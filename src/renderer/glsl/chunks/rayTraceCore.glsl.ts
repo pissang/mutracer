@@ -200,6 +200,8 @@ struct LightSampleRec {
   float dist;
   float pdf;
   bool isDelta;
+  int sourceType;
+  int sourceIndex;
 };
 
 

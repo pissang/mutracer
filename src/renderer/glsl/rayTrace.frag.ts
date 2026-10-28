@@ -65,6 +65,9 @@ export default function createRayTraceFragmentShader() {
     BOUNCES: 2
   },
   uniforms: {
+    emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
+    emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
+    emissiveWeightTotal: Shader.uniform('float',0),
     cameraApertureRadius: Shader.uniform('float', 0),
     cameraFocusDistance: Shader.uniform('float', 10),
 

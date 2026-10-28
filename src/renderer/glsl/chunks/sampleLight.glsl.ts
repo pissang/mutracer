@@ -1,3 +1,4 @@
+import emissive from './emissiveLight.glsl.js';
 import { glsl } from '../../shader.js';
 
 export default glsl`
@@ -29,6 +30,10 @@ void light_sample_sphere(
     return;
   }
   float radius = max(light.radius, 1e-6);
+#ifdef HAS_EMISSIVE_LIGHTS
+  sampleEmissiveSceneLight(shadingPoint,randomSampleValue,result);return;
+#endif
+  result.sourceType=0;result.sourceIndex=-1;
   result.isDelta = false;
   vec3 direction;
 
@@ -214,12 +219,20 @@ void sampleEnvLight(in vec2 samplePoint, inout LightSampleRec result) {
   result.dist = INF;
 }
 
+#ifdef HAS_EMISSIVE_LIGHTS
+${emissive}
+#endif
+
 void sampleLight(
   in vec3 shadingPoint,
   in vec3 randomSampleValue,
   inout LightSampleRec result,
   bool distByIntensity
 ) {
+#ifdef HAS_EMISSIVE_LIGHTS
+  sampleEmissiveSceneLight(shadingPoint,randomSampleValue,result);return;
+#endif
+  result.sourceType=0;result.sourceIndex=-1;
   result.isDelta = false;
   float selector = randomSampleValue.z;
   bool choseEnvironment = false;
@@ -240,6 +253,7 @@ void sampleLight(
         break;
       }
     }
+    result.sourceType=2;result.sourceIndex=selectedIndex;
     Light selectedLight = fetchLight(selectedIndex);
     sampleAnalyticLight(
       selectedLight,

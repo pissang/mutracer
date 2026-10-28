@@ -1,3 +1,5 @@
+import {prepareWebGLLightSampling} from './webglLightSampling.js';
+import {EmissiveTriangleCache} from './lightSampling.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
@@ -135,6 +137,10 @@ class WebGLRayTracePass {
   private _aovPrimitiveCache = new AovPrimitiveCache();
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
+  private _emissiveActive=false;
+  private _directLightLegacy?: {env:number;pmfs:Float32Array};
+  private _emissiveCache=new EmissiveTriangleCache();
+  private _emissiveTex=new WebGLTexture2D(commonNearestFloatProps);
   private _sceneEnvironment = new SceneEnvironmentCache();
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
@@ -866,6 +872,7 @@ class WebGLRayTracePass {
             POWER_WEIGHTED_LIGHT_MIX * (weight / totalWeight)
           : fallbackPmf
     );
+    this._directLightLegacy={env:this._envLightSelectionPmf,pmfs:this._analyticLightSelectionPmfs};
     let cumulativePmf = this._envLightSelectionPmf;
     this._analyticLightSelectionCdfs = Float32Array.from(
       this._analyticLightSelectionPmfs,
@@ -1013,6 +1020,29 @@ class WebGLRayTracePass {
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
 
+    const res=this._preparedMeshData;
+    if(res) {
+      const triangles=this._emissiveCache.collect(res.emissiveBindings,res.materials);
+      this._mainPass.setDefines({HAS_EMISSIVE_LIGHTS:triangles.length>0});
+      if(!triangles.length&&this._emissiveActive&&this._directLightLegacy) {
+        this._envLightSelectionPmf=this._directLightLegacy.env;
+        this._analyticLightSelectionPmfs=Float32Array.from(this._directLightLegacy.pmfs);
+        this._tracePasses.forEach(pass=>pass.setUniform('envLightSelectionPmf',this._envLightSelectionPmf));
+        this._needsUpdateAnalyticLightsBuffer=true;
+      }
+      this._emissiveActive=triangles.length>0;
+      if(triangles.length) {
+        const lighting=prepareWebGLLightSampling(this._analyticLights,triangles,estimateEnvironmentPower(this._envImageSource));
+        this._envLightSelectionPmf=lighting.environmentPmf;
+        this._analyticLightSelectionPmfs=Float32Array.from(lighting.analyticPmfs);
+        const columns=setDataTexture(this._emissiveTex,lighting.data,4).columnsLog;
+        this._mainPass.setUniforms({emissiveLightData:this._emissiveTex,emissiveLightColumns:columns,
+          emissiveChoiceOffset:lighting.emissiveTexels,emissiveChoiceCount:lighting.choiceCount,
+          emissivePmfOffset:lighting.pmfOffset,emissiveWeightTotal:lighting.totalWeight,envLightSelectionPmf:lighting.environmentPmf});
+        this._needsUpdateAnalyticLightsBuffer=true;
+      }
+    }
+
     if (this._needsUpdateAnalyticLightsBuffer) {
       const analyticLights = this._analyticLights;
       analyticLights.length > 0 &&
@@ -1136,6 +1166,7 @@ class WebGLRayTracePass {
     const gl = this._renderer.gl;
     [
       this._lightTex,
+      this._emissiveTex,
       this._openPbrEnergyLut,
       this._envMap,
       this._envMapDistribution,

@@ -3,6 +3,17 @@
 
 import { glsl } from '../../shader.js';
 export default glsl`
+float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
+#ifdef HAS_EMISSIVE_LIGHTS
+  if(!path.fromEye && emissiveWeightTotal>0.0) {
+    vec3 emission=fetchMatData(si.materialIndex*MAT_DATA_SIZE+MAT_ROW_EMISSION).rgb;
+    float value=dot(emission,vec3(.2126,.7152,.0722)),cosine=dot(si.faceNormal,-path.ray.d);
+    if(value>0.0&&cosine>0.0){float d=distance(si.position,path.ray.o);return sampling_power_heuristic(path.scatteringPdf,value/emissiveWeightTotal*d*d/cosine);}
+  }
+#endif
+  return 1.0;
+}
+
 vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPreparedBsdf prepared, inout Path path, vec3 ffnormal, bool isSurface) {
   float occluded = 1.0;
   vec3 lightRnd = vec3(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
@@ -67,15 +78,21 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
       : clamp(1.0 - geometricLight / shadowTerminatorCutoff, 0.0, 1.0);
     shadowOrigin += si.shadowOffset * offsetAmount;
   }
-  initRay(lightRay, shadowOrigin, lightDir);
-  if (intersectSceneShadow(lightRay, lightSample.dist - EPS, si.triangleIndex)) {
+  float shadowDistance=lightSample.dist-EPS;
+  vec3 shadowDirection=lightDir;
+  if(lightSample.sourceType==1){
+    vec3 endpoint=si.position+lightDir*lightSample.dist+EPS*lightSample.normal;
+    shadowDirection=normalize(endpoint-shadowOrigin);shadowDistance=distance(endpoint,shadowOrigin);
+  }
+  initRay(lightRay, shadowOrigin, shadowDirection);
+  if (intersectSceneShadow(lightRay, shadowDistance, si.triangleIndex)) {
     return vec3(0.0);
   }
 
 #ifdef USE_ENVMAP
   // Match the endpoint used by a BSDF-sampled surface transmission, including
   // a separately displayed or grounded background and its coverage.
-  if (isSurface && cosThetaL < 0.0 && lightRnd.z < envLightSelectionPmf) {
+  if (isSurface && cosThetaL < 0.0 && lightSample.sourceType == 0) {
     vec4 background = sampleBackgroundFromRay(lightRay.o, lightDir);
     lightSample.emission = sampling_spectral_rgb_filter(background.rgb * background.a, pathWavelength);
   }
@@ -201,7 +218,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 
   // Direct lighting
   if (!mediumSampled) {
-    path.li += mat.emission * path.beta;
+    path.li += emissiveHitMisWeight(si,path) * mat.emission * path.beta;
     if (mat.materialType == UNLIT) {
       path.abort = true;
       return;
