@@ -359,7 +359,7 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
-  /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  /** Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
   /** Waits for the next release of WebGPU sampling queue capacity and returns true
    * when sampling was queued. Returns false immediately with no queued sampling,
