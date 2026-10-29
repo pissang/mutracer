@@ -55,7 +55,9 @@ events and shadow catchers remain with ordinary path tracing.
 
 Photon mapping starts with a blurred density estimate and decreases its radius
 as samples accumulate. A small initial radius can be noisy; a large one can blur
-nearby surfaces and details. At the first diffuse surface, the gather radius
+nearby surfaces and details. Distant smooth casters enlarge the automatic
+radius; choose `initialRadius` explicitly if deep caustics become too blurred.
+At the first diffuse surface, the gather radius
 is capped to about two projected pixels to reduce visible patches after
 denoising. Reflections and refractions use an approximate footprint.
 Increasing photon count can help, but does not make every additional batch
@@ -72,4 +74,4 @@ Both estimators fall back to PT for the whole scene when a smooth caster uses
 stochastic blend coverage. Cutout coverage remains supported. Environment
 caustics follow PT's visible-background behavior through the first smooth
 transmission; an explicit black background suppresses that contribution.
-Use ordinary PT when quantitative energy agreement matters.
+Quantitative energy agreement with other renderers is not guaranteed.
