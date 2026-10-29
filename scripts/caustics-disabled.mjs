@@ -17,10 +17,15 @@ async function capture(source,label){
  try{for(const backend of ['webgpu','webgl']){
   const page=await chrome.page(`http://127.0.0.1:${server.httpServer.address().port}/tests/gpu/caustics.html${backend==='webgl'?'?webgl':''}`);
   try{for(let i=0;i<200;i++){if(await page.tab.evaluate('!!window.causticsTests'))break;await delay(100);}
+   await page.tab.evaluate(`(()=>{window.disabledSources=[];
+    if(window.GPUDevice){const original=GPUDevice.prototype.createShaderModule;GPUDevice.prototype.createShaderModule=function(descriptor){window.disabledSources.push(String(descriptor.code));return original.call(this,descriptor);};}
+    const original=WebGL2RenderingContext.prototype.shaderSource;WebGL2RenderingContext.prototype.shaderSource=function(shader,source){window.disabledSources.push(source);return original.call(this,shader,source);};})()`);
    for(const [scene,args]of [['ordinary',`{},${samples},false,false,true`],['glass',`{},${samples},true,false,false`]]){
     const r=await page.tab.evaluate(`window.causticsTests.capture(${args})`),bytes=Buffer.from(new Float32Array(r.hdr).buffer);
     writeFileSync(resolve(out,`${label}-${backend}-${scene}.f32`),bytes);
    }
+   const sources=await page.tab.evaluate('window.disabledSources');
+   writeFileSync(resolve(out,`${label}-${backend}-sources.json`),JSON.stringify(sources));
   }finally{await page.close();}
  }}finally{await chrome.close();await server.close();paths.forEach((p,i)=>originals[i]?writeFileSync(p,originals[i]):unlinkSync(p));}
  // Cornell uses exactly the authored glTF camera and records HDR through Render.
@@ -36,5 +41,9 @@ for(const backend of ['webgpu','webgl'])for(const scene of ['ordinary','glass','
  const a=readFileSync(resolve(out,`reference-${backend}-${scene}.f32`)),b=readFileSync(resolve(out,`current-${backend}-${scene}.f32`));let maximum=0;
  for(let i=0;i<Math.min(a.length,b.length);i+=4)maximum=Math.max(maximum,Math.abs(a.readFloatLE(i)-b.readFloatLE(i)));
  results.push({backend,scene,identical:a.equals(b),referenceSha256:sha(a),currentSha256:sha(b),maximum});
+}
+for(const backend of ['webgpu','webgl']){
+ const a=readFileSync(resolve(out,`reference-${backend}-sources.json`)),b=readFileSync(resolve(out,`current-${backend}-sources.json`));
+ results.push({backend,scene:'shader-sources',identical:a.equals(b),referenceSha256:sha(a),currentSha256:sha(b)});
 }
 writeFileSync(resolve(out,'comparison.json'),JSON.stringify({reference,root,samples,results},null,2));console.log(results);if(results.some(r=>!r.identical))process.exitCode=1;

@@ -21,7 +21,9 @@ licenses. Each archive has a SHA-256 checksum file.
 ## Build from source
 
 Install the [SDK build requirements](../README.md#build-and-link).
-Linux also needs the X11/Wayland development libraries; Windows
+macOS also needs Xcode 26 or later selected with `xcode-select`;
+Command Line Tools alone are insufficient. Linux needs the X11/Wayland
+development libraries; Windows
 needs the [contributor setup](../CONTRIBUTING.md#windows). Then, from the
 repository root:
 

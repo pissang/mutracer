@@ -37,7 +37,7 @@ accumulation. The native SDK provides the same choices through Rust
 `CausticSettings` and the C `MT_CAUSTIC_*` flags.
 
 More emitted photons increase time and memory costs. Photon-map storage grows
-by 24 bytes per emitted photon plus a spatial index of at most 2 MiB, in
+by 28 bytes per emitted photon plus up to 13 MiB of overhead, in
 addition to image accumulation. Requests above the device limits or the 128 MiB
 batch budget use fewer photons. Photon batches cover the full image even when PT
 uses tiles or adaptive sampling. Their time counts toward the frame budget;

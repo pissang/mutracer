@@ -12,6 +12,8 @@ interface CausticDiagnostics {
  captureRoots?:boolean;
  rootPass?:unknown;
  photonAlpha?:number;
+ /** Fixed progressive batch for isolated query counters. */
+ photonDebugBatch?:number;
  photonBudgetBytes?:number;
  photonScreenRadius?:boolean;
  photonScreenPixels?:number;

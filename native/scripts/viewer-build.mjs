@@ -24,12 +24,30 @@ copyFileSync(resolve(root,'native/viewer/assets/sample.glb'),resolve(resources,'
 for (const name of ['rt_hdr_alb_nrm_small.tza','rt_hdr_calb_cnrm_large.tza','rt_alb_large.tza','rt_nrm_large.tza'])
   copyFileSync(resolve(root,'oidn/weights',name),resolve(resources,name));
 if(mac) {
-  // ic08 carries the existing 256px PNG without another image tool or dependency.
-  const png=readFileSync(resolve(root,'site/src/assets/mutracer-logo.png'));
-  if(png.readUInt32BE(16)!==256||png.readUInt32BE(20)!==256)throw new Error('App icon requires the shared 256px logo.');
-  const header=Buffer.alloc(16);header.write('icns');header.writeUInt32BE(png.length+16,4);
-  header.write('ic08',8);header.writeUInt32BE(png.length+8,12);
-  writeFileSync(resolve(resources,'MuTracer.icns'),Buffer.concat([header,png]));
+  // Modern macOS masks the full-bleed artwork itself. An icon stack avoids
+  // the extra gray enclosure applied to legacy icons on macOS 26 and later.
+  const document=resolve(out,'MuTracer.icon');
+  mkdirSync(resolve(document,'Assets'),{recursive:true});
+  try {
+    copyFileSync(resolve(root,'native/viewer/assets/macos-icon.json'),resolve(document,'icon.json'));
+    copyFileSync(resolve(root,'site/src/assets/mutracer-logo-render.png'),resolve(document,'Assets/artwork.png'));
+    run('/usr/bin/xcrun',['actool',document,'--compile',resources,'--platform','macosx',
+      '--minimum-deployment-target','14.0','--app-icon','MuTracer',
+      '--output-partial-info-plist',resolve(out,'icon-info.plist')]);
+  } finally {rmSync(document,{recursive:true,force:true});}
+  const icon=resolve(root,'native/viewer/assets/macos-icon.png'),png=readFileSync(icon);
+  if(png.readUInt32BE(16)!==1024||png.readUInt32BE(20)!==1024)throw new Error('macOS app icon requires a 1024px master.');
+  // Supply both standard and Retina representations, including small Finder icons.
+  // https://developer.apple.com/library/archive/documentation/Xcode/Reference/xcode_ref-Asset_Catalog_Format/IconSetType.html
+  const iconset=resolve(out,'MuTracer.iconset');
+  rmSync(iconset,{recursive:true,force:true});mkdirSync(iconset);
+  try {
+    for(const size of [16,32,128,256,512])for(const scale of [1,2]) {
+      const pixels=String(size*scale),name=`icon_${size}x${size}${scale===2?'@2x':''}.png`;
+      run('/usr/bin/sips',['-z',pixels,pixels,icon,'--out',resolve(iconset,name)]);
+    }
+    run('/usr/bin/iconutil',['-c','icns',iconset,'-o',resolve(resources,'MuTracer.icns')]);
+  } finally {rmSync(iconset,{recursive:true,force:true});}
   writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -37,6 +55,7 @@ if(mac) {
 <key>CFBundleIdentifier</key><string>com.meimu.mutracer.native-viewer</string>
 <key>CFBundleName</key><string>MuTracer</string>
 <key>CFBundleIconFile</key><string>MuTracer.icns</string>
+<key>CFBundleIconName</key><string>MuTracer</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>0.0.0</string>
 <key>NSHighResolutionCapable</key><true/>

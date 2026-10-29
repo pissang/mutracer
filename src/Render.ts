@@ -93,7 +93,7 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 export interface CausticSettings {
   /** WebGPU progressive photon mapping for caustics beyond directly visible light paths; ignored on WebGL. Default `false`. */
   photonMapping?: boolean | {
-    /** Emitted photons per batch; 24 bytes per photon plus a spatial index of at most 2 MiB. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget. Default pixel count / 4. */ photonsPerSample?: number;
+    /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget. Default pixel count / 4. */ photonsPerSample?: number;
     /** Positive initial gather radius in scene units. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
   };
   /**

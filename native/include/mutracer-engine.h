@@ -358,7 +358,10 @@ typedef struct mt_render_options {
   uint32_t alpha_blend_strategy; /* mt_alpha_blend_strategy. */
   uint32_t reserved_tail; /* Must be 0. */
   uint32_t caustic_flags; /* MT_CAUSTIC_* mask. Default 0 (all disabled). */
-  uint32_t light_photons, photon_map_photons; /* 0 selects pixel count / 4. Default 0. */
+  uint32_t light_photons; /* 0 selects pixel count / 4. Default 0. */
+  /* 0 selects pixel count / 4. Default 0. 28 bytes per photon plus up to 13 MiB
+     overhead; reduced to fit device limits and the 128 MiB batch budget. */
+  uint32_t photon_map_photons;
   float photon_map_radius; /* Nonnegative; 0 selects 3% of caster sphere radius. Default 0. */
 } mt_render_options;
 MT_ENGINE_LAYOUT(mt_render_options, 128);

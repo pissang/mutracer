@@ -1,4 +1,4 @@
-import {photonPackingWgsl} from './photonMap.compute.js';
+import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
 import background from './chunks/background.wgsl.js';
 import atomic from './chunks/causticAtomic.wgsl.js';
 import adjoint from './chunks/causticAdjoint.wgsl.js';
@@ -89,8 +89,8 @@ ${
     textureStore(photons,vec2i(vec2u(i%width,i/width)),value);
   }
   fn photonStoreDirections(i:u32,value:u32) {
-    let buckets=min(65536u,1u<<(32u-countLeadingZeros(max(256u,caustic.photonCount*2u)-1u)));
-    let index=8u+buckets*2u+caustic.photonCount+i;
+    let buckets=min(${PHOTON_GRID_SIZE}u,1u<<(32u-countLeadingZeros(max(256u,caustic.photonCount*2u)-1u)));
+    let index=8u+buckets*4u+caustic.photonCount*2u+i;
     let width=textureDimensions(photonDirections).x;
     textureStore(photonDirections,vec2i(vec2u(index%width,index/width)),vec4u(value));
   }
