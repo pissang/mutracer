@@ -8,7 +8,7 @@ import {launchChrome, delay} from './reference-runtime.mjs';
 const root=resolve(process.env.MUTRACER_SOURCE_ROOT??'.');
 const out=resolve(process.env.MUTRACER_CAUSTICS_OUTPUT);
 mkdirSync(out,{recursive:true});
-const server=await createServer({configFile:resolve(root,'viewer/vite.config.ts'),server:{host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**/.native-build/**']}},plugins:[{name:'radius-evidence',configureServer(server){server.middlewares.use(async(req,res,next)=>{
+const server=await createServer({configFile:resolve(root,'viewer/vite.config.ts'),server:{fs:{allow:[root,profileRoot]},host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**/.native-build/**']}},plugins:[{name:'radius-evidence',configureServer(server){server.middlewares.use(async(req,res,next)=>{
  if(req.method!=='POST'||!req.url?.startsWith('/__radius-hdr/'))return next();
  const name=req.url.slice('/__radius-hdr/'.length);if(!/^[\w.-]+$/.test(name)){res.statusCode=400;res.end();return;}
  const chunks=[];for await(const chunk of req)chunks.push(chunk);writeFileSync(resolve(out,name),Buffer.concat(chunks));res.end('ok');
