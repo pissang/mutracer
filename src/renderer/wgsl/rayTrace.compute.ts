@@ -1,4 +1,4 @@
-import {photonQueryWgsl} from './photonMap.compute.js';
+import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
 import {createMneeWgsl} from './chunks/mnee.wgsl.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
@@ -216,7 +216,7 @@ ${mnee || lightTracing || photonMapping ? causticPartitionWGSL(mnee, lightTracin
 const CAUSTIC_MNEE=${mnee};
 const CAUSTIC_MNEE_MAX_DEPTH=${mneeMaxDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQueryWgsl:''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, mnee || lightTracing || photonMapping, mnee,photonMapping)}
+`+photonQuerySource(mneeDebugGroup):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, mnee || lightTracing || photonMapping, mnee,photonMapping)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -1055,7 +1055,7 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   outAux.isShadowCatcher = false;
 ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 ${inputHooks?.unclampedColor ?? ''}
-${(mnee||lightTracing||photonMapping) && mneeDebugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${mneeDebugGroup>=30?`vec4f(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4f(mneeTrace[${mneeDebugGroup-10}]+vec3f(10.0),1.0)`:`vec4f(f32(mneeCounters[${mneeDebugGroup*3}]),f32(mneeCounters[${mneeDebugGroup*3+1}]),f32(mneeCounters[${mneeDebugGroup*3+2}]),1.0)`};
+${(mnee||lightTracing||photonMapping) && mneeDebugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${mneeDebugGroup>=50?`vec4f(photonQueryStats,1.0)`:mneeDebugGroup>=30?`vec4f(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4f(mneeTrace[${mneeDebugGroup-10}]+vec3f(10.0),1.0)`:`vec4f(f32(mneeCounters[${mneeDebugGroup*3}]),f32(mneeCounters[${mneeDebugGroup*3+1}]),f32(mneeCounters[${mneeDebugGroup*3+2}]),1.0)`};
 ` : ''}  // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {
