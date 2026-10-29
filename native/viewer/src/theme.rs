@@ -1,5 +1,5 @@
 //! Visual tokens shared with viewer/src/styles/app.css. Keep native styling here;
-//! the browser remains independent and no CSS parser or theme framework is needed.
+//! native desktop typography and spacing are intentionally denser than the browser.
 use eframe::egui::{self, Color32, FontId, Margin, Stroke, TextStyle};
 
 pub const BG: Color32 = Color32::from_rgb(0x11, 0x12, 0x14);
@@ -19,6 +19,14 @@ pub const ACCENT: Color32 = Color32::from_rgb(0xec, 0x96, 0x73);
 pub const ACCENT_SURFACE: Color32 = Color32::from_rgb(0x32, 0x27, 0x24);
 pub const WARNING: Color32 = Color32::from_rgb(0xe6, 0xb7, 0x6a);
 pub const ERROR: Color32 = Color32::from_rgb(0xf1, 0x87, 0x87);
+
+// Native desktop density: retain readable secondary text while reducing chrome.
+pub const FONT_BODY: f32 = 11.;
+pub const FONT_LABEL: f32 = 10.5;
+pub const FONT_SMALL: f32 = 10.;
+pub const FONT_HEADING: f32 = 12.;
+pub const CONTROL_HEIGHT: f32 = 26.;
+pub const SECTION_HEIGHT: f32 = 40.;
 
 pub fn install(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
@@ -47,7 +55,7 @@ pub fn install(ctx: &egui::Context) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widget.corner_radius = 12.into();
+        widget.corner_radius = 6.into();
         widget.expansion = 0.;
         widget.bg_stroke = Stroke::new(1., BORDER);
         widget.fg_stroke = Stroke::new(1., TEXT);
@@ -65,22 +73,22 @@ pub fn install(ctx: &egui::Context) {
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         style
             .text_styles
-            .insert(TextStyle::Body, FontId::proportional(12.));
+            .insert(TextStyle::Body, FontId::proportional(FONT_BODY));
         style
             .text_styles
-            .insert(TextStyle::Button, FontId::proportional(11.5));
+            .insert(TextStyle::Button, FontId::proportional(FONT_LABEL));
         style
             .text_styles
-            .insert(TextStyle::Small, FontId::proportional(10.5));
+            .insert(TextStyle::Small, FontId::proportional(FONT_SMALL));
         style
             .text_styles
-            .insert(TextStyle::Heading, FontId::proportional(13.));
+            .insert(TextStyle::Heading, FontId::proportional(FONT_HEADING));
         style
             .text_styles
-            .insert(TextStyle::Monospace, FontId::monospace(11.));
+            .insert(TextStyle::Monospace, FontId::monospace(FONT_LABEL));
         style.spacing.item_spacing = egui::vec2(6., 4.);
-        style.spacing.button_padding = egui::vec2(8., 3.);
-        style.spacing.interact_size = egui::vec2(32., 24.);
+        style.spacing.button_padding = egui::vec2(7., 3.);
+        style.spacing.interact_size = egui::vec2(28., 22.);
         style.spacing.slider_rail_height = 2.;
         style.spacing.slider_width = 130.;
         style.spacing.combo_width = 130.;
@@ -91,7 +99,7 @@ pub fn install(ctx: &egui::Context) {
 pub fn panel() -> egui::Frame {
     egui::Frame::new()
         .fill(PANEL)
-        .corner_radius(16)
+        .corner_radius(12)
         .inner_margin(10)
         .outer_margin(Margin {
             left: 0,

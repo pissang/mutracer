@@ -44,7 +44,7 @@ fn zoom(ctx: &egui::Context) {
 }
 fn panel_button(ui: &mut egui::Ui, label: &str, right: bool, open: &mut bool) {
     let response = ui.add_sized(
-        [32., 32.],
+        [28., 28.],
         egui::Button::new("").frame(false).fill(if *open {
             theme::ACCENT_SURFACE
         } else {
@@ -105,7 +105,7 @@ fn utility_button(ui: &mut egui::Ui, label: &str, reset: bool) -> egui::Response
 }
 
 fn code_button(ui: &mut egui::Ui) -> egui::Response {
-    let response = ui.add_sized([72., 32.], egui::Button::new("").corner_radius(12));
+    let response = ui.add_sized([68., 28.], egui::Button::new("").corner_radius(8));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Code")
     });
@@ -125,7 +125,7 @@ fn code_button(ui: &mut egui::Ui) -> egui::Response {
         response.rect.center() + egui::vec2(9., 0.),
         egui::Align2::CENTER_CENTER,
         "Code",
-        egui::FontId::proportional(11.5),
+        egui::FontId::proportional(theme::FONT_LABEL),
         theme::TEXT,
     );
     response.on_hover_text("Render setup in Rust")
@@ -133,8 +133,8 @@ fn code_button(ui: &mut egui::Ui) -> egui::Response {
 
 fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> egui::Response {
     let response = ui.add_sized(
-        [if export { 86. } else { 100. }, 32.],
-        egui::Button::new("").corner_radius(10).fill(if export {
+        [if export { 86. } else { 96. }, 28.],
+        egui::Button::new("").corner_radius(8).fill(if export {
             theme::ACCENT_SOLID
         } else {
             theme::CONTROL
@@ -167,14 +167,14 @@ fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> 
         c + egui::vec2(13., 0.),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(11.5),
+        egui::FontId::proportional(theme::FONT_LABEL),
         theme::TEXT,
     );
     response
 }
 
 fn history_button(ui: &mut egui::Ui, redo: bool) -> egui::Response {
-    let response = ui.add_sized([32., 32.], egui::Button::new("").frame(false));
+    let response = ui.add_sized([28., 28.], egui::Button::new("").frame(false));
     let c = response.rect.center();
     let sign = if redo { 1. } else { -1. };
     let color = if ui.is_enabled() {
@@ -211,7 +211,7 @@ impl Viewer {
     pub(super) fn titlebar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         egui::Panel::top("toolbar")
-            .exact_size(52.)
+            .exact_size(48.)
             .resizable(false)
             .show_separator_line(false)
             .frame(
@@ -230,7 +230,7 @@ impl Viewer {
                 let compact = rect.width() < 1000.;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.horizontal_centered(|ui| {
-                        ui.spacing_mut().interact_size.y = 32.;
+                        ui.spacing_mut().interact_size.y = 28.;
                         ui.spacing_mut().item_spacing.x = 2.;
                         // AppKit owns the traffic lights and rounded window frame.
                         #[cfg(target_os = "macos")]
@@ -238,7 +238,7 @@ impl Viewer {
                         ui.add_space(12.);
                         ui.add(
                             egui::Image::from_texture(&logo(&ctx))
-                                .fit_to_exact_size(egui::vec2(30., 30.))
+                                .fit_to_exact_size(egui::vec2(26., 26.))
                                 .corner_radius(9),
                         );
                         ui.add_space(8.);
@@ -248,14 +248,14 @@ impl Viewer {
                             } else {
                                 "MuTracer Viewer"
                             })
-                            .size(13.)
+                            .size(12.)
                             .strong(),
                         );
                         ui.add_space(8.);
                         panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
                     });
                 });
-                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(204., 32.));
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(200., 28.));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.;
@@ -316,7 +316,7 @@ impl Viewer {
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().interact_size.y = 32.;
+                        ui.spacing_mut().interact_size.y = 28.;
                         ui.spacing_mut().button_padding = egui::vec2(8., 6.);
                         panel_button(ui, "Toggle inspector (])", true, &mut self.inspector_open);
                         if ui

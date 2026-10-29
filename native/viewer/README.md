@@ -134,9 +134,6 @@ platform differences for trying features or checking a new version.
 - Expand groups, search and select objects in the left **Scene** tree, or click a surface in
   the viewport to open its material. **Frame selection** fits the camera to the
   object.
-- Use **Scene → Edit object transform…** to open the **Object** panel and edit
-  world position, local Y rotation and uniform scale of the selected object.
-  Objects that share its geometry stay in place.
 - Picking and autofocus can hit transparent or cutout surfaces in front of other
   objects.
 
@@ -212,8 +209,10 @@ platform differences for trying features or checking a new version.
 ### Rendering
 
 - The floating toolbar shows progress and samples, with pause/resume, restart,
-  maximum samples, **Res** and denoise controls; its settings button opens
-  **Render**. **Space** pauses or resumes models without animation; **D**
+  maximum samples, **Res** and denoise controls. In narrow viewports, camera
+  controls stack below it; at smaller widths, use **Render settings** for sample,
+  resolution, denoise, camera and playback controls. Choose **All render settings…**
+  to open **Render**. **Space** pauses or resumes models without animation; **D**
   toggles denoising.
 - Interaction renders a lower-resolution, one-sample preview. When input stops,
   the image converges at the selected resolution and settings. Pausing keeps the

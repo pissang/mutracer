@@ -19,7 +19,7 @@ fn debug_header(ui: &mut egui::Ui, open: &mut bool, times: &[f64]) -> egui::Resp
         rect.left_center() + egui::vec2(4., 0.),
         egui::Align2::LEFT_CENTER,
         "Debug",
-        egui::FontId::proportional(11.5),
+        egui::FontId::proportional(theme::FONT_LABEL),
         theme::TEXT,
     );
     // Keep the timing readout and graph in the header, as in the web viewer.
@@ -235,10 +235,16 @@ impl Viewer {
                         .hint_text("Search objects")
                         .desired_width(f32::INFINITY),
                 );
-                ui.separator();
+                controls::panel_separator(ui, 6.);
                 egui::Panel::bottom("scene_summary")
-                    .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
+                    .show_separator_line(false)
+                    .frame(egui::Frame::new().inner_margin(egui::Margin {
+                        bottom: 8,
+                        ..Default::default()
+                    }))
                     .show(ui, |ui| {
+                        controls::panel_separator(ui, 0.);
+                        ui.add_space(8.);
                         let triangles: usize = self
                             .model
                             .meshes
@@ -260,12 +266,6 @@ impl Viewer {
                             }
                         });
                     });
-                if self.selected_mesh.is_some()
-                    && controls::button(ui, "Edit object transform…").clicked()
-                {
-                    self.tab = 3;
-                    self.inspector_open = true;
-                }
                 self.scene_rows(ui);
             });
     }
@@ -291,7 +291,7 @@ impl Viewer {
                     _ => controls::Icon::Camera,
                 };
                 controls::heading(ui, title, icon);
-                ui.add(egui::Separator::default().spacing(0.));
+                controls::panel_separator(ui, 0.);
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector", self.tab))
                     .auto_shrink([false, false])
@@ -354,9 +354,9 @@ impl Viewer {
         if previous != self.settings {
             self.dirty(Change::Scene);
         }
-        controls::section(ui, "Denoiser", |ui| {
-            controls::toggle(ui, "Denoise", &mut self.denoise);
-            if self.denoise {
+        let mut denoise = self.denoise;
+        controls::section_toggle(ui, "Denoiser", &mut denoise, |ui, enabled| {
+            if enabled {
                 controls::select(ui, "Method", self.denoiser_choice.label(), |ui| {
                     ui.selectable_value(
                         &mut self.denoiser_choice,
@@ -466,6 +466,7 @@ impl Viewer {
                 ui.weak(&self.denoise_status);
             }
         });
+        self.denoise = denoise;
         controls::section(ui, "Color", |ui| {
             let mut hdr = false;
             ui.add_enabled_ui(false,|ui| { controls::toggle(ui,"HDR output",&mut hdr); }).response.on_disabled_hover_text("This viewer window uses an SDR surface. Native SDK window hosts support HDR on compatible displays.");
@@ -670,7 +671,7 @@ impl Viewer {
                                 0.25..=1.,
                             );
                         }
-                        ui.separator();
+                        controls::panel_separator(ui, 6.);
                         let diagnostics = self.target.engine.diagnostics();
                         ui.small(format!(
                             "{} · {}",
@@ -695,27 +696,48 @@ impl Viewer {
             .rect
     }
     fn material_settings(&mut self, ui: &mut egui::Ui) {
-        if let Some(id) = self.selected_mesh {
-            ui.horizontal(|ui| {
-                if controls::button(ui, "Frame selection").clicked() {
-                    let (min, max) = self.model.mesh_bounds(id);
-                    self.camera
-                        .frame((min + max) * 0.5, (max - min).length() * 0.5);
-                    self.dirty(Change::Camera);
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(id) = self.selected_mesh {
+                    if controls::frame_selection_button(ui).clicked() {
+                        let (min, max) = self.model.mesh_bounds(id);
+                        self.camera
+                            .frame((min + max) * 0.5, (max - min).length() * 0.5);
+                        self.camera_index = None;
+                        self.dirty(Change::Camera);
+                    }
                 }
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&self.model.0.meshes[id].name)
-                            .small()
-                            .color(theme::SUBTLE),
-                    )
-                    .truncate(),
-                );
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width());
+                    let name = &self.model.materials[self.selected].name;
+                    let object = self
+                        .selected_mesh
+                        .map(|id| self.model.meshes[id].name.as_str())
+                        .filter(|object| *object != name.as_str());
+                    let label = egui::Label::new(egui::RichText::new(name).strong())
+                        .halign(egui::Align::Min)
+                        .truncate();
+                    if object.is_some() {
+                        ui.add(label).on_hover_text(name);
+                    } else {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 26.),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(label).on_hover_text(name),
+                        );
+                    }
+                    if let Some(object) = object {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(object).small().color(theme::SUBTLE),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(object);
+                    }
+                });
             });
-        }
-        let material_name = &self.model.0.materials[self.selected].name;
-        ui.add(egui::Label::new(egui::RichText::new(material_name).strong()).truncate())
-            .on_hover_text(material_name);
+        });
         ui.add_space(6.);
         controls::segmented(
             ui,
@@ -1220,7 +1242,7 @@ impl Viewer {
                     for (ui, &(value, label)) in columns.iter_mut().zip(row) {
                         if ui
                             .add_sized(
-                                [ui.available_width(), 36.],
+                                [ui.available_width(), theme::CONTROL_HEIGHT],
                                 egui::Button::selectable(mode == value, label),
                             )
                             .clicked()
@@ -1283,13 +1305,10 @@ impl Viewer {
                 },
             );
         }
-        controls::section(ui, "Ground shadow", |ui| {
-            let before = self.environment.ground_shadow;
-            controls::toggle(ui, "Ground shadow", &mut self.environment.ground_shadow);
-            if before != self.environment.ground_shadow {
-                self.dirty(Change::Scene);
-            }
-            if self.environment.ground_shadow {
+        let before = self.environment.ground_shadow;
+        let mut ground_shadow = before;
+        controls::section_toggle(ui, "Ground shadow", &mut ground_shadow, |ui, enabled| {
+            if enabled {
                 controls::scalar(
                     ui,
                     "Opacity",
@@ -1298,6 +1317,10 @@ impl Viewer {
                 );
             }
         });
+        self.environment.ground_shadow = ground_shadow;
+        if before != ground_shadow {
+            self.dirty(Change::Scene);
+        }
         let mut light_changed = false;
         let was_enabled = self.light.enabled;
         controls::section(ui, "Key light", |ui| {
@@ -1453,7 +1476,7 @@ impl Viewer {
             });
             if ui
                 .add_sized(
-                    [ui.available_width(), 30.],
+                    [ui.available_width(), theme::CONTROL_HEIGHT],
                     egui::Button::new("Fit to model · F"),
                 )
                 .clicked()
@@ -1463,13 +1486,12 @@ impl Viewer {
                 changed = true;
             }
         });
-        controls::section(ui, "Depth of field", |ui| {
-            ui.add_enabled_ui(!self.camera.orthographic, |ui| {
-                let mut enabled = self.camera.f_stop > 0.;
-                if controls::toggle(ui, "Depth of field", &mut enabled).changed() {
-                    self.camera.f_stop = if enabled { 2.8 } else { 0. };
-                    self.picking_focus = false;
-                    changed = true;
+        let was_dof_enabled = self.camera.f_stop > 0.;
+        let mut dof_enabled = was_dof_enabled;
+        ui.add_enabled_ui(!self.camera.orthographic, |ui| {
+            controls::section_toggle(ui, "Depth of field", &mut dof_enabled, |ui, enabled| {
+                if enabled && !was_dof_enabled {
+                    self.camera.f_stop = 2.8;
                 }
                 if enabled {
                     changed |= controls::parameter(
@@ -1559,11 +1581,20 @@ impl Viewer {
                     }
                 }
             });
-            if self.camera.orthographic {
-                self.picking_focus = false;
-                ui.weak("Orthographic views have no depth of field.");
-            }
         });
+        if dof_enabled != was_dof_enabled {
+            if !dof_enabled {
+                self.camera.f_stop = 0.;
+            } else if self.camera.f_stop == 0. {
+                self.camera.f_stop = 2.8;
+            }
+            self.picking_focus = false;
+            changed = true;
+        }
+        if self.camera.orthographic {
+            self.picking_focus = false;
+            ui.weak("Orthographic views have no depth of field.");
+        }
         if changed {
             self.dirty(Change::Camera);
         }
@@ -1589,6 +1620,10 @@ impl Viewer {
                 } else {
                     self.render_dock(&ctx, ui.max_rect())
                 };
+                #[cfg(test)]
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("dock-bounds"), (dock_rect, ui.max_rect()));
+                });
                 let debug_rect = if self.hide_ui {
                     egui::Rect::NOTHING
                 } else {

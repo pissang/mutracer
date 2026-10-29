@@ -279,6 +279,43 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     );
     let image = frame(&mut viewer, &ctx, &gpu, [800, 600], vec![])?;
     save(&gpu, &image, &out.join("examples-tab-narrow.png"))?;
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    let expand = ctx
+        .data(|data| {
+            data.get_temp::<egui::Rect>(egui::Id::new(("scene-expand", 1usize)))
+                .unwrap()
+        })
+        .center();
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(expand))?;
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    let material = ctx
+        .data(|data| {
+            data.get_temp::<egui::Rect>(egui::Id::new(("scene-material", 1usize, 0usize)))
+                .unwrap()
+        })
+        .center();
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(material))?;
+    assert_eq!(viewer.selected_mesh, Some(0));
+    assert_eq!(viewer.selected, 0);
+    assert_eq!(viewer.tab, 1);
+    assert_eq!(
+        viewer.camera.eye(),
+        camera,
+        "Tree controls orbited the scene"
+    );
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("scene-material.png"))?;
+    let frame_button = ctx
+        .data(|data| {
+            data.get_temp::<egui::Rect>(egui::Id::new("frame-selection-rect"))
+                .unwrap()
+        })
+        .center();
+    let (min, max) = viewer.model.mesh_bounds(0);
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(frame_button))?;
+    assert_eq!(viewer.camera.target, (min + max) * 0.5);
+    assert_eq!(viewer.camera_index, None);
+    assert_eq!(viewer.selected_mesh, Some(0));
     // The four keyboard shortcuts and rail labels follow the browser order.
     for (key, tab, name) in [
         (egui::Key::Num1, 2, "lighting"),
@@ -369,6 +406,89 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     viewer.tab = 4;
     let image = settle(&mut viewer, &ctx, &gpu)?;
     save(&gpu, &image, &out.join("cornell-camera.png"))?;
+    // Imported cameras, DOF and the settings drawer used to force the dock
+    // outside small viewports. Exercise real panel geometry, including the menu.
+    let saved_name = viewer.model.1.cameras[0].name.clone();
+    viewer.model.1.cameras[0].name = "An authored camera with a deliberately long name".into();
+    let saved_f_stop = viewer.camera.f_stop;
+    let saved_denoise = viewer.denoise;
+    viewer.camera.f_stop = 2.8;
+    viewer.running = false;
+    for (size, drawer) in [
+        ([800, 560], false),
+        ([960, 600], false),
+        ([1200, 800], false),
+        ([1600, 900], false),
+        ([800, 560], true),
+    ] {
+        viewer.texture_browser.open = drawer;
+        for denoise in [false, true] {
+            viewer.denoise = denoise;
+            for _ in 0..3 {
+                frame(&mut viewer, &ctx, &gpu, size, vec![])?;
+            }
+            let (dock, viewport) = ctx.data(|data| {
+                data.get_temp::<(egui::Rect, egui::Rect)>(egui::Id::new("dock-bounds"))
+                    .unwrap()
+            });
+            ensure!(
+                viewport.expand(1.).contains_rect(dock),
+                "Dock {dock:?} exceeds viewport {viewport:?} at {size:?}, drawer={drawer}, denoise={denoise}"
+            );
+            let image = frame(&mut viewer, &ctx, &gpu, size, vec![])?;
+            save(
+                &gpu,
+                &image,
+                &out.join(format!(
+                    "dock-{}-drawer-{drawer}-denoise-{denoise}.png",
+                    size[0]
+                )),
+            )?;
+        }
+        if drawer {
+            let options = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::new("dock-options-rect"))
+                        .unwrap()
+                })
+                .center();
+            frame(&mut viewer, &ctx, &gpu, size, click(options))?;
+            assert!(egui::Popup::is_any_open(&ctx));
+            let image = frame(&mut viewer, &ctx, &gpu, size, vec![])?;
+            save(&gpu, &image, &out.join("dock-narrow-settings.png"))?;
+            frame(
+                &mut viewer,
+                &ctx,
+                &gpu,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            )?;
+            frame(
+                &mut viewer,
+                &ctx,
+                &gpu,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            )?;
+        }
+    }
+    viewer.texture_browser.open = false;
+    viewer.model.1.cameras[0].name = saved_name;
+    viewer.camera.f_stop = saved_f_stop;
+    viewer.denoise = saved_denoise;
+    viewer.running = true;
     viewer.preview_enabled = false;
     viewer.camera.orbit([5., 0.]);
     viewer.dirty(Change::Camera);
