@@ -1,4 +1,3 @@
-import {researchTransport} from '../researchTransport.js';
 import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
 import background from './chunks/background.wgsl.js';
 import atomic from './chunks/causticAtomic.wgsl.js';
@@ -25,6 +24,8 @@ export const causticUnitRandomWgsl = /* wgsl */ `
   }
 `;
 
+// Preserve the dormant R1 uniform slot and shader spelling for source parity.
+// Production packs zero; only an explicitly registered research adapter sets it.
 export function causticLightCompute(
   constants: Record<string, boolean | number>,
   blasLayoutMask: number,
@@ -35,7 +36,7 @@ export function causticLightCompute(
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
-  const source = (
+  return (
     wgpuShaderPreamble(constants, true) +
     /* wgsl */ `
 ${Object.keys(WGPU_SCENE_FEATURE_BITS)
@@ -72,7 +73,7 @@ ${adjoint}
     viewProjection: mat4x4f,
     photonCount: u32,
     batch: u32,
-    reservedTransport: u32,
+    mnee: u32,
     cameraScale: f32,
     casterCount: u32,
     choiceCount: u32,
@@ -396,10 +397,10 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
       m.specularIor=sampling_cauchy_ior(wavelength,m.specularIor,m.transmissionDispersionScale,m.dispersionAbbeNumber);
     }
     if(!isCausticSpecular(m)) {
-      let directSource=ls.sourceType!=0u;
-      let r1=directSource&&chain==1u&&singleT&&m.baseWeight*(1.0-m.baseMetalness)*(1.0-m.transmissionWeight)>0.0&&m.subsurfaceWeight==0.0;
+      let mneeSource=ls.sourceType!=0u;
+      let r1=mneeSource&&chain==1u&&singleT&&m.baseWeight*(1.0-m.baseMetalness)*(1.0-m.transmissionWeight)>0.0&&m.subsurfaceWeight==0.0;
       if(chain>0u
-${mode === 'lightTracing' ? '&&!(caustic.reservedTransport!=0u&&r1)' : ''}){${
+${mode === 'lightTracing' ? '&&!(caustic.mnee!=0u&&r1)' : ''}){${
       mode === 'lightTracing'
         ? 'causticCameraConnect(si,m,ray,flux);'
         : /* wgsl */ `
@@ -470,7 +471,6 @@ ${
 }
 `
   );
-  return researchTransport()?.lightSource(source) ?? source;
 }
 
 export const causticAccumulateCompute = /* wgsl */ `

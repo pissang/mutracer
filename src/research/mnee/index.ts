@@ -72,7 +72,6 @@ export function registerMnee(): void {
     prepare(pass,backend,lighting) {prepareResearch(pass,stateFor(pass),backend,lighting);},
     capture(pass) {if(mneeDiagnostics.captureRoots)mneeDiagnostics.rootPass=pass;},
     dispose(pass,backend) {const state=states.get(pass);if(backend==='webgl')state?.texture?.dispose((pass as any)._renderer.gl);states.delete(pass);},
-    packUniform(data,options) {new Uint32Array(data)[22]=+!!(options as MneeOptions).mnee;},
-    lightSource(source) {return source.replaceAll('reservedTransport','mnee').replaceAll('directSource','mneeSource');}
+    packUniform(data,options) {new Uint32Array(data)[22]=+!!(options as MneeOptions).mnee;}
   });
 }

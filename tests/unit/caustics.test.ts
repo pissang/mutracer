@@ -23,6 +23,14 @@ describe('caustic contracts', () => {
     expect(rayTrace({hasDisplacement: false, mnee: false, lightTracing: false})).toBe(rayTrace({hasDisplacement: false}));
     expect(fragment(false).main).toBe(fragment().main);
   });
+  it('preserves published light and photon transport sources', () => {
+    for (const lightTracing of [false,true]) for (const photonMapping of [false,true]) {
+      expect(hash(rayTrace({hasDisplacement:false,lightTracing,photonMapping}))).toMatchSnapshot(`camera ${lightTracing}/${photonMapping}`);
+    }
+    for (const mode of ['lightTracing','photonMapping'] as const) {
+      expect(hash(causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32},1,false,mode))).toMatchSnapshot(mode);
+    }
+  });
   it('classifies resolved material combinations', () => {
     for (const [params, smooth] of [
       [{}, false], [{transmissionWeight: 1, specularRoughness: 0}, true],

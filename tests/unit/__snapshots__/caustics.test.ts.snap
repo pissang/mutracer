@@ -1,5 +1,17 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`caustic contracts > preserves published light and photon transport sources > camera false/false 1`] = `"3ae89c5a60e96e17e5f1d64c9ba9ebb0cc9b0c4952f343d8923c8e851e319484"`;
+
+exports[`caustic contracts > preserves published light and photon transport sources > camera false/true 1`] = `"b87827810f00ddf3785a8a94b2484da8863def970c8b85d6f4d6c8dae175ba22"`;
+
+exports[`caustic contracts > preserves published light and photon transport sources > camera true/false 1`] = `"d107f5e9d34699fc9924a33ea490b96893873f60e6295c0b5236b415ee5c918f"`;
+
+exports[`caustic contracts > preserves published light and photon transport sources > camera true/true 1`] = `"bf8f18d182bbcfd977b9a08559f3c08b3ff5e530007143e8606d697e7b4e5efa"`;
+
+exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"5e7fdf8ab904f86ab72d869124418873d1626ca86f3612d4ee6957bade541fff"`;
+
+exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"0233e60ac7dcd520f60f4a5798a09b52a9161b2b02c9536f34ffe0873f8f1d2f"`;
+
 exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"36bf961f969fefee80801860cb007fd63578a220e4b798f9bc4023c40ae9f774"`;
 
 exports[`caustic contracts > preserves the disabled shader across caustic switch settings > WGSL off 1`] = `"3ae89c5a60e96e17e5f1d64c9ba9ebb0cc9b0c4952f343d8923c8e851e319484"`;

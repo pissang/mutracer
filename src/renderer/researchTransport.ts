@@ -28,7 +28,6 @@ export interface ResearchTransport {
   capture(pass: object): void;
   dispose(pass: object, backend: 'webgpu' | 'webgl'): void;
   packUniform(data: ArrayBuffer, options: object): void;
-  lightSource(source: string): string;
 }
 let extension: ResearchTransport | undefined;
 /** @internal Registers an explicitly imported experiment; call before allocating renders. */
