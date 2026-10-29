@@ -102,9 +102,48 @@ Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
 batching while the view is changing.
 
-In your own loop, `batchSamples` gives the first level. For the second, call
-`render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true})` after each
-`await render.whenReadyToRefine()` until your next frame; see [Render](./api.md#render).
+Prefer RenderLoop for between-frame refilling. For your own loop, the following
+example runs refills after presentation, with a 60 Hz frame deadline. Adjust the
+frame interval to your application's cadence and update controls before
+`engine.update()`. Enable `batchSamples` on `render`.
+
+<!-- own-loop-refill -->
+```js
+let frameGeneration = 0;
+let inputRevision = 0;
+for (const event of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'input']) {
+  addEventListener(event, () => { inputRevision++; }, {capture: true, passive: true});
+}
+
+async function refill(generation, deadline, input) {
+  const canContinue = () => generation === frameGeneration && !document.hidden &&
+    performance.now() < deadline && input === inputRevision &&
+    render.batchSamples && render.status === 'converging' &&
+    !render.denoising && render.samples > 0 && render.gpuSampleTimeMs !== undefined;
+  while (canContinue() && await render.whenReadyToRefine()) {
+    // Input or a new frame may arrive during the GPU wait.
+    if (!canContinue()) break;
+    render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+  }
+}
+
+function frame(timestamp) {
+  requestAnimationFrame(frame);
+  const generation = ++frameGeneration;
+  if (document.hidden) return;
+  engine.update();
+  render.refine();
+  engine.display.present(render);
+  void refill(generation, timestamp + 1000 / 60, inputRevision);
+}
+requestAnimationFrame(frame);
+```
+
+Stopping while queued sampling can continue leaves the GPU idle before the next
+frame. Ignoring a `false` capacity result can spin on immediately resolved
+Promises. Ignoring the deadline or pending input can delay the next input's image
+behind extra GPU work. Stop refilling during export, custom preview selection or
+AOV display as well; RenderLoop handles those transitions automatically.
 
 `refine()` continues the remaining tiles of the current sample, including repeated
 calls between presentations. `samples` increases only after the whole sample;
