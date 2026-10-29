@@ -1,3 +1,5 @@
+import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
+import {nativeCausticTarget} from './caustics.js';
 import {packAovScene} from '../../src/renderer/aovScene.js';
 import {AovPrimitiveCache} from '../../src/renderer/AovPrimitiveCache.js';
 import {AovHistory} from '../../src/renderer/aov.js';
@@ -191,16 +193,37 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // Match WGPURayTracePass: deterministic source-over specializes only scenes
     // with blend coverage. The shared scene retains the stochastic base shader.
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
-    const variant = constants.SAMPLING_PATTERN !== configuration.sampling.code || constants.BEVEL_SAMPLES !== configuration.bevelSamples || hasAlpha !== state.shader.features.hasAlpha;
     const frameInputs=(configuration.variants & 16)!==0;
-    const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
     const frameFeatures: Parameters<typeof wgpuShaderSource>[1]={...state.shader.features,hasAlpha};
+    const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
+    const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
+    // Independently traced frame guides use the original PT scene bindings.
+    // Their radiance estimate is separate from the merged beauty accumulation.
+    let effectiveFlags=frameInputs?0:configuration.causticFlags;
+    if((effectiveFlags&6)&&hasStochasticCausticCaster(state.meshes))effectiveFlags&=~6;
+    const causticConfiguration={...configuration,causticFlags:effectiveFlags};
+    const light=effectiveFlags?prepareNativeLightSampling(state.lights,state.table,state.emissive,state.environmentPower):undefined;
+    const caustics=light?nativeCausticTarget({meshes:state.meshes,bindings:state.prepared.instanceBindings,materials:state.prepared.materials,lights:state.lights,emissive:state.emissive,environmentPower:state.environmentPower,lighting:light.lightData,cacheKey:state.prepared},causticConfiguration,width,height,bytes.subarray(settingsBytes+8*WORD_BYTES),camera,targetConstants,{...frameFeatures,workgroupSize:shaderId===RESOURCE.HWRT_SHADER?1:8},nativeHits,shaderId===RESOURCE.HWRT_SHADER):undefined;
+    if(caustics){
+      frameFeatures.workgroupSize=caustics.metadata.workgroupSize;
+      frameFeatures.mnee=!!(caustics.metadata.flags&1);frameFeatures.mneeHardwareIndices=shaderId===RESOURCE.HWRT_SHADER;frameFeatures.mneeMethod=caustics.metadata.flags&8?'sms':'newton';frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
+      if(frameFeatures.mnee){targetConstants.CAUSTIC_SEED_COUNT=caustics.seedCount;targetConstants.CAUSTIC_SEED_OFFSET=caustics.seedOffset;}
+      rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
+    }
+    const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
       (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
         shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()));
     const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
-      features: {...state.shader.features, hasAlpha},
-      constants: {...constants, SAMPLING_PATTERN: configuration.sampling.code, BEVEL_SAMPLES: configuration.bevelSamples}}) : new Uint8Array(0);
+      features: frameFeatures,
+      constants: targetConstants}) : new Uint8Array(0);
+    if(caustics){
+      const meta=new TextEncoder().encode(JSON.stringify(caustics.metadata));
+      const parts=[camera,new Uint8Array(rt.buffer),shader,meta,caustics.distribution,caustics.lighting,caustics.uniform];
+      const output=new Uint8Array(32+parts.reduce((sum,p)=>sum+p.byteLength,0));
+      new Uint32Array(output.buffer,0,8).set([VERSION.TARGET_PACKET,shader.byteLength,camera.byteLength,rt.buffer.byteLength,meta.byteLength,caustics.distribution.byteLength,caustics.lighting.byteLength,caustics.uniform.byteLength]);
+      let offset=32;for(const part of parts){output.set(part,offset);offset+=part.byteLength;}return output;
+    }
     const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + rt.buffer.byteLength + shader.byteLength);
     new Uint32Array(result.buffer, 0, 4).set([1, shader.byteLength, camera.byteLength, rt.buffer.byteLength]);
     result.set(camera, 4 * WORD_BYTES); result.set(new Uint8Array(rt.buffer), 4 * WORD_BYTES + camera.byteLength);

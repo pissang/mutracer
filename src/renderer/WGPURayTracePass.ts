@@ -1,69 +1,108 @@
+import {causticDiagnostics} from './causticDiagnostics.js';
+import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
+import {CausticSeedCache} from './causticSeeds.js';
+import {causticEmissionTable} from './causticEmission.js';
+import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
+import {causticLightCompute} from './wgsl/causticLight.compute.js';
+import {
+  causticCasterSpheres,
+  hasStochasticCausticCaster,
+  causticCasterSphere,
+  isCausticSpecular
+} from './caustics.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {WGPUAov} from './WGPUAov.js';
 import {packAovScene} from './aovScene.js';
 import {aovMask, type AovKind} from './aov.js';
-import { proceduralEnvironmentPower } from './proceduralEnvironmentPower.js';
-import { WGPUSkyBaker } from './WGPUSkyBaker.js';
-import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
+import {proceduralEnvironmentPower} from './proceduralEnvironmentPower.js';
+import {WGPUSkyBaker} from './WGPUSkyBaker.js';
+import {
+  initialSceneConstants,
+  sceneAttributeLayout,
+  sceneTraversalConstants,
+  prepareSceneLightSampling,
+  writeTraceLighting,
+  packSceneAnalyticLights,
+  writeTraceQuality,
+  traceSampling,
+  writeTraceSampling
+} from './sceneAssembly.js';
 import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
 import {WGPUBindlessMaterialData} from './WGPUBindlessMaterialData.js';
 import {WGPUBindlessTextures} from './WGPUBindlessTextures.js';
 import {bindlessBindGroupLayouts, bindlessShaderSource} from './wgpuBindlessSource.js';
-import {bindlessLimitReason, resourceTableLayout, setResourceTable, type MaterialTextureSelection} from './wgpuBindless.js';
-import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
-import { wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS } from './wgpuShaderSource.js';
-import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
-import { constants } from './webgl.js';
-import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
-import { normalizeBounces } from './pathLimits.js';
-import { updateMeshInstanceColors } from './prepareMeshBVH.js';
-import { updateTLASInstanceColors } from './bvhAccel.js';
-import { getMaterialHashKey } from '../scene/openPbrSchema.js';
-import { sameInstanceMembership } from './meshInstances.js';
+import {
+  bindlessLimitReason,
+  resourceTableLayout,
+  setResourceTable,
+  type MaterialTextureSelection
+} from './wgpuBindless.js';
+import {wgpuMaterialConstants} from './wgpuMaterialConstants.js';
+import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} from './wgpuShaderSource.js';
+import {makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
+import {constants} from './webgl.js';
+import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
+import {normalizeBounces} from './pathLimits.js';
+import {updateMeshInstanceColors} from './prepareMeshBVH.js';
+import {updateTLASInstanceColors} from './bvhAccel.js';
+import {getMaterialHashKey} from '../scene/openPbrSchema.js';
+import {sameInstanceMembership} from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
-import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
-import { cameraApertureRadius } from './cameraLens.js';
-import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
-import { packCameraUniform } from './cameraUniform.js';
-import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
-import type { SamplingPattern } from './sampling.js';
-import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
-import { MeshMembershipCache } from './meshMembership.js';
-import { mergeRefitRanges } from './bvhAccel.js';
-import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates.js';
-import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
-import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
-import { WGPUEnvMapDistribution } from './WGPUEnvMapDistribution.js';
-import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
-import { WGPUShaderCapabilities } from './WGPUShaderCapabilities.js';
-import { wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
-import {lightShaderCapabilities, retainedShaderCapabilities, type ShaderCapabilities} from './shaderCapabilities.js';
-import { mat4 } from '../math.js';
+import {dirtyMeshInstanceIndices} from './prepareMeshBVH.js';
+import {cameraApertureRadius} from './cameraLens.js';
+import {getGeometryBvh, setGeometryBvh} from './geometryBvh.js';
+import {packCameraUniform} from './cameraUniform.js';
+import {SHADOW_CATCHER_ACCUMULATION_BYTES} from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
+import type {SamplingPattern} from './sampling.js';
+import {
+  DEPTH_SAMPLE_COUNT,
+  packDepthSampleArea,
+  unpackDepthSamples,
+  type DepthSampleArea
+} from './depthQuery.js';
+import {MeshMembershipCache} from './meshMembership.js';
+import {mergeRefitRanges} from './bvhAccel.js';
+import {
+  updatePreparedGeometries,
+  canUpdateGeometries,
+  geometryTopologyChanged,
+  packVertexAttributes
+} from './geometryUpdates.js';
+import {SceneEnvironmentCache, RectLightTextureTracker} from './sceneLightChanges.js';
+import {MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel} from './materialChanges.js';
+import {WGPUEnvMapDistribution} from './WGPUEnvMapDistribution.js';
+import {WGPUShaderCache, retainedShaderCapacity} from './WGPUShaderCache.js';
+import {WGPUShaderCapabilities} from './WGPUShaderCapabilities.js';
+import {wgpuSceneFeatureFlags} from './WGPUSceneFeatures.js';
+import {
+  lightShaderCapabilities,
+  retainedShaderCapabilities,
+  type ShaderCapabilities
+} from './shaderCapabilities.js';
+import {mat4} from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
-import MaterialTable, {
-  DEFAULT_MAX_TEXTURE_ARRAY_BYTES
-} from './MaterialTable.js';
-import type { SceneBackground, SceneLight } from '../scene/Scene.js';
-import { numberArraysEqual } from './util.js';
+import MaterialTable, {DEFAULT_MAX_TEXTURE_ARRAY_BYTES} from './MaterialTable.js';
+import type {SceneBackground, SceneLight} from '../scene/Scene.js';
+import {numberArraysEqual} from './util.js';
 import Camera from '../scene/Camera.js';
 import {
-  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform, backgroundMapRotation
+  generateBackgroundMapFromSceneBackground,
+  environmentRotation,
+  backgroundMapTransform,
+  backgroundMapRotation
 } from './envMapCreation.js';
-import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
+import {WORKGROUP_SIZE} from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
   type EnvironmentSource
 } from './envMapDistribution.js';
-import {
-  updateMeshInstances,
-  updateMeshInstanceTransforms
-} from './prepareMeshBVH.js';
+import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
 import {
   buildTLAS,
   concatBLASBuffers,
@@ -72,7 +111,7 @@ import {
   refitBLAS,
   refitTLAS
 } from './bvhAccel.js';
-import { isTextureDataSource } from '../scene/Texture.js';
+import {isTextureDataSource} from '../scene/Texture.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
@@ -86,14 +125,14 @@ import {
   EmissiveTriangleCache,
   LightChoiceBuffer,
   type EmissiveTriangle,
-  estimateEnvironmentPower,
+  estimateEnvironmentPower
 } from './lightSampling.js';
 import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
 } from './openPbrEnergyLut.js';
-import { offlineAdaptiveCompute } from './wgsl/offlineAdaptive.compute.js';
+import {offlineAdaptiveCompute} from './wgsl/offlineAdaptive.compute.js';
 import {
   normalizeOfflineAdaptiveSamplingOptions,
   type OfflineAdaptiveSamplingOptions,
@@ -182,6 +221,18 @@ class WGPURayTracePass {
   private _height: number = 0;
 
   private _meshes: Mesh[] = [];
+  private _causticKey = '';
+  private _photonMapping = false;
+  private _photonMap?: WGPUPhotonMap;
+  private _causticLight?: WGPUCausticLightPass;
+  private _causticSettings?: import('../Render.js').CausticSettings;
+  private _causticPerspective = true;
+  private _causticCameraScale = 1;
+  private _causticBounds: [number, number, number, number] = [0, 0, 0, 0];
+  private _compiledCausticKey = '';
+  private readonly _causticSeeds = new CausticSeedCache();
+  private _mnee = false;
+  private _lightTracing = false;
   private _sceneEnvironment = new SceneEnvironmentCache();
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
@@ -242,18 +293,29 @@ class WGPURayTracePass {
     const output = this._targetOutputs.get(target);
     if (!output) return;
     this._targetOutputs.delete(target);
+    this._causticLight?.release(target);
+    this._photonMap?.release(target);
     for (const buffer of output.buffers) buffer.destroy();
-    if (this._activeTarget === target) { this._rayTraceBindGroups = undefined; this._needsUpdateBindGroups = true; }
+    if (this._activeTarget === target) {
+      this._rayTraceBindGroups = undefined;
+      this._needsUpdateBindGroups = true;
+    }
   }
 
   getTargetMemoryBytes(target: object) {
-    return this._targetOutputs.get(target)?.buffers.reduce((sum, buffer) => sum + buffer.size, 0) ?? 0;
+    return (
+      (this._targetOutputs.get(target)?.buffers.reduce((sum, buffer) => sum + buffer.size, 0) ?? 0) +
+      (this._causticLight?.bytes(target) ?? 0) +
+      (this._photonMap?.bytes(target) ?? 0)
+    );
   }
 
   useTarget(target: object) {
+    if (this._photonMapping && this._activeTarget !== target) this._needsUpdateBindGroups = true;
     this._activeTarget = target;
     const output = this._targetOutputs.get(target);
-    [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] = output?.buffers ?? [];
+    [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] =
+      output?.buffers ?? [];
     if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
       this._rayTraceBindGroups[this._bindless ? 2 : 3] = output.bindGroup;
     } else {
@@ -319,6 +381,7 @@ class WGPURayTracePass {
 
   private _rayTracePipelineLayout?: GPUPipelineLayout;
   private _rayTraceBindGroups?: GPUBindGroup[];
+  private _photonEmissionGroups?: GPUBindGroup[];
   private _blasLayoutMask = 1;
   private _compiledBlasLayoutMask = 0;
   private _compiledAnisotropyDirections = false;
@@ -432,6 +495,10 @@ class WGPURayTracePass {
   getOutputBuffer() {
     return {
       color: this._outColorBuffer,
+      ...(this._photonMapping || causticDiagnostics.mneeDebugGroup >= 0 ? {wideHdr: true} : {}),
+      ...(this._lightTracing && this._causticLight?.get(this._activeTarget)
+        ? {caustic: this._causticLight.get(this._activeTarget)!}
+        : {}),
       normal: this._outNormalBuffer,
       albedo: this._outAlbedoBuffer,
       shadowCatcher: this._outShadowCatcherBuffer
@@ -685,9 +752,27 @@ class WGPURayTracePass {
   private _createPipelineLayout() {
     const descriptor = {
       label: 'Ray Trace Pipeline Layout',
-      bindGroupLayouts: (this._bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(layout => this._shaderCache.createBindGroupLayout(layout))
+      bindGroupLayouts: (this._bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(
+        (layout, index) => {
+          if (this._photonMapping && index === (this._bindless ? 0 : 1))
+            layout = {
+              ...layout,
+              entries: [
+                ...layout.entries,
+                ...[11, 12].map((binding) => ({
+                  binding: binding + (this._bindless ? 4 : 0),
+                  visibility: GPUShaderStage.COMPUTE,
+                  texture: {sampleType: 'uint' as const}
+                }))
+              ]
+            };
+          return this._shaderCache.createBindGroupLayout(layout);
+        }
+      )
     };
-    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout(this._bindless ? resourceTableLayout(descriptor) : descriptor);
+    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout(
+      this._bindless ? resourceTableLayout(descriptor) : descriptor
+    );
   }
 
   private _updateGPUBuffer(
@@ -748,29 +833,53 @@ class WGPURayTracePass {
       if (this._needsRefitTLAS) this._refitMeshInstances();
       if (this._dirtyColorMeshes.size) this._updateMeshColors();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
+      this._setCaustics(this._causticSettings);
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
       }
 
+      this._setCaustics(this._causticSettings);
+      if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._meshes);
+      if (this._photonMapping) {
+        this._photonMap ??= new WGPUPhotonMap(this._device);
+        const before = this._photonMap.get(this._activeTarget)?.data;
+        const requested = this._causticSettings?.photonMapping;
+        const n = typeof requested === 'object' ? requested.photonsPerSample : undefined;
+        const after = this._photonMap.ensure(
+          this._activeTarget,
+          Number.isFinite(n) && n! > 0 ? n! : (this._width * this._height) / 4
+        );
+        if (before !== after.data) this._needsUpdateBindGroups = true;
+      }
       const device = this._device;
-      const pipelineInputs = JSON.stringify([this._constants, this._hasDisplacement,
-        this._alphaBlendStrategy, this._blasLayoutMask, this._bakePipelineConstants]);
+      const pipelineInputs = JSON.stringify([
+        this._constants,
+        this._hasDisplacement,
+        this._alphaBlendStrategy,
+        this._blasLayoutMask,
+        this._bakePipelineConstants,
+        this._causticKey
+      ]);
       // Steady rendering must not repeat capability selection and cache-key
       // preparation. Dirty resources still take the normal bind-group path.
-      if (pipelineInputs === this._prevPipelineInputs && this._rayTracePipeline &&
-        this._rayTraceBindGroups && !this._needsUpdateBindGroups) return;
+      if (
+        pipelineInputs === this._prevPipelineInputs &&
+        this._rayTracePipeline &&
+        this._rayTraceBindGroups &&
+        !this._needsUpdateBindGroups
+      )
+        return;
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
       const requiredCapabilities = retainedShaderCapabilities(this._constants);
-      const constants: Record<string, boolean | number> = { ...this._constants, ...requiredCapabilities };
-      const hasAlpha = Boolean(constants.HAS_ALPHA_BLEND) &&
-        this._alphaBlendStrategy === 'deterministic-source-over';
+      const constants: Record<string, boolean | number> = {...this._constants, ...requiredCapabilities};
+      const hasAlpha =
+        Boolean(constants.HAS_ALPHA_BLEND) && this._alphaBlendStrategy === 'deterministic-source-over';
       const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
       const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
-      const defineCode = WGPU_SHADER_DEFINE_KEYS
-        .map((key) => `const ${key} = ${constants[key]};`)
-        .join('\n');
+      const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
         hasDisplacement: this._hasDisplacement,
+        caustics: this._causticKey,
         hasAlpha,
         hasSceneAlpha,
         hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
@@ -779,21 +888,27 @@ class WGPURayTracePass {
         bakePipelineConstants: this._bakePipelineConstants
       };
       const structureKey = JSON.stringify({
-        ...structure, defineCode,
+        ...structure,
+        defineCode,
         constants: pipelineConstantsKeys
-          .filter(key => !(key in requiredCapabilities))
-          .map(key => [key, constants[key]])
+          .filter((key) => !(key in requiredCapabilities))
+          .map((key) => [key, constants[key]])
       });
       // Prefer an existing compatible pipeline, including an earlier lean
       // variant. Only grow the current variant when it cannot cover an edit;
       // do not carry unused capabilities across different transport/layouts.
-      const capabilities = this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
-        retainedShaderCapabilities(this._constants,
-          structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined);
+      const capabilities =
+        this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
+        retainedShaderCapabilities(
+          this._constants,
+          structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
+        );
       Object.assign(constants, capabilities);
       const pipelineSignature = JSON.stringify({
         ...structure,
-        constants: Object.keys(constants).sort().map(key => [key, constants[key]])
+        constants: Object.keys(constants)
+          .sort()
+          .map((key) => [key, constants[key]])
       });
       attemptedPipelineSignature = pipelineSignature;
       if (pipelineSignature === this._failedPipelineSignature) {
@@ -802,10 +917,10 @@ class WGPURayTracePass {
       this._pipelineError = undefined;
       const previousPipelineConstantsKeys = wgpuPipelineConstantKeys(this._prevPipelineConstants);
       const needsCreateShaderModule =
+        this._causticKey !== this._compiledCausticKey ||
         !this._rayTracePipelineLayout ||
         !this._computeShaderModule ||
-        pipelineConstantsKeys.join(',') !==
-          previousPipelineConstantsKeys.join(',') ||
+        pipelineConstantsKeys.join(',') !== previousPipelineConstantsKeys.join(',') ||
         defineCode !== this._prevDefinesCode ||
         hasAlpha !== this._compiledHasAlpha ||
         hasSceneAlpha !== this._compiledSceneHasAlpha ||
@@ -813,48 +928,62 @@ class WGPURayTracePass {
         Boolean(constants.USE_COAT_NORMAL_FRAMES) !== this._compiledCoatNormals ||
         this._blasLayoutMask !== this._compiledBlasLayoutMask ||
         (this._bakePipelineConstants &&
-          pipelineConstantsKeys.some(
-            (key) => constants[key] !== this._prevPipelineConstants[key]
-          ));
+          pipelineConstantsKeys.some((key) => constants[key] !== this._prevPipelineConstants[key]));
 
       const needsCreatePipeline =
         needsCreateShaderModule ||
-        pipelineConstantsKeys.some(
-          (key) => constants[key] !== this._prevPipelineConstants[key]
-        );
+        pipelineConstantsKeys.some((key) => constants[key] !== this._prevPipelineConstants[key]);
 
-      compilationStartedAt = needsCreatePipeline
-        ? shaderCompilationNow()
-        : undefined;
+      compilationStartedAt = needsCreatePipeline ? shaderCompilationNow() : undefined;
       let sourceGenerationTimeMs = 0;
       let moduleCreationTimeMs = 0;
       let sourceBytes = this._shaderCompilationDiagnostics?.sourceBytes ?? 0;
       let sourceLines = this._shaderCompilationDiagnostics?.sourceLines ?? 0;
-      let sourceFingerprint =
-        this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
+      let sourceFingerprint = this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
       if (needsCreateShaderModule) {
+        this._compiledCausticKey = this._causticKey;
         const sourceGenerationStartedAt = shaderCompilationNow();
-        let rayTraceShaderCode = wgpuShaderSource(constants, {
-          hasDisplacement: this._hasDisplacement, hasAlpha, hasSceneAlpha,
-          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-          blasLayoutMask: this._blasLayoutMask,
-          dynamicEnvironment: true
-        }, this._bakePipelineConstants);
-        if (this._bindless) rayTraceShaderCode = bindlessShaderSource(rayTraceShaderCode, this._textureSelection.support!.enable);
+        let rayTraceShaderCode = wgpuShaderSource(
+          constants,
+          {
+            hasDisplacement: this._hasDisplacement,
+            hasAlpha,
+            hasSceneAlpha,
+            mnee: this._mnee,
+            mneeMethod:
+              typeof causticDiagnostics.mnee === 'object' ? causticDiagnostics.mnee.method : undefined,
+            lightTracing: this._lightTracing,
+            photonMapping: this._photonMapping,
+            photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
+            mneeDebugGroup: causticDiagnostics.mneeDebugGroup,
+            mneeSeeds: causticDiagnostics.mneeSeeds ?? 4,
+            mneeDamping: !!causticDiagnostics.mneeDamping,
+            smsRoulette: !!causticDiagnostics.smsRoulette,
+            mneeMaxDepth: causticDiagnostics.mneeMaxDepth ?? 20,
+            workgroupSize: this._mnee ? 1 : WORKGROUP_SIZE,
+            hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+            hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+            blasLayoutMask: this._blasLayoutMask,
+            dynamicEnvironment: true
+          },
+          this._bakePipelineConstants
+        );
+        if (this._bindless)
+          rayTraceShaderCode = bindlessShaderSource(
+            rayTraceShaderCode,
+            this._textureSelection.support!.enable
+          );
 
         sourceBytes = rayTraceShaderCode.length;
         sourceLines = shaderSourceLineCount(rayTraceShaderCode);
         sourceFingerprint = shaderSourceFingerprint(rayTraceShaderCode);
-        sourceGenerationTimeMs =
-          shaderCompilationNow() - sourceGenerationStartedAt;
+        sourceGenerationTimeMs = shaderCompilationNow() - sourceGenerationStartedAt;
         const moduleCreationStartedAt = shaderCompilationNow();
         this._computeShaderModule = this._shaderCache.createShaderModule({
           label: 'Ray Trace',
           code: rayTraceShaderCode
         });
-        moduleCreationTimeMs =
-          shaderCompilationNow() - moduleCreationStartedAt;
+        moduleCreationTimeMs = shaderCompilationNow() - moduleCreationStartedAt;
         this._compiledHasAlpha = hasAlpha;
         this._compiledSceneHasAlpha = hasSceneAlpha;
         this._compiledAnisotropyDirections = Boolean(constants.USE_ANISOTROPY_DIRECTIONS);
@@ -872,21 +1001,17 @@ class WGPURayTracePass {
             layoutScopeOpen = false;
             if (layoutError) throw layoutError;
           } catch (error) {
-            const scopedError = layoutScopeOpen
-              ? await device.popErrorScope().catch(() => null)
-              : null;
+            const scopedError = layoutScopeOpen ? await device.popErrorScope().catch(() => null) : null;
             this._rayTracePipelineLayout = undefined;
             const detail = joinWebGPUErrors(error, scopedError);
-            throw new Error(
-              `Unable to create the ray tracing pipeline layout: ${detail}`
-            );
+            throw new Error(`Unable to create the ray tracing pipeline layout: ${detail}`);
           }
         }
 
         // NOTE must before creating pipeline.
         // Because createComputePipelineAsync is async.
         // The constants may be changed after the pipeline is created(in setMesh).
-        this._prevPipelineConstants = { ...constants };
+        this._prevPipelineConstants = {...constants};
         this._prevDefinesCode = defineCode;
         this._needsUpdateBindGroups = true;
 
@@ -927,7 +1052,7 @@ class WGPURayTracePass {
                 sourceFingerprint
               }
             ],
-            pipelines: [{ ...diagnostic }],
+            pipelines: [{...diagnostic}],
             maximumConcurrentPipelineCount: 1,
             peakConcurrentPipelineCount: 1
           };
@@ -949,28 +1074,22 @@ class WGPURayTracePass {
             // Pipeline creation already reports WGSL failures. Pull the much
             // heavier module diagnostics only on that failure path so normal
             // startup does not schedule a second full-module inspection.
-            const info = await this._computeShaderModule!
-              .getCompilationInfo()
-              .catch(() => undefined);
-            const shaderErrors = (info?.messages ?? [])
-              .filter((message) => message.type === 'error');
+            const info = await this._computeShaderModule!.getCompilationInfo().catch(() => undefined);
+            const shaderErrors = (info?.messages ?? []).filter((message) => message.type === 'error');
             if (shaderErrors.length) {
               throw new Error(
                 shaderErrors
-                  .map((message) =>
-                    `Ray Trace WGSL ${message.lineNum}:${message.linePos} ${message.message}`
-                  )
+                  .map((message) => `Ray Trace WGSL ${message.lineNum}:${message.linePos} ${message.message}`)
                   .join('\n')
               );
             }
             throw error;
           } finally {
-            diagnostic.endedAtMs =
-              shaderCompilationNow() - pipelineCompilationStartedAt;
+            diagnostic.endedAtMs = shaderCompilationNow() - pipelineCompilationStartedAt;
             diagnostic.durationMs = diagnostic.endedAtMs;
           }
           this._rayTracePipeline = rayTracePipeline;
-          this._depthCompute = { module: this._computeShaderModule!, constants: pipelineConstants };
+          this._depthCompute = {module: this._computeShaderModule!, constants: pipelineConstants};
           const pipelineError = await device.popErrorScope();
           pipelineScopeOpen = false;
           if (pipelineError) throw pipelineError;
@@ -979,31 +1098,22 @@ class WGPURayTracePass {
             ...this._shaderCompilationDiagnostics!,
             status: 'ready',
             completedPipelineCount: 1,
-            pipelines: [{ ...diagnostic }],
-            pipelineCompilationTimeMs:
-              compilationCompletedAt - pipelineCompilationStartedAt,
+            pipelines: [{...diagnostic}],
+            pipelineCompilationTimeMs: compilationCompletedAt - pipelineCompilationStartedAt,
             totalTimeMs: compilationCompletedAt - compilationStartedAt!
           };
         } catch (error) {
-          const scopedError = pipelineScopeOpen
-            ? await device.popErrorScope().catch(() => null)
-            : null;
+          const scopedError = pipelineScopeOpen ? await device.popErrorScope().catch(() => null) : null;
           const detail = joinWebGPUErrors(error, scopedError);
-          if (
-            !this._bakePipelineConstants &&
-            isWebGPUPipelineSpecializationFailure(error, scopedError)
-          ) {
+          if (!this._bakePipelineConstants && isWebGPUPipelineSpecializationFailure(error, scopedError)) {
             const failedAt = shaderCompilationNow();
             if (this._shaderCompilationDiagnostics?.status === 'compiling') {
               this._shaderCompilationDiagnostics = {
                 ...this._shaderCompilationDiagnostics,
                 status: 'failed',
-                pipelineCompilationTimeMs: pipelineCompilationStartedAt == null
-                  ? undefined
-                  : failedAt - pipelineCompilationStartedAt,
-                totalTimeMs: compilationStartedAt == null
-                  ? undefined
-                  : failedAt - compilationStartedAt,
+                pipelineCompilationTimeMs:
+                  pipelineCompilationStartedAt == null ? undefined : failedAt - pipelineCompilationStartedAt,
+                totalTimeMs: compilationStartedAt == null ? undefined : failedAt - compilationStartedAt,
                 error: detail
               };
             }
@@ -1016,9 +1126,7 @@ class WGPURayTracePass {
             this._rayTraceBindGroups = undefined;
             this._computeShaderModule = undefined;
             this._prevPipelineConstants = {};
-            console.warn(
-              'WebGPU pipeline specialization failed; retrying with constants baked into WGSL.'
-            );
+            console.warn('WebGPU pipeline specialization failed; retrying with constants baked into WGSL.');
             return;
           }
           throw new Error(detail);
@@ -1034,6 +1142,65 @@ class WGPURayTracePass {
 
         this._updateBindGroups();
       }
+      if (this._lightTracing) {
+        this._causticLight ??= new WGPUCausticLightPass(device);
+        this._causticLight.setDistribution(
+          causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes),
+          causticEmissionTable(
+            this._analyticLights,
+            this._emissiveTriangles,
+            this._causticBounds[3],
+            this._envImageSource && 'sky' in this._envImageSource
+              ? proceduralEnvironmentPower(this._envImageSource)
+              : estimateEnvironmentPower(this._envImageSource)
+          )
+        );
+        let causticSource = causticLightCompute(
+          constants,
+          this._blasLayoutMask,
+          this._hasDisplacement,
+          'lightTracing',
+          '',
+          causticDiagnostics.fullEmissionRandom !== false
+        );
+        if (this._bindless)
+          causticSource = bindlessShaderSource(causticSource, this._textureSelection.support!.enable);
+        await this._causticLight.prepare(
+          causticSource,
+          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => this._rayTracePipeline!.getBindGroupLayout(i)),
+          !!this._bindless,
+          this._rayTracePipeline!
+        );
+      }
+      if (this._photonMapping && this._photonMap) {
+        const emitter = this._photonMap.emission;
+        emitter.setDistribution(
+          causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes),
+          causticEmissionTable(
+            this._analyticLights,
+            this._emissiveTriangles,
+            this._causticBounds[3],
+            this._envImageSource && 'sky' in this._envImageSource
+              ? proceduralEnvironmentPower(this._envImageSource)
+              : estimateEnvironmentPower(this._envImageSource)
+          )
+        );
+        let source = causticLightCompute(
+          constants,
+          this._blasLayoutMask,
+          this._hasDisplacement,
+          'photonMapping',
+          '',
+          causticDiagnostics.fullEmissionRandom !== false
+        );
+        if (this._bindless) source = bindlessShaderSource(source, this._textureSelection.support!.enable);
+        await emitter.prepare(
+          source,
+          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => this._rayTracePipeline!.getBindGroupLayout(i)),
+          !!this._bindless,
+          this._rayTracePipeline!
+        );
+      }
       this._retainedShaderCapabilities = capabilities;
       this._retainedShaderStructure = structureKey;
       this._shaderCapabilities.remember(structureKey, capabilities);
@@ -1047,12 +1214,9 @@ class WGPURayTracePass {
         this._shaderCompilationDiagnostics = {
           ...this._shaderCompilationDiagnostics,
           status: 'failed',
-          pipelineCompilationTimeMs: pipelineCompilationStartedAt == null
-            ? undefined
-            : failedAt - pipelineCompilationStartedAt,
-          totalTimeMs: compilationStartedAt == null
-            ? undefined
-            : failedAt - compilationStartedAt,
+          pipelineCompilationTimeMs:
+            pipelineCompilationStartedAt == null ? undefined : failedAt - pipelineCompilationStartedAt,
+          totalTimeMs: compilationStartedAt == null ? undefined : failedAt - compilationStartedAt,
           error: getWebGPUErrorMessage(error)
         };
       }
@@ -1223,7 +1387,7 @@ class WGPURayTracePass {
   }
 
   private _updateBindGroups() {
-    const { _device } = this;
+    const {_device} = this;
     const bindGroupPipeline = this._rayTracePipeline;
     if (!bindGroupPipeline) {
       throw new Error('WebGPU ray tracing bind-group pipeline is not ready.');
@@ -1232,49 +1396,66 @@ class WGPURayTracePass {
       throw new Error('WebGPU BVH buffers are not ready.');
     }
     const bufferEntries: GPUBindGroupEntry[] = [
-        this._bvhBuffer,
-        this._instancesBuffer,
-        this._attrBuffers,
-        this._materialsBuffer
-      ].map(
-        (buffer, i) =>
-          ({
-            binding: i,
-            resource: {
-              buffer: buffer!
-            }
-          }) satisfies GPUBindGroupEntry
-      );
-    const textureEntries: GPUBindGroupEntry[] = [
-        ...(this._bindless ? [] : [{
-          binding: 0,
-          resource: this._mapsSampler
-        },
-        {
-          binding: 1,
-          resource: this._maps!.createView()
-        }]),
-        {
-          binding: 3,
+      this._bvhBuffer,
+      this._instancesBuffer,
+      this._attrBuffers,
+      this._materialsBuffer
+    ].map(
+      (buffer, i) =>
+        ({
+          binding: i,
           resource: {
-            buffer: this._bindless?.metadata ?? this._mapInfoUniform
+            buffer: buffer!
           }
-        },
-        { binding: 4, resource: this._envTex!.createView() },
-        { binding: 5, resource: this._envDistributionTex!.createView() },
-        { binding: 6, resource: this._backgroundTex!.createView() },
-        { binding: 8, resource: this._lightSamplingTexture!.createView() },
-        { binding: 9, resource: this._openPbrEnergyLut.createView() },
-        {
-          binding: 10,
-          resource: this._adaptiveSamplingTexture.createView()
+        }) satisfies GPUBindGroupEntry
+    );
+    const textureEntries: GPUBindGroupEntry[] = [
+      ...(this._bindless
+        ? []
+        : [
+            {
+              binding: 0,
+              resource: this._mapsSampler
+            },
+            {
+              binding: 1,
+              resource: this._maps!.createView()
+            }
+          ]),
+      {
+        binding: 3,
+        resource: {
+          buffer: this._bindless?.metadata ?? this._mapInfoUniform
         }
-      ];
-    const bufferBindGroup = _device.createBindGroup({layout: bindGroupPipeline.getBindGroupLayout(0),
-      entries: this._bindless ? bufferEntries.concat(textureEntries.map(e => ({...e, binding: e.binding + 4}))) : bufferEntries});
-    const texturesBindGroup = this._bindless ? undefined : _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(1), entries: textureEntries
+      },
+      {binding: 4, resource: this._envTex!.createView()},
+      {binding: 5, resource: this._envDistributionTex!.createView()},
+      {binding: 6, resource: this._backgroundTex!.createView()},
+      ...(this._photonMapping
+        ? [
+            {binding: 11, resource: this._photonMap!.get(this._activeTarget)!.data.createView()},
+            {binding: 12, resource: this._photonMap!.get(this._activeTarget)!.headers.createView()}
+          ]
+        : []),
+      {binding: 8, resource: this._lightSamplingTexture!.createView()},
+      {binding: 9, resource: this._openPbrEnergyLut.createView()},
+      {
+        binding: 10,
+        resource: this._adaptiveSamplingTexture.createView()
+      }
+    ];
+    const bufferBindGroup = _device.createBindGroup({
+      layout: bindGroupPipeline.getBindGroupLayout(0),
+      entries: this._bindless
+        ? bufferEntries.concat(textureEntries.map((e) => ({...e, binding: e.binding + 4})))
+        : bufferEntries
     });
+    const texturesBindGroup = this._bindless
+      ? undefined
+      : _device.createBindGroup({
+          layout: bindGroupPipeline.getBindGroupLayout(1),
+          entries: textureEntries
+        });
     const uniformBindGroup = _device.createBindGroup({
       layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 1 : 2),
       entries: Object.keys(this._uniforms).map(
@@ -1287,21 +1468,42 @@ class WGPURayTracePass {
           }) satisfies GPUBindGroupEntry
       )
     });
+    if (this._photonMapping) {
+      // Explicit layouts still track unused textures. Bind a placeholder while
+      // emission writes the real packed map through its storage view.
+      const emissionEntries = textureEntries.map((entry) =>
+        entry.binding === 11 || entry.binding === 12
+          ? {...entry, resource: this._photonMap!.placeholder.createView()}
+          : entry
+      );
+      const sceneGroup = _device.createBindGroup({
+        layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 0 : 1),
+        entries: this._bindless
+          ? bufferEntries.concat(emissionEntries.map((e) => ({...e, binding: e.binding + 4})))
+          : emissionEntries
+      });
+      this._photonEmissionGroups = this._bindless
+        ? [sceneGroup, uniformBindGroup]
+        : [bufferBindGroup, sceneGroup, uniformBindGroup];
+    }
     const target = this._targetOutputs.get(this._activeTarget)!;
-    const outputBindGroup = target.pipeline === bindGroupPipeline && target.bindGroup || _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 2 : 3),
-      entries: [
-        this._outColorBuffer,
-        this._outNormalBuffer,
-        this._outAlbedoBuffer,
-        this._outShadowCatcherBuffer
-      ].map(
-        (buffer, i) => ({
-          binding: i,
-          resource: { buffer }
-        }) satisfies GPUBindGroupEntry
-      )
-    });
+    const outputBindGroup =
+      (target.pipeline === bindGroupPipeline && target.bindGroup) ||
+      _device.createBindGroup({
+        layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 2 : 3),
+        entries: [
+          this._outColorBuffer,
+          this._outNormalBuffer,
+          this._outAlbedoBuffer,
+          this._outShadowCatcherBuffer
+        ].map(
+          (buffer, i) =>
+            ({
+              binding: i,
+              resource: {buffer}
+            }) satisfies GPUBindGroupEntry
+        )
+      });
 
     target.bindGroup = outputBindGroup;
     target.pipeline = bindGroupPipeline;
@@ -1312,9 +1514,6 @@ class WGPURayTracePass {
       outputBindGroup
     ];
   }
-
-
-
 
   createPass(
     encoder: GPUCommandEncoder,
@@ -1345,11 +1544,7 @@ class WGPURayTracePass {
     const dispatchHeight = Math.ceil(this._height / tiles[1]);
 
     // Update other uniforms
-    this._device.queue.writeBuffer(
-      this._uniforms.rtUniform,
-      0,
-      this._rtUniform.buffer
-    );
+    this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
 
     if (clear) {
       encoder.clearBuffer(this._outColorBuffer);
@@ -1358,6 +1553,40 @@ class WGPURayTracePass {
       encoder.clearBuffer(this._outShadowCatcherBuffer);
     }
 
+    const offset = this._rtUniform.views.scaleOffset;
+    const causticBatch = this._lightTracing && offset[2] === tiles[0] - 1 && offset[3] === tiles[1] - 1;
+    const photonBatch = this._photonMapping && offset[2] === 0 && offset[3] === 0;
+    if (photonBatch && this._photonMap) {
+      const requested = this._causticSettings?.photonMapping,
+        initial = typeof requested === 'object' ? requested.initialRadius : undefined;
+      const radius =
+        Number.isFinite(initial) && initial! > 0 ? initial! : Math.max(this._causticBounds[3] * 0.03, 1e-4);
+      const batch = Math.max(
+        1,
+        this._rtUniform.views.sampleCount[0] - this._rtUniform.views.sampleSequenceOffset[0] + 1
+      );
+      this._photonMap.encode(
+        encoder,
+        this._photonEmissionGroups!,
+        this._activeTarget,
+        photonRadius(radius, batch, causticDiagnostics.photonAlpha ?? 2 / 3),
+        {
+          querySet: timing?.querySet,
+          resourceTable: this._bindless?.table,
+          orthographic: !this._causticPerspective,
+          width: this._width,
+          height: this._height,
+          clear,
+          run: true,
+          photons: 1,
+          batch: Math.floor(this._rtUniform.views.sampleCount[0]),
+          mnee: this._mnee,
+          viewProjection: new Float32Array(16),
+          casterSphere: this._causticBounds,
+          cameraScale: this._causticCameraScale
+        }
+      );
+    }
     const descriptor: GPUComputePassDescriptor = {};
     const querySet = timing?.querySet;
     if (querySet) {
@@ -1378,12 +1607,44 @@ class WGPURayTracePass {
       pass.setBindGroup(idx, bindGroup);
     });
 
+    if (causticDiagnostics.captureRoots) causticDiagnostics.rootPass = this;
     pass.dispatchWorkgroups(
-      Math.ceil(dispatchWidth / WORKGROUP_SIZE),
-      Math.ceil(dispatchHeight / WORKGROUP_SIZE),
+      Math.ceil(dispatchWidth / (this._mnee ? 1 : WORKGROUP_SIZE)),
+      Math.ceil(dispatchHeight / (this._mnee ? 1 : WORKGROUP_SIZE)),
       1
     );
     pass.end();
+    if (this._lightTracing && this._causticLight) {
+      const viewProjection = mat4.create();
+      mat4.invert(viewProjection, this._viewProjInv);
+      const requested = this._causticSettings?.lightTracing;
+      const count = typeof requested === 'object' ? requested.photonsPerSample : undefined;
+      const photons = Math.min(
+        this._device.limits.maxComputeWorkgroupsPerDimension * 64,
+        Math.max(1, Math.round(Number.isFinite(count) ? count! : (this._width * this._height) / 4))
+      );
+      this._causticLight.encode(
+        encoder,
+        this._rayTraceBindGroups!.slice(0, this._bindless ? 2 : 3),
+        this._activeTarget,
+        {
+          querySet: causticBatch ? querySet : undefined,
+          width: this._width,
+          height: this._height,
+          clear,
+          run: !!causticBatch,
+          photons,
+          batch: Math.floor(this._rtUniform.views.sampleCount[0]),
+          mnee: this._mnee,
+          resourceTable: this._bindless?.table,
+          orthographic: !this._causticPerspective,
+          viewProjection,
+          casterSphere: this._causticBounds,
+          cameraScale: this._causticCameraScale
+        }
+      );
+    }
+    return (causticBatch ? 1 : 0) | (photonBatch ? 2 : 0);
   }
 
   async getDebugBVHData() {
@@ -1522,8 +1783,40 @@ class WGPURayTracePass {
     );
   }
 
-  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
+  setQuality(options: {
+    bounces: number;
+    bevel: boolean;
+    dispersionWavelengths: 1 | 3;
+    directLightCandidates: number;
+    caustics?: import('../Render.js').CausticSettings;
+  }) {
+    WGPURayTracePass.prototype._setCaustics.call(this, options.caustics);
     writeTraceQuality(this._rtUniform.views, options);
+  }
+
+  private _setCaustics(settings?: import('../Render.js').CausticSettings) {
+    this._causticSettings = settings;
+    const hasCaster =
+      !!(causticDiagnostics.mnee || settings?.lightTracing || settings?.photonMapping) &&
+      this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
+    const mnee = !!causticDiagnostics.mnee && hasCaster;
+    if (mnee !== !!this._mnee) this._needsUpdateLightSamplingData = true;
+    this._mnee = mnee;
+    const photonSupported =
+      !(settings?.lightTracing || settings?.photonMapping) ||
+      !hasCaster ||
+      !hasStochasticCausticCaster(this._meshes);
+    this._lightTracing = !!settings?.lightTracing && hasCaster && photonSupported;
+    const photonMapping = !!settings?.photonMapping && hasCaster && photonSupported;
+    if (photonMapping !== !!this._photonMapping) {
+      this._rayTracePipelineLayout = undefined;
+      this._needsUpdateBindGroups = true;
+    }
+    this._photonMapping = photonMapping;
+    this._causticKey =
+      this._mnee || this._lightTracing || this._photonMapping
+        ? `${this._mnee}/${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.mneeDebugGroup}/${causticDiagnostics.mneeSeeds ?? 4}/${!!causticDiagnostics.mneeDamping}/${!!causticDiagnostics.smsRoulette}/${causticDiagnostics.mneeMaxDepth ?? 20}/${typeof causticDiagnostics.mnee === 'object' ? causticDiagnostics.mnee.method : 'newton'}`
+        : '';
   }
 
   private _setEnvMap(envImage: EnvironmentSource | undefined) {
@@ -1928,16 +2221,51 @@ class WGPURayTracePass {
   }
 
   private _updateLightSamplingData() {
-    this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
-    const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
-      this._envImageSource && 'sky' in this._envImageSource ? proceduralEnvironmentPower(this._envImageSource) : estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch,
-      this._shadowCatcherLightChoices);
+    this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(
+      this._analyticLights.map((light) => light.type),
+      this._emissiveTriangles.length
+    );
+    const lighting = prepareSceneLightSampling(
+      this._analyticLights,
+      this._emissiveTriangles,
+      this._envImageSource && 'sky' in this._envImageSource
+        ? proceduralEnvironmentPower(this._envImageSource)
+        : estimateEnvironmentPower(this._envImageSource),
+      this._device.limits.maxTextureDimension2D,
+      this._lightChoices,
+      this._lightSamplingScratch,
+      this._shadowCatcherLightChoices
+    );
+    if (this._mnee && this._preparedMeshData) {
+      const seed = this._causticSeeds.collect(
+        this._preparedMeshData.instanceBindings,
+        this._preparedMeshData.materials
+      );
+      const offset = lighting.lightData.length / 4;
+      this._constants.CAUSTIC_SEED_OFFSET = offset;
+      this._constants.CAUSTIC_SEED_COUNT = seed.count;
+      const texels = offset + seed.data.length / 4,
+        width = Math.min(Math.max(1, texels), this._device.limits.maxTextureDimension2D),
+        height = Math.ceil(texels / width);
+      const data = new Float32Array(width * height * 4);
+      data.set(lighting.lightData);
+      data.set(seed.data, offset * 4);
+      lighting.lightData = data;
+      lighting.lightWidth = width;
+      lighting.lightHeight = height;
+    } else {
+      delete this._constants.CAUSTIC_SEED_OFFSET;
+      delete this._constants.CAUSTIC_SEED_COUNT;
+    }
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;
     const {lightWidth: width, lightHeight: height, lightData: textureData} = lighting;
     writeTraceLighting(this._rtUniform.views, lighting);
-    const resized = !this._lightSamplingTexture || width !== this._lightSamplingTextureSize[0] || height !== this._lightSamplingTextureSize[1];
+    const resized =
+      !this._lightSamplingTexture ||
+      width !== this._lightSamplingTextureSize[0] ||
+      height !== this._lightSamplingTextureSize[1];
     if (
       !this._lightSamplingTexture ||
       width !== this._lightSamplingTextureSize[0] ||
@@ -1962,15 +2290,20 @@ class WGPURayTracePass {
       let changed = row < height && full;
       if (row < height && !full) {
         for (let i = row * width * 4; i < (row + 1) * width * 4; i++) {
-          if (words[i] !== oldWords![i]) { changed = true; break; }
+          if (words[i] !== oldWords![i]) {
+            changed = true;
+            break;
+          }
         }
       }
       if (changed && startRow < 0) startRow = row;
       if (!changed && startRow >= 0) {
         this._device.queue.writeTexture(
-          { texture: this._lightSamplingTexture!, origin: [0, startRow] },
+          {texture: this._lightSamplingTexture!, origin: [0, startRow]},
           textureData.subarray(startRow * width * 4, row * width * 4),
-          { bytesPerRow: width * 16 }, { width, height: row - startRow });
+          {bytesPerRow: width * 16},
+          {width, height: row - startRow}
+        );
         startRow = -1;
       }
     }
@@ -2471,6 +2804,10 @@ class WGPURayTracePass {
 
   // TODO reuse the code of RayTraceNode
   setCamera(camera: Camera) {
+    this._causticPerspective = camera.projection === 'perspective';
+    const projection = camera.getProjectionMatrix(this._targetAspect);
+    this._causticCameraScale = Math.abs(projection[0] * projection[5]) / 4;
+    this._setCaustics(this._causticSettings);
     const viewProjectionInvMat = this._viewProjInv;
     this._apertureRadius = cameraApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
@@ -2580,11 +2917,15 @@ class WGPURayTracePass {
     this._disposed = true;
     this._envDistribution?.dispose();
     this._skyBaker?.dispose();
-    this._bindless?.dispose(); this._retiredBindless.forEach(textures => textures.dispose()); this._retiredBindless.clear();
+    this._bindless?.dispose();
+    this._retiredBindless.forEach((textures) => textures.dispose());
+    this._retiredBindless.clear();
+    this._causticLight?.dispose();
+    this._photonMap?.dispose();
     this._shaderCache.clear();
     this._shaderCapabilities.clear();
     const buffers = new Set<GPUBuffer | undefined>([
-      ...Array.from(this._targetOutputs.values()).flatMap(target => target.buffers),
+      ...Array.from(this._targetOutputs.values()).flatMap((target) => target.buffers),
       this._mapInfoUniform,
       this._attrBuffers,
       this._materialsBuffer,

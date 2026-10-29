@@ -8,7 +8,7 @@ import type {WGPUShaderFeatures} from '../../src/renderer/wgpuShaderSource.js';
 export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false, opaqueClosest = false): string {
   if (empty) return /* wgsl */ `
 fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
-fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool { return false; }
+fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool { return false; }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) { (*si).hit = false; }
 `;
   const vector = features.hasAnisotropyDirections || features.hasCoatNormals ? '.xyz' : '';
@@ -40,7 +40,7 @@ fn mtWorldToLocal(instance: i32) -> mat4x4f {
   return mat4x4f(instancesBuffer[instance * 10 + 1], instancesBuffer[instance * 10 + 2],
     instancesBuffer[instance * 10 + 3], instancesBuffer[instance * 10 + 4]);
 }
-fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i32,
+fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i32, skipInstance:i32,
     doubleSided: bool, isRefractionRay: bool) -> MtHit {
   var query: ray_query;
   // OPAQUE is enabled only for all-double-sided, non-alpha, non-PDM geometry.
@@ -58,7 +58,7 @@ fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i3
     let record = mtRecord(instance, candidate.primitive_index);
 ${diagnostic ? `    mtCandidateCount++;
     if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedSeen++; }` : ''}
-    if (!shadow && record == skipRecord) { continue; }
+    if (!shadow && record == skipRecord && instance == skipInstance) { continue; }
     let index = mtIndices(instance, record);
     var tri = mtTriangle(index);
     let w2l = mtWorldToLocal(instance);
@@ -139,17 +139,17 @@ fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
     hit.instance, hit.normal, o + hit.t * d, -1);
 }
 fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0), doubleSided, isRefractionRay);
+  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0), (*si).instanceIndex, doubleSided, isRefractionRay);
 ${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit.instance, hit.record, hit.t, hit.barycentric, bounces, doubleSided, isRefractionRay, (*si).triangleIndex);` : ''}
   mtComplete(ray, si, hit);
 }
-fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool {
   let limit = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
   if (limit <= 1e-7) { return false; }
-  return mtTrace(ray, limit, true, -1, -1, true, false).kind != 0u;
+  return mtTrace(ray, limit, true, -1, -1, -1, true, false).kind != 0u;
 }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
-  mtComplete(ray, si, mtTrace(ray, maxDistance, false, instanceIndex, -1, true, false));
+  mtComplete(ray, si, mtTrace(ray, maxDistance, false, instanceIndex, -1, -1, true, false));
 }
 `;
 }
@@ -180,7 +180,7 @@ fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
   }
   let software = ${backend === 'hardware' ? 'SceneQueryHit(false, -1, -1, RAY_MAX_DISTANCE, vec3f(0.0))' : 'querySceneSoftware(ray)'};
   ${empty || backend === 'software' ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
-  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, false, false);
+  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, -1, false, false);
   let hardware = SceneQueryHit(hw.kind != 0u, select(-1, hw.instance, hw.kind != 0u),
     select(-1, hw.record, hw.kind != 0u), select(RAY_MAX_DISTANCE, hw.t, hw.kind != 0u), hw.barycentric);`}
   outColor[idx] = bitcast<vec4f>(vec4u(u32(software.hit), bitcast<u32>(software.instance), bitcast<u32>(software.record), bitcast<u32>(software.t)));

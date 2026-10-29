@@ -46,6 +46,9 @@ export interface Settings {
 
   maxSamples: number;
   bounces: number;
+  caustics: boolean;
+  causticLightTracing:boolean;
+  causticPhotonMapping:boolean;
   resolutionScale: number;
   samplingPattern: SamplingPattern;
   bvhBuilder: BVHBuilder;
@@ -121,6 +124,8 @@ export const DEFAULT_SETTINGS: Settings = {
   groundOpacity: 0.8,
   maxSamples: 64,
   bounces: 6,
+  caustics: false,
+  causticLightTracing:true,causticPhotonMapping:false,
   resolutionScale: 0.5,
   samplingPattern: 'sobol',
   // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
@@ -298,7 +303,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'
@@ -350,6 +355,8 @@ function validateSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    caustics: settings.caustics === true,
+    causticLightTracing: settings.causticLightTracing===true,causticPhotonMapping:settings.causticPhotonMapping===true,
     output: settings.output === 'shadow' ? 'final' : settings.output,
     lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,

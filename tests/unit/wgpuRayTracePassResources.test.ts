@@ -192,7 +192,7 @@ describe('WGPURayTracePass output resource lifetime', () => {
     expect(createBuffer).toHaveBeenCalledTimes(count);
     expect(pass.getTargetMemoryBytes(final)).toBe(16 * 16 * 96);
     expect(pass.getTargetMemoryBytes(preview)).toBe(8 * 8 * 96);
-    for (const buffer of [...Object.values(finalBuffers), ...Object.values(previewBuffers)]) {
+    for (const buffer of [...Object.values(finalBuffers), ...Object.values(previewBuffers)].filter((buffer): buffer is GPUBuffer => !!buffer)) {
       expect(buffer.destroy).not.toHaveBeenCalled();
     }
     pass.dispose();

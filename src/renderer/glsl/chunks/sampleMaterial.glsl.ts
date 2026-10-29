@@ -2,8 +2,11 @@
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
 import { glsl } from '../../shader.js';
-export default glsl`
+export function createSampleMaterialGlsl(caustics = false) { return glsl`
 float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
+  // Secondary intersections remain two-sided, but one-sided emission does not.
+  float facing=dot(si.faceNormal,-path.ray.d);
+  if(facing<=0.0&&fetchMatData(si.materialIndex*MAT_DATA_SIZE+MAT_ROW_ALPHA).z<0.5)return 0.0;
 #ifdef HAS_EMISSIVE_LIGHTS
   if(!path.fromEye && emissiveWeightTotal>0.0) {
     vec3 emission=fetchMatData(si.materialIndex*MAT_DATA_SIZE+MAT_ROW_EMISSION).rgb;
@@ -19,7 +22,11 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   vec3 lightRnd = vec3(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
 
   LightSampleRec lightSample;
-  sampleLight(si.position, lightRnd, lightSample, false);
+  sampleLight(si.position, lightRnd, lightSample, false);${caustics ? /* glsl */ `
+  if(isSurface&&isCausticSpecular(mat)){
+    Path connection=path;causticAdvance(connection,mat,dot(ffnormal,lightSample.direction)<0.0,true);
+    if(lightSample.sourceType!=0&&causticHitOwned(connection))return vec3(0.0);
+  }` : ''}
   lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
 
   vec3 lightDir = lightSample.direction;
@@ -103,7 +110,10 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   float misWeight = lightSample.isDelta
     ? 1.0
     : sampling_power_heuristic(lightPdf, scatteringPdf);
-  return misWeight > 0.0
+${caustics?`  Path connection=path;
+  if(isSurface&&isCausticSpecular(mat))causticAdvance(connection,mat,dot(ffnormal,lightDir)<0.0,true);
+  causticHotRecord(connection,misWeight*lightSample.emission*f/lightPdf,0);
+`:''}  return misWeight > 0.0
     ? misWeight * lightSample.emission * f / lightPdf
     : vec3(0.0);
 }
@@ -218,7 +228,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 
   // Direct lighting
   if (!mediumSampled) {
-    path.li += emissiveHitMisWeight(si,path) * mat.emission * path.beta;
+    ${caustics ? 'if (!causticHitOwned(path)) { causticHotRecord(path,emissiveHitMisWeight(si,path)*mat.emission,1);causticEmitterRecord(si,path,emissiveHitMisWeight(si,path),mat.emission); ' : ''}path.li += emissiveHitMisWeight(si,path) * mat.emission * path.beta;${caustics ? ' }' : ''}
     if (mat.materialType == UNLIT) {
       path.abort = true;
       return;
@@ -233,7 +243,8 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     mat.geometryBitangent = si.geometryBitangent;
     prepared = openpbr_prepare(surfaceTangent, mat, -path.ray.d, ffnormal);
     path.li += DirectLight(si, mat, prepared, path, ffnormal, true) * path.beta;
-    // Sample BSDF for color and outgoing direction
+${caustics ? /* glsl */ `    vec3 manifoldValue=path.beta*mneeContribution(si,prepared);causticEstimateRecord(manifoldValue,0);path.li+=manifoldValue;
+` : ''}    // Sample BSDF for color and outgoing direction
     bool isNextRefraction;
     vec3 f = openpbr_sample_prepared(
       prepared,
@@ -255,7 +266,8 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       path.abort = true;
       return;
     }
-    path.beta *= f / scatteringPdf;
+${caustics ? /* glsl */ `    causticAdvance(path, mat, isNextRefraction, true);
+` : ''}    path.beta *= f / scatteringPdf;
     crossedBoundary = !mat.thinWalled &&
       isNextRefraction;
     path.isNextRefraction = isNextRefraction;
@@ -269,7 +281,8 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 
   path.scatteringPdf = scatteringPdf;
   initRay(path.ray, path.ray.o, scatterDir);
-  if (mediumSampled) {
+  if (mediumSampled) {${caustics ? /* glsl */ `
+    causticAdvance(path, mat, false, false);` : ''}
     path.isNextRefraction = false;
   }
   path.fromEye = false;
@@ -294,3 +307,5 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 #endif
 }
 `;
+}
+export default createSampleMaterialGlsl();

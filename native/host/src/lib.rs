@@ -19,6 +19,7 @@ use wgpu::util::DeviceExt;
 pub mod logging;
 mod aov;
 pub mod api;
+mod caustics;
 mod commit_plan;
 mod compilation;
 pub mod context;
@@ -546,6 +547,8 @@ fn compile_pipeline(
 /// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 struct Target {
+    workgroup_size: u32,
+    caustics: Option<caustics::State>,
     aov_shader: wgpu::ShaderModule,
     aov_pipelines: aov::PipelineCache,
     width: u32,
@@ -889,6 +892,8 @@ impl GpuScene {
                 .filter_map(|id| buffers.remove(&id).map(|b| (id, b)))
                 .collect();
             Some(Target {
+                workgroup_size: 8,
+                caustics: None,
                 aov_shader: depth_shader.clone(),
                 aov_pipelines: aov_pipelines.clone(),
                 width: scene.width,
@@ -930,7 +935,11 @@ impl GpuScene {
         ))
     }
     fn add_samples(&self, target: &mut Target, additional: u32) -> Result<()> {
-        let timer = profiling::GpuTimer::new(&self.gpu.device, additional, false);
+        let timer = profiling::GpuTimer::new(
+            &self.gpu.device,
+            additional * target.caustics.as_ref().map_or(1, |c| c.pass_count()),
+            false,
+        );
         self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         crate::GpuDevice::wait(&self.gpu.device)?;
         if profiling::gpu_enabled() {
@@ -982,10 +991,18 @@ impl GpuScene {
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
+        let caustic_packet = packet.caustics;
+        let workgroup_size = caustic_packet
+            .as_ref()
+            .map_or(8, |p| p.metadata.workgroup_size);
+        let target_scene = caustic_packet
+            .as_ref()
+            .map(|p| caustics::State::extend_scene(&self.scene, p))
+            .unwrap_or_else(|| self.scene.clone());
         let (pipeline, layouts, aov_shader, aov_pipelines) = match packet.shader {
             Some(source) => {
                 let (compiled, _) =
-                    compile_pipeline(&self.gpu, &self.scene, source, self.hardware.is_some())?;
+                    compile_pipeline(&self.gpu, &target_scene, source, self.hardware.is_some())?;
                 (
                     Some(compiled.pipeline),
                     compiled.layouts,
@@ -1050,6 +1067,21 @@ impl GpuScene {
             }
             queue.submit([encoder.finish()]);
         }
+        let caustics = caustic_packet
+            .map(|packet| {
+                caustics::State::new(
+                    &self.gpu,
+                    packet,
+                    &layouts,
+                    &self.scene,
+                    &self.buffers,
+                    &self.textures,
+                    &self.samplers,
+                    &buffers,
+                    size,
+                )
+            })
+            .transpose()?;
         let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("MuTracer render target resources"),
@@ -1080,7 +1112,13 @@ impl GpuScene {
         let output = group(
             layout::group::OUTPUT,
             &[
-                (layout::output_binding::COLOR, &buffers[&res::COLOR]),
+                (
+                    layout::output_binding::COLOR,
+                    caustics
+                        .as_ref()
+                        .and_then(|c| c.pt_color.as_ref())
+                        .unwrap_or(&buffers[&res::COLOR]),
+                ),
                 (layout::output_binding::NORMAL, &buffers[&res::NORMAL]),
                 (layout::output_binding::ALBEDO, &buffers[&res::ALBEDO]),
                 (
@@ -1090,6 +1128,8 @@ impl GpuScene {
             ],
         );
         Ok(Target {
+            workgroup_size,
+            caustics,
             aov_shader,
             aov_pipelines,
             width: size[0],
@@ -1121,7 +1161,11 @@ impl GpuScene {
         let samples = start..end;
         let groups = [
             &self.groups[layout::group::SCENE],
-            &self.groups[layout::group::TEXTURES],
+            target
+                .caustics
+                .as_ref()
+                .map(|c| &c.textures)
+                .unwrap_or(&self.groups[layout::group::TEXTURES]),
             &target.groups[0],
             &target.groups[1],
         ];
@@ -1142,16 +1186,44 @@ impl GpuScene {
             );
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let pair = (sample - start) * target.caustics.as_ref().map_or(1, |c| c.pass_count());
+            let pt_pair = pair + target.caustics.as_ref().map_or(0, |c| c.pt_pair());
+            let batch = f32::from_le_bytes(frame[..4].try_into().unwrap()).max(0.) as u32;
+            if let Some(c) = &target.caustics {
+                c.before(
+                    &self.gpu,
+                    &mut encoder,
+                    [groups[0], groups[1], groups[2]],
+                    sample,
+                    batch,
+                    timer,
+                    pair,
+                );
+            }
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    timestamp_writes: timer.map(|t| t.pass(sample - start)),
+                    timestamp_writes: timer.map(|t| t.pass(pt_pair)),
                     ..Default::default()
                 });
                 pass.set_pipeline(pipeline);
                 for (index, group) in groups.iter().enumerate() {
                     pass.set_bind_group(index as u32, *group, &[]);
                 }
-                pass.dispatch_workgroups(target.width.div_ceil(8), target.height.div_ceil(8), 1);
+                pass.dispatch_workgroups(
+                    target.width.div_ceil(target.workgroup_size),
+                    target.height.div_ceil(target.workgroup_size),
+                    1,
+                );
+            }
+            if let Some(c) = &target.caustics {
+                c.after(
+                    &self.gpu,
+                    &mut encoder,
+                    [groups[0], groups[1], groups[2]],
+                    batch,
+                    timer,
+                    pt_pair + 1,
+                );
             }
             if sample + 1 == end {
                 if let Some(t) = timer {

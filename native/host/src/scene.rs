@@ -744,6 +744,7 @@ pub(super) struct TargetPacket {
     /// Prepared before GPU publication so it never waits for AOT under REGISTRY.
     pub frames: Vec<[u8; 16]>,
     pub shader: Option<String>,
+    pub caustics: Option<crate::caustics::Packet>,
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) struct LightingUpdates {
@@ -1279,32 +1280,73 @@ impl PreparedState {
         let packet = runtime::call_with_loss(loss, move || {
             native_step(mt_core_scene_target, &input, state.token)
         })?;
+        if packet.len() < 16 {
+            return Err("Invalid native render target header".into());
+        }
         let w = Words(&packet);
         let (shader, camera, trace) = (w.u(1), w.u(2), w.u(3));
+        let extended = w.u(0) == crate::layout::version::TARGET_PACKET;
+        let header = if extended { 32 } else { 16 };
+        if packet.len() < header {
+            return Err("Invalid native render target header".into());
+        }
+        let extra = if extended {
+            w.u(4) + w.u(5) + w.u(6) + w.u(7)
+        } else {
+            0
+        };
         if camera != 144
             || trace != crate::layout::ray_uniform::BYTES
-            || packet.len() != 16 + camera + trace + shader
+            || packet.len() != header + camera + trace + shader + extra
         {
             return Err("Invalid native render target packet".into());
         }
-        let camera_bytes = packet[16..16 + camera].to_vec();
+        let caustics = if extended {
+            let base = header + camera + trace + shader;
+            let meta = w.u(4);
+            let distribution = w.u(5);
+            let lighting = w.u(6);
+            let uniform = w.u(7);
+            let metadata: crate::caustics::Metadata =
+                serde_json::from_slice(&packet[base..base + meta])?;
+            if ![1, 2, 4, 8].contains(&metadata.workgroup_size) {
+                return Err("Invalid caustic workgroup size".into());
+            }
+            Some(crate::caustics::Packet {
+                metadata,
+                distribution: packet[base + meta..base + meta + distribution].to_vec(),
+                lighting: packet[base + meta + distribution..base + meta + distribution + lighting]
+                    .to_vec(),
+                uniform: packet[base + meta + distribution + lighting
+                    ..base + meta + distribution + lighting + uniform]
+                    .to_vec(),
+            })
+        } else {
+            None
+        };
+        let camera_bytes = packet[header..header + camera].to_vec();
         if !camera_bytes
             .chunks_exact(4)
             .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
         {
             return Err("Camera produces non-finite GPU parameters".into());
         }
-        let trace_bytes = packet[16 + camera..16 + camera + trace].to_vec();
+        let trace_bytes = packet[header + camera..header + camera + trace].to_vec();
         let word = |at: usize| -> [u8; 4] { trace_bytes[at..at + 4].try_into().unwrap() };
         let seed = u32::from_le_bytes(word(layout::ray_uniform::SEQUENCE_SEED));
         let bounces = i32::from_le_bytes(word(layout::ray_uniform::BOUNCES)) as f32;
         let frames = runtime::frames_with_loss(loss, bounces, seed)?;
         Ok(TargetPacket {
+            caustics,
             camera: camera_bytes,
             trace: trace_bytes,
             frames,
             shader: (shader > 0)
-                .then(|| String::from_utf8(packet[16 + camera + trace..].to_vec()))
+                .then(|| {
+                    String::from_utf8(
+                        packet[header + camera + trace..header + camera + trace + shader].to_vec(),
+                    )
+                })
                 .transpose()?,
         })
     }
@@ -1708,7 +1750,10 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
     };
     exception_packet(&packet)?;
     let w = Words(&packet);
-    if w.u(0) != 1 && w.u(0) != crate::layout::version::RESOURCE_WRITES {
+    if w.u(0) != 1
+        && w.u(0) != crate::layout::version::RESOURCE_WRITES
+        && w.u(0) != crate::layout::version::TARGET_PACKET
+    {
         return Err(match w.u(1) {
             2 => "Full scene commit required: resource shape or shader feature changed",
             1 | 3 => "Invalid or unavailable retained scene reference",

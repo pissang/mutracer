@@ -11,6 +11,7 @@
 - First layer: `new Engine({canvas})`, set `engine.scene` / `engine.camera`, then create `new Render(engine, options?)`; [independent renders](docs/progressive-rendering.md).
 - Frame: update controls/source adapters, call `engine.update()` once, `current.refine()`, then `engine.display.present(current)`. Only update detects/commits external edits; rendering compares revisions.
 - Sample batching: `batchSamples` (default false) lets one refine submit several samples; with `final: {batchSamples: true}`, RenderLoop also refines between display frames. [Two levels](docs/progressive-rendering.md#sample-batching).
+- Caustics: `render.caustics = {lightTracing:true, photonMapping:true}`; experimental, off by default and WebGPU only. [Guide](docs/caustics.md), [options](docs/api.md#caustics).
 - Batch settings: `Object.assign(render, settings)` / `Object.assign(engine.display, settings)` with `RenderSettings` / `DisplaySettings`; constructor options configure Render. [Defaults](docs/api.md).
 - Ownership: Engine owns shared scene/device/BVH/atlas; Display owns tone mapping, bloom, HDR and channel; Render owns resolution, quality, samples, fallback and denoiser. `transmissiveOutputAlphaMin` is a Render option; [API](docs/api.md).
 - Initialization: optional `await engine.init()` gives backend, adapter and limits; `backend: 'auto'` defaults to WebGPU with WebGL fallback. `webgpu` requires WebGPU and `webgl` forces WebGL 2.

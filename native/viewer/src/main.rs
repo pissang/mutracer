@@ -179,6 +179,13 @@ impl Target {
 /// bevel and dispersion quality bits clear, so the render does too.
 fn render_settings(settings: &RenderSettings, size: [u32; 2], held: bool) -> api::RenderSettings {
     api::RenderSettings {
+        caustics: api::CausticSettings {
+            light_tracing: settings.caustic_flags & 2 != 0,
+            photon_mapping: settings.caustic_flags & 4 != 0,
+            light_photons: settings.light_photons,
+            photon_map_photons: settings.photon_map_photons,
+            photon_map_radius: settings.photon_map_radius,
+        },
         max_samples: settings.max_samples.clamp(1, 16384),
         bounces: settings.bounces,
         clamping: settings.clamping,

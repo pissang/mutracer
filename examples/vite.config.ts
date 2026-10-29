@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import { shaderFormattingPlugin } from '../scripts/shader-formatting.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
-const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing'];
+const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing', 'caustics'];
 
 /**
  * Static build of the examples for the site (`npm run build:site`). During

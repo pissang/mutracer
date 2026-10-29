@@ -114,11 +114,14 @@ typedef struct mt_render_settings {
   uint32_t struct_size, sampling_pattern, seed, max_samples;
   uint32_t bounces, direct_light_candidates, bevel_samples, sample_sequence_offset;
   double clamping, transmissive_output_alpha_min;
+  uint32_t caustic_flags; /* MT_CAUSTIC_* bit mask, default 0 (all disabled). */
+  uint32_t light_photons, photon_map_photons; /* Default 0: pixel count / 4, capped by device limits. */
+  float photon_map_radius; /* Nonnegative; default 0: 3% of the caster sphere radius. */
 } mt_render_settings;
 #if defined(__cplusplus) && __cplusplus >= 201103L
-static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+static_assert(sizeof(mt_render_settings) == 64, "mt_render_settings layout");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+_Static_assert(sizeof(mt_render_settings) == 64, "mt_render_settings layout");
 #endif
 /* Pure initialization, no device requirement. NULL returns MT_ERROR_INVALID_ARGUMENT. */
 int32_t mt_render_settings_default(mt_render_settings *output);

@@ -172,6 +172,10 @@ export interface RenderingDiagnostics {
     lastBuild?: { geometryCount: number; bvhTimeMs: number };
   };
   gpuTraceTiming?: {
+    /** Last light-tracing batch time in milliseconds. Default undefined until measured. */ causticTimeMs?:number;
+    /** Last photon-map batch time in milliseconds. Default undefined until measured. */ photonMappingTimeMs?:number;
+    /** Photon emission, count, block scan, sum scan and scatter times in milliseconds. Default undefined until measured. */ photonStagesMs?:number[];
+    /** Camera path kernel time in milliseconds. Default undefined until measured. */ pathTracingTimeMs?:number;
     tileTimeMs: number;
     tileTimePerSampleMs?: number;
     estimatedFullFrameTimeMs: number;

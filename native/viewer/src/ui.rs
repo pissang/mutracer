@@ -308,6 +308,13 @@ impl Viewer {
                 "Bounces",
                 controls::Scrub::new(&mut self.settings.bounces, 1..=16),
             );
+            let mut light = self.settings.caustic_flags & 2 != 0;
+            controls::toggle(ui, "Light tracing", &mut light);
+            let mut photons = self.settings.caustic_flags & 4 != 0;
+            controls::toggle(ui, "Photon mapping", &mut photons);
+            self.settings.caustic_flags = (self.settings.caustic_flags & !6)
+                | if light { 2 } else { 0 }
+                | if photons { 4 } else { 0 };
             controls::select(
                 ui,
                 "Sampling",

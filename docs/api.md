@@ -130,6 +130,7 @@ other sequences retain their completed samples.
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
+| `caustics` | `undefined` | Optional caustics; all estimators default to off. See [caustics](#caustics) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
 | `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
 | `dispersionWavelengths` | `3` | 3 wavelengths, or one randomly chosen wavelength |
@@ -205,6 +206,25 @@ fallback is not traced again. Fallback chains and cycles are rejected.
 Resolves `{samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling,
 varianceHistory?}` after filtering. It rejects if engine input revisions change.
 The same render cannot refine concurrently; other renders remain usable.
+
+### Caustics
+
+```ts
+render.caustics = {lightTracing: {photonsPerSample: 32768}};
+render.caustics = undefined; // Disable every estimator.
+```
+
+Changing any caustic option restarts accumulation. All estimators are experimental;
+see the [caustics guide](./caustics.md) for choosing estimators, supported paths,
+rendering cost and image-quality limitations.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `lightTracing` | `false` | `true` or an object enables directly visible caustic light paths on WebGPU; ignored on WebGL 2 |
+| `lightTracing.photonsPerSample` | pixel count / 4 | Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit |
+| `photonMapping` | `false` | `true` or an object enables progressive caustic photon mapping on WebGPU; ignored on WebGL 2 |
+| `photonMapping.photonsPerSample` | pixel count / 4 | Emitted photons per batch; 24 bytes each plus at most 2 MiB for the index. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget |
+| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive initial gather radius in scene units; smaller radii preserve detail but require more photons |
 
 ## RenderLoop and Sync
 

@@ -815,7 +815,7 @@ fn collect_accounts_a_batch_without_submitting_another() {
 fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
     let _test = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = super::aov_tests::aov_engine(Backend::Software);
-    engine.display().set_size(16, 12).unwrap();
+    engine.display().set_size(64, 48).unwrap();
     engine.set_scene(&lit_scene()).unwrap();
     let updates = Arc::new(std::sync::atomic::AtomicU32::new(0));
     struct CountSync(Arc<std::sync::atomic::AtomicU32>, SyncActivity);
@@ -839,9 +839,10 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         RenderLoopOptions {
             preview: None,
             final_render: LoopRender::Settings(RenderSettings {
-                // This fixture must stay unfinished long enough to observe a
-                // refill lease, even when a tiny GPU scene batches very fast.
+                // Keep enough work and short tick batches to observe several
+                // refill leases before this fixture reaches its sample cap.
                 max_samples: 16384,
+                time_budget_ms: 1.,
                 batch_samples: true,
                 aovs: 1,
                 aov_samples: 3,

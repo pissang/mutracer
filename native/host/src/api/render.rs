@@ -53,9 +53,32 @@ impl Default for RenderSize {
         Self::Scale(1.)
     }
 }
+/// Optional caustic estimators. Every estimator is disabled by default.
+/// Photon estimators use PT for scenes containing smooth BLEND casters.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct CausticSettings {
+    /// Directly visible light paths; default false.
+    pub light_tracing: bool,
+    /// Photons per batch; 0 selects pixel count / 4. Default 0.
+    pub light_photons: u32,
+    /// Progressive caustic density estimate; default false.
+    pub photon_mapping: bool,
+    /// Photons per batch; 0 selects pixel count / 4. Default 0. Uses 24 bytes
+    /// each plus at most 2 MiB for the index; capped by device limits and 128 MiB.
+    pub photon_map_photons: u32,
+    /// Initial gather radius; 0 selects 3% of the caster sphere radius. Default 0.
+    pub photon_map_radius: f32,
+}
+impl CausticSettings {
+    pub(super) fn flags(self) -> u32 {
+        (if self.light_tracing { 2 } else { 0 }) | (if self.photon_mapping { 4 } else { 0 })
+    }
+}
 /// Per-render execution and image-quality settings. Defaults match the browser library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderSettings {
+    /// Caustic estimators. Default: all disabled.
+    pub caustics: CausticSettings,
     /// Optional AOV bit mask; bit 0 depth, 1 position, 2 roughness, 3 diffuse
     /// reflectance, 4 specular reflectance, 5 ID, 6 motion. Default 0.
     pub aovs: u32,
@@ -136,6 +159,7 @@ pub struct AdaptiveResolution {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            caustics: CausticSettings::default(),
             aovs: 0,
             aov_samples: 16,
             max_samples: 2048,
@@ -162,6 +186,9 @@ impl RenderSettings {
     /// call it and return its `InvalidArgument` error.
     pub fn validate(&self) -> Result<()> {
         let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
+        if !self.caustics.photon_map_radius.is_finite() || self.caustics.photon_map_radius < 0. {
+            return invalid("photon_map_radius must be finite and nonnegative");
+        }
         if self.aovs & !127 != 0 || self.aov_samples == 0 {
             return invalid("Invalid AOV mask or sample cap");
         }
@@ -218,6 +245,10 @@ impl RenderSettings {
     /// The L0 settings record; `cap` and `offset` differ only for converge.
     pub(super) fn l0(&self, cap: u32, offset: u32) -> L0Settings {
         L0Settings {
+            caustic_flags: self.caustics.flags(),
+            light_photons: self.caustics.light_photons,
+            photon_map_photons: self.caustics.photon_map_photons,
+            photon_map_radius: self.caustics.photon_map_radius,
             sampling_pattern: match self.sampling_pattern {
                 SamplingPattern::Sobol => 0,
                 SamplingPattern::ZSobol => 1,

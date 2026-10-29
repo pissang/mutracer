@@ -51,6 +51,14 @@ export function RenderPanel() {
         <Scrub label="Clamping" value={s.clamping} min={0} max={100} step={1} format={(v) => (v === 0 ? 'Off' : String(v))} onChange={(v) => update({ clamping: v })} />
       </Section>
 
+      <Section title="Caustics" icon={<Sun size={14} />} actions={<Switch label="Caustics" checked={s.caustics} onChange={v=>update({caustics:v})}/> }>
+        {s.caustics&&<>
+          <Switch label="Light tracing" checked={s.causticLightTracing} disabled={webgl} onChange={v=>update({causticLightTracing:v})}><span className="field-label">Light tracing</span></Switch>
+          <Switch label="Photon mapping" checked={s.causticPhotonMapping} disabled={webgl} onChange={v=>update({causticPhotonMapping:v})}><span className="field-label">Photon mapping</span></Switch>
+          {webgl&&<Hint>Light tracing and photon mapping require WebGPU.</Hint>}
+        </>}
+      </Section>
+
       <Section
         title="Denoiser"
         icon={<Sparkles size={14} />}
