@@ -250,6 +250,15 @@ export class ViewerEngine {
     return this.loadPreset(presetId ?? 'spheres', true);
   }
 
+  /** A link edited in an open viewer: its settings apply and win over the defaults of the scene it names. */
+  async openURL(presetId: string | null) {
+    const url = readURLSettings();
+    if (Object.keys(url).length) setSettings(url, { record: false });
+    if (!presetId || presetId === get().model?.presetId) return;
+    this.initialURLSettings = url;
+    return this.loadPreset(presetId);
+  }
+
   async loadPreset(id: string, restoreCamera = false) {
     const preset = MODEL_PRESETS.find((p) => p.id === id) ?? MODEL_PRESETS[0];
     // CC-BY models are credited in the viewport; CC0 ones only in the Examples menu.

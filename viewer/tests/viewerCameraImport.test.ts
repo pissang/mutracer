@@ -329,6 +329,23 @@ describe('initial link and preset precedence',()=>{
   await viewer.load('Cornell',async()=>model(1),meta);
   expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:true,causticPhotonMapping:true});
  });
+ it('applies a link edited in an open viewer over the scene it loads',async()=>{
+  const viewer=engine() as ReturnType<typeof engine>&Pick<ViewerEngine,'openURL'|'loadPreset'>;
+  const meta=(presetId:string)=>({presetId,credit:null,sourceUrl:null});
+  viewer.loadPreset=async id=>viewer.load(id,async()=>model(1),meta(id));
+  await viewer.load('Spheres',async()=>model(0),meta('spheres'));
+  useViewer.setState({model:{name:'Spheres',...meta('spheres')}});
+  Object.assign(location,{hash:'#model=research-cornell-caustic&caustics=true&causticLightTracing=false&causticPhotonMapping=false'});
+  await viewer.openURL('research-cornell-caustic');
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:false,causticPhotonMapping:false});
+  // The same scene only takes the edited settings.
+  useViewer.setState({model:{name:'Cornell',...meta('research-cornell-caustic')}});
+  Object.assign(location,{hash:'#model=research-cornell-caustic&causticPhotonMapping=true'});
+  const load=vi.spyOn(viewer,'loadPreset');
+  await viewer.openURL('research-cornell-caustic');
+  expect(load).not.toHaveBeenCalled();
+  expect(useViewer.getState().settings).toMatchObject({causticLightTracing:false,causticPhotonMapping:true});
+ });
  it('keeps incoming authored-lighting overrides on a fresh initial load only',async()=>{
   Object.assign(location,{hash:'#lighting=studio&envId=sky&envIntensity=2&envRotation=35'});
   const viewer=engine(),data=model(0);data.lighting={available:true,environment:null,warnings:[]};
