@@ -93,6 +93,27 @@ describe('independent Render', () => {
     a.refine(); expect(a.samples).toBe(4); expect(() => c.refine()).toThrow('disposed');
     engine.dispose();
   });
+  it.each(['webgpu', 'webgl'] as const)('publishes only complete tiled samples across repeated refines (%s)', backend => {
+    const {engine, targets} = renderFixture({tiles: 3, backend}); const render = new Render(engine);
+    render.refine(); render.refine(); expect(render.samples).toBe(0);
+    expect(engine.display.present(render)).toBeUndefined();
+    render.refine(); expect(render.samples).toBe(1); expect(engine.display.present(render)).toBe(render);
+    render.refine(); render.refine(); expect(render.samples).toBe(1);
+    expect(engine.display.present(render)).toBe(render);
+    expect(targets[0].trace).toHaveBeenCalledTimes(5);
+    render.refine(); expect(render.samples).toBe(2); engine.dispose();
+  });
+  it.each(['camera', 'scene'] as const)('discards unfinished tiles when committed %s inputs change', input => {
+    const {engine, camera, targets} = renderFixture({tiles: 3}); const render = new Render(engine);
+    render.refine(); render.refine();
+    if (input === 'camera') camera.position = [2, 0, 0];
+    else engine.scene = {meshes: [], lights: []};
+    engine.update(); render.refine(); expect(render.samples).toBe(0);
+    expect(engine.display.present(render)).toBeUndefined();
+    render.refine(); expect(render.samples).toBe(0);
+    render.refine(); expect(render.samples).toBe(1);
+    expect(targets[0].restartSamples).toHaveBeenCalledTimes(2); engine.dispose();
+  });
   it('uses committed camera state until update and restarts all renders afterwards', () => {
     const {engine, camera, targets, operations} = renderFixture(); const a = new Render(engine), b = new Render(engine);
     a.refine(); b.refine(); camera.position = [3, 0, 1]; a.refine();

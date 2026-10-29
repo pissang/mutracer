@@ -106,6 +106,14 @@ In your own loop, `batchSamples` gives the first level. For the second, call
 `render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true})` after each
 `await render.whenReadyToRefine()` until your next frame; see [Render](./api.md#render).
 
+`refine()` continues the remaining tiles of the current sample, including repeated
+calls between presentations. `samples` increases only after the whole sample;
+presentation keeps the previous complete sample until then. Committed scene or
+camera edits discard an unfinished sample and restart against the new inputs.
+`maxTiles` caps the sample's tile grid (rounded up to a rectangular grid), so a
+smaller value makes larger tiles. It does not cap work per frame or per call;
+use `timeBudgetMs` and the between-frame deadline to control queued work.
+
 ## Reading and exporting
 
 A fixed-size render does not need to be displayed. Its camera defaults to the

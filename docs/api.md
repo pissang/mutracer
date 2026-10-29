@@ -139,7 +139,7 @@ other sequences retain their completed samples.
 | `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |
 | `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
-| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
+| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Target tile time / maximum tile grid size per sample (rounded up to a rectangular grid); fewer tiles make larger tiles, without limiting work per frame or call |
 | `batchSamples` | `false` | Let one refine submit several samples within timeBudgetMs; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
