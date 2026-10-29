@@ -158,11 +158,15 @@ describe('independent Render', () => {
   });
   it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
+    expect(render.gpuWorkPending).toBe(false);
     await render.whenReadyToRefine(); expect(targets).toHaveLength(0);
-    render.refine(); let complete!: () => void; const pending = new Promise<void>(resolve => {complete = resolve;});
-    Object.assign(targets[0], {whenTraceAvailable: () => pending});
+    render.refine(); let complete!: () => void, queued = true;
+    const pending = new Promise<void>(resolve => {complete = () => {queued = false; resolve();};});
+    Object.assign(targets[0], {whenTraceAvailable: () => pending, hasPendingTrace: () => queued});
+    expect(render.gpuWorkPending).toBe(true);
     expect(render.whenReadyToRefine()).toBe(pending); expect(targets[0].trace).toHaveBeenCalledOnce();
-    complete(); await pending; render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+    complete(); await pending; expect(render.gpuWorkPending).toBe(false);
+    render.dispose(); expect(render.gpuWorkPending).toBe(false); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
   });
   it.each([0, -1, NaN, Infinity])('rejects an invalid realtime queue budget (%s) and restores subsequent calls', targetBatchTimeMs => {
     const {engine} = renderFixture(); const render = new Render(engine);

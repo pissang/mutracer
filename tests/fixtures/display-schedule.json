@@ -1,4 +1,5 @@
 {
+  "refillSampleTimesMs": [1, 40],
   "cases": [
     {"name": "publish-current", "events": ["start", "complete"], "actions": ["Filter", "Publish"]},
     {

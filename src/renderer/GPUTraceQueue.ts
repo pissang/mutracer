@@ -5,6 +5,8 @@ export class GPUTraceQueue {
 
   constructor(private queue: GPUQueue) {}
 
+  get hasPending(): boolean { return this.pending.size > 0; }
+
   available(budgetMs: number): number {
     return Math.max(0, budgetMs - this.pendingMs);
   }

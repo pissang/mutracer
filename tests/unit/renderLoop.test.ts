@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import RenderLoop from '../../src/RenderLoop';
@@ -320,6 +321,23 @@ describe('RenderLoop sampling between display frames', () => {
     expect(budget).toHaveBeenLastCalledWith(4);
     loop.stop(); await f.complete(); expect(loop.final.samples).toBe(4);
     loop.dispose(); engine.dispose();
+  });
+  const refillTimes: number[] = JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json', import.meta.url), 'utf8')).refillSampleTimesMs;
+  it.each(refillTimes)('refills incomplete tiles with a %s ms full sample estimate', async fullSampleMs => {
+    const f = refillFixture();
+    let submitted = 0, pending = false;
+    Object.assign(f.target, {getRealtimeSampleTime: () => fullSampleMs, hasPendingTrace: () => pending});
+    // A tile does real work without advancing the completed-sample counter.
+    vi.mocked(f.target.trace).mockImplementation(() => {submitted++; pending = true; return false;});
+    f.loop.tick();
+    const samples = f.loop.final.samples, presents = f.operations.filter(o => o.kind === 'present').length;
+    await f.complete(); await f.complete(); await f.complete();
+    expect(submitted).toBe(3); expect(f.loop.final.samples).toBe(samples);
+    expect(f.operations.filter(o => o.kind === 'present')).toHaveLength(presents);
+    // No submission means no promise/microtask spin while preparation is pending.
+    vi.mocked(f.target.trace).mockImplementation(() => {pending = false; return false;});
+    await f.complete(); expect(f.completions).toHaveLength(0);
+    f.loop.dispose(); f.engine.dispose();
   });
   it('expires a manual tick at the next display frame and ignores old completion callbacks after a new tick', async () => {
     const f = refillFixture();

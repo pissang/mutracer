@@ -90,13 +90,13 @@ are refined that frame. See [scene updates](updates.md) for notifications.
 Without batching, a still image gets one sample per display frame, so a fast GPU
 idles for most of each frame. With `batchSamples`, sampling works on two levels:
 
-- **Per call.** One `refine()` may submit several samples while at most
-  `timeBudgetMs` of GPU work is queued, and returns without waiting for them.
+- **Per call.** One `refine()` may submit several samples within an estimated
+  `timeBudgetMs` of GPU work, or one longer sample or tile, and returns without waiting for them.
   Without `batchSamples`, a call traces one sample or tile.
 - **Between frames.** RenderLoop also refines its final render each time the GPU
   finishes queued work, until the next display frame. It keeps about 4 ms of work
-  queued, or one sample if that is longer, so a camera edit waits behind at most
-  that much work at any refresh rate.
+  queued, or one sample or tile if that is longer. Expensive tiled samples can
+  continue between display frames; presentation still follows the display frame rate.
 
 Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops

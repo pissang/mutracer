@@ -361,6 +361,8 @@ export default class Render {
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** Whether measured WebGPU sample batching has queued work on the engine's shared queue. Excludes denoising, display and offline convergence. Default false; also false before allocation, without timestamps, on WebGL or after disposal. */
+  get gpuWorkPending(): boolean { return !this._disposed && (this._target?.hasPendingTrace?.() ?? false); }
   /** Waits for the next release of WebGPU sampling queue capacity. Resolves immediately if no sampling is queued or on WebGL; does not submit work. Throws after disposal. */
   whenReadyToRefine(): Promise<void> {
     if (this._disposed) throw new Error('Render is disposed.');

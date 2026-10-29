@@ -195,7 +195,7 @@ export default class RenderLoop {
       const before = this.final.samples;
       const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
       if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
-      if (this.final.samples > before && status === 'converging') wait();
+      if ((this.final.samples > before || this.final.gpuWorkPending) && status === 'converging') wait();
     };
     const wait = () => {void this.final.whenReadyToRefine().then(refill, () => {});};
     // Keep only a short chunk ahead of input. GPU completion, rather than the
@@ -205,7 +205,9 @@ export default class RenderLoop {
   private _canRefill(): boolean {
     const time = this.final.gpuSampleTimeMs;
     return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
-      this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
+      // The backend limits queued work. A long sample can still refill one tile
+      // on GPU completion without waiting for the next presentation frame.
+      this.final.status === 'converging' && time !== undefined;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;

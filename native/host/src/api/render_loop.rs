@@ -853,9 +853,7 @@ impl RenderLoop {
         let render = &self.final_render;
         render.settings().is_ok_and(|s| {
             (s.batch_samples || s.allow_multiple_samples_per_frame)
-                && render
-                    .gpu_sample_time_ms()
-                    .is_some_and(|ms| ms <= s.time_budget_ms)
+                && render.gpu_sample_time_ms().is_some()
         }) && render.refill_ready()
             && !render.denoising()
             && render.samples() > 0
@@ -866,7 +864,7 @@ impl RenderLoop {
     pub fn cancel_refill(&mut self) {
         self.refill_until = None;
     }
-    /// Whether a short stationary beauty batch can be collected/refilled before
+    /// Whether a stationary beauty batch can be collected/refilled before
     /// the next frame. A tick grants at most 16 ms; input, activity, filtering,
     /// auxiliary output and custom preview selection revoke that grant.
     pub fn needs_refill(&self) -> bool {
@@ -877,7 +875,7 @@ impl RenderLoop {
             && !self.syncs_active()
             && self.can_refill()
     }
-    /// Collects GPU completion and submits a short final batch within the current
+    /// Collects GPU completion and submits a final batch within the current
     /// tick's lease. Call on GPU completion on the same thread as `tick`. Does not
     /// update syncs, commit inputs or present. Returns whether the lease remains
     /// active. An expired/cancelled lease submits nothing.
