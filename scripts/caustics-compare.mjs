@@ -77,7 +77,7 @@ export function gaussianRegionResidual(candidate, reference, indices, sigma) {
 
 // Coordinates in a 256x256 authored-camera image, half-open. Conservative patches
 // avoid box silhouettes, room edges and the light. They are not whole-surface integrals.
-export const cornellRegions={underwaterBackWall:[102,100,215,160],underwaterFloor:[100,244,160,250],aboveWaterWall:[100,34,180,45],waterSurface:[100,62,180,72],aboveWaterSideWall:[48,35,63,46],ceiling:[101,17,125,25]};
+export const cornellRegions={underwaterBackWall:[102,100,215,160],underwaterFloor:[100,244,160,250],aboveWaterWall:[100,34,180,45],waterSurface:[100,62,180,72],aboveWaterSideWall:[10,35,20,46],ceiling:[101,17,125,25]};
 // Perspective rays of tests/gpu/caustics.ts, camera below the horizontal glass.
 // Inset the 2.5x2.5 glass footprint to 2x2 to exclude finite-radius edge leakage.
 export function receiverMask(width,height) {
