@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Experimental caustics on WebGPU with `render.caustics`, off by default and ignored on WebGL 2: `lightTracing` for directly visible receivers and `photonMapping` for receivers seen through glass or water. See the [caustics guide](docs/caustics.md).
+- `render.refineUntil(deadline, {signal})` refines once, then keeps the GPU busy until the deadline or cancellation, replacing the hand-written refill loop in custom frame loops. See [sample batching](docs/progressive-rendering.md#sample-batching).
+
+### Changed
+
+- `whenReadyToRefine()` resolves to `true` when sampling was queued and `false` otherwise.
+- `gpuSampleTimeMs` also reports tiled samples, extrapolated from tile GPU time.
+
+### Performance
+
+- RenderLoop keeps refilling expensive tiled samples between display frames instead of waiting for the next frame.
 
 ### Fixed
 
