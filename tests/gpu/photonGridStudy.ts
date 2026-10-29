@@ -12,7 +12,7 @@ function stats(a: number[]) {
   return {queries:a.length,mean:a.reduce((x,y)=>x+y,0)/Math.max(1,a.length),p99:a[Math.floor(a.length*.99)]??0,max:a.at(-1)??0};
 }
 /** Stage timings are uninstrumented; counters run separately at batch 64. */
-export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[]}) {
+export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[];countersOnly?:boolean}) {
   const errors:string[]=[];
   engine.device?.addEventListener('uncapturederror', e=>errors.push((e as GPUUncapturedErrorEvent).error.message));
   render.caustics=options.settings;
@@ -21,7 +21,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
   d.captureRoots=true;
   await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:17});
   const results=[];
-  for(const samples of options.checkpoints){
+  for(const samples of options.countersOnly?[]:options.checkpoints){
     const started=performance.now();
     await render.converge({samples,samplesPerBatch:1,sampleSequenceOffset:17});
     await engine.device?.queue.onSubmittedWorkDone();
@@ -31,6 +31,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     await save(options.name+'-'+samples+'.f32',hdr.data.buffer as ArrayBuffer);
     await save(options.name+'-'+samples+'.json',JSON.stringify(row));results.push(row);
   }
+  if(!options.countersOnly){
   const timings=[];
   // Hold the progressive radius at the 64th batch, with fixed query/emit streams.
   d.photonDebugBatch=64;
@@ -47,9 +48,12 @@ export async function measure(engine: Engine, render: Render, options: {name:str
   const batch=pass?._photonMap?.get(pass._activeTarget);
   const profile={samples:render.samples,timings,memory,emitted:batch?.count,buckets:batch?.buckets,diagnostics:engine.getDiagnostics()};
   await save(options.name+'-profile.json',JSON.stringify(profile,null,2));
+  }
+  d.photonDebugBatch=64;
   if((window as any).photonGridCounters&&options.settings.photonMapping){
     const deepReads:number[]=[],deepPassed:number[]=[],rows=[];
-    for(const group of [50,51,52,53,54,55,56,57,58]){
+    // Transmission paths may shade more than bounces events; PM accepts depths 0–20.
+    for(const group of [50,...Array.from({length:21},(_,i)=>51+i)]){
       d.mneeDebugGroup=group;
       render.restart();
       await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:80});
