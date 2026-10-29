@@ -1,6 +1,6 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
-import {PHOTON_BYTES, PHOTON_GRID_SIZE, photonLayout, photonGridCompute} from './wgsl/photonMap.compute.js';
+import {PHOTON_BYTES, PHOTON_GRID_SIZE, photonLayout, photonGridCompute, photonScreenRadius} from './wgsl/photonMap.compute.js';
 export {photonRadius} from './wgsl/photonMap.compute.js';
 interface Batch {
   grid: GPUBuffer;
@@ -120,7 +120,7 @@ export class WGPUPhotonMap {
     groups: GPUBindGroup[],
     target: object,
     radius: number,
-    options: Parameters<WGPUCausticLightPass['encode']>[3]
+    options: Parameters<WGPUCausticLightPass['encode']>[3] & {progressiveBatch?: number}
   ) {
     const batch = this.targets.get(target)!;
     if (causticDiagnostics.capturePhotons)
@@ -141,7 +141,12 @@ export class WGPUPhotonMap {
     new Float32Array(bytes)[0] = radius;
     new Uint32Array(bytes)[1] = batch.count;
     new Float32Array(bytes)[2] =
-      causticDiagnostics.photonScreenRadius !== false ? (causticDiagnostics.photonScreenPixels ?? 2) : 0;
+      causticDiagnostics.photonScreenRadius === false ? 0
+      : causticDiagnostics.photonProgressiveScreenRadius
+        ? photonScreenRadius(causticDiagnostics.photonDebugBatch ?? options.progressiveBatch ?? 1,
+          causticDiagnostics.photonScreenPixels ?? 8, causticDiagnostics.photonScreenMinimum ?? 2,
+          causticDiagnostics.photonAlpha ?? 2 / 3)
+        : (causticDiagnostics.photonScreenPixels ?? 2);
     new Float32Array(bytes)[3] = causticDiagnostics.photonSkipQuery
       ? 1
       : causticDiagnostics.photonSkipVisible

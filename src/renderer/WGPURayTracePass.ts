@@ -821,7 +821,7 @@ class WGPURayTracePass {
     const n = typeof requested === 'object' ? requested.photonsPerSample : undefined;
     const after = this._photonMap.ensure(
       this._activeTarget,
-      Number.isFinite(n) && n! > 0 ? n! : defaultPhotonMapPhotons(this._width, this._height)
+      Number.isFinite(n) && n! > 0 ? n! : defaultPhotonMapPhotons(this._width, this._height, causticDiagnostics.photonCountDivisor)
     );
     if (before !== after.data) this._needsUpdateBindGroups = true;
   }
@@ -1600,6 +1600,7 @@ class WGPURayTracePass {
           querySet: timing?.querySet,
           resourceTable: this._bindless?.table,
           orthographic: !this._causticPerspective,
+          progressiveBatch: batch,
           width: this._width,
           height: this._height,
           clear,

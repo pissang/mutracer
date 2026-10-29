@@ -1,7 +1,7 @@
 import {gpu} from './shaderSourceFormattingFixture';
 import {expect,it,vi} from 'vitest';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
-import {PHOTON_BYTES,defaultPhotonMapPhotons,photonBucketCount,photonGridCompute,photonLayout} from '../../src/renderer/wgsl/photonMap.compute';
+import {PHOTON_BYTES,photonScreenRadius,defaultPhotonMapPhotons,photonBucketCount,photonGridCompute,photonLayout} from '../../src/renderer/wgsl/photonMap.compute';
 import {photonRadius,photonVisibleRadius} from '../../src/renderer/WGPUPhotonMap';
 it('matches the photon and hash storage contracts and the consistent radius schedule',()=>{
  gpu();const d=makeShaderDataDefinitions(photonGridCompute),record=d.structs.Bucket;
@@ -103,4 +103,42 @@ it('uses the allocated photon count rather than a larger request when encoding t
   pass.createPass(encoder, false, [1,1]);
   expect(encode.mock.calls[0][3]).toBeCloseTo(photonRadius(2, 64, 2 / 3, 65536, 'ppm'), 14);
  } finally {diagnostics.photonRadiusScaling = previous;}
+});
+
+it('shrinks the opt-in screen radius with the world schedule and a pixel floor',()=>{
+ expect(photonScreenRadius(0)).toBe(8);
+ expect(photonScreenRadius(1)).toBe(8);
+ expect(photonScreenRadius(64)).toBeCloseTo(4);
+ expect(photonScreenRadius(4096)).toBeCloseTo(2);
+ expect(photonScreenRadius(1e12)).toBe(2);
+ expect(photonScreenRadius(64,6,1)).toBeCloseTo(3);
+ expect(defaultPhotonMapPhotons(960,544,1)).toBe(262144);
+ expect(defaultPhotonMapPhotons(192,192,1)).toBe(192*192);
+ expect(defaultPhotonMapPhotons(960,544)).toBe(130560);
+});
+it('packs the opt-in pixel schedule from accumulation batches rather than random offsets', async()=>{
+ const {WGPUPhotonMap}=await import('../../src/renderer/WGPUPhotonMap');
+ const {causticDiagnostics:d}=await import('../../src/renderer/causticDiagnostics');
+ const saved={...d},target={},writes:Float32Array[]=[];
+ const map=Object.assign(Object.create(WGPUPhotonMap.prototype),{
+  device:{queue:{writeBuffer:(_buffer:unknown,_offset:number,bytes:ArrayBuffer)=>writes.push(new Float32Array(bytes.slice(0)))}},
+  targets:new Map([[target,{count:16,buckets:256}]]),emission:{emit(){}},pipelines:[]
+ }) as WGPUPhotonMap;
+ const encoder={clearBuffer(){},beginComputePass:()=>({end(){}})} as unknown as GPUCommandEncoder;
+ const options={width:1000,height:1000,viewProjection:new Float32Array([2,0,0,0,0,2,0,0,0,0,1,-1,0,0,0,0]),
+  casterSphere:[0,0,-5,1],photons:16,batch:80,progressiveBatch:64,clear:true,run:true,cameraScale:1};
+ try{
+  d.photonProgressiveScreenRadius=true;d.photonScreenPixels=undefined;d.photonScreenMinimum=undefined;
+  d.photonDebugBatch=undefined;d.photonAlpha=undefined;d.photonScreenRadius=true;
+  map.encode(encoder,[],target,.05,options);
+  expect(writes[0][2]).toBeCloseTo(4);expect(writes[0][5]).toBeCloseTo(.02);
+  map.encode(encoder,[],target,.005,{...options,progressiveBatch:1});
+  expect(writes[1][2]).toBe(8);expect(writes[1][5]).toBeCloseTo(.005);
+  d.photonProgressiveScreenRadius=false;
+  map.encode(encoder,[],target,.05,options);
+  expect(writes[2][2]).toBe(2);expect(writes[2][5]).toBeCloseTo(.01);
+ }finally{
+  for(const key of Object.keys(d))delete d[key as keyof typeof d];
+  Object.assign(d,saved);
+ }
 });

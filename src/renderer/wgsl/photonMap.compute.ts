@@ -17,8 +17,12 @@ export function photonRadius(
   return radius * Math.pow(Math.max(1, photons) / PHOTON_REFERENCE_COUNT, exponent);
 }
 /** Default photon-map batch: pixel count / 4, capped at 2^18. */
-export function defaultPhotonMapPhotons(width: number, height: number) {
-  return Math.min(2 ** 18, Math.max(1, Math.round((width * height) / 4)));
+export function defaultPhotonMapPhotons(width: number, height: number, divisor = 4) {
+  return Math.min(2 ** 18, Math.max(1, Math.round((width * height) / divisor)));
+}
+/** Internal visible-receiver A/B; the global world-space radius still caps it. */
+export function photonScreenRadius(batch: number, initial = 8, minimum = 2, alpha = 2 / 3) {
+  return Math.max(minimum, photonRadius(initial, batch, alpha));
 }
 /** Power-of-two hash capacity, bounded independently of large photon batches. */
 export function photonBucketCount(photons: number) {

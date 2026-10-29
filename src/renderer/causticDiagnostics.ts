@@ -9,6 +9,10 @@ interface CausticDiagnostics {
  photonBudgetBytes?:number;
  photonScreenRadius?:boolean;
  photonScreenPixels?:number;
+ /** Visible-radius and density experiments are opt-in; public defaults stay fixed. */
+ photonProgressiveScreenRadius?:boolean;
+ photonScreenMinimum?:number;
+ photonCountDivisor?:number;
  photonSkipQuery?:boolean;
  photonSkipVisible?:boolean;
  photonMaxDepth?:number;
