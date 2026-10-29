@@ -13,7 +13,7 @@ function stats(a: number[]) {
   return {queries:a.length,mean:a.reduce((x,y)=>x+y,0)/Math.max(1,a.length),p99:a[Math.floor(a.length*.99)]??0,max:a.at(-1)??0};
 }
 /** Stage timings are uninstrumented; counters run separately at batch 64. */
-export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[];countersOnly?:boolean;denoise?:boolean;counterGroups?:number[];queryProfile?:boolean;progress?:boolean}) {
+export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[];countersOnly?:boolean;denoise?:boolean;counterGroups?:number[];queryProfile?:boolean;progress?:boolean;fixedPixel?:[number,number]}) {
   const errors:string[]=[];
   engine.device?.addEventListener('uncapturederror', e=>errors.push((e as GPUUncapturedErrorEvent).error.message));
   render.caustics=options.settings;
@@ -42,6 +42,10 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     const row={name:options.name,samples,width:hdr.width,height:hdr.height,totalMs,traceMs:traceEnded-started,denoiseMs:ended-traceEnded};
     await save(options.name+'-'+samples+'.f32',hdr.data.buffer as ArrayBuffer);
     await save(options.name+'-'+samples+'.json',JSON.stringify(row));results.push(row);
+    engine.display.present(render);
+    const canvas=engine.display.canvas;
+    await save(options.name+'-'+samples+'.png',canvas instanceof HTMLCanvasElement
+      ?await new Promise<Blob>(resolve=>canvas.toBlob(blob=>resolve(blob!))):await canvas.convertToBlob());
     if(options.denoise){
       const denoised=await render.readPixels('denoised');
       await save(options.name+'-'+samples+'-oidn.f32',denoised.data.buffer as ArrayBuffer);
@@ -90,6 +94,21 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     d.debugGroup=-1;
   }
   d.photonDebugBatch=undefined;
+  if(options.fixedPixel&&options.settings.photonMapping&&!options.settings.lightTracing){
+    d.debugGroup=73;
+    const rows=[];
+    // Separate one-sample renders preserve the random stream and progressive
+    // radius of each production batch without averaging away the count.
+    for(let batch=1;batch<=64;batch++){
+      d.photonDebugBatch=batch;
+      await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:16+batch});
+      const hdr=await render.readPixels('hdr');
+      const [x,y]=options.fixedPixel,index=(y*hdr.width+x)*4;
+      rows.push({batch,reads:hdr.data[index],accepted:hdr.data[index+1],queries:hdr.data[index+2]});
+    }
+    await save(options.name+'-fixed-pixel.json',JSON.stringify({pixel:options.fixedPixel,rows},null,2));
+    d.debugGroup=-1;d.photonDebugBatch=undefined;
+  }
   if(errors.length)throw Error(errors.join('\n'));
   return results;
 }

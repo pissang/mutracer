@@ -308,10 +308,11 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
 /** Evidence-only per-query counters; no extra bindings or public render options. */
 export function photonQuerySource(debugGroup = -1) {
   if (debugGroup < 50) return photonQueryWgsl;
-  const selected = debugGroup === 50 ? 'visible' : debugGroup === 72 ? '!visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
+  const selected = debugGroup === 50 || debugGroup === 73 ? 'visible' : debugGroup === 72 ? '!visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
   return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl
     .replace('var sum=vec3f(0.0);', 'var sum=vec3f(0.0);var reads=0u;var passed=0u;')
     .replace('let index=photonIndexWord(indexStart+i);', 'reads++;let index=photonIndexWord(indexStart+i);')
-    .replace('let directions=photonIndexWord', 'passed++;let directions=photonIndexWord')
+    .replace(debugGroup === 73 ? 'var flux=photonDecodeFlux' : 'let directions=photonIndexWord',
+      debugGroup === 73 ? 'passed++;var flux=photonDecodeFlux' : 'passed++;let directions=photonIndexWord')
     .replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats${debugGroup === 72 ? '+' : ''}=vec3f(f32(reads),f32(passed),1.0);}return sum/(PI*radius*radius);`);
 }

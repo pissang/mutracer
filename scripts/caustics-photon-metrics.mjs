@@ -36,11 +36,11 @@ for(const file of files){
  const hdrReference=resampleReference(matchingReference,candidate.width,candidate.height,{verticalFov});
  const oidn=file.includes('-oidn');
  const referenceImage=oidn?displayLinear(hdrReference):hdrReference;
- const result=compare(referenceImage,[{path:file,image:candidate}],{masks,verticalFov});
+ const result=compare(referenceImage,[{path:file,image:candidate}],{masks,verticalFov,gaussianSigma:Number(process.env.GAUSSIAN_SIGMA??0)*candidate.height/544});
  // Quantify filtering against the same display-linear target, keeping raw HDR
  // energy agreement as an independent metric with its own units.
  let before;
- if(oidn){const raw=loadHdr(resolve(directory,file.replace('-oidn','')));before=compare(referenceImage,[{path:file,image:displayLinear(raw)}],{masks,verticalFov});}
+ if(oidn){const raw=loadHdr(resolve(directory,file.replace('-oidn','')));before=compare(referenceImage,[{path:file,image:displayLinear(raw)}],{masks,verticalFov,gaussianSigma:Number(process.env.GAUSSIAN_SIGMA??0)*candidate.height/544});}
  const metadata=JSON.parse(readFileSync(resolve(directory,file.replace('.f32','.json'))));
  for(const row of result.rows)rows.push({...row,space:oidn?'AgX display-linear':'HDR radiance',beforeDenoise:before?.rows.find(r=>r.region===row.region),samples:metadata.samples,traceMs:metadata.traceMs,totalMs:metadata.totalMs,denoiseMs:metadata.denoiseMs});
 }

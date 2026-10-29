@@ -28,3 +28,15 @@ it('area resampling preserves constants and reports structure differences on a f
  const shifted={width:4,height:4,data:new Float32Array(image.data)};shifted.data[4]=8;
  expect(compare(image,[{path:'changed',image:shifted}],{masks:{patch:[0,1,4,5]}}).rows[0].gradientRMSE).toBeGreaterThan(0);
 });
+
+it('separates uniform bias from low-frequency blotches without light spill',()=>{
+ const image={width:16,height:16,data:new Float32Array(16*16*4).fill(1)};
+ const shifted={...image,data:new Float32Array(image.data).fill(2)};
+ const masks={patch:Array.from({length:64},(_,i)=>(Math.floor(i/8)+4)*16+i%8+4)};
+ shifted.data[0]=100000;
+ const row=compare(image,[{path:'bias',image:shifted}],{masks,gaussianSigma:2}).rows[0];
+ expect(row.lowFrequencyRelativeRMSE).toBeCloseTo(1);
+ expect(row.blotchRelativeRMS).toBeCloseTo(0);
+ for(const i of masks.patch)for(let c=0;c<3;c++)shifted.data[i*4+c]=i%16<8?1:3;
+ expect(compare(image,[{path:'blotch',image:shifted}],{masks,gaussianSigma:2}).rows[0].blotchRelativeRMS).toBeGreaterThan(.1);
+});

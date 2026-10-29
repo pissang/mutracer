@@ -51,9 +51,33 @@ export function resampleReference(image,width,height,{verticalFov=false}={}) {
  return {width,height,data};
 }
 
+// Normalized Gaussian on a fixed region: neighboring lights and other surfaces
+// cannot spill residuals into the patch. Sparse masks use the same normalization.
+export function gaussianRegionResidual(candidate, reference, indices, sigma) {
+ const xs=indices.map(i=>i%candidate.width),ys=indices.map(i=>Math.floor(i/candidate.width));
+ const left=xs.reduce((a,b)=>Math.min(a,b),Infinity),top=ys.reduce((a,b)=>Math.min(a,b),Infinity),width=xs.reduce((a,b)=>Math.max(a,b),-Infinity)-left+1,height=ys.reduce((a,b)=>Math.max(a,b),-Infinity)-top+1;
+ const radius=Math.ceil(3*sigma),weights=Array.from({length:radius*2+1},(_,i)=>Math.exp(-.5*((i-radius)/sigma)**2));
+ const input=new Float64Array(width*height),mask=new Float64Array(input.length);
+ const local=indices.map(i=>(Math.floor(i/candidate.width)-top)*width+i%candidate.width-left);
+ for(let k=0;k<indices.length;k++){
+  const i=indices[k],j=local[k];mask[j]=1;
+  for(let c=0;c<3;c++)input[j]+=(candidate.data[i*4+c]-reference.data[i*4+c])/3;
+ }
+ const blur=a=>{
+  const horizontal=new Float64Array(a.length),out=new Float64Array(a.length);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)for(let k=-radius;k<=radius;k++)if(x+k>=0&&x+k<width)
+   horizontal[y*width+x]+=weights[k+radius]*a[y*width+x+k];
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)for(let k=-radius;k<=radius;k++)if(y+k>=0&&y+k<height)
+   out[y*width+x]+=weights[k+radius]*horizontal[(y+k)*width+x];
+  return out;
+ };
+ const values=blur(input),normalization=blur(mask);
+ return local.map(i=>values[i]/normalization[i]);
+}
+
 // Coordinates in a 256x256 authored-camera image, half-open. Conservative patches
 // avoid box silhouettes, room edges and the light. They are not whole-surface integrals.
-export const cornellRegions={underwaterBackWall:[102,100,215,160],underwaterFloor:[100,244,160,250],aboveWaterWall:[100,34,180,45],waterSurface:[100,62,180,72]};
+export const cornellRegions={underwaterBackWall:[102,100,215,160],underwaterFloor:[100,244,160,250],aboveWaterWall:[100,34,180,45],waterSurface:[100,62,180,72],aboveWaterSideWall:[48,35,63,46],ceiling:[101,17,125,25]};
 // Perspective rays of tests/gpu/caustics.ts, camera below the horizontal glass.
 // Inset the 2.5x2.5 glass footprint to 2x2 to exclude finite-radius edge leakage.
 export function receiverMask(width,height) {
@@ -66,7 +90,7 @@ export function receiverMask(width,height) {
  return indices;
 }
 export const receiverRegions={causticReceiver:[0,0,128,96]};
-export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,masks:providedMasks,verticalFov=false}={}) {
+export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,masks:providedMasks,verticalFov=false,gaussianSigma=0}={}) {
  const {width,height}=candidates[0].image;
  if(candidates.some(c=>c.image.width!==width||c.image.height!==height))throw Error('Candidate resolutions differ');
  const ref=resampleReference(reference,width,height,{verticalFov}),rects=providedMasks?Object.fromEntries(Object.keys(providedMasks).map(k=>[k,[0,0,width,height]])):receiver?receiverRegions:cornellRegions,base=receiver?[128,96]:[256,256];
@@ -91,7 +115,12 @@ export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,m
     const b=Math.log1p(luminance(ref,j))-Math.log1p(luminance(ref,i));
     gradientError+=(a-b)*(a-b);gradientReference+=b*b;edges++;
    }
+   const blurred=gaussianSigma>0?gaussianRegionResidual(image,ref,indices,gaussianSigma):undefined;
+   const lowMean=blurred?blurred.reduce((s,v)=>s+v,0)/indices.length:0;
+   const lowEnergy=blurred?blurred.reduce((s,v)=>s+v**2,0)/indices.length:0;
    rows.push({region,path,reference:expected,candidate:actual,relativeError,
+    ...(blurred?{gaussianSigma,lowFrequencyRelativeRMSE:Math.sqrt(lowEnergy)/expected.trimmedMean,
+      blotchRelativeRMS:Math.sqrt(Math.max(0,lowEnergy-lowMean**2))/expected.trimmedMean}:{}),
     logRMSE:Math.sqrt(logErrors.reduce((a,b)=>a+b,0)/indices.length),
     gradientRMSE:Math.sqrt(gradientError/Math.max(1,edges)),
     relativeGradientError:Math.sqrt(gradientError/Math.max(1e-20,gradientReference))});
