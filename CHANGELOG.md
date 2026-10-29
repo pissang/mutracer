@@ -3,6 +3,18 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Experimental caustics on WebGPU with `render.caustics`, off by default and ignored on WebGL 2: `lightTracing` for directly visible receivers and `photonMapping` for receivers seen through glass or water. See the [caustics guide](docs/caustics.md).
+
+### Fixed
+
+- WebGL 2 samples emissive meshes as lights, so small emitters illuminate scenes without heavy noise, as on WebGPU.
+- One-sided emitters no longer emit from their back faces when hit by secondary rays.
+- WebGL 2 keeps accumulated lighting when a path escapes to a flat or texture background.
+
 ## 0.2.0 - 2026-10-28
 
 Faster WebGPU rendering, surface AOVs and procedural skies.
