@@ -4,6 +4,9 @@
 import { glsl } from '../../shader.js';
 export default glsl`
 float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
+  // Secondary intersections remain two-sided, but one-sided emission does not.
+  float facing=dot(si.faceNormal,-path.ray.d);
+  if(facing<=0.0&&fetchMatData(si.materialIndex*MAT_DATA_SIZE+MAT_ROW_ALPHA).z<0.5)return 0.0;
 #ifdef HAS_EMISSIVE_LIGHTS
   if(!path.fromEye && emissiveWeightTotal>0.0) {
     vec3 emission=fetchMatData(si.materialIndex*MAT_DATA_SIZE+MAT_ROW_EMISSION).rgb;

@@ -132,7 +132,7 @@ export default class MaterialState {
    * @deprecated Use geometryThinWalled.
    */
   thinWalled: boolean = materialDefault('thinWalled');
-  /** Disables geometric back-face culling for this material. Default `false`. */
+  /** Disables geometric back-face culling and permits back-face emission. Default `false`. */
   doubleSided: boolean = materialDefault('doubleSided');
 
   // Textures

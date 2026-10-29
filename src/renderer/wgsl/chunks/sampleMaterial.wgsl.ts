@@ -244,6 +244,10 @@ fn emissiveHitMisWeight(
   si: ptr<function, SurfaceInteraction>,
   path: ptr<function, Path>
 ) -> f32 {
+  // Secondary traversal accepts back faces for transmission; a one-sided
+  // emitter still radiates only into its front hemisphere.
+  let cosLight = dot((*si).faceNormal, -(*path).ray.d);
+  if (cosLight <= 0.0 && materialsBuffer[(*si).materialIndex].doubleSided < 0.5) { return 0.0; }
   if ((*path).fromEye | (rtUniform.lightWeightTotal <= 0.0) |
       (i32(materialsBuffer[(*si).materialIndex].matType) == UNLIT)) {
     return 1.0;
@@ -252,7 +256,6 @@ fn emissiveHitMisWeight(
     materialsBuffer[(*si).materialIndex].emission,
     luminance
   );
-  let cosLight = dot((*si).faceNormal, -(*path).ray.d);
   if ((samplingLuminance <= 0.0) | (cosLight <= 0.0)) {
     return 1.0;
   }
