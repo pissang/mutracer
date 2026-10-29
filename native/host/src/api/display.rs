@@ -274,6 +274,7 @@ pub(super) struct DisplayState {
     pub(super) next_pass: u64,
     pub(super) pass_revision: u64,
     presented_pass_revision: u64,
+    pub(super) presented_render: Option<u64>,
     pub(super) processing: bool,
 }
 impl Default for DisplayState {
@@ -292,17 +293,20 @@ impl Default for DisplayState {
             next_pass: 1,
             pass_revision: 0,
             presented_pass_revision: 0,
+            presented_render: None,
             processing: false,
         }
     }
 }
 impl DisplayState {
     pub(super) fn clear_image(&mut self, gpu: &GpuDevice) -> Result<()> {
+        self.presented_render = None;
         self.texture = None;
         self.hdr_texture = None;
         self.present_empty(gpu)
     }
     pub(super) fn present_empty(&mut self, gpu: &GpuDevice) -> Result<()> {
+        self.presented_render = None;
         if let Some(surface) = &mut self.surface {
             // wgpu initializes unwritten texels to transparent black. This image
             // is transient: empty scenes still have no readable render output.
@@ -603,6 +607,7 @@ impl Display {
         }
         gpu.queue.submit([encoder.finish()]);
         state.display.presented_pass_revision = composed.pass_revision;
+        state.display.presented_render = Some(composed.id);
         if let Some(hdr) = hdr_composed {
             if state
                 .display

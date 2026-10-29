@@ -9,6 +9,7 @@ use crate::status;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// A caller-owned callback argument, passed back unchanged.
 #[derive(Clone, Copy)]
@@ -32,7 +33,7 @@ struct EngineEntry {
 struct RenderEntry {
     engine: u64,
     render: Arc<Render>,
-    /// Replaced at each converge; `mt_render_cancel` cancels the current one.
+    /// Replaced at each converge/refine_until; `mt_render_cancel` cancels it.
     cancel: Arc<Mutex<CancelToken>>,
     /// The loop that owns this render, if any.
     owner: Option<u64>,
@@ -723,7 +724,7 @@ unsafe fn converge_options(
         cancel: Some(cancel),
     })
 }
-/// A fresh cancel token for the render `handle`'s next converge.
+/// A fresh cancel token for the render handle's next blocking sampling call.
 fn arm_cancel(handle: u64) -> Result<CancelToken> {
     registry(|r| match r.objects.get(&handle) {
         Some(Object::Render(e)) => {
@@ -1605,6 +1606,30 @@ pub unsafe extern "C" fn mt_render_refine(
 ) -> i32 {
     call(error_out, capacity, || {
         let status = render_of(handle)?.refine()?;
+        unsafe { write_optional(status_out, render_status(status)) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_refine_until(
+    handle: u64,
+    budget_ms: f64,
+    status_out: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        if !budget_ms.is_finite() || budget_ms < 0. {
+            return Err(invalid("Invalid refill budget"));
+        }
+        let duration = Duration::try_from_secs_f64(budget_ms / 1000.)
+            .map_err(|_| invalid("Invalid refill budget"))?;
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .ok_or_else(|| invalid("Invalid refill budget"))?;
+        let render = render_of(handle)?;
+        let cancel = arm_cancel(handle)?;
+        let status = render.refine_until(deadline, Some(&cancel))?;
         unsafe { write_optional(status_out, render_status(status)) };
         Ok(())
     })

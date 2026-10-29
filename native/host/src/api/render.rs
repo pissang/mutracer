@@ -461,7 +461,7 @@ pub struct DenoiserOptions {
     /// Smaller tiles reduce temporary GPU memory at extra work cost.
     pub max_tile_size: u32,
 }
-/// Cross-thread cancellation for [`Render::converge`].
+/// Cross-thread cancellation for [`Render::converge`] and [`Render::refine_until`].
 #[derive(Clone, Debug, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
 impl CancelToken {
@@ -469,8 +469,8 @@ impl CancelToken {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Requests cancellation from any thread; the converge call using this token
-    /// returns [`Status::Cancelled`].
+    /// Requests cancellation from any thread. Converge returns [`Status::Cancelled`];
+    /// refine_until returns its current render status.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
@@ -715,6 +715,7 @@ pub(super) struct RenderState {
     sample_ms: Option<f64>,
     gpu_sample_ms: Option<f64>,
     refine_options: RefineOptions,
+    refill_cancel: Option<CancelToken>,
     pub(super) capture: Option<Capture>,
     pub(super) output: super::post_process::OutputState,
     capture_key: Option<TargetKey>,
@@ -2105,6 +2106,7 @@ impl Render {
                 sample_ms: None,
                 gpu_sample_ms: None,
                 refine_options: RefineOptions::default(),
+                refill_cancel: None,
                 capture: None,
                 output: Default::default(),
                 capture_key: None,
@@ -2515,6 +2517,114 @@ impl Render {
                 }
             }
         })
+    }
+    /// Runs one ordinary [`Render::refine`] even when the deadline has passed or
+    /// `cancel` is already cancelled, then collects/refills sampling until a
+    /// monotonic deadline. `None` disables application cancellation. Cancellation
+    /// returns the current status, retaining submitted samples.
+    ///
+    /// This call blocks while polling GPU completion with 1 ms sleep intervals.
+    /// Present this render first to permit refills, then present again after this
+    /// call. Refills require the engine's Final display channel, batching, at least
+    /// one complete sample, valid GPU timing within `time_budget_ms`, queued
+    /// sampling and no filtering, input changes or convergence. No syncs, input
+    /// commits or presentation run here. Preparation/compilation/first-sample work
+    /// advances only in the initial refine and can exceed the deadline.
+    /// Deadlines and cancellation do not interrupt an in-progress refine or callback.
+    /// A newer call cancels the previous refill. Errors follow [`Render::refine`].
+    pub fn refine_until(
+        &self,
+        deadline: Instant,
+        cancel: Option<&CancelToken>,
+    ) -> Result<RenderStatus> {
+        let lease = CancelToken::new();
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if let Some(previous) = render.refill_cancel.replace(lease.clone()) {
+                previous.cancel();
+            }
+            Ok(())
+        })?;
+        let result = (|| {
+            self.refine()?;
+            let revision = self.get(|state, r| {
+                (
+                    state.scene_revision,
+                    state.camera_revision,
+                    r.input_generation,
+                )
+            });
+            let can_continue = || {
+                !lease.is_cancelled()
+                    && !cancel.is_some_and(CancelToken::is_cancelled)
+                    && Instant::now() < deadline
+                    && !self.engine.inputs_pending()
+                    && self.status() == RenderStatus::Converging
+                    && self
+                        .get(|state, r| {
+                            revision
+                                == Some((
+                                    state.scene_revision,
+                                    state.camera_revision,
+                                    r.input_generation,
+                                ))
+                                && state.display.settings.channel == super::Channel::Final
+                                && state.display.presented_render == Some(self.id)
+                                && !r.busy
+                                && r.job.is_some()
+                                && r.denoise.worker.is_none()
+                                && r.samples > 0
+                                && r.samples < next_target(r)
+                                && r.status == RenderStatus::Converging
+                                && (r.settings.batch_samples
+                                    || r.settings.allow_multiple_samples_per_frame)
+                                && r.gpu_sample_ms
+                                    .is_some_and(|ms| ms <= r.settings.time_budget_ms)
+                        })
+                        .unwrap_or(false)
+            };
+            while can_continue() {
+                let ready = Arc::new(AtomicBool::new(false));
+                let completed = ready.clone();
+                self.engine
+                    .inner
+                    .gpu
+                    .queue
+                    .on_submitted_work_done(move || completed.store(true, Ordering::Release));
+                while !ready.load(Ordering::Acquire) && can_continue() {
+                    self.engine.poll_device();
+                    if !ready.load(Ordering::Acquire) {
+                        std::thread::sleep(
+                            deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_millis(1)),
+                        );
+                    }
+                }
+                if !can_continue() {
+                    break;
+                }
+                self.refine_with_options(RefineOptions {
+                    target_batch_time_ms: Some(4.),
+                    defer_resolve: true,
+                    ..Default::default()
+                })?;
+            }
+            Ok(self.status())
+        })();
+        lease.cancel();
+        let _ = self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if render
+                .refill_cancel
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.0, &lease.0))
+            {
+                render.refill_cancel = None;
+            }
+            Ok(())
+        });
+        result
     }
     // Match the browser capacity wait: only sampling in flight can wake a refill.
     // Display, filtering and offline jobs do not grant background sampling.

@@ -61,7 +61,9 @@ and presents it.
 - Loop sample counts and sample events include final beauty samples only.
   Preview and auxiliary-output progress stay independent.
 - Hosts that schedule renders themselves call `refine` and `Display::present`;
-  `refine_with_options` can override batching for one call.
+  `refine_with_options` can override batching for one call. `refine_until`
+  (`mt_render_refine_until`) can fill the time between presentations; see its
+  declaration for deadlines and cancellation.
 
 ## Updates
 
@@ -108,7 +110,7 @@ Render options default to the browser library's values; the
 - [Window engines](display.md#window-presentation) must be used on their window
   thread.
 - Event and progress callbacks run synchronously inside `update`,
-  `read_depth_samples`, `refine`, `converge` and render-loop calls. They may call
+  `read_depth_samples`, `refine`, `refine_until`, `converge` and render-loop calls. They may call
   the API, except the render loop that is running them.
 - [Custom denoiser](denoising.md#custom-denoisers) callbacks run on library
   threads.

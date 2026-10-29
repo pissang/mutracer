@@ -26,7 +26,7 @@ extern "C" {
  * Event/progress callbacks run synchronously on the calling thread inside
  * mt_engine_update,
  * mt_engine_read_depth_samples,
- * mt_render_refine, mt_render_converge and the render loop calls, and may call
+ * mt_render_refine, mt_render_refine_until, mt_render_converge and the render loop calls, and may call
  * back into this API, except into the render loop that is running them
  * (MT_ERROR_INVALID_STATE).
  *
@@ -454,6 +454,22 @@ int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser
  * status (optional) receives mt_render_status. A render failure returns MT_OK
  * with MT_RENDER_ERROR and an error event. */
 int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t capacity);
+/* Runs one ordinary refine, then blocks collecting/refilling queued samples until
+ * a monotonic deadline budget_ms milliseconds after entry. budget_ms must be finite and >=0;
+ * 0 runs only the initial refine. Invalid input returns MT_ERROR_INVALID_ARGUMENT
+ * before scheduling. Preparation, compilation and initial sampling may exceed
+ * the budget; deadlines/cancellation do not interrupt a refine or callback already
+ * in progress. status is optional and receives mt_render_status, as in refine.
+ * Present this render first to enable refills, then present again after return.
+ * Refills require the Final display channel, batching, a completed sample, GPU
+ * timing within time_budget_ms, queued sampling, and no pending inputs/filter or
+ * convergence. No inputs are committed and no image is presented by this call.
+ * mt_render_cancel may interrupt from another thread; cancellation retains work
+ * already submitted and returns MT_OK with the current status. No cancellation
+ * is retained from an earlier call. Other same-engine calls follow the ordinary
+ * calling-thread rules; callbacks run as for refine. No pointers are retained. */
+int32_t mt_render_refine_until(mt_render render, double budget_ms, uint32_t *status,
+  char *error, size_t capacity);
 /* JNLM filters the composed SDR image, including PNG export, without
  * changing raw HDR, HDR window output or sample counts. Initialize with mt_jnlm_options_default. */
 typedef struct mt_jnlm_options {
@@ -524,8 +540,9 @@ int32_t mt_converge_options_default(uint32_t samples, mt_converge_options *outpu
  * same render returns MT_ERROR_INVALID_STATE meanwhile. */
 int32_t mt_render_converge(mt_render render, const mt_converge_options *options, uint32_t *samples,
   char *error, size_t capacity);
-/* Cancels a running converge of this render (or of the loop owning it as final
- * render). The only call allowed from another thread. Idempotent. */
+/* Cancels a running converge or refine_until of this render (or converge on
+ * the loop owning it as final render). The only call allowed from another thread.
+ * Idempotent; refine_until retains submitted work and returns its current status. */
 int32_t mt_render_cancel(mt_render render, char *error, size_t capacity);
 
 typedef struct mt_render_snapshot {
