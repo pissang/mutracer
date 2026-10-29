@@ -153,6 +153,10 @@ of stopping for confirmation.
 
 ## Multi-session tasks
 
+- Keep multi-stage tasks moving. When an item stalls, record what was tried
+  and the evidence, then continue with the next item. Collect unresolved items
+  and report them together at the end, so the maintainer can decide how to
+  proceed.
 - A task split across several sessions keeps one progress file beside its plan
   in `plans/`. It is a snapshot of the current state, not a log. It holds only:
   the status of each task with its commit, the remaining work in order, open
