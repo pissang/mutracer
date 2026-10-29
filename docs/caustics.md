@@ -63,7 +63,10 @@ improve the image monotonically. More samples do not remove the finite precision
 loss in stored photon data. Spatially correlated photon noise can remain
 visible after denoising. A denoiser can soften narrow caustic lines even when it
 improves average brightness; compare raw HDR and denoised output when judging
-detail. Prefer light tracing when the receiver is directly visible.
+detail. Use raw HDR for energy comparisons: displayed or denoised brightness
+can differ even when regional HDR energy agrees. More photons can reduce noise,
+but do not guarantee matching denoised brightness. Prefer light tracing when the
+receiver is directly visible.
 
 Both estimators fall back to PT for the whole scene when a smooth caster uses
 stochastic blend coverage. Cutout coverage remains supported. Environment
