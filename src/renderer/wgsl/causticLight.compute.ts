@@ -121,7 +121,23 @@ fn causticLoad(i:u32)->vec4f {
 fn causticSphere(i:u32)->vec4f {
   return causticLoad(i);
 }
+// Photon emission samples a source surface, independently of any receiver.
+// A NEE sample viewed from the aggregate caster center can reject an emitter
+// which still illuminates another caster, or sample only part of a sphere.
+var<private> causticEmissionOrigin:vec3f;
+var<private> causticEmissionAreaPdf:f32;
+fn causticAreaLight(origin:vec3f,position:vec3f,normal:vec3f,emission:vec3f,area:f32,pmf:f32,result:ptr<function,LightSampleRec>) {
+  causticEmissionOrigin=position;
+  causticEmissionAreaPdf=pmf/max(area,1e-20);
+  let offset=position-origin;
+  (*result).dist=length(offset);
+  (*result).direction=offset/max((*result).dist,1e-20);
+  (*result).normal=normal;
+  (*result).emission=emission;
+  (*result).pdf=pmf;
+}
 fn causticSampleLight(origin:vec3f,rnd:vec3f,result:ptr<function,LightSampleRec>) {
+  causticEmissionAreaPdf=0.0;
   (*result).pdf=0.0;
   (*result).sourceType=0u;
   (*result).isDelta=false;
@@ -143,15 +159,35 @@ fn causticSampleLight(origin:vec3f,rnd:vec3f,result:ptr<function,LightSampleRec>
   else if(choice.z==2u) {
     (*result).sourceType=2u;
     var light=analyticLights[choice.w];
-    light.selectionPmf=1.0;
-    sampleAnalyticLight(light,origin,rnd.xy,result);
-    (*result).pdf*=pmf;
+    let kind=i32(light.litType);
+    if(kind==RECT_LIGHT) {
+      let position=light.position+light.u*(rnd.x-.5)+light.v*(rnd.y-.5);
+      causticAreaLight(origin,position,normalize(cross(light.u,light.v)),light.emission,light.area,pmf,result);
+      (*result).isDelta=light.radiusOrSpread<=.001;
+      light_apply_rect_texture(light,position,light.position-.5*(light.u+light.v),result);
+    }
+    else if((kind==SPHERE_LIGHT||kind==SPOT_LIGHT)&&light.radiusOrSpread>0.0) {
+      let z=1.0-2.0*rnd.x;
+      let radial=sqrt(max(0.0,1.0-z*z));
+      let normal=vec3f(radial*cos(TWOPI*rnd.y),radial*sin(TWOPI*rnd.y),z);
+      causticAreaLight(origin,light.position+light.radiusOrSpread*normal,normal,light.emission,light.area,pmf,result);
+    }
+    else {
+      light.selectionPmf=1.0;
+      sampleAnalyticLight(light,origin,rnd.xy,result);
+      (*result).pdf*=pmf;
+    }
   }
   else {
     (*result).sourceType=1u;
-    var triangle=getEmissiveTriangle(i32(choice.w));
-    triangle.selectionPmf=pmf;
-    sampleEmissiveTriangleLight(triangle,origin,rnd.xy,result);
+    let triangle=getEmissiveTriangle(i32(choice.w));
+    let u=sqrt(rnd.x);
+    let bary=vec3f(1.0-u,u*(1.0-rnd.y),u*rnd.y);
+    let position=bary.x*triangle.p0+bary.y*triangle.p1+bary.z*triangle.p2;
+    let normal=normalize(cross(triangle.p1-triangle.p0,triangle.p2-triangle.p0));
+    let uv=bary.x*triangle.uv0+bary.y*triangle.uv1+bary.z*triangle.uv2;
+    let uv1=bary.x*triangle.secondaryUv0+bary.y*triangle.secondaryUv1+bary.z*triangle.secondaryUv2;
+    causticAreaLight(origin,position,normal,getMaterialEmission(i32(triangle.materialIndex),uv,uv1),triangle.area,pmf,result);
   }
   (*result).selectionPmf=pmf;
 }
@@ -185,7 +221,8 @@ fn causticDirection(origin:vec3f,rnd:vec3f,pdf:ptr<function,f32>,targetRadius:pt
     }
   }
   *targetRadius=selected.w;
-  let axis=normalize(selected.xyz-origin);
+  let offset=selected.xyz-origin;
+  let axis=normalize(select(vec3f(0.0,0.0,1.0),offset,dot(offset,offset)>1e-20));
   let cosine=mix(1.0,causticCosMax(selected,origin),rnd.x);
   let sine=sqrt(max(0.0,1.0-cosine*cosine));
   var t:vec3f;
@@ -294,6 +331,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     infinite=i32(analyticLights[ls.sourceIndex].litType)==DIRECTIONAL_LIGHT;
   }
   var origin=caustic.casterSphere.xyz+ls.direction*ls.dist;
+  if(causticEmissionAreaPdf>0.0) { origin=causticEmissionOrigin; }
   var direction:vec3f;
   var flux:vec3f;
   var targetRadius=caustic.casterSphere.w;
@@ -333,8 +371,14 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     let diskPdf=overlaps/max(PI*area,1e-20);
     flux=ls.emission/(ls.pdf*diskPdf);
   }
+  else if(ls.sourceType==2u&&i32(analyticLights[ls.sourceIndex].litType)==RECT_LIGHT&&ls.isDelta) {
+    // A zero-spread rectangle is a collimated beam, matching PT's delta source.
+    direction=ls.normal;
+    flux=ls.emission/causticEmissionAreaPdf;
+  }
   else {
-    var areaPdf=ls.pdf*abs(dot(ls.normal,-ls.direction))/(ls.dist*ls.dist);
+    var areaPdf=ls.pdf*abs(dot(ls.normal,-ls.direction))/max(ls.dist*ls.dist,1e-20);
+    if(causticEmissionAreaPdf>0.0) { areaPdf=causticEmissionAreaPdf; }
     if(ls.isDelta) {
       areaPdf=ls.selectionPmf;
     }

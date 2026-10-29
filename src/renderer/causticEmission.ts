@@ -5,7 +5,7 @@ import {getSpotLightArea,getSpotLightRadiance} from './lightsData.js';
 /** Emitted flux, independent of the NEE selection heuristic. */
 export function causticEmissionPower(light:AnalyticLightState,radius=1) {
   if(light.type==='DirectionalLight')return colorLuminance(light.color)*light.intensity*Math.PI*radius*radius;
-  if(light.type==='RectLight')return estimateAnalyticLightPower(light)*Math.sin(Math.PI*.5*light.spread)**2;
+  if(light.type==='RectLight')return estimateAnalyticLightPower(light)*(light.spread<=.001?1/Math.PI:Math.sin(Math.PI*.5*light.spread)**2);
   if(light.type!=='SpotLight')return estimateAnalyticLightPower(light);
   const outer=Math.cos(light.outerAngle*Math.PI/180),inner=Math.cos(Math.min(light.innerAngle,light.outerAngle)*Math.PI/180);
   const rows=128,columns=128;let integral=0;
@@ -16,7 +16,8 @@ export function causticEmissionPower(light:AnalyticLightState,radius=1) {
     integral+=t*t*(3-2*t)*ies;
   }
   integral*=2*Math.PI*(1-outer)/(rows*columns);
-  const intensity=colorLuminance(light.color)*(light.radius===0?light.intensity:getSpotLightRadiance(light)*getSpotLightArea(light));
+  // A sphere projects to one quarter of its surface area in any direction.
+  const intensity=colorLuminance(light.color)*(light.radius===0?light.intensity:getSpotLightRadiance(light)*getSpotLightArea(light)/4);
   return intensity*integral;
 }
 /** Two texels per alias choice: probability/alias/type/index, then its PMF. */
