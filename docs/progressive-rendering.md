@@ -87,8 +87,8 @@ are refined that frame. See [scene updates](updates.md) for notifications.
 
 ## Sample batching
 
-Without batching, a still image gets one sample per display frame, so a fast GPU
-idles for most of each frame. With `batchSamples`, sampling works on two levels:
+Without batching, each call advances one sample or tile, so a fast GPU can idle
+between display frames. With `batchSamples`, sampling works on two levels:
 
 - **Per call.** One `refine()` may submit several samples within an estimated
   `timeBudgetMs` of GPU work, or one longer sample or tile, and returns without waiting for them.
@@ -114,12 +114,13 @@ frame interval to your application's cadence and update controls before
 ```js
 let frameGeneration = 0;
 let inputRevision = 0;
+let paused = false;
 for (const event of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change']) {
   addEventListener(event, () => { inputRevision++; }, {capture: true, passive: true});
 }
 
 async function refill(generation, deadline, input) {
-  const canContinue = () => generation === frameGeneration && !document.hidden &&
+  const canContinue = () => generation === frameGeneration && !paused && !document.hidden &&
     performance.now() < deadline && input === inputRevision &&
     engine.display.channel === 'final' && render.batchSamples && render.status === 'converging' &&
     !render.denoising && render.samples > 0 && render.gpuTileTimeMs !== undefined &&
@@ -134,7 +135,7 @@ async function refill(generation, deadline, input) {
 function frame(timestamp) {
   requestAnimationFrame(frame);
   const generation = ++frameGeneration;
-  if (document.hidden) return;
+  if (paused || document.hidden) return;
   engine.update();
   render.refine();
   engine.display.present(render);
@@ -147,7 +148,8 @@ Stopping while queued sampling can continue leaves the GPU idle before the next
 frame. Ignoring a `false` capacity result can spin on immediately resolved
 Promises. Ignoring the deadline or pending input can delay the next input's image
 behind extra GPU work. Stop refilling during export, custom preview selection or
-AOV display as well (increment `frameGeneration` before a pause or export);
+AOV display as well (set `paused = true` and increment `frameGeneration` before
+a pause or export, then clear `paused` to resume);
 RenderLoop handles those transitions automatically.
 
 `refine()` continues the remaining tiles of the current sample, including repeated

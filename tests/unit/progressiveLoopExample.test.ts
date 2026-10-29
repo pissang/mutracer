@@ -7,7 +7,7 @@ const example = readFileSync(new URL('../../docs/progressive-rendering.md', impo
   .split('<!-- own-loop-refill -->')[1].match(/```js\n([\s\S]*?)```/)![1];
 
 describe('copyable progressive loop example', () => {
-  it.each(['complete', 'empty', 'input', 'hidden', 'deadline'] as const)('refills tiled work and stops on %s', async reason => {
+  it.each(['complete', 'empty', 'input', 'hidden', 'deadline', 'pause'] as const)('refills tiled work and stops on %s', async reason => {
     const {engine, targets} = renderFixture({tiles: 3});
     const render = new Render(engine, {batchSamples: true});
     render.refine(); render.refine(); render.refine();
@@ -15,9 +15,11 @@ describe('copyable progressive loop example', () => {
     const frames: ((timestamp: number) => void)[] = [];
     const document = {hidden: false}; let now = 0;
     let queued = true, calls = 0;
+    let pause!: () => void;
     Object.assign(targets[0], {getRealtimeSampleTime: () => 120, getRealtimeTileTime: () => 20,
       whenTraceAvailable: async () => {
         calls++;
+        if (reason === 'pause') pause();
         if (reason === 'input') listeners.get('pointerdown')!();
         if (reason === 'hidden') document.hidden = true;
         if (reason === 'deadline') now = 20;
@@ -29,7 +31,7 @@ describe('copyable progressive loop example', () => {
       if (render.samples === 2) queued = false;
       return result;
     });
-    new Function('engine', 'render', 'document', 'requestAnimationFrame', 'addEventListener', 'performance', example)(
+    pause = new Function('engine', 'render', 'document', 'requestAnimationFrame', 'addEventListener', 'performance', example + '\nreturn () => {paused = true; frameGeneration++;};')(
       engine, render, document, (frame: (timestamp: number) => void) => frames.push(frame),
       (name: string, listener: () => void) => listeners.set(name, listener), {now: () => now});
     frames.shift()!(0);

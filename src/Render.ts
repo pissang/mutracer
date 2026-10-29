@@ -128,7 +128,7 @@ export interface RenderSettings {
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;
   /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles?: number;
-  /** Let one refine submit several samples, up to timeBudgetMs of GPU work; WebGPU requires GPU timestamps. RenderLoop also keeps batching between display frames. Default false. */ batchSamples?: boolean;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. RenderLoop also batches between display frames when individual tiles fit the budget. Default false. */ batchSamples?: boolean;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */ allowMultipleSamplesPerFrame?: boolean;
   /** Adapt scale to frame timing; minScale must not exceed resolutionScale. Default false. */ adaptiveResolution?: {targetFrameMs: number; minScale: number} | false;
   /** Single-level fallback on the same engine. Default null. */ fallback?: Render | null;
@@ -249,7 +249,7 @@ export default class Render {
   /** Minimum transmissive path alpha. Default 1. Changing it restarts this render. */ transmissiveOutputAlphaMin = 1;
   /** Execution budget in milliseconds. Default 21. */ timeBudgetMs = 21;
   /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles = Infinity;
-  /** Let one refine submit several samples within timeBudgetMs; WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */
   get allowMultipleSamplesPerFrame(): boolean { return this.batchSamples; }
   set allowMultipleSamplesPerFrame(value: boolean) { this.batchSamples = value; }
