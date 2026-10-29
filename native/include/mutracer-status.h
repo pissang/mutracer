@@ -47,7 +47,10 @@ enum {
  * incompatibly; the ABI stays experimental until a stable release. Compare it
  * with mt_abi_version() when loading the library dynamically. Scene descriptors
  * carry their own MT_VERSION_SCENE. */
-#define MT_ABI_VERSION 8u
+/* Caustic estimators; default 0 (all disabled). */
+#define MT_CAUSTIC_LIGHT_TRACING 2u
+#define MT_CAUSTIC_PHOTON_MAPPING 4u
+#define MT_ABI_VERSION 10u
 uint32_t mt_abi_version(void);
 
 /* Every struct passed to or filled by the library starts with uint32_t

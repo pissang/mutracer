@@ -357,8 +357,11 @@ typedef struct mt_render_options {
    * GPU cost; secondary coverage remains stochastic. */
   uint32_t alpha_blend_strategy; /* mt_alpha_blend_strategy. */
   uint32_t reserved_tail; /* Must be 0. */
+  uint32_t caustic_flags; /* MT_CAUSTIC_* mask. Default 0 (all disabled). */
+  uint32_t light_photons, photon_map_photons; /* 0 selects pixel count / 4. Default 0. */
+  float photon_map_radius; /* Nonnegative; 0 selects 3% of caster sphere radius. Default 0. */
 } mt_render_options;
-MT_ENGINE_LAYOUT(mt_render_options, 112);
+MT_ENGINE_LAYOUT(mt_render_options, 128);
 /* Initializes the full current record, including struct_size. Other render
  * option calls require struct_size == sizeof(mt_render_options). */
 int32_t mt_render_options_default(mt_render_options *output);

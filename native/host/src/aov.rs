@@ -23,10 +23,22 @@ impl Query {
             pipelines: target.aov_pipelines.clone(),
             gpu: scene.gpu.clone(),
             shader: target.aov_shader.clone(),
-            layouts: scene.layouts[..3].to_vec(),
+            layouts: (0..3)
+                .map(|i| {
+                    target
+                        .pipeline
+                        .as_ref()
+                        .unwrap_or(&scene.pipeline)
+                        .get_bind_group_layout(i)
+                })
+                .collect(),
             groups: vec![
                 scene.groups[0].clone(),
-                scene.groups[1].clone(),
+                target
+                    .caustics
+                    .as_ref()
+                    .map(|c| c.textures.clone())
+                    .unwrap_or_else(|| scene.groups[1].clone()),
                 target.groups[0].clone(),
             ],
             retained: scene
