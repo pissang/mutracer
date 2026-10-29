@@ -66,7 +66,10 @@ export default class RenderLoop {
     } catch (error) {for (const render of this._owned) render.dispose(); throw error;}
     for (const sync of syncs) this.addSync(sync);
     this._unsubscribe = this.final.on('sample', event => this._events.emit('sample', {...event, preview: false}));
-    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this._visibility);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this._visibility);
+      for (const event of this._inputEvents) document.addEventListener(event, this._input, {capture: true, passive: true});
+    }
   }
   private _render(value: Render | RenderOptions | undefined, defaults: RenderOptions): Render {
     if (value instanceof Render) return value;
@@ -212,6 +215,10 @@ export default class RenderLoop {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
     this._cancelScheduled = scheduleFrame(() => { this._cancelScheduled = undefined; try {this._tick();} finally {this._schedule();} });
   }
+  // Input may finish before the next sync update (for example a quick drag).
+  // Revoke the old frame's lease at dispatch, before a GPU fence can refill it.
+  private readonly _inputEvents = ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change'] as const;
+  private _input = (): void => { this._cancelRefill(); };
   private _visibility = (): void => {
     if (document.hidden) {this._cancelFrame(); this._cancelRefill();} else this._schedule();
   };
@@ -237,7 +244,10 @@ export default class RenderLoop {
   dispose(): void {
     if (this._disposed) return;
     this.stop(); this._disposed = true; this._unsubscribe(); this._events.clear(); this._syncs.clear();
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this._visibility);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._visibility);
+      for (const event of this._inputEvents) document.removeEventListener(event, this._input, true);
+    }
     for (const render of this._owned) render.dispose(); this._owned.clear();
   }
 }

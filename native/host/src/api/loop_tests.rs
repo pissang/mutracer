@@ -853,6 +853,10 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         },
     )
     .unwrap();
+    assert!(
+        !render_loop.final_render().refill_ready(),
+        "no queued sampling must not grant a refill"
+    );
     tick_until(&mut render_loop, |l, _| l.needs_refill());
     assert!(render_loop.final_render().gpu_sample_time_ms().unwrap() > 0.);
     let table: serde_json::Value = serde_json::from_str(include_str!(

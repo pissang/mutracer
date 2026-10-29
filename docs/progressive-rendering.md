@@ -105,20 +105,21 @@ batching while the view is changing.
 Prefer RenderLoop for between-frame refilling. For your own loop, the following
 example runs refills after presentation, with a 60 Hz frame deadline. Adjust the
 frame interval to your application's cadence and update controls before
-`engine.update()`. Enable `batchSamples` on `render`.
+`engine.update()`. This example uses one render and the final beauty channel; enable
+`batchSamples` on `render`.
 
 <!-- own-loop-refill -->
 ```js
 let frameGeneration = 0;
 let inputRevision = 0;
-for (const event of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'input']) {
+for (const event of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change']) {
   addEventListener(event, () => { inputRevision++; }, {capture: true, passive: true});
 }
 
 async function refill(generation, deadline, input) {
   const canContinue = () => generation === frameGeneration && !document.hidden &&
     performance.now() < deadline && input === inputRevision &&
-    render.batchSamples && render.status === 'converging' &&
+    engine.display.channel === 'final' && render.batchSamples && render.status === 'converging' &&
     !render.denoising && render.samples > 0 && render.gpuSampleTimeMs !== undefined;
   while (canContinue() && await render.whenReadyToRefine()) {
     // Input or a new frame may arrive during the GPU wait.
@@ -143,7 +144,8 @@ Stopping while queued sampling can continue leaves the GPU idle before the next
 frame. Ignoring a `false` capacity result can spin on immediately resolved
 Promises. Ignoring the deadline or pending input can delay the next input's image
 behind extra GPU work. Stop refilling during export, custom preview selection or
-AOV display as well; RenderLoop handles those transitions automatically.
+AOV display as well (increment `frameGeneration` before a pause or export);
+RenderLoop handles those transitions automatically.
 
 `refine()` continues the remaining tiles of the current sample, including repeated
 calls between presentations. `samples` increases only after the whole sample;

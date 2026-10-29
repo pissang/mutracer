@@ -347,6 +347,16 @@ describe('RenderLoop sampling between display frames', () => {
     expect(f.target.trace).toHaveBeenCalledTimes(before + 1);
     f.loop.dispose(); f.engine.dispose();
   });
+  it.each(JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json', import.meta.url), 'utf8')).refillCancelInputEvents as string[])('revokes a frame lease immediately on %s before sync commits', async event => {
+    const listeners = new Map<string, () => void>();
+    const remove = vi.fn();
+    vi.stubGlobal('document', {hidden: false, addEventListener: (name: string, listener: () => void) => listeners.set(name, listener), removeEventListener: remove});
+    const f = refillFixture();
+    listeners.get(event)!();
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before);
+    f.loop.dispose(); expect(remove).toHaveBeenCalledWith(event, expect.any(Function), true); f.engine.dispose();
+  });
   it('expires a manual tick at the next display frame and ignores old completion callbacks after a new tick', async () => {
     const f = refillFixture();
     const expire = [...f.frames.values()][0]; expire(0);
