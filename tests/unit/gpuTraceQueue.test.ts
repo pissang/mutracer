@@ -5,11 +5,11 @@ describe('GPU trace backpressure', () => {
   it('wakes as soon as one sample frees capacity while the rest of the queue still runs', async () => {
     const complete: (() => void)[] = [];
     const queue = new GPUTraceQueue({onSubmittedWorkDone: () => new Promise<void>(resolve => complete.push(resolve))} as GPUQueue);
-    await queue.whenAvailable(); expect(queue.hasPending).toBe(false);
+    expect(await queue.whenAvailable()).toBe(false); expect(queue.hasPending).toBe(false);
     queue.track(2); queue.track(3); const ready = queue.whenAvailable();
     expect(queue.hasPending).toBe(true);
     expect(queue.available(8)).toBe(3);
-    complete[0](); await ready; expect(queue.available(8)).toBe(5);
+    complete[0](); expect(await ready).toBe(true); expect(queue.available(8)).toBe(5);
     expect(queue.hasPending).toBe(true);
     complete[1](); await queue.whenAvailable(); expect(queue.available(8)).toBe(8);
     expect(queue.hasPending).toBe(false);

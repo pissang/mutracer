@@ -162,8 +162,7 @@ or alpha, plus its existing early depth termination.
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
 | `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms; undefined without timestamps, for stale inputs or during converge |
-| `gpuWorkPending` | Queued measured WebGPU sample-batching work, shared by this engine's renders; false when unavailable. Excludes denoising, display and offline convergence |
-| `whenReadyToRefine()` | Wait for the next release of WebGPU sampling queue capacity; resolves immediately if none is queued or on WebGL; submits no work |
+| `whenReadyToRefine()` | Wait for WebGPU sampling capacity and return `true` if sampling was queued; return `false` immediately with no sampling, on WebGL, or for only denoising, display or offline convergence work; submits no work; throws after disposal |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
 | `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |

@@ -1,5 +1,6 @@
 {
-  "refillSampleTimesMs": [1, 40],
+  "refillSampleTimesMs": [1, 40, 120],
+  "refillRequiresQueuedSampling": true,
   "cases": [
     {"name": "publish-current", "events": ["start", "complete"], "actions": ["Filter", "Publish"]},
     {

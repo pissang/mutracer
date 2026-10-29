@@ -303,7 +303,7 @@ describe('RenderLoop sampling between display frames', () => {
     const target = fixture.targets[0], completions: (() => void)[] = [];
     const budget = vi.fn(), defer = vi.fn();
     Object.assign(target, {getRealtimeSampleTime: () => 1, setRealtimeBatchBudget: budget, setRealtimeDeferPostProcess: defer,
-      whenTraceAvailable: () => fixture.engine.device!.queue.onSubmittedWorkDone()});
+      whenTraceAvailable: () => fixture.engine.device!.queue.onSubmittedWorkDone().then(() => true)});
     vi.spyOn(fixture.engine.device!.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => completions.push(() => resolve(undefined))));
     loop.tick();
     return {...fixture, loop, sync, target, frames, completions, budget, defer, async complete() {completions.shift()!(); await settle();}};
@@ -326,7 +326,7 @@ describe('RenderLoop sampling between display frames', () => {
   it.each(refillTimes)('refills incomplete tiles with a %s ms full sample estimate', async fullSampleMs => {
     const f = refillFixture();
     let submitted = 0, pending = false;
-    Object.assign(f.target, {getRealtimeSampleTime: () => fullSampleMs, hasPendingTrace: () => pending});
+    Object.assign(f.target, {getRealtimeSampleTime: () => fullSampleMs, whenTraceAvailable: () => pending ? f.engine.device!.queue.onSubmittedWorkDone().then(() => true) : Promise.resolve(false)});
     // A tile does real work without advancing the completed-sample counter.
     vi.mocked(f.target.trace).mockImplementation(() => {submitted++; pending = true; return false;});
     f.loop.tick();
@@ -337,6 +337,14 @@ describe('RenderLoop sampling between display frames', () => {
     // No submission means no promise/microtask spin while preparation is pending.
     vi.mocked(f.target.trace).mockImplementation(() => {pending = false; return false;});
     await f.complete(); expect(f.completions).toHaveLength(0);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('stops when the capacity wait reports no queued sampling', async () => {
+    const f = refillFixture();
+    vi.spyOn(f.loop.final, 'whenReadyToRefine').mockResolvedValue(false);
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    f.loop.tick(); await settle();
+    expect(f.target.trace).toHaveBeenCalledTimes(before + 1);
     f.loop.dispose(); f.engine.dispose();
   });
   it('expires a manual tick at the next display frame and ignores old completion callbacks after a new tick', async () => {

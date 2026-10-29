@@ -11,8 +11,9 @@ export class GPUTraceQueue {
     return Math.max(0, budgetMs - this.pendingMs);
   }
 
-  whenAvailable(): Promise<void> {
-    return this.pending.values().next().value ?? Promise.resolve();
+  whenAvailable(): Promise<boolean> {
+    const pending = this.pending.values().next().value;
+    return pending ? pending.then(() => true) : Promise.resolve(false);
   }
 
   track(estimatedMs: number): void {

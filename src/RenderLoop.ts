@@ -192,12 +192,11 @@ export default class RenderLoop {
         aovChannel(this.display.channel) ||
         !this._canRefill() || [...this._syncs].some(sync => sync.active) ||
         this.select({changing: false}) !== 'final') return;
-      const before = this.final.samples;
       const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
       if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
-      if ((this.final.samples > before || this.final.gpuWorkPending) && status === 'converging') wait();
+      if (status === 'converging') wait();
     };
-    const wait = () => {void this.final.whenReadyToRefine().then(refill, () => {});};
+    const wait = () => {void this.final.whenReadyToRefine().then(queued => {if (queued) refill();}, () => {});};
     // Keep only a short chunk ahead of input. GPU completion, rather than the
     // display refresh rate, paces the next chunk; presentation stays on rAF.
     wait();

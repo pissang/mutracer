@@ -158,16 +158,21 @@ describe('independent Render', () => {
   });
   it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
-    expect(render.gpuWorkPending).toBe(false);
-    await render.whenReadyToRefine(); expect(targets).toHaveLength(0);
-    render.refine(); let complete!: () => void, queued = true;
-    const pending = new Promise<void>(resolve => {complete = () => {queued = false; resolve();};});
-    Object.assign(targets[0], {whenTraceAvailable: () => pending, hasPendingTrace: () => queued});
-    expect(render.gpuWorkPending).toBe(true);
-    expect(render.whenReadyToRefine()).toBe(pending); expect(targets[0].trace).toHaveBeenCalledOnce();
-    complete(); await pending; expect(render.gpuWorkPending).toBe(false);
-    render.dispose(); expect(render.gpuWorkPending).toBe(false); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+    expect(await render.whenReadyToRefine()).toBe(false); expect(targets).toHaveLength(0);
+    render.refine(); let complete!: () => void;
+    const pending = new Promise<boolean>(resolve => {complete = () => resolve(true);});
+    Object.assign(targets[0], {whenTraceAvailable: () => pending});
+    const ready = render.whenReadyToRefine(); expect(targets[0].trace).toHaveBeenCalledOnce();
+    complete(); expect(await ready).toBe(true);
+    Object.assign(targets[0], {whenTraceAvailable: () => Promise.resolve(false)});
+    expect(await render.whenReadyToRefine()).toBe(false);
+    render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
   });
+  it('returns false on WebGL without waiting for display or denoising work', async () => {
+    const {engine} = renderFixture({backend: 'webgl'}); const render = new Render(engine);
+    render.refine(); expect(await render.whenReadyToRefine()).toBe(false); engine.dispose();
+  });
+
   it.each([0, -1, NaN, Infinity])('rejects an invalid realtime queue budget (%s) and restores subsequent calls', targetBatchTimeMs => {
     const {engine} = renderFixture(); const render = new Render(engine);
     vi.spyOn(console, 'error').mockImplementation(() => {});

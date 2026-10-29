@@ -2516,9 +2516,13 @@ impl Render {
             }
         })
     }
+    // Match the browser capacity wait: only sampling in flight can wake a refill.
+    // Display, filtering and offline jobs do not grant background sampling.
     pub(super) fn refill_ready(&self) -> bool {
-        self.get(|_, r| r.denoise.worker.is_none() && r.samples < next_target(r))
-            .unwrap_or(false)
+        self.get(|_, r| {
+            !r.busy && r.job.is_some() && r.denoise.worker.is_none() && r.samples < next_target(r)
+        })
+        .unwrap_or(false)
     }
     /// Last measured GPU time per beauty sample, or `None` before a valid
     /// timestamp or after inputs restart. CPU polling time is excluded.
