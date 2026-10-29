@@ -1,7 +1,7 @@
 import {gpu} from './shaderSourceFormattingFixture';
 import {expect,it,vi} from 'vitest';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
-import {PHOTON_BYTES,photonBucketCount,photonGridCompute,photonLayout} from '../../src/renderer/wgsl/photonMap.compute';
+import {PHOTON_BYTES,defaultPhotonMapPhotons,photonBucketCount,photonGridCompute,photonLayout} from '../../src/renderer/wgsl/photonMap.compute';
 import {photonRadius,photonVisibleRadius} from '../../src/renderer/WGPUPhotonMap';
 it('matches the photon and hash storage contracts and the consistent radius schedule',()=>{
  gpu();const d=makeShaderDataDefinitions(photonGridCompute),record=d.structs.Bucket;
@@ -59,4 +59,9 @@ it('estimates perspective and orthographic footprints without changing the gathe
  expect(photonVisibleRadius(.005,options)).toBe(.005);
  expect(photonVisibleRadius(.05,{...options,orthographic:true})).toBeCloseTo(.002);
  expect(photonVisibleRadius(.05,options,0)).toBe(.05);
+});
+it('caps the default photon-map batch at 2^18 photons', () => {
+  expect(defaultPhotonMapPhotons(480, 272)).toBe(32640);
+  expect(defaultPhotonMapPhotons(1920, 1088)).toBe(2 ** 18);
+  expect(defaultPhotonMapPhotons(1, 1)).toBe(1);
 });

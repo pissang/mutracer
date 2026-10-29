@@ -1,5 +1,6 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
+import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
 import {CausticSeedCache} from './causticSeeds.js';
 import {causticEmissionTable} from './causticEmission.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
@@ -821,7 +822,7 @@ class WGPURayTracePass {
     const n = typeof requested === 'object' ? requested.photonsPerSample : undefined;
     const after = this._photonMap.ensure(
       this._activeTarget,
-      Number.isFinite(n) && n! > 0 ? n! : (this._width * this._height) / 4
+      Number.isFinite(n) && n! > 0 ? n! : defaultPhotonMapPhotons(this._width, this._height)
     );
     if (before !== after.data) this._needsUpdateBindGroups = true;
   }

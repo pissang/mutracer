@@ -1,6 +1,10 @@
 export const PHOTON_BYTES = 20;
 export const PHOTON_GRID_SIZE = 262144;
 export const PHOTON_SCAN_BLOCK = 256;
+/** Default photon-map batch: pixel count / 4, capped at 2^18. */
+export function defaultPhotonMapPhotons(width: number, height: number) {
+  return Math.min(2 ** 18, Math.max(1, Math.round((width * height) / 4)));
+}
 /** Power-of-two hash capacity, bounded independently of large photon batches. */
 export function photonBucketCount(photons: number) {
   return Math.min(PHOTON_GRID_SIZE, 2 ** Math.ceil(Math.log2(Math.max(256, photons * 2))));

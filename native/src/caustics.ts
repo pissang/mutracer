@@ -3,7 +3,7 @@ import {CausticSeedCache} from '../../src/renderer/causticSeeds.js';
 import {causticEmissionTable} from '../../src/renderer/causticEmission.js';
 import {packCausticLightUniform} from '../../src/renderer/causticUniform.js';
 import {causticLightCompute,causticAccumulateCompute,causticBufferCompositeCompute} from '../../src/renderer/wgsl/causticLight.compute.js';
-import {photonGridCompute} from '../../src/renderer/wgsl/photonMap.compute.js';
+import {defaultPhotonMapPhotons,photonGridCompute} from '../../src/renderer/wgsl/photonMap.compute.js';
 import {mat4} from '../../src/math.js';
 import type Mesh from '../../src/scene/MeshState.js';
 import type Material from '../../src/scene/MaterialState.js';
@@ -29,7 +29,7 @@ export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBi
  // Large Metal manifold kernels spill or fail with larger threadgroups.
  // Keep host dispatch and shader block sizes equal; disabled targets keep 8.
  const metadata={flags,workgroupSize:flags&1?1:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
-  lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||Math.max(1,Math.round(width*height/4)),
+  lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||defaultPhotonMapPhotons(width,height),
   initialRadius:settings.photonMapRadius||Math.max(bounds[3]*.03,1e-4),
   lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections):'',
   photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections):'',
