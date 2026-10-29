@@ -24,11 +24,11 @@ try {
    if(ready)break;
    if(i===899)throw Error('Cornell viewer load timeout');await delay(200);
   }
-  await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');const e=getEngine();window.photonViewerErrors=[];e.engine.device?.addEventListener('uncapturederror',event=>window.photonViewerErrors.push(event.error.message));const c=e.engine.display.canvas;c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;setSettings({cameraIndex:0,bounces:8,caustics:true,causticPhotonMapping:true,causticLightTracing:false,maxSamples:1,fStop:0,autoRotate:false});})()`);
+  await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');const e=getEngine();window.photonViewerErrors=[];e.engine.device?.addEventListener('uncapturederror',event=>window.photonViewerErrors.push(event.error.message));const c=e.engine.display.canvas;c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;setSettings({cameraIndex:0,bounces:8,caustics:${process.env.CAUSTIC_MODE!=='pt'},causticPhotonMapping:${process.env.CAUSTIC_MODE!=='pt'},causticLightTracing:${process.env.CAUSTIC_MODE==='combined'},maxSamples:1,fStop:0,autoRotate:false});})()`);
   await page.tab.evaluate(`import('/@fs/${profileRoot}/tests/gpu/photonViewerProfile.ts').then(async m=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');window.radiusProfile=m.profileViewer(getEngine());})`);
   await page.tab.evaluate(`import('/@fs/${root}/src/renderer/causticDiagnostics.ts').then(m=>{m.causticDiagnostics.photonSkipQuery=${process.env.QUERY_OFF==='1'};})`);
   const results=[];
-  for(const denoise of process.env.DENOISE==='0'?[false]:[false,true])for(const scale of [.5,1]){
+  for(const denoise of process.env.DENOISE==='0'?[false]:process.env.DENOISE==='1'?[true]:[false,true])for(const scale of [.5,1]){
    await page.tab.evaluate(`import('/src/store.ts').then(m=>m.setSettings({resolutionScale:${scale},denoise:${denoise},maxSamples:1}))`);
    for(let i=0;i<1800;i++){
     const ready=await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const e=getEngine();return e.final.samples===1&&e.loop.status==='finished'&&e.final.resolutionScale===${scale};})()`);
@@ -46,6 +46,12 @@ try {
    if(process.env.CAPTURE_HDR==='1'){
     await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const image=await getEngine().final.readPixels('hdr');const r=await fetch('/__radius-hdr/${scale}-${denoise}.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('HDR evidence upload failed');})()`);
     writeFileSync(resolve(out,`${scale}-${denoise}.json`),JSON.stringify({width:row.width,height:row.height}));
+    if(denoise){
+     await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const image=await getEngine().final.readPixels('denoised');const r=await fetch('/__radius-hdr/${scale}-${denoise}-oidn.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('OIDN evidence upload failed');})()`);
+     writeFileSync(resolve(out,`${scale}-${denoise}-oidn.json`),JSON.stringify({width:row.width,height:row.height}));
+    }
+    const screenshot=await page.tab.call('Page.captureScreenshot',{format:'png'});
+    writeFileSync(resolve(out,`${scale}-${denoise}.png`),Buffer.from(screenshot.data,'base64'));
    }
    const result={scale,denoise,...row};results.push(result);
    writeFileSync(resolve(out,'viewer.json'),JSON.stringify(results,null,2));
