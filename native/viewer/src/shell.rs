@@ -17,11 +17,30 @@ fn logo_image() -> &'static egui::ColorImage {
     })
 }
 pub fn icon() -> egui::IconData {
-    let image = logo_image();
-    egui::IconData {
-        rgba: image.pixels.iter().flat_map(|p| p.to_array()).collect(),
-        width: image.size[0] as u32,
-        height: image.size[1] as u32,
+    #[cfg(target_os = "macos")]
+    {
+        // Let AppKit use the bundle's icon, including system appearance variants.
+        // eframe treats an empty IconData as a request to keep the OS icon.
+        if crate::bundled_asset("MuTracer.icns", std::path::PathBuf::new()).is_file() {
+            return egui::IconData::default();
+        }
+        let image = image::load_from_memory(include_bytes!("../assets/macos-icon.png"))
+            .expect("MuTracer macOS icon")
+            .into_rgba8();
+        egui::IconData {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let image = logo_image();
+        egui::IconData {
+            rgba: image.pixels.iter().flat_map(|p| p.to_array()).collect(),
+            width: image.size[0] as u32,
+            height: image.size[1] as u32,
+        }
     }
 }
 fn logo(ctx: &egui::Context) -> egui::TextureHandle {
