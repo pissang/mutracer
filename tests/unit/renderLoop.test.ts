@@ -11,7 +11,7 @@ class Source extends Sync {
   get active() {return this.moving || super.active;}
   activate(ms: number) {this.activateFor(ms);}
 }
-afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
+afterEach(() => {vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('RenderLoop selection and presentation', () => {
   it('uses an 80 ms adaptive preview budget with an independent final budget', () => {
@@ -324,7 +324,10 @@ describe('RenderLoop sampling between display frames', () => {
   });
   const refillTimes: number[] = JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json', import.meta.url), 'utf8')).refillSampleTimesMs;
   it.each(refillTimes)('refills incomplete tiles with a %s ms full sample estimate', async fullSampleMs => {
+    // This case checks queue/tile policy; deadline expiration is covered separately.
+    vi.useFakeTimers();
     const f = refillFixture();
+    f.complete = async () => {f.completions.shift()!(); for(let i=0;i<12;i++)await Promise.resolve();};
     let submitted = 0, pending = false;
     Object.assign(f.target, {getRealtimeSampleTime: () => fullSampleMs, getRealtimeTileTime: () => Math.min(fullSampleMs, 20), whenTraceAvailable: () => pending ? f.engine.device!.queue.onSubmittedWorkDone().then(() => true) : Promise.resolve(false)});
     // A tile does real work without advancing the completed-sample counter.

@@ -302,7 +302,6 @@ export default class Render {
   private _busy = false;
   private _refineOptions?: RefineOptions;
   private _refillController?: AbortController;
-  private _loopRefinePolicy?: {options: RefineOptions; beforeRefill: () => void};
   private _offlineCamera = false;
   private _input = {scene: -1, camera: -1, settings: ''};
   private _adaptiveScale = 1;
@@ -520,13 +519,14 @@ export default class Render {
    * already aborted signal still permits the synchronous refine().
    */
   refineUntil(deadline: number, options?: {signal?: AbortSignal}): Promise<void> {
-    const policy = this._loopRefinePolicy; this._loopRefinePolicy = undefined;
-    const signal = options?.signal;
+    return this._refineToDeadline(deadline, options?.signal);
+  }
+  private _refineToDeadline(deadline: number, signal?: AbortSignal, options?: RefineOptions, beforeRefill?: () => void): Promise<void> {
     this._refillController?.abort();
     const controller = this._refillController = new AbortController();
     // Keep lifecycle exceptions synchronous, just like refine(). Install the
     // controller first so a synchronous sample listener can revoke this call.
-    try { this.refine(undefined, policy?.options); }
+    try { this.refine(undefined, options); }
     catch (error) { controller.abort(); if (this._refillController === controller) this._refillController = undefined; throw error; }
     const device = this._engine.device;
     const canContinue = (afterWait = false) => !controller.signal.aborted && !signal?.aborted &&
@@ -552,7 +552,7 @@ export default class Render {
       try {
         while (canContinue()) {
           if (!await Promise.race([this.whenReadyToRefine(), cancelled])) break;
-          policy?.beforeRefill();
+          beforeRefill?.();
           if (!canContinue(true)) break;
           this.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
         }
@@ -573,9 +573,7 @@ export default class Render {
   get _refilling() { return !!this._refillController && !this._refillController.signal.aborted; }
   /** @internal Preserve loop-specific synchronous overrides while using refineUntil. */
   _refineUntil(deadline: number, signal: AbortSignal, options: RefineOptions, beforeRefill: () => void): Promise<void> {
-    this._loopRefinePolicy = {options, beforeRefill};
-    try { return this.refineUntil(deadline, {signal}); }
-    finally { this._loopRefinePolicy = undefined; }
+    return this._refineToDeadline(deadline, signal, options, beforeRefill);
   }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
