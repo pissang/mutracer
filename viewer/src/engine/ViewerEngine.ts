@@ -1,4 +1,4 @@
-import {causticOptions} from '../caustics';
+import {causticOptions, presetCaustics} from '../caustics';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -331,7 +331,8 @@ export class ViewerEngine {
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
-    if (researchScene) setSettings({ groundShadow: false, ...(meta.presetId === 'research-cornell-caustic' ? {caustics: true, causticLightTracing: false, causticPhotonMapping: true} : {}) }, { record: false });
+    const caustics = presetCaustics(meta.presetId, !!restored, DEFAULT_SETTINGS);
+    if (researchScene || caustics) setSettings({ ...(researchScene ? { groundShadow: false } : {}), ...caustics }, { record: false });
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
