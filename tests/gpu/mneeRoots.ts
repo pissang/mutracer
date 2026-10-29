@@ -1,11 +1,11 @@
 // Fixed-receiver root enumeration, independent of the render's Newton start count.
 // Executes the production solver, intersection code and seed distribution.
 import {wgpuShaderSource} from '../../src/renderer/wgpuShaderSource.js';
-import {causticDiagnostics} from '../../src/renderer/causticDiagnostics.js';
+import {mneeDiagnostics} from '../../src/research/mnee/index.js';
 export async function enumerateRoots(viewer:any,batches=4) {
- const pass=causticDiagnostics.rootPass as any;if(!pass)throw Error('Root probe pass was not captured');
+ const pass=mneeDiagnostics.rootPass as any;if(!pass)throw Error('Root probe pass was not captured');
  const device=viewer.engine.device as GPUDevice,constants=pass._prevPipelineConstants;
- const features={hasDisplacement:pass._hasDisplacement,hasAlpha:Boolean(constants.HAS_ALPHA_BLEND),hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:pass._blasLayoutMask,dynamicEnvironment:true,mnee:true,mneeDebugGroup:0,mneeSeeds:4,mneeDamping:!!causticDiagnostics.mneeDamping,mneeMaxDepth:20,workgroupSize:1};
+ const features={hasDisplacement:pass._hasDisplacement,hasAlpha:Boolean(constants.HAS_ALPHA_BLEND),hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:pass._blasLayoutMask,dynamicEnvironment:true,mnee:true,mneeDebugGroup:0,mneeSeeds:4,mneeDamping:!!mneeDiagnostics.mneeDamping,mneeMaxDepth:20,workgroupSize:1};
  const source=wgpuShaderSource(constants,features,true).replace('fn main(', 'fn unusedBeauty(');
  const groups=pass._rayTraceBindGroups as GPUBindGroup[],layout=device.createPipelineLayout({bindGroupLayouts:groups.map((_,i)=>pass._rayTracePipeline.getBindGroupLayout(i))});
  const targets=pass.getOutputBuffer(),count=128*128,size=count*16;
@@ -62,5 +62,5 @@ export async function enumerateRoots(viewer:any,batches=4) {
   results.push({pixel,receiver,candidates:batches*count,accepted:accepted.length,failures,roots,rootsAt1e4:cluster(.0001).length,discoveryHistory:checkpoints.map((n,i)=>({candidates:(i+1)*count,roots:cluster(.001,accepted.slice(0,n)).length})),estimatedSms64WeightFraction:roots.reduce((sum,r)=>sum+r.weight*r.sms64Coverage,0)/totalWeight,totalUnitEmitterWeight:totalWeight});
  }
  readbacks.forEach(buffer=>buffer.destroy());
- return {solver:'production mneeSolve; one independent area seed per enumeration trial; render Newton start count stays four',camera:'top-first image pixel center, Y flipped for GPU camera UV; deterministic transmission prefix',emitter:y,tolerance:.001,iterations:10,damping:!!causticDiagnostics.mneeDamping,results};
+ return {solver:'production mneeSolve; one independent area seed per enumeration trial; render Newton start count stays four',camera:'top-first image pixel center, Y flipped for GPU camera UV; deterministic transmission prefix',emitter:y,tolerance:.001,iterations:10,damping:!!mneeDiagnostics.mneeDamping,results};
 }

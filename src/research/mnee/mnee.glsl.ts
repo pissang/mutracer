@@ -1,5 +1,5 @@
-import {INSTANCE_VEC4_STRIDE} from '../../bvhAccel.js';
-import {createShaderMixin,Shader} from '../../shader.js';
+import {INSTANCE_VEC4_STRIDE} from '../../renderer/bvhAccel.js';
+import {createShaderMixin,Shader} from '../../renderer/shader.js';
 // Independent GLSL implementation of the single-interface implicit map in mnee.wgsl.ts.
 export function createMneeGlsl(debug = false,sms=false,seeds=4,damping=false,maxDepth=20,roulette=false) { return createShaderMixin({uniforms:{
   mneeSeedOffset:Shader.uniform('int'),mneeSeedCount:Shader.uniform('int'),

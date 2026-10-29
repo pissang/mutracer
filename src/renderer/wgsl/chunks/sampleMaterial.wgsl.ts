@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, mnee = false,photonMapping=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {
@@ -394,8 +394,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
     prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
   }
-${mnee ? /* wgsl */ `  if (!mediumSampled) { let value=(*path).beta*mneeContribution(*si,prepared);causticEstimateRecord(value,0u);(*path).li+=value; }
-` : ''}${photonMapping?/* wgsl */ `  if(!mediumSampled){let value=(*path).beta*photonContribution(*si,prepared,(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
+${researchContribution}${photonMapping?/* wgsl */ `  if(!mediumSampled){let value=(*path).beta*photonContribution(*si,prepared,(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
 ` : ''}  let scattered = sampleScattering(si, *ma, prepared, path, ffnormal, !mediumSampled);
   scatterDir = scattered.direction;
   scatteringPdf = scattered.pdf;

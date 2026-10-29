@@ -1,6 +1,21 @@
 export const PHOTON_BYTES = 20;
 export const PHOTON_GRID_SIZE = 262144;
 export const PHOTON_SCAN_BLOCK = 256;
+export const PHOTON_REFERENCE_COUNT = 2 ** 18;
+export type PhotonRadiusScaling = 'none' | 'ppm' | 'constant-count';
+/** Internal density A/B, with the same progressive schedule in all modes. */
+export function photonRadius(
+  initial: number,
+  batch: number,
+  alpha = 2 / 3,
+  photons = PHOTON_REFERENCE_COUNT,
+  scaling: PhotonRadiusScaling = 'none'
+) {
+  const radius = initial * Math.pow(Math.max(1, batch), (alpha - 1) / 2);
+  if (scaling === 'none' || photons === PHOTON_REFERENCE_COUNT) return radius;
+  const exponent = scaling === 'ppm' ? (alpha - 1) / 2 : -1 / 2;
+  return radius * Math.pow(Math.max(1, photons) / PHOTON_REFERENCE_COUNT, exponent);
+}
 /** Default photon-map batch: pixel count / 4, capped at 2^18. */
 export function defaultPhotonMapPhotons(width: number, height: number) {
   return Math.min(2 ** 18, Math.max(1, Math.round((width * height) / 4)));
@@ -293,10 +308,10 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
 /** Evidence-only per-query counters; no extra bindings or public render options. */
 export function photonQuerySource(debugGroup = -1) {
   if (debugGroup < 50) return photonQueryWgsl;
-  const selected = debugGroup === 50 ? 'visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
+  const selected = debugGroup === 50 ? 'visible' : debugGroup === 72 ? '!visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
   return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl
     .replace('var sum=vec3f(0.0);', 'var sum=vec3f(0.0);var reads=0u;var passed=0u;')
     .replace('let index=photonIndexWord(indexStart+i);', 'reads++;let index=photonIndexWord(indexStart+i);')
     .replace('let directions=photonIndexWord', 'passed++;let directions=photonIndexWord')
-    .replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats=vec3f(f32(reads),f32(passed),1.0);}return sum/(PI*radius*radius);`);
+    .replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats${debugGroup === 72 ? '+' : ''}=vec3f(f32(reads),f32(passed),1.0);}return sum/(PI*radius*radius);`);
 }

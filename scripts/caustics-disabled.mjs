@@ -12,7 +12,8 @@ async function capture(source,label){
  const paths=['tests/gpu/caustics.ts','tests/gpu/caustics.html','src/renderer/causticDiagnostics.ts'].map(p=>resolve(source,p));
  const contents=[fixture,html,readFileSync(resolve(root,'src/renderer/causticDiagnostics.ts'))];
  const originals=paths.map(p=>existsSync(p)?readFileSync(p):null);
- paths.forEach((p,i)=>{mkdirSync(dirname(p),{recursive:true});writeFileSync(p,contents[i]);});
+ // Preserve the reference's own fixture and controls; only fill missing files.
+ paths.forEach((p,i)=>{if(!originals[i]){mkdirSync(dirname(p),{recursive:true});writeFileSync(p,contents[i]);}});
  const server=await createServer({root:source,configFile:false,optimizeDeps:{entries:[],noDiscovery:true},server:{host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**/.native-build/**']}}});await server.listen();const chrome=await launchChrome();
  try{for(const backend of ['webgpu','webgl']){
   const page=await chrome.page(`http://127.0.0.1:${server.httpServer.address().port}/tests/gpu/caustics.html${backend==='webgl'?'?webgl':''}`);

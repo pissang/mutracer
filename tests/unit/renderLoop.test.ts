@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import RenderLoop from '../../src/RenderLoop';
@@ -301,8 +302,8 @@ describe('RenderLoop sampling between display frames', () => {
     const loop = new RenderLoop(fixture.engine, {sync, final: {batchSamples: true}}); loop.tick();
     const target = fixture.targets[0], completions: (() => void)[] = [];
     const budget = vi.fn(), defer = vi.fn();
-    Object.assign(target, {getRealtimeSampleTime: () => 1, setRealtimeBatchBudget: budget, setRealtimeDeferPostProcess: defer,
-      whenTraceAvailable: () => fixture.engine.device!.queue.onSubmittedWorkDone()});
+    Object.assign(target, {getRealtimeSampleTime: () => 1, getRealtimeTileTime: () => 1, setRealtimeBatchBudget: budget, setRealtimeDeferPostProcess: defer,
+      whenTraceAvailable: () => fixture.engine.device!.queue.onSubmittedWorkDone().then(() => true)});
     vi.spyOn(fixture.engine.device!.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => completions.push(() => resolve(undefined))));
     loop.tick();
     return {...fixture, loop, sync, target, frames, completions, budget, defer, async complete() {completions.shift()!(); await settle();}};
@@ -320,6 +321,48 @@ describe('RenderLoop sampling between display frames', () => {
     expect(budget).toHaveBeenLastCalledWith(4);
     loop.stop(); await f.complete(); expect(loop.final.samples).toBe(4);
     loop.dispose(); engine.dispose();
+  });
+  const refillTimes: number[] = JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json', import.meta.url), 'utf8')).refillSampleTimesMs;
+  it.each(refillTimes)('refills incomplete tiles with a %s ms full sample estimate', async fullSampleMs => {
+    const f = refillFixture();
+    let submitted = 0, pending = false;
+    Object.assign(f.target, {getRealtimeSampleTime: () => fullSampleMs, getRealtimeTileTime: () => Math.min(fullSampleMs, 20), whenTraceAvailable: () => pending ? f.engine.device!.queue.onSubmittedWorkDone().then(() => true) : Promise.resolve(false)});
+    // A tile does real work without advancing the completed-sample counter.
+    vi.mocked(f.target.trace).mockImplementation(() => {submitted++; pending = true; return false;});
+    f.loop.tick();
+    const samples = f.loop.final.samples, presents = f.operations.filter(o => o.kind === 'present').length;
+    await f.complete(); await f.complete(); await f.complete();
+    expect(submitted).toBe(3); expect(f.loop.final.samples).toBe(samples);
+    expect(f.operations.filter(o => o.kind === 'present')).toHaveLength(presents);
+    // No submission means no promise/microtask spin while preparation is pending.
+    vi.mocked(f.target.trace).mockImplementation(() => {pending = false; return false;});
+    await f.complete(); expect(f.completions).toHaveLength(0);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('keeps a single expensive tile on display frames', async () => {
+    const f = refillFixture();
+    Object.assign(f.target, {getRealtimeTileTime: () => 120});
+    f.loop.tick(); const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('stops when the capacity wait reports no queued sampling', async () => {
+    const f = refillFixture();
+    vi.spyOn(f.loop.final, 'whenReadyToRefine').mockResolvedValue(false);
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    f.loop.tick(); await settle();
+    expect(f.target.trace).toHaveBeenCalledTimes(before + 1);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it.each(JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json', import.meta.url), 'utf8')).refillCancelInputEvents as string[])('revokes a frame lease immediately on %s before sync commits', async event => {
+    const listeners = new Map<string, () => void>();
+    const remove = vi.fn();
+    vi.stubGlobal('document', {hidden: false, addEventListener: (name: string, listener: () => void) => listeners.set(name, listener), removeEventListener: remove});
+    const f = refillFixture();
+    listeners.get(event)!();
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before);
+    f.loop.dispose(); expect(remove).toHaveBeenCalledWith(event, expect.any(Function), true); f.engine.dispose();
   });
   it('expires a manual tick at the next display frame and ignores old completion callbacks after a new tick', async () => {
     const f = refillFixture();

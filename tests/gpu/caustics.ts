@@ -1,8 +1,10 @@
+import {registerMnee, mneeDiagnostics} from '../../src/research/mnee/index.js';
 import {Camera,Engine,Render,Mesh,OpenPBRMaterial,RectLight,SpotLight,createPlaneGeometry,createSphereGeometry,generateVertexNormals,DirectionalLight,EnvironmentLight,Texture} from '../../src/main.js';
 import {causticDiagnostics} from '../../src/renderer/causticDiagnostics.js';
 import type {CausticSettings} from '../../src/Render.js';
 async function capture(caustics?: CausticSettings & {mnee?: boolean | {method?: 'newton' | 'sms'}}, samples=64, sphere=false, spot=sphere, omitCaster=false, wave=false,variant='') {
-  causticDiagnostics.mnee = caustics?.mnee;
+  if (caustics?.mnee) registerMnee();
+  mneeDiagnostics.mnee = caustics?.mnee;
   const canvas=document.createElement('canvas');document.querySelector('canvas')!.replaceWith(canvas);
   const engine=new Engine({canvas,textureBinding:variant==='bindless'?'auto':'atlas',backend:location.search.includes('webgl')?'webgl':'webgpu'});
   const render=new Render(engine,{bounces:(globalThis as typeof globalThis&{causticBounces?:number}).causticBounces??8,caustics,batchSamples:true,bevel:false});

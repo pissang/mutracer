@@ -53,3 +53,6 @@ to include bloom/JNLM output and 48×32 → 30×20 → 48×32 scratch reuse; app
 `?webgl` to select WebGL 2. Capture results include HDR pixels, denoised pixels,
 depth queries and renderer compilation diagnostics. Compare each backend and
 layout against its own baseline.
+
+MNEE/SMS live in `src/research/mnee/` and never enter release artifacts.
+Tests and research scripts import `registerMnee` and `mneeDiagnostics` from its `index.ts`, then call `registerMnee()` before creating renders.

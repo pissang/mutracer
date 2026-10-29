@@ -1,3 +1,4 @@
+import {registerMnee} from '../../src/research/mnee/index';
 import {causticLightCompute,causticAccumulateCompute,CAUSTIC_UNIFORM_BYTES} from '../../src/renderer/wgsl/causticLight.compute';
 import {packCausticLightUniform} from '../../src/renderer/WGPUCausticLightPass';
 import {createNormalizeRayTraceOutputWGSL} from '../../src/renderer/WGPURayTraceOutput';
@@ -13,6 +14,7 @@ import rayTrace from '../../src/renderer/wgsl/rayTrace.compute';
 import fragment from '../../src/renderer/glsl/rayTrace.frag';
 import {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {gpu} from './shaderSourceFormattingFixture';
+registerMnee();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 describe('caustic contracts', () => {
   it('preserves the disabled shader across caustic switch settings', () => {
@@ -20,6 +22,14 @@ describe('caustic contracts', () => {
     expect(hash(fragment().main)).toMatchSnapshot('GLSL off');
     expect(rayTrace({hasDisplacement: false, mnee: false, lightTracing: false})).toBe(rayTrace({hasDisplacement: false}));
     expect(fragment(false).main).toBe(fragment().main);
+  });
+  it('preserves published light and photon transport sources', () => {
+    for (const lightTracing of [false,true]) for (const photonMapping of [false,true]) {
+      expect(hash(rayTrace({hasDisplacement:false,lightTracing,photonMapping}))).toMatchSnapshot(`camera ${lightTracing}/${photonMapping}`);
+    }
+    for (const mode of ['lightTracing','photonMapping'] as const) {
+      expect(hash(causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32},1,false,mode))).toMatchSnapshot(mode);
+    }
   });
   it('classifies resolved material combinations', () => {
     for (const [params, smooth] of [

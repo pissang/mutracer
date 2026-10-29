@@ -24,6 +24,8 @@ export const causticUnitRandomWgsl = /* wgsl */ `
   }
 `;
 
+// Preserve the dormant R1 uniform slot and shader spelling for source parity.
+// Production packs zero; only an explicitly registered research adapter sets it.
 export function causticLightCompute(
   constants: Record<string, boolean | number>,
   blasLayoutMask: number,

@@ -154,6 +154,19 @@ describe('WebGPU realtime sampling', () => {
     pipeline.manager.dispose();
   });
 
+  it('extrapolates the public sample estimate from tile GPU time', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const pipeline = createPipeline(true, 100_000_000n), camera = new Camera({projection: 'perspective'});
+    pipeline.setSize(1920, 1088);
+    for (let i = 0; i < 4; i++) {pipeline.trace(camera, 128); await pipeline.flushDiagnostics();}
+    const timing = pipeline.getDiagnostics().gpuTraceTiming!;
+    expect(timing.tileCount).toBeGreaterThan(1);
+    expect(pipeline.getRealtimeTileTime!()).toBe(timing.tileTimePerSampleMs);
+    expect(pipeline.getRealtimeSampleTime!()).toBe(timing.estimatedFullFrameTimeMs);
+    expect(timing.estimatedFullFrameTimeMs).toBe(timing.tileTimeMs * timing.tileCount);
+    pipeline.manager.dispose();
+  });
+
   it('tops up only completed samples, preserves sequence indices and stops at the sample cap', async () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});

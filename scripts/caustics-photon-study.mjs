@@ -32,7 +32,7 @@ try {for(const scene of scenes){
 
  writeFileSync(resolve(directory,'scene.json'),JSON.stringify(audit,null,2));
  }else{for(let i=0;i<200;i++){if(await page.tab.evaluate('!!window.causticsTests'))break;await delay(100);}}
- await page.tab.evaluate(`(async()=>{const {causticDiagnostics:d}=await import('/@fs/${root}/src/renderer/causticDiagnostics.ts');d.mnee=false;d.captureRoots=true;window.photonAudit=${process.env.AUDIT==='1'};d.photonSkipQuery=${process.env.QUERY_OFF==='1'};d.photonScreenRadius=${process.env.SCREEN_RADIUS!=='0'};d.photonSeparate=${process.env.SEPARATE==='1'};d.capturePhotons=true;window.causticSize=[${width},${height}];})()`);
+ await page.tab.evaluate(`(async()=>{const {causticDiagnostics:d}=await import('/@fs/${root}/src/renderer/causticDiagnostics.ts');const research=await import('/@fs/${root}/src/research/mnee/index.ts');research.registerMnee();research.mneeDiagnostics.mnee=false;research.mneeDiagnostics.captureRoots=true;window.photonAudit=${process.env.AUDIT==='1'};d.photonSkipQuery=${process.env.QUERY_OFF==='1'};d.photonScreenRadius=${process.env.SCREEN_RADIUS!=='0'};d.photonSeparate=${process.env.SEPARATE==='1'};d.capturePhotons=true;window.causticSize=[${width},${height}];})()`);
  for(const mode of modes){
  const settings={lightTracing:mode==='light'||mode==='light-photon',photonMapping:mode==='reference'?{photonsPerSample:Number(process.env.REFERENCE_PHOTONS??5000000),initialRadius:.05}:mode==='photon'||mode==='light-photon'};
  const options={name:scene+'-'+width+'x'+height+'-'+mode,settings,checkpoints,denoise:process.env.DENOISE!=='0',separate:process.env.SEPARATE==='1'};

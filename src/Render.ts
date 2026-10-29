@@ -93,8 +93,8 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 export interface CausticSettings {
   /** WebGPU progressive photon mapping for caustics beyond directly visible light paths; ignored on WebGL. Default `false`. */
   photonMapping?: boolean | {
-    /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget. Default pixel count / 4, at most 262144. */ photonsPerSample?: number;
-    /** Positive initial gather radius in scene units. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
+    /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default. Default pixel count / 4, at most 262144. */ photonsPerSample?: number;
+    /** Positive first-batch gather radius in scene units, independent of photonsPerSample; shrinks as batches accumulate. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
   };
   /**
    * WebGPU light tracing for directly visible caustic paths; ignored on WebGL.
@@ -127,8 +127,8 @@ export interface RenderSettings {
   /** Primary-ray alpha blend strategy; WebGPU only. Default stochastic. */ alphaBlendStrategy?: AlphaBlendStrategy;
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;
-  /** Maximum tiles per frame. Default Infinity. */ maxTiles?: number;
-  /** Let one refine submit several samples, up to timeBudgetMs of GPU work; WebGPU requires GPU timestamps. RenderLoop also keeps batching between display frames. Default false. */ batchSamples?: boolean;
+  /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles?: number;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. RenderLoop also batches between display frames when individual tiles fit the budget. Default false. */ batchSamples?: boolean;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */ allowMultipleSamplesPerFrame?: boolean;
   /** Adapt scale to frame timing; minScale must not exceed resolutionScale. Default false. */ adaptiveResolution?: {targetFrameMs: number; minScale: number} | false;
   /** Single-level fallback on the same engine. Default null. */ fallback?: Render | null;
@@ -248,8 +248,8 @@ export default class Render {
   /** WebGPU primary-ray alpha policy; ignored on WebGL. Default stochastic. */ alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
   /** Minimum transmissive path alpha. Default 1. Changing it restarts this render. */ transmissiveOutputAlphaMin = 1;
   /** Execution budget in milliseconds. Default 21. */ timeBudgetMs = 21;
-  /** Maximum tiles per frame. Default Infinity. */ maxTiles = Infinity;
-  /** Let one refine submit several samples within timeBudgetMs; WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
+  /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles = Infinity;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */
   get allowMultipleSamplesPerFrame(): boolean { return this.batchSamples; }
   set allowMultipleSamplesPerFrame(value: boolean) { this.batchSamples = value; }
@@ -359,12 +359,18 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
-  /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  /** Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
-  /** Waits for the next release of WebGPU sampling queue capacity. Resolves immediately if no sampling is queued or on WebGL; does not submit work. Throws after disposal. */
-  whenReadyToRefine(): Promise<void> {
+  /** Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuTileTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeTileTime?.() : undefined; }
+  /** Waits for the next release of WebGPU sampling queue capacity and returns true
+   * when sampling was queued. Returns false immediately with no queued sampling,
+   * on WebGL, or for only denoising, display or offline convergence work.
+   * Does not submit work. Throws after disposal.
+   */
+  whenReadyToRefine(): Promise<boolean> {
     if (this._disposed) throw new Error('Render is disposed.');
-    return this._target?.whenTraceAvailable?.() ?? Promise.resolve();
+    return !this._busy ? this._target?.whenTraceAvailable?.() ?? Promise.resolve(false) : Promise.resolve(false);
   }
   /** Complete surface-output samples since restart; stale inputs report 0. Independent of beauty samples. Default 0. */
   get aovSamplesRendered(): number { return this._current ? this._target?.getAovSamples?.() ?? 0 : 0; }

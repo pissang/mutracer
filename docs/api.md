@@ -139,8 +139,8 @@ other sequences retain their completed samples.
 | `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |
 | `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
-| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
-| `batchSamples` | `false` | Let one refine submit several samples within timeBudgetMs; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
+| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Target tile time / maximum tile grid size per sample (rounded up to a rectangular grid); fewer tiles make larger tiles, without limiting work per frame or call |
+| `batchSamples` | `false` | Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
@@ -161,8 +161,9 @@ or alpha, plus its existing early depth termination.
 | `denoising` | Queued/running inference, including intermediate updates; default false |
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
-| `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms; undefined without timestamps, for stale inputs or during converge |
-| `whenReadyToRefine()` | Wait for the next release of WebGPU sampling queue capacity; resolves immediately if none is queued or on WebGL; submits no work |
+| `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms, extrapolated from tile GPU time when tiled; undefined without timestamps, for stale inputs or during converge |
+| `gpuTileTimeMs` | Latest WebGPU beauty tile estimate in ms, including amortized caustic work; equal to `gpuSampleTimeMs` without tiling; undefined without timestamps, for stale inputs or during converge |
+| `whenReadyToRefine()` | Wait for WebGPU sampling capacity and return `true` if sampling was queued; return `false` immediately with no sampling, on WebGL, or for only denoising, display or offline convergence work; submits no work; throws after disposal |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
 | `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |
@@ -223,8 +224,8 @@ rendering cost and image-quality limitations.
 | `lightTracing` | `false` | `true` or an object enables directly visible caustic light paths on WebGPU; ignored on WebGL 2 |
 | `lightTracing.photonsPerSample` | pixel count / 4 | Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit |
 | `photonMapping` | `false` | `true` or an object enables progressive caustic photon mapping on WebGPU; ignored on WebGL 2 |
-| `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget |
-| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive initial gather radius in scene units; smaller radii preserve detail but require more photons |
+| `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default |
+| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive first-batch gather radius in scene units, independent of `photonsPerSample`; shrinks as batches accumulate. Smaller radii preserve detail but require more photons |
 
 ## RenderLoop and Sync
 

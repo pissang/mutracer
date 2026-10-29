@@ -67,7 +67,8 @@ pub struct CausticSettings {
     /// Uses 28 bytes each plus up to 13 MiB of overhead; capped by device limits
     /// and 128 MiB.
     pub photon_map_photons: u32,
-    /// Initial gather radius; 0 selects 3% of the caster sphere radius. Default 0.
+    /// First-batch gather radius in scene units, independent of `photon_map_photons`;
+    /// shrinks as batches accumulate. 0 selects 3% of the caster sphere radius. Default 0.
     pub photon_map_radius: f32,
 }
 impl CausticSettings {
@@ -2515,9 +2516,13 @@ impl Render {
             }
         })
     }
+    // Match the browser capacity wait: only sampling in flight can wake a refill.
+    // Display, filtering and offline jobs do not grant background sampling.
     pub(super) fn refill_ready(&self) -> bool {
-        self.get(|_, r| r.denoise.worker.is_none() && r.samples < next_target(r))
-            .unwrap_or(false)
+        self.get(|_, r| {
+            !r.busy && r.job.is_some() && r.denoise.worker.is_none() && r.samples < next_target(r)
+        })
+        .unwrap_or(false)
     }
     /// Last measured GPU time per beauty sample, or `None` before a valid
     /// timestamp or after inputs restart. CPU polling time is excluded.

@@ -48,6 +48,31 @@ struct Photons {
     _data: wgpu::Texture,
     _headers: wgpu::Texture,
 }
+#[derive(Clone, Copy)]
+enum RadiusScaling {
+    None,
+    Ppm,
+    ConstantCount,
+}
+impl RadiusScaling {
+    // Internal experiment switch. Public settings retain the unscaled schedule.
+    fn probe() -> Self {
+        match std::env::var("MUTRACER_PHOTON_RADIUS_MODE").as_deref() {
+            Ok("ppm") => Self::Ppm,
+            Ok("constant-count") => Self::ConstantCount,
+            _ => Self::None,
+        }
+    }
+    fn radius(self, initial: f32, batch: u32, photons: u32) -> f32 {
+        let radius = f64::from(initial) * f64::from(batch.max(1)).powf(-1. / 6.);
+        let exponent = match self {
+            Self::None => return radius as f32,
+            Self::Ppm => -1. / 6.,
+            Self::ConstantCount => -1. / 2.,
+        };
+        (radius * (f64::from(photons.max(1)) / 262144.).powf(exponent)) as f32
+    }
+}
 pub(crate) struct State {
     pub textures: wgpu::BindGroup,
     emission_textures: wgpu::BindGroup,
@@ -56,6 +81,7 @@ pub(crate) struct State {
     photons: Option<Photons>,
     template: Vec<u8>,
     initial_radius: f32,
+    radius_scaling: RadiusScaling,
     size: [u32; 2],
     pixels: u32,
     _distribution: wgpu::Texture,
@@ -637,6 +663,7 @@ impl State {
             photons,
             template: packet.uniform,
             initial_radius: m.initial_radius,
+            radius_scaling: RadiusScaling::probe(),
             size,
             pixels,
             _distribution: distribution,
@@ -672,7 +699,9 @@ impl State {
             timer,
             pair,
         );
-        let radius = (f64::from(self.initial_radius) * f64::from(sample + 1).powf(-1. / 6.)) as f32;
+        let radius = self
+            .radius_scaling
+            .radius(self.initial_radius, sample + 1, p.emit.count);
         let mut data = [0u8; 32];
         data[..4].copy_from_slice(&radius.to_le_bytes());
         data[4..8].copy_from_slice(&p.emit.count.to_le_bytes());
@@ -770,6 +799,33 @@ impl State {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(self.pixels.div_ceil(64), 1, 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod radius_tests {
+    use super::RadiusScaling;
+    #[test]
+    fn photon_count_radius_contract() {
+        for photons in [65536, 262144, 1048576] {
+            let legacy = RadiusScaling::None.radius(2., 64, photons);
+            assert_eq!(legacy, 1.);
+            let ppm = RadiusScaling::Ppm.radius(2., 64, photons);
+            let constant = RadiusScaling::ConstantCount.radius(2., 64, photons);
+            let ratio = f64::from(photons) / 262144.;
+            assert_eq!(ppm, ratio.powf(-1. / 6.) as f32);
+            assert_eq!(constant, ratio.powf(-1. / 2.) as f32);
+            for mode in [
+                RadiusScaling::None,
+                RadiusScaling::Ppm,
+                RadiusScaling::ConstantCount,
+            ] {
+                assert_eq!(
+                    mode.radius(2., 4096, photons),
+                    mode.radius(2., 64, photons) / 2.
+                );
+            }
         }
     }
 }

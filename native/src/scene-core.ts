@@ -206,8 +206,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const caustics=light?nativeCausticTarget({meshes:state.meshes,bindings:state.prepared.instanceBindings,materials:state.prepared.materials,lights:state.lights,emissive:state.emissive,environmentPower:state.environmentPower,lighting:light.lightData,cacheKey:state.prepared},causticConfiguration,width,height,bytes.subarray(settingsBytes+8*WORD_BYTES),camera,targetConstants,{...frameFeatures,workgroupSize:shaderId===RESOURCE.HWRT_SHADER?1:8},nativeHits,shaderId===RESOURCE.HWRT_SHADER):undefined;
     if(caustics){
       frameFeatures.workgroupSize=caustics.metadata.workgroupSize;
-      frameFeatures.mnee=!!(caustics.metadata.flags&1);frameFeatures.mneeHardwareIndices=shaderId===RESOURCE.HWRT_SHADER;frameFeatures.mneeMethod=caustics.metadata.flags&8?'sms':'newton';frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
-      if(frameFeatures.mnee){targetConstants.CAUSTIC_SEED_COUNT=caustics.seedCount;targetConstants.CAUSTIC_SEED_OFFSET=caustics.seedOffset;}
+      frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
       rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
     }
     const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;

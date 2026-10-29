@@ -1,6 +1,7 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
 import {PHOTON_BYTES, PHOTON_GRID_SIZE, photonLayout, photonGridCompute} from './wgsl/photonMap.compute.js';
+export {photonRadius} from './wgsl/photonMap.compute.js';
 interface Batch {
   grid: GPUBuffer;
   uniform: GPUBuffer;
@@ -201,11 +202,6 @@ export class WGPUPhotonMap {
     this.placeholder.destroy();
   }
 }
-/** Knaus & Zwicker's probabilistic radius schedule; default alpha = 2/3. */
-export function photonRadius(initial: number, batch: number, alpha = 2 / 3) {
-  return initial * Math.pow(Math.max(1, batch), (alpha - 1) / 2);
-}
-
 /** Typical first-receiver footprint at the caster center; query disks stay exact. */
 export function photonVisibleRadius(radius: number, options: {viewProjection: ArrayLike<number>; casterSphere: readonly number[]; width: number; orthographic?: boolean}, screenPixels = 2) {
   const m = options.viewProjection, p = options.casterSphere;

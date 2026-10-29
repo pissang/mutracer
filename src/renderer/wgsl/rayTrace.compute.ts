@@ -1,6 +1,6 @@
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
-import {createMneeWgsl} from './chunks/mnee.wgsl.js';
+import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
@@ -40,15 +40,7 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
-  mnee?: boolean;
-  mneeDebugGroup?: number;
-  mneeSeeds?:number;
-  mneeDamping?:boolean;
-  smsRoulette?:boolean;
-  mneeMaxDepth?:number;
-  mneeMethod?:'newton'|'sms';
-  /** Native ray-query hits carry source primitive indices. Default false. */
-  mneeHardwareIndices?:boolean;
+  debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
   lightTracing?: boolean;
@@ -74,9 +66,14 @@ export interface RayTraceShaderOptions {
 }
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
-export default function rayTraceCompute({
+export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+  const research = researchTransport()?.compute(options);
+  const enabled = research?.enabled ?? false;
+  const partitionDepth = research?.maxDepth ?? 20;
+  const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
+  let {
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
-  mnee = false, lightTracing = false,photonMapping=false,photonMaxDepth=20, mneeDebugGroup = -1,mneeSeeds=4,mneeDamping=false,mneeMaxDepth=20,smsRoulette=false,mneeMethod='newton',mneeHardwareIndices=false,
+  lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
   hasAlpha = true,
@@ -87,7 +84,7 @@ export default function rayTraceCompute({
   dynamicEnvironment = false,
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
-}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+} = options;
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
@@ -147,12 +144,12 @@ export default function rayTraceCompute({
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: mnee || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
 ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
-  caustics: mnee || lightTracing || photonMapping,
+  caustics: enabled || lightTracing || photonMapping,
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
@@ -212,11 +209,11 @@ fn bsdfMISWeight(scatteringPdf: f32, lightPdf: f32) -> f32 {
     max(scatteringPdf + weightedLightPdf, 1e-20);
 }
 
-${mnee || lightTracing || photonMapping ? causticPartitionWGSL(mnee, lightTracing,photonMapping,mneeMaxDepth,mneeDebugGroup>=30,photonMaxDepth) : ''}${mnee ? createMneeWgsl(mneeDebugGroup >= 0,mneeMethod==='sms',mneeHardwareIndices,mneeSeeds,mneeDamping,mneeMaxDepth,smsRoulette) : ''}${photonMapping?`const CAUSTIC_LIGHT_TRACING=${lightTracing};
-const CAUSTIC_MNEE=${mnee};
-const CAUSTIC_MNEE_MAX_DEPTH=${mneeMaxDepth}u;
+${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, lightTracing,photonMapping,partitionDepth,debugGroup>=30,photonMaxDepth) : ''}${research?.declarations ?? ''}${photonMapping?`const CAUSTIC_LIGHT_TRACING=${lightTracing};
+const CAUSTIC_MNEE=${enabled};
+const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(mneeDebugGroup):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, mnee || lightTracing || photonMapping, mnee,photonMapping)}
+`+photonQuerySource(debugGroup):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -465,7 +462,7 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
       if (SPECTRAL) {
         lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).wavelength);
       }
-      ${mnee || lightTracing || photonMapping ? 'if (!causticHitOwned(*path, true, true)) { causticHotRecord(*path,misWeight*lightSample.emission,2u); ' : ''}(*path).li += misWeight * (*path).beta * lightSample.emission;${mnee || lightTracing || photonMapping ? ' }' : ''}
+      ${enabled || lightTracing || photonMapping ? 'if (!causticHitOwned(*path, true, true)) { causticHotRecord(*path,misWeight*lightSample.emission,2u); ' : ''}(*path).li += misWeight * (*path).beta * lightSample.emission;${enabled || lightTracing || photonMapping ? ' }' : ''}
       (*path).alpha = 1.0;
       (*path).abort = true;
     }
@@ -1055,7 +1052,7 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   outAux.isShadowCatcher = false;
 ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 ${inputHooks?.unclampedColor ?? ''}
-${(mnee||lightTracing||photonMapping) && mneeDebugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${mneeDebugGroup>=50?`vec4f(photonQueryStats,1.0)`:mneeDebugGroup>=30?`vec4f(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4f(mneeTrace[${mneeDebugGroup-10}]+vec3f(10.0),1.0)`:`vec4f(f32(mneeCounters[${mneeDebugGroup*3}]),f32(mneeCounters[${mneeDebugGroup*3+1}]),f32(mneeCounters[${mneeDebugGroup*3+2}]),1.0)`};
+${(enabled||lightTracing||photonMapping) && debugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${debugGroup>=50?`vec4f(photonQueryStats,1.0)`:debugGroup>=30?`vec4f(causticHot[${debugGroup-30}],1.0)`:research?.debugOutput ?? 'liAndAlpha'};
 ` : ''}  // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {

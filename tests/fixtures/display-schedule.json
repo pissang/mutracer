@@ -1,4 +1,8 @@
 {
+  "refillSampleTimesMs": [1, 40, 120],
+  "refillRequiresQueuedSampling": true,
+  "refillRequiresTileBudgetFit": true,
+  "refillCancelInputEvents": ["pointerdown", "pointermove", "pointerup", "wheel", "keydown", "input", "change"],
   "cases": [
     {"name": "publish-current", "events": ["start", "complete"], "actions": ["Filter", "Publish"]},
     {

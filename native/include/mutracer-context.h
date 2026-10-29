@@ -117,7 +117,9 @@ typedef struct mt_render_settings {
   uint32_t caustic_flags; /* MT_CAUSTIC_* bit mask, default 0 (all disabled). */
   uint32_t light_photons, photon_map_photons; /* Default 0: pixel count / 4, capped by device limits;
                                                 photon_map_photons also at most 262144. */
-  float photon_map_radius; /* Nonnegative; default 0: 3% of the caster sphere radius. */
+  /* Nonnegative first-batch radius in scene units, independent of photon_map_photons;
+     shrinks with accumulated batches. Default 0: 3% of the caster sphere radius. */
+  float photon_map_radius;
 } mt_render_settings;
 #if defined(__cplusplus) && __cplusplus >= 201103L
 static_assert(sizeof(mt_render_settings) == 64, "mt_render_settings layout");

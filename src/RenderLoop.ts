@@ -66,7 +66,10 @@ export default class RenderLoop {
     } catch (error) {for (const render of this._owned) render.dispose(); throw error;}
     for (const sync of syncs) this.addSync(sync);
     this._unsubscribe = this.final.on('sample', event => this._events.emit('sample', {...event, preview: false}));
-    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this._visibility);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this._visibility);
+      for (const event of this._inputEvents) document.addEventListener(event, this._input, {capture: true, passive: true});
+    }
   }
   private _render(value: Render | RenderOptions | undefined, defaults: RenderOptions): Render {
     if (value instanceof Render) return value;
@@ -192,25 +195,30 @@ export default class RenderLoop {
         aovChannel(this.display.channel) ||
         !this._canRefill() || [...this._syncs].some(sync => sync.active) ||
         this.select({changing: false}) !== 'final') return;
-      const before = this.final.samples;
       const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
       if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
-      if (this.final.samples > before && status === 'converging') wait();
+      if (status === 'converging') wait();
     };
-    const wait = () => {void this.final.whenReadyToRefine().then(refill, () => {});};
+    const wait = () => {void this.final.whenReadyToRefine().then(queued => {if (queued) refill();}, () => {});};
     // Keep only a short chunk ahead of input. GPU completion, rather than the
     // display refresh rate, paces the next chunk; presentation stays on rAF.
     wait();
   }
   private _canRefill(): boolean {
-    const time = this.final.gpuSampleTimeMs;
+    const time = this.final.gpuTileTimeMs;
     return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
+      // The backend limits queued work. A long sample can still refill one tile
+      // on GPU completion without waiting for the next presentation frame.
       this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
     this._cancelScheduled = scheduleFrame(() => { this._cancelScheduled = undefined; try {this._tick();} finally {this._schedule();} });
   }
+  // Input may finish before the next sync update (for example a quick drag).
+  // Revoke the old frame's lease at dispatch, before a GPU fence can refill it.
+  private readonly _inputEvents = ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change'] as const;
+  private _input = (): void => { this._cancelRefill(); };
   private _visibility = (): void => {
     if (document.hidden) {this._cancelFrame(); this._cancelRefill();} else this._schedule();
   };
@@ -236,7 +244,10 @@ export default class RenderLoop {
   dispose(): void {
     if (this._disposed) return;
     this.stop(); this._disposed = true; this._unsubscribe(); this._events.clear(); this._syncs.clear();
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this._visibility);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._visibility);
+      for (const event of this._inputEvents) document.removeEventListener(event, this._input, true);
+    }
     for (const render of this._owned) render.dispose(); this._owned.clear();
   }
 }

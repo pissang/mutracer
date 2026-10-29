@@ -362,7 +362,9 @@ typedef struct mt_render_options {
   /* 0 selects pixel count / 4, at most 262144. Default 0. 28 bytes per photon plus up to 13 MiB
      overhead; reduced to fit device limits and the 128 MiB batch budget. */
   uint32_t photon_map_photons;
-  float photon_map_radius; /* Nonnegative; 0 selects 3% of caster sphere radius. Default 0. */
+  /* Nonnegative first-batch radius in scene units, independent of photon_map_photons;
+     shrinks with accumulated batches. 0 selects 3% of caster sphere radius. Default 0. */
+  float photon_map_radius;
 } mt_render_options;
 MT_ENGINE_LAYOUT(mt_render_options, 128);
 /* Initializes the full current record, including struct_size. Other render

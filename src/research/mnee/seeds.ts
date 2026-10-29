@@ -1,6 +1,6 @@
-import {EmissiveTriangleCache,type EmissiveTriangle,type EmissiveMeshBinding} from './lightSampling.js';
-import type Material from '../scene/MaterialState.js';
-import {isCausticSpecular} from './caustics.js';
+import {EmissiveTriangleCache,type EmissiveTriangle,type EmissiveMeshBinding} from '../../renderer/lightSampling.js';
+import type Material from '../../scene/MaterialState.js';
+import {isCausticSpecular} from '../../renderer/caustics.js';
 /** World-space triangles and their area CDF. Shared by Newton and SMS seeds. */
 export class CausticSeedCache {
  private readonly cache=new EmissiveTriangleCache(m=>isCausticSpecular(m)?1:0);

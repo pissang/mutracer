@@ -129,7 +129,6 @@ export class WGPUCausticLightPass {
       run: boolean;
       photons: number;
       batch: number;
-      mnee: boolean;
       viewProjection: Float32Array | Float64Array | number[];
       casterSphere: readonly number[];
       cameraScale: number;

@@ -87,24 +87,78 @@ are refined that frame. See [scene updates](updates.md) for notifications.
 
 ## Sample batching
 
-Without batching, a still image gets one sample per display frame, so a fast GPU
-idles for most of each frame. With `batchSamples`, sampling works on two levels:
+Without batching, each call advances one sample or tile, so a fast GPU can idle
+between display frames. With `batchSamples`, sampling works on two levels:
 
-- **Per call.** One `refine()` may submit several samples while at most
-  `timeBudgetMs` of GPU work is queued, and returns without waiting for them.
+- **Per call.** One `refine()` may submit several samples within an estimated
+  `timeBudgetMs` of GPU work, or one longer sample or tile, and returns without waiting for them.
   Without `batchSamples`, a call traces one sample or tile.
 - **Between frames.** RenderLoop also refines its final render each time the GPU
   finishes queued work, until the next display frame. It keeps about 4 ms of work
-  queued, or one sample if that is longer, so a camera edit waits behind at most
-  that much work at any refresh rate.
+  queued, or one sample or tile if that is longer. Expensive tiled samples can
+  continue between display frames when each measured tile fits `timeBudgetMs`;
+  longer tiles wait for display frames to bound input delay. Presentation still
+  follows the display frame rate.
 
 Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
 batching while the view is changing.
 
-In your own loop, `batchSamples` gives the first level. For the second, call
-`render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true})` after each
-`await render.whenReadyToRefine()` until your next frame; see [Render](./api.md#render).
+Prefer RenderLoop for between-frame refilling. For your own loop, the following
+example runs refills after presentation, with a 60 Hz frame deadline. Adjust the
+frame interval to your application's cadence and update controls before
+`engine.update()`. This example uses one render and the final beauty channel; enable
+`batchSamples` on `render`.
+
+<!-- own-loop-refill -->
+```js
+let frameGeneration = 0;
+let inputRevision = 0;
+let paused = false;
+for (const event of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change']) {
+  addEventListener(event, () => { inputRevision++; }, {capture: true, passive: true});
+}
+
+async function refill(generation, deadline, input) {
+  const canContinue = () => generation === frameGeneration && !paused && !document.hidden &&
+    performance.now() < deadline && input === inputRevision &&
+    engine.display.channel === 'final' && render.batchSamples && render.status === 'converging' &&
+    !render.denoising && render.samples > 0 && render.gpuTileTimeMs !== undefined &&
+    render.gpuTileTimeMs <= render.timeBudgetMs;
+  while (canContinue() && await render.whenReadyToRefine()) {
+    // Input or a new frame may arrive during the GPU wait.
+    if (!canContinue()) break;
+    render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+  }
+}
+
+function frame(timestamp) {
+  requestAnimationFrame(frame);
+  const generation = ++frameGeneration;
+  if (paused || document.hidden) return;
+  engine.update();
+  render.refine();
+  engine.display.present(render);
+  void refill(generation, timestamp + 1000 / 60, inputRevision);
+}
+requestAnimationFrame(frame);
+```
+
+Stopping while queued sampling can continue leaves the GPU idle before the next
+frame. Ignoring a `false` capacity result can spin on immediately resolved
+Promises. Ignoring the deadline or pending input can delay the next input's image
+behind extra GPU work. Stop refilling during export, custom preview selection or
+AOV display as well (set `paused = true` and increment `frameGeneration` before
+a pause or export, then clear `paused` to resume);
+RenderLoop handles those transitions automatically.
+
+`refine()` continues the remaining tiles of the current sample, including repeated
+calls between presentations. `samples` increases only after the whole sample;
+presentation keeps the previous complete sample until then. Committed scene or
+camera edits discard an unfinished sample and restart against the new inputs.
+`maxTiles` caps the sample's tile grid (rounded up to a rectangular grid), so a
+smaller value makes larger tiles. It does not cap work per frame or per call;
+use `timeBudgetMs` and the between-frame deadline to control queued work.
 
 ## Reading and exporting
 
