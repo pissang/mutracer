@@ -1,5 +1,5 @@
 import {readFileSync,writeFileSync,readdirSync} from 'node:fs';
-import {resolve,basename,dirname} from 'node:path';
+import {resolve,basename} from 'node:path';
 import {compare,loadHdr,resampleReference} from './caustics-compare.mjs';
 
 import {displayLinear} from './caustics-study-color.mjs';
@@ -10,12 +10,6 @@ const rows=[];
 for(const file of files){
  const candidate=loadHdr(resolve(directory,file));
  let matchingReference=reference;
- if(file.startsWith('sphere-')&&(reference.width!==candidate.width||reference.height!==candidate.height)){
-  const prefix=`sphere-${candidate.width}x${candidate.height}-light-`;
-  const alternate=readdirSync(dirname(process.argv[3])).find(name=>{if(!name.startsWith('sphere-')||!name.includes('-light-')||!name.endsWith('.f32'))return false;const meta=JSON.parse(readFileSync(resolve(dirname(process.argv[3]),name.replace('.f32','.json'))));return meta.width===candidate.width&&meta.height===candidate.height;});
-  if(!alternate)throw Error('Missing matching high-spp sphere reference: '+prefix);
-  matchingReference=loadHdr(resolve(dirname(process.argv[3]),alternate));
- }
  let masks;
  if(file.startsWith('sphere-')){
   // Floor intersections outside the sphere silhouette, inside a fixed world patch.
