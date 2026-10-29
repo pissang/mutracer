@@ -138,6 +138,44 @@ describe('Render.refineUntil', () => {
     if (reason === 'converge') await f.render.converge({samples: 1});
     await promise; await f.complete(); expect(f.refine).toHaveBeenCalledTimes(1); f.engine.dispose();
   });
+  it('handles a late capacity rejection after cancellation without an unhandled rejection', async () => {
+    const f = fixture(), controller = new AbortController();
+    let reject!: (error: Error) => void;
+    Object.assign(f.target, {whenTraceAvailable: () => new Promise<boolean>((_, fail) => {reject = fail;})});
+    const promise = f.start(controller.signal);
+    controller.abort(); await promise;
+    reject(new Error('obsolete GPU wait')); await settle();
+    expect(f.render.status).toBe('converging'); expect(f.refine).toHaveBeenCalledTimes(1); f.engine.dispose();
+  });
+  it('ends a reentrant older call when a sample listener starts a newer refill', async () => {
+    const f = fixture(), controller = new AbortController();
+    let newer!: Promise<void>;
+    const unsubscribe = f.render.on('sample', () => {unsubscribe(); newer = f.start(controller.signal);});
+    const older = f.start(); await older;
+    expect(f.render.samples).toBe(3); expect(f.completions).toHaveLength(1);
+    controller.abort(); await newer; f.engine.dispose();
+  });
+  it('reports synchronous trace errors using the ordinary refine error status', async () => {
+    const f = fixture(), failure = new Error('trace failure');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(f.target.trace).mockImplementation(() => {throw failure;});
+    await f.start(); expect(f.render.status).toBe('error'); expect(f.engine.lastError).toBe(failure);
+    expect(f.completions).toHaveLength(0); f.engine.dispose();
+  });
+  it('still refines once when the deadline has already expired', async () => {
+    const f = fixture(); await f.start(undefined, -1);
+    expect(f.render.samples).toBe(2); expect(f.completions).toHaveLength(0); f.engine.dispose();
+  });
+  it.each(['preparing', 'compiling', 'first-sample'] as const)('advances %s only through its synchronous call', async stage => {
+    const f = renderFixture({tiles: 3});
+    if (stage === 'preparing') vi.spyOn(f.engine, '_ready', 'get').mockReturnValue(false);
+    const render = new Render(f.engine, {batchSamples: true});
+    if (stage === 'compiling') {render.refine(); vi.mocked(f.targets[0].trace).mockReturnValue(true);}
+    const capacity = vi.spyOn(render, 'whenReadyToRefine');
+    await render.refineUntil(Infinity);
+    expect(render.status).toBe(stage === 'first-sample' ? 'converging' : stage);
+    expect(render.samples).toBe(0); expect(capacity).not.toHaveBeenCalled(); f.engine.dispose();
+  });
   it('preserves synchronous lifecycle exceptions', () => {
     const f = fixture(); f.render.dispose();
     expect(() => f.render.refineUntil(Infinity)).toThrow('Render is disposed'); f.engine.dispose();
