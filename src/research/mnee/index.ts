@@ -20,11 +20,16 @@ export interface MneeOptions {
 declare module '../../renderer/wgpuShaderSource.js' { interface WGPUShaderFeatures extends MneeOptions {} }
 declare module '../../renderer/wgsl/rayTrace.compute.js' { interface RayTraceShaderOptions extends MneeOptions {} }
 declare module '../../renderer/causticUniform.js' { interface CausticLightUniformOptions {mnee?: boolean} }
-export const mneeDiagnostics: Omit<MneeOptions, 'mnee'> & {
+type MneeDiagnostics = Omit<MneeOptions, 'mnee'> & {
   mnee?: boolean | {method?: 'newton' | 'sms'};
   captureRoots?: boolean;
   rootPass?: unknown;
-} = {mneeDebugGroup: -1};
+};
+// Vite probes may reach this module through both .js and .ts URLs. Keep the
+// probe result shared across those module instances, as with photon diagnostics.
+const diagnosticsKey = Symbol.for('mutracer.research.mneeDiagnostics');
+const diagnosticsScope = globalThis as typeof globalThis & Record<symbol, MneeDiagnostics | undefined>;
+export const mneeDiagnostics = diagnosticsScope[diagnosticsKey] ??= {mneeDebugGroup: -1};
 // MNEE probe settings deliberately stay outside ordinary caustic diagnostics.
 interface State extends ResearchPassState {seeds?: unknown; cache?: unknown; texture?: any}
 const states = new WeakMap<object, State>();
