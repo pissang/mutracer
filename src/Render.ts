@@ -89,6 +89,22 @@ export type OIDNDenoiserOptions = OIDNSettings & (
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
 export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
+/** Optional caustic estimators. All are disabled by default. Photon estimators use PT when a smooth caster has stochastic blend coverage. */
+export interface CausticSettings {
+  /** WebGPU progressive photon mapping for caustics beyond directly visible light paths; ignored on WebGL. Default `false`. */
+  photonMapping?: boolean | {
+    /** Emitted photons per batch; 24 bytes per photon plus a spatial index of at most 2 MiB. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget. Default pixel count / 4. */ photonsPerSample?: number;
+    /** Positive initial gather radius in scene units. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
+  };
+  /**
+   * WebGPU light tracing for directly visible caustic paths; ignored on WebGL.
+   * Default `false`.
+   */ lightTracing?: boolean | {
+    /** Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit. Default pixel count / 4. */
+    photonsPerSample?: number;
+  };
+}
+
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
@@ -103,6 +119,7 @@ export interface RenderSettings {
    */ bounces?: number;
   /** Radiance clamp; 0 disables it. Default 0. */ clamping?: number;
   /** Sampling sequence. Default sobol. */ samplingPattern?: SamplingPattern;
+  /** Caustic estimators. All are disabled by default. */ caustics?: CausticSettings;
   /** Light candidates per vertex; WebGPU only, ignored on WebGL. Default 4. */ directLightCandidates?: number;
   /** Rounded material edges. Default true. */ bevel?: boolean;
   /** Bevel neighborhood probes, clamped to 1–32. Default 8. */ bevelSamples?: number;
@@ -223,6 +240,7 @@ export default class Render {
    */ bounces = 3;
   /** Per-sample radiance clamp; 0 disables it. Default 0. */ clamping = 0;
   /** Sampling sequence. Default sobol. */ samplingPattern: SamplingPattern = 'sobol';
+  /** Caustic estimators. Default undefined (all disabled). */ caustics?: CausticSettings;
   /** WebGPU light candidates per vertex; ignored on WebGL. Default 4. */ directLightCandidates = 4;
   /** Rounded material edges. Default true. */ bevel = true;
   /** Bevel probes, clamped to 1–32. Default 8. */ bevelSamples = 8;

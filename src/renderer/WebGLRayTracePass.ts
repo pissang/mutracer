@@ -1,5 +1,9 @@
-import {prepareWebGLLightSampling} from './webglLightSampling.js';
+import {causticDiagnostics} from './causticDiagnostics.js';
+import {CausticSeedCache} from './causticSeeds.js';
+import {prepareSceneLightSampling} from './sceneAssembly.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
+import {isCausticSpecular} from './caustics.js';
+import {prepareWebGLLightSampling} from './webglLightSampling.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
@@ -137,6 +141,16 @@ class WebGLRayTracePass {
   private _aovPrimitiveCache = new AovPrimitiveCache();
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
+  private readonly _causticSeeds=new CausticSeedCache();
+  private _mnee = false;
+  private _mneeDebugGroup=-1;
+  private _mneeSeeds=4;
+  private _mneeDamping=false;
+  private _smsRoulette=false;
+  private _mneeMaxDepth=2;
+  private _mneeMethod:'newton'|'sms'='newton';
+  private _mneeCache = new EmissiveTriangleCache();
+  private _mneeTex = new WebGLTexture2D(commonNearestFloatProps);
   private _emissiveActive=false;
   private _directLightLegacy?: {env:number;pmfs:Float32Array};
   private _emissiveCache=new EmissiveTriangleCache();
@@ -976,7 +990,15 @@ class WebGLRayTracePass {
     this._shadowCatcherPass.useTarget(target);
   }
 
-  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
+  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
+    const mnee = !!causticDiagnostics.mnee && this._meshes.some(mesh => mesh.materials.some(isCausticSpecular));
+    const method=typeof causticDiagnostics.mnee==='object'?causticDiagnostics.mnee.method??'newton':'newton';
+    if (method!==(this._mneeMethod??'newton')||mnee !== !!this._mnee || (mnee && (this._mneeDebugGroup !== causticDiagnostics.mneeDebugGroup||(causticDiagnostics.mneeSeeds??4)!==(this._mneeSeeds??4)||!!causticDiagnostics.mneeDamping!==!!this._mneeDamping||!!causticDiagnostics.smsRoulette!==!!this._smsRoulette||(causticDiagnostics.mneeMaxDepth??2)!==(this._mneeMaxDepth??2)))) {
+      this._mnee = mnee;
+      this._smsRoulette=!!causticDiagnostics.smsRoulette;this._mneeDamping=!!causticDiagnostics.mneeDamping;this._mneeMaxDepth=causticDiagnostics.mneeMaxDepth??2;this._mneeSeeds=causticDiagnostics.mneeSeeds??4;this._mneeDebugGroup=causticDiagnostics.mneeDebugGroup;this._mneeMethod=method;
+      const shader = createRayTraceFragmentShader(mnee,this._mneeDebugGroup,method,this._mneeSeeds,this._mneeDamping,this._mneeMaxDepth,this._smsRoulette); shader.parallelCompile = true;
+      this._mainPass.setShader(shader);
+    }
     this._tracePasses.forEach(pass => {
       pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
       pass.setUniform('bevelEnabled', options.bevel);
@@ -1019,6 +1041,26 @@ class WebGLRayTracePass {
     if (this._dirtyColorMeshes.size) this._updateMeshColors();
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
+
+    if (this._mnee && this._preparedMeshData) {
+      const res = this._preparedMeshData;
+      const triangles = this._mneeCache.collect(res.emissiveBindings, res.materials);
+      const lighting = prepareSceneLightSampling(this._analyticLights, triangles, 0, 4096);
+      const pmfOffset = lighting.emissiveTexels + lighting.choiceCount;
+      const seed=this._causticSeeds.collect(res.instanceBindings,res.materials);
+      const seedOffset=pmfOffset+lighting.choiceCount;
+      const data = new Float32Array(Math.max(1, seedOffset+seed.data.length/4) * 4);
+      data.set(seed.data,seedOffset*4);
+      data.set(lighting.lightData.subarray(0, pmfOffset * 4));
+      const choices = new Int32Array(data.buffer);
+      for (let i=0; i<lighting.choiceCount; i++) {
+        const type = choices[(lighting.emissiveTexels+i)*4+2], source = choices[(lighting.emissiveTexels+i)*4+3];
+        data[(pmfOffset+i)*4] = type===2 ? lighting.analyticPmfs[source] : triangles[source].selectionPmf;
+      }
+      const columns = setDataTexture(this._mneeTex, data, 4).columnsLog;
+      this._mainPass.setUniforms({mneeLightData:this._mneeTex,mneeLightColumns:columns,
+        mneeSeedOffset:seedOffset,mneeSeedCount:seed.count,mneeChoiceOffset:lighting.emissiveTexels,mneeChoiceCount:lighting.choiceCount,mneePmfOffset:pmfOffset});
+    }
 
     const res=this._preparedMeshData;
     if(res) {
@@ -1166,6 +1208,7 @@ class WebGLRayTracePass {
     const gl = this._renderer.gl;
     [
       this._lightTex,
+      this._mneeTex,
       this._emissiveTex,
       this._openPbrEnergyLut,
       this._envMap,

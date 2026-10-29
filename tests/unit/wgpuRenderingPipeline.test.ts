@@ -86,15 +86,15 @@ vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass
 vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
 
-function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n, mapState: () => GPUBufferMapState = () => 'unmapped') {
+function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n, mapState: () => GPUBufferMapState = () => 'unmapped',causticTimeNs=0n) {
   const device = {
     features: new Set(timestamps ? ['timestamp-query'] : []),
-    createQuerySet: () => ({ count: 2, destroy() {} }),
+    createQuerySet: (options:GPUQuerySetDescriptor) => ({ count: options.count, destroy() {} }),
     createBuffer: (opts: GPUBufferDescriptor) => ({
       size: opts.size, get mapState() {return mapState();}, destroy() {}, unmap() {},
       mapAsync: async () => {},
       getMappedRange: () => new BigInt64Array([
-        0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs
+        0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs,0n,causticTimeNs,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n
       ]).buffer
     }),
     createTexture: (opts: GPUTextureDescriptor) => ({
@@ -144,6 +144,16 @@ async function warmRealtime(pipeline: ReturnType<typeof createPipeline>, camera:
 }
 
 describe('WebGPU realtime sampling', () => {
+  it('includes independent caustic timestamps in the frame budget',async()=>{
+    vi.spyOn(performance,'now').mockReturnValue(0);
+    const pipeline=createPipeline(true,1_000_000n,()=> 'unmapped',2_000_000n),camera=new Camera({projection:'perspective'});
+    mocks.TracePass.latest.createPass.mockReturnValue(true);
+    await warmRealtime(pipeline,camera);pipeline.trace(camera,128);await pipeline.flushDiagnostics();
+    const timing=pipeline.getDiagnostics().gpuTraceTiming;
+    expect(timing?.causticTimeMs).toBe(2);expect(timing?.estimatedFullFrameTimeMs).toBeGreaterThanOrEqual(3);
+    pipeline.manager.dispose();
+  });
+
   it('tops up only completed samples, preserves sequence indices and stops at the sample cap', async () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});

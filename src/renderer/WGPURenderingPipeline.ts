@@ -102,7 +102,7 @@ function createTimeQuery(device: GPUDevice) {
   try {
     const querySet = device.createQuerySet({
       type: 'timestamp',
-      count: 2
+      count: 16
     });
     const resolveBuffer = device.createBuffer({
       size: querySet.count * 8,
@@ -154,8 +154,13 @@ function makeWGPUAccumulationTarget(
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
   let tileTimingGeneration = 0;
+  let causticBatchTimeMs=0,photonBatchTimeMs=0;
   let lastGpuTraceTiming:
     | {
+      causticTimeMs?:number;
+      photonMappingTimeMs?:number;
+      photonStagesMs?:number[];
+      pathTracingTimeMs?:number;
       tileTimeMs: number;
       tileTimePerSampleMs?: number;
       estimatedFullFrameTimeMs: number;
@@ -310,7 +315,7 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
   function invalidateTilePrediction() {
     tileTimingGeneration++;
     tileRenderWithPredict?.needsUpdatePredicting();
-    lastGpuTraceTiming = undefined;
+    lastGpuTraceTiming = undefined;causticBatchTimeMs=0;photonBatchTimeMs=0;
     // A changed render configuration needs fresh timing. Refresh
     // its estimator without submitting a hidden probe in that mode.
     needsUpdatePredicting = offlineSamplesPerBatch === 0;
@@ -525,7 +530,7 @@ output.color = color;
     _updateSeed(renderWidth, renderHeight);
     const activeTimeQuery = timeQuery;
     const isUnmapped = activeTimeQuery?.resultBuffer.mapState === 'unmapped';
-    rayTracePass.createPass(
+    const measuredCausticBatch=rayTracePass.createPass(
       encoder,
       clear,
       tiles,
@@ -561,15 +566,24 @@ output.color = color;
       diagnosticsReadbackPromise = activeTimeQuery.resultBuffer
         .mapAsync(GPUMapMode.READ).then(() => {
           const mappedRange = activeTimeQuery.resultBuffer.getMappedRange();
-          const times = new BigInt64Array(mappedRange, 0, 2);
-          const traceTime = Math.max(Number(times[1] - times[0]) / 1_000_000, 0.1);
+          const times = new BigInt64Array(mappedRange, 0, 16);
+          const causticTime=(measuredCausticBatch&1)?Math.max(Number(times[3]-times[2]+times[5]-times[4])/1_000_000,0):0;
+          // Independent timestamp pairs avoid Metal's cross-pass counter bug.
+          const photonTime=(measuredCausticBatch&2)?Math.max(Number(times[7]-times[6]+times[9]-times[8]+times[11]-times[10]+times[13]-times[12]+times[15]-times[14])/1_000_000,0):0;
+          const ptTime=Math.max(Number(times[1]-times[0])/1_000_000,0);
           // A readback may finish after scene preparation or a mode switch.
           // It must not overwrite throughput learned for the current scene.
           const timingIsCurrent =
             !disposed && submittedTimingGeneration === tileTimingGeneration &&
             !isFirstFrame;
           if (timingIsCurrent) {
+            if(measuredCausticBatch&1)causticBatchTimeMs=causticTime;
+            if(measuredCausticBatch&2)photonBatchTimeMs=photonTime;
+            const traceTime=Math.max(ptTime+(causticBatchTimeMs+photonBatchTimeMs)/submittedTileCount,.1);
             lastGpuTraceTiming = {
+              causticTimeMs:causticBatchTimeMs,photonMappingTimeMs:photonBatchTimeMs,
+              photonStagesMs:(measuredCausticBatch&2)?[6,8,10,12,14].map(i=>Math.max(Number(times[i+1]-times[i])/1_000_000,0)):undefined,
+              pathTracingTimeMs:ptTime,
               tileTimeMs: traceTime,
               tileTimePerSampleMs: traceTime,
               estimatedFullFrameTimeMs: traceTime * submittedTileCount,
@@ -1541,7 +1555,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {
-      const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
+      const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin', 'caustics'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
       if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
       const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);

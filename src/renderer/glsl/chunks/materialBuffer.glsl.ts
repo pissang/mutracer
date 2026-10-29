@@ -9,7 +9,7 @@ import { mapAlphaUsageConstants } from '../../materialConstants.js';
 
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
 
-export default createShaderMixin({
+export function createMaterialBufferGlsl(caustics = false) { return createShaderMixin({
   uniforms: {
     materialBuffer: Shader.uniform('sampler2D'),
     materialBufferColumns: Shader.uniform('int', 1),
@@ -351,7 +351,9 @@ void getMaterial(
   mat.baseColor *= color;
   if (mat.materialType == UNLIT) mat.emission *= color;
 
-  mat.specularRoughness = clamp(mat.specularRoughness, ROUGHNESS_MIN, 1.0);
+${caustics ? /* glsl */ `  mat.causticRoughness = mat.specularRoughness;
+  mat.causticNormalMapped = roughnessAndNormal.y >= 0.0;
+` : ''}  mat.specularRoughness = clamp(mat.specularRoughness, ROUGHNESS_MIN, 1.0);
   mat.baseMetalness = clamp(mat.baseMetalness, 0.0, 1.0);
   vec2 specularAlpha = openpbr_roughness_to_alpha(mat.specularRoughness, mat.specularAnisotropy);
   mat.alphaX = specularAlpha.x;
@@ -403,3 +405,5 @@ vec3 getMatNormal(int materialIndex, vec2 uv, vec3 normal, vec3 dp1, vec3 dp2, v
 
 `
 });
+}
+export default createMaterialBufferGlsl();

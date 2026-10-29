@@ -13,13 +13,13 @@ export function createMaterialBufferWgsl({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
-  hasTransmission = true,
+  hasTransmission = true, caustics = false,
   hasMetalness = true
 }: {
   hasSceneAlpha?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
-  hasTransmission?: boolean;
+  hasTransmission?: boolean; caustics?: boolean;
   hasMetalness?: boolean;
 } = {}) {
   const alphaModeAssignment = hasSceneAlpha
@@ -316,7 +316,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   (*ma).baseColor *= color;
   if ((*ma).materialType == UNLIT) { (*ma).emission *= color; }
 
-  (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
+${caustics ? /* wgsl */ `  (*ma).causticRoughness = (*ma).specularRoughness;
+  (*ma).causticNormalMapped = matData.normalMapIndex >= 0.0;
+` : ''}  (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);
   let specularAlpha = openpbr_roughness_to_alpha((*ma).specularRoughness, (*ma).specularAnisotropy);
   (*ma).alphaX = specularAlpha.x;

@@ -166,7 +166,11 @@ export const SETTINGS = {
   "TRANSMISSIVE_ALPHA_MIN": 12,
   "SEQUENCE_OFFSET": 14,
   "VARIANTS": 15,
-  "WORDS": 16
+  "CAUSTIC_FLAGS": 16,
+  "LIGHT_PHOTONS": 17,
+  "PHOTON_MAP_PHOTONS": 18,
+  "PHOTON_MAP_RADIUS": 19,
+  "WORDS": 20
 } as const;
 export const WRITE_ENTRY = {
   "ID": 0,
@@ -215,6 +219,7 @@ export const VERSION = {
   "SCENE": 4,
   "RESOURCE_PACKET": 1,
   "RESOURCE_WRITES": 3,
+  "TARGET_PACKET": 4,
   "GEOMETRY_KERNELS": 1
 } as const;
 export const RESOURCE = {

@@ -1,5 +1,7 @@
 {
   "version": 1,
+  "photonResolvePasses": ["PT+photons+guides:RGBA32", "CatcherMask:RGBA16"],
+  "causticResolvePasses": ["PT+guides+catcher:RGBA16", "CausticColor:RGBA32"],
   "cases": [
     {
       "name": "sdr-transfer",
@@ -271,5 +273,71 @@
     "BrowserDiagnosticComposition": "Browser post-processing executes composition before selecting the raw diagnostic image; native selects diagnostics before composition.",
     "BrowserCustomSceneFilter": "Browser scene fixtures execute a custom scene-linear filter; native fixtures upload the same prefiltered image before composition.",
     "BrowserByteGuides": "Production browser normal/albedo resolve uses RGBA8; native HDR diagnostics retain float16. Allow 2.3e-3 absolute error (half an 8-bit code plus float16 rounding)."
-  }
+  },
+  "causticResolve": [
+    {"name":"photon-query-hdr-range","wideHdr":true,"pt":[1e-8,1e8,1,1],"samples":1,"caustic":[0,0,0,1],"expected":[1e-8,1e8,1]},
+    {
+      "name": "pt-plus-independent-photon-average",
+      "pt": [
+        4,
+        8,
+        12,
+        4
+      ],
+      "samples": 4,
+      "caustic": [
+        6,
+        9,
+        12,
+        3
+      ],
+      "expected": [
+        3,
+        5,
+        7
+      ]
+    },
+    {
+      "name": "no-photon-batches",
+      "pt": [
+        4,
+        8,
+        12,
+        4
+      ],
+      "samples": 4,
+      "caustic": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "name": "photon-hdr-dynamic-range",
+      "pt": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "samples": 1,
+      "caustic": [
+        1e-08,
+        100000000.0,
+        1,
+        1
+      ],
+      "expected": [
+        1e-08,
+        100000000.0,
+        1
+      ]
+    }
+  ]
 }

@@ -225,7 +225,8 @@ function dominantLocalMaterial(geometry: Geometry, indices: Uint32Array, triangl
 
 export function collectEmissiveTriangles(
   bindings: EmissiveMeshBinding[],
-  materials: OpenPBRMaterial[]
+  materials: OpenPBRMaterial[],
+  samplingWeight?: (material:OpenPBRMaterial)=>number
 ) {
   const triangles: EmissiveTriangle[] = [];
   const local = [vec3.create(), vec3.create(), vec3.create()];
@@ -241,7 +242,7 @@ export function collectEmissiveTriangles(
     for (let local = 0; local < Math.max(1, materialIndices.length); local++) {
       const material = materials[materialIndices[local] ?? materialIndices[0] ?? 0];
       samplingLuminances.push(!material || material.shadowCatcher || material.unlit
-        ? 0 : colorLuminance(materialEmission(material)));
+        ? 0 : (samplingWeight?samplingWeight(material):colorLuminance(materialEmission(material))));
     }
     const matrix = new Float64Array(16), parent = matrixStorage(mesh.transform);
     for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
@@ -342,7 +343,7 @@ const emissiveBindings = new WeakMap<EmissiveTriangleCache, WeakMap<Mesh, Emissi
 
 /** Caches world-space vertices per mesh, independently of emission strength. */
 export class EmissiveTriangleCache {
-  constructor() { emissiveBindings.set(this, new WeakMap()); }
+  constructor(private readonly samplingWeight?:(material:OpenPBRMaterial)=>number) { emissiveBindings.set(this, new WeakMap()); }
   private _triangles: EmissiveTriangle[] = [];
   collect(bindings: EmissiveMeshBinding[], materials: OpenPBRMaterial[]) {
     const cachedBindings = emissiveBindings.get(this)!;
@@ -351,7 +352,7 @@ export class EmissiveTriangleCache {
       const { mesh, geometry, materialIndices } = binding;
       const isActive = (index: number) => {
         const m = materials[index];
-        return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(materialEmission(m)) > 1e-8;
+        return !!m && !m.unlit && !m.shadowCatcher && (this.samplingWeight?this.samplingWeight(m):colorLuminance(materialEmission(m))) > 1e-8;
       };
       const instanceVersion = mesh.instanceData?.transformsVersion ?? 0;
       const instanceCount = meshInstanceCount(mesh);
@@ -363,12 +364,12 @@ export class EmissiveTriangleCache {
         meshMatrixChanged(mesh, cached.matrix)) {
         cached = { geometry, version: geometry.version, instanceVersion, instanceCount, instanceTransforms, matrix: copyMeshMatrix(mesh),
           indices: materialIndices.slice(), activity: materialIndices.map(isActive),
-          triangles: collectEmissiveTriangles([binding], materials) };
+          triangles: collectEmissiveTriangles([binding], materials,this.samplingWeight) };
         cachedBindings.set(mesh, cached);
       } else {
         for (const triangle of cached.triangles) {
           const m = materials[triangle.materialIndex];
-          triangle.samplingLuminance = colorLuminance(materialEmission(m));
+          triangle.samplingLuminance = this.samplingWeight?this.samplingWeight(m):colorLuminance(materialEmission(m));
         }
       }
       for (const triangle of cached.triangles) this._triangles.push(triangle);

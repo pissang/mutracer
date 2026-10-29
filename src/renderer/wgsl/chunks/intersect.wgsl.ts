@@ -221,7 +221,7 @@ function getBVHTraverseCode(
       for (var k = 0; k < primitiveCount; k++) {
         let triangleIndex = primitiveOffset + k;
         ${skipTriangleCode}
-        if (bounces > 0 && triangleIndex == currentTriangleIndex) {
+        if (bounces > 0 && triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
           continue;
         }
         
@@ -633,6 +633,7 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
   let doubleSided = false;
   let isRefractionRay = false;
   let currentTriangleIndex = -1;
+  let currentInstanceIndex = -1;
   var tMax = RAY_MAX_DISTANCE;
   var maxDim: i32;
   var shear: vec3f;
@@ -669,6 +670,7 @@ fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32,
   var hitTri: Triangle;
   var hitInsIdx: i32;
   var currentTriangleIndex: i32 = (*si).triangleIndex;
+  let currentInstanceIndex = (*si).instanceIndex;
 
   ${getBVHTraverseCode(
     `
@@ -716,6 +718,7 @@ fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: 
   var hitTri: Triangle;
   var hitInsIdx: i32;
   var currentTriangleIndex: i32 = -1;
+  let currentInstanceIndex = instanceIndex;
 
   ${getBVHTraverseCode(
     `
@@ -784,7 +787,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   }
 }
 
-fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32, currInstanceIndex:i32) -> bool {
   if (rtUniform.isEmpty > 0) {
     return false;
   }
@@ -798,6 +801,7 @@ fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
   let bounces = 1;
   var isRefractionRay = false;
   var currentTriangleIndex: i32 = currTriangleIndex;
+  let currentInstanceIndex = currInstanceIndex;
 
   ${getBVHTraverseCode(
     /*wgsl */ `

@@ -16,6 +16,7 @@ export const traceSchema = {
   bevel: {key: 'bevel', default: true, kind: 'image', backends: both},
   bevelSamples: {key: 'bevelSamples', default: 8, kind: 'image', backends: both, normalize: normalizeBevelSamples},
   dispersionWavelengths: {key: 'dispersionWavelengths', default: 3, kind: 'image', backends: both},
+  caustics: {key: 'caustics', default: undefined, kind: 'image', backends: both},
   directLightCandidates: {key: 'directLightCandidates', default: 4, kind: 'image', backends: ['webgpu'], normalize: normalizeDirectLightCandidates},
   alphaBlendStrategy: {key: 'alphaBlendStrategy', default: 'stochastic', kind: 'image', backends: ['webgpu']},
   transmissiveOutputAlphaMin: {key: 'transmissiveOutputAlphaMin', default: 1, kind: 'image', backends: both},

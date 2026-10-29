@@ -1,3 +1,5 @@
+import {createMneeGlsl} from './chunks/mnee.glsl.js';
+import {createCausticPartitionGlsl} from './chunks/caustics.glsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -5,14 +7,14 @@ import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import commonGlsl from './chunks/common.glsl.js';
-import rayTraceCore from './chunks/rayTraceCore.glsl.js';
+import {createRayTraceCoreGlsl} from './chunks/rayTraceCore.glsl.js';
 import textureLinear from './chunks/textureLinear.glsl.js';
-import materialBufferGlsl from './chunks/materialBuffer.glsl.js';
+import {createMaterialBufferGlsl} from './chunks/materialBuffer.glsl.js';
 import intersect from './chunks/intersect.glsl.js';
 import randGlsl from './chunks/rand.glsl.js';
 import random from './chunks/random.glsl.js';
 import envMap from './chunks/envMap.glsl.js';
-import sampleMaterialGlsl from './chunks/sampleMaterial.glsl.js';
+import {createSampleMaterialGlsl} from './chunks/sampleMaterial.glsl.js';
 import sampleLightGlsl from './chunks/sampleLight.glsl.js';
 import { FragmentShader, glsl, Shader } from '../shader.js';
 import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl.js';
@@ -56,7 +58,11 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 }
 `;
 
-export default function createRayTraceFragmentShader() {
+export default function createRayTraceFragmentShader(mnee = false, mneeDebugGroup = -1,mneeMethod:'newton'|'sms'='newton',mneeSeeds=4,mneeDamping=false,mneeMaxDepth=20,smsRoulette=false) {
+  const mneeGlsl = createMneeGlsl(mneeDebugGroup >= 0,mneeMethod==='sms',mneeSeeds,mneeDamping,mneeMaxDepth,smsRoulette);
+  const materialBufferGlsl = createMaterialBufferGlsl(mnee);
+  const rayTraceCore = createRayTraceCoreGlsl(mnee);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(mnee);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
@@ -83,7 +89,7 @@ export default function createRayTraceFragmentShader() {
     dispersionWavelengths: Shader.uniform('int', 3),
     bounceLimit: Shader.uniform('int', 8)
   },
-  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap],
+  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap, ...(mnee ? [mneeGlsl] : [])],
   main: glsl`
 ${commonGlsl}
 
@@ -107,7 +113,7 @@ float heroWavelength;
 float pathWavelength;
 
 ${sampleLightGlsl}
-${sampleMaterialGlsl}
+${mnee ? createCausticPartitionGlsl(mneeMaxDepth,mneeDebugGroup>=30) + mneeGlsl.main : ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -310,7 +316,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       lightSample.pdf *= light.selectionPmf;
       float misWeight = sampling_power_heuristic(path.scatteringPdf, lightSample.pdf);
       lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
-      path.li += misWeight * path.beta * lightSample.emission;
+      ${mnee ? 'if (!causticHitOwned(path)) { ' : ''}path.li += misWeight * path.beta * lightSample.emission;${mnee ? ' }' : ''}
       // TODO set alpha to 1.0 will cause some sharp edges
       path.alpha = 1.0;
       path.abort = true;
@@ -463,7 +469,9 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.li = vec3(0);
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.beta = vec3(1.0);
-  path.fromEye = true;
+  path.fromEye = true;${mnee ? /* glsl */ `
+  path.causticK = 0; path.causticSingleT = false;
+  path.causticReceiverPrimary = false; path.causticHasReceiver = false; path.causticMneeReceiver=false;` : ''}
   path.scatteringPdf = 0.0;
   path.scatteringIsDelta = false;
   path.isNextRefraction = false;
@@ -573,7 +581,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 
 void main() {
 
-  initRandom();
+${mnee && mneeDebugGroup >= 0 ? '  for(int i=0;i<21;i++)mneeCounters[i]=0.0;for(int i=0;i<10;i++)mneeTrace[i]=vec3(0.0);for(int i=0;i<15;i++)causticHot[i]=vec3(0.0);\n' : ''}  initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
@@ -617,7 +625,7 @@ void main() {
     liAndAlpha = vec4(0, 0, 0, 1);
   }
 
-  out_color = liAndAlpha;
+  out_color = ${mnee && mneeDebugGroup >= 0 ? mneeDebugGroup>=30?`vec4(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4(mneeTrace[${mneeDebugGroup-10}]+vec3(10.0),1.0)`:`vec4(mneeCounters[${mneeDebugGroup*3}],mneeCounters[${mneeDebugGroup*3+1}],mneeCounters[${mneeDebugGroup*3+2}],1.0)` : 'liAndAlpha'};
   out_albedo = vec4(outAux.albedo, outAux.isBlank ? 0.0 : 1.0);
   out_normal = vec4(outAux.normal, 1.0);
   // Moments and count of the built-in denoiser's guide value. The catcher

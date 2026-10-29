@@ -1,3 +1,7 @@
+import {photonQueryWgsl} from './photonMap.compute.js';
+import backgroundWgsl from './chunks/background.wgsl.js';
+import {createMneeWgsl} from './chunks/mnee.wgsl.js';
+import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import reflectanceWGSL from './aovReflectance.wgsl.js';
@@ -36,6 +40,20 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  mnee?: boolean;
+  mneeDebugGroup?: number;
+  mneeSeeds?:number;
+  mneeDamping?:boolean;
+  smsRoulette?:boolean;
+  mneeMaxDepth?:number;
+  mneeMethod?:'newton'|'sms';
+  /** Native ray-query hits carry source primitive indices. Default false. */
+  mneeHardwareIndices?:boolean;
+  /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
+  workgroupSize?:number;
+  lightTracing?: boolean;
+  photonMapping?:boolean;
+  photonMaxDepth?:number;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
   hasAnisotropyDirections?: boolean;
   /** Include independent coat normals only when a material uses that slot. */
@@ -57,7 +75,8 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute({
-  hasDisplacement,
+  hasDisplacement,workgroupSize=WORKGROUP_SIZE,
+  mnee = false, lightTracing = false,photonMapping=false,photonMaxDepth=20, mneeDebugGroup = -1,mneeSeeds=4,mneeDamping=false,mneeMaxDepth=20,smsRoulette=false,mneeMethod='newton',mneeHardwareIndices=false,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
   hasAlpha = true,
@@ -128,11 +147,12 @@ export default function rayTraceCompute({
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities })}
+${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: mnee || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
 ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
+  caustics: mnee || lightTracing || photonMapping,
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
@@ -192,7 +212,11 @@ fn bsdfMISWeight(scatteringPdf: f32, lightPdf: f32) -> f32 {
     max(scatteringPdf + weightedLightPdf, 1e-20);
 }
 
-${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals)}
+${mnee || lightTracing || photonMapping ? causticPartitionWGSL(mnee, lightTracing,photonMapping,mneeMaxDepth,mneeDebugGroup>=30,photonMaxDepth) : ''}${mnee ? createMneeWgsl(mneeDebugGroup >= 0,mneeMethod==='sms',mneeHardwareIndices,mneeSeeds,mneeDamping,mneeMaxDepth,smsRoulette) : ''}${photonMapping?`const CAUSTIC_LIGHT_TRACING=${lightTracing};
+const CAUSTIC_MNEE=${mnee};
+const CAUSTIC_MNEE_MAX_DEPTH=${mneeMaxDepth}u;
+const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
+`+photonQueryWgsl:''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, mnee || lightTracing || photonMapping, mnee,photonMapping)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -235,107 +259,7 @@ struct RayTraceAuxiliary {
   shadowCounts: vec2f,
 }
 
-fn groundedSurfaceDistance(point: vec3f, height: f32, radius: f32) -> f32 {
-  let pointLength = length(point);
-  if (pointLength < 0.00001) {
-    return -radius;
-  }
-
-  let originalY = radius * point.y / pointLength;
-  let transitionY = -1.5 * height;
-  var surfaceRadius: f32;
-  if (originalY >= 0.0) {
-    surfaceRadius = radius;
-  }
-  else if (originalY < transitionY) {
-    surfaceRadius = -height * pointLength / point.y;
-  }
-  else {
-    let factor = 1.0
-      - originalY * originalY / (3.0 * transitionY * transitionY);
-    surfaceRadius = radius * factor;
-  }
-  return pointLength - surfaceRadius;
-}
-
-fn groundedBackgroundDirection(origin: vec3f, direction: vec3f) -> vec3f {
-  if (!USE_GROUNDED_BACKGROUND) {
-    return direction;
-  }
-  let params = rtUniform.groundedBackgroundParams;
-  let rayDirection = normalize(direction);
-  let center = vec3f(
-    rtUniform.groundedBackgroundCenter.x,
-    params.z + params.x,
-    rtUniform.groundedBackgroundCenter.y
-  );
-  let localOrigin = origin - center;
-  let projectedOrigin = dot(localOrigin, rayDirection);
-  let discriminant = projectedOrigin * projectedOrigin
-    - dot(localOrigin, localOrigin) + params.y * params.y;
-  if (
-    discriminant <= 0.0
-    || groundedSurfaceDistance(localOrigin, params.x, params.y) > 0.0
-  ) {
-    return direction;
-  }
-
-  var farDistance = -projectedOrigin + sqrt(discriminant);
-  if (farDistance <= 0.0) {
-    return direction;
-  }
-
-  let sphereHit = localOrigin + rayDirection * farDistance;
-  if (sphereHit.y >= 0.0) {
-    return normalize(sphereHit);
-  }
-
-  if (rayDirection.y < -0.00001 && params.y > 1.5 * params.x) {
-    let groundDistance = (-params.x - localOrigin.y) / rayDirection.y;
-    let groundHit = localOrigin + rayDirection * groundDistance;
-    let groundRadius = (2.0 / 3.0)
-      * sqrt(params.y * params.y - 2.25 * params.x * params.x);
-    if (groundDistance > 0.0 && length(groundHit.xz) <= groundRadius) {
-      return normalize(groundHit);
-    }
-  }
-
-  var nearDistance = 0.0;
-  for (var i = 0; i < 14; i++) {
-    let middleDistance = (nearDistance + farDistance) * 0.5;
-    let middlePoint = localOrigin + rayDirection * middleDistance;
-    if (groundedSurfaceDistance(middlePoint, params.x, params.y) > 0.0) {
-      farDistance = middleDistance;
-    }
-    else {
-      nearDistance = middleDistance;
-    }
-  }
-  let hit = localOrigin + rayDirection * ((nearDistance + farDistance) * 0.5);
-  return normalize(hit);
-}
-
-fn sampleSceneBackground(ray: Ray) -> vec4f {
-  var bg = vec4f(0.0);
-  if (USE_BACKGROUND_MAP) {
-    let d = groundedBackgroundDirection(ray.o, ray.d);
-    let t = rtUniform.backgroundMapTransform;
-    let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-    let rotation = rtUniform.backgroundMapRotation;
-    let mapDirection = transpose(mat3x3f(rotation[0].xyz, rotation[1].xyz, rotation[2].xyz)) * backgroundDirection;
-    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(mapDirection));
-    bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
-  }
-  else if (USE_BACKGROUND) {
-    bg = rtUniform.backgroundColor;
-  }
-  else if (USE_ENVMAP) {
-    bg = textureLinear(envMap, environmentUv(ray.d));
-  }
-  return bg;
-}
-
-fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
+${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
   let bg = sampleSceneBackground(ray);
   if (SPECTRAL) {
     return vec4f(sampling_spectral_rgb_filter(bg.rgb, wavelength), bg.a);
@@ -541,14 +465,15 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
       if (SPECTRAL) {
         lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).wavelength);
       }
-      (*path).li += misWeight * (*path).beta * lightSample.emission;
+      ${mnee || lightTracing || photonMapping ? 'if (!causticHitOwned(*path, true, true)) { causticHotRecord(*path,misWeight*lightSample.emission,2u); ' : ''}(*path).li += misWeight * (*path).beta * lightSample.emission;${mnee || lightTracing || photonMapping ? ' }' : ''}
       (*path).alpha = 1.0;
       (*path).abort = true;
     }
   }
 
   if (USE_ENVMAP) {
-    if (!((*si).hit && isAlphaOccluded)) {
+    if (!((*si).hit && isAlphaOccluded)) {${lightTracing||photonMapping ? /* wgsl */ `
+      if(causticHitOwned(*path,false,true)){(*path).abort=true;return;}` : ''}
       if ((*path).isNextRefraction) {
         // Camera-visible transmission follows the displayed background,
         // including grounded projection. Other rays use the raw environment
@@ -1073,7 +998,7 @@ fn sampleCircle(ip: vec2f) -> vec2f {
 }
 
 
-@compute @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE}, 1)
+@compute @workgroup_size(${workgroupSize}, ${workgroupSize}, 1)
 fn main(@builtin(global_invocation_id) globalId: vec3u) {
   let outputSize = rtUniform.outputSize;
   let scaleOffset = rtUniform.scaleOffset;
@@ -1130,7 +1055,8 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   outAux.isShadowCatcher = false;
 ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 ${inputHooks?.unclampedColor ?? ''}
-  // Clamp at Integration Level to reduce fireflies.
+${(mnee||lightTracing||photonMapping) && mneeDebugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${mneeDebugGroup>=30?`vec4f(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4f(mneeTrace[${mneeDebugGroup-10}]+vec3f(10.0),1.0)`:`vec4f(f32(mneeCounters[${mneeDebugGroup*3}]),f32(mneeCounters[${mneeDebugGroup*3+1}]),f32(mneeCounters[${mneeDebugGroup*3+2}]),1.0)`};
+` : ''}  // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {
     let clamping = rtUniform.clamping;

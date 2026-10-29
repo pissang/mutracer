@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, mnee = false,photonMapping=false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {
@@ -32,7 +32,12 @@ fn finishDirectLight(
   (*shadowWork).risTarget = 0.0;
   var Li = lightSample.emission;
 
-  let lightDir = lightSample.direction;
+  let lightDir = lightSample.direction;${caustics ? /* wgsl */ `
+  if(isSurface&&isCausticSpecular(ma)){
+    var connection=*path;
+    causticAdvance(&connection,ma,dot(ffnormal,lightDir)<0.0,true);
+    if(causticHitOwned(connection,lightSample.sourceType!=0u,true)){return false;}
+  }` : ''}
   let viewDir = -(*path).ray.d;
   let lightPdf = lightSample.pdf;
   let lightSelectionPmf = lightSample.selectionPmf;
@@ -168,8 +173,11 @@ fn sampleScattering(
             (f32(candidateCount) * selectedTarget);
         }
       }
-      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex)) {
-        (*path).li += selected.contribution * candidateUCW;
+      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
+${caustics?`        var connection=*path;
+        if(isSurface&&isCausticSpecular(ma)){causticAdvance(&connection,ma,dot(ffnormal,selected.ray.d)<0.0,true);}
+        connection.beta=vec3f(1.0);causticHotRecord(connection,selected.contribution*candidateUCW,0u);
+`:''}        (*path).li += selected.contribution * candidateUCW;
       }
       if (!isSurface) {
         result.direction = sampling_henyey_greenstein(-(*path).ray.d,
@@ -243,7 +251,8 @@ fn sampleScattering(
 fn emissiveHitMisWeight(
   si: ptr<function, SurfaceInteraction>,
   path: ptr<function, Path>
-) -> f32 {
+) -> f32 {${caustics ? /* wgsl */ `
+  if (causticHitOwned(*path, true, true)) { return 0.0; }` : ''}
   // Secondary traversal accepts back faces for transmission; a one-sided
   // emitter still radiates only into its front hemisphere.
   let cosLight = dot((*si).faceNormal, -(*path).ray.d);
@@ -365,7 +374,9 @@ ${hasCoatNormals ? /* wgsl */ `
   }
 
   if (!mediumSampled) {
-    (*path).li += emissiveHitMisWeight(si, path) * (*ma).emission * (*path).beta;
+${caustics?`    let emissionWeight=emissiveHitMisWeight(si,path);
+    causticHotRecord(*path,emissionWeight*(*ma).emission,1u);causticEmitterRecord(*si,*path,emissionWeight,(*ma).emission);
+    (*path).li+=emissionWeight*(*ma).emission*(*path).beta;`:'    (*path).li += emissiveHitMisWeight(si, path) * (*ma).emission * (*path).beta;'}
   }
   if ((*ma).materialType == UNLIT) {
     (*path).abort = true;
@@ -383,7 +394,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
     prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
   }
-  let scattered = sampleScattering(si, *ma, prepared, path, ffnormal, !mediumSampled);
+${mnee ? /* wgsl */ `  if (!mediumSampled) { let value=(*path).beta*mneeContribution(*si,prepared);causticEstimateRecord(value,0u);(*path).li+=value; }
+` : ''}${photonMapping?/* wgsl */ `  if(!mediumSampled){let value=(*path).beta*photonContribution(*si,prepared,(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
+` : ''}  let scattered = sampleScattering(si, *ma, prepared, path, ffnormal, !mediumSampled);
   scatterDir = scattered.direction;
   scatteringPdf = scattered.pdf;
   if (!mediumSampled) {
@@ -405,7 +418,8 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*path).scatteringIsDelta = !prepared.material.thinWalled &
       (abs(prepared.material.relativeIor - 1.0) <= 1e-6) &
       (prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6);
-    (*path).beta *= f / scatteringPdf;
+${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
+` : ''}    (*path).beta *= f / scatteringPdf;
 
     crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;
@@ -418,7 +432,8 @@ ${hasCoatNormals ? /* wgsl */ `
   }
   (*path).scatteringPdf = scatteringPdf;
   (*path).ray.d = scatterDir;
-  if (mediumSampled) {
+  if (mediumSampled) {${caustics ? /* wgsl */ `
+    causticAdvance(path, *ma, false, false);` : ''}
     (*path).isNextRefraction = false;
   }
 

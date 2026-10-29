@@ -6,7 +6,7 @@ import { createShaderMixin, glsl, Shader } from '../../shader.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import { CONSTANT_SPOT_LIGHT } from '../../lightConstants.js';
 
-export default createShaderMixin({
+export function createRayTraceCoreGlsl(caustics = false) { return createShaderMixin({
   uniforms: {
     lightsTex: Shader.uniform('sampler2D'),
     iesProfileData: Shader.uniform('sampler2D'),
@@ -83,7 +83,9 @@ struct SurfaceInteraction {
 struct OpenPbrResolvedMaterial {
   int materialType;
 
-  float specularRoughness;
+  float specularRoughness;${caustics ? /* glsl */ `
+  float causticRoughness;
+  bool causticNormalMapped;` : ''}
   float baseMetalness;
   vec3 baseColor;
   float specularIor;
@@ -190,7 +192,12 @@ struct Path {
   bool abort;
   float scatteringPdf;
   bool scatteringIsDelta;
-  bool isNextRefraction;
+  bool isNextRefraction;${caustics ? /* glsl */ `
+  int causticK;
+  bool causticSingleT;
+  bool causticReceiverPrimary;
+  bool causticHasReceiver;
+  bool causticMneeReceiver;` : ''}
 };
 
 struct LightSampleRec {
@@ -289,3 +296,5 @@ float evaluateSpotEmissionMultiplier(Light light, vec3 lightToSurface) {
 }
 `
 });
+}
+export default createRayTraceCoreGlsl();

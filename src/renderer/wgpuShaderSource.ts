@@ -4,6 +4,20 @@ import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 export interface WGPUShaderFeatures {
   hasDisplacement: boolean;
+  mnee?: boolean;
+  mneeDebugGroup?: number;
+  mneeSeeds?:number;
+  mneeDamping?:boolean;
+  smsRoulette?:boolean;
+  mneeMaxDepth?:number;
+  mneeMethod?:'newton'|'sms';
+  /** Native ray-query hits carry source primitive indices. Default false. */
+  mneeHardwareIndices?:boolean;
+  /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
+  workgroupSize?:number;
+  lightTracing?: boolean;
+  photonMapping?:boolean;
+  photonMaxDepth?:number;
   hasAlpha: boolean;
   hasSceneAlpha: boolean;
   hasAnisotropyDirections: boolean;
@@ -31,6 +45,7 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   return `\n${defineCode}\n${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
+  if(features.mnee)constants={CAUSTIC_SEED_COUNT:0,CAUSTIC_SEED_OFFSET:0,...constants};
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,

@@ -8,6 +8,7 @@ import { renderFixture } from '../helpers/renderPipeline';
 const renderChanges: Record<string, unknown> = {
   aovs: ['depth'], aovSamples: 8,
   bounces: 5, clamping: 2, bevel: false, bevelSamples: 12, dispersionWavelengths: 1,
+  caustics: {photonMapping: true, lightTracing: {photonsPerSample: 32}},
   directLightCandidates: 8, alphaBlendStrategy: 'deterministic-source-over', transmissiveOutputAlphaMin: .3,
   samplingPattern: 'random', timeBudgetMs: 50, maxTiles: 2, batchSamples: true,
 };
@@ -37,6 +38,14 @@ describe('settings schemas', () => {
     engine.dispose();
   });
 
+  it('restarts when the nested photon radius changes in place',()=>{
+    const {engine,targets}=renderFixture();
+    const method={initialRadius: .1};
+    const render=new Render(engine,{caustics:{photonMapping:method}});render.refine();
+    method.initialRadius=.2;render.refine();
+    expect(targets[0].restartSamples).toHaveBeenCalledTimes(2);render.dispose();engine.dispose();
+  });
+
   for (const field of Object.values(traceSchema).filter(field => field.kind !== 'sample-cap')) {
     it(`${field.key} ${field.kind === 'image' ? 'restarts' : 'preserves'} accumulation and reaches the target`, () => {
       const {engine, targets} = renderFixture(); const render = new Render(engine); render.refine();
@@ -48,6 +57,16 @@ describe('settings schemas', () => {
       engine.dispose();
     });
   }
+  it('restarts when nested caustic settings change in place', () => {
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {caustics: {photonMapping: true, lightTracing: {photonsPerSample: 32}}});
+    render.refine();
+    render.caustics!.photonMapping = false; render.refine();
+    (render.caustics!.lightTracing as {photonsPerSample: number}).photonsPerSample = 64;
+    render.refine();
+    expect(targets[0].restartSamples).toHaveBeenCalledTimes(3);
+    engine.dispose();
+  });
   for (const samplingPattern of ['sobol', 'zsobol', 'random'] as const) {
     it(`sample cap invalidation follows ${samplingPattern}`, () => {
       const {engine, targets} = renderFixture(); const render = new Render(engine, {samplingPattern}); render.refine();
