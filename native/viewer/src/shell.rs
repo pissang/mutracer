@@ -71,6 +71,66 @@ fn panel_button(ui: &mut egui::Ui, label: &str, right: bool, open: &mut bool) {
         *open = !*open;
     }
 }
+fn utility_button(ui: &mut egui::Ui, label: &str, reset: bool) -> egui::Response {
+    let response = ui.add_sized([26., 26.], egui::Button::new("").frame(false));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let c = response.rect.center();
+    let stroke = Stroke::new(1.2, theme::MUTED);
+    if reset {
+        let points = (0..=24)
+            .map(|i| c + egui::Vec2::angled(-2.5 + i as f32 * 5.5 / 24.) * 6.)
+            .collect();
+        ui.painter().add(egui::Shape::line(points, stroke));
+        ui.painter().add(egui::Shape::line(
+            vec![
+                c + egui::vec2(-6., -7.),
+                c + egui::vec2(-6., -2.),
+                c + egui::vec2(-1., -2.),
+            ],
+            stroke,
+        ));
+    } else {
+        ui.painter().circle_stroke(c, 6.5, stroke);
+        ui.painter().text(
+            c - egui::vec2(0., 0.5),
+            egui::Align2::CENTER_CENTER,
+            "?",
+            egui::FontId::proportional(11.),
+            theme::MUTED,
+        );
+    }
+    response.on_hover_text(label)
+}
+
+fn code_button(ui: &mut egui::Ui) -> egui::Response {
+    let response = ui.add_sized([72., 32.], egui::Button::new("").corner_radius(12));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Code")
+    });
+    let c = response.rect.left_center() + egui::vec2(16., 0.);
+    let stroke = Stroke::new(1.2, theme::TEXT);
+    for direction in [-1., 1.] {
+        ui.painter().add(egui::Shape::line(
+            vec![
+                c + egui::vec2(direction * 3., -4.),
+                c + egui::vec2(direction * 7., 0.),
+                c + egui::vec2(direction * 3., 4.),
+            ],
+            stroke,
+        ));
+    }
+    ui.painter().text(
+        response.rect.center() + egui::vec2(9., 0.),
+        egui::Align2::CENTER_CENTER,
+        "Code",
+        egui::FontId::proportional(11.5),
+        theme::TEXT,
+    );
+    response.on_hover_text("Render setup in Rust")
+}
+
 fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> egui::Response {
     let response = ui.add_sized(
         [if export { 86. } else { 100. }, 32.],
@@ -87,15 +147,7 @@ fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> 
     let p = ui.painter();
     let stroke = Stroke::new(1.2, theme::TEXT);
     if sample {
-        p.add(egui::Shape::closed_line(
-            vec![
-                c + egui::vec2(0., -6.),
-                c + egui::vec2(5., 0.),
-                c + egui::vec2(0., 6.),
-                c + egui::vec2(-5., 0.),
-            ],
-            stroke,
-        ));
+        crate::controls::paint_icon(ui, c, crate::controls::Icon::Examples, theme::TEXT);
     } else {
         let sign = if export { 1. } else { -1. };
         p.line_segment([c + egui::vec2(0., -5.), c + egui::vec2(0., 5.)], stroke);
@@ -190,29 +242,20 @@ impl Viewer {
                                 .corner_radius(9),
                         );
                         ui.add_space(8.);
-                        ui.vertical(|ui| {
-                            ui.add_space(3.);
-                            ui.label(
-                                egui::RichText::new(if compact {
-                                    "MuTracer"
-                                } else {
-                                    "MuTracer Viewer"
-                                })
-                                .size(13.)
-                                .strong(),
-                            );
-                            ui.label(
-                                egui::RichText::new("PATH TRACER")
-                                    .monospace()
-                                    .size(9.)
-                                    .color(theme::SUBTLE),
-                            );
-                        });
+                        ui.label(
+                            egui::RichText::new(if compact {
+                                "MuTracer"
+                            } else {
+                                "MuTracer Viewer"
+                            })
+                            .size(13.)
+                            .strong(),
+                        );
                         ui.add_space(8.);
                         panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
                     });
                 });
-                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(100., 32.));
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(204., 32.));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.;
@@ -262,6 +305,13 @@ impl Viewer {
                                 ui.close();
                             }
                         });
+                        let examples = header_button(ui, "Examples", false, true);
+                        ctx.data_mut(|data| {
+                            data.insert_temp(egui::Id::new("examples-button-rect"), examples.rect)
+                        });
+                        if examples.clicked() {
+                            self.toggle_inspector_tab(5);
+                        }
                     });
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -271,33 +321,21 @@ impl Viewer {
                         panel_button(ui, "Toggle inspector (])", true, &mut self.inspector_open);
                         if ui
                             .add_enabled_ui(self.can_export(), |ui| {
-                                header_button(ui, "Export…", true, false)
+                                header_button(ui, "Export", true, false)
                             })
                             .inner
                             .clicked()
                         {
                             self.open_export(&ctx);
                         }
-                        if ui
-                            .add_sized([32., 32.], egui::Button::new("?").frame(false))
-                            .on_hover_text("Keyboard shortcuts")
-                            .clicked()
-                        {
+                        if utility_button(ui, "Keyboard shortcuts", false).clicked() {
                             self.tools.help_open = true;
                         }
                         if !compact {
-                            if ui
-                                .button("Code")
-                                .on_hover_text("Render setup in Rust")
-                                .clicked()
-                            {
+                            if code_button(ui).clicked() {
                                 self.tools.code_open = true;
                             }
-                            if ui
-                                .add_sized([32., 32.], egui::Button::new("↺").frame(false))
-                                .on_hover_text("Reset all…")
-                                .clicked()
-                            {
+                            if utility_button(ui, "Reset all…", true).clicked() {
                                 self.tools.reset_open = true;
                             }
                             let (undo, redo) = self.history.labels();

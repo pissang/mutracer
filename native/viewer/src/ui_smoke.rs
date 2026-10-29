@@ -223,6 +223,12 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
             },
         ]
     };
+    let header_rect = |ctx: &egui::Context| {
+        ctx.data(|data| {
+            data.get_temp::<egui::Rect>(egui::Id::new("debug-header-rect"))
+                .unwrap()
+        })
+    };
     // The collapsed performance graph and expanded chevron both toggle the card
     // without selecting or orbiting the scene beneath it.
     frame(
@@ -230,7 +236,7 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
         &ctx,
         &gpu,
         [1200, 800],
-        click(egui::pos2(375., 102.)),
+        click(header_rect(&ctx).right_center() - egui::vec2(35., 0.)),
     )?;
     assert!(viewer.debug_open);
     let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
@@ -240,7 +246,7 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
         &ctx,
         &gpu,
         [1200, 800],
-        click(egui::pos2(510., 102.)),
+        click(header_rect(&ctx).right_center() - egui::vec2(9., 0.)),
     )?;
     assert!(!viewer.debug_open);
     let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
@@ -254,22 +260,16 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
         viewer.selected_mesh.is_none(),
         "Debug header selected the underlying model"
     );
-    // Collapse and reopen Examples through its real rail control.
-    frame(
-        &mut viewer,
-        &ctx,
-        &gpu,
-        [1200, 800],
-        click(egui::pos2(1170., 85.)),
-    )?;
+    let examples_pos = ctx
+        .data(|data| {
+            data.get_temp::<egui::Rect>(egui::Id::new("examples-button-rect"))
+                .unwrap()
+        })
+        .center();
+    // Collapse and reopen Examples through its real toolbar control.
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(examples_pos))?;
     assert!(!viewer.inspector_open);
-    frame(
-        &mut viewer,
-        &ctx,
-        &gpu,
-        [1200, 800],
-        click(egui::pos2(1170., 85.)),
-    )?;
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(examples_pos))?;
     assert!(viewer.inspector_open && viewer.tab == 5);
     assert!(viewer.examples.research);
     assert_eq!(
@@ -279,6 +279,43 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     );
     let image = frame(&mut viewer, &ctx, &gpu, [800, 600], vec![])?;
     save(&gpu, &image, &out.join("examples-tab-narrow.png"))?;
+    // The four keyboard shortcuts and rail labels follow the browser order.
+    for (key, tab, name) in [
+        (egui::Key::Num1, 2, "lighting"),
+        (egui::Key::Num2, 1, "material"),
+        (egui::Key::Num3, 4, "camera"),
+        (egui::Key::Num4, 0, "render"),
+    ] {
+        frame(
+            &mut viewer,
+            &ctx,
+            &gpu,
+            [1200, 800],
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        )?;
+        assert_eq!(viewer.tab, tab);
+        assert!(viewer.inspector_open);
+        let image = frame(
+            &mut viewer,
+            &ctx,
+            &gpu,
+            [1200, 800],
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        )?;
+        save(&gpu, &image, &out.join(format!("inspector-{name}.png")))?;
+    }
     viewer.tab = 0;
     viewer.debug_open = true;
     viewer.display_settings.output = 5;

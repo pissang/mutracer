@@ -66,23 +66,26 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 
 ## Use
 
+The [viewer checklist](../../docs/viewer-checklist.md) covers shared workflows and
+platform differences for trying features or checking a new version.
+
 ### Files and window
 
-- The app opens with the material spheres example. Use **Open…** (**⌘O** / **Ctrl+O**)
+- The app opens with the material spheres example. Use **Open** (**⌘O** / **Ctrl+O**)
   or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
   files and images beside their `.gltf`. While loading, the previous model stays
   visible; a failed load shows an error and keeps it.
-- **Open → More** opens a folder, a model/environment URL or a local HDR.
+- **Open** opens a folder, a model/environment URL or a local HDR.
   A URL model loads external resources relative to that URL.
-- **Export…** opens a preview. **Save viewport PNG** saves the current displayed
+- **Export** opens a preview. **Save viewport PNG** saves the current displayed
   image; **Render PNG** uses an independent Viewport, 1080p, 2K, 4K or Square
   size, sample budget and optional transparency. You can cancel the render;
   the interactive image and its accumulated samples are kept.
 - Drag empty space in the top bar to move the window and double-click it to
   zoom. The three window buttons close, minimize or zoom; the bottom-right grip
   resizes.
-- The right rail opens **Examples**, **Lighting**, **Material**, **Camera**, **Render**
-  and **Object**; click the active category to hide the inspector. **[** and **]**
+- The right rail opens **Lighting**, **Material**, **Camera** and **Render**
+  (**1–4**); click the active category to hide the inspector. **[** and **]**
   toggle the scene list and inspector. Section headings collapse. Narrow windows
   hide the scene list.
 - Undo/redo in the top bar (**⌘Z / Ctrl+Z**, **⇧⌘Z / Ctrl+Shift+Z**) covers
@@ -96,7 +99,7 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 
 ### Examples
 
-- Open **Examples** in the right rail to browse the same **MuTracer collection**
+- Open **Examples** in the top bar to browse the same **MuTracer collection**
   and **glTF Research Scenes** as the web viewer. Choose a thumbnail to load it.
   Switching inspector tabs keeps the selected collection and loaded model.
 - Downloads include the model's external buffers, textures and available scene
@@ -131,8 +134,9 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 - Expand groups, search and select objects in the left **Scene** tree, or click a surface in
   the viewport to open its material. **Frame selection** fits the camera to the
   object.
-- The **Object** panel edits world position, local Y rotation and uniform scale
-  of the selected object. Objects that share its geometry stay in place.
+- Use **Scene → Edit object transform…** to open the **Object** panel and edit
+  world position, local Y rotation and uniform scale of the selected object.
+  Objects that share its geometry stay in place.
 - Picking and autofocus can hit transparent or cutout surfaces in front of other
   objects.
 

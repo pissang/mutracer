@@ -502,7 +502,7 @@ impl Viewer {
             selected,
             selected_mesh: None,
             texture_browser: textures::Browser::default(),
-            tab: 0,
+            tab: 1,
             scene_open: true,
             inspector_open: true,
             object_query: String::new(),

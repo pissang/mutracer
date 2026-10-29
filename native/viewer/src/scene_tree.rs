@@ -111,10 +111,10 @@ impl Viewer {
                 self.selected_mesh
                     .is_some_and(|m| nodes[r.node].meshes.contains(&m))
             }) {
-                scroll = scroll.vertical_scroll_offset(index as f32 * 32.);
+                scroll = scroll.vertical_scroll_offset(index as f32 * 28.);
             }
         }
-        scroll.show_rows(ui, 32., items.len(), |ui, range| {
+        scroll.show_rows(ui, 28., items.len(), |ui, range| {
             for row in &items[range] {
                 let node = &nodes[row.node];
                 ui.push_id(row.node, |ui| {

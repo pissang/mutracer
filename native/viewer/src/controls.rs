@@ -20,7 +20,7 @@ pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(
             open,
         );
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.), Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.), Sense::click());
         if response.clicked() {
             state.toggle(ui);
         }
@@ -39,8 +39,26 @@ pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(
                 theme::CONTROL.gamma_multiply(0.4),
             );
         }
+        let icon = match title {
+            "Quality" => Some(Icon::Render),
+            "Color" | "Base" => Some(Icon::Material),
+            "Environment" | "Studio" => Some(Icon::Lighting),
+            "View" | "Depth of field" => Some(Icon::Camera),
+            "Caustics" | "Effects" => Some(Icon::Sun),
+            "Denoiser" => Some(Icon::Examples),
+            "Background" => Some(Icon::Background),
+            _ => None,
+        };
+        if let Some(icon) = icon {
+            paint_icon(
+                ui,
+                rect.left_center() + egui::vec2(7., 0.),
+                icon,
+                theme::MUTED,
+            );
+        }
         ui.painter().text(
-            rect.left_center(),
+            rect.left_center() + egui::vec2(if icon.is_some() { 22. } else { 0. }, 0.),
             Align2::LEFT_CENTER,
             title,
             FontId::proportional(11.5),
@@ -442,6 +460,7 @@ pub fn segmented<T: Copy + PartialEq>(
                                     theme::SUBTLE
                                 }),
                             )
+                            .wrap_mode(egui::TextWrapMode::Truncate)
                             .fill(if selected {
                                 theme::CONTROL
                             } else {
@@ -641,6 +660,8 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
 #[derive(Clone, Copy)]
 pub enum Icon {
     Examples,
+    Sun,
+    Background,
     Lighting,
     Material,
     Camera,
@@ -692,43 +713,33 @@ pub fn preset_card(ui: &mut Ui, width: f32, name: &str, detail: &str, selected: 
     response.on_hover_text(format!("{name} · {detail}"))
 }
 
-pub fn heading(ui: &mut Ui, title: &str, subtitle: &str, icon: Icon) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.), Sense::hover());
-    let badge = egui::Rect::from_min_size(rect.left_top(), egui::vec2(32., 32.));
+pub fn heading(ui: &mut Ui, title: &str, icon: Icon) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.), Sense::hover());
+    let badge = egui::Rect::from_center_size(
+        rect.left_center() + egui::vec2(16., 0.),
+        egui::vec2(32., 32.),
+    );
     ui.painter().rect_filled(badge, 10, theme::ACCENT_SURFACE);
     ui.painter().rect_stroke(
         badge,
         10,
-        Stroke::new(1., theme::ACCENT.gamma_multiply(0.35)),
+        Stroke::new(1., theme::ACCENT.gamma_multiply(0.36)),
         egui::StrokeKind::Inside,
     );
     paint_icon(ui, badge.center(), icon, theme::ACCENT);
     ui.painter().text(
-        rect.left_top() + egui::vec2(42., 1.),
-        Align2::LEFT_TOP,
+        rect.left_center() + egui::vec2(42., 0.),
+        Align2::LEFT_CENTER,
         title,
         FontId::proportional(13.),
         theme::TEXT,
     );
-    let text = egui::WidgetText::from(
-        egui::RichText::new(subtitle)
-            .size(10.5)
-            .color(theme::SUBTLE),
-    )
-    .into_galley(
-        ui,
-        Some(egui::TextWrapMode::Truncate),
-        (rect.width() - 42.).max(1.),
-        egui::TextStyle::Small,
-    );
-    ui.painter()
-        .galley(rect.left_top() + egui::vec2(42., 19.), text, theme::SUBTLE);
 }
 
 pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Response {
     let response = ui.add_sized(
-        [ui.available_width(), 54.],
-        egui::Button::selectable(selected, "").corner_radius(6),
+        [ui.available_width(), 60.],
+        egui::Button::selectable(selected, "").corner_radius(12),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -751,7 +762,7 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
         response.rect.center_bottom() - egui::vec2(0., 8.),
         Align2::CENTER_BOTTOM,
         label,
-        FontId::proportional(9.),
+        FontId::proportional(10.),
         color,
     );
     response.on_hover_text(label)
@@ -760,44 +771,102 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
 pub(super) fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.2, color);
-    let rect = egui::Rect::from_center_size(center, egui::vec2(16., 14.));
     match icon {
         Icon::Examples => {
-            for x in [-4., 4.] {
-                for y in [-4., 4.] {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center + egui::vec2(x, y), egui::vec2(6., 6.)),
-                        1,
-                        stroke,
-                        egui::StrokeKind::Inside,
-                    );
-                }
+            for (offset, radius) in [(egui::vec2(-2., 2.), 6.), (egui::vec2(5., -5.), 3.)] {
+                let c = center + offset;
+                painter.add(egui::Shape::closed_line(
+                    vec![
+                        c - egui::vec2(0., radius),
+                        c + egui::vec2(radius * 0.3, -radius * 0.3),
+                        c + egui::vec2(radius, 0.),
+                        c + egui::vec2(radius * 0.3, radius * 0.3),
+                        c + egui::vec2(0., radius),
+                        c + egui::vec2(-radius * 0.3, radius * 0.3),
+                        c - egui::vec2(radius, 0.),
+                        c - egui::vec2(radius * 0.3, radius * 0.3),
+                    ],
+                    stroke,
+                ));
             }
         }
-        Icon::Lighting => {
-            painter.circle_stroke(center, 4., stroke);
+        Icon::Sun => {
+            painter.circle_stroke(center, 3.5, stroke);
             for i in 0..8 {
                 let d = egui::Vec2::angled(i as f32 * std::f32::consts::TAU / 8.);
-                painter.line_segment([center + d * 6., center + d * 8.], stroke);
+                painter.line_segment([center + d * 5.5, center + d * 8.], stroke);
+            }
+        }
+        Icon::Background => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(center, egui::vec2(16., 14.)),
+                2,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(center + egui::vec2(-3., -3.), 1.5, stroke);
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-7., 5.),
+                    center + egui::vec2(-1., -1.),
+                    center + egui::vec2(3., 3.),
+                    center + egui::vec2(6., 0.),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Lighting => {
+            painter.circle_stroke(center, 8., stroke);
+            painter.line_segment(
+                [center - egui::vec2(8., 0.), center + egui::vec2(8., 0.)],
+                stroke,
+            );
+            // Globe meridians, matching the Lighting tab's globe silhouette.
+            for side in [-1., 1.] {
+                painter.add(egui::Shape::line(
+                    (0..=16)
+                        .map(|i| {
+                            let angle = i as f32 * std::f32::consts::PI / 16.;
+                            center + egui::vec2(side * 3.5 * angle.sin(), -8. * angle.cos())
+                        })
+                        .collect(),
+                    stroke,
+                ));
             }
         }
         Icon::Material => {
-            painter.circle_stroke(center, 7., stroke);
+            // A palette with a thumb notch, rather than a generic material sphere.
+            let points = (0..=28)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 28.;
+                    let radius = if (0.2..1.4).contains(&angle) { 4.5 } else { 8. };
+                    center + egui::Vec2::angled(angle) * radius
+                })
+                .collect();
+            painter.add(egui::Shape::closed_line(points, stroke));
             for offset in [
-                egui::vec2(-3., -2.),
-                egui::vec2(3., -2.),
-                egui::vec2(0., 3.),
+                egui::vec2(-3., -3.),
+                egui::vec2(2., -4.),
+                egui::vec2(-4., 2.),
             ] {
-                painter.circle_filled(center + offset, 1.4, color);
+                painter.circle_filled(center + offset, 1., color);
             }
         }
         Icon::Camera => {
-            painter.rect_stroke(rect, 3, stroke, egui::StrokeKind::Inside);
-            painter.circle_stroke(center, 3.5, stroke);
-            painter.line_segment(
-                [center + egui::vec2(-4., -9.), center + egui::vec2(3., -9.)],
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(-8., -4.),
+                    center + egui::vec2(-4., -4.),
+                    center + egui::vec2(-2., -7.),
+                    center + egui::vec2(3., -7.),
+                    center + egui::vec2(5., -4.),
+                    center + egui::vec2(8., -4.),
+                    center + egui::vec2(8., 6.),
+                    center + egui::vec2(-8., 6.),
+                ],
                 stroke,
-            );
+            ));
+            painter.circle_stroke(center + egui::vec2(0., 1.), 3., stroke);
         }
         Icon::Render => {
             painter.circle_stroke(center, 7., stroke);

@@ -47,7 +47,7 @@ pub fn install(ctx: &egui::Context) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widget.corner_radius = 5.into();
+        widget.corner_radius = 12.into();
         widget.expansion = 0.;
         widget.bg_stroke = Stroke::new(1., BORDER);
         widget.fg_stroke = Stroke::new(1., TEXT);
@@ -91,12 +91,12 @@ pub fn install(ctx: &egui::Context) {
 pub fn panel() -> egui::Frame {
     egui::Frame::new()
         .fill(PANEL)
-        .corner_radius(8)
+        .corner_radius(16)
         .inner_margin(10)
         .outer_margin(Margin {
             left: 0,
-            right: 6,
-            top: 6,
-            bottom: 6,
+            right: 8,
+            top: 8,
+            bottom: 8,
         })
 }
