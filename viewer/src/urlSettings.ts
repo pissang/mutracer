@@ -25,6 +25,7 @@ const parsers = {
   background: choice('environment', 'grounded', 'color', 'transparent'), backgroundColor: color,
   groundedHeight: nullable(number(Number.MIN_VALUE)), groundedRadius: nullable(number(Number.MIN_VALUE)),
   groundShadow: boolean, groundOpacity: number(0, 1),
+  caustics: boolean,causticLightTracing:boolean,causticPhotonMapping:boolean,
   maxSamples: number(1, Infinity, true), bounces: number(1, Infinity, true), resolutionScale: number(Number.MIN_VALUE, 1),
   samplingPattern: choice('sobol', 'zsobol', 'random'), bvhBuilder: choice('tinybvh', 'builtin'), clamping: number(0),
   denoise: boolean, denoiseModel: choice('jnlm', 'standard', 'small', 'cleanAuxLarge'), denoiseWhileConverging: boolean,

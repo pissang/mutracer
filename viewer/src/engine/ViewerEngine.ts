@@ -1,3 +1,4 @@
+import {causticOptions} from '../caustics';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -330,7 +331,7 @@ export class ViewerEngine {
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
-    if (researchScene) setSettings({ groundShadow: false }, { record: false });
+    if (researchScene) setSettings({ groundShadow: false, ...(meta.presetId === 'research-cornell-caustic' ? {caustics: true, causticLightTracing: false, causticPhotonMapping: true} : {}) }, { record: false });
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
@@ -635,6 +636,7 @@ export class ViewerEngine {
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
+    r.caustics = this.preview.caustics = causticOptions(s);
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
     this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
@@ -1395,7 +1397,7 @@ export class ViewerEngine {
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
         aovs: this.final.aovs, aovSamples: this.final.aovSamples,
-        maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
+        maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping, caustics: this.final.caustics,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
         alphaBlendStrategy: this.final.alphaBlendStrategy, transmissiveOutputAlphaMin: this.final.transmissiveOutputAlphaMin,
