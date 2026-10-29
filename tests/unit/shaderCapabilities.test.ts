@@ -136,6 +136,29 @@ describe('retained WebGPU pipeline capabilities', () => {
     expect(pass._updateBindGroups).toHaveBeenCalledTimes(1);
   });
 
+  it('rebinds alternating photon targets without reporting compilation', async () => {
+    const {pass, compile} = photonPass();
+    pass._updateBindGroups.mockImplementation(() => {pass._rayTraceBindGroups = [];});
+    const preview = {}, final = {};
+    // The first activation allocates each target's photon map.
+    for (const target of [preview, final]) {
+      pass.useTarget(target);
+      await pass.updatePipeline();
+    }
+    // Each target retains its output bind group for the current pipeline.
+    for (const target of [preview, final])
+      pass._targetOutputs.set(target, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    const binds = pass._updateBindGroups.mock.calls.length;
+    for (const target of [preview, final, preview, final]) {
+      pass.useTarget(target);
+      void pass.updatePipeline();
+      expect(pass.isCompilingShader()).toBe(false);
+      expect(pass.isPipelineReady()).toBe(true);
+    }
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(binds + 4);
+    expect(compile).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['layout validation', 'pipeline compilation'] as const)(
     'recovers when caustics are toggled during %s', async (stage) => {
       const {pass, device, compile, quality} = photonPass();

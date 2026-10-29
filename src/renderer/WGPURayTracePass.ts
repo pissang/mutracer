@@ -311,7 +311,7 @@ class WGPURayTracePass {
   }
 
   useTarget(target: object) {
-    if (this._photonMapping && this._activeTarget !== target) this._needsUpdateBindGroups = true;
+    if (this._photonMapping && this._activeTarget !== target) this._needsPhotonTargetBindGroups = true;
     this._activeTarget = target;
     const output = this._targetOutputs.get(target);
     [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] =
@@ -414,6 +414,9 @@ class WGPURayTracePass {
   private _focusDistance = 10;
 
   private _needsUpdateBindGroups = true;
+  // Photon maps are per target. Switching targets only rebinds them, which
+  // must not send steady frames through the asynchronous pipeline path.
+  private _needsPhotonTargetBindGroups = false;
 
   private _computeShaderModule?: GPUShaderModule;
   private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
@@ -871,8 +874,13 @@ class WGPURayTracePass {
         this._rayTracePipeline &&
         this._rayTraceBindGroups &&
         !this._needsUpdateBindGroups
-      )
+      ) {
+        if (this._needsPhotonTargetBindGroups) {
+          this._needsPhotonTargetBindGroups = false;
+          this._updateBindGroups();
+        }
         return;
+      }
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
       const requiredCapabilities = retainedShaderCapabilities(this._constants);
       const constants: Record<string, boolean | number> = {...this._constants, ...requiredCapabilities};
@@ -1151,8 +1159,9 @@ class WGPURayTracePass {
       // being bound now, rather than the one active before the asynchronous work.
       this._preparePhotonTarget();
       // TODO rebind when lights, materials, bvh changed.
-      if (this._needsUpdateBindGroups) {
+      if (this._needsUpdateBindGroups || this._needsPhotonTargetBindGroups) {
         this._needsUpdateBindGroups = false;
+        this._needsPhotonTargetBindGroups = false;
 
         this._updateBindGroups();
       }
