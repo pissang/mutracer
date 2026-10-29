@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {existsSync, mkdtempSync, rmSync} from 'node:fs';
+import {existsSync, mkdtempSync, rmSync, openSync, closeSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 
@@ -41,9 +41,11 @@ export async function launchChrome() {
   const executable = process.env.MUTRACER_CHROME ?? (process.platform === 'darwin'
     ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome');
   const profile = mkdtempSync(resolve(tmpdir(), 'mutracer-reference-chrome-'));
-  const child = spawn(executable, ['--user-data-dir=' + profile, '--remote-debugging-port=0',
+  const logFd=process.env.MUTRACER_CHROME_LOG?openSync(process.env.MUTRACER_CHROME_LOG,'a'):undefined;
+  const child = spawn(executable, [...(logFd!==undefined?['--enable-logging=stderr']:[]),'--user-data-dir=' + profile, '--remote-debugging-port=0',
     '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-background-timer-throttling',
-    '--js-flags=--expose-gc', '--headless=new', 'about:blank'], {stdio: 'ignore'});
+    '--js-flags=--expose-gc', '--headless=new', 'about:blank'], {stdio:logFd!==undefined?['ignore','ignore',logFd]:'ignore'});
+  if(logFd!==undefined)closeSync(logFd);
   let launchError;
   child.on('error', error => {launchError = error;});
   const close = async () => {
