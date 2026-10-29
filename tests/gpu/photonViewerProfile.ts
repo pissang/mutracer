@@ -60,7 +60,7 @@ export function profileViewer(viewer: any) {
   const wait = viewer.final.whenReadyToRefine.bind(viewer.final);
   viewer.final.whenReadyToRefine = () => {
     const start = performance.now(), currentFrame = frame;
-    return wait().then(queued => {
+    return wait().then((queued: boolean) => {
       if (enabled) calls.push({category:'queue-wait', frame:currentFrame, start, end:performance.now()});
       return queued;
     });

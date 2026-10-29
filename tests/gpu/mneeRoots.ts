@@ -1,7 +1,7 @@
 // Fixed-receiver root enumeration, independent of the render's Newton start count.
 // Executes the production solver, intersection code and seed distribution.
 import {wgpuShaderSource} from '../../src/renderer/wgpuShaderSource.js';
-import {causticDiagnostics} from '../../src/renderer/causticDiagnostics.js';
+import {mneeDiagnostics as causticDiagnostics} from '../../src/research/mnee/index.js';
 export async function enumerateRoots(viewer:any,batches=4) {
  const pass=causticDiagnostics.rootPass as any;if(!pass)throw Error('Root probe pass was not captured');
  const device=viewer.engine.device as GPUDevice,constants=pass._prevPipelineConstants;

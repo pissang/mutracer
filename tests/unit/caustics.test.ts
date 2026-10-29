@@ -1,3 +1,4 @@
+import {registerMnee} from '../../src/research/mnee/index';
 import {causticLightCompute,causticAccumulateCompute,CAUSTIC_UNIFORM_BYTES} from '../../src/renderer/wgsl/causticLight.compute';
 import {packCausticLightUniform} from '../../src/renderer/WGPUCausticLightPass';
 import {createNormalizeRayTraceOutputWGSL} from '../../src/renderer/WGPURayTraceOutput';
@@ -13,6 +14,7 @@ import rayTrace from '../../src/renderer/wgsl/rayTrace.compute';
 import fragment from '../../src/renderer/glsl/rayTrace.frag';
 import {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {gpu} from './shaderSourceFormattingFixture';
+registerMnee();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 describe('caustic contracts', () => {
   it('preserves the disabled shader across caustic switch settings', () => {

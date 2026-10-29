@@ -1,5 +1,4 @@
-import {createMneeGlsl} from './chunks/mnee.glsl.js';
-import {createCausticPartitionGlsl} from './chunks/caustics.glsl.js';
+import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -58,11 +57,13 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 }
 `;
 
-export default function createRayTraceFragmentShader(mnee = false, mneeDebugGroup = -1,mneeMethod:'newton'|'sms'='newton',mneeSeeds=4,mneeDamping=false,mneeMaxDepth=20,smsRoulette=false) {
-  const mneeGlsl = createMneeGlsl(mneeDebugGroup >= 0,mneeMethod==='sms',mneeSeeds,mneeDamping,mneeMaxDepth,smsRoulette);
-  const materialBufferGlsl = createMaterialBufferGlsl(mnee);
-  const rayTraceCore = createRayTraceCoreGlsl(mnee);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(mnee);
+export default function createRayTraceFragmentShader(...options: unknown[]) {
+  const research = researchTransport()?.fragment(options);
+  const enabled = research?.enabled ?? false;
+  const fragments = research?.fragments;
+  const materialBufferGlsl = createMaterialBufferGlsl(fragments);
+  const rayTraceCore = createRayTraceCoreGlsl(fragments);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
@@ -89,7 +90,7 @@ export default function createRayTraceFragmentShader(mnee = false, mneeDebugGrou
     dispersionWavelengths: Shader.uniform('int', 3),
     bounceLimit: Shader.uniform('int', 8)
   },
-  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap, ...(mnee ? [mneeGlsl] : [])],
+  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap, ...(research?.mixin ? [research.mixin] : [])],
   main: glsl`
 ${commonGlsl}
 
@@ -113,7 +114,7 @@ float heroWavelength;
 float pathWavelength;
 
 ${sampleLightGlsl}
-${mnee ? createCausticPartitionGlsl(mneeMaxDepth,mneeDebugGroup>=30) + mneeGlsl.main : ''}${sampleMaterialGlsl}
+${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -316,7 +317,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       lightSample.pdf *= light.selectionPmf;
       float misWeight = sampling_power_heuristic(path.scatteringPdf, lightSample.pdf);
       lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
-      ${mnee ? 'if (!causticHitOwned(path)) { ' : ''}path.li += misWeight * path.beta * lightSample.emission;${mnee ? ' }' : ''}
+      ${enabled ? 'if (!causticHitOwned(path)) { ' : ''}path.li += misWeight * path.beta * lightSample.emission;${enabled ? ' }' : ''}
       // TODO set alpha to 1.0 will cause some sharp edges
       path.alpha = 1.0;
       path.abort = true;
@@ -469,7 +470,7 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.li = vec3(0);
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.beta = vec3(1.0);
-  path.fromEye = true;${mnee ? /* glsl */ `
+  path.fromEye = true;${enabled ? /* glsl */ `
   path.causticK = 0; path.causticSingleT = false;
   path.causticReceiverPrimary = false; path.causticHasReceiver = false; path.causticMneeReceiver=false;` : ''}
   path.scatteringPdf = 0.0;
@@ -581,7 +582,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 
 void main() {
 
-${mnee && mneeDebugGroup >= 0 ? '  for(int i=0;i<21;i++)mneeCounters[i]=0.0;for(int i=0;i<10;i++)mneeTrace[i]=vec3(0.0);for(int i=0;i<15;i++)causticHot[i]=vec3(0.0);\n' : ''}  initRandom();
+${fragments?.debugInit ?? ''}  initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
@@ -625,7 +626,7 @@ ${mnee && mneeDebugGroup >= 0 ? '  for(int i=0;i<21;i++)mneeCounters[i]=0.0;for(
     liAndAlpha = vec4(0, 0, 0, 1);
   }
 
-  out_color = ${mnee && mneeDebugGroup >= 0 ? mneeDebugGroup>=30?`vec4(causticHot[${mneeDebugGroup-30}],1.0)`:mneeDebugGroup>=10?`vec4(mneeTrace[${mneeDebugGroup-10}]+vec3(10.0),1.0)`:`vec4(mneeCounters[${mneeDebugGroup*3}],mneeCounters[${mneeDebugGroup*3+1}],mneeCounters[${mneeDebugGroup*3+2}],1.0)` : 'liAndAlpha'};
+  out_color = ${research?.debugOutput || 'liAndAlpha'};
   out_albedo = vec4(outAux.albedo, outAux.isBlank ? 0.0 : 1.0);
   out_normal = vec4(outAux.normal, 1.0);
   // Moments and count of the built-in denoiser's guide value. The catcher

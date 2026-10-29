@@ -1,4 +1,4 @@
-import {INSTANCE_VEC4_STRIDE} from '../../bvhAccel.js';
+import {INSTANCE_VEC4_STRIDE} from '../../renderer/bvhAccel.js';
 // Single-interface manifold connection. Constraint differentiation follows
 // Hanika et al., Manifold Next Event Estimation (2015), https://jo.dreggn.org/home/2015_mnee.pdf.
 // This implementation uses the implicit 2x2 map directly; no reference code is copied.

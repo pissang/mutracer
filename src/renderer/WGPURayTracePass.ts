@@ -1,7 +1,7 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
-import {CausticSeedCache} from './causticSeeds.js';
+import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
 import {causticLightCompute} from './wgsl/causticLight.compute.js';
@@ -231,8 +231,7 @@ class WGPURayTracePass {
   private _causticCameraScale = 1;
   private _causticBounds: [number, number, number, number] = [0, 0, 0, 0];
   private _compiledCausticKey = '';
-  private readonly _causticSeeds = new CausticSeedCache();
-  private _mnee = false;
+  private _transport?: ResearchPassState;
   private _lightTracing = false;
   private _sceneEnvironment = new SceneEnvironmentCache();
   private _rectLightTextures = new RectLightTextureTracker();
@@ -499,7 +498,7 @@ class WGPURayTracePass {
   getOutputBuffer() {
     return {
       color: this._outColorBuffer,
-      ...(this._photonMapping || causticDiagnostics.mneeDebugGroup >= 0 ? {wideHdr: true} : {}),
+      ...(this._photonMapping || ((this._transport?.debugGroup ?? -1) >= 0 || causticDiagnostics.debugGroup >= 0) ? {wideHdr: true} : {}),
       ...(this._lightTracing && this._causticLight?.get(this._activeTarget)
         ? {caustic: this._causticLight.get(this._activeTarget)!}
         : {}),
@@ -962,18 +961,12 @@ class WGPURayTracePass {
             hasDisplacement: this._hasDisplacement,
             hasAlpha,
             hasSceneAlpha,
-            mnee: this._mnee,
-            mneeMethod:
-              typeof causticDiagnostics.mnee === 'object' ? causticDiagnostics.mnee.method : undefined,
+            ...this._transport?.features,
             lightTracing: this._lightTracing,
             photonMapping: this._photonMapping,
             photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
-            mneeDebugGroup: causticDiagnostics.mneeDebugGroup,
-            mneeSeeds: causticDiagnostics.mneeSeeds ?? 4,
-            mneeDamping: !!causticDiagnostics.mneeDamping,
-            smsRoulette: !!causticDiagnostics.smsRoulette,
-            mneeMaxDepth: causticDiagnostics.mneeMaxDepth ?? 20,
-            workgroupSize: this._mnee ? 1 : WORKGROUP_SIZE,
+            debugGroup: causticDiagnostics.debugGroup,
+            workgroupSize: this._transport?.workgroupSize ?? WORKGROUP_SIZE,
             hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
             hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
             blasLayoutMask: this._blasLayoutMask,
@@ -1613,7 +1606,7 @@ class WGPURayTracePass {
           run: true,
           photons: 1,
           batch: Math.floor(this._rtUniform.views.sampleCount[0]),
-          mnee: this._mnee,
+          ...this._transport?.uniform,
           viewProjection: photonViewProjection,
           casterSphere: this._causticBounds,
           cameraScale: this._causticCameraScale
@@ -1640,10 +1633,10 @@ class WGPURayTracePass {
       pass.setBindGroup(idx, bindGroup);
     });
 
-    if (causticDiagnostics.captureRoots) causticDiagnostics.rootPass = this;
+    researchTransport()?.capture(this);
     pass.dispatchWorkgroups(
-      Math.ceil(dispatchWidth / (this._mnee ? 1 : WORKGROUP_SIZE)),
-      Math.ceil(dispatchHeight / (this._mnee ? 1 : WORKGROUP_SIZE)),
+      Math.ceil(dispatchWidth / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
+      Math.ceil(dispatchHeight / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
       1
     );
     pass.end();
@@ -1668,7 +1661,7 @@ class WGPURayTracePass {
           run: !!causticBatch,
           photons,
           batch: Math.floor(this._rtUniform.views.sampleCount[0]),
-          mnee: this._mnee,
+          ...this._transport?.uniform,
           resourceTable: this._bindless?.table,
           orthographic: !this._causticPerspective,
           viewProjection,
@@ -1829,12 +1822,11 @@ class WGPURayTracePass {
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
     this._causticSettings = settings;
-    const hasCaster =
-      !!(causticDiagnostics.mnee || settings?.lightTracing || settings?.photonMapping) &&
+    const transport = researchTransport()?.configure(this, 'webgpu');
+    if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
+    this._transport = transport;
+    const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
       this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
-    const mnee = !!causticDiagnostics.mnee && hasCaster;
-    if (mnee !== !!this._mnee) this._needsUpdateLightSamplingData = true;
-    this._mnee = mnee;
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
       !hasCaster ||
@@ -1847,9 +1839,10 @@ class WGPURayTracePass {
     }
     this._photonMapping = photonMapping;
     this._causticKey =
-      this._mnee || this._lightTracing || this._photonMapping
-        ? `${this._mnee}/${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.mneeDebugGroup}/${causticDiagnostics.mneeSeeds ?? 4}/${!!causticDiagnostics.mneeDamping}/${!!causticDiagnostics.smsRoulette}/${causticDiagnostics.mneeMaxDepth ?? 20}/${typeof causticDiagnostics.mnee === 'object' ? causticDiagnostics.mnee.method : 'newton'}`
+      this._transport?.enabled || this._lightTracing || this._photonMapping
+        ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${this._transport?.key ?? ''}`
         : '';
+
   }
 
   private _setEnvMap(envImage: EnvironmentSource | undefined) {
@@ -2269,27 +2262,7 @@ class WGPURayTracePass {
       this._lightSamplingScratch,
       this._shadowCatcherLightChoices
     );
-    if (this._mnee && this._preparedMeshData) {
-      const seed = this._causticSeeds.collect(
-        this._preparedMeshData.instanceBindings,
-        this._preparedMeshData.materials
-      );
-      const offset = lighting.lightData.length / 4;
-      this._constants.CAUSTIC_SEED_OFFSET = offset;
-      this._constants.CAUSTIC_SEED_COUNT = seed.count;
-      const texels = offset + seed.data.length / 4,
-        width = Math.min(Math.max(1, texels), this._device.limits.maxTextureDimension2D),
-        height = Math.ceil(texels / width);
-      const data = new Float32Array(width * height * 4);
-      data.set(lighting.lightData);
-      data.set(seed.data, offset * 4);
-      lighting.lightData = data;
-      lighting.lightWidth = width;
-      lighting.lightHeight = height;
-    } else {
-      delete this._constants.CAUSTIC_SEED_OFFSET;
-      delete this._constants.CAUSTIC_SEED_COUNT;
-    }
+    researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;

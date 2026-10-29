@@ -1,3 +1,4 @@
+import {registerMnee, mneeDiagnostics} from '../../src/research/mnee/index.js';
 import type Engine from '../../src/Engine.js';
 import type Render from '../../src/Render.js';
 import type {CausticSettings} from '../../src/Render.js';
@@ -18,7 +19,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
   render.caustics=options.settings;
   render.batchSamples=false;render.maxTiles=1;render.timeBudgetMs=1000;render.bounces=8;
   render.bevel=false;render.fallback=null;render.aovs=[];await render.setDenoiser(null);
-  d.captureRoots=true;
+  registerMnee(); mneeDiagnostics.captureRoots=true;
   await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:17});
   const results=[];
   if (options.denoise && !options.countersOnly) {
@@ -63,7 +64,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     await new Promise(r=>setTimeout(r,0));await render._output!.flushDiagnostics();
     if(render.samples>before){const t=engine.getDiagnostics()?.gpuTraceTiming;if(t)timings.push({...t});}
   }
-  const pass=d.rootPass as any;
+  const pass=mneeDiagnostics.rootPass as any;
   const memory=pass?._photonMap?.bytes(pass._activeTarget)??0;
   const batch=pass?._photonMap?.get(pass._activeTarget);
   const profile={samples:render.samples,timings,memory,emitted:batch?.count,buckets:batch?.buckets,diagnostics:engine.getDiagnostics()};
@@ -76,7 +77,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     const deepReads:number[]=[],deepPassed:number[]=[],rows=[];
     // Transmission paths may shade more than bounces events; PM accepts depths 0–20.
     for(const group of options.counterGroups??[50,...Array.from({length:21},(_,i)=>51+i)]){
-      d.mneeDebugGroup=group;
+      d.debugGroup=group;
       render.restart();
       await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:80});
       const hdr=await render.readPixels('hdr');const reads:number[]=[],passed:number[]=[];let queryCount=0,totalReads=0,totalPassed=0;
@@ -86,7 +87,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     }
     rows.push({group:99,read:stats(deepReads),passed:stats(deepPassed)});
     await save(options.name+'-queries.json',JSON.stringify(rows,null,2));
-    d.mneeDebugGroup=-1;
+    d.debugGroup=-1;
   }
   d.photonDebugBatch=undefined;
   if(errors.length)throw Error(errors.join('\n'));

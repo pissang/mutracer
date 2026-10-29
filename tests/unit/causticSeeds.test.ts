@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {CausticSeedCache} from '../../src/renderer/causticSeeds';
+import {CausticSeedCache} from '../../src/research/mnee/seeds';
 import {Mesh,OpenPBRMaterial,createPlaneGeometry} from '../../src/main';
 it('samples only caster area and refreshes transforms and material membership',()=>{
  const cache=new CausticSeedCache(),glass=new OpenPBRMaterial({transmissionWeight:1,specularRoughness:0}),diffuse=new OpenPBRMaterial();

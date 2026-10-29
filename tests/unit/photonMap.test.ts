@@ -26,7 +26,7 @@ it('caps dual-index allocations to the budget and dispatches their second row',a
  const batch=map.ensure(target,5_000_000);expect(batch.count).toBeGreaterThan(4_194_240);expect(batch.count).toBeLessThan(5_000_000);expect(map.bytes(target)).toBeLessThanOrEqual(128*1024*1024);
  expect(batch.data.width*batch.data.height).toBeGreaterThanOrEqual(batch.count);
  const encoder={clearBuffer(){},beginComputePass(){return {setPipeline(){},setBindGroup(){},dispatchWorkgroups(...args:number[]){dispatches.push(args);},end(){}};}} as unknown as GPUCommandEncoder;
- map.encode(encoder,[],target,.05,{width:1,height:1,photons:5_000_000,batch:0,mnee:false,clear:true,run:true,viewProjection:new Float32Array(16),casterSphere:[0,0,0,1],cameraScale:1});
+ map.encode(encoder,[],target,.05,{width:1,height:1,photons:5_000_000,batch:0,clear:true,run:true,viewProjection:new Float32Array(16),casterSphere:[0,0,0,1],cameraScale:1});
  expect(dispatches).toEqual([[65535,2],[1024,2],[1,2],[65535,2]]);
  const capped=map.ensure({},100_000_000);expect(capped.count).toBeLessThan(5_000_000);
  map.dispose();

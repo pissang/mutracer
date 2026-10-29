@@ -1,3 +1,4 @@
+import {registerMnee, mneeDiagnostics} from '../../src/research/mnee/index.js';
 import type Engine from '../../src/Engine.js';
 import type Render from '../../src/Render.js';
 import type {CausticSettings} from '../../src/Render.js';
@@ -21,7 +22,7 @@ export async function measure(engine: Engine, render: Render, options: StudyOpti
   const gpuErrors:string[]=[];
   const onGPUError=(event:Event)=>gpuErrors.push((event as GPUUncapturedErrorEvent).error.message);
   engine.device?.addEventListener('uncapturederror',onGPUError);
-  causticDiagnostics.mnee = false;
+  registerMnee(); mneeDiagnostics.mnee = false;
   render.caustics = options.settings;
   render.batchSamples = false;
   render.maxTiles = 1;
@@ -35,7 +36,7 @@ export async function measure(engine: Engine, render: Render, options: StudyOpti
   });
   const results = [];
   const audit:any[]=[];
-  const pass=causticDiagnostics.rootPass as any;
+  const pass=mneeDiagnostics.rootPass as any;
   if((window as any).photonAudit&&pass){
     pass.__originalCreatePass??=pass.createPass;
     pass.createPass=function(...args:any[]){audit.push({sample:this._rtUniform.views.sampleCount[0],light:this._lightTracing,photon:this._photonMapping,width:this._width,height:this._height});return this.__originalCreatePass(...args);};

@@ -22,7 +22,7 @@ try {
  if(process.env.CAUSTIC_BENCHMARK)await page.tab.evaluate('window.causticBenchmark=true');
  if(process.env.CASTER_DISTRIBUTION)await page.tab.evaluate(`import('/src/renderer/causticDiagnostics.ts').then(m=>{m.causticDiagnostics.capturePhotons=true;m.causticDiagnostics.aggregateCasters=${process.env.CASTER_DISTRIBUTION==='union'};})`);
  if(process.env.WIDTH&&process.env.HEIGHT)await page.tab.evaluate(`window.causticSize=[${Number(process.env.WIDTH)},${Number(process.env.HEIGHT)}]`);
- if(process.env.MNEE_DEBUG_GROUP!==undefined)await page.tab.evaluate(`import('/src/renderer/causticDiagnostics.ts').then(m=>m.causticDiagnostics.mneeDebugGroup=${Number(process.env.MNEE_DEBUG_GROUP)})`);
+ if(process.env.MNEE_DEBUG_GROUP!==undefined)await page.tab.evaluate(`import('/src/research/mnee/index.ts').then(m=>{m.registerMnee();m.mneeDiagnostics.mneeDebugGroup=${Number(process.env.MNEE_DEBUG_GROUP)};})`);
  if(backend==='webgpu') {
  const resolved=await page.tab.evaluate('window.causticsResolveContract()');
  writeFileSync(resolve(directory,'resolve-contract.json'),JSON.stringify(resolved,null,2));
