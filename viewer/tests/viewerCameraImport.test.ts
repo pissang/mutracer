@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadedModel } from '../src/engine/loadModel';
+import {readURLSettings} from '../src/urlSettings';
 import type { CachedModel } from '../src/engine/modelCache';
 
 vi.hoisted(() => {
@@ -27,7 +28,7 @@ import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } 
 function engine() {
   const viewer = Object.create(ViewerEngine.prototype);
   Object.assign(viewer, {
-    loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
+    initialURLSettings: readURLSettings(), loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
     modelGroup: new THREE.Group(), hiddenAtLoad: new Set(), ground: new THREE.Mesh(),
     canvas: { clientWidth: 800, clientHeight: 600 }, needsResize: false,
     perspectiveCamera: new THREE.PerspectiveCamera(35, 4 / 3),
@@ -59,6 +60,7 @@ function model(count: number): LoadedModel {
 }
 
 beforeEach(() => {
+  Object.assign(location,{search:'',hash:''});
   useViewer.setState({ settings: { ...DEFAULT_SETTINGS }, toast: null, cameras: [] });
 });
 
@@ -300,4 +302,40 @@ describe('imported camera choice', () => {
     expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
+});
+
+describe('initial link and preset precedence',()=>{
+ it.each([false,true])('keeps explicit incoming values on initial and refreshed loads (cached=%s)',async restored=>{
+  Object.assign(location,{search:'?causticLightTracing=true',hash:'#caustics=false&causticLightTracing=false&causticPhotonMapping=false&groundShadow=true&maxSamples=128&bounces=12&denoise=false&denoiseModel=small'});
+  const viewer=engine(),url=readURLSettings();
+  setSettings(url);
+  const meta={presetId:'research-cornell-caustic',credit:null,sourceUrl:null};
+  const data=model(1);
+  await viewer.load('Cornell',async()=>data,meta,restored?{id:'preset:research-cornell-caustic',meta:{name:'Cornell',...meta}}:undefined);
+  expect(useViewer.getState().settings).toMatchObject(url);
+  // A second engine represents refreshing the normalized share link.
+  const refreshed=engine();setSettings({...DEFAULT_SETTINGS,...readURLSettings()});
+  await refreshed.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject(url);
+ });
+ it('consumes initial overrides so switching models still resets Cornell caustics',async()=>{
+  Object.assign(location,{hash:'#caustics=true&causticLightTracing=false&causticPhotonMapping=true'});
+  const viewer=engine();setSettings(readURLSettings());
+  const meta={presetId:'research-cornell-caustic',credit:null,sourceUrl:null};
+  await viewer.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:false,causticPhotonMapping:true});
+  await viewer.load('Spheres',async()=>model(0),{...meta,presetId:'spheres'});
+  expect(useViewer.getState().settings).toMatchObject({caustics:false,causticLightTracing:true,causticPhotonMapping:false});
+  await viewer.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:true,causticPhotonMapping:true});
+ });
+ it('keeps incoming authored-lighting overrides on a fresh initial load only',async()=>{
+  Object.assign(location,{hash:'#lighting=studio&envId=sky&envIntensity=2&envRotation=35'});
+  const viewer=engine(),data=model(0);data.lighting={available:true,environment:null,warnings:[]};
+  await viewer.loadModel(data);
+  expect(useViewer.getState().settings).toMatchObject({lighting:'studio',envId:'sky',envIntensity:2,envRotation:35});
+  const replacement=model(0);replacement.lighting=data.lighting;
+  await viewer.loadModel(replacement);
+  expect(useViewer.getState().settings).toMatchObject({lighting:'environment',envId:'model',envIntensity:1,envRotation:0});
+ });
 });

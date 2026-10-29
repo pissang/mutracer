@@ -5,12 +5,17 @@ type PresetFields=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|
  * Cornell Caustic turns on light tracing and photon mapping. Other fresh preset loads restore the defaults so a
  * scene-specific choice does not carry over; restored loads keep stored and URL settings.
  */
-export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields):Partial<PresetFields>|undefined {
+export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields,url:Partial<PresetFields>={}):Partial<PresetFields>|undefined {
  const fresh=presetId!==null&&!restored;
  const patch:Partial<PresetFields>={
   ...(research?{groundShadow:false}:fresh?{groundShadow:defaults.groundShadow}:{}),
   ...(presetId==='research-cornell-caustic'?{caustics:true,causticLightTracing:true,causticPhotonMapping:true}
    :fresh?{caustics:defaults.caustics,causticLightTracing:defaults.causticLightTracing,causticPhotonMapping:defaults.causticPhotonMapping}:{})
  };
+ // Only an incoming URL may override a preset. The caller consumes it after
+ // the initial load, so switching away still restores the usual scene defaults.
+ for(const key of Object.keys(patch) as (keyof PresetFields)[]) {
+  if(url[key]!==undefined)patch[key]=url[key];
+ }
  return Object.keys(patch).length?patch:undefined;
 }

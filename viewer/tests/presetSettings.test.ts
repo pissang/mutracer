@@ -11,3 +11,8 @@ it('keeps research and Cornell settings to their own built-in scenes',()=>{
  expect(presetSettings('spheres',false,true,defaults)).toBeUndefined();
  expect(presetSettings(null,false,false,defaults)).toBeUndefined();
 });
+
+it('gives only explicit valid link fields precedence over scene defaults',()=>{
+ expect(presetSettings('research-cornell-caustic',true,false,defaults,{caustics:false,causticLightTracing:false}))
+  .toEqual({groundShadow:false,caustics:false,causticLightTracing:false,causticPhotonMapping:true});
+});

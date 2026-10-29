@@ -48,8 +48,7 @@ export interface ExportOptions {
 const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
-const INITIAL_LIGHTING = Object.fromEntries(Object.entries(readURLSettings())
-  .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key)));
+
 
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
@@ -110,6 +109,9 @@ export class ViewerEngine {
   private needsResize = true;
   private loadToken = 0;
   private modelId: string | null = null;
+  // Capture the incoming link before writeHash normalizes it or model loading
+  // applies defaults. Consume once; later model selections retain their resets.
+  private initialURLSettings: Partial<Settings> | undefined = readURLSettings();
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
   private envAbort?: AbortController;
@@ -332,17 +334,19 @@ export class ViewerEngine {
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
-    const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS);
+    const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings);
     if (presetPatch) setSettings(presetPatch, { record: false });
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
-        ...(restored ? INITIAL_LIGHTING : {}) } });
+        ...Object.fromEntries(Object.entries(this.initialURLSettings ?? {})
+          .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key))) } });
       // A pending custom HDRI can exist even when the selection was already 'model'.
       if (get().settings.envId === 'model') this.cancelEnvironmentDownload();
     } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
       set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
     }
+    this.initialURLSettings = undefined;
     this.modelId = id;
     this.materials.modelId = id;
     if (!edits) void clearMaterialEdits();
