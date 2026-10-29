@@ -810,6 +810,19 @@ class WGPURayTracePass {
     });
   }
 
+  private _preparePhotonTarget() {
+    if (!this._photonMapping) return;
+    this._photonMap ??= new WGPUPhotonMap(this._device);
+    const before = this._photonMap.get(this._activeTarget)?.data;
+    const requested = this._causticSettings?.photonMapping;
+    const n = typeof requested === 'object' ? requested.photonsPerSample : undefined;
+    const after = this._photonMap.ensure(
+      this._activeTarget,
+      Number.isFinite(n) && n! > 0 ? n! : (this._width * this._height) / 4
+    );
+    if (before !== after.data) this._needsUpdateBindGroups = true;
+  }
+
   async updatePipeline() {
     if (this._isCompilingShader) {
       return;
@@ -840,18 +853,9 @@ class WGPURayTracePass {
 
       this._setCaustics(this._causticSettings);
       if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._meshes);
-      if (this._photonMapping) {
-        this._photonMap ??= new WGPUPhotonMap(this._device);
-        const before = this._photonMap.get(this._activeTarget)?.data;
-        const requested = this._causticSettings?.photonMapping;
-        const n = typeof requested === 'object' ? requested.photonsPerSample : undefined;
-        const after = this._photonMap.ensure(
-          this._activeTarget,
-          Number.isFinite(n) && n! > 0 ? n! : (this._width * this._height) / 4
-        );
-        if (before !== after.data) this._needsUpdateBindGroups = true;
-      }
+      this._preparePhotonTarget();
       const device = this._device;
+      const causticKey = this._causticKey;
       const pipelineInputs = JSON.stringify([
         this._constants,
         this._hasDisplacement,
@@ -997,9 +1001,12 @@ class WGPURayTracePass {
           let layoutScopeOpen = true;
           try {
             this._createPipelineLayout();
+            const layout = this._rayTracePipelineLayout;
             const layoutError = await device.popErrorScope();
             layoutScopeOpen = false;
             if (layoutError) throw layoutError;
+            // A quality edit can invalidate the layout while validation waits.
+            if (layout !== this._rayTracePipelineLayout || causticKey !== this._causticKey) return;
           } catch (error) {
             const scopedError = layoutScopeOpen ? await device.popErrorScope().catch(() => null) : null;
             this._rayTracePipelineLayout = undefined;
@@ -1015,6 +1022,8 @@ class WGPURayTracePass {
         this._prevDefinesCode = defineCode;
         this._needsUpdateBindGroups = true;
 
+        const layout = this._rayTracePipelineLayout!;
+        const module = this._computeShaderModule!;
         device.pushErrorScope('validation');
         let pipelineScopeOpen = true;
         try {
@@ -1060,9 +1069,9 @@ class WGPURayTracePass {
           try {
             rayTracePipeline = await this._shaderCache.createComputePipelineAsync({
               label: 'Ray Trace',
-              layout: this._rayTracePipelineLayout!,
+              layout,
               compute: {
-                module: this._computeShaderModule!,
+                module,
                 entryPoint: 'main',
                 constants: pipelineConstants
               }
@@ -1074,7 +1083,7 @@ class WGPURayTracePass {
             // Pipeline creation already reports WGSL failures. Pull the much
             // heavier module diagnostics only on that failure path so normal
             // startup does not schedule a second full-module inspection.
-            const info = await this._computeShaderModule!.getCompilationInfo().catch(() => undefined);
+            const info = await module.getCompilationInfo().catch(() => undefined);
             const shaderErrors = (info?.messages ?? []).filter((message) => message.type === 'error');
             if (shaderErrors.length) {
               throw new Error(
@@ -1088,11 +1097,13 @@ class WGPURayTracePass {
             diagnostic.endedAtMs = shaderCompilationNow() - pipelineCompilationStartedAt;
             diagnostic.durationMs = diagnostic.endedAtMs;
           }
-          this._rayTracePipeline = rayTracePipeline;
-          this._depthCompute = {module: this._computeShaderModule!, constants: pipelineConstants};
           const pipelineError = await device.popErrorScope();
           pipelineScopeOpen = false;
           if (pipelineError) throw pipelineError;
+          if (layout !== this._rayTracePipelineLayout || module !== this._computeShaderModule ||
+            causticKey !== this._causticKey) return;
+          this._rayTracePipeline = rayTracePipeline;
+          this._depthCompute = {module, constants: pipelineConstants};
           const compilationCompletedAt = shaderCompilationNow();
           this._shaderCompilationDiagnostics = {
             ...this._shaderCompilationDiagnostics!,
@@ -1136,6 +1147,9 @@ class WGPURayTracePass {
       // Compilation can complete after Engine disposal/device loss has released
       // the material table and its textures. Never bind that retired generation.
       if (this._disposed) return;
+      // Target activation can change during compilation. Allocate for the target
+      // being bound now, rather than the one active before the asynchronous work.
+      this._preparePhotonTarget();
       // TODO rebind when lights, materials, bvh changed.
       if (this._needsUpdateBindGroups) {
         this._needsUpdateBindGroups = false;

@@ -10,6 +10,7 @@ import MaterialTable from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import {createPlaneGeometry} from '../../src/util/commonGeometry';
+import Mesh from '../../src/scene/Mesh';
 
 const texture = () => new Texture({width: 1, height: 1, data: new Uint8Array([128, 128, 128, 128])});
 function materialCapabilities(materials: OpenPBRMaterial[]) {
@@ -87,10 +88,83 @@ function pipelinePass() {
     _rayTracePipelineLayout: {}, _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
     _bevelSamples: 8, _hasDisplacement: false,
     _updateBindGroups: vi.fn(() => {pass._rayTraceBindGroups = [];})});
-  return {pass, compile};
+  return {pass, compile, device};
 }
 
 describe('retained WebGPU pipeline capabilities', () => {
+  function photonPass() {
+    const fixture = pipelinePass();
+    const {pass, compile} = fixture;
+    const targets = new Map<object, {data: object}>();
+    const ensure = vi.fn((target: object) => {
+      if (!targets.has(target)) targets.set(target, {data: {}});
+      return targets.get(target)!;
+    });
+    Object.assign(pass, {
+      _meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0}))],
+      _analyticLights: [], _emissiveTriangles: [], _targetOutputs: new Map(),
+      _width: 16, _height: 16,
+      _photonMap: {get: (target: object) => targets.get(target), ensure,
+        emission: {setDistribution() {}, prepare: async () => {}}},
+      _createPipelineLayout: vi.fn(() => {pass._rayTracePipelineLayout = {};})
+    });
+    compile.mockImplementation(async () => ({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline));
+    const quality = (enabled: boolean) => pass.setQuality({bounces: 3, bevel: false,
+      dispersionWavelengths: 1, directLightCandidates: 4,
+      caustics: enabled ? {photonMapping: true} : undefined});
+    quality(true);
+    pass.useTarget({});
+    return {...fixture, targets, ensure, quality};
+  }
+
+  it('prepares photon resources for the target activated during compilation', async () => {
+    const {pass, compile, targets, ensure} = photonPass();
+    let finish!: (pipeline: GPUComputePipeline) => void;
+    compile.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    pass._updateBindGroups.mockImplementation(() => {
+      expect(targets.get(pass._activeTarget)?.data).toBeDefined();
+      pass._rayTraceBindGroups = [];
+    });
+    const pending = pass.updatePipeline();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(1));
+    const target = {};
+    pass.useTarget(target);
+    finish({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline);
+    await pending;
+    expect(pass.getPipelineError()).toBeUndefined();
+    expect(ensure).toHaveBeenLastCalledWith(target, 64);
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['layout validation', 'pipeline compilation'] as const)(
+    'recovers when caustics are toggled during %s', async (stage) => {
+      const {pass, device, compile, quality} = photonPass();
+      let finish!: () => void;
+      if (stage === 'layout validation') {
+        vi.spyOn(device, 'popErrorScope').mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => resolve(null);
+        }));
+      } else {
+        compile.mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => resolve({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline);
+        }));
+      }
+      const pending = pass.updatePipeline();
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      quality(false);
+      finish();
+      await pending;
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass._updateBindGroups).not.toHaveBeenCalled();
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeUndefined();
+      quality(true);
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass._rayTracePipeline).toBeDefined();
+    }
+  );
+
   it('skips steady capability lookup but still updates dirty resource bindings', async () => {
     const {pass, compile} = pipelinePass();
     const find = vi.spyOn(pass._shaderCapabilities, 'find');
