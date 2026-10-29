@@ -172,10 +172,10 @@ describe('independent Render', () => {
   it('exposes GPU sample timing only for a current, live render', () => {
     const {engine, camera, targets} = renderFixture(); const render = new Render(engine);
     expect(render.gpuSampleTimeMs).toBeUndefined(); render.refine();
-    Object.assign(targets[0], {getRealtimeSampleTime: () => 2}); expect(render.gpuSampleTimeMs).toBe(2);
-    camera.position = [1, 0, 0]; engine.update(); expect(render.gpuSampleTimeMs).toBeUndefined();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, getRealtimeTileTime: () => .5}); expect(render.gpuSampleTimeMs).toBe(2); expect(render.gpuTileTimeMs).toBe(.5);
+    camera.position = [1, 0, 0]; engine.update(); expect(render.gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined();
     render.refine(); expect(render.gpuSampleTimeMs).toBe(2);
-    render.dispose(); expect(render.gpuSampleTimeMs).toBeUndefined(); engine.dispose();
+    render.dispose(); expect(render.gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined(); engine.dispose();
   });
   it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
@@ -239,6 +239,7 @@ describe('converge selects one render', () => {
     const {engine, camera, targets, operations} = renderFixture(); const a = new Render(engine), b = new Render(engine);
     b.refine(); const exportCamera = camera.clone(); exportCamera.position = [8, 1, 2];
     const pending = a.converge({samples: 4, camera: exportCamera, sampleSequenceOffset: 19}); exportCamera.position = [9, 9, 9];
+    expect(await a.whenReadyToRefine()).toBe(false);
     expect(() => a.refine()).toThrow('converge'); b.refine();
     const result = await pending; expect(result.samples).toBe(4); expect(a.samples).toBe(4); expect(b.samples).toBe(2);
     expect(engine.camera).toBe(camera); expect(camera.position).toEqual([0, 0, 0]);

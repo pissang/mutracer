@@ -15,7 +15,7 @@ describe('copyable progressive loop example', () => {
     const frames: ((timestamp: number) => void)[] = [];
     const document = {hidden: false}; let now = 0;
     let queued = true, calls = 0;
-    Object.assign(targets[0], {getRealtimeSampleTime: () => 120,
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 120, getRealtimeTileTime: () => 20,
       whenTraceAvailable: async () => {
         calls++;
         if (reason === 'input') listeners.get('pointerdown')!();

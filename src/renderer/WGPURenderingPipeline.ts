@@ -1582,6 +1582,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     setRealtimeBatchBudget(milliseconds) { realtimeBatchBudgetMs = milliseconds; },
     setRealtimeDeferPostProcess(defer) { realtimeDeferPostProcess = defer; },
     getRealtimeSampleTime() { return lastGpuTraceTiming?.estimatedFullFrameTimeMs; },
+    getRealtimeTileTime() { return lastGpuTraceTiming?.tileTimePerSampleMs; },
     whenTraceAvailable() { return traceQueue.whenAvailable(); },
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },

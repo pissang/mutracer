@@ -868,12 +868,16 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         let mut settings = render.settings().unwrap();
         settings.time_budget_ms = render.gpu_sample_time_ms().unwrap() * 21. / ms.as_f64().unwrap();
         render.set_settings(settings).unwrap();
-        assert!(
+        assert_eq!(
             render_loop.needs_refill(),
-            "backend queue limits permit refilling expensive samples"
+            ms.as_f64().unwrap() <= 21.,
+            "an individual native sample must fit the input latency budget"
         );
     }
 
+    let mut settings = render_loop.final_render().settings().unwrap();
+    settings.time_budget_ms = 1.;
+    render_loop.final_render().set_settings(settings).unwrap();
     let samples = render_loop.samples();
     let presentations = render_loop.presentations();
     let sync_updates = updates.load(std::sync::atomic::Ordering::Relaxed);

@@ -96,7 +96,9 @@ idles for most of each frame. With `batchSamples`, sampling works on two levels:
 - **Between frames.** RenderLoop also refines its final render each time the GPU
   finishes queued work, until the next display frame. It keeps about 4 ms of work
   queued, or one sample or tile if that is longer. Expensive tiled samples can
-  continue between display frames; presentation still follows the display frame rate.
+  continue between display frames when each measured tile fits `timeBudgetMs`;
+  longer tiles wait for display frames to bound input delay. Presentation still
+  follows the display frame rate.
 
 Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
@@ -120,7 +122,8 @@ async function refill(generation, deadline, input) {
   const canContinue = () => generation === frameGeneration && !document.hidden &&
     performance.now() < deadline && input === inputRevision &&
     engine.display.channel === 'final' && render.batchSamples && render.status === 'converging' &&
-    !render.denoising && render.samples > 0 && render.gpuSampleTimeMs !== undefined;
+    !render.denoising && render.samples > 0 && render.gpuTileTimeMs !== undefined &&
+    render.gpuTileTimeMs <= render.timeBudgetMs;
   while (canContinue() && await render.whenReadyToRefine()) {
     // Input or a new frame may arrive during the GPU wait.
     if (!canContinue()) break;

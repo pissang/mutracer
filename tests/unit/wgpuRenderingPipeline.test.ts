@@ -161,6 +161,7 @@ describe('WebGPU realtime sampling', () => {
     for (let i = 0; i < 4; i++) {pipeline.trace(camera, 128); await pipeline.flushDiagnostics();}
     const timing = pipeline.getDiagnostics().gpuTraceTiming!;
     expect(timing.tileCount).toBeGreaterThan(1);
+    expect(pipeline.getRealtimeTileTime!()).toBe(timing.tileTimePerSampleMs);
     expect(pipeline.getRealtimeSampleTime!()).toBe(timing.estimatedFullFrameTimeMs);
     expect(timing.estimatedFullFrameTimeMs).toBe(timing.tileTimeMs * timing.tileCount);
     pipeline.manager.dispose();

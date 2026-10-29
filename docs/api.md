@@ -162,6 +162,7 @@ or alpha, plus its existing early depth termination.
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
 | `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms, extrapolated from tile GPU time when tiled; undefined without timestamps, for stale inputs or during converge |
+| `gpuTileTimeMs` | Latest WebGPU beauty tile estimate in ms, including amortized caustic work; equal to `gpuSampleTimeMs` without tiling; undefined without timestamps, for stale inputs or during converge |
 | `whenReadyToRefine()` | Wait for WebGPU sampling capacity and return `true` if sampling was queued; return `false` immediately with no sampling, on WebGL, or for only denoising, display or offline convergence work; submits no work; throws after disposal |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |

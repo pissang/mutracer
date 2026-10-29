@@ -361,6 +361,8 @@ export default class Render {
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuTileTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeTileTime?.() : undefined; }
   /** Waits for the next release of WebGPU sampling queue capacity and returns true
    * when sampling was queued. Returns false immediately with no queued sampling,
    * on WebGL, or for only denoising, display or offline convergence work.

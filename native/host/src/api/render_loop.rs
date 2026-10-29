@@ -853,7 +853,9 @@ impl RenderLoop {
         let render = &self.final_render;
         render.settings().is_ok_and(|s| {
             (s.batch_samples || s.allow_multiple_samples_per_frame)
-                && render.gpu_sample_time_ms().is_some()
+                && render
+                    .gpu_sample_time_ms()
+                    .is_some_and(|ms| ms <= s.time_budget_ms)
         }) && render.refill_ready()
             && !render.denoising()
             && render.samples() > 0

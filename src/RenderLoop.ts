@@ -205,11 +205,11 @@ export default class RenderLoop {
     wait();
   }
   private _canRefill(): boolean {
-    const time = this.final.gpuSampleTimeMs;
+    const time = this.final.gpuTileTimeMs;
     return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
       // The backend limits queued work. A long sample can still refill one tile
       // on GPU completion without waiting for the next presentation frame.
-      this.final.status === 'converging' && time !== undefined;
+      this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
