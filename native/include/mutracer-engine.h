@@ -328,7 +328,9 @@ typedef enum mt_alpha_blend_strategy {
 typedef struct mt_render_options {
   uint32_t struct_size;
   uint32_t max_samples; /* 1..16384. Default 2048. */
-  uint32_t bounces; /* Clamped to 1..20. Default 3. */
+  /* Scattering depth, clamped to 1..20. Default 3. Complete caustic
+   * light-to-camera paths can be longer than this depth. */
+  uint32_t bounces;
   uint32_t sampling_pattern; /* mt_sampling_pattern. Default MT_SAMPLING_SOBOL. */
   uint32_t direct_light_candidates; /* Clamped to 1..16. Default 4. */
   uint32_t bevel; /* Rounded material edges. Default 1. */

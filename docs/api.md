@@ -145,12 +145,12 @@ other sequences retain their completed samples.
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
 `bounces` is rounded and clamped to [1, 20] in both backends; NaN becomes 1.
-The path loop allows at most `min(bounces * 3, 20)` events, including transmission,
-alpha skips and escape checks. Opaque paths also have their own scattering-depth
-termination. This event budget can truncate deep transparent paths even when
-the requested scattering depth is larger. Intel Mac WebGL retains its driver
-workaround: `min(bounces, 3)` loop events, doubled for scenes with transmission
-or alpha, plus its existing early depth termination.
+Paths allow at most `min(bounces * 3, 20)` events, including transmission,
+alpha skips and escape checks. Opaque paths also terminate at their scattering
+limit. The event budget can truncate deep transparent paths before the requested
+scattering depth. On Intel Mac WebGL, the event limit is `min(bounces, 3)`, doubled
+for scenes with transmission or alpha, with earlier scattering termination.
+See [caustic path-length limits](./caustics.md#limits) when comparing renderers.
 
 | Method / property | Meaning |
 | --- | --- |

@@ -53,6 +53,9 @@ perspective and orthographic cameras, depth of field and dispersion. Photon
 mapping adds caustics throughout the allowed camera path. Volume scattering
 events and shadow catchers remain with ordinary path tracing.
 
+Complete caustic light-to-camera paths can be longer than `bounces`. Align total
+path-length limits when comparing radiance with another renderer.
+
 Photon mapping starts with a blurred density estimate and decreases its radius
 as samples accumulate. A small initial radius can be noisy; a large one can blur
 nearby surfaces and details. Distant smooth casters enlarge the automatic

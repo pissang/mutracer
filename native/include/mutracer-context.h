@@ -100,7 +100,8 @@ int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length
  * or MT_SAMPLING_RANDOM. max_samples configures the
  * sequence; render still allows total 1..16384 samples. seed is any u32.
  * bounces clamp to 1..20, direct-light candidates to 1..16 and bevel samples to
- * 1..32. clamping must be finite; 0 disables it. Transmissive alpha must be
+ * 1..32. Complete caustic light-to-camera paths can exceed bounces.
+ * clamping must be finite; 0 disables it. Transmissive alpha must be
  * finite. Scene quality flags still select bevel and dispersion.
  * sample_sequence_offset selects the first sequence index. struct_size must be
  * sizeof(mt_render_settings).

@@ -90,6 +90,7 @@ pub struct RenderSettings {
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
     /// Maximum scattering depth, clamped to 1–20. Default 3.
+    /// Complete caustic light-to-camera paths can be longer than this depth.
     pub bounces: u32,
     /// Per-sample radiance clamp; 0 disables it. Default 0.
     pub clamping: f64,
