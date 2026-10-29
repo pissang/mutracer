@@ -1,9 +1,19 @@
 export const PHOTON_BYTES = 20;
-export const PHOTON_GRID_SIZE = 65536;
+export const PHOTON_GRID_SIZE = 262144;
 export const PHOTON_SCAN_BLOCK = 256;
 /** Power-of-two hash capacity, bounded independently of large photon batches. */
 export function photonBucketCount(photons: number) {
   return Math.min(PHOTON_GRID_SIZE, 2 ** Math.ceil(Math.log2(Math.max(256, photons * 2))));
+}
+/** Shared texture address contract; payload is stored once, indices twice. */
+export function photonLayout(count: number) {
+  const buckets = photonBucketCount(count);
+  const coarseHeaders = 8;
+  const fineHeaders = coarseHeaders + buckets * 2;
+  const coarseIndices = fineHeaders + buckets * 2;
+  const fineIndices = coarseIndices + count;
+  const directions = fineIndices + count;
+  return {buckets, coarseHeaders, fineHeaders, coarseIndices, fineIndices, directions, texels: directions + count};
 }
 /** Batch-local hash buckets: count, two-level parallel prefix sum, then parallel scatter. */
 export const photonGridCompute = /* wgsl */ `
@@ -19,7 +29,7 @@ export const photonGridCompute = /* wgsl */ `
     screenPixels: f32,
     skipQuery: f32,
     buckets: u32,
-    padding0: u32,
+    fineRadius: f32,
     padding1: u32,
     padding2: u32,
   }
@@ -31,8 +41,13 @@ export const photonGridCompute = /* wgsl */ `
     let p=bitcast<vec3u>(cell);
     return ((p.x*73856093u)^(p.y*19349663u)^(p.z*83492791u))&(parameters.buckets-1u);
   }
-  fn hashPhoton(p:vec3f)->u32 {
-    return hashCell(vec3i(floor(p/(2.0*parameters.radius))));
+  fn hashPhoton(p:vec3f,layer:u32)->u32 {
+    let radius=select(parameters.radius,parameters.fineRadius,layer==1u);
+    let cellSize=select(radius,2.0*radius,layer==1u);
+    return hashCell(vec3i(floor(p/cellSize)));
+  }
+  fn gridStart(layer:u32)->u32 {
+    return layer*(parameters.buckets+parameters.buckets/256u);
   }
   fn storeIndex(i:u32,value:u32) {
     let width=textureDimensions(headers).x;
@@ -54,9 +69,11 @@ export const photonGridCompute = /* wgsl */ `
     if(photonRecord(index).w==0u) {
       return;
     }
-    atomicAdd(&grid[hashPhoton(photonPosition(index))].count,1u);
+    for(var layer=0u;layer<2u;layer++) {
+      atomicAdd(&grid[gridStart(layer)+hashPhoton(photonPosition(index),layer)].count,1u);
+    }
   }
-  // Each block scans 256 buckets. A second workgroup scans at most 256 totals.
+  // Each block scans 256 buckets; the next workgroup scans chunks of block totals.
   var<workgroup> scan:array<u32,256>;
   fn inclusiveScan(local:u32,value:u32)->u32 {
     scan[local]=value;
@@ -74,51 +91,56 @@ export const photonGridCompute = /* wgsl */ `
   }
   @compute @workgroup_size(256)
   fn scanBlocks(@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3u) {
-    let index=group.x*256u+local;
+    let index=gridStart(group.y)+group.x*256u+local;
     let count=atomicLoad(&grid[index].count);
     let prefix=inclusiveScan(local,count);
     grid[index].offset=prefix-count;
     if(local==255u) {
-      atomicStore(&grid[parameters.buckets+group.x].count,prefix);
+      atomicStore(&grid[gridStart(group.y)+parameters.buckets+group.x].count,prefix);
     }
   }
   @compute @workgroup_size(256)
-  fn scanSums(@builtin(local_invocation_index)local:u32) {
+  fn scanSums(@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3u) {
     let blocks=parameters.buckets/256u;
+    let chunk=(blocks+255u)/256u;
+    let first=local*chunk;
+    let start=gridStart(group.y)+parameters.buckets;
     var count=0u;
-    if(local<blocks) {
-      count=atomicLoad(&grid[parameters.buckets+local].count);
+    for(var i=first;i<min(first+chunk,blocks);i++) {
+      count+=atomicLoad(&grid[start+i].count);
     }
     let prefix=inclusiveScan(local,count);
-    if(local<blocks) {
-      grid[parameters.buckets+local].offset=prefix-count;
+    var offset=prefix-count;
+    for(var i=first;i<min(first+chunk,blocks);i++) {
+      grid[start+i].offset=offset;
+      offset+=atomicLoad(&grid[start+i].count);
     }
-    if(local==255u) {
+    if(local==255u&&group.y==0u) {
       storeIndex(0u,bitcast<u32>(parameters.radius));
       storeIndex(1u,prefix);
       storeIndex(2u,bitcast<u32>(parameters.screenPixels));
       storeIndex(3u,bitcast<u32>(parameters.skipQuery));
       storeIndex(4u,parameters.count);
       storeIndex(5u,parameters.buckets);
+      storeIndex(6u,bitcast<u32>(parameters.fineRadius));
     }
   }
   @compute @workgroup_size(64)
   fn scatter(@builtin(global_invocation_id)id:vec3u) {
     let invocation=id.x+id.y*4194240u;
-    if(invocation<parameters.buckets) {
-      let offset=grid[invocation].offset+grid[parameters.buckets+invocation/256u].offset;
-      storeIndex(8u+invocation*2u,offset);
-      storeIndex(9u+invocation*2u,atomicLoad(&grid[invocation].count));
+    for(var layer=0u;layer<2u;layer++) {
+      let start=gridStart(layer);
+      if(invocation<parameters.buckets) {
+        let offset=grid[start+invocation].offset+grid[start+parameters.buckets+invocation/256u].offset;
+        storeIndex(8u+layer*parameters.buckets*2u+invocation*2u,offset);
+        storeIndex(9u+layer*parameters.buckets*2u+invocation*2u,atomicLoad(&grid[start+invocation].count));
+      }
+      if(invocation<parameters.count&&photonRecord(invocation).w!=0u) {
+        let bucket=hashPhoton(photonPosition(invocation),layer);
+        let index=grid[start+bucket].offset+grid[start+parameters.buckets+bucket/256u].offset+atomicAdd(&grid[start+bucket].cursor,1u);
+        storeIndex(8u+parameters.buckets*4u+layer*parameters.count+index,invocation);
+      }
     }
-    if(invocation>=parameters.count) {
-      return;
-    }
-    if(photonRecord(invocation).w==0u) {
-      return;
-    }
-    let bucket=hashPhoton(photonPosition(invocation));
-    let index=grid[bucket].offset+grid[parameters.buckets+bucket/256u].offset+atomicAdd(&grid[bucket].cursor,1u);
-    storeIndex(8u+parameters.buckets*2u+index,invocation);
   }
 `;
 /** Packed photon payload: position f32 x3, RGBE8 flux, two octahedral directions. */
@@ -206,20 +228,28 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
     if(visible&&screenPixels>0.0) {
       radius=min(radius,photonPixelFootprint(si)*screenPixels);
     }
-    let cellSize=2.0*globalRadius;
+    let layer=select(0u,1u,visible&&screenPixels>0.0);
+    let cellSize=select(globalRadius,2.0*bitcast<f32>(photonIndexWord(6u)),layer==1u);
     let firstCell=vec3i(floor((si.position-vec3f(radius))/cellSize));
     let lastCell=vec3i(floor((si.position+vec3f(radius))/cellSize));
     let buckets=photonIndexWord(5u);
-    let indexStart=8u+buckets*2u;
+    let headerStart=8u+layer*buckets*2u;
+    let indexStart=8u+buckets*4u+layer*photonIndexWord(4u);
     let emitted=f32(photonIndexWord(4u));
     var sum=vec3f(0.0);
     for(var z=firstCell.z;z<=lastCell.z;z++) {
       for(var y=firstCell.y;y<=lastCell.y;y++) {
         for(var x=firstCell.x;x<=lastCell.x;x++) {
           let queryCell=vec3i(x,y,z);
+          // Reject cube corners before loading their photon lists. Padding keeps
+          // the bound conservative when cell multiplication rounds in f32.
+          let cellMin=vec3f(queryCell)*cellSize;
+          let padding=max(vec3f(cellSize*1e-5),abs(cellMin)*1e-6);
+          let closest=clamp(si.position,cellMin-padding,cellMin+vec3f(cellSize)+padding);
+          if(distance(closest,si.position)>=radius) { continue; }
           let bucket=photonHash(queryCell);
-          let offset=photonIndexWord(8u+bucket*2u);
-          let count=photonIndexWord(9u+bucket*2u);
+          let offset=photonIndexWord(headerStart+bucket*2u);
+          let count=photonIndexWord(headerStart+1u+bucket*2u);
           for(var i=offset;i<offset+count;i++) {
             let index=photonIndexWord(indexStart+i);
             let record=photonLoad(index);
@@ -228,7 +258,7 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
             if(any(vec3i(floor(position/cellSize))!=queryCell)||distance(position,si.position)>=radius) {
               continue;
             }
-            let directions=photonIndexWord(indexStart+u32(emitted)+index);
+            let directions=photonIndexWord(8u+buckets*4u+u32(emitted)*2u+index);
             let normal=photonDecodeOct(vec2f(f32(directions&255u)/255.0,f32((directions>>8u)&127u)/127.0));
             if(dot(normal,si.faceNormal)<0.9) {
               continue;

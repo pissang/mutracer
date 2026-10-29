@@ -1588,6 +1588,8 @@ class WGPURayTracePass {
         1,
         this._rtUniform.views.sampleCount[0] - this._rtUniform.views.sampleSequenceOffset[0] + 1
       );
+      const photonViewProjection = mat4.create();
+      mat4.invert(photonViewProjection, this._viewProjInv);
       this._photonMap.encode(
         encoder,
         this._photonEmissionGroups!,
@@ -1604,7 +1606,7 @@ class WGPURayTracePass {
           photons: 1,
           batch: Math.floor(this._rtUniform.views.sampleCount[0]),
           mnee: this._mnee,
-          viewProjection: new Float32Array(16),
+          viewProjection: photonViewProjection,
           casterSphere: this._causticBounds,
           cameraScale: this._causticCameraScale
         }

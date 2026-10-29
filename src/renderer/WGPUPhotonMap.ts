@@ -1,6 +1,6 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
-import {PHOTON_BYTES, photonBucketCount, photonGridCompute} from './wgsl/photonMap.compute.js';
+import {PHOTON_BYTES, PHOTON_GRID_SIZE, photonLayout, photonGridCompute} from './wgsl/photonMap.compute.js';
 interface Batch {
   grid: GPUBuffer;
   uniform: GPUBuffer;
@@ -48,34 +48,34 @@ export class WGPUPhotonMap {
       Math.min(
         Math.round(requested),
         Math.floor(device.limits.maxStorageBufferBindingSize / PHOTON_BYTES),
-        Math.floor((limit * limit - 131080) / 2),
-        Math.floor(((causticDiagnostics.photonBudgetBytes ?? 128 * 1024 * 1024) - 2 * 1024 * 1024) / 24)
+        Math.floor((limit * limit - PHOTON_GRID_SIZE * 4 - 8) / 3),
+        Math.floor(((causticDiagnostics.photonBudgetBytes ?? 128 * 1024 * 1024) - 13 * 1024 * 1024) / 28)
       )
     );
     // Include row padding instead of assuming every texture is tightly packed.
     const allocationBytes = (n: number) => {
-      const buckets = photonBucketCount(n);
+      const {buckets, texels} = photonLayout(n);
       const capacity = (texels: number) => Math.min(texels, limit) * Math.ceil(texels / limit);
-      return (buckets + buckets / 256) * 16 + capacity(n) * 16 + capacity(n * 2 + buckets * 2 + 8) * 4 + 32;
+      return (buckets + buckets / 256) * 32 + capacity(n) * 16 + capacity(texels) * 4 + 32;
     };
     while (count > 1 && allocationBytes(count) > budget) {
-      count = Math.max(1, count - Math.ceil((allocationBytes(count) - budget) / 24));
+      count = Math.max(1, count - Math.ceil((allocationBytes(count) - budget) / 28));
     }
     const existing = this.targets.get(target);
     if (existing?.count === count) return existing;
     this.release(target);
-    const buckets = photonBucketCount(count),
+    const {buckets, texels: headerTexels} = photonLayout(count),
       texels = count,
       width = Math.min(texels, limit),
       height = Math.ceil(texels / width);
     // One rgba32uint texel holds position and flux. Direction words live after
-    // the sorted indices in the integer grid texture: 20 B payload + 4 B index.
+    // both sorted indices in the integer grid texture: 20 B payload + 8 B indices.
     const batch = {
       count,
       buckets,
       grid: device.createBuffer({
         label: 'Photon hash buckets',
-        size: (buckets + buckets / 256) * 16,
+        size: (buckets + buckets / 256) * 32,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
       }),
       uniform: device.createBuffer({
@@ -92,8 +92,8 @@ export class WGPUPhotonMap {
       headers: device.createTexture({
         label: 'Photon grid headers',
         size: [
-          Math.min(count * 2 + buckets * 2 + 8, limit),
-          Math.ceil((count * 2 + buckets * 2 + 8) / limit)
+          Math.min(headerTexels, limit),
+          Math.ceil((headerTexels) / limit)
         ],
         format: 'r32uint',
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
@@ -147,6 +147,7 @@ export class WGPUPhotonMap {
         ? 2
         : 0;
     new Uint32Array(bytes)[4] = batch.buckets;
+    new Float32Array(bytes)[5] = photonVisibleRadius(radius, options, new Float32Array(bytes)[2]);
     this.device.queue.writeBuffer(batch.uniform, 0, bytes);
     const group = batch.group;
     // Dispatch boundaries synchronize storage accesses. Offline batches share one
@@ -171,7 +172,7 @@ export class WGPUPhotonMap {
           : index === 2
             ? 1
             : Math.ceil((index === 3 ? Math.max(batch.count, batch.buckets) : batch.count) / 64);
-      pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
+      pass.dispatchWorkgroups(Math.min(groups, 65535), index === 1 || index === 2 ? 2 : Math.ceil(groups / 65535));
       if (!combined) pass.end();
     });
     combined?.end();
@@ -203,4 +204,13 @@ export class WGPUPhotonMap {
 /** Knaus & Zwicker's probabilistic radius schedule; default alpha = 2/3. */
 export function photonRadius(initial: number, batch: number, alpha = 2 / 3) {
   return initial * Math.pow(Math.max(1, batch), (alpha - 1) / 2);
+}
+
+/** Typical first-receiver footprint at the caster center; query disks stay exact. */
+export function photonVisibleRadius(radius: number, options: {viewProjection: ArrayLike<number>; casterSphere: readonly number[]; width: number; orthographic?: boolean}, screenPixels = 2) {
+  const m = options.viewProjection, p = options.casterSphere;
+  const depth = options.orthographic ? 1 : Math.abs(m[3]*p[0]+m[7]*p[1]+m[11]*p[2]+m[15]);
+  const projection = Math.hypot(m[0], m[4], m[8]);
+  const footprint = 2 * depth / (options.width * projection) * screenPixels;
+  return screenPixels > 0 && Number.isFinite(footprint) && footprint > 0 ? Math.min(radius, Math.max(1e-8, footprint)) : radius;
 }

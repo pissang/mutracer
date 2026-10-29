@@ -63,8 +63,8 @@ pub struct CausticSettings {
     pub light_photons: u32,
     /// Progressive caustic density estimate; default false.
     pub photon_mapping: bool,
-    /// Photons per batch; 0 selects pixel count / 4. Default 0. Uses 24 bytes
-    /// each plus at most 2 MiB for the index; capped by device limits and 128 MiB.
+    /// Photons per batch; 0 selects pixel count / 4. Default 0. Uses 28 bytes
+    /// each plus up to 13 MiB of overhead; capped by device limits and 128 MiB.
     pub photon_map_photons: u32,
     /// Initial gather radius; 0 selects 3% of the caster sphere radius. Default 0.
     pub photon_map_radius: f32,

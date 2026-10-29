@@ -56,6 +56,7 @@ pub(crate) struct State {
     photons: Option<Photons>,
     template: Vec<u8>,
     initial_radius: f32,
+    size: [u32; 2],
     pixels: u32,
     _distribution: wgpu::Texture,
     _lighting: wgpu::Texture,
@@ -379,34 +380,34 @@ impl State {
             .min(
                 u64::from(limit.max_texture_dimension_2d)
                     .pow(2)
-                    .saturating_sub(131080)
-                    / 2,
+                    .saturating_sub(262144 * 4 + 8)
+                    / 3,
             )
-            .min((128 * 1024 * 1024 - 2 * 1024 * 1024) / 24) as u32;
+            .min((128 * 1024 * 1024 - 13 * 1024 * 1024) / 28) as u32;
         let count = |requested: u32| {
             let mut n = requested.clamp(1, max_count);
             loop {
-                let buckets = (n.saturating_mul(2).max(256).next_power_of_two()).min(65536);
+                let buckets = (n.saturating_mul(2).max(256).next_power_of_two()).min(262144);
                 let capacity = |texels: u64| {
                     texels.min(u64::from(limit.max_texture_dimension_2d))
                         * texels.div_ceil(u64::from(limit.max_texture_dimension_2d))
                 };
-                let bytes = u64::from(buckets + buckets / 256) * 16
+                let bytes = u64::from(buckets + buckets / 256) * 32
                     + capacity(u64::from(n)) * 16
-                    + capacity(u64::from(n) * 2 + u64::from(buckets) * 2 + 8) * 4
+                    + capacity(u64::from(n) * 3 + u64::from(buckets) * 4 + 8) * 4
                     + 32;
                 if bytes <= 128 * 1024 * 1024 || n == 1 {
                     break n;
                 }
                 n = n
-                    .saturating_sub(((bytes - 128 * 1024 * 1024).div_ceil(24)) as u32)
+                    .saturating_sub(((bytes - 128 * 1024 * 1024).div_ceil(28)) as u32)
                     .max(1);
             }
         };
         let photons = if m.flags & 4 != 0 {
             let n = count(m.photon_map_photons);
-            let buckets = (n.saturating_mul(2).max(256).next_power_of_two()).min(65536);
-            let grid = buffer(device, u64::from(buckets + buckets / 256) * 16, false);
+            let buckets = (n.saturating_mul(2).max(256).next_power_of_two()).min(262144);
+            let grid = buffer(device, u64::from(buckets + buckets / 256) * 32, false);
             let uniform = buffer(device, 32, true);
             let texels = n;
             let width = texels.min(limit.max_texture_dimension_2d);
@@ -420,8 +421,8 @@ impl State {
             );
             let headers = texture(
                 gpu,
-                (n * 2 + buckets * 2 + 8).min(limit.max_texture_dimension_2d),
-                (n * 2 + buckets * 2 + 8).div_ceil(limit.max_texture_dimension_2d),
+                (n * 3 + buckets * 4 + 8).min(limit.max_texture_dimension_2d),
+                (n * 3 + buckets * 4 + 8).div_ceil(limit.max_texture_dimension_2d),
                 None,
                 true,
                 wgpu::TextureFormat::R32Uint,
@@ -636,6 +637,7 @@ impl State {
             photons,
             template: packet.uniform,
             initial_radius: m.initial_radius,
+            size,
             pixels,
             _distribution: distribution,
             _lighting: lighting,
@@ -676,6 +678,22 @@ impl State {
         data[4..8].copy_from_slice(&p.emit.count.to_le_bytes());
         data[8..12].copy_from_slice(&2.0f32.to_le_bytes());
         data[16..20].copy_from_slice(&p.buckets.to_le_bytes());
+        // Same caster-center footprint as the web host; only the index changes.
+        let word =
+            |i: usize| f32::from_le_bytes(self.template[i * 4..i * 4 + 4].try_into().unwrap());
+        let depth = if u32::from_le_bytes(self.template[104..108].try_into().unwrap()) != 0 {
+            1.0
+        } else {
+            (word(7) * word(0) + word(11) * word(1) + word(15) * word(2) + word(19)).abs()
+        };
+        let projection = (word(4).powi(2) + word(8).powi(2) + word(12).powi(2)).sqrt();
+        let footprint = 4.0 * depth / (self.size[0] as f32 * projection);
+        let fine_radius = if footprint.is_finite() && footprint > 0.0 {
+            radius.min(footprint.max(1e-8))
+        } else {
+            radius
+        };
+        data[20..24].copy_from_slice(&fine_radius.to_le_bytes());
         gpu.queue.write_buffer(&p.uniform, 0, &data);
         let dispatch =
             |pass: &mut wgpu::ComputePass<'_>, i: usize, pipeline: &wgpu::ComputePipeline| {
@@ -687,7 +705,15 @@ impl State {
                     3 => p.emit.count.max(p.buckets).div_ceil(64),
                     _ => p.emit.count.div_ceil(64),
                 };
-                pass.dispatch_workgroups(groups.min(65535), groups.div_ceil(65535), 1);
+                pass.dispatch_workgroups(
+                    groups.min(65535),
+                    if i == 1 || i == 2 {
+                        2
+                    } else {
+                        groups.div_ceil(65535)
+                    },
+                    1,
+                );
             };
         if let Some(timer) = timer {
             for (i, pipeline) in p.pipelines.iter().enumerate() {
