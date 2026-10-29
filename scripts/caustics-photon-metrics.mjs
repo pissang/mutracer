@@ -1,10 +1,16 @@
+// node scripts/caustics-photon-metrics.mjs captures complete-energy-reference.{exr,f32}
+// For clouds, also set BLOTCH_REFERENCE to a long capture of the same path class;
+// use BLOTCH_REFERENCE_SPACE=display-linear for an OIDN capture. PT needs its own target.
 import {readFileSync,writeFileSync,readdirSync} from 'node:fs';
 import {resolve,basename} from 'node:path';
-import {compare,loadHdr,resampleReference} from './caustics-compare.mjs';
+import {compare,loadHdr,resampleReference,cornellBlotchMasks,denoisedBlotchStatistics} from './caustics-compare.mjs';
 
 import {displayLinear} from './caustics-study-color.mjs';
 
+// Optional noise target must cover the same transport class as each candidate.
+// BLOTCH_REFERENCE_SPACE=display-linear accepts an OIDN capture; default is HDR.
 const directory=resolve(process.argv[2]), reference=loadHdr(resolve(process.argv[3]));
+const noisePath=process.env.BLOTCH_REFERENCE,noiseReference=noisePath?loadHdr(resolve(noisePath)):null;
 const files=readdirSync(directory).filter(f=>f.endsWith('.f32')&&(process.env.SCENE?f.startsWith(process.env.SCENE):true));
 const rows=[];
 for(const file of files){
@@ -36,7 +42,19 @@ for(const file of files){
  let before;
  if(oidn){const raw=loadHdr(resolve(directory,file.replace('-oidn','')));before=compare(referenceImage,[{path:file,image:displayLinear(raw)}],{masks,verticalFov,gaussianSigma:Number(process.env.GAUSSIAN_SIGMA??0)*candidate.height/544});}
  const metadata=JSON.parse(readFileSync(resolve(directory,file.replace('.f32','.json'))));
+ // Keep noise diagnosis separate from energy agreement. The reference may be a
+ // long-batch capture of the same path class; never compare PT noise to missing
+ // transport in a different estimator. Masks follow geometry, not brightness.
+ if(oidn&&noiseReference&&file.includes('-pt-')===basename(noisePath).includes('-pt-')){
+  const matched=resampleReference(noiseReference,candidate.width,candidate.height,{verticalFov});
+  const noiseTarget=process.env.BLOTCH_REFERENCE_SPACE==='display-linear'?matched:displayLinear(matched);
+  const raw=displayLinear(loadHdr(resolve(directory,file.replace('-oidn',''))));
+  const noiseMasks=masks??cornellBlotchMasks(candidate.width,candidate.height,{verticalFov});
+  for(const [region,indices]of Object.entries(noiseMasks))rows.push({region,path:file,
+   space:'AgX display-linear',samples:metadata.samples,traceMs:metadata.traceMs,totalMs:metadata.totalMs,
+   denoisedBlotch:denoisedBlotchStatistics(raw,candidate,noiseTarget,indices,1.5*candidate.height/544)});
+ }
  for(const row of result.rows)rows.push({...row,space:oidn?'AgX display-linear':'HDR radiance',beforeDenoise:before?.rows.find(r=>r.region===row.region),samples:metadata.samples,traceMs:metadata.traceMs,totalMs:metadata.totalMs,denoiseMs:metadata.denoiseMs});
 }
 writeFileSync(resolve(directory,(process.env.SCENE??'all')+'-metrics.json'),JSON.stringify({directory,reference:process.argv[3],rows},null,2));
-for(const row of rows.filter(r=>r.samples===64))console.log(basename(row.path),row.region,(row.relativeError.trimmedMean*100).toFixed(2),row.logRMSE.toFixed(4),row.relativeGradientError.toFixed(3));
+for(const row of rows.filter(r=>r.samples===64&&r.relativeError))console.log(basename(row.path),row.region,(row.relativeError.trimmedMean*100).toFixed(2),row.logRMSE.toFixed(4),row.relativeGradientError.toFixed(3));

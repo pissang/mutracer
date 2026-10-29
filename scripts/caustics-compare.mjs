@@ -78,6 +78,72 @@ export function gaussianRegionResidual(candidate, reference, indices, sigma) {
 // Coordinates in a 256x256 authored-camera image, half-open. Conservative patches
 // avoid box silhouettes, room edges and the light. They are not whole-surface integrals.
 export const cornellRegions={underwaterBackWall:[102,100,215,160],underwaterFloor:[100,244,160,250],aboveWaterWall:[100,34,180,45],waterSurface:[100,62,180,72],aboveWaterSideWall:[10,35,20,46],ceiling:[101,17,125,25]};
+// Fixed polygons in the authored 256-square camera. The wall polygon follows a
+// conservative envelope above the water silhouette, including the left cloud patch.
+export const cornellBlotchRegions={
+ aboveWaterWallUpperLeft:[[35,33],[80,33],[80,46],[35,46]],
+ aboveWaterWallWhole:[[35,33],[221,33],[221,61],[190,61],[150,58],[120,58],[94,45],[75,48],[60,52],[35,54]],
+ ceilingWhole:[[6,2],[250,2],[220,30],[36,30]]
+};
+export function cornellBlotchMasks(width,height,{verticalFov=false}={}) {
+ const masks={};
+ for(const [name,vertices] of Object.entries(cornellBlotchRegions)) {
+  const polygon=vertices.map(([x,y])=>[verticalFov?width/2+(x-128)*height/256:x*width/256,y*height/256]);
+  const indices=[];
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
+   let inside=false;
+   for(let i=0,j=polygon.length-1;i<polygon.length;j=i++) {
+    const [a,b]=polygon[i],[c,d]=polygon[j];
+    if((b>y+.5)!==(d>y+.5)&&x+.5<(c-a)*(y+.5-b)/(d-b)+a)inside=!inside;
+   }
+   // Exclude a fixed guard around the ceiling emitter, independent of radiance.
+   const ax=verticalFov?128+(x+.5-width/2)*256/height:(x+.5)*256/width,ay=(y+.5)*256/height;
+   const emitter=name==='ceilingWhole'&&ax>=118&&ax<138&&ay>=10&&ay<30;
+   if(inside&&!emitter)indices.push(y*width+x);
+  }
+  masks[name]=indices;
+ }
+ return masks;
+}
+/** Residual texture and correlation, separate from the signed energy bias.
+ * Use a converged reference of the same path class; a missing transport class
+ * or mismatched camera is model error, not a noise reference. Sigma is in pixels.
+ */
+export function blotchStatistics(candidate,reference,indices,sigma=3) {
+ if(!(sigma>0)||!indices.length)throw Error('Blotch metric needs a positive sigma and nonempty mask');
+ const errors=indices.map(i=>[0,1,2].reduce((s,c)=>s+candidate.data[4*i+c]-reference.data[4*i+c],0)/3);
+ const mean=errors.reduce((s,v)=>s+v,0)/errors.length;
+ const variance=errors.reduce((s,v)=>s+(v-mean)**2,0)/errors.length;
+ const target=indices.reduce((s,i)=>s+(reference.data[4*i]+reference.data[4*i+1]+reference.data[4*i+2])/3,0)/indices.length;
+ if(!Number.isFinite(variance)||!(target>0))throw Error('Non-finite residual or nonpositive reference');
+ const smooth=gaussianRegionResidual(candidate,reference,indices,sigma);
+ const broad=gaussianRegionResidual(candidate,reference,indices,sigma*4);
+ const bandVariance=smooth.reduce((s,v,k)=>s+(v-broad[k])**2,0)/smooth.length;
+ const lowMean=smooth.reduce((s,v)=>s+v,0)/smooth.length;
+ const lowVariance=smooth.reduce((s,v)=>s+(v-lowMean)**2,0)/smooth.length;
+ const lookup=new Map(indices.map((i,k)=>[i,errors[k]-mean]));
+ const autocorrelation={};
+ for(const lag of [1,2,4,8,16]) {
+  let covariance=0,energy=0,pairs=0;
+  for(const i of indices)for(const j of [i+lag,i+lag*candidate.width]) {
+   if(j===i+lag&&Math.floor(j/candidate.width)!==Math.floor(i/candidate.width))continue;
+   if(!lookup.has(j))continue;
+   const a=lookup.get(i),b=lookup.get(j);covariance+=a*b;energy+=(a*a+b*b)/2;pairs++;
+  }
+  autocorrelation[lag]={value:energy>0?covariance/energy:0,pairs};
+ }
+ return {sigma,bandOuterSigma:sigma*4,cloudBandRelativeRMS:Math.sqrt(bandVariance)/target,relativeBias:mean/target,residualRelativeRMS:Math.sqrt(variance)/target,
+  blotchRelativeRMS:Math.sqrt(lowVariance)/target,lowFrequencyFraction:variance>0?lowVariance/variance:0,autocorrelation};
+}
+/** Correlated residual that survives filtering. All three images must share the
+ * same linear display space. This is a noise diagnostic, not an accuracy score:
+ * report the two components and energy error alongside it, never alone.
+ */
+export function denoisedBlotchStatistics(raw,denoised,reference,indices,sigma=1.5) {
+ const before=blotchStatistics(raw,reference,indices,sigma);
+ const after=blotchStatistics(denoised,reference,indices,sigma);
+ return {before,after,correlatedCloudRelativeRMS:after.cloudBandRelativeRMS*Math.sqrt(Math.max(0,before.autocorrelation[1].value))};
+}
 // Perspective rays of tests/gpu/caustics.ts, camera below the horizontal glass.
 // Inset the 2.5x2.5 glass footprint to 2x2 to exclude finite-radius edge leakage.
 export function receiverMask(width,height) {
@@ -90,9 +156,10 @@ export function receiverMask(width,height) {
  return indices;
 }
 export const receiverRegions={causticReceiver:[0,0,128,96]};
-export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,masks:providedMasks,verticalFov=false,gaussianSigma=0}={}) {
+export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,masks:providedMasks,verticalFov=false,gaussianSigma=0,blotch=false}={}) {
  const {width,height}=candidates[0].image;
  if(candidates.some(c=>c.image.width!==width||c.image.height!==height))throw Error('Candidate resolutions differ');
+ if(blotch&&!providedMasks)providedMasks=cornellBlotchMasks(width,height,{verticalFov});
  const ref=resampleReference(reference,width,height,{verticalFov}),rects=providedMasks?Object.fromEntries(Object.keys(providedMasks).map(k=>[k,[0,0,width,height]])):receiver?receiverRegions:cornellRegions,base=receiver?[128,96]:[256,256];
  const masks={},rows=[];
  for(const [region,rectangle]of Object.entries(rects)) {
@@ -100,11 +167,14 @@ export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,m
   if(providedMasks)for(const index of providedMasks[region])indices.push(index);
   else if(receiver)indices.push(...receiverMask(width,height));
   else for(let y=rect[1];y<rect[3];y++)for(let x=rect[0];x<rect[2];x++)indices.push(y*width+x);
-  masks[region]={rectangle:rect,pixels:indices.length,...(receiver?{indices,geometry:{floorY:0,footprintXZ:[-1,1],camera:[0,.75,3],lookAt:[0,0,0],fov:50}}:{})};
+  masks[region]={rectangle:rect,pixels:indices.length,...(providedMasks?{indices}:{}),...(receiver?{indices,geometry:{floorY:0,footprintXZ:[-1,1],camera:[0,.75,3],lookAt:[0,0,0],fov:50}}:{})};
   const extract=image=>indices.map(i=>(image.data[i*4]+image.data[i*4+1]+image.data[i*4+2])/3);
   const expected=statistics(extract(ref),trim,clamp);
   for(const {path,image}of candidates) {
    const actual=statistics(extract(image),trim,clamp);
+   const absoluteErrors=indices.map(i=>Math.abs((image.data[i*4]+image.data[i*4+1]+image.data[i*4+2]-ref.data[i*4]-ref.data[i*4+1]-ref.data[i*4+2])/3));
+   // Pixel fidelity cannot be inferred from cancellation in a regional mean.
+   const trimmedRelativeMAE=statistics(absoluteErrors,trim,clamp).trimmedMean/expected.trimmedMean;
    const relativeError=Object.fromEntries(['median','trimmedMean','clampedMean','rawMean'].map(k=>[k,actual[k]/expected[k]-1]));
    const luminance=(im,i)=>Math.max(0,(im.data[i*4]+im.data[i*4+1]+im.data[i*4+2])/3);
    const logErrors=indices.map(i=>Math.pow(Math.log1p(luminance(image,i))-Math.log1p(luminance(ref,i)),2));
@@ -118,7 +188,8 @@ export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,m
    const blurred=gaussianSigma>0?gaussianRegionResidual(image,ref,indices,gaussianSigma):undefined;
    const lowMean=blurred?blurred.reduce((s,v)=>s+v,0)/indices.length:0;
    const lowEnergy=blurred?blurred.reduce((s,v)=>s+v**2,0)/indices.length:0;
-   rows.push({region,path,reference:expected,candidate:actual,relativeError,
+   rows.push({region,path,reference:expected,candidate:actual,relativeError,trimmedRelativeMAE,
+    ...(blotch?{blotch:blotchStatistics(image,ref,indices,gaussianSigma||3*height/544)}:{}),
     ...(blurred?{gaussianSigma,lowFrequencyRelativeRMSE:Math.sqrt(lowEnergy)/expected.trimmedMean,
       blotchRelativeRMS:Math.sqrt(Math.max(0,lowEnergy-lowMean**2))/expected.trimmedMean}:{}),
     logRMSE:Math.sqrt(logErrors.reduce((a,b)=>a+b,0)/indices.length),
@@ -127,13 +198,16 @@ export function compare(reference,candidates,{receiver=false,trim=.001,clamp=1,m
   }
  }
  return {width,height,metric:'linear (R+G+B)/3, no exposure scaling; each image trimmed independently',trimBrightFraction:trim,clampThreshold:clamp,
-  referenceDownsample:`${reference.width/width}x${reference.height/height} box average after orientation alignment`,maskDefinition:receiver?'pixel-center camera rays intersect floor inside the inset glass footprint':'fixed half-open rectangles in authored camera; conservative patches, not complete surfaces',masks,rows};
+  referenceDownsample:`${reference.width/width}x${reference.height/height} box average after orientation alignment`,maskDefinition:providedMasks?'fixed explicit pixel masks, independent of candidate radiance':receiver?'pixel-center camera rays intersect floor inside the inset glass footprint':'fixed half-open rectangles in authored camera; conservative patches, not complete surfaces',masks,rows};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
  const args=process.argv.slice(2),outIndex=args.indexOf('--output'),output=outIndex>=0?resolve(args.splice(outIndex,2)[1]):null;
  const receiver=args.includes('--receiver');if(receiver)args.splice(args.indexOf('--receiver'),1);
+ const blotch=args.includes('--blotch');if(blotch)args.splice(args.indexOf('--blotch'),1);
+ const verticalFov=args.includes('--vertical-fov');if(verticalFov)args.splice(args.indexOf('--vertical-fov'),1);
+ const sigmaIndex=args.indexOf('--sigma'),gaussianSigma=sigmaIndex>=0?Number(args.splice(sigmaIndex,2)[1]):0;
  const [reference,...paths]=args;if(!reference||!paths.length)throw Error('Expected reference candidate(s) --output directory [--receiver]');
- const result=compare(loadHdr(reference),paths.map(path=>({path:resolve(path),image:loadHdr(path)})),{receiver});
+ const result=compare(loadHdr(reference),paths.map(path=>({path:resolve(path),image:loadHdr(path)})),{receiver,blotch,verticalFov,gaussianSigma});
  if(output){mkdirSync(output,{recursive:true});writeFileSync(resolve(output,'comparison.json'),JSON.stringify({reference:resolve(reference),...result},null,2)+'\n');
   const colors=['#e53935','#1e88e5','#43a047','#fdd835'];
   writeFileSync(resolve(output,'masks.svg'),`<svg xmlns="http://www.w3.org/2000/svg" width="${result.width}" height="${result.height}" viewBox="0 0 ${result.width} ${result.height}">${Object.entries(result.masks).map(([name,{rectangle:r,indices}],i)=>indices?`<g fill="${colors[i]}" fill-opacity=".4"><title>${name}</title>${indices.map(p=>`<rect x="${p%result.width}" y="${Math.floor(p/result.width)}" width="1" height="1"/>`).join('')}</g>`:`<g><title>${name}</title><rect x="${r[0]}" y="${r[1]}" width="${r[2]-r[0]}" height="${r[3]-r[1]}" fill="${colors[i]}" fill-opacity=".4" stroke="${colors[i]}"/></g>`).join('')}</svg>`);
