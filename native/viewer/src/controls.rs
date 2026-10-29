@@ -7,11 +7,81 @@ pub fn button(ui: &mut Ui, label: &str) -> Response {
     ui.add(egui::Button::new(label).min_size(egui::vec2(0., 24.)))
 }
 
+pub fn frame_selection_button(ui: &mut Ui) -> Response {
+    let response = ui.add_sized([26., 26.], egui::Button::new("").frame(false));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            "Frame selected object",
+        )
+    });
+    let center = response.rect.center();
+    let color = if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::MUTED
+    };
+    for (x, y) in [(-1., -1.), (1., -1.), (-1., 1.), (1., 1.)] {
+        ui.painter().add(egui::Shape::line(
+            vec![
+                center + egui::vec2(x * 3., y * 6.),
+                center + egui::vec2(x * 6., y * 6.),
+                center + egui::vec2(x * 6., y * 3.),
+            ],
+            Stroke::new(1.2, color),
+        ));
+    }
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("frame-selection-rect"), response.rect));
+    response.on_hover_text("Frame selected object")
+}
+
+/// Bleed through the panel's padding, preserving the scroll area's vertical clip.
+pub fn panel_separator(ui: &mut Ui, spacing: f32) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), spacing), Sense::hover());
+    let bounds = ui
+        .stack()
+        .iter()
+        .find(|node| node.kind() == Some(egui::UiKind::Frame) && node.frame().fill == theme::PANEL)
+        .map(|node| node.frame().fill_rect(node.max_rect))
+        .unwrap_or(rect);
+    let mut clip = ui.clip_rect();
+    clip.min.x = bounds.left();
+    clip.max.x = bounds.right();
+    ui.painter().with_clip_rect(clip).hline(
+        bounds.x_range(),
+        rect.center().y,
+        Stroke::new(1., Color32::from_white_alpha(14)),
+    );
+}
+
 pub fn section(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
     section_open(ui, title, true, contents);
 }
 
 pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(&mut Ui)) {
+    section_header(ui, title, open, None, |ui, _| contents(ui));
+}
+
+pub fn section_toggle(
+    ui: &mut Ui,
+    title: &str,
+    enabled: &mut bool,
+    contents: impl FnOnce(&mut Ui, bool),
+) {
+    section_header(ui, title, true, Some(enabled), contents);
+}
+
+fn section_header(
+    ui: &mut Ui,
+    title: &str,
+    open: bool,
+    mut enabled: Option<&mut bool>,
+    contents: impl FnOnce(&mut Ui, bool),
+) {
     ui.push_id(title, |ui| {
         ui.spacing_mut().item_spacing.y = 0.;
         let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -19,9 +89,24 @@ pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(
             ui.id().with("open"),
             open,
         );
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.), Sense::click());
-        if response.clicked() {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::SECTION_HEIGHT),
+            Sense::hover(),
+        );
+        let mut trigger = rect;
+        if enabled.is_some() {
+            trigger.max.x -= 60.;
+        }
+        let response = ui.interact(trigger, ui.id().with("section-trigger"), Sense::click());
+        let arrow_clicked = enabled.is_some()
+            && ui
+                .interact(
+                    egui::Rect::from_min_max(egui::pos2(rect.right() - 20., rect.top()), rect.max),
+                    ui.id().with("section-arrow"),
+                    Sense::click(),
+                )
+                .clicked();
+        if response.clicked() || arrow_clicked {
             state.toggle(ui);
         }
         response.widget_info(|| {
@@ -39,11 +124,29 @@ pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(
                 theme::CONTROL.gamma_multiply(0.4),
             );
         }
+        let icon = match title {
+            "Quality" => Some(Icon::Render),
+            "Color" | "Base" => Some(Icon::Material),
+            "Environment" | "Studio" => Some(Icon::Lighting),
+            "View" | "Depth of field" => Some(Icon::Camera),
+            "Caustics" | "Effects" => Some(Icon::Sun),
+            "Denoiser" => Some(Icon::Examples),
+            "Background" => Some(Icon::Background),
+            _ => None,
+        };
+        if let Some(icon) = icon {
+            paint_icon(
+                ui,
+                rect.left_center() + egui::vec2(7., 0.),
+                icon,
+                theme::MUTED,
+            );
+        }
         ui.painter().text(
-            rect.left_center(),
+            rect.left_center() + egui::vec2(if icon.is_some() { 22. } else { 0. }, 0.),
             Align2::LEFT_CENTER,
             title,
-            FontId::proportional(11.5),
+            FontId::proportional(theme::FONT_LABEL),
             if state.is_open() {
                 theme::TEXT
             } else {
@@ -68,12 +171,30 @@ pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(
             offsets.map(|p| c + p).to_vec(),
             Stroke::new(1., theme::SUBTLE),
         ));
+        if let Some(value) = enabled.as_deref_mut() {
+            let switch_rect = egui::Rect::from_center_size(
+                rect.right_center() - egui::vec2(38., 0.),
+                egui::vec2(28., theme::CONTROL_HEIGHT),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(switch_rect), |ui| {
+                let response = toggle(ui, "", value);
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Checkbox,
+                        ui.is_enabled(),
+                        *value,
+                        title,
+                    )
+                });
+            });
+        }
+        let enabled = enabled.as_deref().copied().unwrap_or(true);
         state.show_body_unindented(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 7.;
-            contents(ui);
+            contents(ui, enabled);
             ui.add_space(7.);
         });
-        ui.add(egui::Separator::default().spacing(0.));
+        panel_separator(ui, 0.);
     });
 }
 
@@ -82,7 +203,7 @@ fn property<R>(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui, egui::Id
         egui::Frame::new()
             .fill(theme::INPUT)
             .stroke(Stroke::new(1., theme::BORDER))
-            .corner_radius(9)
+            .corner_radius(6)
             .inner_margin(egui::Margin::symmetric(10, 0))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -90,13 +211,15 @@ fn property<R>(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui, egui::Id
                 ui.horizontal(|ui| {
                     let label = ui
                         .allocate_ui_with_layout(
-                            egui::vec2(label_width, 30.),
+                            egui::vec2(label_width, theme::CONTROL_HEIGHT),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(label_width);
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(label).size(11.).color(theme::SUBTLE),
+                                        egui::RichText::new(label)
+                                            .size(theme::FONT_LABEL)
+                                            .color(theme::SUBTLE),
                                     )
                                     .truncate(),
                                 )
@@ -287,17 +410,19 @@ pub fn parameter<Num: egui::emath::Numeric>(
         } = scrub;
         let min = range.start().to_f64();
         let max = range.end().to_f64();
-        let (row, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.), Sense::hover());
-        let value_width = (row.width() * 0.3).clamp(64., 100.);
+        let (row, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::CONTROL_HEIGHT),
+            Sense::hover(),
+        );
+        let value_width = (row.width() * 0.3).clamp(48., 100.);
         let numeric =
             egui::Rect::from_min_max(egui::pos2(row.right() - value_width, row.top()), row.max);
         let rect = egui::Rect::from_min_max(row.min, egui::pos2(numeric.left() - 6., row.bottom()));
-        ui.painter().rect_filled(rect, 9, theme::INPUT);
+        ui.painter().rect_filled(rect, 6, theme::INPUT);
         let mut response = ui
             .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.spacing_mut().slider_width = rect.width();
-                ui.spacing_mut().interact_size.y = 30.;
+                ui.spacing_mut().interact_size.y = theme::CONTROL_HEIGHT;
                 // Paint our full-row fill below; retain the standard slider's interaction.
                 let widgets = &mut ui.visuals_mut().widgets;
                 for visuals in [
@@ -332,7 +457,7 @@ pub fn parameter<Num: egui::emath::Numeric>(
                     rect.min,
                     egui::pos2(x, rect.bottom()),
                 )))
-                .rect_filled(rect, 9, theme::SCRUB_FILL);
+                .rect_filled(rect, 6, theme::SCRUB_FILL);
         }
         if x > rect.left() + 2. && x < rect.right() - 2. {
             ui.painter().line_segment(
@@ -343,13 +468,17 @@ pub fn parameter<Num: egui::emath::Numeric>(
                 Stroke::new(1.5, theme::MUTED),
             );
         }
-        let text = egui::WidgetText::from(egui::RichText::new(label).size(11.).color(theme::TEXT))
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Truncate),
-                (rect.width() - 20.).max(1.),
-                egui::TextStyle::Body,
-            );
+        let text = egui::WidgetText::from(
+            egui::RichText::new(label)
+                .size(theme::FONT_LABEL)
+                .color(theme::TEXT),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - 20.).max(1.),
+            egui::TextStyle::Body,
+        );
         ui.painter().galley(
             rect.left_center() + egui::vec2(10., -text.size().y * 0.5),
             text,
@@ -369,7 +498,7 @@ pub fn parameter<Num: egui::emath::Numeric>(
         };
         let edit = ui
             .scope_builder(egui::UiBuilder::new().max_rect(numeric), |ui| {
-                ui.spacing_mut().interact_size.y = 30.;
+                ui.spacing_mut().interact_size.y = theme::CONTROL_HEIGHT;
                 numeric_value(
                     ui,
                     numeric.size(),
@@ -397,7 +526,7 @@ pub fn parameter<Num: egui::emath::Numeric>(
             theme::BORDER
         };
         ui.painter()
-            .rect_stroke(rect, 9, Stroke::new(1., border), egui::StrokeKind::Inside);
+            .rect_stroke(rect, 6, Stroke::new(1., border), egui::StrokeKind::Inside);
         response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), value.to_f64(), label));
         response.on_hover_text(label)
     })
@@ -424,7 +553,7 @@ pub fn segmented<T: Copy + PartialEq>(
         egui::Frame::new()
             .fill(theme::INPUT)
             .stroke(Stroke::new(1., theme::BORDER))
-            .corner_radius(10)
+            .corner_radius(8)
             .inner_margin(3)
             .show(ui, |ui| {
                 let width =
@@ -434,14 +563,13 @@ pub fn segmented<T: Copy + PartialEq>(
                     for &(option, text) in options {
                         let selected = *value == option;
                         let response = ui.add_sized(
-                            [width, 24.],
+                            [width, 20.],
                             egui::Button::new(
-                                egui::RichText::new(text).size(11.).color(if selected {
-                                    theme::TEXT
-                                } else {
-                                    theme::SUBTLE
-                                }),
+                                egui::RichText::new(text)
+                                    .size(theme::FONT_LABEL)
+                                    .color(if selected { theme::TEXT } else { theme::SUBTLE }),
                             )
+                            .wrap_mode(egui::TextWrapMode::Truncate)
                             .fill(if selected {
                                 theme::CONTROL
                             } else {
@@ -517,7 +645,7 @@ pub fn texture_sampling(ui: &mut Ui, wrap: &mut [u32; 2], scale: &mut [f32; 2]) 
                 );
                 numeric_value(
                     ui,
-                    egui::vec2(ui.available_width(), 30.),
+                    egui::vec2(ui.available_width(), theme::CONTROL_HEIGHT),
                     Scrub::new(&mut scale[axis], f32::NEG_INFINITY..=f32::INFINITY).max_decimals(4),
                     0.025,
                 )
@@ -534,14 +662,39 @@ pub fn select(
     value: impl Into<egui::WidgetText>,
     contents: impl FnOnce(&mut Ui),
 ) {
-    property(ui, label, |ui, label_id| {
+    let value = value.into();
+    ui.push_id(label, |ui| {
+        // One galley gives the prefix and selected value exactly the same baseline.
+        let mut text = egui::text::LayoutJob::default();
+        text.append(
+            label,
+            0.,
+            egui::TextFormat {
+                font_id: FontId::proportional(theme::FONT_LABEL),
+                color: theme::SUBTLE,
+                ..Default::default()
+            },
+        );
+        text.append(
+            value.text(),
+            8.,
+            egui::TextFormat {
+                font_id: FontId::proportional(theme::FONT_LABEL),
+                color: theme::TEXT,
+                ..Default::default()
+            },
+        );
+        ui.spacing_mut().icon_width = 14.;
+        ui.spacing_mut().button_padding = egui::vec2(10., (theme::CONTROL_HEIGHT - 14.) * 0.5);
+        ui.spacing_mut().interact_size.y = theme::CONTROL_HEIGHT;
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = theme::INPUT;
         egui::ComboBox::from_id_salt("choice")
-            .selected_text(value)
+            .selected_text(text)
             .width(ui.available_width())
             .wrap_mode(egui::TextWrapMode::Truncate)
             .show_ui(ui, contents)
             .response
-            .labelled_by(label_id);
+            .on_hover_text(label);
     });
 }
 
@@ -550,17 +703,17 @@ pub fn color(ui: &mut Ui, label: &str, value: &mut [f32; 3]) -> Response {
         egui::Frame::new()
             .fill(theme::INPUT)
             .stroke(Stroke::new(1., theme::BORDER))
-            .corner_radius(9)
-            .inner_margin(egui::Margin::symmetric(4, 3))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(4, 2))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().interact_size = egui::vec2(22., 22.);
+                    ui.spacing_mut().interact_size = egui::vec2(20., 20.);
                     let mut edited = *value;
                     let response = ui.color_edit_button_rgb(&mut edited);
                     if response.changed() {
                         *value = edited;
                     }
-                    ui.label(egui::RichText::new(label).size(11.));
+                    ui.label(egui::RichText::new(label).size(theme::FONT_LABEL));
                     let color: Color32 = egui::Rgba::from_rgb(value[0], value[1], value[2]).into();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
@@ -585,8 +738,10 @@ pub fn color(ui: &mut Ui, label: &str, value: &mut [f32; 3]) -> Response {
 }
 
 pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
-    let (rect, mut response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.), Sense::click());
+    let (rect, mut response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), theme::CONTROL_HEIGHT),
+        Sense::click(),
+    );
     if response.clicked() {
         *value = !*value;
         response.mark_changed();
@@ -599,12 +754,12 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
         rect.left_center(),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(11.),
+        FontId::proportional(theme::FONT_LABEL),
         theme::MUTED,
     );
     let track = egui::Rect::from_center_size(
-        rect.right_center() - egui::vec2(17., 0.),
-        egui::vec2(34., 20.),
+        rect.right_center() - egui::vec2(14., 0.),
+        egui::vec2(28., 16.),
     );
     painter.rect_filled(
         track,
@@ -626,13 +781,13 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
     painter.circle_filled(
         egui::pos2(
             if *value {
-                track.right() - 10.
+                track.right() - 8.
             } else {
-                track.left() + 10.
+                track.left() + 8.
             },
             track.center().y,
         ),
-        8.,
+        6.,
         theme::TEXT,
     );
     response
@@ -641,16 +796,19 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
 #[derive(Clone, Copy)]
 pub enum Icon {
     Examples,
+    Sun,
+    Background,
     Lighting,
     Material,
     Camera,
     Render,
     Object,
+    Folder,
 }
 
 pub fn preset_card(ui: &mut Ui, width: f32, name: &str, detail: &str, selected: bool) -> Response {
     let response = ui.add_sized(
-        [width, 44.],
+        [width, 40.],
         egui::Button::new("")
             .fill(if selected {
                 theme::ACCENT_SURFACE
@@ -665,7 +823,7 @@ pub fn preset_card(ui: &mut Ui, width: f32, name: &str, detail: &str, selected: 
                     theme::BORDER
                 },
             ))
-            .corner_radius(9),
+            .corner_radius(6),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -676,8 +834,8 @@ pub fn preset_card(ui: &mut Ui, width: f32, name: &str, detail: &str, selected: 
         )
     });
     for (text, y, size, color) in [
-        (name, 7., 11., theme::TEXT),
-        (detail, 24., 9.5, theme::SUBTLE),
+        (name, 6., theme::FONT_LABEL, theme::TEXT),
+        (detail, 22., 9.5, theme::SUBTLE),
     ] {
         let galley = egui::WidgetText::from(egui::RichText::new(text).size(size).color(color))
             .into_galley(
@@ -692,43 +850,33 @@ pub fn preset_card(ui: &mut Ui, width: f32, name: &str, detail: &str, selected: 
     response.on_hover_text(format!("{name} · {detail}"))
 }
 
-pub fn heading(ui: &mut Ui, title: &str, subtitle: &str, icon: Icon) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.), Sense::hover());
-    let badge = egui::Rect::from_min_size(rect.left_top(), egui::vec2(32., 32.));
+pub fn heading(ui: &mut Ui, title: &str, icon: Icon) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.), Sense::hover());
+    let badge = egui::Rect::from_center_size(
+        rect.left_center() + egui::vec2(14., 0.),
+        egui::vec2(28., 28.),
+    );
     ui.painter().rect_filled(badge, 10, theme::ACCENT_SURFACE);
     ui.painter().rect_stroke(
         badge,
         10,
-        Stroke::new(1., theme::ACCENT.gamma_multiply(0.35)),
+        Stroke::new(1., theme::ACCENT.gamma_multiply(0.36)),
         egui::StrokeKind::Inside,
     );
     paint_icon(ui, badge.center(), icon, theme::ACCENT);
     ui.painter().text(
-        rect.left_top() + egui::vec2(42., 1.),
-        Align2::LEFT_TOP,
+        rect.left_center() + egui::vec2(38., 0.),
+        Align2::LEFT_CENTER,
         title,
-        FontId::proportional(13.),
+        FontId::proportional(theme::FONT_HEADING),
         theme::TEXT,
     );
-    let text = egui::WidgetText::from(
-        egui::RichText::new(subtitle)
-            .size(10.5)
-            .color(theme::SUBTLE),
-    )
-    .into_galley(
-        ui,
-        Some(egui::TextWrapMode::Truncate),
-        (rect.width() - 42.).max(1.),
-        egui::TextStyle::Small,
-    );
-    ui.painter()
-        .galley(rect.left_top() + egui::vec2(42., 19.), text, theme::SUBTLE);
 }
 
 pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Response {
     let response = ui.add_sized(
-        [ui.available_width(), 54.],
-        egui::Button::selectable(selected, "").corner_radius(6),
+        [ui.available_width(), 52.],
+        egui::Button::selectable(selected, "").corner_radius(12),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -745,13 +893,13 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
     } else {
         theme::SUBTLE
     };
-    let center = response.rect.center_top() + egui::vec2(0., 18.);
+    let center = response.rect.center_top() + egui::vec2(0., 16.);
     paint_icon(ui, center, icon, color);
     ui.painter().text(
         response.rect.center_bottom() - egui::vec2(0., 8.),
         Align2::CENTER_BOTTOM,
         label,
-        FontId::proportional(9.),
+        FontId::proportional(9.5),
         color,
     );
     response.on_hover_text(label)
@@ -760,44 +908,102 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
 pub(super) fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.2, color);
-    let rect = egui::Rect::from_center_size(center, egui::vec2(16., 14.));
     match icon {
         Icon::Examples => {
-            for x in [-4., 4.] {
-                for y in [-4., 4.] {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center + egui::vec2(x, y), egui::vec2(6., 6.)),
-                        1,
-                        stroke,
-                        egui::StrokeKind::Inside,
-                    );
-                }
+            for (offset, radius) in [(egui::vec2(-2., 2.), 6.), (egui::vec2(5., -5.), 3.)] {
+                let c = center + offset;
+                painter.add(egui::Shape::closed_line(
+                    vec![
+                        c - egui::vec2(0., radius),
+                        c + egui::vec2(radius * 0.3, -radius * 0.3),
+                        c + egui::vec2(radius, 0.),
+                        c + egui::vec2(radius * 0.3, radius * 0.3),
+                        c + egui::vec2(0., radius),
+                        c + egui::vec2(-radius * 0.3, radius * 0.3),
+                        c - egui::vec2(radius, 0.),
+                        c - egui::vec2(radius * 0.3, radius * 0.3),
+                    ],
+                    stroke,
+                ));
             }
         }
-        Icon::Lighting => {
-            painter.circle_stroke(center, 4., stroke);
+        Icon::Sun => {
+            painter.circle_stroke(center, 3.5, stroke);
             for i in 0..8 {
                 let d = egui::Vec2::angled(i as f32 * std::f32::consts::TAU / 8.);
-                painter.line_segment([center + d * 6., center + d * 8.], stroke);
+                painter.line_segment([center + d * 5.5, center + d * 8.], stroke);
+            }
+        }
+        Icon::Background => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(center, egui::vec2(16., 14.)),
+                2,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(center + egui::vec2(-3., -3.), 1.5, stroke);
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-7., 5.),
+                    center + egui::vec2(-1., -1.),
+                    center + egui::vec2(3., 3.),
+                    center + egui::vec2(6., 0.),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Lighting => {
+            painter.circle_stroke(center, 8., stroke);
+            painter.line_segment(
+                [center - egui::vec2(8., 0.), center + egui::vec2(8., 0.)],
+                stroke,
+            );
+            // Globe meridians, matching the Lighting tab's globe silhouette.
+            for side in [-1., 1.] {
+                painter.add(egui::Shape::line(
+                    (0..=16)
+                        .map(|i| {
+                            let angle = i as f32 * std::f32::consts::PI / 16.;
+                            center + egui::vec2(side * 3.5 * angle.sin(), -8. * angle.cos())
+                        })
+                        .collect(),
+                    stroke,
+                ));
             }
         }
         Icon::Material => {
-            painter.circle_stroke(center, 7., stroke);
+            // A palette with a thumb notch, rather than a generic material sphere.
+            let points = (0..=28)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 28.;
+                    let radius = if (0.2..1.4).contains(&angle) { 4.5 } else { 8. };
+                    center + egui::Vec2::angled(angle) * radius
+                })
+                .collect();
+            painter.add(egui::Shape::closed_line(points, stroke));
             for offset in [
-                egui::vec2(-3., -2.),
-                egui::vec2(3., -2.),
-                egui::vec2(0., 3.),
+                egui::vec2(-3., -3.),
+                egui::vec2(2., -4.),
+                egui::vec2(-4., 2.),
             ] {
-                painter.circle_filled(center + offset, 1.4, color);
+                painter.circle_filled(center + offset, 1., color);
             }
         }
         Icon::Camera => {
-            painter.rect_stroke(rect, 3, stroke, egui::StrokeKind::Inside);
-            painter.circle_stroke(center, 3.5, stroke);
-            painter.line_segment(
-                [center + egui::vec2(-4., -9.), center + egui::vec2(3., -9.)],
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(-8., -4.),
+                    center + egui::vec2(-4., -4.),
+                    center + egui::vec2(-2., -7.),
+                    center + egui::vec2(3., -7.),
+                    center + egui::vec2(5., -4.),
+                    center + egui::vec2(8., -4.),
+                    center + egui::vec2(8., 6.),
+                    center + egui::vec2(-8., 6.),
+                ],
                 stroke,
-            );
+            ));
+            painter.circle_stroke(center + egui::vec2(0., 1.), 3., stroke);
         }
         Icon::Render => {
             painter.circle_stroke(center, 7., stroke);
@@ -806,6 +1012,19 @@ pub(super) fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32
                 let side = egui::Vec2::angled((i + 1) as f32 * std::f32::consts::TAU / 6.);
                 painter.line_segment([center + d * 7., center + side * 3.], stroke);
             }
+        }
+        Icon::Folder => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(-7., -5.),
+                    center + egui::vec2(-2., -5.),
+                    center + egui::vec2(0., -3.),
+                    center + egui::vec2(7., -3.),
+                    center + egui::vec2(7., 6.),
+                    center + egui::vec2(-7., 6.),
+                ],
+                stroke,
+            ));
         }
         Icon::Object => {
             let top = center - egui::vec2(0., 8.);
@@ -853,6 +1072,77 @@ mod tests {
         );
         output.textures_delta.clear();
         response.unwrap()
+    }
+
+    #[test]
+    fn section_switch_keeps_collapse_and_enabled_state_independent() {
+        fn draw_section(
+            ctx: &Context,
+            enabled: &mut bool,
+            events: Vec<Event>,
+        ) -> (egui::Rect, Option<bool>) {
+            let mut rect = egui::Rect::NOTHING;
+            let mut body = None;
+            let mut output = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        ui.set_width(280.);
+                        rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(ui.available_width(), theme::SECTION_HEIGHT),
+                        );
+                        section_toggle(ui, "Denoiser", enabled, |_, value| body = Some(value));
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            (rect, body)
+        }
+        fn click(ctx: &Context, enabled: &mut bool, pos: egui::Pos2) {
+            for pressed in [true, false] {
+                draw_section(
+                    ctx,
+                    enabled,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        let ctx = Context::default();
+        theme::install(&ctx);
+        ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.);
+        let mut enabled = true;
+        let (rect, body) = draw_section(&ctx, &mut enabled, vec![]);
+        assert_eq!(body, Some(true));
+        click(
+            &ctx,
+            &mut enabled,
+            rect.right_center() - egui::vec2(38., 0.),
+        );
+        assert!(!enabled);
+        assert_eq!(draw_section(&ctx, &mut enabled, vec![]).1, Some(false));
+        click(&ctx, &mut enabled, rect.left_center() + egui::vec2(50., 0.));
+        assert_eq!(draw_section(&ctx, &mut enabled, vec![]).1, None);
+        click(
+            &ctx,
+            &mut enabled,
+            rect.right_center() - egui::vec2(38., 0.),
+        );
+        assert!(enabled);
+        assert_eq!(draw_section(&ctx, &mut enabled, vec![]).1, None);
+        click(&ctx, &mut enabled, rect.right_center() - egui::vec2(8., 0.));
+        assert_eq!(draw_section(&ctx, &mut enabled, vec![]).1, Some(true));
     }
 
     #[test]
