@@ -17,7 +17,7 @@ Choose the estimators for the visible receiver:
 Light tracing preserves narrow, directly visible caustics without a gather
 radius. Photon mapping covers indirect caustics and surfaces seen through glass,
 with additional memory and gather cost. Combined estimators assign path coverage
-automatically. The viewer's Cornell caustic preset enables photon mapping.
+automatically. The viewer's Cornell caustic preset enables both estimators.
 
 Set `render.caustics = undefined` to disable every estimator. See
 [API options and defaults](./api.md#caustics).
