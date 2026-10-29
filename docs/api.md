@@ -224,8 +224,8 @@ rendering cost and image-quality limitations.
 | `lightTracing` | `false` | `true` or an object enables directly visible caustic light paths on WebGPU; ignored on WebGL 2 |
 | `lightTracing.photonsPerSample` | pixel count / 4 | Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit |
 | `photonMapping` | `false` | `true` or an object enables progressive caustic photon mapping on WebGPU; ignored on WebGL 2 |
-| `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Rounded to a positive integer and reduced to fit device limits and a 128 MiB batch budget |
-| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive initial gather radius in scene units; smaller radii preserve detail but require more photons |
+| `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default |
+| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive first-batch gather radius in scene units, independent of `photonsPerSample`; shrinks as batches accumulate. Smaller radii preserve detail but require more photons |
 
 ## RenderLoop and Sync
 

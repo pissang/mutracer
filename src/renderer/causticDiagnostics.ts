@@ -12,6 +12,7 @@ interface CausticDiagnostics {
  captureRoots?:boolean;
  rootPass?:unknown;
  photonAlpha?:number;
+ photonRadiusScaling?: import('./wgsl/photonMap.compute.js').PhotonRadiusScaling;
  /** Fixed progressive batch for isolated query counters. */
  photonDebugBatch?:number;
  photonBudgetBytes?:number;

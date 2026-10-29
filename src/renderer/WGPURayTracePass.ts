@@ -1595,7 +1595,14 @@ class WGPURayTracePass {
         encoder,
         this._photonEmissionGroups!,
         this._activeTarget,
-        photonRadius(radius, causticDiagnostics.photonDebugBatch ?? batch, causticDiagnostics.photonAlpha ?? 2 / 3),
+        photonRadius(
+          radius,
+          causticDiagnostics.photonDebugBatch ?? batch,
+          causticDiagnostics.photonAlpha ?? 2 / 3,
+          // Allocation limits may reduce the requested count.
+          this._photonMap.get(this._activeTarget)!.count,
+          causticDiagnostics.photonRadiusScaling
+        ),
         {
           querySet: timing?.querySet,
           resourceTable: this._bindless?.table,

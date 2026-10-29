@@ -36,7 +36,8 @@ display and denoising include the combined result. Changes to any option restart
 accumulation. The native SDK provides the same choices through Rust
 `CausticSettings` and the C `MT_CAUSTIC_*` flags.
 
-More emitted photons increase time and memory costs. Photon-map storage grows
+More emitted photons can reduce noise but increase time and memory costs,
+including gather cost. Photon-map storage grows
 by 28 bytes per emitted photon plus up to 13 MiB of overhead, in
 addition to image accumulation. Requests above the device limits or the 128 MiB
 batch budget use fewer photons. Photon batches cover the full image even when PT
