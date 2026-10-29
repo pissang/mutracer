@@ -1,7 +1,9 @@
 // Measure the actual viewer RenderLoop, including presentation and OIDN scheduling.
 import {createServer} from 'vite';
 import {mkdirSync, writeFileSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {resolve,dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const profileRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 import {launchChrome, delay} from './reference-runtime.mjs';
 const root=resolve(process.env.MUTRACER_SOURCE_ROOT??'.');
 const out=resolve(process.env.MUTRACER_CAUSTICS_OUTPUT);
@@ -23,7 +25,7 @@ try {
    if(i===899)throw Error('Cornell viewer load timeout');await delay(200);
   }
   await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');const e=getEngine();window.photonViewerErrors=[];e.engine.device?.addEventListener('uncapturederror',event=>window.photonViewerErrors.push(event.error.message));const c=e.engine.display.canvas;c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;setSettings({cameraIndex:0,bounces:8,caustics:true,causticPhotonMapping:true,causticLightTracing:false,maxSamples:1,fStop:0,autoRotate:false});})()`);
-  await page.tab.evaluate(`import('/@fs/${root}/tests/gpu/photonViewerProfile.ts').then(async m=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');window.radiusProfile=m.profileViewer(getEngine());})`);
+  await page.tab.evaluate(`import('/@fs/${profileRoot}/tests/gpu/photonViewerProfile.ts').then(async m=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');window.radiusProfile=m.profileViewer(getEngine());})`);
   await page.tab.evaluate(`import('/@fs/${root}/src/renderer/causticDiagnostics.ts').then(m=>{m.causticDiagnostics.photonSkipQuery=${process.env.QUERY_OFF==='1'};})`);
   const results=[];
   for(const denoise of process.env.DENOISE==='0'?[false]:[false,true])for(const scale of [.5,1]){

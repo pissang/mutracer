@@ -7,7 +7,7 @@ const root=resolve(process.env.MUTRACER_SOURCE_ROOT??'.'),out=resolve(process.en
 mkdirSync(out,{recursive:true});
 const server=await createServer({configFile:resolve(root,'viewer/vite.config.ts'),server:{host:'127.0.0.1',port:0,hmr:false}});await server.listen();
 const chrome=await launchChrome(),results=[];
-try{for(const model of ['research-cornell-caustic','spheres']){
+try{for(const model of (process.env.MODELS?.split(',')??['research-cornell-caustic','spheres'])){
  const page=await chrome.page(`http://127.0.0.1:${server.httpServer.address().port}/#model=${model}&denoise=false&maxSamples=1024`);
  try{
  await page.tab.call('Emulation.setDeviceMetricsOverride',{width:2200,height:1200,deviceScaleFactor:1,mobile:false});
@@ -44,5 +44,5 @@ try{for(const model of ['research-cornell-caustic','spheres']){
  const rows=await page.tab.evaluate('window.latencyRows');
  for(const kind of ['camera','settings']){const values=rows.filter(r=>r.kind===kind).map(r=>r.ms).sort((a,b)=>a-b);results.push({model,kind,median:values[Math.floor(values.length/2)],p95:values[Math.ceil(values.length*.95)-1],rows:rows.filter(r=>r.kind===kind)});}
  writeFileSync(resolve(out,'latency.json'),JSON.stringify(results,null,2));console.log(results.map(({rows,...r})=>r));
- }finally{await page.close();}
+ }finally{await Promise.race([page.close(),delay(5000)]);}
 }}finally{await chrome.close();await server.close();}
