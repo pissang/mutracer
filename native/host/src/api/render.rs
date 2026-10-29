@@ -67,7 +67,8 @@ pub struct CausticSettings {
     /// Uses 28 bytes each plus up to 13 MiB of overhead; capped by device limits
     /// and 128 MiB.
     pub photon_map_photons: u32,
-    /// Initial gather radius; 0 selects 3% of the caster sphere radius. Default 0.
+    /// First-batch gather radius in scene units, independent of `photon_map_photons`;
+    /// shrinks as batches accumulate. 0 selects 3% of the caster sphere radius. Default 0.
     pub photon_map_radius: f32,
 }
 impl CausticSettings {
