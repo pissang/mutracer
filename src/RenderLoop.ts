@@ -40,7 +40,7 @@ export default class RenderLoop {
   private _busy = false;
   private _disposed = false;
   private _cancelScheduled?: () => void;
-  private _refillGeneration = 0;
+  private _refillController?: AbortController;
   private _cancelRefillFrame?: () => void;
   private _warnedTick = false;
   /** Render whose next presentation is waiting for a complete preview frame. */
@@ -107,7 +107,7 @@ export default class RenderLoop {
   }
   private _tick(): RenderLoopStatus {
     this._cancelRefill();
-    const refillGeneration = this._refillGeneration;
+    const controller = this._refillController = new AbortController();
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
     const aov = aovChannel(this.display.channel);
@@ -159,7 +159,20 @@ export default class RenderLoop {
     if (motion?.phase === 'moving' && idle && current._completeFor('motion')) {
       current._restartAovs(); motion.phase = 'settling';
     }
-    let status = refine(current);
+    const refill = !aov && idle && current === this.final;
+    let status: RenderStatus;
+    if (refill) {
+      // Keep the loop's short synchronous budget; the public helper uses an
+      // ordinary refine(). Selection/activity are application policy, revoked
+      // through the same signal as input, stop and the next display frame.
+      void current._refineUntil(performance.now() + 1000 / 60, controller.signal,
+        {batchSamples: current.batchSamples, targetBatchTimeMs: 4}, () => {
+          if ([...this._syncs].some(sync => sync.active) || this.select({changing: false}) !== 'final') controller.abort();
+        }).then(() => {
+          if (!controller.signal.aborted && current.status === 'error') this._setStatus('error');
+        });
+      status = current.status;
+    } else status = refine(current);
     if (motion?.phase === 'priming' && status === 'finished') {
       current._restartAovs(); motion.phase = 'settling'; status = refine(current);
     }
@@ -175,41 +188,15 @@ export default class RenderLoop {
     const previewing = waitingForPreview || (!aov && current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
     const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
-    if (refillGeneration === this._refillGeneration && !aov && idle && current === this.final && !previewing) this._scheduleRefill();
+    if (refill && !previewing && !controller.signal.aborted && current._refilling) {
+      // Manual tick grants work only until the next display frame.
+      this._cancelRefillFrame = scheduleFrame(() => this._cancelRefill());
+    } else controller.abort();
     return this._setStatus(next);
   }
   private _cancelRefill(): void {
-    this._refillGeneration++;
+    this._refillController?.abort(); this._refillController = undefined;
     this._cancelRefillFrame?.(); this._cancelRefillFrame = undefined;
-  }
-  private _scheduleRefill(): void {
-    const device = this.engine.device;
-    if (!device || !this._canRefill()) return;
-    const generation = this._refillGeneration;
-    // A manual tick grants work only until the next display frame. If the host
-    // stops ticking (pause/export), it cannot leave a background render running.
-    this._cancelRefillFrame = scheduleFrame(() => this._cancelRefill());
-    const refill = () => {
-      if (generation !== this._refillGeneration || device !== this.engine.device ||
-        this._disposed || this._busy || (typeof document !== 'undefined' && document.hidden) ||
-        aovChannel(this.display.channel) ||
-        !this._canRefill() || [...this._syncs].some(sync => sync.active) ||
-        this.select({changing: false}) !== 'final') return;
-      const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
-      if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
-      if (status === 'converging') wait();
-    };
-    const wait = () => {void this.final.whenReadyToRefine().then(queued => {if (queued) refill();}, () => {});};
-    // Keep only a short chunk ahead of input. GPU completion, rather than the
-    // display refresh rate, paces the next chunk; presentation stays on rAF.
-    wait();
-  }
-  private _canRefill(): boolean {
-    const time = this.final.gpuTileTimeMs;
-    return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
-      // The backend limits queued work. A long sample can still refill one tile
-      // on GPU completion without waiting for the next presentation frame.
-      this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;

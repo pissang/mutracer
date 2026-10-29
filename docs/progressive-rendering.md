@@ -104,56 +104,43 @@ Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
 batching while the view is changing.
 
-Prefer RenderLoop for between-frame refilling. For your own loop, the following
-example runs refills after presentation, with a 60 Hz frame deadline. Adjust the
-frame interval to your application's cadence and update controls before
-`engine.update()`. This example uses one render and the final beauty channel; enable
-`batchSamples` on `render`.
+Prefer RenderLoop for between-frame refilling. For a custom loop, use
+`refineUntil(deadline, {signal})`. It synchronously calls `refine()` once, so
+`present()` belongs immediately after the call. On WebGPU it then refills short
+batches until the deadline, cancellation, a hidden page or sampling/display
+conditions prevent more work. WebGL performs only the synchronous call.
+
+This example assumes `engine` and `render` are created with
+`render.batchSamples = true` and the final beauty channel selected. Adjust the
+60 Hz deadline to your application's cadence and update controls before
+`engine.update()`.
 
 <!-- own-loop-refill -->
 ```js
-let frameGeneration = 0;
-let inputRevision = 0;
-let paused = false;
-for (const event of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change']) {
-  addEventListener(event, () => { inputRevision++; }, {capture: true, passive: true});
-}
-
-async function refill(generation, deadline, input) {
-  const canContinue = () => generation === frameGeneration && !paused && !document.hidden &&
-    performance.now() < deadline && input === inputRevision &&
-    engine.display.channel === 'final' && render.batchSamples && render.status === 'converging' &&
-    !render.denoising && render.samples > 0 && render.gpuTileTimeMs !== undefined &&
-    render.gpuTileTimeMs <= render.timeBudgetMs;
-  while (canContinue() && await render.whenReadyToRefine()) {
-    // Input or a new frame may arrive during the GPU wait.
-    if (!canContinue()) break;
-    render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
-  }
-}
+let refill;
+const stop = () => refill?.abort();
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change'])
+  addEventListener(type, stop, {capture: true, passive: true});
 
 function frame(timestamp) {
   requestAnimationFrame(frame);
-  const generation = ++frameGeneration;
-  if (paused || document.hidden) return;
+  stop();
   engine.update();
-  render.refine();
+  refill = new AbortController();
+  void render.refineUntil(timestamp + 1000 / 60, {signal: refill.signal});
   engine.display.present(render);
-  void refill(generation, timestamp + 1000 / 60, inputRevision);
 }
 requestAnimationFrame(frame);
 ```
 
-Stopping while queued sampling can continue leaves the GPU idle before the next
-frame. Ignoring a `false` capacity result can spin on immediately resolved
-Promises. Ignoring the deadline or pending input can delay the next input's image
-behind extra GPU work. Stop refilling during export, custom preview selection or
-AOV display as well (set `paused = true` and increment `frameGeneration` before
-a pause or export, then clear `paused` to resume);
-RenderLoop handles those transitions automatically.
+Call `stop()` before pausing, exporting or switching to another render, and skip
+`refineUntil()` while paused. A new call automatically ends the previous refill.
+The signal cancels future submissions; work already queued on the GPU completes.
+The returned Promise resolves when refilling stops, including after an
+asynchronous error (reported through `render.status` and `engine.lastError`).
 
-`refine()` continues the remaining tiles of the current sample, including repeated
-calls between presentations. `samples` increases only after the whole sample;
+The library automatically continues the remaining tiles of the current sample
+between presentations. `samples` increases only after the whole sample;
 presentation keeps the previous complete sample until then. Committed scene or
 camera edits discard an unfinished sample and restart against the new inputs.
 `maxTiles` caps the sample's tile grid (rounded up to a rectangular grid), so a

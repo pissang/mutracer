@@ -538,6 +538,7 @@ export default class Engine {
   /** @internal */ _unregister(render: Render) { this._renders.delete(render); }
   /** @internal */ _createTarget() { return this._pipeline?.createTarget(`render-${++this._targetCounter}`); }
   /** @internal */ _releaseTarget(target: RenderTarget) { if (this._presented === target) this._presented = undefined; this._pipeline?.releaseTarget(target); }
+  /** @internal */ _isPresented(target: RenderTarget | undefined) { return !!target && this._presented === target; }
   /** @internal */ _present(target: RenderTarget) { target.activate(); target.present(); this._presented = target; }
   /** @internal */ _notifyError(value: unknown): Error {
     const error = value instanceof Error ? value : new Error(String(value));

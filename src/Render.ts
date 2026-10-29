@@ -301,6 +301,8 @@ export default class Render {
   private _disposed = false;
   private _busy = false;
   private _refineOptions?: RefineOptions;
+  private _refillController?: AbortController;
+  private _loopRefinePolicy?: {options: RefineOptions; beforeRefill: () => void};
   private _offlineCamera = false;
   private _input = {scene: -1, camera: -1, settings: ''};
   private _adaptiveScale = 1;
@@ -361,7 +363,7 @@ export default class Render {
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
-  /** Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  /** @internal Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuTileTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeTileTime?.() : undefined; }
   /** Waits for the next release of WebGPU sampling queue capacity and returns true
    * when sampling was queued. Returns false immediately with no queued sampling,
@@ -503,6 +505,78 @@ export default class Render {
     catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
     finally { this._refineOptions = previous; this._engine._reportShaderProgress(); }
   }
+  /**
+   * Synchronously calls refine() once, then refills WebGPU sampling until deadline
+   * (the performance.now() time base). Call present() immediately afterwards: the
+   * first refine has already run; later refills leave resolving to presentation.
+   * Refilling stops on abort, a hidden page, unavailable sampling capacity, or when
+   * batching, convergence, tile timing/budget or this render's final display no
+   * longer permits it. Preparing, compiling, denoising and the first incomplete
+   * sample advance only through the synchronous call. WebGL runs only that call.
+   * A new call ends the previous refill. Asynchronous errors set status to error
+   * and resolve; synchronous errors follow refine().
+   * @param deadline End time in performance.now() milliseconds.
+   * @param options.signal Optional application cancellation; default none. An
+   * already aborted signal still permits the synchronous refine().
+   */
+  refineUntil(deadline: number, options?: {signal?: AbortSignal}): Promise<void> {
+    const policy = this._loopRefinePolicy; this._loopRefinePolicy = undefined;
+    const signal = options?.signal;
+    this._refillController?.abort();
+    const controller = this._refillController = new AbortController();
+    // Keep lifecycle exceptions synchronous, just like refine(). Install the
+    // controller first so a synchronous sample listener can revoke this call.
+    try { this.refine(undefined, policy?.options); }
+    catch (error) { controller.abort(); if (this._refillController === controller) this._refillController = undefined; throw error; }
+    const device = this._engine.device;
+    const canContinue = (afterWait = false) => !controller.signal.aborted && !signal?.aborted &&
+      !this._disposed && !this._busy && device !== undefined && device === this._engine.device &&
+      (typeof document === 'undefined' || !document.hidden) && performance.now() < deadline &&
+      this.batchSamples && this.status === 'converging' && !this.denoising && this.samples > 0 &&
+      this.gpuTileTimeMs !== undefined && this.gpuTileTimeMs <= this.timeBudgetMs &&
+      this._engine.display.channel === 'final' && (!afterWait || this._engine._isPresented(this._target));
+    if (!canContinue()) {
+      if (this._refillController === controller) this._refillController = undefined;
+      return Promise.resolve();
+    }
+    return (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const abort = () => controller.abort();
+      const visibility = () => { if (document.hidden) abort(); };
+      let stopped!: () => void;
+      const cancelled = new Promise<false>(resolve => { stopped = () => resolve(false); });
+      controller.signal.addEventListener('abort', stopped, {once: true});
+      signal?.addEventListener('abort', abort, {once: true});
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility);
+      if (Number.isFinite(deadline)) timer = setTimeout(abort, Math.min(2147483647, Math.max(0, deadline - performance.now())));
+      try {
+        while (canContinue()) {
+          if (!await Promise.race([this.whenReadyToRefine(), cancelled])) break;
+          policy?.beforeRefill();
+          if (!canContinue(true)) break;
+          this.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && !this._disposed) {
+          this._engine._setRenderError(this._engine._notifyError(error)); this._status = 'error';
+        }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        controller.signal.removeEventListener('abort', stopped);
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility);
+        if (this._refillController === controller) this._refillController = undefined;
+      }
+    })();
+  }
+  /** @internal Whether this render currently has a between-frame lease. */
+  get _refilling() { return !!this._refillController && !this._refillController.signal.aborted; }
+  /** @internal Preserve loop-specific synchronous overrides while using refineUntil. */
+  _refineUntil(deadline: number, signal: AbortSignal, options: RefineOptions, beforeRefill: () => void): Promise<void> {
+    this._loopRefinePolicy = {options, beforeRefill};
+    try { return this.refineUntil(deadline, {signal}); }
+    finally { this._loopRefinePolicy = undefined; }
+  }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
     this._reloadDenoiser();
@@ -600,15 +674,16 @@ export default class Render {
   }
 
   private _cancelDenoise() { this._denoiseController?.abort(); this._denoiseController = undefined; this._denoiseRevision++; this._target?.cancelDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
-  /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
+  /** @internal */ _inputsChanged(resetTiming = false) { this._refillController?.abort(); this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
   /** @internal */ _deviceLost(recovering: boolean) {
+    this._refillController?.abort();
     this._cancelAdaptiveFrames();
     this._cancelDenoise(); this._filterRevision++;
     this._filter = undefined; this._filterPending = undefined; this._filterKey = '';
     this._target = undefined; this._input = {scene: -1, camera: -1, settings: ''};
     this._status = recovering ? 'preparing' : 'error';
   }
-  /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
+  /** @internal */ _displayChanged() { this._refillController?.abort(); this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
     const target = this._target, filter = this._filter;
     if (!target || !filter || this._denoisePending || this.samples < 1 || this._denoisedSamples === this.samples) return;
@@ -670,10 +745,11 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
+    this._refillController?.abort();
     this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise(); this._cancelAdaptiveFrames();
     if (this._target) this._engine._releaseTarget(this._target);
     if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
@@ -702,6 +778,7 @@ export default class Render {
       const current = this._engine._inputs;
       if (current.scene !== inputs.scene || current.camera !== inputs.camera) throw new Error('Engine inputs changed during converge.');
     };
+    this._refillController?.abort();
     this._busy = true;
     const abortConverge = () => this._cancelDenoise();
     options.signal?.addEventListener('abort', abortConverge, {once: true});
