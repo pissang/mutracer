@@ -1,3 +1,4 @@
+import {assertNoResearchArtifacts, assertNoProductionResearchImports} from './check-research-artifacts.mjs';
 // Builds the static site deployed to Cloudflare (see wrangler.jsonc):
 //   dist-site/            home page (site/)
 //   dist-site/viewer/     viewer (viewer/)
@@ -24,3 +25,6 @@ renameSync(path.join(out, 'viewer/oidn'), path.join(out, 'oidn'));
 // three.ts loads this at run time, so Vite does not copy it.
 mkdirSync(path.join(out, 'examples/assets'), { recursive: true });
 copyFileSync(path.join(root, 'examples/assets/chess.glb'), path.join(out, 'examples/assets/chess.glb'));
+
+assertNoProductionResearchImports(root);
+assertNoResearchArtifacts(out);

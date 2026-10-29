@@ -1,3 +1,4 @@
+import {assertNoResearchArtifacts, assertNoProductionResearchImports} from './check-research-artifacts.mjs';
 import ts from 'typescript';
 import { createShaderFormattingTransformer } from './shader-formatting.mjs';
 import { loadShaderIdentifierMap } from './shader-identifiers.mjs';
@@ -19,7 +20,9 @@ rmSync(outputRoot, { recursive: true, force: true });
 const configPath = path.join(projectRoot, 'tsconfig.json');
 const config = ts.readConfigFile(configPath, ts.sys.readFile);
 const parsed = ts.parseJsonConfigFileContent(config.config ?? {}, ts.sys, projectRoot);
-const program = ts.createProgram(parsed.fileNames, parsed.options);
+assertNoProductionResearchImports(projectRoot);
+const researchRoot = path.join(projectRoot, 'src', 'research') + path.sep;
+const program = ts.createProgram(parsed.fileNames.filter(filename => !filename.startsWith(researchRoot)), parsed.options);
 const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
   ...ts.getPreEmitDiagnostics(program)];
 if (!diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) {
@@ -52,3 +55,5 @@ copyFileSync(
 const workerClientPath = path.join(outputRoot, 'renderer', 'bvhWorkerClient.js');
 writeFileSync(workerClientPath,
   readFileSync(workerClientPath, 'utf8').replace('./bvh.worker.ts', './bvh.worker.js'));
+
+assertNoResearchArtifacts(outputRoot);

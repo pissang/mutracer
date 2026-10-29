@@ -26,7 +26,7 @@ export async function photonMapContract() {
   pass.setBindGroup(0, device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: batch.data.createView()}]}));
   pass.dispatchWorkgroups(Math.ceil(count / 64));
   pass.end();
-  map.encode(encoder, [], target, 1, {width: 100, height: 100, photons: count, batch: 0, 
+  map.encode(encoder, [], target, 1, {width: 100, height: 100, photons: count, batch: 0,
     clear: true, run: true, viewProjection: new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]), orthographic: true, casterSphere: [0, 0, 0, 1], cameraScale: 1});
   const stride = Math.ceil(batch.headers.width * 4 / 256) * 256;
   const readback = device.createBuffer({size: stride * batch.headers.height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
