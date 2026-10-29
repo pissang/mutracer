@@ -199,7 +199,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 #if !defined(USE_ENVMAP)
       // TODO treat background as a light source
       if (towardsCam) {
-        path.li = path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
+        path.li += path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
       }
 #endif
     }
