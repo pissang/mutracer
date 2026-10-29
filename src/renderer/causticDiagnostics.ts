@@ -13,6 +13,10 @@ interface CausticDiagnostics {
  photonProgressiveScreenRadius?:boolean;
  photonScreenMinimum?:number;
  photonCountDivisor?:number;
+ /** Scale experiments; off by default and excluded from public settings. */
+ photonPerCasterRadius?:boolean;
+ causticViewImportance?:boolean;
+ photonDeepScreenPixels?:number;
  photonSkipQuery?:boolean;
  photonSkipVisible?:boolean;
  photonMaxDepth?:number;

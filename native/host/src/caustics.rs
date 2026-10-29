@@ -11,6 +11,7 @@ pub(crate) struct Metadata {
     pub light_photons: u32,
     pub photon_map_photons: u32,
     pub initial_radius: f32,
+    pub per_caster_radius: f32,
     pub light_shader: String,
     pub photon_shader: String,
     pub grid_shader: String,
@@ -82,6 +83,7 @@ pub(crate) struct State {
     template: Vec<u8>,
     initial_radius: f32,
     radius_scaling: RadiusScaling,
+    experiments: u32,
     size: [u32; 2],
     pixels: u32,
     _distribution: wgpu::Texture,
@@ -355,7 +357,7 @@ impl State {
     }
     pub fn new(
         gpu: &GpuDevice,
-        packet: Packet,
+        mut packet: Packet,
         layouts: &[wgpu::BindGroupLayout],
         scene: &Scene,
         buffers: &HashMap<usize, wgpu::Buffer>,
@@ -380,11 +382,23 @@ impl State {
             )?;
         }
         let m = packet.metadata;
+        let local = std::env::var("MUTRACER_PHOTON_PER_CASTER_RADIUS").as_deref() == Ok("1");
+        let view = std::env::var("MUTRACER_CAUSTIC_VIEW_IMPORTANCE").as_deref() == Ok("1");
+        let deep = std::env::var("MUTRACER_PHOTON_DEEP_PIXELS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0)
+            .min(65535);
+        let experiments = u32::from(local) | (deep << 8);
+        let words_per_photon = if local { 4u64 } else { 3 };
+        let bytes_per_photon = 16 + words_per_photon * 4;
         let device = &gpu.device;
         let pixels = size[0] * size[1];
         if packet.uniform.len() != 112 {
             return Err("Invalid caustic uniform".into());
         }
+        packet.uniform[108..112]
+            .copy_from_slice(&(u32::from(local) | (u32::from(view) << 1)).to_le_bytes());
         let distribution = texture(
             gpu,
             m.distribution_width,
@@ -407,9 +421,10 @@ impl State {
                 u64::from(limit.max_texture_dimension_2d)
                     .pow(2)
                     .saturating_sub(262144 * 4 + 8)
-                    / 3,
+                    / words_per_photon,
             )
-            .min((128 * 1024 * 1024 - 13 * 1024 * 1024) / 28) as u32;
+            .min((128 * 1024 * 1024 - 13 * 1024 * 1024) / bytes_per_photon)
+            as u32;
         let count = |requested: u32| {
             let mut n = requested.clamp(1, max_count);
             loop {
@@ -420,13 +435,13 @@ impl State {
                 };
                 let bytes = u64::from(buckets + buckets / 256) * 32
                     + capacity(u64::from(n)) * 16
-                    + capacity(u64::from(n) * 3 + u64::from(buckets) * 4 + 8) * 4
+                    + capacity(u64::from(n) * words_per_photon + u64::from(buckets) * 4 + 8) * 4
                     + 32;
                 if bytes <= 128 * 1024 * 1024 || n == 1 {
                     break n;
                 }
                 n = n
-                    .saturating_sub(((bytes - 128 * 1024 * 1024).div_ceil(28)) as u32)
+                    .saturating_sub(((bytes - 128 * 1024 * 1024).div_ceil(bytes_per_photon)) as u32)
                     .max(1);
             }
         };
@@ -445,10 +460,11 @@ impl State {
                 true,
                 wgpu::TextureFormat::Rgba32Uint,
             );
+            let header_texels = n * words_per_photon as u32 + buckets * 4 + 8;
             let headers = texture(
                 gpu,
-                (n * 3 + buckets * 4 + 8).min(limit.max_texture_dimension_2d),
-                (n * 3 + buckets * 4 + 8).div_ceil(limit.max_texture_dimension_2d),
+                header_texels.min(limit.max_texture_dimension_2d),
+                header_texels.div_ceil(limit.max_texture_dimension_2d),
                 None,
                 true,
                 wgpu::TextureFormat::R32Uint,
@@ -662,7 +678,12 @@ impl State {
             light,
             photons,
             template: packet.uniform,
-            initial_radius: m.initial_radius,
+            initial_radius: if local {
+                m.per_caster_radius
+            } else {
+                m.initial_radius
+            },
+            experiments,
             radius_scaling: RadiusScaling::probe(),
             size,
             pixels,
@@ -723,6 +744,7 @@ impl State {
             radius
         };
         data[20..24].copy_from_slice(&fine_radius.to_le_bytes());
+        data[24..28].copy_from_slice(&self.experiments.to_le_bytes());
         gpu.queue.write_buffer(&p.uniform, 0, &data);
         let dispatch =
             |pass: &mut wgpu::ComputePass<'_>, i: usize, pipeline: &wgpu::ComputePipeline| {

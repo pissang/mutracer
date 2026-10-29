@@ -29,7 +29,16 @@ it('caps dual-index allocations to the budget and dispatches their second row',a
  map.encode(encoder,[],target,.05,{width:1,height:1,photons:5_000_000,batch:0,clear:true,run:true,viewProjection:new Float32Array(16),casterSphere:[0,0,0,1],cameraScale:1});
  expect(dispatches).toEqual([[65535,2],[1024,2],[1,2],[65535,2]]);
  const capped=map.ensure({},100_000_000);expect(capped.count).toBeLessThan(5_000_000);
- map.dispose();
+ const {causticDiagnostics:d}=await import('../../src/renderer/causticDiagnostics');
+ const original=d.photonPerCasterRadius;
+ try {
+  d.photonPerCasterRadius=true;
+  const local=map.ensure(target,5_000_000);
+  expect(local).not.toBe(batch);
+  expect(local.count).toBeLessThan(batch.count);
+  expect(map.bytes(target)).toBeLessThanOrEqual(128*1024*1024);
+  expect(local.headers.width*local.headers.height).toBeGreaterThanOrEqual(photonLayout(local.count,true).texels);
+ } finally {d.photonPerCasterRadius=original;map.dispose();}
 });
 
 it('scales hash capacity to small batches and caps large batches',()=>{
@@ -123,7 +132,7 @@ it('packs the opt-in pixel schedule from accumulation batches rather than random
  const map=Object.assign(Object.create(WGPUPhotonMap.prototype),{
   device:{queue:{writeBuffer:(_buffer:unknown,_offset:number,bytes:ArrayBuffer)=>writes.push(new Float32Array(bytes.slice(0)))}},
   targets:new Map([[target,{count:16,buckets:256}]]),emission:{emit(){}},pipelines:[]
- }) as WGPUPhotonMap;
+ }) as import('../../src/renderer/WGPUPhotonMap').WGPUPhotonMap;
  const encoder={clearBuffer(){},beginComputePass:()=>({end(){}})} as unknown as GPUCommandEncoder;
  const options={width:1000,height:1000,viewProjection:new Float32Array([2,0,0,0,0,2,0,0,0,0,1,-1,0,0,0,0]),
   casterSphere:[0,0,-5,1],photons:16,batch:80,progressiveBatch:64,clear:true,run:true,cameraScale:1};

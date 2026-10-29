@@ -1,3 +1,4 @@
+import {causticDiagnostics} from './causticDiagnostics.js';
 import {packCausticLightUniform} from './causticUniform.js';
 export {packCausticLightUniform} from './causticUniform.js';
 import {resourceTableLayout, setResourceTable, type ResourceTable} from './wgpuBindless.js';
@@ -196,6 +197,7 @@ export class WGPUCausticLightPass {
     if (!this.pipeline) return;
     const data = packCausticLightUniform({
       ...options,
+      experiments: (+!!causticDiagnostics.photonPerCasterRadius) | (+!!causticDiagnostics.causticViewImportance << 1),
       casterCount: this.casterCount,
       choiceCount: this.choiceCount
     });

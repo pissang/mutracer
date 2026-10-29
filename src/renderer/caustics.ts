@@ -59,12 +59,12 @@ export function causticCasterSphere(meshes:readonly Mesh[]):CasterSphere {
   return [center[0],center[1],center[2],radius];
 }
 /** CPU reference for the solid-angle mixture, including overlapping cones. */
-export function casterDirectionPdf(origin:readonly number[],direction:readonly number[],spheres:readonly CasterSphere[]) {
+export function casterDirectionPdf(origin:readonly number[],direction:readonly number[],spheres:readonly CasterSphere[],weights:readonly number[]=[]) {
   let total=0,overlaps=0;
-  for(const s of spheres){const d=Math.hypot(s[0]-origin[0],s[1]-origin[1],s[2]-origin[2]);
+  for(const [index,s] of spheres.entries()){const weight=weights[index]??1;const d=Math.hypot(s[0]-origin[0],s[1]-origin[1],s[2]-origin[2]);
     const cosine=d>s[3]?Math.sqrt(Math.max(0,1-(s[3]/d)**2)):-1;
-    total+=2*Math.PI*(1-cosine);
-    if(d<=s[3]||((s[0]-origin[0])*direction[0]+(s[1]-origin[1])*direction[1]+(s[2]-origin[2])*direction[2])/d>=cosine)overlaps++;
+    total+=2*Math.PI*(1-cosine)*weight;
+    if(d<=s[3]||((s[0]-origin[0])*direction[0]+(s[1]-origin[1])*direction[1]+(s[2]-origin[2])*direction[2])/d>=cosine)overlaps+=weight;
   }
   return total>0?overlaps/total:0;
 }

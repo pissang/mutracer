@@ -1577,7 +1577,9 @@ class WGPURayTracePass {
       const requested = this._causticSettings?.photonMapping,
         initial = typeof requested === 'object' ? requested.initialRadius : undefined;
       const radius =
-        Number.isFinite(initial) && initial! > 0 ? initial! : Math.max(this._causticBounds[3] * 0.03, 1e-4);
+        Number.isFinite(initial) && initial! > 0 ? initial! : Math.max((causticDiagnostics.photonPerCasterRadius
+          ? causticCasterSpheres(this._meshes).reduce((maximum, s) => Math.max(maximum, s[3]), 0)
+          : this._causticBounds[3]) * 0.03, 1e-4);
       const batch = Math.max(
         1,
         this._rtUniform.views.sampleCount[0] - this._rtUniform.views.sampleSequenceOffset[0] + 1

@@ -29,14 +29,14 @@ export function photonBucketCount(photons: number) {
   return Math.min(PHOTON_GRID_SIZE, 2 ** Math.ceil(Math.log2(Math.max(256, photons * 2))));
 }
 /** Shared texture address contract; payload is stored once, indices twice. */
-export function photonLayout(count: number) {
+export function photonLayout(count: number, perCasterRadius = false) {
   const buckets = photonBucketCount(count);
   const coarseHeaders = 8;
   const fineHeaders = coarseHeaders + buckets * 2;
   const coarseIndices = fineHeaders + buckets * 2;
   const fineIndices = coarseIndices + count;
   const directions = fineIndices + count;
-  return {buckets, coarseHeaders, fineHeaders, coarseIndices, fineIndices, directions, texels: directions + count};
+  return {buckets, coarseHeaders, fineHeaders, coarseIndices, fineIndices, directions, texels: directions + count * (perCasterRadius ? 2 : 1)};
 }
 /** Batch-local hash buckets: count, two-level parallel prefix sum, then parallel scatter. */
 export const photonGridCompute = /* wgsl */ `
@@ -53,7 +53,7 @@ export const photonGridCompute = /* wgsl */ `
     skipQuery: f32,
     buckets: u32,
     fineRadius: f32,
-    padding1: u32,
+    experiments: u32,
     padding2: u32,
   }
   @group(0)@binding(0)var photons:texture_2d<u32>;
@@ -146,6 +146,7 @@ export const photonGridCompute = /* wgsl */ `
       storeIndex(4u,parameters.count);
       storeIndex(5u,parameters.buckets);
       storeIndex(6u,bitcast<u32>(parameters.fineRadius));
+      storeIndex(7u,parameters.experiments);
     }
   }
   @compute @workgroup_size(64)
@@ -248,8 +249,11 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
       return vec3f(0.0);
     }
     var radius=globalRadius;
-    if(visible&&screenPixels>0.0) {
-      radius=min(radius,photonPixelFootprint(si)*screenPixels);
+    let experiments=photonIndexWord(7u);
+    let deepPixels=f32(experiments>>8u);
+    let queryPixels=select(deepPixels,screenPixels,visible);
+    if(queryPixels>0.0) {
+      radius=min(radius,photonPixelFootprint(si)*queryPixels);
     }
     let layer=select(0u,1u,visible&&screenPixels>0.0);
     let cellSize=select(globalRadius,2.0*bitcast<f32>(photonIndexWord(6u)),layer==1u);
@@ -281,6 +285,12 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
             if(any(vec3i(floor(position/cellSize))!=queryCell)||distance(position,si.position)>=radius) {
               continue;
             }
+            var kernelRadius=radius;
+            if((experiments&1u)!=0u) {
+              let scale=bitcast<f32>(photonIndexWord(8u+buckets*4u+u32(emitted)*3u+index));
+              kernelRadius=min(radius,globalRadius*scale);
+              if(!(kernelRadius>0.0)||distance(position,si.position)>=kernelRadius) { continue; }
+            }
             let directions=photonIndexWord(8u+buckets*4u+u32(emitted)*2u+index);
             let normal=photonDecodeOct(vec2f(f32(directions&255u)/255.0,f32((directions>>8u)&127u)/127.0));
             if(dot(normal,si.faceNormal)<0.9) {
@@ -300,7 +310,7 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
             }
             var pdf:f32;
             let response=openpbr_eval_prepared(prepared,incoming,&pdf);
-            sum+=response*flux/cosine;
+            sum+=response*flux/cosine*(radius*radius)/(kernelRadius*kernelRadius);
           }
         }
       }
@@ -312,6 +322,16 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
 /** Evidence-only per-query counters; no extra bindings or public render options. */
 export function photonQuerySource(debugGroup = -1) {
   if (debugGroup < 50) return photonQueryWgsl;
+  // Offline union-of-photons audit. Each depth is replayed with the same seed;
+  // payloads are positions/normals rather than radiance, before path throughput.
+  if (debugGroup >= 80) {
+    const normal = debugGroup >= 130 || debugGroup === 81;
+    const visible = debugGroup < 100;
+    const depth = debugGroup - (normal ? 130 : 100);
+    const selected = visible ? 'visible' : `!visible&&samplingBounce==${depth}u`;
+    const payload = debugGroup === 82 ? 'vec3f(photonPixelFootprint(si),radius,1.0)' : normal ? 'si.faceNormal' : 'si.position';
+    return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl.replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats=${payload};}return sum/(PI*radius*radius);`);
+  }
   const selected = debugGroup === 50 || debugGroup === 73 ? 'visible' : debugGroup === 72 ? '!visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
   return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl
     .replace('var sum=vec3f(0.0);', 'var sum=vec3f(0.0);var reads=0u;var passed=0u;')

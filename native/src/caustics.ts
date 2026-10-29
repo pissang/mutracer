@@ -13,6 +13,7 @@ import {decodeCamera} from './camera-core.js';
 export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBinding[];materials:Material[];lights:AnalyticLightState[];emissive:EmissiveTriangle[];environmentPower:number;lighting:Float32Array;cacheKey:object},
  settings:{causticFlags:number;lightPhotons:number;photonMapPhotons:number;photonMapRadius:number},width:number,height:number,cameraRecord:Uint8Array,cameraUniform:Uint8Array,constants:Record<string,boolean|number>,features:WGPUShaderFeatures,intersections:string,hardware:boolean){
  const spheres=causticCasterSpheres(input.meshes);if(!settings.causticFlags||!spheres.length)return undefined;
+ let maximumCasterRadius=0;for(const sphere of spheres)maximumCasterRadius=Math.max(maximumCasterRadius,sphere[3]);
  const flags=settings.causticFlags&6,bounds=causticCasterSphere(input.meshes);
  const emission=causticEmissionTable(input.lights,input.emissive,bounds[3],input.environmentPower);
  const texels=Math.max(1,spheres.length+emission.count*2),distributionWidth=Math.min(texels,4096),distributionHeight=Math.ceil(texels/distributionWidth);
@@ -25,6 +26,7 @@ export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBi
  const metadata={flags,workgroupSize:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
   lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||defaultPhotonMapPhotons(width,height),
   initialRadius:settings.photonMapRadius||Math.max(bounds[3]*.03,1e-4),
+  perCasterRadius:settings.photonMapRadius||Math.max(maximumCasterRadius*.03,1e-4),
   lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections):'',
   photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections):'',
   composeShader:causticBufferCompositeCompute,gridShader:flags&4?photonGridCompute:'',accumulateShader:causticAccumulateCompute};

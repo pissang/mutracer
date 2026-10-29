@@ -26,6 +26,9 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     await render.setDenoiser({type:'oidn', model:'standard', schedule:'progressive', weightsBaseUrl:'/oidn/weights/'});
     await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:17});
   }
+  const finishAudit = (window as any).causticOidnAudit
+    ? (await import('./causticOidnAudit.js')).auditOidn(engine, render, options.name, Math.max(...options.checkpoints))
+    : undefined;
   for(const samples of options.countersOnly?[]:options.checkpoints){
     const started=performance.now();
     let traceEnded=started;
@@ -52,6 +55,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
       await save(options.name+'-'+samples+'-oidn.json',JSON.stringify(row));
     }
   }
+  await finishAudit?.();
   await render.setDenoiser(null);
   if(!options.countersOnly){
   const originalSkip=d.photonSkipQuery;
@@ -91,6 +95,32 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     }
     rows.push({group:99,read:stats(deepReads),passed:stats(deepPassed)});
     await save(options.name+'-queries.json',JSON.stringify(rows,null,2));
+    d.debugGroup=-1;
+  }
+  if ((window as any).causticQueryPositions && options.settings.photonMapping) {
+    d.photonDebugBatch=64;
+    for (const group of [80,81,82,...Array.from({length:21},(_,i)=>100+i),...Array.from({length:21},(_,i)=>130+i)]) {
+      d.debugGroup=group;
+      await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:80});
+      const image=await render.readPixels('hdr');
+      await save(options.name+'-query-'+group+'.f32',image.data.buffer as ArrayBuffer);
+    }
+    const pass=mneeDiagnostics.rootPass as any;
+    const batch=pass._photonMap.get(pass._activeTarget);
+    const device=engine.device!;
+    for (const [key,channels] of [['data',4],['headers',1]] as const) {
+      const texture=batch[key] as GPUTexture;
+      const row=Math.ceil(texture.width*channels*4/256)*256;
+      const staging=device.createBuffer({size:row*texture.height,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+      const encoder=device.createCommandEncoder();
+      encoder.copyTextureToBuffer({texture},{buffer:staging,bytesPerRow:row},[texture.width,texture.height]);
+      device.queue.submit([encoder.finish()]);await staging.mapAsync(GPUMapMode.READ);
+      const source=new Uint8Array(staging.getMappedRange()),packed=new Uint8Array(texture.width*texture.height*channels*4);
+      for(let y=0;y<texture.height;y++)packed.set(source.subarray(y*row,y*row+texture.width*channels*4),y*texture.width*channels*4);
+      await save(options.name+'-photons-'+key+'.u32',packed);
+      staging.unmap();staging.destroy();
+    }
+    await save(options.name+'-photon-audit.json',JSON.stringify({width:render.width,height:render.height,count:batch.count,buckets:batch.buckets,camera:{projection:engine.camera!.projection,fov:engine.camera!.fov,transform:Array.from(engine.camera!.transform)}}));
     d.debugGroup=-1;
   }
   d.photonDebugBatch=undefined;

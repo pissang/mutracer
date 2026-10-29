@@ -78,6 +78,7 @@ ${adjoint}
     casterCount: u32,
     choiceCount: u32,
     orthographic: u32,
+    experiments: u32,
   }
   @group(3) @binding(0) var<uniform> caustic: CausticLightUniform;
 ${
@@ -158,21 +159,32 @@ fn causticCosMax(s:vec4f,origin:vec3f)->f32 {
   let distanceSquared=dot(s.xyz-origin,s.xyz-origin);
   return select(-1.0,sqrt(max(0.0,1.0-s.w*s.w/distanceSquared)),distanceSquared>s.w*s.w);
 }
-fn causticDirection(origin:vec3f,rnd:vec3f,pdf:ptr<function,f32>)->vec3f {
+// A positive floor retains paths from offscreen or occluded casters. The
+// complete weighted mixture PDF below, including overlaps, compensates selection.
+fn causticTargetWeight(s:vec4f)->f32 {
+  if((caustic.experiments&2u)==0u) { return 1.0; }
+  let clip=caustic.viewProjection*vec4f(s.xyz,1.0);
+  let m=caustic.viewProjection;
+  let extent=s.w*max(length(vec3f(m[0].x,m[1].x,m[2].x)),length(vec3f(m[0].y,m[1].y,m[2].y)));
+  if(clip.w<=0.0||abs(clip.x)>clip.w+extent||abs(clip.y)>clip.w+extent) { return .05; }
+  return .05+min(1.0,extent*extent/max(clip.w*clip.w,1e-20));
+}
+fn causticDirection(origin:vec3f,rnd:vec3f,pdf:ptr<function,f32>,targetRadius:ptr<function,f32>)->vec3f {
   var total=0.0;
   for(var i=0u;i<caustic.casterCount;i++) {
-    total+=1.0-causticCosMax(causticSphere(i),origin);
+    total+=(1.0-causticCosMax(causticSphere(i),origin))*causticTargetWeight(causticSphere(i));
   }
   var choice=rnd.z*total;
   var selected=causticSphere(0u);
   for(var i=0u;i<caustic.casterCount;i++) {
     let sphere=causticSphere(i);
     selected=sphere;
-    choice-=1.0-causticCosMax(sphere,origin);
+    choice-=(1.0-causticCosMax(sphere,origin))*causticTargetWeight(sphere);
     if(choice<=0.0) {
       break;
     }
   }
+  *targetRadius=selected.w;
   let axis=normalize(selected.xyz-origin);
   let cosine=mix(1.0,causticCosMax(selected,origin),rnd.x);
   let sine=sqrt(max(0.0,1.0-cosine*cosine));
@@ -186,7 +198,7 @@ fn causticDirection(origin:vec3f,rnd:vec3f,pdf:ptr<function,f32>)->vec3f {
     let sphere=causticSphere(i);
     let c=causticCosMax(sphere,origin);
     if(c<0.0||dot(normalize(sphere.xyz-origin),direction)>=c) {
-      overlaps+=1.0;
+      overlaps+=causticTargetWeight(sphere);
     }
   }
   *pdf=overlaps/max(TWOPI*total,1e-20);
@@ -284,22 +296,25 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
   var origin=caustic.casterSphere.xyz+ls.direction*ls.dist;
   var direction:vec3f;
   var flux:vec3f;
+  var targetRadius=caustic.casterSphere.w;
   if(infinite) {
     direction=-ls.direction;
     // Mixture of projected caster disks. Every overlap contributes to the PDF.
     var area=0.0;
     for(var i=0u;i<caustic.casterCount;i++) {
-      area+=causticSphere(i).w*causticSphere(i).w;
+      let s=causticSphere(i);
+      area+=s.w*s.w*causticTargetWeight(s);
     }
     var choice=causticEmission1D(causticDim(63u))*area;
     var sphere=causticSphere(0u);
     for(var i=0u;i<caustic.casterCount;i++) {
       sphere=causticSphere(i);
-      choice-=sphere.w*sphere.w;
+      choice-=sphere.w*sphere.w*causticTargetWeight(sphere);
       if(choice<=0.0) {
         break;
       }
     }
+    targetRadius=sphere.w;
     var t:vec3f;
     var b:vec3f;
     sampling_orthonormal_basis(direction,&t,&b);
@@ -312,7 +327,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
       let offset=origin-s.xyz;
       let projected=offset-direction*dot(offset,direction);
       if(dot(projected,projected)<=s.w*s.w) {
-        overlaps+=1.0;
+        overlaps+=causticTargetWeight(s);
       }
     }
     let diskPdf=overlaps/max(PI*area,1e-20);
@@ -327,7 +342,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
       return;
     }
     var directionPdf:f32;
-    direction=causticDirection(origin,vec3f(causticEmission2D(causticDim(62u)),causticEmission1D(causticDim(63u))),&directionPdf);
+    direction=causticDirection(origin,vec3f(causticEmission2D(causticDim(62u)),causticEmission1D(causticDim(63u))),&directionPdf,&targetRadius);
     var emission=ls.emission;
     var emissionCosine=max(0.0,dot(ls.normal,direction));
     if(ls.sourceType==2u) {
@@ -406,6 +421,14 @@ ${mode === 'lightTracing' ? '&&!(caustic.mnee!=0u&&r1)' : ''}){${
         : /* wgsl */ `
   let position=bitcast<vec3u>(si.position);
   photonStore(photonIndex,vec4u(position,photonEncodeFlux(flux)));
+  if((caustic.experiments&1u)!=0u) {
+    var maximum=1e-8;
+    for(var i=0u;i<caustic.casterCount;i++) { maximum=max(maximum,causticSphere(i).w); }
+    let buckets=min(${PHOTON_GRID_SIZE}u,1u<<(32u-countLeadingZeros(max(256u,caustic.photonCount*2u)-1u)));
+    let index=8u+buckets*4u+caustic.photonCount*3u+photonIndex;
+    let width=textureDimensions(photonDirections).x;
+    textureStore(photonDirections,vec2i(vec2u(index%width,index/width)),vec4u(bitcast<u32>(targetRadius/maximum)));
+  }
   let incoming=vec2u(round(photonEncodeOct(-ray.d)*255.0));
   let normal=vec2u(round(photonEncodeOct(si.faceNormal)*vec2f(255.0,127.0)));
   photonStoreDirections(photonIndex,normal.x|(normal.y<<8u)|(select(0u,1u,r1)<<15u)|(incoming.x<<16u)|(incoming.y<<24u));
