@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumRgb} from '../../src/renderer/causticSpectrum';
+import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumRgb, causticSpectrumSample} from '../../src/renderer/causticSpectrum';
 
 describe('caustic spectrum weights', () => {
   it('keeps white light white under uniform wavelength sampling', () => {
@@ -13,6 +13,24 @@ describe('caustic spectrum weights', () => {
       });
     }
     for (const value of mean) expect(value).toBeCloseTo(1, 3);
+  });
+
+  it('importance sampling keeps white light white with bounded flux', () => {
+    const steps = 64 * 256;
+    const mean = [0, 0, 0];
+    let peak = 0;
+    for (let i = 0; i < steps; i++) {
+      const {wavelength, pdf} = causticSpectrumSample((i + 0.5) / steps);
+      expect(wavelength).toBeGreaterThanOrEqual(CAUSTIC_WAVELENGTH_MIN);
+      expect(wavelength).toBeLessThanOrEqual(CAUSTIC_WAVELENGTH_MIN + CAUSTIC_WAVELENGTH_RANGE);
+      causticSpectrumRgb(wavelength).forEach((value, c) => {
+        const weight = value / (pdf * CAUSTIC_WAVELENGTH_RANGE);
+        mean[c] += weight / steps;
+        peak = Math.max(peak, weight);
+      });
+    }
+    for (const value of mean) expect(value).toBeCloseTo(1, 2);
+    expect(peak).toBeLessThan(4);
   });
 
   it('varies continuously from blue through green to red', () => {

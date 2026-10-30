@@ -1,5 +1,5 @@
 import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
-import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumWgsl} from '../causticSpectrum.js';
+import {CAUSTIC_WAVELENGTH_RANGE, causticSpectrumWgsl} from '../causticSpectrum.js';
 import background from './chunks/background.wgsl.js';
 import atomic from './chunks/causticAtomic.wgsl.js';
 import adjoint from './chunks/causticAdjoint.wgsl.js';
@@ -320,8 +320,9 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
   hashedCounter=0u;
   rng_initialize(samplingPixel,i32(sampleSeed(caustic.batch,rtUniform.sequenceSeed)));
   var wavelength=0.0;
+  var wavelengthPdf=1.0;
   if(SPECTRAL) {
-    wavelength=${CAUSTIC_WAVELENGTH_MIN}.0+${CAUSTIC_WAVELENGTH_RANGE}.0*causticEmission1D(causticDim(69u));
+    wavelength=causticSpectrumSample(causticEmission1D(causticDim(69u)),&wavelengthPdf);
   }
   var ls:LightSampleRec;
   causticSampleLight(caustic.casterSphere.xyz,vec3f(causticEmission2D(causticDim(60u)),causticEmission1D(causticDim(61u))),&ls);
@@ -413,7 +414,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     flux=emission*emissionCosine/(areaPdf*directionPdf);
   }
   if(SPECTRAL) {
-    flux*=causticSpectrumRgb(wavelength);
+    flux*=causticSpectrumRgb(wavelength)/(wavelengthPdf*${CAUSTIC_WAVELENGTH_RANGE}.0);
   }
   var ray:Ray;
   initRay(&ray,origin+EPS*direction,direction);

@@ -49,6 +49,40 @@ export function causticSpectrumRgb(wavelength: number): Rgb {
   return unnormalizedRgb(wavelength).map((value, c) => value * SCALE[c]) as Rgb;
 }
 
+// Inverse CDF of r+g+b in 5 nm bins. Photons spend fewer samples on dim spectrum
+// tails, and narrow bins keep the flux of every wavelength near-constant in total.
+const SAMPLE_BINS = 60;
+const SAMPLE_BIN_WIDTH = CAUSTIC_WAVELENGTH_RANGE / SAMPLE_BINS;
+const SAMPLE_CDF: readonly number[] = (() => {
+  const substeps = 20;
+  const cdf = [0];
+  for (let bin = 0; bin < SAMPLE_BINS; bin++) {
+    let mass = 0;
+    for (let i = 0; i < substeps; i++) {
+      const [r, g, b] = causticSpectrumRgb(CAUSTIC_WAVELENGTH_MIN + (bin + (i + 0.5) / substeps) * SAMPLE_BIN_WIDTH);
+      mass += r + g + b;
+    }
+    cdf.push(cdf[bin] + mass);
+  }
+  return cdf.map((value) => value / cdf[SAMPLE_BINS]);
+})();
+
+/** Maps a unit random number to a wavelength and its probability density. */
+export function causticSpectrumSample(u: number) {
+  let low = 0;
+  let high = SAMPLE_BINS;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (SAMPLE_CDF[middle] <= u) low = middle;
+    else high = middle;
+  }
+  const mass = SAMPLE_CDF[low + 1] - SAMPLE_CDF[low];
+  return {
+    wavelength: CAUSTIC_WAVELENGTH_MIN + SAMPLE_BIN_WIDTH * (low + (u - SAMPLE_CDF[low]) / mass),
+    pdf: mass / SAMPLE_BIN_WIDTH
+  };
+}
+
 const lobeSum = (lobes: readonly Lobe[]) =>
   lobes.map(([a, mean, below, above]) => `${a}f*causticSpectrumLobe(wavelength,${mean}f,${below}f,${above}f)`).join('+');
 
@@ -61,5 +95,17 @@ fn causticSpectrumRgb(wavelength:f32)->vec3f {
   let xyz=vec3f(${XYZ_LOBES.map(lobeSum).join(',')});
   let rgb=mat3x3f(${[0, 1, 2].map((c) => XYZ_TO_RGB.map((row) => `${row[c]}f`).join(',')).join(',')})*xyz;
   return max(rgb,vec3f(0.0))*vec3f(${SCALE.map((s) => `${s}f`).join(',')});
+}
+fn causticSpectrumSample(u:f32,pdf:ptr<function,f32>)->f32 {
+  let cdf=array<f32,${SAMPLE_BINS + 1}>(${SAMPLE_CDF.map((value) => `${value}f`).join(',')});
+  var low=0u;
+  var high=${SAMPLE_BINS}u;
+  while(high-low>1u) {
+    let middle=(low+high)/2u;
+    if(cdf[middle]<=u) { low=middle; } else { high=middle; }
+  }
+  let mass=cdf[low+1u]-cdf[low];
+  *pdf=mass/${SAMPLE_BIN_WIDTH}.0;
+  return ${CAUSTIC_WAVELENGTH_MIN}.0+${SAMPLE_BIN_WIDTH}.0*(f32(low)+(u-cdf[low])/mass);
 }
 `;
