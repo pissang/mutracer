@@ -544,12 +544,14 @@ export const causticAccumulateCompute = /* wgsl */ `
   @group(0) @binding(0) var<storage,read_write> splats:array<atomic<u32>>;
   @group(0) @binding(1) var<storage,read_write> accumulation:array<vec4f>;
   @compute @workgroup_size(64)
-  fn main(@builtin(global_invocation_id) id:vec3u) {
-    if(id.x>=arrayLength(&accumulation)) {
+  fn main(@builtin(global_invocation_id) id:vec3u, @builtin(num_workgroups) groups:vec3u) {
+    // Large images exceed one dispatch row; preserve the linear pixel order.
+    let pixel=id.x+id.y*groups.x*64u;
+    if(pixel>=arrayLength(&accumulation)) {
       return;
     }
-    let i=id.x*3u;
-    accumulation[id.x]+=vec4f(vec3f(bitcast<f32>(atomicLoad(&splats[i])),bitcast<f32>(atomicLoad(&splats[i+1u])),bitcast<f32>(atomicLoad(&splats[i+2u]))),1.0);
+    let i=pixel*3u;
+    accumulation[pixel]+=vec4f(vec3f(bitcast<f32>(atomicLoad(&splats[i])),bitcast<f32>(atomicLoad(&splats[i+1u])),bitcast<f32>(atomicLoad(&splats[i+2u]))),1.0);
   }
 `;
 

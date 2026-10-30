@@ -185,7 +185,9 @@ export class WGPUCausticLightPass {
     });
     resolve.setPipeline(this.accumulate);
     resolve.setBindGroup(0, output.resolveGroup);
-    resolve.dispatchWorkgroups(Math.ceil((width * height) / 64));
+    const workgroups = Math.ceil((width * height) / 64);
+    const columns = Math.min(workgroups, this.device.limits.maxComputeWorkgroupsPerDimension);
+    resolve.dispatchWorkgroups(columns, Math.ceil(workgroups / columns));
     resolve.end();
   }
   emit(
