@@ -79,6 +79,20 @@ describe('AOV preview settings', () => {
   );
 });
 
+describe('caustic preview settings', () => {
+  it.each(['caustics', 'causticLightTracing', 'causticPhotonMapping'] as const)(
+    'restarts the preview when %s changes', key => {
+      const viewer = engine();
+      const preview = { restart: vi.fn() };
+      Object.assign(viewer, { engine: { display: {} }, final: {}, preview });
+      const apply = viewer as unknown as { applySettings(s: Settings, previous: Settings): void };
+      const previous = { ...DEFAULT_SETTINGS };
+      apply.applySettings({ ...previous, [key]: !previous[key] }, previous);
+      expect(preview.restart).toHaveBeenCalledOnce();
+    }
+  );
+});
+
 describe('imported camera choice', () => {
   it.each(['perspective', 'orthographic'] as const)('continues orbiting a transformed %s scene camera from its view around world up', async (projection) => {
     const viewer = engine();
