@@ -62,6 +62,9 @@ pub struct CausticSettings {
     /// Photons per batch; 0 selects pixel count / 4. Default 0.
     pub light_photons: u32,
     /// Progressive caustic density estimate; default false.
+    /// Without light tracing, directly visible receivers can have fewer
+    /// denoising blotches and more raw noise. Receivers seen through reflection
+    /// or refraction are unchanged.
     pub photon_mapping: bool,
     /// Photons per batch; 0 selects pixel count / 4, at most 262144. Default 0.
     /// Uses 28 bytes each plus up to 13 MiB of overhead; capped by device limits
