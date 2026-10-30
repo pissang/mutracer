@@ -548,6 +548,7 @@ fn compile_pipeline(
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 struct Target {
     workgroup_size: u32,
+    caustic_sequence_offset: u32,
     caustics: Option<caustics::State>,
     aov_shader: wgpu::ShaderModule,
     aov_pipelines: aov::PipelineCache,
@@ -893,6 +894,7 @@ impl GpuScene {
                 .collect();
             Some(Target {
                 workgroup_size: 8,
+                caustic_sequence_offset: 0,
                 caustics: None,
                 aov_shader: depth_shader.clone(),
                 aov_pipelines: aov_pipelines.clone(),
@@ -1127,8 +1129,12 @@ impl GpuScene {
                 ),
             ],
         );
+        let offset = layout::ray_uniform::SAMPLE_SEQUENCE_OFFSET;
+        let caustic_sequence_offset =
+            u32::from_le_bytes(packet.trace[offset..offset + 4].try_into().unwrap());
         Ok(Target {
             workgroup_size,
+            caustic_sequence_offset,
             caustics,
             aov_shader,
             aov_pipelines,
@@ -1188,7 +1194,9 @@ impl GpuScene {
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let pair = (sample - start) * target.caustics.as_ref().map_or(1, |c| c.pass_count());
             let pt_pair = pair + target.caustics.as_ref().map_or(0, |c| c.pt_pair());
-            let batch = f32::from_le_bytes(frame[..4].try_into().unwrap()).max(0.) as u32;
+            // Browser emission uses its f32 sampleCount, including the sequence offset.
+            let sample_count = f32::from_le_bytes(frame[..4].try_into().unwrap()).max(0.);
+            let batch = caustics::emission_batch(sample_count, target.caustic_sequence_offset);
             if let Some(c) = &target.caustics {
                 c.before(
                     &self.gpu,

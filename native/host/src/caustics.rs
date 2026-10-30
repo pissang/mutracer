@@ -24,6 +24,11 @@ pub(crate) struct Packet {
     pub lighting: Vec<u8>,
     pub uniform: Vec<u8>,
 }
+// Match the browser's f32 sampleCount uniform before using it as the photon batch.
+pub(super) fn emission_batch(sample: f32, sequence_offset: u32) -> u32 {
+    (f64::from(sample.max(0.)) + f64::from(sequence_offset)) as f32 as u32
+}
+
 struct Emission {
     pipeline: wgpu::ComputePipeline,
     group: wgpu::BindGroup,
@@ -828,6 +833,17 @@ impl State {
 #[cfg(test)]
 mod radius_tests {
     use super::RadiusScaling;
+    #[test]
+    fn emission_batch_includes_sequence_offset() {
+        let batches: Vec<_> = (0..4)
+            .map(|sample| super::emission_batch(sample as f32, 17))
+            .collect();
+        assert_eq!(batches, [17, 18, 19, 20]);
+        assert_eq!(super::emission_batch(3., 0), 3);
+        // The browser writes the combined number to an f32 uniform first.
+        assert_eq!(super::emission_batch(1., 16_777_216), 16_777_216);
+    }
+
     #[test]
     fn photon_count_radius_contract() {
         for photons in [65536, 262144, 1048576] {
