@@ -13,18 +13,24 @@ function stats(a: number[]) {
   return {queries:a.length,mean:a.reduce((x,y)=>x+y,0)/Math.max(1,a.length),p99:a[Math.floor(a.length*.99)]??0,max:a.at(-1)??0};
 }
 /** Stage timings are uninstrumented; counters run separately at batch 64. */
-export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[];countersOnly?:boolean;denoise?:boolean;counterGroups?:number[];queryProfile?:boolean;progress?:boolean;fixedPixel?:[number,number]}) {
+export async function measure(engine: Engine, render: Render, options: {name:string;settings:CausticSettings;checkpoints:number[];countersOnly?:boolean;denoise?:boolean;counterGroups?:number[];queryProfile?:boolean;progress?:boolean;fixedPixel?:[number,number];seed?:number;sequenceSeed?:number}) {
   const errors:string[]=[];
   engine.device?.addEventListener('uncapturederror', e=>errors.push((e as GPUUncapturedErrorEvent).error.message));
   render.caustics=options.settings;
   render.batchSamples=false;render.maxTiles=1;render.timeBudgetMs=1000;render.bounces=8;
   render.bevel=false;render.fallback=null;render.aovs=[];await render.setDenoiser(null);
   registerMnee(); mneeDiagnostics.captureRoots=true;
-  await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:17});
+  await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:options.seed??17});
+  // Evidence-only seed override on this pass; the production pipeline and its
+  // default seed remain untouched. A sequence offset is not an independent seed.
+  const seedPass=mneeDiagnostics.rootPass as unknown as {setSamplingPattern:(pattern:import('../../src/renderer/sampling.js').SamplingPattern,maxSamples:number,seed?:number)=>void};
+  const originalSampling=seedPass?.setSamplingPattern;
+  if(options.sequenceSeed&&!originalSampling)throw Error('No captured pass for the independent seed override');
+  if(options.sequenceSeed&&originalSampling) seedPass.setSamplingPattern=function(pattern,maxSamples){originalSampling.call(this,pattern,maxSamples,options.sequenceSeed);};
   const results=[];
   if (options.denoise && !options.countersOnly) {
     await render.setDenoiser({type:'oidn', model:'standard', schedule:'progressive', weightsBaseUrl:'/oidn/weights/'});
-    await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:17});
+    await render.converge({samples:1,samplesPerBatch:1,sampleSequenceOffset:options.seed??17});
   }
   const finishAudit = (window as any).causticOidnAudit
     ? (await import('./causticOidnAudit.js')).auditOidn(engine, render, options.name, Math.max(...options.checkpoints))
@@ -32,7 +38,7 @@ export async function measure(engine: Engine, render: Render, options: {name:str
   for(const samples of options.countersOnly?[]:options.checkpoints){
     const started=performance.now();
     let traceEnded=started;
-    await render.converge({samples,samplesPerBatch:1,sampleSequenceOffset:17,
+    await render.converge({samples,samplesPerBatch:1,sampleSequenceOffset:options.seed??17,timeoutMs:900000,
       onProgress:event=>{
         if(event.stage==='denoising')traceEnded=performance.now();
         if(options.progress&&event.stage==='final'&&event.samples%64===0)
@@ -41,8 +47,11 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     await engine.device?.queue.onSubmittedWorkDone();
     const ended=performance.now(),totalMs=ended-started;
     if(!options.denoise)traceEnded=ended;
+    if(render.samples!==samples)throw Error('Incomplete checkpoint: '+render.samples+'/'+samples);
     const hdr=await render.readPixels('hdr');
-    const row={name:options.name,samples,width:hdr.width,height:hdr.height,totalMs,traceMs:traceEnded-started,denoiseMs:ended-traceEnded};
+    const actualSequenceSeed=(seedPass as unknown as {_rtUniform?:{views:{sequenceSeed:Uint32Array}}})?._rtUniform?.views.sequenceSeed[0]??0;
+    if(actualSequenceSeed!==(options.sequenceSeed??0))throw Error('Sequence seed override was not applied');
+    const row={name:options.name,samples,width:hdr.width,height:hdr.height,seed:options.seed??17,sequenceSeed:actualSequenceSeed,backend:engine.backend,adapter:engine.getDiagnostics()?.adapterName,totalMs,traceMs:traceEnded-started,denoiseMs:ended-traceEnded};
     await save(options.name+'-'+samples+'.f32',hdr.data.buffer as ArrayBuffer);
     await save(options.name+'-'+samples+'.json',JSON.stringify(row));results.push(row);
     engine.display.present(render);
@@ -140,5 +149,6 @@ export async function measure(engine: Engine, render: Render, options: {name:str
     d.debugGroup=-1;d.photonDebugBatch=undefined;
   }
   if(errors.length)throw Error(errors.join('\n'));
+  if(options.sequenceSeed&&originalSampling)seedPass.setSamplingPattern=originalSampling;
   return results;
 }
