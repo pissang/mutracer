@@ -8,9 +8,9 @@ exports[`caustic contracts > preserves published light and photon transport sour
 
 exports[`caustic contracts > preserves published light and photon transport sources > camera true/true 1`] = `"8d2604d1c125ad85455be000576ad5766c9fb9f83a97d3e05444373fedb342ab"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"c610d7389723553561d659ff4f02e5c47cb73d70a88690a253fc798010f90b28"`;
+exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"cbf8c501bbe74ddcc4f7dbc3ff02a3d5572f1458c9f5ac07301d191568d38c45"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"917432a4e6f4cfb85642e99cf1839e5afd5aa5d4d7f7e6b05c771c28c6dddec2"`;
+exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"16d4ef744243c772854ef5e0b8a7905e50425de84e3af1794cedd95e382e6b62"`;
 
 exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"36bf961f969fefee80801860cb007fd63578a220e4b798f9bc4023c40ae9f774"`;
 

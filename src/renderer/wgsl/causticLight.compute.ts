@@ -244,7 +244,7 @@ fn causticDirection(origin:vec3f,rnd:vec3f,pdf:ptr<function,f32>,targetRadius:pt
 ${
   mode === 'lightTracing'
     ? /* wgsl */ `${atomic}
-  fn causticCameraConnect(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, incoming: Ray, flux: vec3f) {
+  fn causticCameraConnect(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, incoming: Ray, flux: vec3f, extinction: vec3f) {
     let eye=cameraUniform.viewInv[3].xyz;
     let forward=-normalize(cameraUniform.viewInv[2].xyz);
     let lensSample=causticEmission2D(causticDim(68u));
@@ -294,7 +294,8 @@ ${
   }
   let importance=caustic.cameraScale*rtUniform.outputSize.x*rtUniform.outputSize.y /
   select(max(distanceSquared*cameraCosine*cameraCosine*cameraCosine,1e-12),1.0,caustic.orthographic!=0u);
-  let value=flux*response*causticAdjoint(-incoming.d,direction,normal,si.faceNormal)*importance/f32(caustic.photonCount);
+  let transmittance=exp(-extinction*sqrt(distanceSquared));
+  let value=flux*transmittance*response*causticAdjoint(-incoming.d,direction,normal,si.faceNormal)*importance/f32(caustic.photonCount);
   let pixel=vec2u(film*rtUniform.outputSize);
   let index=(pixel.x+pixel.y*u32(rtUniform.outputSize.x))*3u;
   causticAtomicAdd(index,value.x);
@@ -461,7 +462,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
       if(chain>0u
 ${mode === 'lightTracing' ? '&&!(caustic.mnee!=0u&&r1)' : ''}){${
       mode === 'lightTracing'
-        ? 'causticCameraConnect(si,m,ray,flux);'
+        ? 'causticCameraConnect(si,m,ray,flux,extinction);'
         : /* wgsl */ `
   let position=bitcast<vec3u>(si.position);
   photonStore(photonIndex,vec4u(position,photonEncodeFlux(flux)));
@@ -527,7 +528,8 @@ ${
   if(transmission&&!m.thinWalled) {
     flux/=m.relativeIor*m.relativeIor;
   }
-  if(transmission&&!m.thinWalled) {
+  // Match PT: a clear solid interface does not replace the active medium.
+  if(transmission&&!m.thinWalled&&m.mediumType>0) {
     extinction=select(m.mediumExtinction,vec3f(0.0),m.inside);
     scattering=select(m.mediumScattering,vec3f(0.0),m.inside);
   }

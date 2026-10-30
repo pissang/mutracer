@@ -29,6 +29,7 @@ try {
  if(process.argv.includes('--photon-map')){const photonContract=await page.tab.evaluate("import('/tests/gpu/photonMap.ts').then(m=>m.photonMapContract())");writeFileSync(resolve(directory,'photon-contract.json'),JSON.stringify(photonContract,null,2));}
  if(process.argv.includes('--accumulation-contract')){const accumulation=await page.tab.evaluate("import('/tests/gpu/causticAccumulation.ts').then(m=>m.causticAccumulationContract())");writeFileSync(resolve(directory,'accumulation-contract.json'),JSON.stringify(accumulation,null,2));}
  }
+ if(process.argv.includes('--medium-contract'))writeFileSync(resolve(directory,'medium-contract.json'),JSON.stringify(await page.tab.evaluate("import('/tests/gpu/causticMedium.ts').then(m=>m.causticMediumContract())"),null,2));
  if(process.argv.includes('--emitter-contract'))writeFileSync(resolve(directory,'emitter-contract.json'),JSON.stringify(await page.tab.evaluate('window.emitterFacingContract()'),null,2));
  if(process.argv.includes('--alpha-contract'))writeFileSync(resolve(directory,'alpha-contract.json'),JSON.stringify(await page.tab.evaluate('window.alphaVisibilityContract()'),null,2));
  if(process.argv.includes('--directional-contract'))writeFileSync(resolve(directory,'directional-contract.json'),JSON.stringify(await page.tab.evaluate('window.directionalCausticsContract()'),null,2));
