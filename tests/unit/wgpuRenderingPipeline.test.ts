@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => {
     releaseTarget() {}
     setTransmissiveOutputAlphaMin() {}
     useTarget() {}
-    setQuality() {}
+    setQuality(_options: {caustics?: {photonMapping?: boolean | object}}) {}
     updatePipeline() {}
     isCompilingShader() { return false; }
     isPipelineReady() { return true; }
@@ -142,6 +142,58 @@ async function warmRealtime(pipeline: ReturnType<typeof createPipeline>, camera:
   pipeline.trace(camera, 128); await pipeline.flushDiagnostics();
   enableRealtime(pipeline);
 }
+
+it.each([false, true])('finishes a caustic pipeline switch while presenting the previous preview (PM: %s)', photonMapping => {
+  const preview = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  const final = preview.manager.createTarget('final');
+  const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const, samplingPattern: 'sobol' as const, maxSamples: 8, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+  preview.configure({...settings, caustics: {photonMapping: !photonMapping}});
+  preview.activate(); preview.trace(camera, 8); preview.trace(camera, 8);
+  expect(preview.getTotalSamplesRendered()).toBeGreaterThan(0);
+  final.configure({...settings, caustics: {photonMapping}}); final.setSize(80, 64);
+  const pass = mocks.TracePass.latest;
+  let quality = !photonMapping, revision = 0, compiling = false, ready = false;
+  let complete!: () => void;
+  vi.spyOn(pass, 'setQuality').mockImplementation(options => {
+    const next = !!options.caustics?.photonMapping;
+    if (next !== quality) { quality = next; revision++; ready = false; }
+  });
+  vi.spyOn(pass, 'isCompilingShader').mockImplementation(() => compiling);
+  vi.spyOn(pass, 'isPipelineReady').mockImplementation(() => ready);
+  vi.spyOn(pass, 'updatePipeline').mockImplementation(() => {
+    if (ready || compiling) return;
+    const started = revision; compiling = true;
+    complete = () => { compiling = false; ready = started === revision; };
+  });
+  final.activate(); expect(final.trace(camera, 8)).toBe(true);
+  preview.activate(); preview.drawPostProcess(); preview.present();
+  complete();
+  final.activate(); final.trace(camera, 8); final.trace(camera, 8);
+  expect(final.getTotalSamplesRendered()).toBeGreaterThan(0);
+  preview.manager.dispose();
+});
+
+it.each([false, true])('resolves deferred samples with their own caustic outputs after another target traces (PM: %s)', photonMapping => {
+  const preview = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const, samplingPattern: 'sobol' as const, maxSamples: 8, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+  const pass = mocks.TracePass.latest;
+  let activePhotonMapping = false;
+  const caustic = {} as GPUBuffer;
+  vi.spyOn(pass, 'setQuality').mockImplementation(options => {activePhotonMapping = !!options.caustics?.photonMapping;});
+  vi.spyOn(pass, 'getOutputBuffer').mockImplementation(() => activePhotonMapping ? {wideHdr: true, caustic} : {});
+  preview.configure({...settings, batchSamples: true, caustics: {photonMapping}});
+  preview.setRealtimeDeferPostProcess!(true);
+  preview.trace(camera, 8); preview.trace(camera, 8);
+  const output = [...mocks.Pass.all.values()].flat().find(p => p instanceof mocks.OutputPass)!;
+  output.createPass.mockClear();
+  const final = preview.manager.createTarget('final');
+  final.configure({...settings, caustics: {photonMapping: !photonMapping}}); final.setSize(80, 64);
+  final.activate(); final.trace(camera, 8);
+  preview.activate(); preview.drawPostProcess();
+  expect(output.createPass).toHaveBeenCalledOnce();
+  expect(output.createPass.mock.calls[0][1]).toEqual(photonMapping ? {wideHdr: true, caustic} : {});
+  preview.manager.dispose();
+});
 
 describe('WebGPU realtime sampling', () => {
   it('includes independent caustic timestamps in the frame budget',async()=>{

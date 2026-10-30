@@ -144,6 +144,9 @@ function makeWGPUAccumulationTarget(
   // the next presentation or read resolves them once.
   let realtimeDeferPostProcess = false;
   let postProcessPending = false;
+  // Resolve uses the configuration that produced these buffers, even if another
+  // target has since changed the shared trace pass's caustic settings.
+  let sampledOutput: ReturnType<WGPURayTracePass['getOutputBuffer']> | undefined;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
@@ -536,6 +539,7 @@ output.color = color;
       tiles,
       activeTimeQuery ? { querySet: activeTimeQuery.querySet } : undefined
     );
+    sampledOutput = rayTracePass.getOutputBuffer();
     if (activeTimeQuery) {
       encoder.resolveQuerySet(
         activeTimeQuery.querySet,
@@ -710,7 +714,7 @@ output.color = color;
     );
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
-      rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), resolvedHasShadowCatcher);
+      rayTraceOutputPass.createPass(encoder, sampledOutput ?? rayTracePass.getOutputBuffer(), resolvedHasShadowCatcher);
     }
 
     composePass.setUniform(
@@ -840,6 +844,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   function trace(camera: Camera, maxSamples: number) {
+    applyTraceQuality();
     // A call to draw means accumulation has been invalidated. Cancel OIDN
     // before checking shader compilation: pipeline-affecting parameter changes
     // otherwise leave the previous asynchronous denoise alive while resources
@@ -1038,6 +1043,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // The target retains its complete presentation texture through the resize.
     clearDenoisedOutput();
     tileTimingGeneration++;
+    sampledOutput = undefined;
     renderWidth = nextRenderWidth;
     renderHeight = nextRenderHeight;
     (tileRenderWithPredict || tileRender).setSize(renderWidth, renderHeight);
@@ -1538,11 +1544,16 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     });
   }
 
+  // Keep tracing quality out of presentation: an old fallback must not
+  // invalidate a new caustic pipeline while it is compiling.
+  function applyTraceQuality() {
+    if (execution) rayTracePass.setQuality(execution);
+  }
+
   function activate() {
     rayTracePass.useTarget(targetKey);
     if (renderWidth && renderHeight) rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
     if (execution) {
-      rayTracePass.setQuality(execution);
       rayTracePass.setClamping(execution.clamping);
       rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
       rayTracePass.setBevelSamples(execution.bevelSamples);
@@ -1664,6 +1675,7 @@ width: renderWidth, height: renderHeight,
     restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
       if (samples < 1 || !execution?.aovs?.length) return true;
+      applyTraceQuality();
       rayTracePass.setCamera(camera); aovCamera = camera;
       rayTracePass.updatePipeline();
       if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
@@ -1671,6 +1683,7 @@ width: renderWidth, height: renderHeight,
     },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
+      applyTraceQuality();
       rayTracePass.setCamera(aovCamera);
       while (!rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) {
         if (disposed) throw new Error('AOV compilation was interrupted');
@@ -1752,7 +1765,7 @@ width: renderWidth, height: renderHeight,
           setSize(input.width, input.height);
           rayTracePass.useTarget(targetKey);
           rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-          const buffers = rayTracePass.getOutputBuffer();
+          const buffers = sampledOutput = rayTracePass.getOutputBuffer();
           const shadow = new Float32Array(input.width * input.height * 12);
           for (let i = 0; i < input.width * input.height; i++) {
             shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);

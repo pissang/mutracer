@@ -652,10 +652,6 @@ export class ViewerEngine {
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.caustics = this.preview.caustics = causticOptions(s);
-    // A completed preview still carries its previous GPU pipeline settings.
-    // Retire it before a caustics switch so presenting it cannot undo the final
-    // render's pipeline change while the new shader is compiling.
-    if (prev && (changed('caustics') || changed('causticLightTracing') || changed('causticPhotonMapping'))) this.preview.restart();
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
     this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
