@@ -456,7 +456,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
     let survival=(transmittance.x+transmittance.y+transmittance.z)/3.0;
     flux*=transmittance/select(1.0,max(survival,1e-20),any(scattering>vec3f(0.0)));
     if(SPECTRAL) {
-      m.specularIor=sampling_cauchy_ior(wavelength,m.specularIor,m.transmissionDispersionScale,m.dispersionAbbeNumber);
+      m.specularIor=sampling_cauchy_ior(causticSpectrumIorWavelength(wavelength),m.specularIor,m.transmissionDispersionScale,m.dispersionAbbeNumber);
     }
     if(!isCausticSpecular(m)) {
       let mneeSource=ls.sourceType!=0u;

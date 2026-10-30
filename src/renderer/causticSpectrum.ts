@@ -83,6 +83,18 @@ export function causticSpectrumSample(u: number) {
   };
 }
 
+// Cauchy IOR grows quickly at short wavelengths and strong dispersion scales turn
+// violet light into total internal reflection. Below 500 nm the refracting
+// wavelength eases toward 475 nm, the shortest one camera paths use, while color
+// weights keep the sampled wavelength.
+const IOR_KNEE = 500;
+const IOR_KNEE_WIDTH = 25;
+
+export function causticSpectrumIorWavelength(wavelength: number) {
+  if (wavelength >= IOR_KNEE) return wavelength;
+  return IOR_KNEE - IOR_KNEE_WIDTH * (1 - Math.exp((wavelength - IOR_KNEE) / IOR_KNEE_WIDTH));
+}
+
 const lobeSum = (lobes: readonly Lobe[]) =>
   lobes.map(([a, mean, below, above]) => `${a}f*causticSpectrumLobe(wavelength,${mean}f,${below}f,${above}f)`).join('+');
 
@@ -95,6 +107,10 @@ fn causticSpectrumRgb(wavelength:f32)->vec3f {
   let xyz=vec3f(${XYZ_LOBES.map(lobeSum).join(',')});
   let rgb=mat3x3f(${[0, 1, 2].map((c) => XYZ_TO_RGB.map((row) => `${row[c]}f`).join(',')).join(',')})*xyz;
   return max(rgb,vec3f(0.0))*vec3f(${SCALE.map((s) => `${s}f`).join(',')});
+}
+fn causticSpectrumIorWavelength(wavelength:f32)->f32 {
+  if(wavelength>=${IOR_KNEE}.0) { return wavelength; }
+  return ${IOR_KNEE}.0-${IOR_KNEE_WIDTH}.0*(1.0-exp((wavelength-${IOR_KNEE}.0)/${IOR_KNEE_WIDTH}.0));
 }
 fn causticSpectrumSample(u:f32,pdf:ptr<function,f32>)->f32 {
   let cdf=array<f32,${SAMPLE_BINS + 1}>(${SAMPLE_CDF.map((value) => `${value}f`).join(',')});

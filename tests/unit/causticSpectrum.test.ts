@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumRgb, causticSpectrumSample} from '../../src/renderer/causticSpectrum';
+import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumIorWavelength, causticSpectrumRgb, causticSpectrumSample} from '../../src/renderer/causticSpectrum';
 
 describe('caustic spectrum weights', () => {
   it('keeps white light white under uniform wavelength sampling', () => {
@@ -31,6 +31,19 @@ describe('caustic spectrum weights', () => {
     }
     for (const value of mean) expect(value).toBeCloseTo(1, 2);
     expect(peak).toBeLessThan(4);
+  });
+
+  it('limits refraction at short wavelengths without reordering the spectrum', () => {
+    expect(causticSpectrumIorWavelength(650)).toBe(650);
+    expect(causticSpectrumIorWavelength(500)).toBe(500);
+    let previous = causticSpectrumIorWavelength(400);
+    expect(previous).toBeGreaterThan(475);
+    for (let wavelength = 401; wavelength <= 520; wavelength++) {
+      const next = causticSpectrumIorWavelength(wavelength);
+      expect(next).toBeGreaterThan(previous);
+      expect(next - previous).toBeLessThan(1.01);
+      previous = next;
+    }
   });
 
   it('varies continuously from blue through green to red', () => {
