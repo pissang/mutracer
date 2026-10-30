@@ -2,7 +2,7 @@
 
 exports[`caustic contracts > preserves published light and photon transport sources > camera false/false 1`] = `"3ae89c5a60e96e17e5f1d64c9ba9ebb0cc9b0c4952f343d8923c8e851e319484"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > camera false/true 1`] = `"bbfd1978651ef8961e8d0060f2c31247880166bff4bb7574a31cb49c3ac35b73"`;
+exports[`caustic contracts > preserves published light and photon transport sources > camera false/true 1`] = `"56e1c9db1f5bd6049f70de3e6d0f3a70a44b09f75aa9d34f48f4423abbabc3aa"`;
 
 exports[`caustic contracts > preserves published light and photon transport sources > camera true/false 1`] = `"d107f5e9d34699fc9924a33ea490b96893873f60e6295c0b5236b415ee5c918f"`;
 

@@ -207,6 +207,9 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     if(caustics){
       frameFeatures.workgroupSize=caustics.metadata.workgroupSize;
       frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
+      // Use the same first-camera-hit subset generator as the browser. Combined
+      // LT/PM emits the original query source and leaves specular prefixes alone.
+      frameFeatures.photonDirectSubset=frameFeatures.photonMapping&&!frameFeatures.lightTracing;
       rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
     }
     const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;

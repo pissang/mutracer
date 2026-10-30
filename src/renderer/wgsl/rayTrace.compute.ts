@@ -46,6 +46,8 @@ export interface RayTraceShaderOptions {
   lightTracing?: boolean;
   photonMapping?:boolean;
   photonMaxDepth?:number;
+  /** Internal A/B override for directly visible PM receivers. Default true; ignored with light tracing. */
+  photonDirectSubset?:boolean;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
   hasAnisotropyDirections?: boolean;
   /** Include independent coat normals only when a material uses that slot. */
@@ -213,7 +215,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
 ${sampleShadowCatcherWgsl}
 
 // Output

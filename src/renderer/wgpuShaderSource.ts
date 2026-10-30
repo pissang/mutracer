@@ -11,6 +11,7 @@ export interface WGPUShaderFeatures {
   lightTracing?: boolean;
   photonMapping?:boolean;
   photonMaxDepth?:number;
+  photonDirectSubset?:boolean;
   hasAlpha: boolean;
   hasSceneAlpha: boolean;
   hasAnisotropyDirections: boolean;

@@ -965,6 +965,7 @@ class WGPURayTracePass {
             lightTracing: this._lightTracing,
             photonMapping: this._photonMapping,
             photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
+            photonDirectSubset: causticDiagnostics.photonDirectSubset,
             debugGroup: causticDiagnostics.debugGroup,
             workgroupSize: this._transport?.workgroupSize ?? WORKGROUP_SIZE,
             hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
@@ -1843,7 +1844,7 @@ class WGPURayTracePass {
     this._photonMapping = photonMapping;
     this._causticKey =
       this._transport?.enabled || this._lightTracing || this._photonMapping
-        ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${this._transport?.key ?? ''}`
+        ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${causticDiagnostics.photonDirectSubset !== false}/${this._transport?.key ?? ''}`
         : '';
 
   }

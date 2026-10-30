@@ -91,7 +91,7 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 
 /** Optional caustic estimators. All are disabled by default. Photon estimators use PT when a smooth caster has stochastic blend coverage. */
 export interface CausticSettings {
-  /** WebGPU progressive photon mapping for caustics beyond directly visible light paths; ignored on WebGL. Default `false`. */
+  /** WebGPU progressive photon mapping; ignored on WebGL. PM-only sampling can reduce denoising blotches on directly visible receivers, with noisier raw output. Default `false`. */
   photonMapping?: boolean | {
     /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default. Default pixel count / 4, at most 262144. */ photonsPerSample?: number;
     /** Positive first-batch gather radius in scene units, independent of photonsPerSample; shrinks as batches accumulate. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;

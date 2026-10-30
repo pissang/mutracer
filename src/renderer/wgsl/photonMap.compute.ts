@@ -20,10 +20,6 @@ export function photonRadius(
 export function defaultPhotonMapPhotons(width: number, height: number, divisor = 4) {
   return Math.min(2 ** 18, Math.max(1, Math.round((width * height) / divisor)));
 }
-/** Internal visible-receiver A/B; the global world-space radius still caps it. */
-export function photonScreenRadius(batch: number, initial = 8, minimum = 2, alpha = 2 / 3) {
-  return Math.max(minimum, photonRadius(initial, batch, alpha));
-}
 /** Power-of-two hash capacity, bounded independently of large photon batches. */
 export function photonBucketCount(photons: number) {
   return Math.min(PHOTON_GRID_SIZE, 2 ** Math.ceil(Math.log2(Math.max(256, photons * 2))));
@@ -319,9 +315,28 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
   }
 `;
 
+// Each translated 2x2 tile assigns all four labels once. Conditional on any
+// stored photon, a uniform pixel label accepts it with probability 1/4; scaling
+// accepted flux by four preserves the original expected density estimate.
+// Only the first camera hit participates; specular prefixes and deeper queries
+// keep the original estimator. Disjoint salts consume no sampling dimensions.
+export function photonDirectQuerySource(enabled = false) {
+  if (!enabled) return photonQueryWgsl;
+  return photonQueryWgsl
+    .replace('var sum=vec3f(0.0);', `let subsetSeed=sampleSeed(pixelSampleIndex,rtUniform.sequenceSeed^0x91e10da5u);
+    let subsetShift=vec2u(sampleHash(subsetSeed^0x68bc21ebu),sampleHash(subsetSeed^0x967a889bu));
+    let subsetPixel=samplingPixel+subsetShift;
+    let subsetGroup=(subsetPixel.x&1u)|((subsetPixel.y&1u)<<1u);
+    var sum=vec3f(0.0);`)
+    .replace('let record=photonLoad(index);', `if(primary&&(sampleSeed(index,subsetSeed^0x02e5be93u)&3u)!=subsetGroup) { continue; }
+            let record=photonLoad(index);`)
+    .replace('var flux=photonDecodeFlux(record.w)/emitted;', `var flux=photonDecodeFlux(record.w)/emitted;
+            if(primary) { flux*=4.0; }`);
+}
 /** Evidence-only per-query counters; no extra bindings or public render options. */
-export function photonQuerySource(debugGroup = -1) {
-  if (debugGroup < 50) return photonQueryWgsl;
+export function photonQuerySource(debugGroup = -1, directSubset = false) {
+  const source = photonDirectQuerySource(directSubset);
+  if (debugGroup < 50) return source;
   // Offline union-of-photons audit. Each depth is replayed with the same seed;
   // payloads are positions/normals rather than radiance, before path throughput.
   if (debugGroup >= 80) {
@@ -330,10 +345,10 @@ export function photonQuerySource(debugGroup = -1) {
     const depth = debugGroup - (normal ? 130 : 100);
     const selected = visible ? 'visible' : `!visible&&samplingBounce==${depth}u`;
     const payload = debugGroup === 82 ? 'vec3f(photonPixelFootprint(si),radius,1.0)' : normal ? 'si.faceNormal' : 'si.position';
-    return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl.replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats=${payload};}return sum/(PI*radius*radius);`);
+    return 'var<private> photonQueryStats:vec3f;\n' + source.replace('return sum/(PI*radius*radius);', `if(${selected}){photonQueryStats=${payload};}return sum/(PI*radius*radius);`);
   }
   const selected = debugGroup === 50 || debugGroup === 73 ? 'visible' : debugGroup === 72 ? '!visible' : `!visible&&samplingBounce==${debugGroup - 51}u`;
-  return 'var<private> photonQueryStats:vec3f;\n' + photonQueryWgsl
+  return 'var<private> photonQueryStats:vec3f;\n' + source
     .replace('var sum=vec3f(0.0);', 'var sum=vec3f(0.0);var reads=0u;var passed=0u;')
     .replace('let index=photonIndexWord(indexStart+i);', 'reads++;let index=photonIndexWord(indexStart+i);')
     .replace(debugGroup === 73 ? 'var flux=photonDecodeFlux' : 'let directions=photonIndexWord',

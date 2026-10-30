@@ -8,11 +8,10 @@ interface CausticDiagnostics {
  photonDebugBatch?:number;
  photonBudgetBytes?:number;
  photonScreenRadius?:boolean;
- photonScreenPixels?:number;
- /** Visible-radius and density experiments are opt-in; public defaults stay fixed. */
- photonProgressiveScreenRadius?:boolean;
- photonScreenMinimum?:number;
+ /** Internal photon density comparison; public defaults stay fixed. */
  photonCountDivisor?:number;
+ /** Internal direct-receiver A/B override; false restores the original PM shader. */
+ photonDirectSubset?:boolean;
  /** Scale experiments; off by default and excluded from public settings. */
  photonPerCasterRadius?:boolean;
  causticViewImportance?:boolean;

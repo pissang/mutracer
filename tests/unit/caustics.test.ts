@@ -31,6 +31,9 @@ describe('caustic contracts', () => {
       expect(hash(causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32},1,false,mode))).toMatchSnapshot(mode);
     }
   });
+  it('restores the original PM source through the internal opt-out', () => {
+    expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('bbfd1978651ef8961e8d0060f2c31247880166bff4bb7574a31cb49c3ac35b73');
+  });
   it('classifies resolved material combinations', () => {
     for (const [params, smooth] of [
       [{}, false], [{transmissionWeight: 1, specularRoughness: 0}, true],
