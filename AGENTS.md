@@ -110,6 +110,10 @@ of stopping for confirmation.
 ## Rendering changes
 
 - Keep correctness fixes even when the visual change is small.
+- For an algorithm that both web and native implement, develop and evaluate it
+  on web first. Port it to native only after the web version passes review and
+  is merged, then validate native once against the merged web behavior. Do not
+  port, test or run native gates while the algorithm is still being tuned.
 - When matching a reference renderer or paper, treat the reference as the
   behavior contract: align data semantics, pass order, random streams,
   candidate counts, and scene and display settings before judging image
