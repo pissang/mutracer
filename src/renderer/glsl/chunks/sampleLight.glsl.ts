@@ -51,8 +51,12 @@ void light_sample_sphere(
       radius * radius / (centerDistance * centerDistance)
     );
     float cosineLimit = sqrt(max(0.0, 1.0 - sineLimitSquared));
-    float cosine = mix(1.0, cosineLimit, samplePoint.x);
-    float sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    // Keep the small solid angle and sampled sine without subtracting
+    // nearly equal floats; otherwise small emitters produce irradiance bands.
+    float oneMinusCosineLimit = sineLimitSquared / (1.0 + cosineLimit);
+    float oneMinusCosine = samplePoint.x * oneMinusCosineLimit;
+    float cosine = 1.0 - oneMinusCosine;
+    float sine = sqrt(max(0.0, oneMinusCosine * (2.0 - oneMinusCosine)));
     float azimuth = TWOPI * samplePoint.y;
     vec3 tangent;
     vec3 bitangent;
@@ -60,7 +64,7 @@ void light_sample_sphere(
     direction = axis * cosine
       + tangent * (sine * cos(azimuth))
       + bitangent * (sine * sin(azimuth));
-    result.pdf = 1.0 / max(TWOPI * (1.0 - cosineLimit), 1e-8);
+    result.pdf = 1.0 / max(TWOPI * oneMinusCosineLimit, 1e-8);
   }
 
   float projectedCenter = dot(direction, toCenter);

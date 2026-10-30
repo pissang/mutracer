@@ -87,6 +87,19 @@ describe('spot light and IES semantics', () => {
     expect(Number.isFinite(estimateAnalyticLightPower(light))).toBe(true);
   });
 
+  it('preserves small sphere solid angles without cancellation', () => {
+    for (const radius of [.05, .005, .001]) {
+      for (const distance of [2, 4, 8]) {
+        // Independent half-angle identity, accurate even for narrow cones.
+        const halfAngleSine = Math.sin(Math.asin(radius / distance) / 2);
+        const solidAngle = 4 * Math.PI * halfAngleSine * halfAngleSine;
+        expect(sphereSolidAnglePdf(distance, radius) * solidAngle).toBeCloseTo(1, 14);
+      }
+    }
+    expect(sphereSolidAnglePdf(.5, 1)).toBe(1 / (4 * Math.PI));
+    expect(sphereSolidAnglePdf(1, 1)).toBe(1 / (4 * Math.PI));
+  });
+
   it('integrates the inner-to-outer cosine smoothstep for spot selection power', () => {
     const smoothstep = (a: number, b: number, x: number) => {
       const t = Math.min(1, Math.max(0, (x - a) / (b - a)));

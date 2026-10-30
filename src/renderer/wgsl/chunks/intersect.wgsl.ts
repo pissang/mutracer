@@ -921,7 +921,9 @@ fn sphereSolidAnglePdf(origin: vec3f, center: vec3f, radius: f32) -> f32 {
   if (centerDistance <= radius) { return INV4PI; }
   let sinThetaMaxSquared = min(1.0, radius * radius / (centerDistance * centerDistance));
   let cosThetaMax = sqrt(max(0.0, 1.0 - sinThetaMaxSquared));
-  return 1.0 / max(TWOPI * (1.0 - cosThetaMax), 1e-8);
+  // Match the cancellation-free solid angle used by direct light sampling.
+  let oneMinusCosThetaMax = sinThetaMaxSquared / (1.0 + cosThetaMax);
+  return 1.0 / max(TWOPI * oneMinusCosThetaMax, 1e-8);
 }
 
 fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRec>) -> f32 {

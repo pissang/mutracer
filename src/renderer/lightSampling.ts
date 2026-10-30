@@ -97,10 +97,10 @@ export function estimateAnalyticLightPower(light: AnalyticLight) {
 
 export function sphereSolidAnglePdf(distanceToCenter: number, radius: number) {
   if (distanceToCenter <= radius) return 1 / (4 * Math.PI);
-  const cosThetaMax = Math.sqrt(
-    Math.max(0, 1 - radius * radius / (distanceToCenter * distanceToCenter))
-  );
-  return 1 / Math.max(2 * Math.PI * (1 - cosThetaMax), 1e-8);
+  const sinThetaMaxSquared = Math.min(1, radius * radius / (distanceToCenter * distanceToCenter));
+  const cosThetaMax = Math.sqrt(Math.max(0, 1 - sinThetaMaxSquared));
+  const oneMinusCosThetaMax = sinThetaMaxSquared / (1 + cosThetaMax);
+  return 1 / Math.max(2 * Math.PI * oneMinusCosThetaMax, 1e-8);
 }
 
 /** Packs unique 128² peak-normalized IES profiles four scalar samples per texel. */
