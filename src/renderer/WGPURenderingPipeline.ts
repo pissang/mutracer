@@ -877,6 +877,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     rayTracePass.updatePipeline();
+    const pipelineError = rayTracePass.getPipelineError();
+    if (pipelineError) throw pipelineError;
 
     if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) {
       isFirstFrame = true;
@@ -1547,7 +1549,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   // Keep tracing quality out of presentation: an old fallback must not
   // invalidate a new caustic pipeline while it is compiling.
   function applyTraceQuality() {
-    if (execution) rayTracePass.setQuality(execution);
+    if (execution) {
+      rayTracePass.setQuality(execution);
+      rayTracePass.setBevelSamples(execution.bevelSamples);
+      rayTracePass.setAlphaBlendStrategy(execution.alphaBlendStrategy);
+      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
+    }
   }
 
   function activate() {
@@ -1556,9 +1563,6 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     if (execution) {
       rayTracePass.setClamping(execution.clamping);
       rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
-      rayTracePass.setBevelSamples(execution.bevelSamples);
-      rayTracePass.setAlphaBlendStrategy(execution.alphaBlendStrategy);
-      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
     }
   }
 
@@ -1678,15 +1682,23 @@ width: renderWidth, height: renderHeight,
       applyTraceQuality();
       rayTracePass.setCamera(camera); aovCamera = camera;
       rayTracePass.updatePipeline();
+      const pipelineError = rayTracePass.getPipelineError();
+      if (pipelineError) throw pipelineError;
       if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
       return rayTracePass.renderAovs(aov, camera, samples, execution.aovSamples ?? 16, execution.aovs);
     },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
-      applyTraceQuality();
-      rayTracePass.setCamera(aovCamera);
-      while (!rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) {
+      for (;;) {
         if (disposed) throw new Error('AOV compilation was interrupted');
+        activate();
+        applyTraceQuality();
+        rayTracePass.setCamera(aovCamera);
+        rayTracePass.updatePipeline();
+        const pipelineError = rayTracePass.getPipelineError();
+        if (pipelineError) throw pipelineError;
+        if (!rayTracePass.isCompilingShader() && rayTracePass.isPipelineReady() &&
+          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) break;
         await new Promise<void>(resolve => scheduleFrame(() => resolve()));
       }
       return aov.read(kind);

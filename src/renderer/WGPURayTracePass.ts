@@ -318,8 +318,9 @@ class WGPURayTracePass {
       output?.buffers ?? [];
     if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
       this._rayTraceBindGroups[this._bindless ? 2 : 3] = output.bindGroup;
+      this._needsUpdateOutputBindGroup = false;
     } else {
-      this._needsUpdateBindGroups = true;
+      this._needsUpdateOutputBindGroup = true;
     }
   }
 
@@ -417,6 +418,9 @@ class WGPURayTracePass {
   // Photon maps are per target. Switching targets only rebinds them, which
   // must not send steady frames through the asynchronous pipeline path.
   private _needsPhotonTargetBindGroups = false;
+  // Target selection is not a scene-resource edit. A stale fallback must not
+  // leave global bindings dirty after switching back to a prepared target.
+  private _needsUpdateOutputBindGroup = false;
 
   private _computeShaderModule?: GPUShaderModule;
   private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
@@ -837,7 +841,15 @@ class WGPURayTracePass {
     let attemptedPipelineSignature: string | undefined;
     let compilationStartedAt: number | undefined;
     let pipelineCompilationStartedAt: number | undefined;
+    let preparationInvalidated: (() => boolean) | undefined;
     try {
+      if (this._needsUpdateMeshData || this._needsUpdateMeshMembership || this._pendingGeometryUpdates.size ||
+        this._needsRefitTLAS || this._dirtyColorMeshes.size || this._pendingMaterialUpdate || this._needsUpdateLightSamplingData) {
+        // A resource failure may have the same shader signature as its repaired
+        // scene. Retry authored updates, while keeping an unchanged failure idle.
+        this._failedPipelineSignature = undefined;
+        this._pipelineError = undefined;
+      }
       if (this._bindless?.retirement) await this._bindless.retirement;
       if (this._disposed) return;
       if (this._needsUpdateMeshData) {
@@ -875,8 +887,9 @@ class WGPURayTracePass {
         this._rayTraceBindGroups &&
         !this._needsUpdateBindGroups
       ) {
-        if (this._needsPhotonTargetBindGroups) {
+        if (this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
           this._needsPhotonTargetBindGroups = false;
+          this._needsUpdateOutputBindGroup = false;
           this._updateBindGroups();
         }
         return;
@@ -1002,9 +1015,10 @@ class WGPURayTracePass {
         if (!this._rayTracePipelineLayout) {
           device.pushErrorScope('validation');
           let layoutScopeOpen = true;
+          let layout: GPUPipelineLayout | undefined;
           try {
             this._createPipelineLayout();
-            const layout = this._rayTracePipelineLayout;
+            layout = this._rayTracePipelineLayout;
             const layoutError = await device.popErrorScope();
             layoutScopeOpen = false;
             if (layoutError) throw layoutError;
@@ -1012,6 +1026,7 @@ class WGPURayTracePass {
             if (layout !== this._rayTracePipelineLayout || causticKey !== this._causticKey) return;
           } catch (error) {
             const scopedError = layoutScopeOpen ? await device.popErrorScope().catch(() => null) : null;
+            if (this._disposed || (layout && layout !== this._rayTracePipelineLayout) || causticKey !== this._causticKey) return;
             this._rayTracePipelineLayout = undefined;
             const detail = joinWebGPUErrors(error, scopedError);
             throw new Error(`Unable to create the ray tracing pipeline layout: ${detail}`);
@@ -1118,6 +1133,8 @@ class WGPURayTracePass {
           };
         } catch (error) {
           const scopedError = pipelineScopeOpen ? await device.popErrorScope().catch(() => null) : null;
+          if (this._disposed || layout !== this._rayTracePipelineLayout || module !== this._computeShaderModule ||
+            causticKey !== this._causticKey) return;
           const detail = joinWebGPUErrors(error, scopedError);
           if (!this._bakePipelineConstants && isWebGPUPipelineSpecializationFailure(error, scopedError)) {
             const failedAt = shaderCompilationNow();
@@ -1154,12 +1171,18 @@ class WGPURayTracePass {
       // being bound now, rather than the one active before the asynchronous work.
       this._preparePhotonTarget();
       // TODO rebind when lights, materials, bvh changed.
-      if (this._needsUpdateBindGroups || this._needsPhotonTargetBindGroups) {
+      if (this._needsUpdateBindGroups || this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
         this._needsUpdateBindGroups = false;
         this._needsPhotonTargetBindGroups = false;
+        this._needsUpdateOutputBindGroup = false;
 
         this._updateBindGroups();
       }
+      const tracePipeline = this._rayTracePipeline!;
+      const traceLayout = this._rayTracePipelineLayout;
+      const traceModule = this._computeShaderModule;
+      preparationInvalidated = () => this._disposed || tracePipeline !== this._rayTracePipeline ||
+        traceLayout !== this._rayTracePipelineLayout || traceModule !== this._computeShaderModule || causticKey !== this._causticKey;
       if (this._lightTracing) {
         this._causticLight ??= new WGPUCausticLightPass(device);
         this._causticLight.setDistribution(
@@ -1183,12 +1206,14 @@ class WGPURayTracePass {
         );
         if (this._bindless)
           causticSource = bindlessShaderSource(causticSource, this._textureSelection.support!.enable);
-        await this._causticLight.prepare(
+        const preparation = this._causticLight.prepare(
           causticSource,
-          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => this._rayTracePipeline!.getBindGroupLayout(i)),
+          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => tracePipeline.getBindGroupLayout(i)),
           !!this._bindless,
-          this._rayTracePipeline!
+          tracePipeline
         );
+        if (preparation) await preparation;
+        if (preparationInvalidated()) return;
       }
       if (this._photonMapping && this._photonMap) {
         const emitter = this._photonMap.emission;
@@ -1212,12 +1237,16 @@ class WGPURayTracePass {
           causticDiagnostics.fullEmissionRandom !== false
         );
         if (this._bindless) source = bindlessShaderSource(source, this._textureSelection.support!.enable);
-        await emitter.prepare(
+        const preparation = emitter.prepare(
           source,
-          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => this._rayTracePipeline!.getBindGroupLayout(i)),
+          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => tracePipeline.getBindGroupLayout(i)),
           !!this._bindless,
-          this._rayTracePipeline!
+          tracePipeline
         );
+        // Rebinding an old fallback can dirty resources every frame. A cached
+        // emitter must finish synchronously so trace can submit a final sample.
+        if (preparation) await preparation;
+        if (preparationInvalidated()) return;
       }
       this._retainedShaderCapabilities = capabilities;
       this._retainedShaderStructure = structureKey;
@@ -1225,7 +1254,7 @@ class WGPURayTracePass {
       this._prevPipelineInputs = pipelineInputs;
       this._failedPipelineSignature = undefined;
     } catch (error) {
-      if (this._disposed) return;
+      if (this._disposed || preparationInvalidated?.()) return;
       this._pipelineError = error;
       const failedAt = shaderCompilationNow();
       if (this._shaderCompilationDiagnostics?.status === 'compiling') {
@@ -1241,7 +1270,7 @@ class WGPURayTracePass {
       this._failedPipelineSignature = attemptedPipelineSignature;
       // Do not allow the render loop to submit the previous/partial state.
       // The failed signature prevents retrying the same shader every frame;
-      // changing a pipeline-affecting setting permits a new attempt.
+      // changing a pipeline setting or scene resources permits a new attempt.
       this._rayTracePipeline = undefined;
       this._rayTraceBindGroups = undefined;
       this._prevPipelineConstants = {};

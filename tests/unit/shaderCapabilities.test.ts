@@ -11,6 +11,7 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import {createPlaneGeometry} from '../../src/util/commonGeometry';
 import Mesh from '../../src/scene/Mesh';
+import {MaterialChangeTracker} from '../../src/renderer/materialChanges';
 
 const texture = () => new Texture({width: 1, height: 1, data: new Uint8Array([128, 128, 128, 128])});
 function materialCapabilities(materials: OpenPBRMaterial[]) {
@@ -159,6 +160,40 @@ describe('retained WebGPU pipeline capabilities', () => {
     expect(compile).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['light tracing', 'photon mapping', 'both'])('resumes final sampling with %s while an old preview dirties resource bindings', async mode => {
+    const {pass, compile} = photonPass();
+    // A prepared emitter has no asynchronous work left on resource-only edits.
+    pass._photonMap.emission.prepare = vi.fn(() => undefined);
+    pass._causticLight = {setDistribution() {}, prepare: vi.fn(() => undefined)};
+    pass.setQuality({bounces: 3, bevel: true, dispersionWavelengths: 1, directLightCandidates: 4,
+      caustics: {lightTracing: mode !== 'photon mapping', photonMapping: mode !== 'light tracing'}});
+    const preview = {}, final = {};
+    pass.useTarget(preview);
+    await pass.updatePipeline();
+    pass._targetOutputs.set(preview, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    pass._constants.USE_NORMAL_MAPS = true;
+    pass.useTarget(final);
+    await pass.updatePipeline();
+    pass._targetOutputs.set(final, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    const compilations = compile.mock.calls.length;
+    for (let frame = 0; frame < 3; frame++) {
+      // Display keeps the last completed preview visible until final samples.
+      pass.useTarget(preview);
+      expect(pass._needsUpdateBindGroups).toBe(false);
+      pass.useTarget(final);
+      void pass.updatePipeline();
+      expect(pass.isCompilingShader()).toBe(false);
+      expect(pass.isPipelineReady()).toBe(true);
+    }
+    expect(compile).toHaveBeenCalledTimes(compilations);
+    const bindings = pass._updateBindGroups.mock.calls.length;
+    pass._needsUpdateBindGroups = true;
+    pass.useTarget(preview); pass.useTarget(final);
+    void pass.updatePipeline();
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(bindings + 1);
+    expect(pass.isCompilingShader()).toBe(false);
+  });
+
   it.each(['layout validation', 'pipeline compilation'] as const)(
     'recovers when caustics are toggled during %s', async (stage) => {
       const {pass, device, compile, quality} = photonPass();
@@ -185,6 +220,92 @@ describe('retained WebGPU pipeline capabilities', () => {
       await pass.updatePipeline();
       expect(pass.getPipelineError()).toBeUndefined();
       expect(pass._rayTracePipeline).toBeDefined();
+    }
+  );
+
+  it.each(['layout', 'ray pipeline', 'light emitter', 'photon emitter'] as const)(
+    'settles on the latest scene after repeated edits during %s preparation', async stage => {
+      const {pass, device, compile} = photonPass();
+      pass._causticLight = {setDistribution() {}, prepare: vi.fn(() => undefined)};
+      pass._photonMap.emission.prepare = vi.fn(() => undefined);
+      const quality = (lightTracing: boolean, photonMapping: boolean) => pass.setQuality({bounces: 3,
+        bevel: true, dispersionWavelengths: 1, directLightCandidates: 4, caustics: {lightTracing, photonMapping}});
+      quality(true, true);
+      let finish!: () => void;
+      if (stage === 'layout') {
+        vi.spyOn(device, 'popErrorScope').mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => resolve(null);
+        }));
+      } else if (stage === 'ray pipeline') {
+        compile.mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => resolve({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline);
+        }));
+      } else {
+        const emitter = stage === 'light emitter' ? pass._causticLight : pass._photonMap.emission;
+        emitter.prepare.mockImplementationOnce(() => new Promise<void>(resolve => {finish = resolve;}));
+      }
+      const pending = pass.updatePipeline();
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      const started = compile.mock.calls.length;
+      for (let edit = 0; edit < 32; edit++) {
+        pass._constants.HAS_ALPHA_BLEND = pass._constants.HAS_ALPHA = true;
+        pass._constants.USE_NORMAL_MAPS = edit % 2 === 0;
+        pass.setAlphaBlendStrategy(edit % 2 ? 'stochastic' : 'deterministic-source-over');
+        pass.setSamplingPattern(edit % 2 ? 'sobol' : 'random', 64);
+        quality(edit % 3 !== 0, edit % 4 !== 0);
+        pass.useTarget({});
+        await pass.updatePipeline();
+        expect(pass.isCompilingShader()).toBe(true);
+      }
+      expect(compile).toHaveBeenCalledTimes(started);
+      quality(true, true);
+      pass._constants.USE_NORMAL_MAPS = true;
+      finish();
+      await pending;
+      expect(pass.getPipelineError()).toBeUndefined();
+      await pass.updatePipeline();
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass.isCompilingShader()).toBe(false);
+      expect(pass.isPipelineReady()).toBe(true);
+      expect(pass._prevPipelineConstants.SAMPLING_PATTERN).toBe(pass._constants.SAMPLING_PATTERN);
+      expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(wgpuSceneFeatureFlags(pass._constants));
+      expect(pass._compiledCausticKey).toBe(pass._causticKey);
+    }
+  );
+
+  it.each(['layout', 'ray pipeline', 'light emitter', 'photon emitter'] as const)(
+    'discards an obsolete %s failure without poisoning the replacement', async stage => {
+      const {pass, device, compile} = photonPass();
+      pass._constants.HAS_ALPHA_BLEND = pass._constants.HAS_ALPHA = true;
+      pass._causticLight = {setDistribution() {}, prepare: vi.fn(() => undefined)};
+      pass._photonMap.emission.prepare = vi.fn(() => undefined);
+      pass.setQuality({bounces: 3, bevel: true, dispersionWavelengths: 1, directLightCandidates: 4,
+        caustics: {lightTracing: true, photonMapping: true}});
+      const error = new Error('Obsolete preparation failed');
+      let fail!: () => void;
+      if (stage === 'layout') {
+        vi.spyOn(device, 'popErrorScope').mockImplementationOnce(() => new Promise(resolve => {
+          fail = () => resolve({message: error.message} as GPUError);
+        }));
+      } else if (stage === 'ray pipeline') {
+        compile.mockImplementationOnce(() => new Promise((_resolve, reject) => {fail = () => reject(error);}));
+      } else {
+        const emitter = stage === 'light emitter' ? pass._causticLight : pass._photonMap.emission;
+        emitter.prepare.mockImplementationOnce(() => new Promise((_resolve, reject) => {fail = () => reject(error);}));
+      }
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const pending = pass.updatePipeline();
+        await vi.waitFor(() => expect(fail).toBeDefined());
+        pass.setAlphaBlendStrategy('deterministic-source-over');
+        fail(); await pending;
+        expect(pass.getPipelineError()).toBeUndefined();
+        expect(log).not.toHaveBeenCalled();
+        await pass.updatePipeline();
+        expect(pass.isPipelineReady()).toBe(true);
+        expect(pass.getPipelineError()).toBeUndefined();
+      } finally {log.mockRestore();}
     }
   );
 
@@ -310,6 +431,34 @@ describe('retained WebGPU pipeline capabilities', () => {
       await pass.updatePipeline();
       expect(pass.getPipelineError()).toBeUndefined();
       expect(pass._rayTracePipeline).toBeDefined();
+      expect(compile).toHaveBeenCalledTimes(2);
+    } finally {error.mockRestore();}
+  });
+
+  it('retries a failed pipeline after a material resource edit with unchanged shader capabilities', async () => {
+    const {pass, compile} = pipelinePass();
+    const material = new OpenPBRMaterial();
+    const geometry = createPlaneGeometry();
+    const materials = new MaterialTable([material], []);
+    pass._preparedMeshData = {materials: [material], geometry};
+    pass._materialData = materials;
+    pass._materialChanges = new MaterialChangeTracker();
+    pass._updateGPUBuffer = vi.fn(() => ({}));
+    pass._updateMaterialConstants([material], materials, geometry);
+    const constants = {...pass._constants};
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      compile.mockRejectedValueOnce(new Error('Resource validation failed'));
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeDefined();
+      await pass.updatePipeline();
+      expect(compile).toHaveBeenCalledTimes(1);
+      material.baseColor = [.2, .3, .4];
+      pass._pendingMaterialUpdate = {level: 'params', materials: new Set([material])};
+      await pass.updatePipeline();
+      expect(pass._constants).toEqual(constants);
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass.isPipelineReady()).toBe(true);
       expect(compile).toHaveBeenCalledTimes(2);
     } finally {error.mockRestore();}
   });

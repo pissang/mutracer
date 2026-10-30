@@ -60,8 +60,11 @@ export class WGPUCausticLightPass {
       compute: {module: device.createShaderModule({code: causticAccumulateCompute}), entryPoint: 'main'}
     });
   }
-  async prepare(source: string, groups: GPUBindGroupLayout[], bindless = false, layoutKey: object = groups) {
+  prepare(source: string, groups: GPUBindGroupLayout[], bindless = false, layoutKey: object = groups) {
     if (this.key === source && this.layoutKey === layoutKey && this.pipeline) return;
+    return this.compile(source, groups, bindless, layoutKey);
+  }
+  private async compile(source: string, groups: GPUBindGroupLayout[], bindless: boolean, layoutKey: object) {
     const module = this.device.createShaderModule({label: 'Caustic light tracing', code: source});
     const info = await module.getCompilationInfo();
     const errors = info.messages.filter((m) => m.type === 'error');

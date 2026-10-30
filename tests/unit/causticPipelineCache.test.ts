@@ -12,7 +12,7 @@ it('rebuilds an emitter when scene binding layouts change with unchanged shader 
  } as unknown as GPUDevice;
  const pass=new WGPUCausticLightPass(device),first={},second={};
  await pass.prepare('same shader',[],false,first);
- await pass.prepare('same shader',[],false,first);
+ expect(pass.prepare('same shader',[],false,first)).toBeUndefined();
  expect(compile).toHaveBeenCalledTimes(1);
  await pass.prepare('same shader',[],false,second);
  expect(compile).toHaveBeenCalledTimes(2);
