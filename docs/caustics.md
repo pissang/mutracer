@@ -62,13 +62,14 @@ is capped to about two projected pixels to reduce visible patches after
 denoising. Reflections and refractions use an approximate footprint.
 Increasing photon count can help, but does not make every additional batch
 improve the image monotonically. More samples do not remove the finite precision
-loss in stored photon data. Spatially correlated photon noise can remain
-visible after denoising. A denoiser can soften narrow caustic lines even when it
+loss in stored photon data. With photon mapping alone, OIDN can leave
+low-frequency cloud-like blotches.
+Enable light tracing alongside photon mapping to reduce them on directly visible
+receivers. A denoiser can soften narrow caustic lines even when it
 improves average brightness; compare raw HDR and denoised output when judging
 detail. Use raw HDR for energy comparisons: displayed or denoised brightness
 can differ even when regional HDR energy agrees. More photons can reduce noise,
-but do not guarantee matching denoised brightness. Prefer light tracing when the
-receiver is directly visible.
+but do not guarantee matching denoised brightness.
 
 Both estimators fall back to PT for the whole scene when a smooth caster uses
 stochastic blend coverage. Cutout coverage remains supported. Environment
