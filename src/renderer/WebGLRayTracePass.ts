@@ -986,9 +986,9 @@ class WebGLRayTracePass {
     });
   }
 
-  setWavelength(wavelength: number) {
+  setSpectralChannel(channel: number) {
     this._tracePasses.forEach((pass) => {
-      pass.setUniform('wavelength', wavelength);
+      pass.setUniform('spectralChannel', channel);
     });
   }
 

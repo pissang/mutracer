@@ -154,7 +154,7 @@ ${debug ? '  mneeCounters[13]++;' : ''}
     let light=analyticLights[ls.sourceIndex];emission=light.emission;
     if(i32(light.litType)==SPOT_LIGHT){emission*=evaluateSpotEmissionMultiplier(light,-wo);}
   }
-  if (SPECTRAL) { emission = sampling_spectral_rgb_filter(emission,receiver.wavelength); }
+  if (SPECTRAL) { emission = sampling_spectral_rgb_filter(emission,receiver.spectralChannel); }
 ${debug ? '  mneeCounters[10]++;' : ''}
   *solution=si.position;
 ${debug?'if(mneeTraceEnabled){mneeTrace[7].x=10.0;}':''}

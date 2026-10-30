@@ -1,5 +1,5 @@
 import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
-import {CAUSTIC_WAVELENGTH_RANGE, causticSpectrumWgsl} from '../causticSpectrum.js';
+import {SPECTRUM_PHOTON_DISTRIBUTION, SPECTRUM_WAVELENGTH_RANGE, spectrumWgsl} from '../spectrum.js';
 import background from './chunks/background.wgsl.js';
 import atomic from './chunks/causticAtomic.wgsl.js';
 import adjoint from './chunks/causticAdjoint.wgsl.js';
@@ -58,7 +58,7 @@ ${rand}
 ${random}
 ${env}
 ${sampling}
-${causticSpectrumWgsl}
+${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(frames, coat)}
 ${light}
 ${background.replace(
@@ -322,7 +322,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
   var wavelength=0.0;
   var wavelengthPdf=1.0;
   if(SPECTRAL) {
-    wavelength=causticSpectrumSample(causticEmission1D(causticDim(69u)),&wavelengthPdf);
+    wavelength=spectrumSample(${SPECTRUM_PHOTON_DISTRIBUTION}u,causticEmission1D(causticDim(69u)),&wavelengthPdf);
   }
   var ls:LightSampleRec;
   causticSampleLight(caustic.casterSphere.xyz,vec3f(causticEmission2D(causticDim(60u)),causticEmission1D(causticDim(61u))),&ls);
@@ -414,7 +414,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     flux=emission*emissionCosine/(areaPdf*directionPdf);
   }
   if(SPECTRAL) {
-    flux*=causticSpectrumRgb(wavelength)/(wavelengthPdf*${CAUSTIC_WAVELENGTH_RANGE}.0);
+    flux*=spectrumRgb(wavelength)/(wavelengthPdf*${SPECTRUM_WAVELENGTH_RANGE}.0);
   }
   var ray:Ray;
   initRay(&ray,origin+EPS*direction,direction);
@@ -456,7 +456,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
     let survival=(transmittance.x+transmittance.y+transmittance.z)/3.0;
     flux*=transmittance/select(1.0,max(survival,1e-20),any(scattering>vec3f(0.0)));
     if(SPECTRAL) {
-      m.specularIor=sampling_cauchy_ior(causticSpectrumIorWavelength(wavelength),m.specularIor,m.transmissionDispersionScale,m.dispersionAbbeNumber);
+      m.specularIor=sampling_cauchy_ior(spectrumIorWavelength(wavelength),m.specularIor,m.transmissionDispersionScale,m.dispersionAbbeNumber);
     }
     if(!isCausticSpecular(m)) {
       let mneeSource=ls.sourceType!=0u;

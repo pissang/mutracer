@@ -23,7 +23,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
 
   LightSampleRec lightSample;
   sampleLight(si.position, lightRnd, lightSample, false);${fragments['sample0'] ?? ''}
-  lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
+  lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
 
   vec3 lightDir = lightSample.direction;
   vec3 viewDir = -path.ray.d;
@@ -97,7 +97,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   // a separately displayed or grounded background and its coverage.
   if (isSurface && cosThetaL < 0.0 && lightSample.sourceType == 0) {
     vec4 background = sampleBackgroundFromRay(lightRay.o, lightDir);
-    lightSample.emission = sampling_spectral_rgb_filter(background.rgb * background.a, pathWavelength);
+    lightSample.emission = sampling_spectral_rgb_filter(background.rgb * background.a, pathChannel);
   }
 #endif
 

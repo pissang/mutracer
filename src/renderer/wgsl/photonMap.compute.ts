@@ -302,7 +302,7 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
             }
             var flux=photonDecodeFlux(record.w)/emitted;
             if(SPECTRAL) {
-              flux=sampling_spectral_rgb_filter(flux,si.wavelength);
+              flux=sampling_spectral_rgb_filter(flux,si.spectralChannel);
             }
             var pdf:f32;
             let response=openpbr_eval_prepared(prepared,incoming,&pdf);

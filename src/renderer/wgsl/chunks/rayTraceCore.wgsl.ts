@@ -79,6 +79,8 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   barycentrics: vec2f,
 
   wavelength: f32,
+  // RGB channel a spectral path carries, 1 to 3. Zero keeps full RGB.
+  spectralChannel: i32,
 
   mediumType: i32,
   mediumExtinction: vec3f,

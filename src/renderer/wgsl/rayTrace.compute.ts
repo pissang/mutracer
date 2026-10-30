@@ -23,6 +23,7 @@ import { createSampleMaterialWgsl } from './chunks/sampleMaterial.wgsl.js';
 import sampleLightWgsl from './chunks/sampleLight.wgsl.js';
 import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
+import {spectrumWgsl} from '../spectrum.js';
 import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
@@ -161,6 +162,7 @@ ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
+${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
 ${sampleLightWgsl}${inputHooks?.declarations ?? ''}
 
@@ -258,10 +260,10 @@ struct RayTraceAuxiliary {
   shadowCounts: vec2f,
 }
 
-${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
+${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, channel: i32) -> vec4f {
   let bg = sampleSceneBackground(ray);
   if (SPECTRAL) {
-    return vec4f(sampling_spectral_rgb_filter(bg.rgb, wavelength), bg.a);
+    return vec4f(sampling_spectral_rgb_filter(bg.rgb, channel), bg.a);
   }
   return bg;
 }
@@ -287,7 +289,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           // before the grounded skybox. Preserve the displayed projection.
           let bg = sampleSpectralSceneBackground(
             (*path).ray,
-            (*si).wavelength
+            (*si).spectralChannel
           );
           let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
             envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
@@ -299,7 +301,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           let envUv = environmentUv((*path).ray.d);
           var emission = textureLinear(envMap, envUv).rgb;
           if (SPECTRAL) {
-            emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
+            emission = sampling_spectral_rgb_filter(emission, (*si).spectralChannel);
           }
           (*path).li += (*path).beta * emission *
             bsdfMISWeight((*path).scatteringPdf, envMapPdf(envUv));
@@ -308,7 +310,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
       else {
         let bg = sampleSpectralSceneBackground(
           (*path).ray,
-          (*si).wavelength
+          (*si).spectralChannel
         );
         (*path).li += (*path).beta * bg.rgb * bg.a;
       }
@@ -322,7 +324,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
     // reconstruct the skybox instead of adding three full RGB copies.
     let bg = sampleSpectralSceneBackground(
       (*path).ray,
-      (*si).wavelength
+      (*si).spectralChannel
     );
     if ((*path).fromEye) {
       // Sample from background if first ray not hit anything.
@@ -462,7 +464,7 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
     if (d != INF && !(occluded && isAlphaOccluded)) {
       let misWeight = bsdfMISWeight((*path).scatteringPdf, lightSample.pdf);
       if (SPECTRAL) {
-        lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).wavelength);
+        lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).spectralChannel);
       }
       ${enabled || lightTracing || photonMapping ? 'if (!causticHitOwned(*path, true, true)) { causticHotRecord(*path,misWeight*lightSample.emission,2u); ' : ''}(*path).li += misWeight * (*path).beta * lightSample.emission;${enabled || lightTracing || photonMapping ? ' }' : ''}
       (*path).alpha = 1.0;
@@ -479,7 +481,7 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
         // map as the physically sampled lighting source.
         let bg = sampleSpectralSceneBackground(
           (*path).ray,
-          (*si).wavelength
+          (*si).spectralChannel
         );
         let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
             envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
@@ -496,7 +498,7 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
         envMapPdf(_uv) * rtUniform.envLightPmf
       );
       if (SPECTRAL) {
-        emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
+        emission = sampling_spectral_rgb_filter(emission, (*si).spectralChannel);
       }
       // TODO force the min alpha to be 1 when showing envmap as background
       if (!USE_BACKGROUND) {
@@ -832,10 +834,10 @@ ${primaryVariables}
   let singleWavelength = rtUniform.dispersionWavelengths == 1;
   var dispersivePrimary = false;
   var heroWavelengthIndex = 0;
+  var wavelengthSample = 0.0;
   var wavelengthRngState: vec4u;
   var wavelengthHashedCounter = 0u;
   var wavelengthAux: RayTraceAuxiliary;
-  let wavelengths = array<f32, 3>(650.0, 510.0, 475.0);
   var color = vec3f(0.0); var alpha = 0.0;
   var accumulatedGuideAlbedo = vec3f(0.0);
   var accumulatedGuideNormal = vec3f(0.0);
@@ -853,20 +855,24 @@ ${primaryVariables}
       if (!primaryReady) {
 ${primaryGuides}
         primarySi = si; primaryMa = ma; primaryReady = true;
-        wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
         dispersivePrimary = si.hit & (ma.transmissionWeight > 0.001) & (ma.transmissionDispersionScale > 0.001);
-        if (singleWavelength & dispersivePrimary) {
-          heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
+        wavelengthSample = sample1D(CAMERA_WAVELENGTH);
+        if (singleWavelength) {
+          heroWavelengthIndex = min(i32(floor(wavelengthSample * 3.0)), 2);
+          wavelengthSample = fract(wavelengthSample * 3.0);
         }
+        wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
       }
       si = primarySi; ma = primaryMa; wavelengthAux = *outAux;
       if (!singleWavelength) {
         s0 = wavelengthRngState; hashedCounter = wavelengthHashedCounter; samplingBounce = 0u;
         wavelengthAux.isBlank = false; wavelengthAux.isShadowCatcher = false;
       }
-      si.wavelength = 0.0;
+      si.wavelength = 0.0; si.spectralChannel = 0;
       if (!singleWavelength | dispersivePrimary) {
-        si.wavelength = wavelengths[select(wavelengthIndex, heroWavelengthIndex, singleWavelength)];
+        let channel = select(wavelengthIndex, heroWavelengthIndex, singleWavelength);
+        si.spectralChannel = channel + 1;
+        si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
         ma.specularIor = sampling_cauchy_ior(si.wavelength, ma.specularIor,
           ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
       }
@@ -914,7 +920,6 @@ ${primaryGuides}
       // preview and offline RGB splitting. A runtime loop bound prevents the
       // WGSL compiler from cloning the full path graph three times while the
       // uniform still selects the exact existing preview/offline behavior.
-      let rgbWaveLengths = array<f32, 3>(650.0, 510.0, 475.0);
       var colAccum = vec3f(0.0);
       var alpha = 0.0;
       var accumulatedGuideAlbedo = vec3f(0.0);
@@ -922,6 +927,7 @@ ${primaryGuides}
       var allBlank = true;
       var si2 = si;
       var ma2 = ma;
+      var wavelengthSample = sample1D(CAMERA_WAVELENGTH);
       let wavelengthRngState = s0;
       let wavelengthHashedCounter = hashedCounter;
       let singleWavelength = rtUniform.dispersionWavelengths == 1;
@@ -930,10 +936,11 @@ ${primaryGuides}
         ma.transmissionDispersionScale > 0.001;
       let wavelengthCount = select(3, 1, singleWavelength);
       var heroWavelengthIndex = 0;
-      if (singleWavelength && dispersivePrimary) {
+      if (singleWavelength) {
         // Stochastic hero wavelength: one RGB channel per pixel keeps the
         // preview spectral at one-third of the full three-path cost.
-        heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
+        heroWavelengthIndex = min(i32(floor(wavelengthSample * 3.0)), 2);
+        wavelengthSample = fract(wavelengthSample * 3.0);
       }
       for (var i = 0; i < wavelengthCount; i++) {
         // Common random numbers keep Monte Carlo error correlated between
@@ -945,8 +952,11 @@ ${primaryGuides}
           samplingBounce = 0u;
         }
         si.wavelength = 0.0;
+        si.spectralChannel = 0;
         if (!singleWavelength || dispersivePrimary) {
-          si.wavelength = rgbWaveLengths[select(i, heroWavelengthIndex, singleWavelength)];
+          let channel = select(i, heroWavelengthIndex, singleWavelength);
+          si.spectralChannel = channel + 1;
+          si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
           ma.specularIor = sampling_cauchy_ior(
             si.wavelength,
             ma.specularIor,

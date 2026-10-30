@@ -34,7 +34,6 @@ import {
 import { type JNLMDenoiser } from './jnlm.js';
 import { WebGLJNLMDenoisePass } from './WebGLJNLMDenoiser.js';
 
-const wavelengths = [650, 510, 475];
 
 /**
  * WebGL 2.0 counterpart of WGPURenderingPipeline.
@@ -161,18 +160,18 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     updateSeed(true);
     if (rayTracePass.hasDispersion()) {
       if (execution?.dispersionWavelengths === 1) {
-        // A positive wavelength enables stochastic hero-wavelength sampling
-        // in the shader. Preview traces one random RGB channel per pixel.
-        rayTracePass.setWavelength(wavelengths[0]);
+        // A positive channel enables stochastic hero-wavelength sampling in
+        // the shader. Preview traces one random RGB channel per pixel.
+        rayTracePass.setSpectralChannel(1);
         rayTracePass.createPass(clear, tile);
       } else {
-        wavelengths.forEach((wavelength, index) => {
-          rayTracePass.setWavelength(wavelength);
-          rayTracePass.createPass(clear && index === 0, tile, index > 0);
-        });
+        for (let channel = 1; channel <= 3; channel++) {
+          rayTracePass.setSpectralChannel(channel);
+          rayTracePass.createPass(clear && channel === 1, tile, channel > 1);
+        }
       }
     } else {
-      rayTracePass.setWavelength(0);
+      rayTracePass.setSpectralChannel(0);
       rayTracePass.createPass(clear, tile);
     }
   }
