@@ -1,4 +1,5 @@
 import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
+import {CAUSTIC_WAVELENGTH_MIN, CAUSTIC_WAVELENGTH_RANGE, causticSpectrumWgsl} from '../causticSpectrum.js';
 import background from './chunks/background.wgsl.js';
 import atomic from './chunks/causticAtomic.wgsl.js';
 import adjoint from './chunks/causticAdjoint.wgsl.js';
@@ -57,6 +58,7 @@ ${rand}
 ${random}
 ${env}
 ${sampling}
+${causticSpectrumWgsl}
 ${createOpenPbrBsdfWgsl(frames, coat)}
 ${light}
 ${background.replace(
@@ -319,8 +321,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
   rng_initialize(samplingPixel,i32(sampleSeed(caustic.batch,rtUniform.sequenceSeed)));
   var wavelength=0.0;
   if(SPECTRAL) {
-    let wavelengths=array<f32,3>(650.0,510.0,475.0);
-    wavelength=wavelengths[min(u32(causticEmission1D(causticDim(69u))*3.0),2u)];
+    wavelength=${CAUSTIC_WAVELENGTH_MIN}.0+${CAUSTIC_WAVELENGTH_RANGE}.0*causticEmission1D(causticDim(69u));
   }
   var ls:LightSampleRec;
   causticSampleLight(caustic.casterSphere.xyz,vec3f(causticEmission2D(causticDim(60u)),causticEmission1D(causticDim(61u))),&ls);
@@ -412,7 +413,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     flux=emission*emissionCosine/(areaPdf*directionPdf);
   }
   if(SPECTRAL) {
-    flux=3.0*sampling_spectral_rgb_filter(flux,wavelength);
+    flux*=causticSpectrumRgb(wavelength);
   }
   var ray:Ray;
   initRay(&ray,origin+EPS*direction,direction);
@@ -514,13 +515,7 @@ ${
     var reverse:Ray;
     initRay(&reverse,si.position,-ray.d);
     let bg=sampleSceneBackground(reverse);
-    var numerator=bg.rgb*bg.a;
-    var denominator=ls.emission;
-    if(SPECTRAL) {
-      numerator=sampling_spectral_rgb_filter(numerator,wavelength);
-      denominator=sampling_spectral_rgb_filter(denominator,wavelength);
-    }
-    flux*=numerator/max(denominator,vec3f(1e-20));
+    flux*=bg.rgb*bg.a/max(ls.emission,vec3f(1e-20));
   }
   flux*=response/pdf*causticAdjoint(view,next,normal,si.faceNormal);
   // The shared BSDF is a radiance sampler. Cancel its eta_i/eta_t squared
