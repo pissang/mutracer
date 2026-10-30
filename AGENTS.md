@@ -67,6 +67,9 @@ Run browser GPU tests, captures and benchmarks in headless Chrome
 (`--headless=new`) with a temporary profile, so results do not depend on a
 visible window, focus or an unlocked screen. Use a visible window only for checks
 that need real presentation, such as native window and HDR surface tests.
+Never lock, sleep or suspend the session, or change display or power settings;
+if a check needs a visible, unlocked screen that is not available, record it as
+blocked.
 
 Scale verification to the change. While iterating on display, denoising or
 scheduling, run `npm run test:parity` and the affected tests only; run the complete
