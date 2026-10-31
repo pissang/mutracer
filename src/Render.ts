@@ -34,7 +34,7 @@ export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
 export interface Denoiser {
   /** Optional preallocation before first use or after device/dimension changes. Default undefined. The device may change after recovery; recreate device-owned resources then. */
   prepare?(input: {device: GPUDevice; width: number; height: number}): Promise<void>;
-  /** Write all output RGB, then resolve after submitting GPU work. Abort on input changes, restart, replacement or disposal; aborted results are discarded even if this resolves. Buffers are borrowed until settlement; do not retain or destroy them. */
+  /** Write all output RGB, then resolve after submitting GPU work. Abort on input changes, restart, replacement or disposal; aborted results are discarded even if this resolves. Settle within 10 seconds of an abort, or later denoising continues without waiting. Buffers are borrowed until settlement; do not retain or destroy them. */
   denoise(input: DenoiseInput, context: {signal: AbortSignal; schedule: DenoiseSchedule}): Promise<void>;
 }
 /** Borrowed, tightly packed rgba32float buffers, top row first, width*height*16 bytes of image data. */
@@ -709,7 +709,7 @@ export default class Render {
         target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now();
         if (frameStart !== undefined) this._frameTime = Math.max(this._frameTime, this._lastDenoiseTime - frameStart);
       }
-    });
+    }, controller.signal);
     this._denoisePending = task;
     void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => {
       if (this._denoisePending === task) {

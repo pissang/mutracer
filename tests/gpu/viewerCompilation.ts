@@ -23,7 +23,7 @@ export async function capture(lightTracing = true, photonMapping = true, slot: '
   const errors: string[] = [];
   viewer.engine.on('error', error => errors.push(error.message));
   const update = WGPURayTracePass.prototype.updatePipeline;
-  let pending = Promise.resolve();
+  let pending: Promise<void> | undefined;
   WGPURayTracePass.prototype.updatePipeline = function() {
     return pending = update.call(this);
   };

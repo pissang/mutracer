@@ -281,6 +281,7 @@ describe('WGPURayTracePass output resource lifetime', () => {
     };
     pass._targetOutputs = new Map();
     pass._activeTarget = {};
+    pass._targetTransport = new WeakMap();
     pass._outColorBuffer = oldBuffers[0];
     pass._outNormalBuffer = oldBuffers[1];
     pass._outAlbedoBuffer = oldBuffers[2];

@@ -6,6 +6,8 @@ import type Sync from './Sync.js';
 import { Events } from './util/events.js';
 import { aovChannel, updateProgressiveState, loopImageState, type ProgressiveState } from './renderer/progressiveScheduler.js';
 
+const MAX_INFERENCE_HOLD_MS = 5000;
+
 /** Presentation state; preview images never count as final completion. */
 export type RenderLoopStatus = RenderStatus | 'previewing';
 export interface RenderLoopOptions {
@@ -46,6 +48,8 @@ export default class RenderLoop {
   /** Render whose next presentation is waiting for a complete preview frame. */
   private _previewFrameOwner?: Render;
   private _presented?: Render;
+  private _inferenceHoldStart?: number;
+  private _lastError?: Error;
   private _finishedImage?: string;
   private _motion?: {render: Render; phase: 'moving' | 'priming' | 'settling' | 'settled'};
   private _unsubscribe: () => void;
@@ -85,6 +89,7 @@ export default class RenderLoop {
   /** Whether an explicit integration or consecutive edits indicate motion. Default false. */ get changing(): boolean { return this._changing; }
   /** Complete final beauty samples; preview and AOV-only sampling are excluded. Default 0. */ get samples(): number { return this.status === 'previewing' ? 0 : this.final.samples; }
   /** Current presented/execution state. Default preparing. */ get status(): RenderLoopStatus { return this._status; }
+  /** Exception thrown by the latest tick, such as from a sync or scene update; status is error while set. Default undefined. */ get lastError(): Error | undefined { return this._lastError; }
   /** Subscribes to status transitions or complete final samples; returns unsubscribe. */
   on<K extends keyof LoopEvents>(event: K, listener: (value: LoopEvents[K]) => void): () => void { return this._events.on(event, listener); }
   /** Adds an integration on this engine. Duplicate registrations are ignored. */
@@ -105,7 +110,22 @@ export default class RenderLoop {
     if (this._running) { if (!this._warnedTick) {this._warnedTick = true; console.warn('RenderLoop.tick() is ignored while start() is active.');} return this.status; }
     return this._tick();
   }
+  // Anything thrown here would otherwise repeat every frame while status keeps
+  // reporting the last healthy state.
   private _tick(): RenderLoopStatus {
+    try {
+      const status = this._runTick();
+      this._lastError = undefined;
+      return status;
+    } catch (value) {
+      const error = value instanceof Error ? value : new Error(String(value));
+      if (error.message !== this._lastError?.message) console.error(`RenderLoop tick failed: ${error.message}`, error);
+      this._lastError = error;
+      this._cancelRefill(); this._previewFrameOwner = undefined;
+      return this._setStatus('error');
+    }
+  }
+  private _runTick(): RenderLoopStatus {
     this._cancelRefill();
     const controller = this._refillController = new AbortController();
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
@@ -119,7 +139,11 @@ export default class RenderLoop {
     const owner = this._previewFrameOwner;
     const pendingPreview = !!owner && (owner === this.preview || !owner._completeFor(this.display.channel));
     const tracingPreview = pendingPreview && this.preview?.status === 'converging' && samples(this.preview) === 0;
-    const holding = tracingPreview || (!aov && this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
+    const holdingInference = !aov && this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising;
+    if (!holdingInference) this._inferenceHoldStart = undefined;
+    else this._inferenceHoldStart ??= performance.now();
+    // Only a commit can cancel inference, so a stalled filter must not hold it forever.
+    const holding = tracingPreview || (holdingInference && performance.now() - this._inferenceHoldStart! < MAX_INFERENCE_HOLD_MS);
     // Inference belongs to a presentation, not merely to a background render.
     // A fallback result must never replace an already available final image.
     if (pendingPreview && !holding && this.preview) this._present(this.preview);
