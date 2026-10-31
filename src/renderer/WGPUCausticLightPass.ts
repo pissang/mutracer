@@ -17,8 +17,6 @@ export class WGPUCausticLightPass {
   private casterCount = 0;
   private choiceCount = 0;
   private pipeline?: GPUComputePipeline;
-  private key = '';
-  private layoutKey?: object;
   private readonly outputs = new Map<object, Output>();
   private readonly uniform: GPUBuffer;
   private readonly layout: GPUBindGroupLayout;
@@ -60,17 +58,14 @@ export class WGPUCausticLightPass {
       compute: {module: device.createShaderModule({code: causticAccumulateCompute}), entryPoint: 'main'}
     });
   }
-  prepare(source: string, groups: GPUBindGroupLayout[], bindless = false, layoutKey: object = groups) {
-    if (this.key === source && this.layoutKey === layoutKey && this.pipeline) return;
-    return this.compile(source, groups, bindless, layoutKey);
-  }
-  private async compile(source: string, groups: GPUBindGroupLayout[], bindless: boolean, layoutKey: object) {
+  /** Compiles an emitter for one trace pipeline's layouts; select it with use(). */
+  async prepare(source: string, groups: GPUBindGroupLayout[], bindless = false) {
     const module = this.device.createShaderModule({label: 'Caustic light tracing', code: source});
     const info = await module.getCompilationInfo();
     const errors = info.messages.filter((m) => m.type === 'error');
     if (errors.length)
       throw Error(errors.map((m) => `Caustic WGSL ${m.lineNum}:${m.linePos} ${m.message}`).join('\n'));
-    const pipeline = await this.device.createComputePipelineAsync({
+    return this.device.createComputePipelineAsync({
       label: 'Caustic light tracing',
       layout: this.device.createPipelineLayout(
         bindless
@@ -79,9 +74,9 @@ export class WGPUCausticLightPass {
       ),
       compute: {module, entryPoint: 'main'}
     });
+  }
+  use(pipeline: GPUComputePipeline) {
     this.pipeline = pipeline;
-    this.key = source;
-    this.layoutKey = layoutKey;
   }
   setDistribution(spheres: readonly CasterSphere[], lights: {data: Float32Array; count: number}) {
     this.choiceCount = lights.count;

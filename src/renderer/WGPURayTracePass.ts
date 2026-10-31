@@ -176,6 +176,21 @@ function joinWebGPUErrors(...errors: unknown[]) {
   ].join('\n');
 }
 
+/** One compiled shader configuration. Its compilation task owns all of these fields. */
+interface TraceVariant {
+  status: 'pending' | 'ready' | 'failed';
+  settled: Promise<void>;
+  capabilities: ShaderCapabilities;
+  structureKey: string;
+  diagnostics: ShaderCompilationDiagnostics;
+  pipeline?: GPUComputePipeline;
+  depthCompute?: GPUProgrammableStage;
+  lightEmitter?: GPUComputePipeline;
+  photonEmitter?: GPUComputePipeline;
+  error?: unknown;
+}
+const MAX_TRACE_VARIANTS = 32;
+
 function shaderCompilationNow() {
   return typeof performance === 'undefined' ? Date.now() : performance.now();
 }
@@ -230,7 +245,6 @@ class WGPURayTracePass {
   private _causticPerspective = true;
   private _causticCameraScale = 1;
   private _causticBounds: [number, number, number, number] = [0, 0, 0, 0];
-  private _compiledCausticKey = '';
   private _transport?: ResearchPassState;
   private _lightTracing = false;
   private _sceneEnvironment = new SceneEnvironmentCache();
@@ -380,23 +394,23 @@ class WGPURayTracePass {
   private _backgroundImageSource: EnvironmentSource | undefined;
   private _backgroundTex?: GPUTexture;
 
-  private _rayTracePipelineLayout?: GPUPipelineLayout;
   private _rayTraceBindGroups?: GPUBindGroup[];
   private _photonEmissionGroups?: GPUBindGroup[];
   private _blasLayoutMask = 1;
-  private _compiledBlasLayoutMask = 0;
-  private _compiledAnisotropyDirections = false;
-  private _compiledCoatNormals = false;
-  private _compiledHasAlpha = true;
-  private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
   private _constants = initialSceneConstants();
   private _retainedShaderCapabilities?: ShaderCapabilities;
   private _retainedShaderStructure?: string;
   private _shaderCapabilities = new WGPUShaderCapabilities();
-  private _prevPipelineConstants: Record<string, boolean | number> = {};
-  private _prevDefinesCode = '';
-  private _prevPipelineInputs?: string;
+  private _targetTransport = new WeakMap<object, number>();
+  private _traceVariants = new Map<string, TraceVariant>();
+  private _traceModules = new Map<string, {module: GPUShaderModule; bytes: number; lines: number; fingerprint: string}>();
+  private _requestedVariant?: TraceVariant;
+  private _activeVariant?: TraceVariant;
+  private _activeInputs?: string;
+  private _awaitingRetirement?: Promise<void>;
+  private _resourceError: unknown;
+  private _aovPipelinesFailed = false;
 
   private _hasTransmission = false;
   private _hasShadowCatcher = false;
@@ -422,7 +436,6 @@ class WGPURayTracePass {
   // leave global bindings dirty after switching back to a prepared target.
   private _needsUpdateOutputBindGroup = false;
 
-  private _computeShaderModule?: GPUShaderModule;
   private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
     accumulation?: GPUComputePipeline; center?: GPUComputePipeline; error?: unknown;
   }>>();
@@ -432,12 +445,8 @@ class WGPURayTracePass {
   private _shaderCache: WGPUShaderCache;
   private _debugBVHBuffer?: ArrayBuffer;
 
-  private _isCompilingShader = false;
-  private _shaderCompilationDiagnostics?: ShaderCompilationDiagnostics;
-  private _pipelineError: unknown;
   // Fold scene invariants before backend inlining; runtime edits use uniforms.
   private _bakePipelineConstants = true;
-  private _failedPipelineSignature?: string;
 
 
 
@@ -500,10 +509,12 @@ class WGPURayTracePass {
   }
 
   getOutputBuffer() {
+    // Another render may have traced since this target's samples were written.
+    const transport = this._targetTransport.get(this._activeTarget) ?? 0;
     return {
       color: this._outColorBuffer,
-      ...(this._photonMapping || ((this._transport?.debugGroup ?? -1) >= 0 || causticDiagnostics.debugGroup >= 0) ? {wideHdr: true} : {}),
-      ...(this._lightTracing && this._causticLight?.get(this._activeTarget)
+      ...(transport & 2 || ((this._transport?.debugGroup ?? -1) >= 0 || causticDiagnostics.debugGroup >= 0) ? {wideHdr: true} : {}),
+      ...(transport & 1 && this._causticLight?.get(this._activeTarget)
         ? {caustic: this._causticLight.get(this._activeTarget)!}
         : {}),
       normal: this._outNormalBuffer,
@@ -777,7 +788,7 @@ class WGPURayTracePass {
         }
       )
     };
-    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout(
+    return this._shaderCache.createPipelineLayout(
       this._bindless ? resourceTableLayout(descriptor) : descriptor
     );
   }
@@ -830,28 +841,27 @@ class WGPURayTracePass {
     if (before !== after.data) this._needsUpdateBindGroups = true;
   }
 
-  async updatePipeline() {
-    if (this._isCompilingShader) {
-      return;
+  /**
+   * Prepares the pipeline for the settings currently written to this pass.
+   * Everything except compilation runs synchronously, and compilation only
+   * writes to its own variant. Renders with different settings can therefore
+   * interleave without invalidating each other. Returns a promise while the
+   * requested state waits on the GPU; undefined means nothing is outstanding.
+   */
+  updatePipeline(): Promise<void> | undefined {
+    if (this._disposed) return;
+    if (this._needsUpdateMeshData || this._needsUpdateMeshMembership || this._pendingGeometryUpdates.size ||
+      this._needsRefitTLAS || this._dirtyColorMeshes.size || this._pendingMaterialUpdate || this._needsUpdateLightSamplingData) {
+      // A failure can have the same shader signature as its repaired scene.
+      // Retry after authored updates, while keeping an unchanged failure idle.
+      this._resourceError = undefined;
+      for (const [signature, variant] of this._traceVariants) if (variant.status === 'failed') this._traceVariants.delete(signature);
+      if (this._aovPipelinesFailed) { this._aovPipelines = new WeakMap(); this._aovPipelinesFailed = false; }
     }
-    // Set this before any synchronous preparation. updatePipeline is called
-    // without awaiting it, so a preparation error must not let createPass run
-    // with an undefined pipeline in the same frame.
-    this._isCompilingShader = true;
-    let attemptedPipelineSignature: string | undefined;
-    let compilationStartedAt: number | undefined;
-    let pipelineCompilationStartedAt: number | undefined;
-    let preparationInvalidated: (() => boolean) | undefined;
+    this._awaitingRetirement = this._bindless?.retirement;
+    if (this._awaitingRetirement) return this._awaitingRetirement;
+    if (this._resourceError) return;
     try {
-      if (this._needsUpdateMeshData || this._needsUpdateMeshMembership || this._pendingGeometryUpdates.size ||
-        this._needsRefitTLAS || this._dirtyColorMeshes.size || this._pendingMaterialUpdate || this._needsUpdateLightSamplingData) {
-        // A resource failure may have the same shader signature as its repaired
-        // scene. Retry authored updates, while keeping an unchanged failure idle.
-        this._failedPipelineSignature = undefined;
-        this._pipelineError = undefined;
-      }
-      if (this._bindless?.retirement) await this._bindless.retirement;
-      if (this._disposed) return;
       if (this._needsUpdateMeshData) {
         this._updateMeshData();
       } else if (this._needsUpdateMeshMembership) {
@@ -868,21 +878,21 @@ class WGPURayTracePass {
 
       this._setCaustics(this._causticSettings);
       if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._meshes);
+      this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
-      const device = this._device;
-      const causticKey = this._causticKey;
       const pipelineInputs = JSON.stringify([
         this._constants,
         this._hasDisplacement,
         this._alphaBlendStrategy,
         this._blasLayoutMask,
         this._bakePipelineConstants,
-        this._causticKey
+        this._causticKey,
+        !!this._bindless
       ]);
       // Steady rendering must not repeat capability selection and cache-key
       // preparation. Dirty resources still take the normal bind-group path.
       if (
-        pipelineInputs === this._prevPipelineInputs &&
+        pipelineInputs === this._activeInputs &&
         this._rayTracePipeline &&
         this._rayTraceBindGroups &&
         !this._needsUpdateBindGroups
@@ -892,6 +902,7 @@ class WGPURayTracePass {
           this._needsUpdateOutputBindGroup = false;
           this._updateBindGroups();
         }
+        this._requestedVariant = this._activeVariant;
         return;
       }
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
@@ -905,6 +916,7 @@ class WGPURayTracePass {
       const structure = {
         hasDisplacement: this._hasDisplacement,
         caustics: this._causticKey,
+        bindless: !!this._bindless,
         hasAlpha,
         hasSceneAlpha,
         hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
@@ -929,356 +941,229 @@ class WGPURayTracePass {
           structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
         );
       Object.assign(constants, capabilities);
-      const pipelineSignature = JSON.stringify({
+      // Runtime feature values live in uniforms, so edits can share a pipeline
+      // as long as its compiled defines and overrides are the same.
+      const signature = JSON.stringify({
         ...structure,
-        constants: Object.keys(constants)
-          .sort()
-          .map((key) => [key, constants[key]])
+        defineCode,
+        constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
       });
-      attemptedPipelineSignature = pipelineSignature;
-      if (pipelineSignature === this._failedPipelineSignature) {
-        return;
-      }
-      this._pipelineError = undefined;
-      const previousPipelineConstantsKeys = wgpuPipelineConstantKeys(this._prevPipelineConstants);
-      const needsCreateShaderModule =
-        this._causticKey !== this._compiledCausticKey ||
-        !this._rayTracePipelineLayout ||
-        !this._computeShaderModule ||
-        pipelineConstantsKeys.join(',') !== previousPipelineConstantsKeys.join(',') ||
-        defineCode !== this._prevDefinesCode ||
-        hasAlpha !== this._compiledHasAlpha ||
-        hasSceneAlpha !== this._compiledSceneHasAlpha ||
-        Boolean(constants.USE_ANISOTROPY_DIRECTIONS) !== this._compiledAnisotropyDirections ||
-        Boolean(constants.USE_COAT_NORMAL_FRAMES) !== this._compiledCoatNormals ||
-        this._blasLayoutMask !== this._compiledBlasLayoutMask ||
-        (this._bakePipelineConstants &&
-          pipelineConstantsKeys.some((key) => constants[key] !== this._prevPipelineConstants[key]));
-
-      const needsCreatePipeline =
-        needsCreateShaderModule ||
-        pipelineConstantsKeys.some((key) => constants[key] !== this._prevPipelineConstants[key]);
-
-      compilationStartedAt = needsCreatePipeline ? shaderCompilationNow() : undefined;
-      let sourceGenerationTimeMs = 0;
-      let moduleCreationTimeMs = 0;
-      let sourceBytes = this._shaderCompilationDiagnostics?.sourceBytes ?? 0;
-      let sourceLines = this._shaderCompilationDiagnostics?.sourceLines ?? 0;
-      let sourceFingerprint = this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
-      if (needsCreateShaderModule) {
-        this._compiledCausticKey = this._causticKey;
-        const sourceGenerationStartedAt = shaderCompilationNow();
-        let rayTraceShaderCode = wgpuShaderSource(
-          constants,
-          {
-            hasDisplacement: this._hasDisplacement,
-            hasAlpha,
-            hasSceneAlpha,
-            ...this._transport?.features,
-            lightTracing: this._lightTracing,
-            photonMapping: this._photonMapping,
-            photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
-            photonDirectSubset: causticDiagnostics.photonDirectSubset,
-            debugGroup: causticDiagnostics.debugGroup,
-            workgroupSize: this._transport?.workgroupSize ?? WORKGROUP_SIZE,
-            hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-            hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-            blasLayoutMask: this._blasLayoutMask,
-            dynamicEnvironment: true
-          },
-          this._bakePipelineConstants
-        );
-        if (this._bindless)
-          rayTraceShaderCode = bindlessShaderSource(
-            rayTraceShaderCode,
-            this._textureSelection.support!.enable
-          );
-
-        sourceBytes = rayTraceShaderCode.length;
-        sourceLines = shaderSourceLineCount(rayTraceShaderCode);
-        sourceFingerprint = shaderSourceFingerprint(rayTraceShaderCode);
-        sourceGenerationTimeMs = shaderCompilationNow() - sourceGenerationStartedAt;
-        const moduleCreationStartedAt = shaderCompilationNow();
-        this._computeShaderModule = this._shaderCache.createShaderModule({
-          label: 'Ray Trace',
-          code: rayTraceShaderCode
-        });
-        moduleCreationTimeMs = shaderCompilationNow() - moduleCreationStartedAt;
-        this._compiledHasAlpha = hasAlpha;
-        this._compiledSceneHasAlpha = hasSceneAlpha;
-        this._compiledAnisotropyDirections = Boolean(constants.USE_ANISOTROPY_DIRECTIONS);
-        this._compiledCoatNormals = Boolean(constants.USE_COAT_NORMAL_FRAMES);
-        this._compiledBlasLayoutMask = this._blasLayoutMask;
-      }
-
-      if (needsCreatePipeline) {
-        if (!this._rayTracePipelineLayout) {
-          device.pushErrorScope('validation');
-          let layoutScopeOpen = true;
-          let layout: GPUPipelineLayout | undefined;
-          try {
-            this._createPipelineLayout();
-            layout = this._rayTracePipelineLayout;
-            const layoutError = await device.popErrorScope();
-            layoutScopeOpen = false;
-            if (layoutError) throw layoutError;
-            // A quality edit can invalidate the layout while validation waits.
-            if (layout !== this._rayTracePipelineLayout || causticKey !== this._causticKey) return;
-          } catch (error) {
-            const scopedError = layoutScopeOpen ? await device.popErrorScope().catch(() => null) : null;
-            if (this._disposed || (layout && layout !== this._rayTracePipelineLayout) || causticKey !== this._causticKey) return;
-            this._rayTracePipelineLayout = undefined;
-            const detail = joinWebGPUErrors(error, scopedError);
-            throw new Error(`Unable to create the ray tracing pipeline layout: ${detail}`);
-          }
-        }
-
-        // NOTE must before creating pipeline.
-        // Because createComputePipelineAsync is async.
-        // The constants may be changed after the pipeline is created(in setMesh).
-        this._prevPipelineConstants = {...constants};
-        this._prevDefinesCode = defineCode;
-        this._needsUpdateBindGroups = true;
-
-        const layout = this._rayTracePipelineLayout!;
-        const module = this._computeShaderModule!;
-        device.pushErrorScope('validation');
-        let pipelineScopeOpen = true;
-        try {
-          const pipelineConstants = !this._bakePipelineConstants
-            ? pipelineConstantsKeys.reduce(
-                (obj, key) => {
-                  obj[key] = +constants[key];
-                  return obj;
-                },
-                {} as Record<string, number>
-              )
-            : undefined;
-          const diagnostic: ShaderCompilationDiagnostics['pipelines'][number] = {
-            label: 'Ray Trace',
-            entryPoint: 'main',
-            firstFrameRequired: true,
-            status: 'compiling'
-          };
-          pipelineCompilationStartedAt = shaderCompilationNow();
-          diagnostic.startedAtMs = 0;
-          diagnostic.concurrentCompilationCount = 1;
-          this._shaderCompilationDiagnostics = {
-            status: 'compiling',
-            sourceBytes,
-            sourceLines,
-            pipelineCount: 1,
-            completedPipelineCount: 0,
-            sourceGenerationTimeMs,
-            moduleCreationTimeMs,
-            modules: [
-              {
-                label: 'Ray Trace',
-                sourceBytes,
-                sourceLines,
-                sourceFingerprint
-              }
-            ],
-            pipelines: [{...diagnostic}],
-            maximumConcurrentPipelineCount: 1,
-            peakConcurrentPipelineCount: 1
-          };
-          let rayTracePipeline: GPUComputePipeline;
-          try {
-            rayTracePipeline = await this._shaderCache.createComputePipelineAsync({
-              label: 'Ray Trace',
-              layout,
-              compute: {
-                module,
-                entryPoint: 'main',
-                constants: pipelineConstants
-              }
-            });
-            diagnostic.status = 'ready';
-          } catch (error) {
-            diagnostic.status = 'failed';
-            diagnostic.error = getWebGPUErrorMessage(error);
-            // Pipeline creation already reports WGSL failures. Pull the much
-            // heavier module diagnostics only on that failure path so normal
-            // startup does not schedule a second full-module inspection.
-            const info = await module.getCompilationInfo().catch(() => undefined);
-            const shaderErrors = (info?.messages ?? []).filter((message) => message.type === 'error');
-            if (shaderErrors.length) {
-              throw new Error(
-                shaderErrors
-                  .map((message) => `Ray Trace WGSL ${message.lineNum}:${message.linePos} ${message.message}`)
-                  .join('\n')
-              );
-            }
-            throw error;
-          } finally {
-            diagnostic.endedAtMs = shaderCompilationNow() - pipelineCompilationStartedAt;
-            diagnostic.durationMs = diagnostic.endedAtMs;
-          }
-          const pipelineError = await device.popErrorScope();
-          pipelineScopeOpen = false;
-          if (pipelineError) throw pipelineError;
-          if (layout !== this._rayTracePipelineLayout || module !== this._computeShaderModule ||
-            causticKey !== this._causticKey) return;
-          this._rayTracePipeline = rayTracePipeline;
-          this._depthCompute = {module, constants: pipelineConstants};
-          const compilationCompletedAt = shaderCompilationNow();
-          this._shaderCompilationDiagnostics = {
-            ...this._shaderCompilationDiagnostics!,
-            status: 'ready',
-            completedPipelineCount: 1,
-            pipelines: [{...diagnostic}],
-            pipelineCompilationTimeMs: compilationCompletedAt - pipelineCompilationStartedAt,
-            totalTimeMs: compilationCompletedAt - compilationStartedAt!
-          };
-        } catch (error) {
-          const scopedError = pipelineScopeOpen ? await device.popErrorScope().catch(() => null) : null;
-          if (this._disposed || layout !== this._rayTracePipelineLayout || module !== this._computeShaderModule ||
-            causticKey !== this._causticKey) return;
-          const detail = joinWebGPUErrors(error, scopedError);
-          if (!this._bakePipelineConstants && isWebGPUPipelineSpecializationFailure(error, scopedError)) {
-            const failedAt = shaderCompilationNow();
-            if (this._shaderCompilationDiagnostics?.status === 'compiling') {
-              this._shaderCompilationDiagnostics = {
-                ...this._shaderCompilationDiagnostics,
-                status: 'failed',
-                pipelineCompilationTimeMs:
-                  pipelineCompilationStartedAt == null ? undefined : failedAt - pipelineCompilationStartedAt,
-                totalTimeMs: compilationStartedAt == null ? undefined : failedAt - compilationStartedAt,
-                error: detail
-              };
-            }
-            // WebKit can accept a large WGSL module but fail while translating
-            // its specialization-constant variant to Metal. Baking the values
-            // into WGSL lets its front end eliminate disabled feature branches
-            // before creating the Metal library.
-            this._bakePipelineConstants = true;
-            this._rayTracePipeline = undefined;
-            this._rayTraceBindGroups = undefined;
-            this._computeShaderModule = undefined;
-            this._prevPipelineConstants = {};
-            console.warn('WebGPU pipeline specialization failed; retrying with constants baked into WGSL.');
-            return;
-          }
-          throw new Error(detail);
-        }
-      }
-
-      // Compilation can complete after Engine disposal/device loss has released
-      // the material table and its textures. Never bind that retired generation.
-      if (this._disposed) return;
-      // Target activation can change during compilation. Allocate for the target
-      // being bound now, rather than the one active before the asynchronous work.
-      this._preparePhotonTarget();
-      // TODO rebind when lights, materials, bvh changed.
-      if (this._needsUpdateBindGroups || this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
-        this._needsUpdateBindGroups = false;
-        this._needsPhotonTargetBindGroups = false;
-        this._needsUpdateOutputBindGroup = false;
-
-        this._updateBindGroups();
-      }
-      const tracePipeline = this._rayTracePipeline!;
-      const traceLayout = this._rayTracePipelineLayout;
-      const traceModule = this._computeShaderModule;
-      preparationInvalidated = () => this._disposed || tracePipeline !== this._rayTracePipeline ||
-        traceLayout !== this._rayTracePipelineLayout || traceModule !== this._computeShaderModule || causticKey !== this._causticKey;
-      if (this._lightTracing) {
-        this._causticLight ??= new WGPUCausticLightPass(device);
-        this._causticLight.setDistribution(
-          causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes),
-          causticEmissionTable(
-            this._analyticLights,
-            this._emissiveTriangles,
-            this._causticBounds[3],
-            this._envImageSource && 'sky' in this._envImageSource
-              ? proceduralEnvironmentPower(this._envImageSource)
-              : estimateEnvironmentPower(this._envImageSource)
-          )
-        );
-        let causticSource = causticLightCompute(
-          constants,
-          this._blasLayoutMask,
-          this._hasDisplacement,
-          'lightTracing',
-          '',
-          causticDiagnostics.fullEmissionRandom !== false
-        );
-        if (this._bindless)
-          causticSource = bindlessShaderSource(causticSource, this._textureSelection.support!.enable);
-        const preparation = this._causticLight.prepare(
-          causticSource,
-          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => tracePipeline.getBindGroupLayout(i)),
-          !!this._bindless,
-          tracePipeline
-        );
-        if (preparation) await preparation;
-        if (preparationInvalidated()) return;
-      }
-      if (this._photonMapping && this._photonMap) {
-        const emitter = this._photonMap.emission;
-        emitter.setDistribution(
-          causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes),
-          causticEmissionTable(
-            this._analyticLights,
-            this._emissiveTriangles,
-            this._causticBounds[3],
-            this._envImageSource && 'sky' in this._envImageSource
-              ? proceduralEnvironmentPower(this._envImageSource)
-              : estimateEnvironmentPower(this._envImageSource)
-          )
-        );
-        let source = causticLightCompute(
-          constants,
-          this._blasLayoutMask,
-          this._hasDisplacement,
-          'photonMapping',
-          '',
-          causticDiagnostics.fullEmissionRandom !== false
-        );
-        if (this._bindless) source = bindlessShaderSource(source, this._textureSelection.support!.enable);
-        const preparation = emitter.prepare(
-          source,
-          (this._bindless ? [0, 1] : [0, 1, 2]).map((i) => tracePipeline.getBindGroupLayout(i)),
-          !!this._bindless,
-          tracePipeline
-        );
-        // Rebinding an old fallback can dirty resources every frame. A cached
-        // emitter must finish synchronously so trace can submit a final sample.
-        if (preparation) await preparation;
-        if (preparationInvalidated()) return;
-      }
-      this._retainedShaderCapabilities = capabilities;
-      this._retainedShaderStructure = structureKey;
-      this._shaderCapabilities.remember(structureKey, capabilities);
-      this._prevPipelineInputs = pipelineInputs;
-      this._failedPipelineSignature = undefined;
+      const variant = this._traceVariants.get(signature) ??
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities});
+      this._requestedVariant = variant;
+      if (variant.status === 'pending') return variant.settled;
+      if (variant.status === 'failed') return;
+      this._installTraceVariant(variant, pipelineInputs);
     } catch (error) {
-      if (this._disposed || preparationInvalidated?.()) return;
-      this._pipelineError = error;
-      const failedAt = shaderCompilationNow();
-      if (this._shaderCompilationDiagnostics?.status === 'compiling') {
-        this._shaderCompilationDiagnostics = {
-          ...this._shaderCompilationDiagnostics,
-          status: 'failed',
-          pipelineCompilationTimeMs:
-            pipelineCompilationStartedAt == null ? undefined : failedAt - pipelineCompilationStartedAt,
-          totalTimeMs: compilationStartedAt == null ? undefined : failedAt - compilationStartedAt,
-          error: getWebGPUErrorMessage(error)
-        };
-      }
-      this._failedPipelineSignature = attemptedPipelineSignature;
-      // Do not allow the render loop to submit the previous/partial state.
-      // The failed signature prevents retrying the same shader every frame;
-      // changing a pipeline setting or scene resources permits a new attempt.
-      this._rayTracePipeline = undefined;
-      this._rayTraceBindGroups = undefined;
-      this._prevPipelineConstants = {};
+      this._resourceError = error;
       this._needsUpdateBindGroups = true;
-      console.error('Failed to update WebGPU ray tracing pipeline.', error);
-    } finally {
-      this._isCompilingShader = false;
+      console.error('Failed to update WebGPU ray tracing resources.', error);
     }
+  }
+
+  /** Runs only for a ready variant, without yielding, so tracing can start in this call. */
+  private _installTraceVariant(variant: TraceVariant, pipelineInputs: string) {
+    if (this._activeVariant !== variant) {
+      this._activeVariant = variant;
+      this._rayTracePipeline = variant.pipeline;
+      this._depthCompute = variant.depthCompute;
+      this._needsUpdateBindGroups = true;
+    }
+    const emission = () => causticEmissionTable(
+      this._analyticLights,
+      this._emissiveTriangles,
+      this._causticBounds[3],
+      this._envImageSource && 'sky' in this._envImageSource
+        ? proceduralEnvironmentPower(this._envImageSource)
+        : estimateEnvironmentPower(this._envImageSource)
+    );
+    const casters = () => causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes);
+    if (this._lightTracing && this._causticLight) {
+      this._causticLight.setDistribution(casters(), emission());
+      this._causticLight.use(variant.lightEmitter!);
+    }
+    if (this._photonMapping && this._photonMap) {
+      this._photonMap.emission.setDistribution(casters(), emission());
+      this._photonMap.emission.use(variant.photonEmitter!);
+    }
+    // TODO rebind when lights, materials, bvh changed.
+    if (this._needsUpdateBindGroups || this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
+      this._needsUpdateBindGroups = false;
+      this._needsPhotonTargetBindGroups = false;
+      this._needsUpdateOutputBindGroup = false;
+      this._updateBindGroups();
+    }
+    this._retainedShaderCapabilities = variant.capabilities;
+    this._retainedShaderStructure = variant.structureKey;
+    this._shaderCapabilities.remember(variant.structureKey, variant.capabilities);
+    this._activeInputs = pipelineInputs;
+  }
+
+  /** Snapshots everything compilation needs. The task must not read mutable pass state afterwards. */
+  private _startTraceVariant(signature: string, constants: Record<string, boolean | number>, shader: {
+    hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
+    structureKey: string; capabilities: ShaderCapabilities;
+  }) {
+    const startedAt = shaderCompilationNow();
+    const bake = this._bakePipelineConstants, bindless = this._bindless;
+    const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
+    // Override values are not part of the WGSL unless they are baked, so a
+    // quality edit can share the module that the driver has already parsed.
+    const moduleKey = JSON.stringify([this._causticKey, !!bindless, hasAlpha, hasSceneAlpha, this._hasDisplacement,
+      constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, this._blasLayoutMask, defineCode, pipelineConstantsKeys,
+      bake && pipelineConstantsKeys.map((key) => constants[key])]);
+    let source = this._traceModules.get(moduleKey);
+    let sourceGenerationTimeMs = 0, moduleCreationTimeMs = 0;
+    if (!source) {
+      let code = wgpuShaderSource(
+        constants,
+        {
+          hasDisplacement: this._hasDisplacement,
+          hasAlpha,
+          hasSceneAlpha,
+          ...this._transport?.features,
+          lightTracing: this._lightTracing,
+          photonMapping: this._photonMapping,
+          photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
+          photonDirectSubset: causticDiagnostics.photonDirectSubset,
+          debugGroup: causticDiagnostics.debugGroup,
+          workgroupSize: this._transport?.workgroupSize ?? WORKGROUP_SIZE,
+          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+          blasLayoutMask: this._blasLayoutMask,
+          dynamicEnvironment: true
+        },
+        bake
+      );
+      if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
+      sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
+      const moduleStartedAt = shaderCompilationNow();
+      source = {
+        module: this._shaderCache.createShaderModule({label: 'Ray Trace', code}),
+        bytes: code.length, lines: shaderSourceLineCount(code), fingerprint: shaderSourceFingerprint(code)
+      };
+      moduleCreationTimeMs = shaderCompilationNow() - moduleStartedAt;
+      this._traceModules.set(moduleKey, source);
+      if (this._traceModules.size > 8) this._traceModules.delete(this._traceModules.keys().next().value!);
+    }
+    const {module} = source;
+    const layout = this._createPipelineLayout();
+    const pipelineConstants = !bake
+      ? pipelineConstantsKeys.reduce(
+          (obj, key) => {
+            obj[key] = +constants[key];
+            return obj;
+          },
+          {} as Record<string, number>
+        )
+      : undefined;
+    const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
+      const code = causticLightCompute(constants, this._blasLayoutMask, this._hasDisplacement, mode, '',
+        causticDiagnostics.fullEmissionRandom !== false);
+      return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
+    };
+    const lightEmitter = this._lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
+    const lightSource = lightEmitter && emitterSource('lightTracing');
+    const photonEmitter = this._photonMapping ? this._photonMap?.emission : undefined;
+    const photonSource = photonEmitter && emitterSource('photonMapping');
+    const pipelineDiagnostic: ShaderCompilationDiagnostics['pipelines'][number] = {
+      label: 'Ray Trace', entryPoint: 'main', firstFrameRequired: true, status: 'compiling',
+      startedAtMs: 0, concurrentCompilationCount: 1
+    };
+    const variant: TraceVariant = {
+      status: 'pending', capabilities: shader.capabilities, structureKey: shader.structureKey,
+      settled: undefined!,
+      diagnostics: {
+        status: 'compiling', sourceBytes: source.bytes, sourceLines: source.lines, pipelineCount: 1,
+        completedPipelineCount: 0, sourceGenerationTimeMs, moduleCreationTimeMs,
+        modules: [{label: 'Ray Trace', sourceBytes: source.bytes, sourceLines: source.lines, sourceFingerprint: source.fingerprint}],
+        pipelines: [{...pipelineDiagnostic}], maximumConcurrentPipelineCount: 1, peakConcurrentPipelineCount: 1
+      }
+    };
+    const device = this._device, groupIndices = bindless ? [0, 1] : [0, 1, 2];
+    const compile = async () => {
+      // Scopes capture all device errors while open, so one must never span an
+      // await: frames presented meanwhile would be blamed on this pipeline.
+      device.pushErrorScope('validation');
+      const request = this._shaderCache.createComputePipelineAsync({
+        label: 'Ray Trace', layout,
+        compute: {module, entryPoint: 'main', constants: pipelineConstants}
+      });
+      const scope = device.popErrorScope().catch(() => null);
+      let pipeline: GPUComputePipeline;
+      try {
+        pipeline = await request;
+        const scopedError = await scope;
+        if (scopedError) throw scopedError;
+      } catch (error) {
+        const scopedError = await scope;
+        // Pipeline creation already reports WGSL failures. Pull the much
+        // heavier module diagnostics only on that failure path so normal
+        // startup does not schedule a second full-module inspection.
+        const info = await module.getCompilationInfo().catch(() => undefined);
+        const shaderErrors = (info?.messages ?? []).filter((message) => message.type === 'error');
+        if (shaderErrors.length) {
+          throw new Error(
+            shaderErrors
+              .map((message) => `Ray Trace WGSL ${message.lineNum}:${message.linePos} ${message.message}`)
+              .join('\n')
+          );
+        }
+        if (isWebGPUPipelineSpecializationFailure(error, scopedError)) throw error;
+        throw new Error(joinWebGPUErrors(error, scopedError));
+      }
+      const groups = lightEmitter || photonEmitter ? groupIndices.map((i) => pipeline.getBindGroupLayout(i)) : [];
+      const [light, photon] = await Promise.all([
+        lightEmitter?.prepare(lightSource!, groups, !!bindless),
+        photonEmitter?.prepare(photonSource!, groups, !!bindless)
+      ]);
+      Object.assign(variant, {pipeline, lightEmitter: light, photonEmitter: photon,
+        depthCompute: {module, constants: pipelineConstants}});
+    };
+    const finishDiagnostics = (status: 'ready' | 'failed', error?: string) => {
+      const totalTimeMs = shaderCompilationNow() - startedAt;
+      Object.assign(variant.diagnostics, {
+        status, completedPipelineCount: status === 'ready' ? 1 : 0, error,
+        pipelines: [{...pipelineDiagnostic, status, error, endedAtMs: totalTimeMs, durationMs: totalTimeMs}],
+        pipelineCompilationTimeMs: totalTimeMs, totalTimeMs
+      });
+    };
+    variant.settled = compile().then(
+      () => {
+        variant.status = 'ready';
+        finishDiagnostics('ready');
+      },
+      (error) => {
+        finishDiagnostics('failed', getWebGPUErrorMessage(error));
+        if (this._disposed) return;
+        if (!bake && isWebGPUPipelineSpecializationFailure(error)) {
+          // WebKit can accept a large WGSL module but fail while translating
+          // its specialization-constant variant to Metal. Baking the values
+          // into WGSL lets its front end eliminate disabled feature branches
+          // before creating the Metal library. The next request has a new
+          // signature, so this one stays pending until it is replaced.
+          this._bakePipelineConstants = true;
+          this._traceVariants.delete(signature);
+          console.warn('WebGPU pipeline specialization failed; retrying with constants baked into WGSL.');
+          return;
+        }
+        // Nobody needs an obsolete result, and a later request should try again.
+        if (this._requestedVariant !== variant) {
+          this._traceVariants.delete(signature);
+          variant.status = 'failed';
+          return;
+        }
+        variant.status = 'failed';
+        variant.error = error;
+        console.error('Failed to update WebGPU ray tracing pipeline.', error);
+      }
+    );
+    this._traceVariants.set(signature, variant);
+    for (const [key, retained] of this._traceVariants) {
+      if (this._traceVariants.size <= MAX_TRACE_VARIANTS) break;
+      if (retained.status !== 'pending' && retained !== this._activeVariant) this._traceVariants.delete(key);
+    }
+    return variant;
   }
 
   private _prepareAovPipelines(kinds: readonly AovKind[]) {
@@ -1309,7 +1194,7 @@ class WGPURayTracePass {
         this._shaderCache.createComputePipelineAsync({label: 'AOV accumulation', layout, compute: {...compute, entryPoint: 'aovTrace'}}),
         this._shaderCache.createComputePipelineAsync({label: 'AOV center', layout, compute: {...compute, entryPoint: 'aovTraceCenter'}})
       ]).then(([accumulation, center]) => { pending.accumulation = accumulation; pending.center = center; },
-        error => { pending.error = error; });
+        error => { pending.error = error; this._aovPipelinesFailed = true; });
     }
     if (pipelines.error) throw pipelines.error;
     return pipelines;
@@ -1361,7 +1246,7 @@ class WGPURayTracePass {
     const tracePipeline = this._rayTracePipeline;
     const groups = this._rayTraceBindGroups;
     const textures = this._bindless, textureRevision = textures?.revision;
-    if (!tracePipeline || !groups || !this._depthCompute || this._isCompilingShader) return;
+    if (!tracePipeline || !groups || !this._depthCompute || this.isCompilingShader()) return;
     const packed = packDepthSampleArea(area, aspect ?? this._width / this._height);
     if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
       const outputLayout = this._shaderCache.createBindGroupLayout({
@@ -1418,8 +1303,9 @@ class WGPURayTracePass {
     }
   }
 
+  /** Whether the latest request waits on GPU work that will settle on its own. */
   isCompilingShader() {
-    return this._isCompilingShader;
+    return !!this._awaitingRetirement || this._requestedVariant?.status === 'pending';
   }
 
   isPipelineReady() {
@@ -1429,8 +1315,9 @@ class WGPURayTracePass {
     );
   }
 
+  /** Failure of the latest request. A failed variant does not affect other renders. */
   getPipelineError() {
-    return this._pipelineError;
+    return this._resourceError ?? this._requestedVariant?.error;
   }
 
   private _updateBindGroups() {
@@ -1730,7 +1617,7 @@ class WGPURayTracePass {
           scale: atlas?.scale ?? 1, metadataBytes: 0, resourceTableCapacity: 0, retiredBytes: 0
         })
       },
-      shaderCompilation: this._shaderCompilationDiagnostics,
+      shaderCompilation: this._requestedVariant?.diagnostics,
       lightSampling: {
         emissiveTriangles: this._emissiveTriangles.length,
         activeChoices: this._rtUniform.views.lightChoiceCount[0],
@@ -1752,15 +1639,6 @@ class WGPURayTracePass {
       : 'stochastic';
     if (next === this._alphaBlendStrategy) return false;
     this._alphaBlendStrategy = next;
-    if (this._constants.HAS_ALPHA_BLEND) {
-      this._computeShaderModule = undefined;
-      this._rayTracePipeline = undefined;
-      this._rayTracePipelineLayout = undefined;
-      this._rayTraceBindGroups = undefined;
-      this._prevPipelineConstants = {};
-      this._failedPipelineSignature = undefined;
-      this._needsUpdateBindGroups = true;
-    }
     return true;
   }
 
@@ -1866,10 +1744,6 @@ class WGPURayTracePass {
       !hasStochasticCausticCaster(this._meshes);
     this._lightTracing = !!settings?.lightTracing && hasCaster && photonSupported;
     const photonMapping = !!settings?.photonMapping && hasCaster && photonSupported;
-    if (photonMapping !== !!this._photonMapping) {
-      this._rayTracePipelineLayout = undefined;
-      this._needsUpdateBindGroups = true;
-    }
     this._photonMapping = photonMapping;
     this._causticKey =
       this._transport?.enabled || this._lightTracing || this._photonMapping
@@ -2491,11 +2365,7 @@ class WGPURayTracePass {
     this._hasShadowCatcher = materials.some((m) => m.shadowCatcher);
 
     const hasDisplacement = materialData.getDisplacementMaps().length > 0;
-    if (hasDisplacement !== this._hasDisplacement) {
-      this._hasDisplacement = hasDisplacement;
-      // Needs to recreate pipeline layout
-      this._rayTracePipelineLayout = undefined;
-    }
+    this._hasDisplacement = hasDisplacement;
 
     Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
       this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
@@ -2701,7 +2571,6 @@ class WGPURayTracePass {
       this._retiredBindless.add(retired);
       void this._device.queue.onSubmittedWorkDone().catch(() => {}).then(() => {retired.dispose(); this._retiredBindless.delete(retired);});
       this._bindless = undefined;
-      this._computeShaderModule = undefined; this._rayTracePipelineLayout = undefined;
     }
     return new MaterialTable(...args);
   }
@@ -2984,6 +2853,7 @@ class WGPURayTracePass {
       this._adaptiveSamplingTexture
     ]);
     textures.forEach((texture) => texture?.destroy());
+    this._traceVariants.clear();
     this._rayTracePipeline = undefined;
     this._rayTraceBindGroups = undefined;
   }
