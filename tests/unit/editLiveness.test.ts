@@ -95,4 +95,45 @@ describe('RenderLoop edit liveness', () => {
     expect(['finished', 'error']).toContain(status);
     loop.dispose(); other?.dispose(); engine.dispose();
   });
+
+  // Offline output rejects on input changes, but must always settle and hand
+  // the render back to the interactive loop.
+  it.each(Array.from({length: 60}, (_, seed) => seed))('settles convergence during random edits (seed %i)', async seed => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fixture = setup(seed);
+    const {gpu, engine, final, loop, other, pick} = fixture;
+    engine.on('error', () => {});
+    await engine.init();
+    for (let round = 0; round < 3; round++) {
+      let settled: string | undefined;
+      const controller = new AbortController();
+      const options = {samples: 3, samplesPerBatch: 1 + pick(3), signal: controller.signal, timeoutMs: 60000};
+      const task = pick(2) ? loop.converge(options) : final.converge(options);
+      void task.then(() => { settled = 'resolved'; }, error => { settled = 'rejected: ' + error?.message; });
+      for (let step = 0; step < 30 && !settled; step++) {
+        const action = pick(6);
+        if (action === 0) edits[pick(edits.length - 1)](fixture);
+        else if (action === 1) { try { loop.tick(); } catch { /* A direct converge rejects refine on its render. */ } }
+        else if (action === 2) engine.update();
+        else if (action === 3) gpu.settle(false, pick(1000));
+        else if (action === 4) other?.refine();
+        await macrotask();
+      }
+      if (!pick(3)) controller.abort();
+      gpu.state.failNextCompile = false;
+      for (let frame = 0; frame < 300 && !settled; frame++) { gpu.settle(); await macrotask(); }
+      expect(settled).toBeDefined();
+      // Afterwards the loop is usable with whatever state the edits left.
+      engine.display.channel = 'final';
+      let status = loop.status, frame = 0;
+      for (; frame < 200; frame++) {
+        status = loop.tick(); gpu.settle(); await macrotask();
+        if (!gpu.outstanding && (status === 'finished' || status === 'error') && !final.denoising) break;
+      }
+      expect(frame).toBeLessThan(200);
+      expect(status === 'error' || final.samples >= final.maxSamples).toBe(true);
+    }
+    loop.dispose(); other?.dispose(); engine.dispose();
+  });
 });
