@@ -137,7 +137,7 @@ other sequences retain their completed samples.
 | `alphaBlendStrategy` | `'stochastic'` | WebGPU primary BLEND policy; ignored on WebGL |
 | `transmissiveOutputAlphaMin` | `1` | Path-depth alpha rule over transparent backgrounds; changes restart this render |
 | `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |
-| `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
+| `width` / `height` | undefined | Paired fixed constructor dimensions; `toBlob`, `readPixels` and the getters return exactly this size |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
 | `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Target tile time / maximum tile grid size per sample (rounded up to a rectangular grid); fewer tiles make larger tiles, without limiting work per frame or call |
 | `batchSamples` | `false` | Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
@@ -274,7 +274,7 @@ Use `engine.display`; creation of additional displays is outside this API.
 their next refine; fixed renders retain their dimensions.
 `present(render)` only presents: it returns the render or its ready fallback,
 or undefined without changing the canvas when neither is ready.
-`toBlob(render, {type?, quality?})` composes that render at its actual dimensions,
+`toBlob(render, {type?, quality?})` composes that render at its output dimensions,
 without resizing or changing the current canvas. MIME defaults to image/png;
 quality defaults to the browser encoder value.
 
@@ -603,7 +603,9 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
 `display.addPostProcess(pass)` returns unregister and runs on every present/export.
-Both are WebGPU-only. See [formats, lifecycle and overlay example](./post-processing.md).
+Both are WebGPU-only. Textures are rounded up to multiples of 16 pixels, so a
+fixed render's texture can include extra pixels around the requested image. See
+[formats, lifecycle and overlay example](./post-processing.md).
 
 Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
+import { cameraFocalLength } from '../../src/renderer/cameraLens';
 import { renderFixture } from '../helpers/renderPipeline';
 
 function adaptiveFrames() {
@@ -11,6 +12,33 @@ function adaptiveFrames() {
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('independent Render', () => {
+  it('keeps fixed output exact and square when the backend rounds the target up', async () => {
+    const {engine, camera, targets, operations} = renderFixture();
+    const render = new Render(engine, {width: 1000, height: 390}); render.refine();
+    const target = targets[0];
+    target.getMemory = () => ({width: 1008, height: 400, bytes: 0});
+    expect([render.width, render.height]).toEqual([1000, 390]);
+
+    camera.fStop = 2.8;
+    camera.position = [1, 0, 0]; engine.update(); render.refine();
+    const traced = operations.filter(operation => operation.kind === 'draw').at(-1)!.camera!;
+    const committed = engine._inputs.value!;
+    const before = committed.getProjectionMatrix(1000 / 390), after = traced.getProjectionMatrix(1);
+    expect(after[0]).toBeCloseTo(before[0] * 1000 / 1008, 5);
+    expect(after[5]).toBeCloseTo(before[5] * 390 / 400, 5);
+    expect(cameraFocalLength(traced)).toBeCloseTo(cameraFocalLength(committed), 5);
+
+    // Each texel holds its own column and row, so the crop position is observable.
+    const data = new Float32Array(1008 * 400 * 4);
+    for (let y = 0; y < 400; y++) for (let x = 0; x < 1008; x++) data.set([x, y], (y * 1008 + x) * 4);
+    target.readOutput = vi.fn(async () => ({width: 1008, height: 400, data}));
+    const pixels = await render.readPixels('hdr');
+    expect([pixels.width, pixels.height, pixels.data.length]).toEqual([1000, 390, 1000 * 390 * 4]);
+    expect([...pixels.data.subarray(0, 2)]).toEqual([4, 5]);
+    expect([...pixels.data.subarray(-4, -2)]).toEqual([1003, 394]);
+    engine.dispose();
+  });
+
   it.each([false, true])('adapts from the whole tiled sample, including fallback rendering (%s)', fallback => {
     const frame = adaptiveFrames();
     let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);

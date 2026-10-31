@@ -349,8 +349,8 @@ export default class Render {
     engine._register(this);
     if (denoiser) void this.setDenoiser(denoiser).catch(error => this._engine._notifyError(error));
   }
-  /** Actual target width; before allocation uses the requested dimensions. */ get width() { return this._target?.getMemory().width || this._size().width; }
-  /** Actual target height; before allocation uses the requested dimensions. */ get height() { return this._target?.getMemory().height || this._size().height; }
+  /** Output width: exact for fixed renders; otherwise the target width, or the requested width before allocation. */ get width() { return this._fixed?.width ?? (this._target?.getMemory().width || this._size().width); }
+  /** Output height: exact for fixed renders; otherwise the target height, or the requested height before allocation. */ get height() { return this._fixed?.height ?? (this._target?.getMemory().height || this._size().height); }
   /** Complete beauty samples since the last restart; stale engine inputs report 0. Default 0. */
   get samples() { return this._current ? this._target?.getTotalSamplesRendered() ?? 0 : 0; }
   /** Whether complete beauty samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
@@ -404,7 +404,7 @@ export default class Render {
     if (!target) return this._status = 'preparing';
     const before = target.getAovSamples?.() ?? 0;
     const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples);
-    if (!target.refineAovs?.(this._engine._inputs.value!, Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
+    if (!target.refineAovs?.(this._targetCamera(this._engine._inputs.value!), Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
     if ((target.getAovSamples?.() ?? 0) > before) {
       this._frameTime = Math.max(.001, performance.now() - started);
       this._frameStart = started; this._frameScale = this._adaptiveScale;
@@ -424,6 +424,40 @@ export default class Render {
     if (this._fixed) return this._fixed;
     const scale = this.adaptiveResolution ? Math.min(this._adaptiveScale, this._resolutionScale) : this._resolutionScale;
     return {width: Math.max(1, Math.round(this._engine.display.canvas.width * scale)), height: Math.max(1, Math.round(this._engine.display.canvas.height * scale))};
+  }
+  /**
+   * Backends may round targets up. A fixed render widens the view over the extra
+   * pixels so the requested centered rectangle keeps its framing and square pixels.
+   */
+  private _targetCamera(camera: Camera) {
+    const memory = this._target?.getMemory(), fixed = this._fixed;
+    if (!memory || !fixed || (memory.width === fixed.width && memory.height === fixed.height)) return camera;
+    const scaleX = memory.width / fixed.width, scaleY = memory.height / fixed.height;
+    const widened = camera.clone();
+    widened.transform = camera.transform;
+    if (camera.projection === 'perspective') {
+      widened.fov = Math.atan(Math.tan(camera.fov * Math.PI / 360) * scaleY) * 360 / Math.PI;
+      widened.aspect = (camera.aspect ?? fixed.width / fixed.height) * scaleX / scaleY;
+      // Keeps the lens focal length, and with it depth of field.
+      widened.sensorHeight = camera.sensorHeight * scaleY;
+    } else {
+      const x = (camera.left + camera.right) / 2, y = (camera.bottom + camera.top) / 2;
+      widened.left = x + (camera.left - x) * scaleX; widened.right = x + (camera.right - x) * scaleX;
+      widened.bottom = y + (camera.bottom - y) * scaleY; widened.top = y + (camera.top - y) * scaleY;
+    }
+    return widened;
+  }
+  /** @internal Crops a target-sized RGBA image to a fixed render's requested rectangle. */
+  _cropOutput<T extends Float32Array | Uint32Array>(image: {width: number; height: number; data: T}): {width: number; height: number; data: T} {
+    const fixed = this._fixed;
+    if (!fixed || !image.width || (image.width === fixed.width && image.height === fixed.height)) return image;
+    const {width, height} = fixed, data = new (image.data.constructor as new (length: number) => T)(width * height * 4);
+    const left = (image.width - width) >> 1, top = (image.height - height) >> 1;
+    for (let y = 0; y < height; y++) {
+      const start = ((y + top) * image.width + left) * 4;
+      data.set(image.data.subarray(start, start + width * 4) as T, y * width * 4);
+    }
+    return {width, height, data};
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
     const settings=collectTraceSettings(this,sampleCap);
@@ -461,7 +495,7 @@ export default class Render {
   }
   private _trace(target: RenderTarget, limit: number) {
     if (this._sampleStart === undefined) { this._sampleStart = performance.now(); this._sampleScale = this._adaptiveScale; }
-    const compiling = target.trace(this._engine._inputs.value!, limit);
+    const compiling = target.trace(this._targetCamera(this._engine._inputs.value!), limit);
     if (compiling) this._sampleStart = undefined;
     return compiling;
   }
@@ -597,7 +631,7 @@ export default class Render {
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (this._trace(target, limit)) return this._status = 'compiling';
-    } else if (target.refineAovs && !target.refineAovs(this._engine._inputs.value!)) {
+    } else if (target.refineAovs && !target.refineAovs(this._targetCamera(this._engine._inputs.value!))) {
       return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);
@@ -730,14 +764,14 @@ export default class Render {
       aovMask(this.aovs);
       if (!this.aovs.includes(aov)) throw new Error(`AOV ${aov} is not enabled`);
       if (!target?.readAov) throw new Error('AOV output is not ready');
-      target.activate(); return target.readAov(aov);
+      target.activate(); return this._cropOutput(await target.readAov(aov));
     }
     if (!target || this.samples === 0) return {width: 0, height: 0, data: new Float32Array(0)};
     if (kind === 'denoised' && this._denoisedSamples === 0) {
       if (!this._warnedDenoisedReadback) { this._warnedDenoisedReadback = true; console.warn('Denoised output is not ready; reading HDR samples instead.'); }
       kind = 'hdr';
     }
-    target.activate(); return target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal');
+    target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
@@ -802,7 +836,7 @@ export default class Render {
           check(); if (performance.now() - started > timeout) throw new Error(`Timed out rendering the offline ${name} pass.`);
           target!.activate(); target!.setOfflineRenderOptions({samplesPerBatch: batch, deferPostProcess: true, sampleSequenceOffset: offset});
           const before = target!.getTotalSamplesRendered(), batchStarted = performance.now();
-          this._status = target!.trace(camera, cap) ? 'compiling' : 'converging';
+          this._status = target!.trace(this._targetCamera(camera), cap) ? 'compiling' : 'converging';
           const count = target!.getTotalSamplesRendered();
           if (count !== previous) {
             previous = count; options.onProgress?.({stage: name, samples: Math.min(count, cap), targetSamples: cap});
