@@ -289,12 +289,8 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 
   function trace(camera: Camera, maxSamples: number) {
     if (rayTracePass.isInvalid() || renderFailed) return false;
-    if (!renderer.isAllProgramCompiled()) {
-      isFirstFrame = true;
-      sampleCount = 0;
-      tileRender.reset();
-      return true;
-    }
+    // Waiting for a shader is not an input change; see the WebGPU pipeline.
+    if (!renderer.isAllProgramCompiled()) return true;
 
     rayTracePass.setCamera(camera);
     aovCamera=camera;

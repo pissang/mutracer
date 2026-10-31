@@ -60,6 +60,7 @@ interface EngineEvents {
   error: Error;
   devicelost: { reason: string; recovering: boolean };
 }
+const CANCELLED_DENOISE_GRACE_MS = 10000;
 interface SharedDevice {device: GPUDevice; adapterInfo?: GPUAdapterInfo; fallbackReason?: string;}
 const sharedDevices = new Map<string, Promise<SharedDevice>>();
 async function sharedDevice(gpu: GPU, mode: 'atlas' | 'auto'): Promise<SharedDevice> {
@@ -108,6 +109,8 @@ export default class Engine {
   private _bvhWorkerPool?: BvhWorkerPool;
   private _bvhPreparationRevision = 0;
   private _bvhPreparation?: Promise<void>;
+  private _bvhPreparationController?: AbortController;
+  private _bvhFailedRevision = -1;
   private _bvhPreparationTail: Promise<unknown> = Promise.resolve();
   private _tinyBvhUnavailable = false;
   private _bvhWorkerUnavailable = false;
@@ -225,7 +228,8 @@ export default class Engine {
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
       if (changes.meshes !== 'none' || changes.lights || changes.background || this.scene !== this._sourceScene || force) {
         this._committedScene = this._snapshot.capture(this.scene, changes);
-        if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) this._pendingMeshes = 'full';
+        // Preparing meshes the next upload replaces would only delay that upload.
+        if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) { this._pendingMeshes = 'full'; this._bvhPreparationController?.abort(); }
         else if (changes.meshes === 'incremental' && this._pendingMeshes !== 'full') this._pendingMeshes = 'incremental';
         for (const mesh of changes.transforms) this._pendingTransforms.add(this._snapshot.mirror(mesh));
         for (const mesh of changes.colors) this._pendingColors.add(this._snapshot.mirror(mesh));
@@ -248,8 +252,18 @@ export default class Engine {
     if (!pipeline || this._disposed || this._bvhPreparation || this._uploadedRevision === this._sceneRevision) return;
     const scene = this._committedScene ?? { meshes: [], lights: [] };
     if (this._needsBVHPreparation(scene.meshes)) {
-      const task = this.prepare(scene); this._bvhPreparation = task;
-      void task.then(() => { if (this._bvhPreparation === task) this._bvhPreparation = undefined; this._upload(); }, error => { if (this._bvhPreparation === task) this._bvhPreparation = undefined; this._notifyError(error); });
+      const controller = this._bvhPreparationController = new AbortController();
+      const task = this.prepare(scene, {signal: controller.signal, onProgress: progress => {
+        if (this._bvhPreparationController === controller) this._events.emit('progress', {stage: 'bvh', progress});
+      }});
+      this._bvhPreparation = task;
+      const finished = () => { if (this._bvhPreparation === task) this._bvhPreparation = undefined; };
+      void task.then(() => { finished(); this._upload(); }, error => {
+        finished();
+        // Upload without prepared BVHs instead of retrying the same failure every frame.
+        if (!controller.signal.aborted) { this._bvhFailedRevision = this._sceneRevision; this._notifyError(error); }
+        this._upload();
+      });
       return;
     }
     const budgetChanged = pipeline.setTextureAtlasBudget(this._lastBudget >= 0 ? this._lastBudget : textureBudget(this));
@@ -284,10 +298,7 @@ export default class Engine {
         ...config,
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
         useWorker, workerPool: this._bvhWorkerPool, isCancelled,
-        rebuild: false, onProgress: progress => {
-          if (this._bvhPreparation === preparation) this._events.emit('progress', {stage: 'bvh', progress});
-          options.onProgress?.(progress);
-        }
+        rebuild: false, onProgress: options.onProgress
       });
       if (isCancelled()) return;
       if (result.workerUnavailable && !this._bvhWorkerUnavailable) {
@@ -319,6 +330,7 @@ export default class Engine {
 
   private _needsBVHPreparation(meshes: Mesh[]) {
     if (this._bvhPreparation) return true;
+    if (this._bvhFailedRevision === this._sceneRevision) return false;
     if ((this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) &&
         (!canUseBvhWorker() || this._bvhWorkerUnavailable)) {
       return meshes.some(mesh => !!getGeometryBvh(getPreparedMeshGeometry(mesh)) && meshNeedsStaticBvh(mesh, this._bvhConfig()));
@@ -518,7 +530,7 @@ export default class Engine {
   /** Releases all renders, shared resources, CPU workers and owned denoisers. */
   dispose() {
     if (this._disposed) return;
-    this._disposed = true; this._bvhPreparationRevision++;
+    this._disposed = true; this._bvhPreparationRevision++; this._bvhPreparationController?.abort();
     this._lossController?.abort(new Error('Engine is disposed.')); this._lossController = undefined;
     this._contextRestore?.reject(new Error('Engine is disposed.')); this._contextRestore = undefined;
     if (this._webglListening) {
@@ -599,10 +611,25 @@ export default class Engine {
     await denoiser.prepare?.({device, width, height});
     this._customPrepared.set(denoiser, {device, width, height});
   }
-  /** @internal */ _enqueueDenoise<T>(work: () => Promise<T>): Promise<T> {
+  /** @internal A cancelled job loses its lease if it does not settle within the grace period. */ _enqueueDenoise<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
     const task = this._denoiseTail.then(async () => {
       const device = this._gpuDevice, generation = this._deviceRevision;
-      try { return await work(); }
+      let settle: Promise<T> | undefined;
+      try {
+        if (!signal) return await work();
+        const abandoned = new Promise<undefined>(resolve => {
+          const expire = () => setTimeout(() => {
+            console.warn('A cancelled denoiser did not settle; continuing without it.');
+            resolve(undefined);
+          }, CANCELLED_DENOISE_GRACE_MS);
+          const running = work().finally(() => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); });
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const onAbort = () => { timer = expire(); };
+          if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, {once: true});
+          settle = running;
+        });
+        return await Promise.race([settle!, abandoned]);
+      }
       finally {
         // Cancelling tiled OIDN stops future tiles, not the commands already
         // submitted. Keep the shared scratch lease until those commands finish

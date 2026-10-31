@@ -154,7 +154,9 @@ do not recompile the path tracer. Neither do changes to `bounces`,
 bevel switch, sample count or seed. Data uploads, atlas/BVH work and accumulation
 restarts may still be needed.
 
-Returning to a cached compatible combination reuses its pipeline. Prepared
+A render waiting for a shader keeps its samples and image, and other renders keep
+sampling. Returning to a cached compatible combination reuses its pipeline, even
+while another combination is still compiling. Prepared
 combinations may be discarded after many different edits; recreating the Engine
 or recovering a lost device also requires preparing shaders again. Compilation time depends
 on the feature combination, BVH layout, browser and GPU driver. Denoising and

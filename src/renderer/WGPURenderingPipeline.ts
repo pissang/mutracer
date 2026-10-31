@@ -4,7 +4,6 @@ import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
 import {aovMask} from './aov.js';
-import {scheduleFrame} from '../util/frame.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -851,15 +850,18 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // and bind groups are being replaced.
     cancelDenoise();
 
-    if (rayTracePass.isCompilingShader()) {
-      isFirstFrame = true;
-      sampleCount = 0;
-      return true;
-    }
-
     // Update the camera before compiling and sampling.
     rayTracePass.setCamera(camera);
     aovCamera = camera;
+    rayTracePass.updatePipeline();
+    const pipelineError = rayTracePass.getPipelineError();
+    if (pipelineError) throw pipelineError;
+
+    // Waiting for a shader is not an input change: this render's samples and
+    // complete image stay valid, and only Render's restart discards them.
+    if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return true;
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
+
     const resetAccumulation = isFirstFrame;
     if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
@@ -868,24 +870,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       denoiseValid = false;
       tileTimingGeneration++;
       elapsedTileTime = undefined;
-      rayTracePass.setCamera(camera);
       (tileRenderWithPredict || tileRender).reset();
 
       // Reset
       isFirstFrame = false;
       sampleCount = 0;
     }
-
-    rayTracePass.updatePipeline();
-    const pipelineError = rayTracePass.getPipelineError();
-    if (pipelineError) throw pipelineError;
-
-    if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) {
-      isFirstFrame = true;
-      sampleCount = 0;
-      return true;
-    }
-    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
 
     // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
@@ -1699,7 +1689,8 @@ width: renderWidth, height: renderHeight,
         if (pipelineError) throw pipelineError;
         if (!rayTracePass.isCompilingShader() && rayTracePass.isPipelineReady() &&
           rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) break;
-        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+        // Display frames stop on a hidden page, but compilation still completes.
+        await new Promise<void>(resolve => setTimeout(resolve, 16));
       }
       return aov.read(kind);
     },

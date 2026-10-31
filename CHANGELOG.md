@@ -22,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Renders with different caustic or shader settings no longer stall each other at 0 samples, including a default RenderLoop preview with caustics on `final`. Shader compilation no longer discards accumulated samples, and returning to an already compiled configuration no longer waits for an obsolete compilation.
+- RenderLoop reports a failed tick through `status` and the new `lastError`, and commits edits after a stalled preview denoiser. A cancelled denoiser that does not settle within 10 seconds no longer blocks later denoising, and new meshes cancel obsolete BVH preparation.
 - WebGL 2 samples emissive meshes as lights, so small emitters illuminate scenes without heavy noise, as on WebGPU.
 - One-sided emitters no longer emit from their back faces when hit by secondary rays.
 - WebGL 2 keeps accumulated lighting when a path escapes to a flat or texture background.

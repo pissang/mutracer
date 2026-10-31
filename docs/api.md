@@ -248,6 +248,7 @@ otherwise. Worker visibility and control forwarding are described in
 
 `engine`, `display`, `preview` (possibly undefined) and `final` are read-only.
 `changing` defaults false; `samples` counts final beauty samples and reports 0 during preview; `status` starts preparing.
+An exception during a tick, such as from a sync, sets `status` to error and `lastError`; the next successful tick clears them.
 `select({changing})` defaults to changing ? preview : final. `addSync`/`removeSync`
 manage integrations without disposing them. `tick` executes a manual frame;
 `start`/`stop` manage animation frames. `converge` accepts the same options as
