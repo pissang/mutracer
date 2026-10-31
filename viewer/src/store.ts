@@ -264,6 +264,8 @@ export interface LensInfo {
 
 export type InspectorTab = 'environment' | 'material' | 'camera' | 'render';
 
+export type ToastTone = 'info' | 'success' | 'warning' | 'error';
+
 export interface ViewerState {
   settings: Settings;
   stats: Stats;
@@ -278,7 +280,7 @@ export interface ViewerState {
   /** Bounding radius of the loaded model in scene units. */
   modelRadius: number;
   error: string | null;
-  toast: { id: number; message: string; tone: 'info' | 'error'; actions?: { label: string; onClick(): void }[] } | null;
+  toast: { id: number; message: string; tone: ToastTone; actions?: { label: string; onClick(): void }[] } | null;
   animation: AnimationState | null;
   selection: { objectId: string | null; materialId: string | null };
   material: SelectedMaterial | null;
@@ -504,7 +506,7 @@ export function setUi(patch: Partial<ViewerState['ui']>) {
 }
 
 let toastId = 0;
-export function showToast(message: string, tone: 'info' | 'error' = 'info', actions?: NonNullable<ViewerState['toast']>['actions']) {
+export function showToast(message: string, tone: ToastTone = 'info', actions?: NonNullable<ViewerState['toast']>['actions']) {
   useViewer.setState({ toast: { id: ++toastId, message, tone, actions } });
 }
 

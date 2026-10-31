@@ -545,7 +545,7 @@ export class ViewerEngine {
     try {
       await this.downloadEnvironment(url, id, name);
     } catch (error) {
-      showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'error');
+      showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'warning');
       useViewer.setState((s) => ({ settings: { ...s.settings, envId: 'sky' } }));
     }
   }
@@ -1243,7 +1243,7 @@ export class ViewerEngine {
       // MaterialX images have their origin at the bottom left.
       await this.materials.setTextures(materialId, maps, { ...MATERIAL_BASE, ...material.values }, `${name} MaterialX`,
         undefined, { uvScale: material.uvScale, flipY: true });
-      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`);
+      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`, warnings.length ? 'warning' : 'success');
       return true;
     } catch (error) {
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
@@ -1386,7 +1386,7 @@ export class ViewerEngine {
     link.href = url;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showToast(`Saved ${link.download}`);
+    showToast(`Saved ${link.download}`, 'success');
   }
 
   captureImage(type = 'image/png', quality?: number): Promise<Blob> {
