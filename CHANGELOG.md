@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Dispersion samples continuous wavelengths on camera paths and caustic photons, so rainbows and dispersive glass form smooth gradients instead of separate red, green and blue images. Scenes with dispersion render differently; `dispersionWavelengths` now counts paths per sample, each carrying one RGB channel.
 - `whenReadyToRefine()` resolves to `true` when sampling was queued and `false` otherwise.
 - `gpuSampleTimeMs` also reports tiled samples, extrapolated from tile GPU time.
 

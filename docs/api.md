@@ -133,7 +133,7 @@ other sequences retain their completed samples.
 | `caustics` | `undefined` | Optional caustics; all estimators default to off. See [caustics](#caustics) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
 | `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
-| `dispersionWavelengths` | `3` | 3 wavelengths, or one randomly chosen wavelength |
+| `dispersionWavelengths` | `3` | One continuous wavelength per RGB channel, or one randomly chosen channel |
 | `alphaBlendStrategy` | `'stochastic'` | WebGPU primary BLEND policy; ignored on WebGL |
 | `transmissiveOutputAlphaMin` | `1` | Path-depth alpha rule over transparent backgrounds; changes restart this render |
 | `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |

@@ -104,7 +104,7 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     Li = background.rgb * background.a;
   }
   if (SPECTRAL) {
-    Li = sampling_spectral_rgb_filter(Li, (*si).wavelength);
+    Li = sampling_spectral_rgb_filter(Li, (*si).spectralChannel);
   }
 
   // A directional source is a delta distribution and cannot be reached by

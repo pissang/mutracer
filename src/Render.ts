@@ -124,7 +124,7 @@ export interface RenderSettings {
   /** Light candidates per vertex; WebGPU only, ignored on WebGL. Default 4. */ directLightCandidates?: number;
   /** Rounded material edges. Default true. */ bevel?: boolean;
   /** Bevel neighborhood probes, clamped to 1–32. Default 8. */ bevelSamples?: number;
-  /** Wavelengths per dispersion sample. Default 3; 1 selects one random wavelength. */ dispersionWavelengths?: 1 | 3;
+  /** Wavelength paths per dispersion sample, each carrying one RGB channel. Default 3; 1 selects one random channel. */ dispersionWavelengths?: 1 | 3;
   /** Primary-ray alpha blend strategy; WebGPU only. Default stochastic. */ alphaBlendStrategy?: AlphaBlendStrategy;
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;

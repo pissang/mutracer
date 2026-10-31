@@ -25,7 +25,7 @@ export default new FragmentShader({
   },
   uniforms: {
     dispersionWavelengths: Shader.uniform('int', 3),
-    wavelength: Shader.uniform('float', 0),
+    spectralChannel: Shader.uniform('int', 0),
     viewportSize: Shader.uniform('vec2'),
     viewProjectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4'),
@@ -95,8 +95,8 @@ vec4 integrator(inout Ray ray, out vec4 background, out vec2 shadowCounts) {
 void main() {
   initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
-  // Match the beauty pass's random stream in hero-wavelength previews.
-  if (dispersionWavelengths == 1 && wavelength > 0.0) { sample1D(CAMERA_WAVELENGTH); }
+  // Match the beauty pass's random stream in spectral renders.
+  if (spectralChannel > 0) { sample1D(CAMERA_WAVELENGTH); }
   Ray cam = primaryCameraRay();
   vec4 background;
   vec2 shadowCounts;

@@ -18,6 +18,7 @@ import sampleLightGlsl from './chunks/sampleLight.glsl.js';
 import { FragmentShader, glsl, Shader } from '../shader.js';
 import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl.js';
 import samplingGlsl from './chunks/sampling.glsl.js';
+import {spectrumGlsl} from '../spectrum.js';
 import { isIntelMac } from '../util.js';
 import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
@@ -85,7 +86,7 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
 
     viewportSize: Shader.uniform('vec2'),
 
-    wavelength: Shader.uniform('float', 0),
+    spectralChannel: Shader.uniform('int', 0),
     bevelEnabled: Shader.uniform('bool', true),
     dispersionWavelengths: Shader.uniform('int', 3),
     bounceLimit: Shader.uniform('int', 8)
@@ -108,10 +109,13 @@ ${intersect.main}
 ${envMap.main}
 
 ${samplingGlsl}
+${spectrumGlsl}
 ${openPbrBsdfGlsl}
 
 float heroWavelength;
 float pathWavelength;
+int heroChannel;
+int pathChannel;
 
 ${sampleLightGlsl}
 ${research?.declarations ?? ''}${sampleMaterialGlsl}
@@ -153,7 +157,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
         // the grounded skybox. Use the displayed background here instead of
         // terminating early with the raw lighting environment.
         vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-        bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+        bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
         float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
               envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
@@ -163,7 +167,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       else {
         vec2 envUv = environmentUv(path.ray.d);
         vec3 emission = textureLinear(envMap, envUv).rgb;
-        emission = sampling_spectral_rgb_filter(emission, pathWavelength);
+        emission = sampling_spectral_rgb_filter(emission, pathChannel);
         path.li += path.beta * emission *
           sampling_power_heuristic(
             path.scatteringPdf,
@@ -172,7 +176,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       }
 #else
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
       path.li += path.beta * bg.rgb * bg.a;
 #endif
       path.abort = true;
@@ -186,7 +190,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
     // Dispersion renders one additive pass per RGB wavelength. Background
     // radiance has to be split in the same way as lights and emissive
     // surfaces, otherwise the full skybox is accumulated three times.
-    bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+    bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
     if (path.fromEye) {
       path.li = bg.rgb * bg.a;
       path.alpha = bg.a;
@@ -290,6 +294,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   // opaque materials stay full RGB and therefore remain noise-free.
   if (dispersionWavelengths == 1 && si.hit && mat.transmissionWeight > 0.001 && mat.transmissionDispersionScale > 0.001) {
     pathWavelength = heroWavelength;
+    pathChannel = heroChannel;
   }
   if (mat.transmissionWeight > 0.001 && pathWavelength > 0.0) {
     mat.specularIor = sampling_cauchy_ior(
@@ -316,7 +321,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
     if (d != INF && !(occluded && isAlphaOccluded)) {
       lightSample.pdf *= light.selectionPmf;
       float misWeight = sampling_power_heuristic(path.scatteringPdf, lightSample.pdf);
-      lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
+      lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
       ${enabled ? 'if (!causticHitOwned(path)) { ' : ''}path.li += misWeight * path.beta * lightSample.emission;${enabled ? ' }' : ''}
       // TODO set alpha to 1.0 will cause some sharp edges
       path.alpha = 1.0;
@@ -331,7 +336,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       // Camera-visible transmission must use the displayed background. The
       // raw environment remains the lighting source for non-transmission rays.
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
       float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
               envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
@@ -346,7 +351,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       path.scatteringPdf,
       envMapPdf(uv) * envLightSelectionPmf
     );
-    emission = sampling_spectral_rgb_filter(emission, pathWavelength);
+    emission = sampling_spectral_rgb_filter(emission, pathChannel);
     path.li += path.beta * emission * misWeight;
 
   // TODO force the min alpha to be 1 when showing envmap as background
@@ -586,11 +591,17 @@ ${fragments?.debugInit ?? ''}  initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
-  pathWavelength = dispersionWavelengths == 1 ? 0.0 : wavelength;
-  heroWavelength = wavelength;
-  if (dispersionWavelengths == 1 && wavelength > 0.0) {
-    float channel = floor(sample1D(CAMERA_WAVELENGTH) * 3.0);
-    heroWavelength = channel < 1.0 ? 650.0 : channel < 2.0 ? 510.0 : 475.0;
+  pathWavelength = 0.0;
+  pathChannel = 0;
+  if (spectralChannel > 0) {
+    float wavelengthSample = sample1D(CAMERA_WAVELENGTH);
+    if (dispersionWavelengths == 1) {
+      heroChannel = min(int(wavelengthSample * 3.0), 2) + 1;
+      heroWavelength = spectrumCameraWavelength(heroChannel - 1, fract(wavelengthSample * 3.0));
+    } else {
+      pathChannel = spectralChannel;
+      pathWavelength = spectrumCameraWavelength(spectralChannel - 1, wavelengthSample);
+    }
   }
 
   // Thin lens model with depth-of-field

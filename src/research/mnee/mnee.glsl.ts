@@ -149,7 +149,7 @@ ${debug?'if(mneeTraceEnabled)mneeTrace[7].x=10.0;':''}
    transmittance=exp(-receiver.mediumExtinction*(distance(x,si.position)+(directional?0.0:distance(y,si.position))));
    interfaceWeight=material.specularWeight*mix(fresnel*material.specularColor,openpbr_metal_fresnel(abs(dot(wi,normal)),material.baseWeight*material.baseColor,material.specularColor),material.baseMetalness);
   }
-  return transmittance*response*interfaceWeight*sampling_spectral_rgb_filter(emission,pathWavelength)*geometry/pdfA;
+  return transmittance*response*interfaceWeight*sampling_spectral_rgb_filter(emission,pathChannel)*geometry/pdfA;
 }
 vec3 mneeContribution(SurfaceInteraction receiver,OpenPbrPreparedBsdf prepared){
  LightSampleRec ls;sampleMneeLight(receiver.position,vec3(sample2D(causticDim(60u)),sample1D(causticDim(61u))),ls);
