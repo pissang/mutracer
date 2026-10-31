@@ -1,5 +1,5 @@
 import {causticOptions} from '../caustics';
-import {presetSettings} from '../presetSettings';
+import {presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -345,6 +345,12 @@ export class ViewerEngine {
     const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
     const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings);
     if (presetPatch) setSettings(presetPatch, { record: false });
+    // Imports do not inherit a stage that belongs to the example they replace.
+    const stage = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.stage;
+    const leavingStage = !meta.presetId && !restored && MODEL_PRESETS.some((preset) => preset.id === get().model?.presetId && preset.stage);
+    if (meta.presetId && !cameraRestored || leavingStage) {
+      setSettings(presetStageSettings(stage, DEFAULT_SETTINGS, this.initialURLSettings), { record: false });
+    }
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
@@ -365,17 +371,9 @@ export class ViewerEngine {
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
-    if (!cameraRestored && this.modelCameras.length) {
-      if (researchScene) {
-        setSettings({ cameraIndex: 0 });
-      } else {
-        const count = this.modelCameras.length;
-        // An old prompt must never select a camera in a replacement model.
-        const valid = () => token === this.loadToken && model === this.model;
-        showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
-          { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
-        ]);
-      }
+    // A view curated for a collection example wins over cameras inside its file.
+    if (!cameraRestored && this.modelCameras.length && !readModelCamera(model.root.userData.mutracerCamera)) {
+      setSettings({ cameraIndex: 0 }, { record: false });
     }
     this.saveCamera();
     if (persist) {
@@ -468,6 +466,8 @@ export class ViewerEngine {
   resetAll() {
     recordGroup('Reset all', () => {
       resetSettings();
+      const stage = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId)?.stage;
+      if (stage) setSettings(stage);
       this.materials.resetAll();
       this.resetVisibility();
     });

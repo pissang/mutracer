@@ -1,4 +1,7 @@
 import type {Settings} from './store';
+/** Stage and lighting choices a collection example stores with its curated view. */
+export const STAGE_FIELDS=['lighting','envId','envRotation','background'] as const;
+export type PresetStage=Pick<Settings,typeof STAGE_FIELDS[number]>;
 type PresetFields=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|'causticPhotonMapping'>;
 /**
  * Settings applied when a built-in scene loads. Research scenes turn off the ground shadow and
@@ -18,4 +21,12 @@ export function presetSettings(presetId:string|null,research:boolean,restored:bo
   if(url[key]!==undefined)patch[key]=url[key];
  }
  return Object.keys(patch).length?patch:undefined;
+}
+
+/**
+ * Stage settings for a first view of a built-in scene: its own stage, or the defaults so that the
+ * previous example's stage does not carry over. An incoming URL wins.
+ */
+export function presetStageSettings(stage:PresetStage|undefined,defaults:PresetStage,url:Partial<PresetStage>={}):PresetStage {
+ return Object.fromEntries(STAGE_FIELDS.map((key)=>[key,url[key]??stage?.[key]??defaults[key]])) as PresetStage;
 }

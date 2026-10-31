@@ -21,17 +21,16 @@ resampled to at most 2K width. If a source map is missing, the model still opens
 and the Lighting panel explains which map is unavailable; choose an environment
 there to replace it.
 
-glTF Research Scenes automatically use their first camera when available.
-For other glTF/GLB imports with cameras, a toast offers **Apply camera** to
-use the first camera; dismiss it to keep the Orbit view. You can select any
+MuTracer collection examples open with a curated view, under the procedural
+sky or a Poly Haven HDRI. Other models with cameras open in their first
+camera. You can select any
 imported camera in the separate camera toolbar at the bottom right; it appears
 only for models with cameras. Drag, pan or zoom after selecting a camera to
 continue in **Orbit** from that view.
 Hover over a camera in the scene tree and click its camera action to apply it
 directly. **Fit to model** in the bottom toolbar (or **F**) returns to Orbit
 and frames the model.
-Reloading the current model restores your saved camera selection without
-showing the prompt again.
+Reloading the current model restores your saved camera selection.
 
 Picking an object in the viewport reveals it in the scene tree and scrolls it
 into view. Material rows start collapsed; expand a mesh to see its materials.

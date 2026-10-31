@@ -11,9 +11,9 @@
     "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/spheres/attribution.json",
     "camera": {
-      "position": [2.3694893932125187, 1.9787714684587185, 3.986024380121064],
-      "target": [0.16, 0.31999998688697817, 0],
-      "fov": 35,
+      "position": [1.724921, 1.852601, 5.308759],
+      "target": [0.0, 0.252, 0.0],
+      "fov": 28,
       "space": "grounded"
     }
   },
@@ -30,9 +30,9 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/toycar/attribution.json",
     "sizeMB": 5.17,
     "camera": {
-      "position": [0.025324038537407917, 0.033701709525349795, 0.050293870388360626],
-      "target": [-0.002, 0.0186, 0.001],
-      "fov": 35,
+      "position": [0.044503, 0.043125, 0.063557],
+      "target": [0.0, 0.02378, 0.0],
+      "fov": 26,
       "space": "grounded"
     }
   },
@@ -49,30 +49,12 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/sheenchair/attribution.json",
     "sizeMB": 3.93,
     "camera": {
-      "position": [0.6784507811122752, 0.8774696398007454, 1.223957608727744],
-      "target": [0, 0.36812353892499994, 0],
-      "fov": 35,
+      "position": [1.03714, 0.717848, 1.659771],
+      "target": [0.0, 0.30184, 0.0],
+      "fov": 26,
       "space": "grounded"
-    }
-  },
-  {
-    "id": "wooden-chess",
-    "name": "Wooden Chess Set",
-    "tag": "Wood",
-    "url": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/wooden-chess/model.glb",
-    "thumbnail": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/wooden-chess/thumbnail.webp",
-    "license": "CC-BY 4.0",
-    "credit": "cmzw",
-    "sourceUrl": "https://sketchfab.com/3d-models/wooden-chess-set-90151fb0fb294e56b45e52b001a884db",
-    "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/wooden-chess/attribution.json",
-    "sizeMB": 2.41,
-    "camera": {
-      "position": [0.4362827570944088, 0.4014387941195868, 0.3054884753084208],
-      "target": [0.010344009697356922, 0.03734823996380911, 0.007242953565403658],
-      "fov": 35,
-      "space": "grounded"
-    }
+    },
+    "stage": {"lighting": "environment", "envId": "studio_small_09", "envRotation": 0, "background": "grounded"}
   },
   {
     "id": "yamaha-mt-09",
@@ -88,11 +70,12 @@
     "sizeMB": 10.94,
     "nonCommercial": true,
     "camera": {
-      "position": [1.6960501485157866, 1.0406658365292198, -0.7908811728678338],
-      "target": [0, 0.7106902961051821, 0],
-      "fov": 35,
+      "position": [2.949608, 1.115395, -1.375425],
+      "target": [0.0, 0.658, 0.0],
+      "fov": 26,
       "space": "grounded"
-    }
+    },
+    "stage": {"lighting": "environment", "envId": "empty_warehouse_01", "envRotation": 0, "background": "grounded"}
   },
   {
     "id": "super-human",
@@ -107,9 +90,9 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/super-human/attribution.json",
     "sizeMB": 3.67,
     "camera": {
-      "position": [-105.87534825725147, 166.70388650621666, 227.0504170490354],
-      "target": [0, 153.57456298828126, 0],
-      "fov": 35,
+      "position": [-108.454385, 173.399988, 333.788274],
+      "target": [0.0, 136.512, 0.0],
+      "fov": 26,
       "space": "grounded"
     }
   },
@@ -127,11 +110,12 @@
     "sizeMB": 19.2,
     "nonCommercial": true,
     "camera": {
-      "position": [-9.46307275803329, 8.475911174419261, 14.914383127377091],
-      "target": [0.5009901433206276, 4.1446315995416025, 0.6842265557554421],
-      "fov": 35,
+      "position": [-9.871888, 10.043584, 18.566321],
+      "target": [0.0, 4.014, 0.0],
+      "fov": 28,
       "space": "grounded"
-    }
+    },
+    "stage": {"lighting": "environment", "envId": "nature_reserve_forest", "envRotation": 0, "background": "grounded"}
   },
   {
     "id": "blender-cover-remix",
@@ -146,9 +130,9 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/blender-cover-remix/attribution.json",
     "sizeMB": 26.77,
     "camera": {
-      "position": [-7.966102731369936, 6.955486121047712, 11.376773737308895],
-      "target": [-4.440892098500626e-16, 3.492700067471975, 0],
-      "fov": 35,
+      "position": [-9.502711, 7.809639, 15.342533],
+      "target": [0.05, 1.9524, 0.055],
+      "fov": 28,
       "space": "grounded"
     }
   },
@@ -165,7 +149,12 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/bugatti-chiron/attribution.json",
     "sizeMB": 12.81,
     "nonCommercial": true,
-    "camera": {"position": [4.55, 2.64, 4.96], "target": [-0.12, 0.55, 0.12], "fov": 35, "space": "grounded"}
+    "camera": {
+      "position": [5.681946, 2.815884, 6.777438],
+      "target": [-0.005, 0.61, 0.0],
+      "fov": 24,
+      "space": "grounded"
+    }
   },
   {
     "id": "porsche-992-gt3-r",
@@ -180,11 +169,12 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/porsche-992-gt3-r/attribution.json",
     "sizeMB": 9.87,
     "camera": {
-      "position": [0.2712064430369904, 0.1287580106001691, 0.44102664120744955],
-      "target": [-0.025, 0, 0.018],
-      "fov": 35,
+      "position": [0.318544, 0.135426, 0.454929],
+      "target": [0.0, 0.0375, 0.0],
+      "fov": 24,
       "space": "grounded"
-    }
+    },
+    "stage": {"lighting": "environment", "envId": "venice_sunset", "envRotation": 0, "background": "grounded"}
   },
   {
     "id": "meet-mat",
@@ -200,9 +190,9 @@
     "sizeMB": 0.56,
     "nonCommercial": true,
     "camera": {
-      "position": [3.3921231599736066, 2.7297770828719106, 4.8444539295400695],
-      "target": [0, 1.255254701417779, 2.220446049250313e-16],
-      "fov": 35,
+      "position": [2.505966, 2.149952, 5.37406],
+      "target": [0.0, 1.1044, 0.0],
+      "fov": 28,
       "space": "grounded"
     }
   },
@@ -219,9 +209,9 @@
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/dragon/attribution.json",
     "sizeMB": 4.99,
     "camera": {
-      "position": [18.714262899540138, 14.363065172446849, 26.726737257626162],
-      "target": [0, 9.203124034404755, 0],
-      "fov": 35,
+      "position": [20.244675, 17.754365, 35.064806],
+      "target": [0.0, 10.615, 0.0],
+      "fov": 28,
       "space": "grounded"
     }
   },
@@ -237,7 +227,12 @@
     "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
     "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/standard-shader-ball/attribution.json",
     "sizeMB": 0.7,
-    "camera": {"position": [2.62, 13.75, 14.86], "target": [0, 5, 0], "fov": 35, "space": "grounded"}
+    "camera": {
+      "position": [10.859721, 14.132575, 23.288747],
+      "target": [0.0, 3.7506, 0.0],
+      "fov": 28,
+      "space": "grounded"
+    }
   },
   {
     "id": "research-breakfast-room",

@@ -221,35 +221,34 @@ describe('imported camera choice', () => {
     (viewer as unknown as { applySettings(s: Settings, previous: Settings): void }).applySettings(settings, settings);
     expect(useViewer.getState().settings).toMatchObject({ envId: 'sky', envIntensity: 1, envRotation: 0 });
   });
-  it('offers only Apply camera while retaining all cameras for manual selection', async () => {
+  it('opens imported models in their first camera without a prompt', async () => {
     const viewer = engine();
     await viewer.loadModel(model(2));
     expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    const toast = useViewer.getState().toast!;
-    expect(toast.message).toContain('2 cameras');
-    expect(toast.actions?.map((action) => action.label)).toEqual(['Apply camera']);
-    setSettings({ cameraIndex: 1 });
-    expect(useViewer.getState().settings.cameraIndex).toBe(1);
-    toast.actions![0].onClick();
     expect(useViewer.getState().settings.cameraIndex).toBe(0);
-  });
-
-  it('starts replacement models in Orbit even when the previous camera index exists', async () => {
-    const viewer = engine();
-    await viewer.loadModel(model(2));
-    const oldApply = useViewer.getState().toast!.actions![0].onClick;
-    setSettings({ cameraIndex: 1 });
-    await viewer.loadModel(model(2));
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    oldApply();
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    await viewer.loadModel(model(0));
-    expect(useViewer.getState().cameras).toEqual([]);
     expect(useViewer.getState().toast).toBeNull();
   });
 
-  it.each([false, true])('prompts on initial/cached loads only if no camera was restored (%s)', async (restored) => {
+  it('keeps a curated view over cameras inside the file', async () => {
+    const viewer = engine();
+    const data = model(2);
+    data.root.userData.mutracerCamera = { position: [1, 1, 1], target: [0, 0, 0], fov: 35, space: 'grounded' };
+    await viewer.loadModel(data);
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+  });
+
+  it('starts each replacement model from its own first camera', async () => {
+    const viewer = engine();
+    await viewer.loadModel(model(2));
+    setSettings({ cameraIndex: 1 });
+    await viewer.loadModel(model(2));
+    expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    await viewer.loadModel(model(0));
+    expect(useViewer.getState().cameras).toEqual([]);
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+  });
+
+  it.each([false, true])('uses the first camera on initial/cached loads only if none was restored (%s)', async (restored) => {
     const viewer = engine();
     viewer.restoreCamera.mockImplementation(() => {
       if (restored) setSettings({ cameraIndex: 1 });
@@ -261,8 +260,8 @@ describe('imported camera choice', () => {
     };
     await viewer.load(data.name, async () => data, cached.meta, cached);
     expect(viewer.restoreCamera).toHaveBeenCalledWith(cached.id);
-    expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : -1);
-    expect(useViewer.getState().toast !== null).toBe(!restored);
+    expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : 0);
+    expect(useViewer.getState().toast).toBeNull();
   });
 
   it.each([false, true])('automatically applies the first research-scene camera on fresh/cached loads (%s)', async (cached) => {
