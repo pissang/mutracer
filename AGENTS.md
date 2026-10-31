@@ -155,6 +155,8 @@ of stopping for confirmation.
   commit bodies or contributor guides.
 - Review edited documentation passages separately, including retained text;
   remove details that do not affect usage and briefly report the review.
+- `docs/technical/` holds design notes for contributors: how an algorithm works,
+  why it was chosen and its limits. Keep usage in the guides.
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
 
