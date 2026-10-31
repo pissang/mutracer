@@ -3,6 +3,114 @@ use crate::scene_api::{Geometry, Light, Mesh, OpenPbrMaterial, Scene};
 use glam::{Mat4, Quat, Vec3};
 #[test]
 #[ignore = "requires a real GPU"]
+fn light_tracing_covers_images_beyond_one_dispatch_row() {
+    // 2736×1536 needs 65,664 workgroups, just above the WebGPU per-dimension limit.
+    const WIDTH: usize = 2736;
+    const HEIGHT: usize = 1536;
+    let mut scene = Scene::new();
+    let mut geometry = Geometry::new(
+        vec![-1., 0., -1., -1., 0., 1., 1., 0., -1., 1., 0., 1.],
+        vec![0, 1, 2, 2, 1, 3],
+    );
+    geometry.normals = vec![0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.].into();
+    geometry.uv[0] = vec![0., 0., 1., 0., 0., 1., 1., 1.].into();
+    let geometry = scene.add_geometry(geometry).unwrap();
+    let mut floor = OpenPbrMaterial::default();
+    floor.values.color = [0.6; 3];
+    let floor = scene.add_material(floor).unwrap();
+    let mut glass = OpenPbrMaterial::default();
+    glass.values.transmission = 1.;
+    glass.values.roughness = 0.;
+    let glass = scene.add_material(glass).unwrap();
+    let mut floor_mesh = Mesh::new(geometry, floor);
+    floor_mesh.transform = Mat4::from_scale(Vec3::new(8., 1., 8.));
+    // All floor light crosses the glass, and the camera below it sees the floor directly.
+    scene.add_mesh(floor_mesh).unwrap();
+    let mut caster = Mesh::new(geometry, glass);
+    caster.transform = Mat4::from_scale_rotation_translation(
+        Vec3::new(8., 1., 8.),
+        Quat::IDENTITY,
+        Vec3::new(0., 3., 0.),
+    );
+    scene.add_mesh(caster).unwrap();
+    scene
+        .add_light(Light::Rect {
+            color: [1.; 3],
+            intensity: 32.,
+            width: 1.,
+            height: 1.,
+            spread: 1.,
+            texture: None,
+            transform: Mat4::from_rotation_translation(
+                Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                Vec3::new(0., 6., 0.),
+            ),
+        })
+        .unwrap();
+    let mut camera = Camera::default();
+    camera.fov = 50.;
+    camera.world_matrix = Mat4::look_at_rh(Vec3::new(0., 2.5, 0.), Vec3::ZERO, Vec3::NEG_Z)
+        .inverse()
+        .to_cols_array();
+    scene.set_default_camera(Some(camera));
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    let render_with = |light_tracing| {
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                bounces: 8,
+                bevel: false,
+                max_samples: 4,
+                size: RenderSize::Fixed {
+                    width: WIDTH as u32,
+                    height: HEIGHT as u32,
+                },
+                caustics: CausticSettings {
+                    light_tracing,
+                    light_photons: 1 << 20,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        render.read_pixels(PixelKind::Hdr).unwrap().data
+    };
+    let plain = render_with(false);
+    let traced = render_with(true);
+    assert!(traced.iter().all(|v| v.is_finite()));
+    // Compose must cover every pixel, including the end of the linear buffer.
+    let alpha_differences = plain
+        .chunks_exact(4)
+        .zip(traced.chunks_exact(4))
+        .filter(|(a, b)| a[3] != b[3])
+        .count();
+    assert_eq!(alpha_differences, 0);
+    // Light tracing replaces these paths, so each end of the linear buffer keeps its energy.
+    for rows in [0..HEIGHT / 8, HEIGHT - HEIGHT / 8..HEIGHT] {
+        let span = rows.start * WIDTH * 4..rows.end * WIDTH * 4;
+        let energy = |image: &[f32]| {
+            image
+                .chunks_exact(4)
+                .map(|p| f64::from(p[0] + p[1] + p[2]))
+                .sum::<f64>()
+        };
+        let ratio = energy(&traced[span.clone()]) / energy(&plain[span.clone()]);
+        println!("rows {rows:?}: traced/plain {ratio}");
+        assert!((ratio - 1.).abs() < 0.25, "rows {rows:?}: {ratio}");
+        assert_ne!(traced[span.clone()], plain[span]);
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU"]
 fn caustics_shared_wgsl_modes_render_and_restart() {
     let mut scene = Scene::new();
     let mut geometry = Geometry::new(

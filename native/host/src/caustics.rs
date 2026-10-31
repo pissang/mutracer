@@ -825,7 +825,9 @@ impl State {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
-            pass.dispatch_workgroups(self.pixels.div_ceil(64), 1, 1);
+            let workgroups = self.pixels.div_ceil(64);
+            let columns = workgroups.min(gpu.device.limits().max_compute_workgroups_per_dimension);
+            pass.dispatch_workgroups(columns, workgroups.div_ceil(columns), 1);
         }
     }
 }

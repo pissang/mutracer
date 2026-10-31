@@ -559,12 +559,14 @@ export const causticBufferCompositeCompute = /* wgsl */ `
   @group(0)@binding(1)var<storage,read>caustics:array<vec4f>;
   @group(0)@binding(2)var<storage,read>normal:array<vec4f>;
   @group(0)@binding(3)var<storage,read_write>output:array<vec4f>;
-  @compute @workgroup_size(64)fn main(@builtin(global_invocation_id)id:vec3u) {
-    if(id.x>=arrayLength(&output)) {
+  @compute @workgroup_size(64)fn main(@builtin(global_invocation_id)id:vec3u,@builtin(num_workgroups)groups:vec3u) {
+    // Large images exceed one dispatch row; preserve the linear pixel order.
+    let pixel=id.x+id.y*groups.x*64u;
+    if(pixel>=arrayLength(&output)) {
       return;
     }
-    let c=caustics[id.x];
-    let p=pt[id.x];
-    output[id.x]=vec4f(p.rgb+c.rgb/max(c.a,1.0)*normal[id.x].a,p.a);
+    let c=caustics[pixel];
+    let p=pt[pixel];
+    output[pixel]=vec4f(p.rgb+c.rgb/max(c.a,1.0)*normal[pixel].a,p.a);
   }
 `;
