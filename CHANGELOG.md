@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- WebGL 2 renders a selected AOV channel when it is the first thing drawn after a scene change, instead of staying at 0 samples.
 - Renders with different caustic or shader settings no longer stall each other at 0 samples, including a default RenderLoop preview with caustics on `final`. Shader compilation no longer discards accumulated samples, and returning to an already compiled configuration no longer waits for an obsolete compilation.
 - RenderLoop reports a failed tick through `status` and the new `lastError`, and commits edits after a stalled preview denoiser. A cancelled denoiser that does not settle within 10 seconds no longer blocks later denoising, and new meshes cancel obsolete BVH preparation.
 - WebGL 2 samples emissive meshes as lights, so small emitters illuminate scenes without heavy noise, as on WebGPU.

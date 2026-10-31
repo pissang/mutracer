@@ -45,6 +45,12 @@ comparison against pixels captured before a refactor.
 
 Use small generated fixtures; do not commit models or images for tests.
 
+[`gpu/renderLoopEdits.html`](./gpu/renderLoopEdits.html) exposes
+`renderLoopEditTests.run(backend, textureBinding)`. On a real GPU, every edit must
+reach a finished image alone, in random sequences and during convergence. Unit tests
+cover the same orderings with a fake GPU in `unit/editLiveness.test.ts`, which cannot
+catch driver behavior or check pixels.
+
 [`gpu/shaderSource.html`](./gpu/shaderSource.html) exposes
 `shaderSourceTests.capture(layout, postProcess)` for before/after comparisons.
 It uses four OpenPBR layer materials, four background configurations, Sobol

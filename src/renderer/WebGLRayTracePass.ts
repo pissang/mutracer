@@ -1119,10 +1119,13 @@ class WebGLRayTracePass {
   setSampleSequenceOffset(_offset: number) {}
 
   prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
-    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
+    if (!kinds.length) return true;
+    // An AOV channel may be the first thing to render a new scene.
+    this.prepare();
+    if (!this._preparedMeshData || !this._tlas) return true;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
-    this.prepare(); state.resize(width,height);
+    state.resize(width,height);
     this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & 24) !== 0});
     if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas)); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
@@ -1134,8 +1137,8 @@ class WebGLRayTracePass {
   }
 
   renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
-    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
     if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
     if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
     const target=Math.min(samples,cap);
     if ((aovMask(kinds) & 31) === 0) state.samples = target;
