@@ -2,6 +2,7 @@ import { Button, Dialog, DialogTrigger, Heading, Popover } from 'react-aria-comp
 import { Check, Pause, Play, SlidersHorizontal, X } from 'lucide-react';
 import { VIEWER_AOVS, setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
+import { ResolutionSelect } from './ResolutionSelect';
 import { ViewControls } from './ViewControls';
 
 const LABELS: Record<RenderPhase, string> = {
@@ -17,7 +18,6 @@ const LABELS: Record<RenderPhase, string> = {
 };
 
 const SAMPLE_STEPS = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
-const RESOLUTION_STEPS = [0.25, 0.5, 0.75, 1];
 
 function formatTime(seconds: number) {
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
@@ -57,8 +57,8 @@ export function StatusBar() {
   const settings = useViewer((s) => s.settings);
   const paused = useViewer((s) => s.paused);
   const playing = useViewer((s) => s.animation?.playing ?? false);
-  const { phase, samples, elapsed, msPerSample, width, height } = stats;
-  const { maxSamples, resolutionScale } = settings;
+  const { phase, samples, elapsed, msPerSample } = stats;
+  const { maxSamples } = settings;
   const sampleTarget = settings.output === 'id' || settings.output === 'motion' ? 1
     : VIEWER_AOVS.some(kind => kind === settings.output) ? Math.min(maxSamples, 16) : maxSamples;
   const progress = Math.min(1, samples / sampleTarget);
@@ -66,10 +66,6 @@ export function StatusBar() {
   const remaining = phase === 'converging' && samples > 4 ? ((sampleTarget - samples) * msPerSample) / 1000 : 0;
   const time = done ? formatTime(elapsed) : remaining > 0.5 ? `~${formatTime(remaining)}` : '';
   const sampleOptions = [...new Set([...SAMPLE_STEPS, maxSamples])].sort((a, b) => a - b);
-  const resolutionOptions = [...new Set([...RESOLUTION_STEPS, resolutionScale])].sort((a, b) => a - b);
-  // Render size at 100%, for the pixel hints in the resolution menu.
-  const fullWidth = width / resolutionScale;
-  const fullHeight = height / resolutionScale;
   const denoise = settings.denoise;
 
   return (
@@ -96,17 +92,7 @@ export function StatusBar() {
           options={sampleOptions.map((v) => ({ value: String(v), label: String(v) }))}
           onChange={(v) => setSettings({ maxSamples: Number(v) })}
         />
-        <Select
-          label="Render resolution"
-          prefix="Res"
-          value={String(resolutionScale)}
-          options={resolutionOptions.map((v) => ({
-            value: String(v),
-            label: `${Math.round(v * 100)}%`,
-            hint: width ? `${Math.round(fullWidth * v)}×${Math.round(fullHeight * v)}` : undefined
-          }))}
-          onChange={(v) => setSettings({ resolutionScale: Number(v) })}
-        />
+        <ResolutionSelect prefix="Res" />
         <div className="dock__denoise">
           <label
             className="dock__toggle"

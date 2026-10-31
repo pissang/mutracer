@@ -26,7 +26,7 @@ const parsers = {
   groundedHeight: nullable(number(Number.MIN_VALUE)), groundedRadius: nullable(number(Number.MIN_VALUE)),
   groundShadow: boolean, groundOpacity: number(0, 1),
   caustics: boolean,causticLightTracing:boolean,causticPhotonMapping:boolean,
-  maxSamples: number(1, Infinity, true), bounces: number(1, Infinity, true), resolutionScale: number(Number.MIN_VALUE, 1),
+  maxSamples: number(1, Infinity, true), bounces: number(1, Infinity, true), resolutionScale: number(Number.MIN_VALUE, 1), resolutionHeight: nullable(number(1, 16384, true)),
   samplingPattern: choice('sobol', 'zsobol', 'random'), bvhBuilder: choice('tinybvh', 'builtin'), clamping: number(0),
   denoise: boolean, denoiseModel: choice('jnlm', 'standard', 'small', 'cleanAuxLarge'), denoiseWhileConverging: boolean,
   jnlmStrength: number(0.1, 3), jnlmSearchRadius: number(1, 16, true), jnlmPatchRadius: number(0, 3, true),

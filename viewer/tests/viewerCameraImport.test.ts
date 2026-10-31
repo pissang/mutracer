@@ -69,7 +69,7 @@ describe('AOV preview settings', () => {
     'only requests the visible %s channel on both renders', output => {
       const viewer = engine();
       const final = { aovs: [] }, preview = { aovs: [] };
-      Object.assign(viewer, { engine: { display: {} }, final, preview });
+      Object.assign(viewer, { engine: { display: { canvas: { height: 1 } } }, final, preview });
       const apply = viewer as unknown as { applySettings(s: Settings, previous: Settings): void };
       const settings = { ...DEFAULT_SETTINGS, output };
       apply.applySettings(settings, settings);
@@ -108,7 +108,7 @@ describe('imported camera choice', () => {
     const controls = new OrbitControls(orbit.perspectiveCamera);
     controls.enableDamping = true;
     orbit.controls = controls;
-    Object.assign(viewer, { engine: { display: {} }, final: {}, preview: {}, focusQueryVersion: 0 });
+    Object.assign(viewer, { engine: { display: { canvas: { height: 1 } } }, final: {}, preview: {}, focusQueryVersion: 0 });
     viewer.applyModelCamera(source.uuid);
     // Exercise the real settings path that previously disabled scene-camera input.
     controls.enabled = false;
@@ -177,7 +177,7 @@ describe('imported camera choice', () => {
     const viewer = engine(), scene = new THREE.Scene();
     const pixels = { width: 1, height: 1, data: new Float32Array([5, 2, 1, 1]) };
     Object.assign(viewer, {
-      scene, engine: { display: {} }, final: {}, preview: {}, studioRig: new THREE.Group(),
+      scene, engine: { display: { canvas: { height: 1 } } }, final: {}, preview: {}, studioRig: new THREE.Group(),
       environment: new Environment({ ...pixels, data: new Float32Array([1, 1, 1, 1]) }),
       studioAmbient: new Environment(pixels),
       applyBackground: (ViewerEngine.prototype as unknown as { applyBackground(): void }).applyBackground

@@ -7,7 +7,7 @@ import {
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -650,7 +650,7 @@ export class ViewerEngine {
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
-    r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
+    r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = renderResolutionScale(s, display.canvas.height);
     r.caustics = this.preview.caustics = causticOptions(s);
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -1454,7 +1454,7 @@ export class ViewerEngine {
         position: light.getWorldPosition(new THREE.Vector3()).toArray(), target: light.target.getWorldPosition(new THREE.Vector3()).toArray() });
     });
     return generateCode({
-      settings: s,
+      settings: { ...s, resolutionScale: this.final.resolutionScale },
       webgpu: this.engine.backend === 'webgpu',
       modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
       environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
@@ -1503,6 +1503,7 @@ export class ViewerEngine {
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const size = this.engine.display.canvas;
     if (size.width !== width || size.height !== height) this.engine.display.setSize(width, height);
+    this.final.resolutionScale = renderResolutionScale(this.settings, height);
     setAspect(this.activeCamera(), this.viewAspect());
   }
 
