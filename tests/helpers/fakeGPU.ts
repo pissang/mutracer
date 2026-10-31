@@ -2,8 +2,13 @@ import {vi} from 'vitest';
 
 const usage = (names: string[]) => Object.fromEntries(names.map((name, index) => [name, 1 << index]));
 
-/** Runs the real renderer on Node. Compilation and queue fences finish only through `settle`, in any order. */
-export function installFakeGPU() {
+/**
+ * Runs the real renderer on Node. Compilation and queue fences finish only through
+ * `settle`, in any order. With `sampleMs`, the device reports GPU time for the
+ * dispatched area, as if a 256×192 sample took that long. This drives batching,
+ * refills and the tile grid.
+ */
+export function installFakeGPU(options: {sampleMs?: number} = {}) {
   vi.stubGlobal('GPUBufferUsage', usage(['MAP_READ', 'MAP_WRITE', 'COPY_SRC', 'COPY_DST', 'INDEX', 'VERTEX', 'UNIFORM', 'STORAGE', 'INDIRECT', 'QUERY_RESOLVE']));
   vi.stubGlobal('GPUTextureUsage', usage(['COPY_SRC', 'COPY_DST', 'TEXTURE_BINDING', 'STORAGE_BINDING', 'RENDER_ATTACHMENT']));
   vi.stubGlobal('GPUShaderStage', {VERTEX: 1, FRAGMENT: 2, COMPUTE: 4});
@@ -11,8 +16,12 @@ export function installFakeGPU() {
   vi.stubGlobal('GPUColorWrite', {RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15});
 
   const pending: (() => void)[] = [];
-  const state = {compiles: 0, traceRunning: 0, maxTraceRunning: 0, failNextCompile: false, submits: 0, losses: 0};
-  const encoderPass = () => new Proxy({}, {get: (_target, key) => key === 'end' ? () => {} : () => {}});
+  const state = {compiles: 0, traceRunning: 0, maxTraceRunning: 0, failNextCompile: false, submits: 0, losses: 0, sampleMs: options.sampleMs ?? 1, dispatch: 0};
+  // The first dispatch of an encoder is its path-tracing tile, in 8×8 workgroups.
+  let tracedDispatch = false;
+  const encoderPass = () => new Proxy({}, {get: (_target, key) => key === 'dispatchWorkgroups' ? (x: number, y = 1) => {
+    if (!tracedDispatch) { tracedDispatch = true; state.dispatch = Math.min(1, x * y * 64 / (256 * 192)); }
+  } : () => {}});
   const bindGroupLayout = () => ({});
   const pipeline = () => ({label: 'fake', getBindGroupLayout: bindGroupLayout});
   const texture = (descriptor: GPUTextureDescriptor) => {
@@ -25,7 +34,15 @@ export function installFakeGPU() {
     const bytes = new ArrayBuffer(Math.min(descriptor.size, 1 << 24));
     return {size: descriptor.size, usage: descriptor.usage, label: descriptor.label, mapState: 'unmapped',
       getMappedRange: () => bytes, unmap() { this.mapState = 'unmapped'; }, destroy() {},
-      mapAsync() { return new Promise<void>(resolve => pending.push(() => { this.mapState = 'mapped'; resolve(); })); }};
+      mapAsync() {
+        this.mapState = 'pending';
+        return new Promise<void>(resolve => pending.push(() => {
+          // Timestamp readbacks hold begin/end pairs in nanoseconds.
+          if (bytes.byteLength >= 128) new BigInt64Array(bytes, 0, 2).set([0n, BigInt(Math.round(state.sampleMs * state.dispatch * 1e6))]);
+          this.mapState = 'mapped';
+          resolve();
+        }));
+      }};
   };
 
   function createDevice(limits: Record<string, number>, features: Iterable<string>) {
@@ -51,7 +68,7 @@ export function installFakeGPU() {
           failed ? reject(new Error('Fake compilation failure')) : resolve(pipeline());
         }));
       },
-      createCommandEncoder: () => ({
+      createCommandEncoder: () => (tracedDispatch = false, {
         beginComputePass: encoderPass, beginRenderPass: encoderPass,
         finish: () => ({}), copyBufferToBuffer() {}, copyTextureToBuffer() {}, copyBufferToTexture() {},
         copyTextureToTexture() {}, clearBuffer() {}, resolveQuerySet() {}, writeTimestamp() {}
@@ -74,8 +91,12 @@ export function installFakeGPU() {
     maxColorAttachments: 8, minUniformBufferOffsetAlignment: 256, minStorageBufferOffsetAlignment: 256
   };
   const devices: {device: GPUDevice; lose: (info: {reason: string; message: string}) => void}[] = [];
-  const adapter = {limits, features: new Set<string>(), info: {vendor: 'fake', description: 'fake'},
-    requestDevice: async () => { const created = createDevice(limits, []); devices.push(created); return created.device; }};
+  const adapter = {limits, features: new Set<string>(options.sampleMs === undefined ? [] : ['timestamp-query']), info: {vendor: 'fake', description: 'fake'},
+    requestDevice: async (descriptor?: GPUDeviceDescriptor) => {
+      const created = createDevice(limits, descriptor?.requiredFeatures ?? []);
+      devices.push(created);
+      return created.device;
+    }};
   vi.stubGlobal('navigator', {gpu: {requestAdapter: async () => adapter, getPreferredCanvasFormat: () => 'bgra8unorm'}});
 
   const canvas = {
@@ -93,5 +114,82 @@ export function installFakeGPU() {
     },
     get outstanding() { return pending.length; },
     loseDevice() { state.losses++; devices.at(-1)?.lose({reason: 'unknown', message: 'Fake device loss'}); }
+  };
+}
+
+/** A controllable page, so visibility can change between frames. */
+export function installFakeDocument() {
+  const listeners = new Map<string, Set<EventListener>>();
+  const page = {
+    hidden: false,
+    addEventListener(type: string, listener: EventListener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(listener); },
+    removeEventListener(type: string, listener: EventListener) { listeners.get(type)?.delete(listener); }
+  };
+  vi.stubGlobal('document', page);
+  return {
+    setHidden(hidden: boolean) {
+      page.hidden = hidden;
+      for (const listener of listeners.get('visibilitychange') ?? []) listener(new Event('visibilitychange'));
+    }
+  };
+}
+
+/** A WebGL 2 context whose program links finish only through `settle`. */
+export function installFakeWebGL() {
+  const listeners = new Map<string, Set<EventListener>>();
+  const pending: (() => void)[] = [];
+  const constants = new Map<string, number>();
+  const constant = (name: string) => { if (!constants.has(name)) constants.set(name, constants.size + 1); return constants.get(name)!; };
+  const state = {programs: 0, linking: new Set<object>(), lost: false};
+  const counts = new Set(['ACTIVE_UNIFORMS', 'ACTIVE_ATTRIBUTES', 'ACTIVE_UNIFORM_BLOCKS'].map(constant));
+  const completion = constant('COMPLETION_STATUS_KHR');
+  const parallel = {COMPLETION_STATUS_KHR: completion};
+  const handlers: Record<string, unknown> = {
+    getExtension: (name: string) => name === 'KHR_parallel_shader_compile' ? parallel : name === 'WEBGL_debug_renderer_info' ? null : {},
+    getParameter: () => 8192,
+    getSupportedExtensions: () => [],
+    getContextAttributes: () => ({}),
+    isContextLost: () => state.lost,
+    checkFramebufferStatus: () => constant('FRAMEBUFFER_COMPLETE'),
+    getShaderParameter: () => true,
+    getProgramParameter: (program: object, name: number) => {
+      if (counts.has(name)) return 0;
+      if (name === completion) return !state.linking.has(program);
+      return true;
+    },
+    linkProgram: (program: object) => { state.programs++; state.linking.add(program); pending.push(() => state.linking.delete(program)); },
+    getShaderInfoLog: () => '', getProgramInfoLog: () => '',
+    getUniformLocation: () => ({}), getAttribLocation: () => 0, getUniformBlockIndex: () => 0, getActiveUniform: () => null,
+    fenceSync: () => ({}), clientWaitSync: () => constant('ALREADY_SIGNALED'), getError: () => constant('NO_ERROR')
+  };
+  const gl = new Proxy({}, {
+    get(_target, key) {
+      if (typeof key !== 'string') return undefined;
+      if (key in handlers) return handlers[key];
+      if (/^[A-Z0-9_]+$/.test(key)) return constant(key);
+      if (key.startsWith('create')) return () => ({});
+      return () => {};
+    }
+  });
+  const canvas = {
+    width: 256, height: 192,
+    addEventListener(type: string, listener: EventListener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(listener); },
+    removeEventListener(type: string, listener: EventListener) { listeners.get(type)?.delete(listener); },
+    getContext: (type: string) => type === 'webgl2' ? gl : null
+  } as unknown as HTMLCanvasElement;
+  const dispatch = (type: string) => {
+    const event = Object.assign(new Event(type), {statusMessage: 'Fake context loss'});
+    for (const listener of listeners.get(type) ?? []) listener(event);
+  };
+  return {
+    canvas, state,
+    settle(all = true, pick = 0) {
+      const events = all ? pending.splice(0) : pending.length ? pending.splice(pick % pending.length, 1) : [];
+      for (const event of events) event();
+      return events.length;
+    },
+    get outstanding() { return pending.length; },
+    loseContext() { state.lost = true; dispatch('webglcontextlost'); },
+    restoreContext() { state.lost = false; dispatch('webglcontextrestored'); }
   };
 }
