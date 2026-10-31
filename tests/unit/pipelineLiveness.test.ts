@@ -20,7 +20,7 @@ function fixture() {
   const pass = Object.create(WGPURayTracePass.prototype) as any;
   const maps = new Map<object, {data: object}>();
   Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(),
-    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _traceModules: new Map(), _targetTransport: new WeakMap(),
+    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
     _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(), _bevelSamples: 8, _hasDisplacement: false,
     _createPipelineLayout: () => ({}), _updateBindGroups: () => {pass._rayTraceBindGroups = [];},
@@ -82,6 +82,23 @@ describe('WebGPU pipeline liveness', () => {
     vi.restoreAllMocks();
   });
 
+  it('bounds concurrent compilation and starts the latest request next', async () => {
+    const {pass, compile, completions} = fixture();
+    const target = {}, settings = (pattern: number) => ({pattern, photon: false, light: false});
+    for (let pattern = 0; pattern < 12; pattern++) trace(pass, target, settings(pattern));
+    expect(compile).toHaveBeenCalledTimes(2);
+    completions.shift()!(); await flush();
+    expect(compile).toHaveBeenCalledTimes(3);
+    completions.splice(0).forEach(done => done()); await flush();
+    expect(trace(pass, target, settings(11))).toBe('sampling');
+    // A request dropped from the queue compiles when it is requested again.
+    expect(trace(pass, target, settings(4))).toBe('waiting');
+    for (let frame = 0; frame < 6 && trace(pass, target, settings(4)) !== 'sampling'; frame++) {
+      completions.splice(0).forEach(done => done()); await flush();
+    }
+    expect(trace(pass, target, settings(4))).toBe('sampling');
+  });
+
   // Regressions here have been individual orderings of these events, so cover
   // the orderings instead of adding one more scenario.
   it.each(Array.from({length: 200}, (_, seed) => seed))('reaches sampling or an error after random events (seed %i)', async seed => {
@@ -102,7 +119,7 @@ describe('WebGPU pipeline liveness', () => {
         case 6: pass._needsUpdateBindGroups = true; break;
       }
     }
-    for (let frame = 0; frame < 3; frame++) {
+    for (let frame = 0; frame < 8; frame++) {
       for (let which = 0; which < 2; which++) expect(trace(pass, targets[which], current[which])).not.toBe('stuck');
       completions.splice(0).forEach(done => done()); await flush();
     }

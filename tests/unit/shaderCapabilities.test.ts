@@ -90,7 +90,7 @@ function pipelinePass() {
     createComputePipelineAsync: compile, pushErrorScope() {}, popErrorScope: async () => null} as unknown as GPUDevice;
   const pass = Object.create(WGPURayTracePass.prototype) as any;
   Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(),
-    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _activeTarget: {}, _traceVariants: new Map(), _traceModules: new Map(), _targetTransport: new WeakMap(),
+    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _activeTarget: {}, _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
     _createPipelineLayout: vi.fn(() => ({})), _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
     _bevelSamples: 8, _hasDisplacement: false,

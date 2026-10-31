@@ -190,6 +190,9 @@ interface TraceVariant {
   error?: unknown;
 }
 const MAX_TRACE_VARIANTS = 32;
+// Requests are cheap but drivers are not, and a running compilation cannot be cancelled.
+const MAX_CONCURRENT_COMPILES = 2;
+const MAX_QUEUED_COMPILES = 4;
 
 function shaderCompilationNow() {
   return typeof performance === 'undefined' ? Date.now() : performance.now();
@@ -404,6 +407,8 @@ class WGPURayTracePass {
   private _shaderCapabilities = new WGPUShaderCapabilities();
   private _targetTransport = new WeakMap<object, number>();
   private _traceVariants = new Map<string, TraceVariant>();
+  private _queuedCompiles: {variant: TraceVariant; signature: string; run: () => Promise<void>; release: () => void}[] = [];
+  private _activeCompiles = 0;
   private _traceModules = new Map<string, {module: GPUShaderModule; bytes: number; lines: number; fingerprint: string}>();
   private _requestedVariant?: TraceVariant;
   private _activeVariant?: TraceVariant;
@@ -767,18 +772,18 @@ class WGPURayTracePass {
     }
   }
 
-  private _createPipelineLayout() {
+  private _createPipelineLayout(bindless: boolean, photonMapping: boolean) {
     const descriptor = {
       label: 'Ray Trace Pipeline Layout',
-      bindGroupLayouts: (this._bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(
+      bindGroupLayouts: (bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(
         (layout, index) => {
-          if (this._photonMapping && index === (this._bindless ? 0 : 1))
+          if (photonMapping && index === (bindless ? 0 : 1))
             layout = {
               ...layout,
               entries: [
                 ...layout.entries,
                 ...[11, 12].map((binding) => ({
-                  binding: binding + (this._bindless ? 4 : 0),
+                  binding: binding + (bindless ? 4 : 0),
                   visibility: GPUShaderStage.COMPUTE,
                   texture: {sampleType: 'uint' as const}
                 }))
@@ -789,7 +794,7 @@ class WGPURayTracePass {
       )
     };
     return this._shaderCache.createPipelineLayout(
-      this._bindless ? resourceTableLayout(descriptor) : descriptor
+      bindless ? resourceTableLayout(descriptor) : descriptor
     );
   }
 
@@ -951,7 +956,10 @@ class WGPURayTracePass {
       const variant = this._traceVariants.get(signature) ??
         this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities});
       this._requestedVariant = variant;
-      if (variant.status === 'pending') return variant.settled;
+      if (variant.status === 'pending') {
+        this._requestQueuedCompile(variant);
+        return variant.settled;
+      }
       if (variant.status === 'failed') return;
       this._installTraceVariant(variant, pipelineInputs);
     } catch (error) {
@@ -1004,68 +1012,18 @@ class WGPURayTracePass {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
     structureKey: string; capabilities: ShaderCapabilities;
   }) {
-    const startedAt = shaderCompilationNow();
     const bake = this._bakePipelineConstants, bindless = this._bindless;
+    const hasDisplacement = this._hasDisplacement, blasLayoutMask = this._blasLayoutMask;
+    const lightTracing = this._lightTracing, photonMapping = this._photonMapping;
+    const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
-    // Override values are not part of the WGSL unless they are baked, so a
-    // quality edit can share the module that the driver has already parsed.
-    const moduleKey = JSON.stringify([this._causticKey, !!bindless, hasAlpha, hasSceneAlpha, this._hasDisplacement,
-      constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, this._blasLayoutMask, defineCode, pipelineConstantsKeys,
-      bake && pipelineConstantsKeys.map((key) => constants[key])]);
-    let source = this._traceModules.get(moduleKey);
-    let sourceGenerationTimeMs = 0, moduleCreationTimeMs = 0;
-    if (!source) {
-      let code = wgpuShaderSource(
-        constants,
-        {
-          hasDisplacement: this._hasDisplacement,
-          hasAlpha,
-          hasSceneAlpha,
-          ...this._transport?.features,
-          lightTracing: this._lightTracing,
-          photonMapping: this._photonMapping,
-          photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
-          photonDirectSubset: causticDiagnostics.photonDirectSubset,
-          debugGroup: causticDiagnostics.debugGroup,
-          workgroupSize: this._transport?.workgroupSize ?? WORKGROUP_SIZE,
-          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-          blasLayoutMask: this._blasLayoutMask,
-          dynamicEnvironment: true
-        },
-        bake
-      );
-      if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
-      sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
-      const moduleStartedAt = shaderCompilationNow();
-      source = {
-        module: this._shaderCache.createShaderModule({label: 'Ray Trace', code}),
-        bytes: code.length, lines: shaderSourceLineCount(code), fingerprint: shaderSourceFingerprint(code)
-      };
-      moduleCreationTimeMs = shaderCompilationNow() - moduleStartedAt;
-      this._traceModules.set(moduleKey, source);
-      if (this._traceModules.size > 8) this._traceModules.delete(this._traceModules.keys().next().value!);
-    }
-    const {module} = source;
-    const layout = this._createPipelineLayout();
-    const pipelineConstants = !bake
-      ? pipelineConstantsKeys.reduce(
-          (obj, key) => {
-            obj[key] = +constants[key];
-            return obj;
-          },
-          {} as Record<string, number>
-        )
-      : undefined;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
-      const code = causticLightCompute(constants, this._blasLayoutMask, this._hasDisplacement, mode, '',
+      const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
         causticDiagnostics.fullEmissionRandom !== false);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
-    const lightEmitter = this._lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
-    const lightSource = lightEmitter && emitterSource('lightTracing');
-    const photonEmitter = this._photonMapping ? this._photonMap?.emission : undefined;
-    const photonSource = photonEmitter && emitterSource('photonMapping');
+    const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
+    const photonEmitter = photonMapping ? this._photonMap?.emission : undefined;
     const pipelineDiagnostic: ShaderCompilationDiagnostics['pipelines'][number] = {
       label: 'Ray Trace', entryPoint: 'main', firstFrameRequired: true, status: 'compiling',
       startedAtMs: 0, concurrentCompilationCount: 1
@@ -1074,14 +1032,70 @@ class WGPURayTracePass {
       status: 'pending', capabilities: shader.capabilities, structureKey: shader.structureKey,
       settled: undefined!,
       diagnostics: {
-        status: 'compiling', sourceBytes: source.bytes, sourceLines: source.lines, pipelineCount: 1,
-        completedPipelineCount: 0, sourceGenerationTimeMs, moduleCreationTimeMs,
-        modules: [{label: 'Ray Trace', sourceBytes: source.bytes, sourceLines: source.lines, sourceFingerprint: source.fingerprint}],
-        pipelines: [{...pipelineDiagnostic}], maximumConcurrentPipelineCount: 1, peakConcurrentPipelineCount: 1
+        status: 'compiling', sourceBytes: 0, sourceLines: 0, pipelineCount: 1,
+        completedPipelineCount: 0, sourceGenerationTimeMs: 0, moduleCreationTimeMs: 0,
+        modules: [], pipelines: [{...pipelineDiagnostic}], maximumConcurrentPipelineCount: 1, peakConcurrentPipelineCount: 1
       }
     };
     const device = this._device, groupIndices = bindless ? [0, 1] : [0, 1, 2];
+    let startedAt = 0;
     const compile = async () => {
+      startedAt = shaderCompilationNow();
+      // Override values are not part of the WGSL unless they are baked, so a
+      // quality edit can share the module that the driver has already parsed.
+      const moduleKey = JSON.stringify([causticKey, !!bindless, hasAlpha, hasSceneAlpha, hasDisplacement,
+        constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
+        bake && pipelineConstantsKeys.map((key) => constants[key])]);
+      let source = this._traceModules.get(moduleKey);
+      if (!source) {
+        let code = wgpuShaderSource(
+          constants,
+          {
+            hasDisplacement,
+            hasAlpha,
+            hasSceneAlpha,
+            ...transport?.features,
+            lightTracing,
+            photonMapping,
+            photonMaxDepth: causticDiagnostics.photonMaxDepth ?? 20,
+            photonDirectSubset: causticDiagnostics.photonDirectSubset,
+            debugGroup: causticDiagnostics.debugGroup,
+            workgroupSize: transport?.workgroupSize ?? WORKGROUP_SIZE,
+            hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+            hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+            blasLayoutMask,
+            dynamicEnvironment: true
+          },
+          bake
+        );
+        if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
+        variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
+        const moduleStartedAt = shaderCompilationNow();
+        source = {
+          module: this._shaderCache.createShaderModule({label: 'Ray Trace', code}),
+          bytes: code.length, lines: shaderSourceLineCount(code), fingerprint: shaderSourceFingerprint(code)
+        };
+        variant.diagnostics.moduleCreationTimeMs = shaderCompilationNow() - moduleStartedAt;
+        this._traceModules.set(moduleKey, source);
+        if (this._traceModules.size > 8) this._traceModules.delete(this._traceModules.keys().next().value!);
+      }
+      Object.assign(variant.diagnostics, {
+        sourceBytes: source.bytes, sourceLines: source.lines,
+        modules: [{label: 'Ray Trace', sourceBytes: source.bytes, sourceLines: source.lines, sourceFingerprint: source.fingerprint}]
+      });
+      const {module} = source;
+      const layout = this._createPipelineLayout(!!bindless, photonMapping);
+      const pipelineConstants = !bake
+        ? pipelineConstantsKeys.reduce(
+            (obj, key) => {
+              obj[key] = +constants[key];
+              return obj;
+            },
+            {} as Record<string, number>
+          )
+        : undefined;
+      const lightSource = lightEmitter && emitterSource('lightTracing');
+      const photonSource = photonEmitter && emitterSource('photonMapping');
       // Scopes capture all device errors while open, so one must never span an
       // await: frames presented meanwhile would be blamed on this pipeline.
       device.pushErrorScope('validation');
@@ -1128,7 +1142,7 @@ class WGPURayTracePass {
         pipelineCompilationTimeMs: totalTimeMs, totalTimeMs
       });
     };
-    variant.settled = compile().then(
+    const run = () => compile().then(
       () => {
         variant.status = 'ready';
         finishDiagnostics('ready');
@@ -1158,12 +1172,41 @@ class WGPURayTracePass {
         console.error('Failed to update WebGPU ray tracing pipeline.', error);
       }
     );
+    variant.settled = new Promise((resolve) => {
+      this._queuedCompiles.push({variant, signature, run, release: resolve});
+    });
     this._traceVariants.set(signature, variant);
+    if (this._queuedCompiles.length > MAX_QUEUED_COMPILES) {
+      // A dropped variant stays pending, because a render that still wants it
+      // replaces it with a new request on its next frame.
+      const obsolete = this._queuedCompiles.shift()!;
+      if (this._traceVariants.get(obsolete.signature) === obsolete.variant) this._traceVariants.delete(obsolete.signature);
+      obsolete.release();
+    }
     for (const [key, retained] of this._traceVariants) {
       if (this._traceVariants.size <= MAX_TRACE_VARIANTS) break;
       if (retained.status !== 'pending' && retained !== this._activeVariant) this._traceVariants.delete(key);
     }
+    this._pumpCompiles();
     return variant;
+  }
+
+  /** Runs the most recently requested variants first: a dragged slider's last value is the one in use. */
+  private _pumpCompiles() {
+    while (this._activeCompiles < MAX_CONCURRENT_COMPILES && this._queuedCompiles.length) {
+      const job = this._queuedCompiles.pop()!;
+      this._activeCompiles++;
+      void job.run().finally(() => {
+        this._activeCompiles--;
+        job.release();
+        if (!this._disposed) this._pumpCompiles();
+      });
+    }
+  }
+
+  private _requestQueuedCompile(variant: TraceVariant) {
+    const index = this._queuedCompiles.findIndex((job) => job.variant === variant);
+    if (index >= 0) this._queuedCompiles.push(...this._queuedCompiles.splice(index, 1));
   }
 
   private _prepareAovPipelines(kinds: readonly AovKind[]) {
@@ -2853,6 +2896,7 @@ class WGPURayTracePass {
       this._adaptiveSamplingTexture
     ]);
     textures.forEach((texture) => texture?.destroy());
+    for (const job of this._queuedCompiles.splice(0)) job.release();
     this._traceVariants.clear();
     this._rayTracePipeline = undefined;
     this._rayTraceBindGroups = undefined;
