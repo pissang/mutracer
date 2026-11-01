@@ -1,5 +1,5 @@
 import {causticOptions} from '../caustics';
-import {presetSettings,presetStageSettings} from '../presetSettings';
+import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -344,6 +344,10 @@ export class ViewerEngine {
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const preset = MODEL_PRESETS.find((preset) => preset.id === meta.presetId);
     const researchScene = preset?.category === 'research';
+    if (!restored) {
+      const previous = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId);
+      setSettings(leavingDisplaySettings(previous?.renderSettings, preset?.renderSettings, DEFAULT_SETTINGS), { record: false });
+    }
     const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings, preset?.renderSettings);
     if (presetPatch) setSettings(presetPatch, { record: false });
     // Imports do not inherit a stage that belongs to the example they replace.

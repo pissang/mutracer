@@ -289,6 +289,42 @@
     }
   },
   {
+    "id": "halloween",
+    "name": "Halloween Night",
+    "tag": "Candle lights · reflections",
+    "url": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/halloween/model.glb",
+    "thumbnail": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/halloween/thumbnail.webp",
+    "license": "CC0",
+    "credit": "Yi Shen",
+    "sourceUrl": "https://github.com/pissang/mutracer-assets",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/halloween/attribution.json",
+    "sizeMB": 8.95,
+    "camera": {
+      "position": [
+        -11.7745,
+        21.3,
+        55.7167
+      ],
+      "target": [
+        -11.8745,
+        21.75,
+        44.1167
+      ],
+      "fov": 46,
+      "space": "grounded"
+    },
+    "renderSettings": {
+      "groundShadow": false,
+      "bounces": 14,
+      "toneMapping": "aces",
+      "exposure": 1.1,
+      "bloomIntensity": 0.14,
+      "bloomThreshold": 1.3,
+      "bloomRadius": 0.6
+    }
+  },
+  {
     "id": "research-breakfast-room",
     "name": "Breakfast Room",
     "tag": "Textured interior",

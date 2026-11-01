@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {presetSettings,presetStageSettings,STAGE_FIELDS} from '../src/presetSettings';
+import {leavingDisplaySettings,presetSettings,presetStageSettings,STAGE_FIELDS} from '../src/presetSettings';
 import {ENVIRONMENT_PRESETS} from '../src/engine/presets';
 import {PUBLIC_MODEL_PRESETS} from '../src/engine/publicModelPresets';
 const defaults={groundShadow:true,caustics:false,causticLightTracing:true,causticPhotonMapping:false,bounces:6};
@@ -25,6 +25,14 @@ it('applies example render choices on fresh loads, preserves restored settings a
  expect(presetSettings('crystal-lens',false,true,defaults,{},scene)).toBeUndefined();
  expect(presetSettings('crystal-lens',false,false,defaults,{caustics:false,bounces:8},scene)).toEqual({...scene,caustics:false,bounces:8});
  expect(presetSettings('toycar',false,false,defaults)).toEqual(defaults);
+});
+
+it('restores the display only when leaving an example that stored a look',()=>{
+ const display={toneMapping:'agx',exposure:1,bloomIntensity:0,bloomThreshold:1,bloomRadius:0.6} as const;
+ const look={toneMapping:'aces',exposure:1.1} as const;
+ expect(leavingDisplaySettings(look,undefined,display)).toEqual({toneMapping:'agx',exposure:1});
+ expect(leavingDisplaySettings(look,{toneMapping:'cineon'},display)).toEqual({exposure:1});
+ expect(leavingDisplaySettings({bounces:12},undefined,display)).toEqual({});
 });
 
 const stageDefaults={lighting:'environment',envId:'sky',envRotation:0,background:'environment'} as const;
