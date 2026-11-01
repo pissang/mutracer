@@ -8,8 +8,8 @@ const DISPLAY_FIELDS=['toneMapping','exposure','bloomIntensity','bloomThreshold'
 export type PresetRenderSettings=PresetFields&Pick<Settings,typeof DISPLAY_FIELDS[number]>;
 /**
  * Settings applied when a built-in scene loads. Research scenes turn off the ground shadow and
- * Cornell Caustic turns on light tracing and photon mapping. Other fresh preset loads restore the defaults so a
- * scene-specific choice does not carry over; restored loads keep stored and URL settings.
+ * Cornell Caustic turns on light tracing and photon mapping. Other first views restore the defaults so a
+ * scene-specific choice does not carry over; a reopened scene with a saved view keeps stored and URL settings.
  */
 export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields,url:Partial<PresetRenderSettings>={},scene:Partial<PresetRenderSettings>={}):Partial<PresetRenderSettings>|undefined {
  const fresh=presetId!==null&&!restored;

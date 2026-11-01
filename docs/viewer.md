@@ -54,6 +54,8 @@ https://mutracer.meimu-studio.com/viewer/?hdrOutputEnabled=true&maxSamples=128#m
 The viewer updates the URL as lighting, render and display settings change.
 Copy the address bar to share those settings and the selected example model.
 Settings also work in the hash, such as `#model=dragon&hdrOutputEnabled=true`.
+A link with only `#model=…` opens the example with its own render settings, as
+the Examples menu does. Settings in a link win over the example's.
 
 ### Options
 

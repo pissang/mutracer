@@ -112,6 +112,10 @@ export class ViewerEngine {
   // Capture the incoming link before writeHash normalizes it or model loading
   // applies defaults. Consume once; later model selections retain their resets.
   private initialURLSettings: Partial<Settings> | undefined = readURLSettings();
+  /** A link naming only an example asks for its own look, even when that example is cached. */
+  private bareLink = false;
+  /** The example shown before this page load, whose look the stored settings may still carry. */
+  private cachedPresetId: string | null = null;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
   private envAbort?: AbortController;
@@ -235,6 +239,8 @@ export class ViewerEngine {
     const token = ++this.loadToken;
     const cached = await readModelCache();
     if (token !== this.loadToken) return;
+    this.bareLink = !!presetId && !Object.keys(this.initialURLSettings ?? {}).length;
+    this.cachedPresetId = cached?.meta.presetId ?? null;
     if (cached && (!presetId || cached.meta.presetId === presetId)) {
       const { meta } = cached;
       const loaded = await this.load(meta.name, (progress) => cached.source
@@ -344,29 +350,34 @@ export class ViewerEngine {
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const preset = MODEL_PRESETS.find((preset) => preset.id === meta.presetId);
     const researchScene = preset?.category === 'research';
-    if (!restored) {
-      const previous = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId);
+    // A saved view marks a reopened scene, unless a bare link asks for the example itself.
+    const reopened = cameraRestored && !this.bareLink;
+    if (!reopened) {
+      const previousId = get().model?.presetId ?? this.cachedPresetId;
+      const previous = MODEL_PRESETS.find((preset) => preset.id === previousId);
       setSettings(leavingDisplaySettings(previous?.renderSettings, preset?.renderSettings, DEFAULT_SETTINGS), { record: false });
     }
-    const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings, preset?.renderSettings);
+    const presetPatch = presetSettings(meta.presetId, researchScene, reopened, DEFAULT_SETTINGS, this.initialURLSettings, preset?.renderSettings);
     if (presetPatch) setSettings(presetPatch, { record: false });
     // Imports do not inherit a stage that belongs to the example they replace.
     const stage = preset?.stage;
     const leavingStage = !meta.presetId && !restored && MODEL_PRESETS.some((preset) => preset.id === get().model?.presetId && preset.stage);
-    if (meta.presetId && !cameraRestored || leavingStage) {
+    if (meta.presetId && !reopened || leavingStage) {
       setSettings(presetStageSettings(stage, DEFAULT_SETTINGS, this.initialURLSettings), { record: false });
     }
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
-    if (authoredLighting && !cameraRestored) {
+    if (authoredLighting && !reopened) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
         ...Object.fromEntries(Object.entries(this.initialURLSettings ?? {})
           .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key))) } });
       // A pending custom HDRI can exist even when the selection was already 'model'.
       if (get().settings.envId === 'model') this.cancelEnvironmentDownload();
-    } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
+    } else if ((!model.lighting?.available || !reopened && !authoredLighting) && get().settings.envId === 'model') {
       set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
     }
     this.initialURLSettings = undefined;
+    this.bareLink = false;
+    this.cachedPresetId = null;
     this.modelId = id;
     this.materials.modelId = id;
     if (!edits) void clearMaterialEdits();
