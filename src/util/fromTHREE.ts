@@ -331,7 +331,7 @@ function convertMaterial(
   }
   const dispersion = Number(physicalMaterial.dispersion);
   material.transmissionDispersionScale = Number.isFinite(dispersion)
-    ? Math.min(1, Math.max(0, dispersion))
+    ? Math.max(0, dispersion)
     : 0;
   const realtimeIridescence = physicalMaterial as THREE.MeshPhysicalMaterial & {
     iridescence?: number;
@@ -461,7 +461,9 @@ function convertMaterial(
     );
     material.transmissionDispersionScale = finite(
       openPbr.transmissionDispersionScale,
-      material.transmissionDispersionScale
+      material.transmissionDispersionScale,
+      0,
+      Infinity
     );
     material.transmissionDispersionAbbeNumber = finite(
       openPbr.transmissionDispersionAbbeNumber,

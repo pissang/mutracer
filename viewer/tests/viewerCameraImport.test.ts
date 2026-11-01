@@ -237,6 +237,36 @@ describe('imported camera choice', () => {
     expect(useViewer.getState().settings.cameraIndex).toBe(-1);
   });
 
+  it('keeps a close preview camera from clipping the subject after fitting a large floor', async () => {
+    const viewer = engine(), data = model(0);
+    data.root.add(new THREE.Mesh(new THREE.PlaneGeometry(72, 72).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial()));
+    data.root.userData.mutracerCamera = { position: [0, 4, 4], target: [0, 0.5, 0], fov: 22, space: 'grounded' };
+    await viewer.loadModel(data);
+    const camera = (viewer as unknown as { perspectiveCamera: THREE.PerspectiveCamera }).perspectiveCamera;
+    camera.updateMatrixWorld(true);
+    const projected = new THREE.Vector3(0, 0.5, 0).project(camera);
+    expect(projected.z).toBeGreaterThan(-1);
+    expect(projected.z).toBeLessThan(1);
+  });
+
+  it.each(['perspective', 'orthographic'] as const)('resets to the authored %s camera after fitting', async (projection) => {
+    const viewer = engine(), data = model(0);
+    const camera = projection === 'perspective'
+      ? new THREE.PerspectiveCamera(24, 4 / 3)
+      : new THREE.OrthographicCamera(-3, 3, 2.25, -2.25);
+    camera.position.set(3, 5, 8);
+    camera.lookAt(0, 1, 0);
+    data.root.add(camera);
+    await viewer.loadModel(data);
+    const view = viewer as unknown as { activeCamera(): THREE.Camera; resetView(): void };
+    expect(view.activeCamera()).toBe(camera);
+    viewer.fit();
+    expect(view.activeCamera()).not.toBe(camera);
+    view.resetView();
+    expect(view.activeCamera()).toBe(camera);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
   it('starts each replacement model from its own first camera', async () => {
     const viewer = engine();
     await viewer.loadModel(model(2));

@@ -59,7 +59,7 @@ export default class MaterialState {
   transmissionScatter: ColorRGB = materialDefault('transmissionScatter');
   /** Henyey-Greenstein anisotropy of the medium, -1 to 1. Default `0`. */
   transmissionScatterAnisotropy: number = materialDefault('transmissionScatterAnisotropy');
-  /** Dispersion strength; `> 0` enables spectral rendering. Default `0`. */
+  /** Nonnegative dispersion strength; values above `1` are supported. `0` disables wavelength-dependent refraction. Default `0`. */
   transmissionDispersionScale: number = materialDefault('transmissionDispersionScale');
   /** Abbe number controlling dispersion. Default `20`. */
   transmissionDispersionAbbeNumber: number = materialDefault('transmissionDispersionAbbeNumber');

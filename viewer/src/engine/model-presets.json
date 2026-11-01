@@ -235,6 +235,60 @@
     }
   },
   {
+    "id": "crystal-lens",
+    "name": "Crystal Lens",
+    "tag": "Crystal · dispersion",
+    "url": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/model.glb",
+    "thumbnail": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/thumbnail.webp",
+    "license": "CC0",
+    "credit": "Yi Shen",
+    "sourceUrl": "https://github.com/pissang/mutracer-assets",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/attribution.json",
+    "sizeMB": 1.29,
+    "camera": {
+      "position": [
+        -2.9393515913038843,
+        4.437806340809544,
+        4.606042787985661
+      ],
+      "target": [
+        -0.9422087762342671,
+        0.3016024888623008,
+        1.1468899623139492
+      ],
+      "fov": 22.457785494219603,
+      "space": "grounded"
+    },
+    "renderSettings": {
+      "groundShadow": false,
+      "caustics": true,
+      "causticLightTracing": true,
+      "causticPhotonMapping": true,
+      "bounces": 12
+    }
+  },
+  {
+    "id": "fluted-crystal",
+    "name": "Fluted Crystal",
+    "tag": "Glass · volume absorption",
+    "url": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/fluted-crystal/model.glb",
+    "thumbnail": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/fluted-crystal/thumbnail.webp",
+    "license": "CC0",
+    "credit": "Yi Shen",
+    "sourceUrl": "https://github.com/pissang/mutracer-assets",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attributionUrl": "https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/fluted-crystal/attribution.json",
+    "sizeMB": 2.93,
+    "renderSettings": {
+      "groundShadow": false,
+      "caustics": true,
+      "causticLightTracing": true,
+      "causticPhotonMapping": true,
+      "bounces": 12
+    }
+  },
+  {
     "id": "research-breakfast-room",
     "name": "Breakfast Room",
     "tag": "Textured interior",

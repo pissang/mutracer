@@ -10,11 +10,11 @@ not promise identical rendered pixels between devices or backends.
 
 | Check | Action and expected result |
 | --- | --- |
-| [ ] Open | Open a GLB, a glTF with external buffers/images, a folder and a model URL; geometry and textures load. Drop files on the viewport. Failed or cancelled loads leave the previous scene usable. |
+| [ ] Open | Open a GLB, a glTF with external buffers/images, a folder and a model URL; geometry and textures load. Drop files on the viewport. On Web, a fresh load uses the collection's curated view or the file's first camera, including orthographic cameras; restoring a saved view takes precedence. Failed or cancelled loads leave the previous scene usable. |
 | [ ] Examples | Open **Examples** in the toolbar; switch between MuTracer collection and glTF Research Scenes, load a thumbnail and check its camera and authored lighting. |
 | [ ] Scene | Search objects or materials and expand nested groups and meshes; select a material child to open its editor. Select an object from the tree or viewport; selection reveals its ancestors. Hide/show a mesh and a group. Select an authored camera. |
 | [ ] Navigation | Drag to orbit, right-drag to pan, scroll to zoom, **F** to fit. Moving an authored camera continues in Orbit. |
-| [ ] History | Undo/redo material, visibility, lighting and render edits; one continuous drag is one step. Reset all restores defaults and reframes the model. |
+| [ ] History | Undo/redo material, visibility, lighting and render edits; one continuous drag is one step. Reset all restores defaults. On Web, it also restores the example's render choices and initial camera, or fits the model when no camera is provided. |
 | [ ] Panels | **1–4** opens Lighting, Material, Camera, Render respectively. **[**, **]** toggle scene/inspector; click the active rail tab to close it. **H** hides the interface. Text input must not trigger shortcuts. |
 | [ ] Playback | **Space** plays/pauses animation when present, otherwise pauses/resumes rendering. Choose another clip and seek the timeline. |
 | [ ] Render dock | Change sample target, viewport resolution and denoising; pause/resume and inspect sample progress, elapsed time and completion. **D** toggles denoising. |

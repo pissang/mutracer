@@ -2,23 +2,25 @@ import type {Settings} from './store';
 /** Stage and lighting choices a collection example stores with its curated view. */
 export const STAGE_FIELDS=['lighting','envId','envRotation','background'] as const;
 export type PresetStage=Pick<Settings,typeof STAGE_FIELDS[number]>;
-type PresetFields=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|'causticPhotonMapping'>;
+export type PresetRenderSettings=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|'causticPhotonMapping'|'bounces'>;
+type PresetFields=PresetRenderSettings;
 /**
  * Settings applied when a built-in scene loads. Research scenes turn off the ground shadow and
  * Cornell Caustic turns on light tracing and photon mapping. Other fresh preset loads restore the defaults so a
  * scene-specific choice does not carry over; restored loads keep stored and URL settings.
  */
-export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields,url:Partial<PresetFields>={}):Partial<PresetFields>|undefined {
+export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields,url:Partial<PresetFields>={},scene:Partial<PresetFields>={}):Partial<PresetFields>|undefined {
  const fresh=presetId!==null&&!restored;
  const patch:Partial<PresetFields>={
   ...(research?{groundShadow:false}:fresh?{groundShadow:defaults.groundShadow}:{}),
   ...(presetId==='research-cornell-caustic'?{caustics:true,causticLightTracing:true,causticPhotonMapping:true}
-   :fresh?{caustics:defaults.caustics,causticLightTracing:defaults.causticLightTracing,causticPhotonMapping:defaults.causticPhotonMapping}:{})
+   :fresh?{caustics:defaults.caustics,causticLightTracing:defaults.causticLightTracing,causticPhotonMapping:defaults.causticPhotonMapping}:{}),
+  ...(fresh?{bounces:defaults.bounces,...scene}:{})
  };
  // Only an incoming URL may override a preset. The caller consumes it after
  // the initial load, so switching away still restores the usual scene defaults.
  for(const key of Object.keys(patch) as (keyof PresetFields)[]) {
-  if(url[key]!==undefined)patch[key]=url[key];
+  if(url[key]!==undefined)Object.assign(patch,{[key]:url[key]});
  }
  return Object.keys(patch).length?patch:undefined;
 }

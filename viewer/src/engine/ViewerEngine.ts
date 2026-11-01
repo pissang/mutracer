@@ -342,11 +342,12 @@ export class ViewerEngine {
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
-    const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
-    const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings);
+    const preset = MODEL_PRESETS.find((preset) => preset.id === meta.presetId);
+    const researchScene = preset?.category === 'research';
+    const presetPatch = presetSettings(meta.presetId, researchScene, !!restored, DEFAULT_SETTINGS, this.initialURLSettings, preset?.renderSettings);
     if (presetPatch) setSettings(presetPatch, { record: false });
     // Imports do not inherit a stage that belongs to the example they replace.
-    const stage = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.stage;
+    const stage = preset?.stage;
     const leavingStage = !meta.presetId && !restored && MODEL_PRESETS.some((preset) => preset.id === get().model?.presetId && preset.stage);
     if (meta.presetId && !cameraRestored || leavingStage) {
       setSettings(presetStageSettings(stage, DEFAULT_SETTINGS, this.initialURLSettings), { record: false });
@@ -371,10 +372,6 @@ export class ViewerEngine {
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
-    // A view curated for a collection example wins over cameras inside its file.
-    if (!cameraRestored && this.modelCameras.length && !readModelCamera(model.root.userData.mutracerCamera)) {
-      setSettings({ cameraIndex: 0 }, { record: false });
-    }
     this.saveCamera();
     if (persist) {
       if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
@@ -446,7 +443,7 @@ export class ViewerEngine {
     });
   }
 
-  /** Frames the model, or uses the view stored with it. */
+  /** Uses the curated view, the first authored camera, or an automatic frame. */
   private resetView() {
     this.fit();
     const defaultCamera = this.model && readModelCamera(this.model.root.userData.mutracerCamera);
@@ -455,6 +452,8 @@ export class ViewerEngine {
       this.perspectiveCamera.fov = defaultCamera.fov;
       this.perspectiveCamera.updateProjectionMatrix();
       this.lookAt(new THREE.Vector3(...defaultCamera.position), new THREE.Vector3(...defaultCamera.target));
+    } else if (this.modelCameras.length) {
+      setSettings({ cameraIndex: 0 }, { record: false });
     }
   }
 
@@ -466,8 +465,10 @@ export class ViewerEngine {
   resetAll() {
     recordGroup('Reset all', () => {
       resetSettings();
-      const stage = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId)?.stage;
-      if (stage) setSettings(stage);
+      const preset = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId);
+      if (preset?.stage) setSettings(preset.stage);
+      const patch = presetSettings(preset?.id ?? null, preset?.category === 'research', false, DEFAULT_SETTINGS, {}, preset?.renderSettings);
+      if (patch) setSettings(patch);
       this.materials.resetAll();
       this.resetVisibility();
     });
@@ -945,6 +946,10 @@ export class ViewerEngine {
     this.controls.target.copy(target);
     this.controls.update();
     const distance = position.distanceTo(target);
+    // A previous Fit can include a large floor. Its near plane must not
+    // clip the subject after moving to a close preview camera.
+    this.camera.near = Math.min(this.camera.near, Math.max(distance / 1000, 1e-4));
+    this.camera.updateProjectionMatrix();
     useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1, focusDistance: Number(distance.toFixed(3)) } }));
   }
 
