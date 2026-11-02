@@ -115,14 +115,15 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     open.subsurfaceWeight = 1; open.subsurfaceColor = subsurfaceColor(s.color.map((v, i) => v / Math.max(1e-9, v + a.color[i])), anisotropy);
     const radii = s.color.map((v, i) => 1 / Math.max(1e-9, (v + a.color[i]) * scale)), radius = Math.max(...radii);
     open.subsurfaceRadius = radius; open.subsurfaceRadiusScale = radii.map(v => v / radius);
-    if (radii.some(v => v < .001)) warn(entity, 'Subsurface mean free paths below 0.001 scene units are limited by the existing OpenPBR medium', 'material');
     if (p.reflectance) {
       open.subsurfaceColor = textures.average(color);
       const mfp = await textures.value(p, 'mfp', [1, 1, 1], entity);
-      const radii = mfp.color.map(v => v / Math.max(1e-9, scalar(p, 'scale', 1)));
+      const radii = textures.average(mfp).map(v => v / Math.max(1e-9, scalar(p, 'scale', 1)));
       const maximum = Math.max(...radii); open.subsurfaceRadius = maximum; open.subsurfaceRadiusScale = radii.map(v => maximum > 0 ? v / maximum : 0);
       if (color.map) warn(entity, 'Subsurface reflectance map approximated by its mean color', 'material');
+      if (mfp.map) warn(entity, 'Subsurface mean free path map approximated by its mean RGB', 'material');
     }
+    if ((open.subsurfaceRadius as number) * Math.min(...open.subsurfaceRadiusScale as number[]) < .001) warn(entity, 'Subsurface mean free paths below 0.001 scene units are limited by the existing OpenPBR medium', 'material');
     if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
   if (type === 'diffusetransmission') { open.thinWalled = true; result.transmission = .5; }

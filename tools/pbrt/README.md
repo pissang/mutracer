@@ -67,6 +67,8 @@ region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
 Ordinary surfaces are double-sided. One-sided emitters also hide their back faces
 from primary rays; this visibility limitation is reported as a warning.
+Subsurface mean free paths below 0.001 scene units are limited by the existing
+OpenPBR medium; this can change fine-scale skin scattering and is warned about.
 
 The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
 an estimated working set above 8 GiB, using eight times the encoded input size.

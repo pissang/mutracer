@@ -63,6 +63,10 @@ describe('PBRT conversion semantics', () => {
     [(.032+.74)*50,(.17+.88)*50,(.48+1.01)*50].forEach((v,i)=>expect(params.mediumExtinction[0][i]).toBeCloseTo(v,4));
     [.74*50,.88*50,1.01*50].forEach((v,i)=>expect(params.mediumScattering[0][i]).toBeCloseTo(v,4));
   });
+  it('warns when authored subsurface mean free paths reach the existing medium floor', async () => {
+    const { scene } = await load('WorldBegin Material "subsurface" "rgb reflectance" [.5 .3 .2] "rgb mfp" [.0013 .00095 .00067] Shape "sphere"');
+    expect(scene.warnings.some(w => w.handling.includes('below 0.001 scene units'))).toBe(true);
+  });
   it('preserves interior homogeneous scattering, including zero absorption and high extinction', async () => {
     const { root } = await load('WorldBegin MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [0 .3 .4] "rgb sigma_s" [1 2 3] "float scale" 5 MediumInterface "fog" "" Material "interface" Shape "sphere"');
     const source = new THREE.Scene(); source.add(root);
