@@ -1,6 +1,6 @@
 {
   "name": "@meimu/mutracer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MuTracer: a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
   "keywords": [
     "path tracing",
