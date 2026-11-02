@@ -9,6 +9,7 @@ vi.mock('../src/engine/ViewerEngine', () => ({ getEngine: () => null }));
 
 import { EnvironmentPanel } from '../src/components/panels/EnvironmentPanel';
 import { DEFAULT_SETTINGS, useViewer } from '../src/store';
+import { MODEL_PRESETS } from '../src/engine/presets';
 
 describe('scene-lighting choice', () => {
   it.each([null, false, true])('offers the choice only with available scene lighting (%s)', (available) => {
@@ -21,5 +22,26 @@ describe('scene-lighting choice', () => {
     expect(markup.includes('Scene lighting')).toBe(available === true);
     expect(markup).toContain('Upload .hdr');
     expect(markup).toContain('Environment map');
+  });
+});
+
+describe('volume controls', () => {
+  it.each([...MODEL_PRESETS.map((preset) => preset.id), null])('offers volumes for scene %s', (presetId) => {
+    Object.assign(useViewer.getInitialState(), {
+      settings: { ...DEFAULT_SETTINGS, volumes: true },
+      model: { name: 'Test model', presetId, credit: null, sourceUrl: null }
+    });
+    const markup = renderToStaticMarkup(createElement(EnvironmentPanel));
+    expect(markup).toContain('Volumes');
+    expect(markup).toContain('Density');
+    expect(markup).toContain('Warp');
+  });
+
+  it('keeps the switch available when volumes are off', () => {
+    Object.assign(useViewer.getInitialState(), { settings: { ...DEFAULT_SETTINGS, volumes: false } });
+    const markup = renderToStaticMarkup(createElement(EnvironmentPanel));
+    expect(markup).toContain('Volumes');
+    expect(markup).not.toContain('Density');
+    expect(markup).not.toContain('Warp');
   });
 });

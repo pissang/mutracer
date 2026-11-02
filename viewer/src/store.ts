@@ -43,11 +43,11 @@ export interface Settings {
   backgroundColor: string;
   groundShadow: boolean;
   groundOpacity: number;
-  /** Shows the example's participating volumes. */
+  /** Shows preset volumes or model-sized ground fog. Default false; Halloween defaults to true. */
   volumes: boolean;
-  /** Scales the density of every example volume; `1` is the example as designed. */
+  /** Scales volume density; `1` uses the preset or automatic fog density. Default 1. */
   volumeDensity: number;
-  /** Noise warp of the example volumes, in multiples of their noise size. */
+  /** Noise warp in multiples of the noise size. Default 0.5. */
   volumeWarp: number;
 
   maxSamples: number;
@@ -130,7 +130,7 @@ export const DEFAULT_SETTINGS: Settings = {
   groundedRadius: null,
   groundShadow: true,
   groundOpacity: 0.8,
-  volumes: true,
+  volumes: false,
   volumeDensity: 1,
   volumeWarp: 0.5,
   maxSamples: 64,

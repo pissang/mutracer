@@ -30,6 +30,7 @@ import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
+import { sceneVolumes } from './volumes';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
@@ -530,17 +531,11 @@ export class ViewerEngine {
     this.materials.setModel(null, null);
   }
 
-  /** Example volumes follow the Volumes settings; other models have none. */
   private applyVolumes() {
     const scene = this.sync.scene;
     if (!scene) return;
-    const s = this.settings;
     const preset = MODEL_PRESETS.find((p) => p.id === get().model?.presetId);
-    scene.volumes = s.volumes ? (preset?.volumes ?? []).map((volume) => ({
-      ...volume,
-      density: volume.density * s.volumeDensity,
-      ...(volume.noise ? { noise: { ...volume.noise, warp: s.volumeWarp } } : {})
-    })) : [];
+    scene.volumes = sceneVolumes(this.settings, this.modelBounds(), preset?.volumes);
   }
 
   private createSync() {
