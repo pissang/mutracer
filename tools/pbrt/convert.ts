@@ -44,7 +44,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   const getMaterial = (shape: Shape) => {
     let variants = materials.get(shape.material);
     if (!variants) { variants = new Map(); materials.set(shape.material, variants); }
-    const key = JSON.stringify([shape.params.alpha, shape.areaLight, shape.inside, shape.areaLight?.params.power ? shape.loc : null]);
+    const key = JSON.stringify([shape.params.alpha, shape.params.displacement, shape.areaLight, shape.inside, shape.areaLight?.params.power ? shape.loc : null]);
     if (!variants.has(key)) variants.set(key, material(shape, scene, textures, warn));
     return variants.get(key)!;
   };
@@ -106,6 +106,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
       const reflection = new THREE.Matrix4().makeScale(-1, 1, 1);
       if (negative) {
         g = g.clone().applyMatrix4(reflection);
+        if (!g.index) g.setIndex(Array.from({ length: g.attributes.position.count }, (_, i) => i));
         const indices = g.index!;
         for (let i = 0; i < indices.count; i += 3) { const a = indices.getX(i); indices.setX(i, indices.getX(i + 1)); indices.setX(i + 1, a); }
       }

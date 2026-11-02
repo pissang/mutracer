@@ -37,6 +37,12 @@ describe('PBRT conversion semantics', () => {
     tint.forEach((v,i)=>expect(v*(base[i]+(1-base[i])*Math.pow(6/7,5))).toBeCloseTo(edge[i],12));
     expect(conductorFresnel(1,2*Math.sqrt(.7/.3),1)).toBeCloseTo(.7,12);
   });
+  it('keeps shape displacement variants independent', async () => {
+    const { root } = await load('WorldBegin Texture "a" "float" "checkerboard" "float tex1" 0 "float tex2" 1 Texture "b" "float" "checkerboard" "float tex1" .2 "float tex2" .8 Shape "sphere" "texture displacement" "a" Shape "sphere" "texture displacement" "b"');
+    const meshes = root.children.filter(o => (o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>[];
+    expect(meshes[0].material).not.toBe(meshes[1].material);
+    expect(meshes[0].material.displacementMap!.image.data[0]).not.toBe(meshes[1].material.displacementMap!.image.data[0]);
+  });
   it('maps named glass dispersion and conductor normal/edge Fresnel', () => {
     const bk7 = glass(namedSpectrum('glass-BK7')!); expect(bk7.ior).toBeCloseTo(1.5168, 3); expect(bk7.abbe).toBeGreaterThan(60); expect(bk7.abbe).toBeLessThan(66);
     const gold = conductor(namedSpectrum('metal-Au-eta')!, namedSpectrum('metal-Au-k')!);
@@ -67,5 +73,12 @@ describe('PBRT transformed surface orientation', () => {
     expect(meshes).toHaveLength(2);
     for (const mesh of meshes) { const matrix = new THREE.Matrix4(); mesh.getMatrixAt(0, matrix); expect(matrix.determinant()).toBeGreaterThan(0); }
     const bounds = new THREE.Box3().setFromObject(root); expect(bounds.min.x).toBeCloseTo(-4, 4); expect(bounds.max.x).toBeCloseTo(1, 4);
+  });
+  it('mirrors textured instances after generated per-triangle UVs remove their index', async () => {
+    const { root } = await load('WorldBegin Texture "t" "spectrum" "checkerboard" Material "diffuse" "texture reflectance" "t" ObjectBegin "a" Scale -1 1 1 Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 0 1 0] ObjectEnd Scale -1 1 1 ObjectInstance "a"');
+    const mesh = root.children.find(o => (o as THREE.InstancedMesh).isInstancedMesh) as THREE.InstancedMesh;
+    expect(mesh.geometry.index!.count).toBe(3);
+    expect(Array.from(mesh.geometry.attributes.uv.array)).toEqual([0,0,1,0,1,1]);
+    expect(new THREE.Box3().setFromObject(root).max.x).toBeCloseTo(1);
   });
 });
