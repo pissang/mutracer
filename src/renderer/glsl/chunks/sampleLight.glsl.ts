@@ -30,7 +30,6 @@ void light_sample_sphere(
     return;
   }
   float radius = max(light.radius, 1e-6);
-  result.sourceType=0;result.sourceIndex=-1;
   result.isDelta = false;
   vec3 direction;
 
