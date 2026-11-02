@@ -19,6 +19,9 @@ APIs may change between minor releases.
   fuzz, thin-film interference, dispersive transmission with absorption and
   volume scattering, subsurface scattering, emission and ray-marched
   height-field displacement.
+- **Experimental caustics (WebGPU)**: light tracing for directly visible
+  receivers and photon mapping for receivers seen through glass or water. See
+  the [caustics guide](docs/caustics.md).
 - **Interactive with millions of triangles**: a two-level BVH whose BLASes are
   built with binned SAH in parallel Workers (a JavaScript port of TinyBVH, or
   the TinyBVH WebAssembly builder with SBVH and CWBVH layouts). Moving

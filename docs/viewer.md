@@ -22,9 +22,9 @@ and the Lighting panel explains which map is unavailable; choose an environment
 there to replace it.
 
 MuTracer collection examples open with a curated view, under the procedural
-sky or a Poly Haven HDRI. A few also set their own tone mapping and bloom,
-which return to the defaults when you leave them. Other models with cameras open in their first
-camera. You can select any
+sky or a Poly Haven HDRI. A few also set their own tone mapping and bloom, which
+return to the defaults when you leave them. Other models with cameras open in their
+first camera. You can select any
 imported camera in the separate camera toolbar at the bottom right; it appears
 only for models with cameras. Drag, pan or zoom after selecting a camera to
 continue in **Orbit** from that view.
