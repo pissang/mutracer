@@ -3,6 +3,15 @@ export const fogGlsl = /* glsl */ `
 vec2 fogInterval(Ray ray, int index, float maximum) {
   vec3 origin = (fogWorldToLocal[index] * vec4(ray.o, 1.0)).xyz;
   vec3 direction = (fogWorldToLocal[index] * vec4(ray.d, 0.0)).xyz;
+  if (fogParams[index].w > 0.5) {
+    float a = dot(direction, direction);
+    float center = -dot(origin, direction) / a;
+    vec3 closest = origin + center * direction;
+    float radius2 = (1.0 - dot(closest, closest)) / a;
+    if (radius2 < 0.0 || a <= 0.0) return vec2(0.0);
+    float radius = sqrt(radius2), near = max(0.0, center - radius);
+    return vec2(near, max(near, min(maximum, center + radius)));
+  }
   float near = 0.0, far = maximum;
   for (int axis = 0; axis < 3; axis++) {
     if (direction[axis] == 0.0) {

@@ -4,6 +4,16 @@ export const fogWgsl = /* wgsl */ `
 fn fogInterval(ray: Ray, volume: FogVolume, maximum: f32) -> vec2f {
   let origin = (volume.worldToLocal * vec4f(ray.o, 1.0)).xyz;
   let direction = (volume.worldToLocal * vec4f(ray.d, 0.0)).xyz;
+  if (volume.params.w > 0.5) {
+    let a = dot(direction, direction);
+    let center = -dot(origin, direction) / a;
+    let closest = origin + center * direction;
+    let radius2 = (1.0 - dot(closest, closest)) / a;
+    if (radius2 < 0.0 || a <= 0.0) { return vec2f(0.0); }
+    let radius = sqrt(radius2);
+    let near = max(0.0, center - radius);
+    return vec2f(near, max(near, min(maximum, center + radius)));
+  }
   var near = 0.0;
   var far = maximum;
   for (var axis = 0; axis < 3; axis++) {
