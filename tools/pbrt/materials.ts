@@ -4,7 +4,22 @@ import presets from './scattering-data.json';
 import { first, scalar, type Entity, type Scene, type Shape } from './scene';
 import { conductor, conductorFresnel, metalTint, glass, namedSpectrum, roughness } from './spectrum';
 import { Textures } from './textures';
+import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import { packMaterialParams } from '../../src/renderer/materialParams';
 export type Warn = (entity: Entity, handling: string, code?: string) => void;
+// Invert the existing OpenPBR artist-color -> single-scattering-albedo mapping
+// through its own packer, rather than duplicating its fitted coefficients.
+function subsurfaceColor(albedo: number[], anisotropy: number): number[] {
+  const probe = new OpenPBRMaterial({ subsurfaceWeight: 1, subsurfaceRadius: 1, subsurfaceAnisotropy: anisotropy });
+  return albedo.map(target => {
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2; probe.subsurfaceColor = [mid, mid, mid];
+      if (packMaterialParams([probe]).mediumScattering[0][0] < target) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  });
+}
 export async function material(shape: Shape, scene: Scene, textures: Textures, warn: Warn, active = new Set<Entity>()): Promise<THREE.MeshPhysicalMaterial> {
   let entity = shape.material;
   if (active.has(entity)) throw new Error(`Cyclic mix material at ${entity.loc.file}:${entity.loc.line}`);
@@ -94,9 +109,13 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   if (type === 'subsurface') {
     const preset = (presets as Record<string, { sigma_a: number[]; sigma_s: number[] }>)[String(first(p, 'name', ''))];
     const a = preset ? { color: preset.sigma_a } : await textures.value(p, 'sigma_a', [.0011, .0024, .014], entity), s = preset ? { color: preset.sigma_s } : await textures.value(p, 'sigma_s', [2.55, 3.21, 3.77], entity);
-    open.specularWeight = 1; open.subsurfaceAnisotropy = preset ? 0 : scalar(p, 'g', 0);
-    open.subsurfaceWeight = 1; open.subsurfaceColor = s.color.map((v, i) => v / Math.max(1e-6, v + a.color[i]));
-    open.subsurfaceRadius = 1 / Math.max(1e-6, (a.color.reduce((x, y) => x + y) + s.color.reduce((x, y) => x + y)) / 3 * scalar(p, 'scale', 1));
+    result.ior = scalar(p, 'eta', 1.33);
+    const anisotropy = preset ? 0 : scalar(p, 'g', 0), scale = scalar(p, 'scale', 1);
+    open.specularWeight = 1; open.subsurfaceAnisotropy = anisotropy;
+    open.subsurfaceWeight = 1; open.subsurfaceColor = subsurfaceColor(s.color.map((v, i) => v / Math.max(1e-9, v + a.color[i])), anisotropy);
+    const radii = s.color.map((v, i) => 1 / Math.max(1e-9, (v + a.color[i]) * scale)), radius = Math.max(...radii);
+    open.subsurfaceRadius = radius; open.subsurfaceRadiusScale = radii.map(v => v / radius);
+    if (radii.some(v => v < .001)) warn(entity, 'Subsurface mean free paths below 0.001 scene units are limited by the existing OpenPBR medium', 'material');
     if (p.reflectance) {
       open.subsurfaceColor = textures.average(color);
       const mfp = await textures.value(p, 'mfp', [1, 1, 1], entity);

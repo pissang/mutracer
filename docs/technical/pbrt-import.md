@@ -68,6 +68,18 @@ Blackbody emission is normalized to unit luminance before light scaling.
 An RGB renderer and PBRT's spectral renderer can retain material-dependent
 biases; comparisons report them without changing either renderer's algorithms.
 
+For coefficient-based subsurface materials, each RGB extinction mean free path is
+`1 / (scale * (sigma_a + sigma_s))`. The largest channel becomes the OpenPBR
+radius and channel ratios become radius scales. Single-scattering albedo
+`sigma_s / (sigma_a + sigma_s)` is converted to the artist-facing subsurface color
+by inverting the existing material packer's mapping. Authored diffuse reflectance
+is already an effective scattering color. These mappings preserve the RGB medium
+coefficients but do not reproduce PBRT's spectral diffusion model.
+
+Ordinary PBRT surfaces accept primary back-face hits. One-sided area emission
+uses FrontSide because MuTracer couples primary visibility and emission sidedness;
+its missing back-side surface visibility is warned about.
+
 PBRT image textures evaluate `(s,1-t)`. Decoded images use top-down rows and
 Three textures set `flipY=true`. Infinite lights use the equal-area square map,
 reprojected to world-space latitude/longitude. The direct importer uses nearest

@@ -4,6 +4,8 @@ import { buildScene } from '../../tools/pbrt/scene';
 import { convert } from '../../tools/pbrt/convert';
 import { conductor, conductorFresnel, metalTint, glass, namedSpectrum, roughness, verticalFov } from '../../tools/pbrt/spectrum';
 import { parsePLY } from '../../tools/pbrt/geometry';
+import { fromTHREEScene } from '../../src/util/fromTHREE';
+import { packMaterialParams } from '../../src/renderer/materialParams';
 const load = async (text: string) => {
   const resolver = { async read() { return new TextEncoder().encode(text).buffer; } };
   const scene = await buildScene('main.pbrt', resolver); return { scene, ...(await convert(scene, resolver)) };
@@ -44,6 +46,13 @@ describe('PBRT conversion semantics', () => {
       const ray = new THREE.Raycaster(new THREE.Vector3(0,0,z), new THREE.Vector3(0,0,-Math.sign(z)));
       expect(ray.intersectObject(root, true)).toHaveLength(1);
     }
+  });
+  it('preserves named subsurface extinction and scattering through the existing OpenPBR packer', async () => {
+    const { root } = await load('WorldBegin Material "subsurface" "string name" "Skin1" "float scale" 50 "float eta" 1.5 Shape "sphere"');
+    const source = new THREE.Scene(); source.add(root);
+    const converted = fromTHREEScene(source), params = packMaterialParams([converted.meshes[0].materials[0]]);
+    [(.032+.74)*50,(.17+.88)*50,(.48+1.01)*50].forEach((v,i)=>expect(params.mediumExtinction[0][i]).toBeCloseTo(v,4));
+    [.74*50,.88*50,1.01*50].forEach((v,i)=>expect(params.mediumScattering[0][i]).toBeCloseTo(v,4));
   });
   it('keeps shape displacement variants independent', async () => {
     const { root } = await load('WorldBegin Texture "a" "float" "checkerboard" "float tex1" 0 "float tex2" 1 Texture "b" "float" "checkerboard" "float tex1" .2 "float tex2" .8 Shape "sphere" "texture displacement" "a" Shape "sphere" "texture displacement" "b"');

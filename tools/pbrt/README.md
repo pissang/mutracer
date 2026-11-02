@@ -65,6 +65,8 @@ Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
 region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
+Ordinary surfaces are double-sided. One-sided emitters also hide their back faces
+from primary rays; this visibility limitation is reported as a warning.
 
 The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
 an estimated working set above 8 GiB, using eight times the encoded input size.
