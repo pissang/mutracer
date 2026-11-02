@@ -46,6 +46,8 @@ adaptive variance currently measures only the PT component.
 
 ## Limits
 
+[Scene fog](./fog.md) disables caustic estimators until all fog volumes are removed.
+
 Light tracing follows surfaces with no diffuse, subsurface, fuzz or coat
 contribution and specular roughness at most 0.1. It supports emissive triangles,
 rectangles, spheres, spotlights, directional lights and environment lighting,

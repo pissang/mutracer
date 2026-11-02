@@ -17,7 +17,7 @@
 - Initialization: optional `await engine.init()` gives backend, adapter and limits; `backend: 'auto'` defaults to WebGPU with WebGL fallback. `webgpu` requires WebGPU and `webgl` forces WebGL 2.
 - Texture bindings: `new Engine({textureBinding:'auto'})` tries experimental WebGPU bindless textures with atlas fallback; default `'atlas'`. [Requirements and budget](docs/api.md#texture-bindings).
 - Status: each render exposes `status`, `samples` and `converged`; statuses are preparing, compiling, converging, denoising, finished and error. The first layer leaves frame selection/UI status to the application.
-- Scene: plain `{meshes, lights, background?}`; meshes use world `transform`. `engine.update()` detects assignments, materials and lights; in-place array/pixel edits need `markUpdated()` or dedicated geometry/instance notifications; [updates](docs/updates.md).
+- Scene: plain `{meshes, lights, background?, fog?}`; meshes use world `transform`. `engine.update()` detects assignments, materials and lights; in-place array/pixel edits need `markUpdated()` or dedicated geometry/instance notifications; [updates](docs/updates.md).
 - Conversion hooks: `convertMaterial` / `convertLight` on `FromTHREESceneOptions` and `THREESyncOptions`; undefined uses defaults, null skips; sync caches by source identity/version. [Ownership and light revisions](docs/threejs.md#custom-conversion).
 - Three.js: use `new THREESync(engine, {scene?, camera?, controls?})` with RenderLoop; use GLTFLoader for glTF. [Three.js](docs/threejs.md).
 - Preview: explicit `new Render(engine, {resolutionScale:.5, adaptiveResolution:{targetFrameMs:20,minScale:.25},bounces:2,bevel:false,dispersionWavelengths:1,directLightCandidates:2})`. Give the final render `fallback: preview`; [fallback rules](docs/progressive-rendering.md#caveats).
@@ -32,6 +32,7 @@
 - Depth: `await engine.readDepthSamples({x,y,size})` uses the committed engine camera; [depth sampling](docs/api.md#depth-sampling).
 - Procedural sky: `new ProceduralSky({resolution:[2048,1024],time:15})` for `EnvironmentLight.map` or backgrounds; Three.js uses the sync's `environment` option. [Options and limits](docs/api.md#proceduralsky).
 - Materials, lights, geometry: OpenPBR constructor parameters, rigid analytic-light transforms and itemSize=1 raw materialIndex; [materials](docs/materials.md), [getting started](docs/getting-started.md).
+- Fog: bounded overlapping boxes/ellipsoids on WebGPU and WebGL 2, optional height falloff; `scene.fog`, up to `MAX_FOG_VOLUMES` (8). [Guide](docs/fog.md), [options](docs/api.md#scenefog).
 - Release resources with `render.dispose()` or `engine.dispose()` for everything; `sync.dispose()` releases adapter caches.
 
 ## Common pitfalls
