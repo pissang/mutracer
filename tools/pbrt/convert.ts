@@ -36,7 +36,10 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   for (const shape of [...scene.shapes, ...Object.values(scene.objects).flat()]) { entities.push(shape.material); if (shape.areaLight) entities.push(shape.areaLight); }
   for (const entity of new Set(entities)) {
     const kind = entity.loc.kind === 'MakeNamedMaterial' ? 'Material' : entity.loc.kind;
-    for (const key of Object.keys(entity.params)) if (allowed[kind] && !allowed[kind].includes(key)) warn(entity, `Parameter ${key} ignored`, 'parameter');
+    for (const key of Object.keys(entity.params)) {
+      const name = kind === 'Material' && entity.type === 'coatedconductor' ? key.replace(/^(interface|conductor)\./, '') : key;
+      if (allowed[kind] && !allowed[kind].includes(name)) warn(entity, `Parameter ${key} ignored`, 'parameter');
+    }
   }
   if (scene.integrator && !['path', 'volpath'].includes(scene.integrator.type)) warn(scene.integrator, `${scene.integrator.type} integrator replaced by MuTracer path tracing`, 'integrator');
   const textures = new Textures(scene, resolver, warn, decode);

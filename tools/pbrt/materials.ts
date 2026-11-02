@@ -34,7 +34,11 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
       result.userData.pbrtComparable = false; return result;
     }
   }
-  const p = entity.params, type = entity.type;
+  const type = entity.type, sourceParams = entity.params;
+  const p = type === 'coatedconductor' ? { ...sourceParams } : sourceParams;
+  if (type === 'coatedconductor') for (const key of ['eta', 'k', 'roughness', 'uroughness', 'vroughness']) {
+    if (sourceParams[`conductor.${key}`]) p[key] = sourceParams[`conductor.${key}`];
+  }
   // PBRT surface intersection does not cull back faces. Emission sidedness is
   // handled below; MuTracer currently couples it to primary-ray culling.
   const result = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: .5, side: THREE.DoubleSide });
@@ -52,8 +56,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     if (type === 'thindielectric') open.thinWalled = true;
     if (type === 'interface' || type === '') { result.ior = 1; open.specularIor = 1; }
     if (p.eta?.type === 'spectrum') {
-      const values = p.eta.values;
-      const curve = typeof values[0] === 'string' ? namedSpectrum(String(values[0])) : values.map(Number);
+      const curve = await textures.spectrum(p.eta);
       if (curve) {
         const value = glass(curve); result.ior = value.ior;
         if (Number.isFinite(value.abbe)) { open.transmissionDispersionScale = 1; open.transmissionDispersionAbbeNumber = value.abbe; }
@@ -62,16 +65,16 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   }
   if (type === 'conductor' || type === 'coatedconductor') {
     result.metalness = 1; open.specularWeight = 1;
-    const curve = (key: string, fallback: string) => {
+    const curve = async (key: string, fallback: string) => {
       const parameter = p[key];
       if (!parameter) return namedSpectrum(fallback);
-      if (typeof parameter.values[0] === 'string') return namedSpectrum(String(parameter.values[0]));
-      const values = parameter.values.map(Number);
-      if (parameter.type === 'spectrum') return values;
+      if (parameter.type === 'spectrum') return textures.spectrum(parameter);
+      const values = parameter.type === 'texture' ? textures.average(await textures.value(p,key,[1,1,1],entity)) : parameter.values.map(Number);
+      if (parameter.type === 'texture') { warn(entity, 'Spatial optical constants use mean RGB wavelength interpolation', 'spectrum'); result.userData.pbrtComparable = false; }
       if (values.length === 1) return [360, values[0], 830, values[0]];
       return [360, values[2], 460, values[2], 550, values[1], 610, values[0], 830, values[0]];
     };
-    const eta = curve('eta', 'metal-Cu-eta'), k = curve('k', 'metal-Cu-k');
+    const eta = await curve('eta', 'metal-Cu-eta'), k = await curve('k', 'metal-Cu-k');
     if (p.eta?.type === 'rgb' || p.k?.type === 'rgb') warn(entity, 'RGB optical constants use wavelength interpolation', 'spectrum');
     if (!p.reflectance && eta && k) {
       const colors = conductor(eta, k); result.color.setRGB(...colors.base as [number, number, number]); open.specularColor = metalTint(colors.base, colors.edge);
@@ -105,7 +108,17 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     warn(entity, 'Anisotropic roughness textures replaced by 0.5', 'texture');
     result.userData.pbrtComparable = false;
   }
-  if (type.startsWith('coated')) { result.clearcoat = 1; result.clearcoatRoughness = result.roughness; open.coatWeight = 1; open.coatDarkening = 1; open.coatIor = 1.5; }
+  if (type.startsWith('coated')) {
+    const coat: typeof p = type === 'coatedconductor' ? Object.fromEntries(Object.entries(sourceParams).filter(([key])=>key.startsWith('interface.')).map(([key,value])=>[key.slice(10),value])) : p;
+    const cu = await textures.value(coat, coat.uroughness ? 'uroughness' : 'roughness', [0,0,0], entity);
+    const cv = await textures.value(coat, coat.vroughness ? 'vroughness' : 'roughness', [0,0,0], entity);
+    if (cu.map || cv.map) warn(entity, 'Coat roughness maps approximated by their means', 'material');
+    const u = roughness(textures.average(cu)[0], remap), v = roughness(textures.average(cv)[0], remap);
+    result.clearcoat = 1; result.clearcoatRoughness = Math.sqrt(u*v); open.coatRoughness = result.clearcoatRoughness;
+    open.coatWeight = 1; open.coatDarkening = 1; open.coatIor = scalar(coat, 'eta', 1.5);
+    if (coat.eta?.type === 'spectrum') { const eta = await textures.spectrum(coat.eta); if (eta) open.coatIor = glass(eta).ior; warn(entity, 'Coat dispersion approximated by its d-line IOR', 'spectrum'); }
+    if (u !== v) { open.coatAnisotropy = Math.min(1,(1-Math.min(u*u,v*v)/Math.max(u*u,v*v))/.9); open.coatAnisotropyRotation = v>u ? Math.PI/2 : 0; }
+  }
   if (type === 'subsurface') {
     const preset = (presets as Record<string, { sigma_a: number[]; sigma_s: number[] }>)[String(first(p, 'name', ''))];
     const a = preset ? { color: preset.sigma_a } : await textures.value(p, 'sigma_a', [.0011, .0024, .014], entity), s = preset ? { color: preset.sigma_s } : await textures.value(p, 'sigma_s', [2.55, 3.21, 3.77], entity);

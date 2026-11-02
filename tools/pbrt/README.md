@@ -51,7 +51,7 @@ copies to coexist in browser memory.
 | loopsubdiv / curve | Loop subdivision with area-weighted normals / skipped with a warning. |
 | perspective / orthographic | Film aspect ratio and short-edge field of view; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
 | diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. |
-| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including named subsurface coefficients. |
+| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients. |
 | mix / hair / measured / interface | Dominant constant-weight branch / diffuse fallback / diffuse fallback / transmissive medium boundary. |
 | imagemap | PNG/JPEG, EXR, TGA and TIFF; encoding, invert, scale, UV scale/offset and repeat/clamp. Black wrap approximates clamp. |
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
@@ -69,6 +69,8 @@ Ordinary surfaces are double-sided. One-sided emitters also hide their back face
 from primary rays; this visibility limitation is reported as a warning.
 Subsurface mean free paths below 0.001 scene units are limited by the existing
 OpenPBR medium; this can change fine-scale skin scattering and is warned about.
+Optical constants accept named spectra or SPD files. Spatial optical-constant
+maps and coat roughness maps use warned mean-value approximations.
 
 The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
 an estimated working set above 8 GiB, using eight times the encoded input size.

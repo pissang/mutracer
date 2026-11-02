@@ -67,6 +67,10 @@ so the edge value is divided by `F0+(1-F0)*(6/7)^5` and limited to [0,1]. Glass 
 Blackbody emission is normalized to unit luminance before light scaling.
 An RGB renderer and PBRT's spectral renderer can retain material-dependent
 biases; comparisons report them without changing either renderer's algorithms.
+Coated conductor inputs keep `conductor.*` substrate parameters separate from
+`interface.*` coat parameters. Both roughness layers use the same remap rule;
+optical constants are read as curves from named data or SPD files before Fresnel
+integration. Coat IOR and anisotropy use the existing OpenPBR metadata fields.
 
 For coefficient-based subsurface materials, each RGB extinction mean free path is
 `1 / (scale * (sigma_a + sigma_s))`. The largest channel becomes the OpenPBR

@@ -5,6 +5,7 @@ import { TIFFLoader } from 'three/examples/jsm/loaders/TIFFLoader.js';
 import { first, scalar, type Entity, type Params, type Scene } from './scene';
 import { blackbody, namedSpectrum, sample, spectralRGB } from './spectrum';
 import { resolvePath, type Resolver, type Warning } from './source';
+import type { Parameter } from './parser';
 export interface Image { width: number; height: number; data: Float32Array | Uint8Array | Uint8ClampedArray }
 export type DecodeImage = (bytes: ArrayBuffer, path: string) => Promise<Image>;
 export interface TextureValue { color: number[]; map?: THREE.DataTexture }
@@ -12,11 +13,26 @@ export class Textures {
   private cache = new Map<string, Promise<TextureValue>>();
   private images = new Map<string, Promise<Image>>();
   private heightMaps = new WeakMap<THREE.DataTexture, THREE.DataTexture>();
+  private spectra = new Map<string, Promise<number[]>>();
   constructor(private scene: Scene, private resolver: Resolver, private warn: (entity: Entity, handling: string, code?: string) => void, private decode?: DecodeImage) {}
   image(path: string): Promise<Image> {
     const key = resolvePath(path, this.scene.entry);
     if (!this.images.has(key)) this.images.set(key, this.decodeFile(path));
     return this.images.get(key)!;
+  }
+  async spectrum(parameter: Parameter): Promise<number[] | undefined> {
+    const value = parameter.values[0];
+    if (typeof value !== 'string') return parameter.values.map(Number);
+    const named = namedSpectrum(value); if (named) return named;
+    if (!/\.(spd|txt)$/i.test(value)) return undefined;
+    const path = resolvePath(value, this.scene.entry);
+    if (!this.spectra.has(path)) this.spectra.set(path, (async () => {
+      const text = new TextDecoder().decode(await this.resolver.read(path));
+      const curve = text.replace(/#[^\n]*/g, '').trim().split(/\s+/).map(Number);
+      if (curve.length < 4 || curve.length % 2 || curve.some(v => !Number.isFinite(v))) throw new Error(`Invalid spectrum ${path}`);
+      return curve;
+    })());
+    return this.spectra.get(path)!;
   }
   private async decodeFile(path: string): Promise<Image> {
     const bytes = await this.resolver.read(resolvePath(path, this.scene.entry));
@@ -44,11 +60,7 @@ export class Textures {
     }
     if (parameter.type === 'spectrum') {
       const value = parameter.values[0];
-      let curve = typeof value === 'string' ? namedSpectrum(value) : parameter.values.map(Number);
-      if (!curve && typeof value === 'string' && /\.(spd|txt)$/i.test(value)) {
-        const text = new TextDecoder().decode(await this.resolver.read(resolvePath(value, this.scene.entry)));
-        curve = text.replace(/#[^\n]*/g, '').trim().split(/\s+/).map(Number);
-      }
+      const curve = await this.spectrum(parameter);
       if (!curve) { this.warn(owner, `Unknown spectrum ${value}; uses ${fallback}`, 'spectrum'); return { color: fallback }; }
       const emission = /LightSource$/.test(owner.loc.kind), color = spectralRGB(w => sample(curve!, w), !emission);
       const y = .2126 * color[0] + .7152 * color[1] + .0722 * color[2];

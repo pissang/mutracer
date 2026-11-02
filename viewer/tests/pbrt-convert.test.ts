@@ -99,6 +99,25 @@ describe('PBRT conversion semantics', () => {
     const gold = conductor(namedSpectrum('metal-Au-eta')!, namedSpectrum('metal-Au-k')!);
     expect(gold.base[0]).toBeGreaterThan(gold.base[2]); expect(gold.edge[2]).toBeGreaterThan(gold.base[2]);
   });
+  it.each(['conductor','coatedconductor'])('loads %s optical constants from SPD files and keeps layer roughness independent', async type => {
+    const prefix = type === 'coatedconductor' ? 'conductor.' : '';
+    const text = `WorldBegin Material "${type}" "spectrum ${prefix}eta" "eta.spd" "spectrum ${prefix}k" "k.spd" "float ${prefix}roughness" .002 "float interface.roughness" .02 "float interface.eta" 1.4 Shape "sphere"`;
+    const reads: string[] = [], resolver = { async read(path: string) { reads.push(path); return new TextEncoder().encode(path==='eta.spd'?'400 1\n700 1\n':path==='k.spd'?'400 2\n700 2\n':text).buffer; } };
+    const scene = await buildScene('main.pbrt',resolver), model = await convert(scene,resolver);
+    const source = new THREE.Scene(); source.add(model.root);
+    const m = fromTHREEScene(source).meshes[0].materials[0], expected = conductor([360,1,830,1],[360,2,830,2]);
+    expected.base.forEach((v,i)=>expect(m.baseColor[i]).toBeCloseTo(v,6));
+    expect(m.specularRoughness).toBeCloseTo(roughness(.002));
+    expect(reads).toContain('eta.spd'); expect(reads).toContain('k.spd');
+    if(type==='coatedconductor'){expect(m.coatRoughness).toBeCloseTo(roughness(.02));expect(m.coatIor).toBe(1.4);}
+  });
+  it('loads dielectric IOR and dispersion from an SPD file', async () => {
+    const text = 'WorldBegin Material "dielectric" "spectrum eta" "glass.spd" Shape "sphere"';
+    const resolver = { async read(path: string) { return new TextEncoder().encode(path==='glass.spd'?'486.13 1.52\n587.56 1.51\n656.27 1.50\n':text).buffer; } };
+    const scene = await buildScene('main.pbrt',resolver), model = await convert(scene,resolver);
+    const source = new THREE.Scene(); source.add(model.root);
+    const m = fromTHREEScene(source).meshes[0].materials[0]; expect(m.specularIor).toBeCloseTo(1.51);expect(m.transmissionDispersionAbbeNumber).toBeCloseTo(25.5);
+  });
   it('triangulates ASCII PLY quads and recognizes texture_u/texture_v', () => {
     const text = 'ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nproperty float texture_u\nproperty float texture_v\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 0 0\n1 0 0 1 0\n1 1 0 1 1\n0 1 0 0 1\n4 0 1 2 3\n';
     const geometry = parsePLY(new TextEncoder().encode(text).buffer); expect(geometry.index!.count).toBe(6); expect(geometry.attributes.uv.count).toBe(4);
