@@ -1,0 +1,150 @@
+import {MAX_PATH_EVENTS} from '../../pathLimits.js';
+export const fogGlsl = /* glsl */ `
+vec2 fogInterval(Ray ray, int index, float maximum) {
+  vec3 origin = (fogWorldToLocal[index] * vec4(ray.o, 1.0)).xyz;
+  vec3 direction = (fogWorldToLocal[index] * vec4(ray.d, 0.0)).xyz;
+  float near = 0.0, far = maximum;
+  for (int axis = 0; axis < 3; axis++) {
+    if (direction[axis] == 0.0) {
+      if (abs(origin[axis]) > 1.0) return vec2(0.0);
+    } else {
+      float a = (-1.0 - origin[axis]) / direction[axis];
+      float b = (1.0 - origin[axis]) / direction[axis];
+      near = max(near, min(a, b)); far = min(far, max(a, b));
+    }
+  }
+  return vec2(near, max(near, far));
+}
+float fogOpticalDepth(Ray ray, int index, vec2 interval) {
+  return fogParams[index].x * (interval.y - interval.x);
+}
+float fogDistance(Ray ray, int index, vec2 interval, float opticalTarget) {
+  if (fogParams[index].x <= 0.0) return INF;
+  return interval.x + opticalTarget / fogParams[index].x;
+}
+float fogTransmittance(Ray ray, float maximum) {
+  float tau = 0.0;
+  for (int i = 0; i < fogCount; i++) tau += fogOpticalDepth(ray, i, fogInterval(ray, i, maximum));
+  return exp(-tau);
+}
+`;
+export const fogPathGlsl = /* glsl */ `
+void fogGuides(Ray ray, float maximum, inout RayTraceAuxiliary outAux) {
+  float tau = 0.0, weight = 0.0; vec3 albedo = vec3(0.0);
+  for (int i = 0; i < fogCount; i++) {
+    float opticalDepth = fogOpticalDepth(ray, i, fogInterval(ray, i, maximum));
+    float w = 1.0 - exp(-opticalDepth);
+    tau += opticalDepth; weight += w; albedo += w * fogColorAnisotropy[i].rgb;
+  }
+  float tr = exp(-tau);
+  if (weight > 0.0) {
+    outAux.albedo = tr * outAux.albedo + (1.0 - tr) * albedo / weight;
+    outAux.normal *= tr; outAux.isBlank = false;
+  }
+}
+float fogSegmentMaximum(Path path, SurfaceInteraction si) {
+  float maximum = si.hit ? distance(si.position, path.ray.o) : INF;
+#ifdef NUM_LIGHTS
+  for (int i = 0; i < NUM_LIGHTS; i++) {
+    LightSampleRec sample;
+    float d = intersectLight(path.ray, fetchLight(i), sample);
+    if (d > 0.0) maximum = min(maximum, d);
+  }
+#endif
+  return maximum;
+}
+int sampleFogEvent(inout Path path, inout SurfaceInteraction si, float maximum, bool resample) {
+  if (si.mediumType > 0 || si.fogSuppressed) return -1;
+  float nearest = maximum; int winner = -1;
+  for (int i = 0; i < fogCount; i++) {
+    vec2 interval = fogInterval(path.ray, i, maximum);
+    if (interval.y <= interval.x || fogParams[i].x <= 0.0) continue;
+    float u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - uint(i)));
+    if (resample) u = hashedSample(0xf091u + uint(i));
+    float candidate = fogDistance(path.ray, i, interval, -log(max(1.0 - u, 1e-7)));
+    if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
+  }
+  if (winner >= 0) {
+    path.ray.o += nearest * path.ray.d; si.position = path.ray.o;
+    si.triangleIndex = -1; si.instanceIndex = -1;
+  }
+  return winner;
+}
+void shadeFogVertex(inout Path path, inout SurfaceInteraction si, int winner, inout int depth) {
+  path.beta *= fogColorAnisotropy[winner].rgb; path.alpha = 1.0; path.fogScattered = true;
+  if (max(max(path.beta.x, path.beta.y), path.beta.z) <= 0.0) { path.abort = true; return; }
+  float originalAnisotropy = si.mediumAnisotropy;
+  si.mediumAnisotropy = fogColorAnisotropy[winner].w;
+  OpenPbrResolvedMaterial material; OpenPbrPreparedBsdf prepared;
+  path.li += path.beta * DirectLight(si, material, prepared, path, vec3(0.0), false);
+  vec3 direction = sampling_henyey_greenstein(-path.ray.d, si.mediumAnisotropy, sample2D(bounceDim(PHASE_DIRECTION)));
+  path.scatteringPdf = sampling_henyey_greenstein_phase(dot(direction, -path.ray.d), si.mediumAnisotropy);
+  si.mediumAnisotropy = originalAnisotropy;
+  initRay(path.ray, path.ray.o, direction);
+  path.scatteringIsDelta = false; path.fromEye = false; path.isNextRefraction = false;
+  depth++;
+#ifdef USE_RR
+  if (depth >= RR_MAX) {
+    float survival = min(1.0, max(max(path.beta.x, path.beta.y), path.beta.z));
+    if (sample1D(bounceDim(RUSSIAN_ROULETTE)) >= survival) path.abort = true;
+    else path.beta /= survival;
+  }
+#endif
+}
+vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+  Path path; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
+  path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
+  path.scatteringPdf = 0.0; path.scatteringIsDelta = false; path.isNextRefraction = false; path.fogScattered = false;
+  Path originalPath = path; SurfaceInteraction primarySi = si; OpenPbrResolvedMaterial primaryMat = mat;
+  RayTraceAuxiliary originalAux = outAux, backAux;
+  float coverage = 1.0; bool split = false, front = false; vec4 back;
+  int depth = 0, event = 0;
+  bool query = false, resample = false, skipFog = false, first = true;
+  int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  for (int step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
+    if (query) {
+      intersectScene(path.ray, si, true);
+      getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    }
+    query = true; samplingBounce = uint(depth);
+    int winner = -1;
+    if (!skipFog) winner = sampleFogEvent(path, si, fogSegmentMaximum(path, si), resample);
+    skipFog = false;
+    if (winner >= 0) {
+      if (depth >= bounceLimit || event >= limit) path.abort = true;
+      else shadeFogVertex(path, si, winner, depth);
+      first = false; resample = false; event++;
+    } else {
+      if (first && path.fromEye && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT) && mat.alpha < 1.0) {
+        split = true; coverage = clamp(mat.alpha, 0.0, 1.0); primarySi = si; primaryMat = mat;
+        path.ray.o = si.position + ray.d * (EPS * 0.02); first = false; resample = true; continue;
+      }
+      first = false;
+      if (event > 0) { int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, false); }
+      if (!path.abort && (depth > bounceLimit || event >= limit)) path.abort = true;
+      if (!path.abort) {
+        si.fogResample = false;
+        bounce(path, depth, si, mat, outAux);
+        resample = si.fogResample;
+        if (!resample) depth++;
+      }
+      event++;
+    }
+    if (path.abort) {
+      vec4 result = vec4(path.li, path.alpha);
+      if (!split || coverage <= 0.0) return result;
+      if (front) {
+        outAux.albedo = mix(backAux.albedo, outAux.albedo, coverage);
+        outAux.normal = mix(backAux.normal, outAux.normal, coverage);
+        outAux.isBlank = backAux.isBlank && outAux.isBlank;
+        outAux.isShadowCatcher = backAux.isShadowCatcher && outAux.isShadowCatcher;
+        return mix(back, result, coverage);
+      }
+      back = result; backAux = outAux; front = true;
+      path = originalPath; si = primarySi; mat = primaryMat; mat.alpha = 1.0; outAux = originalAux;
+      depth = 0; event = 0; query = false; resample = false; skipFog = true;
+    }
+  }
+  return vec4(path.li, path.alpha);
+}
+`;

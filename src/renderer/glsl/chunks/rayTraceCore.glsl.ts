@@ -6,7 +6,7 @@ import { createShaderMixin, glsl, Shader } from '../../shader.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import { CONSTANT_SPOT_LIGHT } from '../../lightConstants.js';
 
-export function createRayTraceCoreGlsl(fragments: Readonly<Record<string, string>> = {}) { return createShaderMixin({
+export function createRayTraceCoreGlsl(fragments: Readonly<Record<string, string>> = {}, hasFog = false) { return createShaderMixin({
   uniforms: {
     lightsTex: Shader.uniform('sampler2D'),
     iesProfileData: Shader.uniform('sampler2D'),
@@ -38,7 +38,9 @@ struct Ray {
   float tMax;
 };
 
-struct SurfaceInteraction {
+struct SurfaceInteraction {${hasFog ? /* glsl */ `
+  bool fogSuppressed;
+  bool fogResample;` : ''}
   bool hit;
   vec3 position;
   vec3 normal; // material shading normal
@@ -181,7 +183,8 @@ ivec4 fetchData(highp isampler2D s, int i, int columnsLog2) {
   return texelFetch(s, unpackTexel(i, columnsLog2), 0);
 }
 
-struct Path {
+struct Path {${hasFog ? /* glsl */ `
+  bool fogScattered;` : ''}
   Ray ray;
   vec3 li;
   float alpha;

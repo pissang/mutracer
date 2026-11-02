@@ -413,7 +413,7 @@ class WebGLRayTracePass {
     const packed = packFog(fog), hasFog = packed.count > 0;
     if (hasFog !== this._hasFog) {
       this._hasFog = hasFog;
-      this._mainPass.setShader(createRayTraceFragmentShader({hasFog}));
+      this._mainPass.setShader(createRayTraceFragmentShader({hasFog}), hasFog ? [] : ['fogCount', 'fogWorldToLocal', 'fogColorAnisotropy', 'fogParams'], hasFog ? [] : ['HAS_FOG']);
     }
     if (hasFog) {
       const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
@@ -598,7 +598,7 @@ class WebGLRayTracePass {
   }
 
   getDiagnostics() {
-    return { textureAtlas: this._materialData?.textureAtlasStats };
+    return { textureAtlas: this._materialData?.textureAtlasStats, fog: {count: this._hasFog ? this._mainPass.getUniform('fogCount') : 0, causticsDisabledReason: this._hasFog ? 'Scene fog uses ordinary path tracing; caustic estimators are disabled.' : undefined} };
   }
 
   private _updateMeshData() {
@@ -999,7 +999,7 @@ class WebGLRayTracePass {
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
-    researchTransport()?.configure(this, 'webgl');
+    if (!this._hasFog) researchTransport()?.configure(this, 'webgl');
     this._tracePasses.forEach(pass => {
       pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
       pass.setUniform('bevelEnabled', options.bevel);

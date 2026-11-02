@@ -51,3 +51,14 @@ describe('fog scene contract', () => {
     expect(detector.detect(scene).fogStructure).toBe(true);
   });
 });
+
+it('uploads WebGL matrix arrays without scalar conversion', async () => {
+  const {WebGLProgramBindings} = await import('../../src/renderer/webgl.js');
+  const {FragmentShader, Shader} = await import('../../src/renderer/shader.js');
+  const matrices = new Float32Array(128);
+  const upload = vi.fn();
+  const bindings = new WebGLProgramBindings(new FragmentShader({uniforms: {worldToLocal: Shader.arrayUniform('mat4', 8, matrices)}, main: ''}));
+  const gl = {useProgram() {}, getUniformLocation: () => 'location', uniformMatrix4fv: upload};
+  bindings.bind({gl, createProgram: () => ({}), isProgramCompiled: () => true} as any);
+  expect(upload).toHaveBeenCalledWith('location', false, matrices);
+});

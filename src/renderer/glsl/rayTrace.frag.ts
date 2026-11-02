@@ -1,3 +1,4 @@
+import {fogGlsl, fogPathGlsl} from './chunks/fog.glsl.js';
 import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
@@ -60,12 +61,12 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
   const hasFog = (options[0] as {hasFog?: boolean} | undefined)?.hasFog ?? false;
-  const research = researchTransport()?.fragment(options);
+  const research = hasFog ? undefined : researchTransport()?.fragment(options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
-  const rayTraceCore = createRayTraceCoreGlsl(fragments);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments);
+  const rayTraceCore = createRayTraceCoreGlsl(fragments, hasFog);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasFog);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
@@ -121,7 +122,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${research?.declarations ?? ''}${sampleMaterialGlsl}
+${hasFog ? fogGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -180,7 +181,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 #else
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
       bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
-      path.li += path.beta * bg.rgb * bg.a;
+      ${hasFog ? 'if (!path.fogScattered) ' : ''}path.li += path.beta * bg.rgb * bg.a;
 #endif
       path.abort = true;
       return;
@@ -212,7 +213,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       }
 #if !defined(USE_ENVMAP)
       // TODO treat background as a light source
-      if (towardsCam) {
+      if (towardsCam${hasFog ? ' && !path.fogScattered' : ''}) {
         path.li += path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
       }
 #endif
@@ -287,11 +288,15 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
     return;
   }
 
-  // Next ray hit
-  intersectScene(path.ray, si, true);
+${hasFog ? /* glsl */ `  si.fogResample = sampleIgnored;
+  return;
+}
+void completeFogVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
+` : ''}  // Next ray hit
+${hasFog ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
-
+`}
   // Dynamic preview only becomes spectral when the primary visible surface
   // actually disperses transmitted light. Direct background and ordinary
   // opaque materials stay full RGB and therefore remain noise-free.
@@ -472,7 +477,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   return dot(result, result) > 1e-12 ? normalize(result) : source.normal;
 }
 
-vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+${hasFog ? fogPathGlsl + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
   Path path;
   path.ray = ray;
   path.li = vec3(0);
@@ -585,7 +590,13 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
       mat.dispersionAbbeNumber
     );
   }
-  return integrateOnePath(si, ray, mat, outAux);
+  ${hasFog ? /* glsl */ `float maximum = si.hit ? distance(si.position, ray.o) : INF;
+  fogGuides(ray, maximum, outAux);
+  si.albedoSampled = true;
+  si.mediumType = 0; si.mediumAnisotropy = 0.0; si.fogSuppressed = false; si.fogResample = false;
+  vec4 result = integrateFogPath(si, ray, mat, outAux);
+  outAux.isBlank = outAux.isBlank && fogTransmittance(ray, maximum) >= 1.0;
+  return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
 }
 
 void main() {
