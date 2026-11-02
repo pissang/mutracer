@@ -20,7 +20,9 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     }
   }
   const p = entity.params, type = entity.type;
-  const result = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: .5, side: THREE.FrontSide });
+  // PBRT surface intersection does not cull back faces. Emission sidedness is
+  // handled below; MuTracer currently couples it to primary-ray culling.
+  const result = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: .5, side: THREE.DoubleSide });
   result.name = `${type} · ${entity.loc.file.split('/').pop()}:${entity.loc.line}`;
   const open: Record<string, unknown> = { specularWeight: 0 };
   result.userData.mutracerOpenPBR = open;
@@ -136,7 +138,8 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const emission = await textures.value(area.params, 'L', [1, 1, 1], area);
     result.emissive.setRGB(...emission.color as [number, number, number]); result.emissiveMap = emission.map ?? null;
     result.emissiveIntensity = scalar(area.params, 'scale', 1);
-    if (first(area.params, 'twosided', false)) result.side = THREE.DoubleSide;
+    result.side = first(area.params, 'twosided', false) ? THREE.DoubleSide : THREE.FrontSide;
+    if (result.side === THREE.FrontSide) warn(area, 'One-sided emission also culls the surface from primary back-face rays in MuTracer', 'light');
     if (area.params.power && (area.params.filename || emission.map)) warn(area, 'Textured area-light power uses geometric area without texture-average normalization', 'light-units');
     if (area.params.filename) {
       const image = await textures.image(String(first(area.params, 'filename', '')));

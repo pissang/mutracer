@@ -37,6 +37,14 @@ describe('PBRT conversion semantics', () => {
     tint.forEach((v,i)=>expect(v*(base[i]+(1-base[i])*Math.pow(6/7,5))).toBeCloseTo(edge[i],12));
     expect(conductorFresnel(1,2*Math.sqrt(.7/.3),1)).toBeCloseTo(.7,12);
   });
+  it('retains ordinary surfaces when primary rays hit their back faces', async () => {
+    const { root } = await load('WorldBegin Material "diffuse" Shape "trianglemesh" "point3 P" [-1 -1 0 1 -1 0 0 1 0]');
+    root.updateMatrixWorld(true);
+    for (const z of [-2, 2]) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(0,0,z), new THREE.Vector3(0,0,-Math.sign(z)));
+      expect(ray.intersectObject(root, true)).toHaveLength(1);
+    }
+  });
   it('keeps shape displacement variants independent', async () => {
     const { root } = await load('WorldBegin Texture "a" "float" "checkerboard" "float tex1" 0 "float tex2" 1 Texture "b" "float" "checkerboard" "float tex1" .2 "float tex2" .8 Shape "sphere" "texture displacement" "a" Shape "sphere" "texture displacement" "b"');
     const meshes = root.children.filter(o => (o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>[];
