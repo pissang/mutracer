@@ -69,7 +69,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     if (value.map) {
       const map = value.map.clone(), data = new Float32Array(value.map.image.data as Float32Array);
       for (let i = 0; i < data.length; i++) if (i % 4 < 3) data[i] = roughness(data[i], remap);
-      map.image = { ...value.map.image, data }; map.needsUpdate = true; result.roughnessMap = map;
+      map.source = new THREE.Source({ ...value.map.image, data }); map.needsUpdate = true; result.roughnessMap = map;
       result.roughness = 1; open.specularRoughness = 1;
     } else { result.roughness = roughness(value.color[0], remap); open.specularRoughness = result.roughness; }
   } else if (p.uroughness?.type === 'texture' || p.vroughness?.type === 'texture') {

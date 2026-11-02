@@ -23,7 +23,7 @@ describe('PBRT image and texture parameter semantics', () => {
     const { textures, owner } = await setup('WorldBegin Shape "sphere"');
     const data = new Float32Array(2*3*4).fill(.5), source = new THREE.DataTexture(data,2,3,THREE.RGBAFormat,THREE.FloatType);
     source.flipY = true; source.repeat.set(2,3);
-    const map = textures.heightMap(source,owner); expect(map.image.width).toBe(4); expect(map.image.height).toBe(4); expect(map.image.data.every(v=>Math.abs(v-.5)<1e-6)).toBe(true); expect(map.flipY).toBe(true); expect(map.repeat.toArray()).toEqual([2,3]); expect(textures.heightMap(source,owner)).toBe(map);
+    const map = textures.heightMap(source,owner); expect(source.image.width).toBe(2); expect(source.image.height).toBe(3); expect(source.image.data).toBe(data); expect(map.image.width).toBe(4); expect(map.image.height).toBe(4); expect(map.image.data.every(v=>Math.abs(v-.5)<1e-6)).toBe(true); expect(map.flipY).toBe(true); expect(map.repeat.toArray()).toEqual([2,3]); expect(textures.heightMap(source,owner)).toBe(map);
   });
   it('uses nonopaque alpha for float images and opaque RGB mean otherwise', async () => {
     for (const alpha of [.25,1]) {

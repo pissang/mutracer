@@ -149,7 +149,7 @@ export class Textures {
         for (let c = 0; c < 4; c++) data[(y * size + x) * 4 + c] += input[(yy * width + xx) * 4 + c] * weight;
       }
     }
-    const result = source.clone(); result.image = { width: size, height: size, data }; result.needsUpdate = true;
+    const result = source.clone(); result.source = new THREE.Source({ width: size, height: size, data }); result.needsUpdate = true;
     this.heightMaps.set(source, result); this.warn(owner, `Height image resampled to ${size}×${size} for the supported displacement layout`, 'displacement'); return result;
   }
   private average(value: TextureValue): number[] {
@@ -162,7 +162,7 @@ export class Textures {
     if (!value.map) return { color: value.color.map((v, i) => v * factor[i]) };
     const map = value.map.clone(), input = value.map.image.data as Float32Array, data = new Float32Array(input);
     for (let i = 0; i < data.length; i++) if (i % 4 < 3) data[i] *= factor[i % 4];
-    map.image = { ...value.map.image, data }; map.needsUpdate = true; return { color: value.color, map };
+    map.source = new THREE.Source({ ...value.map.image, data }); map.needsUpdate = true; return { color: value.color, map };
   }
 }
 export type { Warning };
