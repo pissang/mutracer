@@ -68,6 +68,7 @@ export async function launchChrome() {
     const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
     const browser = new CDP(version.webSocketDebuggerUrl);
     return {
+      pid: child.pid,
       async page(url) {
         const {browserContextId} = await browser.call('Target.createBrowserContext');
         const {targetId} = await browser.call('Target.createTarget', {url, browserContextId, newWindow: true});

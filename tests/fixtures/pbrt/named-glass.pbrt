@@ -1,0 +1,12 @@
+Film "rgb" "integer xresolution" 128 "integer yresolution" 96
+Sampler "sobol" "integer pixelsamples" 64
+Integrator "path" "integer maxdepth" 5
+LookAt 0 1.2 -5 0 0.1 0 0 1 0
+Camera "perspective" "float fov" 40
+WorldBegin
+LightSource "point" "point3 from" [-2 3 -3] "rgb I" [30 30 30]
+AttributeBegin Material "diffuse" "rgb reflectance" [.5 .5 .5]
+Shape "trianglemesh" "point3 P" [-4 -.75 -4 -4 -.75 4 4 -.75 4 4 -.75 -4] "integer indices" [0 1 2 0 2 3]
+AttributeEnd
+AttributeBegin Material "dielectric" "spectrum eta" "glass-BK7"
+Shape "sphere" "float radius" .75 AttributeEnd

@@ -15,5 +15,5 @@
     },
     "types": ["@webgpu/types", "vite/client", "node"]
   },
-  "include": ["src", "vite.config.ts", "../tools/pbrt"]
+  "include": ["src", "vite.config.ts", "../tools/pbrt", "../scripts/pbrt-browser.ts"]
 }

@@ -113,7 +113,8 @@
     "native:ci:gpu": "node native/scripts/ci.mjs --gpu",
     "native:ci:hosts": "node native/scripts/ci.mjs --gpu --hosts",
     "test:parity": "node scripts/test-parity.mjs",
-    "pbrt:inspect": "node scripts/pbrt-inspect.mjs"
+    "pbrt:inspect": "node scripts/pbrt-inspect.mjs",
+    "pbrt:compare": "node scripts/pbrt-compare.mjs"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",
