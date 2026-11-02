@@ -17,12 +17,53 @@ fn fogInterval(ray: Ray, volume: FogVolume, maximum: f32) -> vec2f {
   }
   return vec2f(near, max(near, far));
 }
+// log((1-exp(-z))/z), with a series around zero. The large-z
+// branch evaluates density at the denser endpoint, avoiding overflow in a.
 fn fogOpticalDepth(ray: Ray, volume: FogVolume, interval: vec2f) -> f32 {
-  return volume.params.x * (interval.y - interval.x);
+  let length = interval.y - interval.x;
+  let density = volume.params.x;
+  if (length <= 0.0 || density <= 0.0) { return 0.0; }
+  let k = volume.params.y;
+  if (k == 0.0) { return density * length; }
+  let s = k * ray.d.y;
+  let z = s * length;
+  let enterY = ray.o.y + interval.x * ray.d.y;
+  var logTau: f32;
+  if (abs(z) < 0.01) {
+    let z2 = z * z;
+    logTau = log(density) - k * (enterY - volume.params.z) + log(length) - 0.5 * z + z2 / 24.0 - z2 * z2 / 2880.0;
+  } else {
+    var denseY = enterY;
+    if (s < 0.0) { denseY = ray.o.y + interval.y * ray.d.y; }
+    logTau = log(density) - k * (denseY - volume.params.z) + log(1.0 - exp(-abs(z))) - log(abs(s));
+  }
+  // Targets are -log(1-u) <= 16.64; 80 is indistinguishable from opaque
+  // for both event selection and float32 shadow transmittance.
+  return exp(clamp(logTau, -100.0, 80.0));
 }
 fn fogDistance(ray: Ray, volume: FogVolume, interval: vec2f, opticalTarget: f32) -> f32 {
-  if (volume.params.x <= 0.0) { return INF; }
-  return interval.x + opticalTarget / volume.params.x;
+  let density = volume.params.x;
+  if (density <= 0.0) { return INF; }
+  if (volume.params.y == 0.0) { return interval.x + opticalTarget / density; }
+  if (opticalTarget >= fogOpticalDepth(ray, volume, interval)) { return INF; }
+  let k = volume.params.y;
+  let s = k * ray.d.y;
+  let logA = log(density) - k * (ray.o.y + interval.x * ray.d.y - volume.params.z);
+  let logDistance = log(opticalTarget) - logA;
+  if (s == 0.0) { return interval.x + exp(clamp(logDistance, -100.0, 80.0)); }
+  let q = logDistance + log(abs(s));
+  var length: f32;
+  if (q < -5.0) {
+    let u = exp(q); let signedU = select(-u, u, s > 0.0);
+    length = exp(clamp(logDistance, -100.0, 80.0)) * (1.0 + signedU * 0.5 + u * u / 3.0 + signedU * u * u * 0.25);
+  } else if (s > 0.0) {
+    if (q >= 0.0) { return INF; }
+    length = -log(1.0 - exp(q)) / s;
+  } else {
+    if (q > 40.0) { length = q / -s; }
+    else { length = log(1.0 + exp(q)) / -s; }
+  }
+  return interval.x + length;
 }
 fn fogTransmittance(ray: Ray, maximum: f32) -> f32 {
   var tau = 0.0;

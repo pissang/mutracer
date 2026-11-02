@@ -16,11 +16,42 @@ vec2 fogInterval(Ray ray, int index, float maximum) {
   return vec2(near, max(near, far));
 }
 float fogOpticalDepth(Ray ray, int index, vec2 interval) {
-  return fogParams[index].x * (interval.y - interval.x);
+  float segmentLength = interval.y - interval.x, density = fogParams[index].x;
+  if (segmentLength <= 0.0 || density <= 0.0) return 0.0;
+  float k = fogParams[index].y;
+  if (k == 0.0) return density * segmentLength;
+  float s = k * ray.d.y, z = s * segmentLength;
+  float enterY = ray.o.y + interval.x * ray.d.y;
+  float logTau;
+  if (abs(z) < 0.01) {
+    float z2 = z * z;
+    logTau = log(density) - k * (enterY - fogParams[index].z) + log(segmentLength) - 0.5 * z + z2 / 24.0 - z2 * z2 / 2880.0;
+  } else {
+    float denseY = s < 0.0 ? ray.o.y + interval.y * ray.d.y : enterY;
+    logTau = log(density) - k * (denseY - fogParams[index].z) + log(1.0 - exp(-abs(z))) - log(abs(s));
+  }
+  return exp(clamp(logTau, -100.0, 80.0));
 }
 float fogDistance(Ray ray, int index, vec2 interval, float opticalTarget) {
-  if (fogParams[index].x <= 0.0) return INF;
-  return interval.x + opticalTarget / fogParams[index].x;
+  float density = fogParams[index].x;
+  if (density <= 0.0) return INF;
+  if (fogParams[index].y == 0.0) return interval.x + opticalTarget / density;
+  if (opticalTarget >= fogOpticalDepth(ray, index, interval)) return INF;
+  float k = fogParams[index].y, s = k * ray.d.y;
+  float logA = log(density) - k * (ray.o.y + interval.x * ray.d.y - fogParams[index].z);
+  float logDistance = log(opticalTarget) - logA;
+  if (s == 0.0) return interval.x + exp(clamp(logDistance, -100.0, 80.0));
+  float q = logDistance + log(abs(s)), segmentLength;
+  if (q < -5.0) {
+    float u = exp(q), signedU = s > 0.0 ? u : -u;
+    segmentLength = exp(clamp(logDistance, -100.0, 80.0)) * (1.0 + signedU * 0.5 + u * u / 3.0 + signedU * u * u * 0.25);
+  } else if (s > 0.0) {
+    if (q >= 0.0) return INF;
+    segmentLength = -log(1.0 - exp(q)) / s;
+  } else {
+    segmentLength = q > 40.0 ? q / -s : log(1.0 + exp(q)) / -s;
+  }
+  return interval.x + segmentLength;
 }
 float fogTransmittance(Ray ray, float maximum) {
   float tau = 0.0;
