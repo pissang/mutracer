@@ -58,3 +58,5 @@ Material "diffuse" "rgb reflectance" [.5 .5 .5] "texture displacement" "height"
 LightSource "point" "point3 from" [-1 2 2] "rgb I" [12 12 12]
 Shape "trianglemesh" "point3 P" [-.5 -.5 0 .5 -.5 0 .5 .5 0 -.5 .5 0] "point2 uv" [0 0 1 0 1 1 0 1] "integer indices" [0 1 2 0 2 3]
 `);
+
+await writeFile('tests/fixtures/pbrt/anisotropic.pbrt', film + light + floor + 'AttributeBegin Rotate 90 1 0 0 Material "conductor" "rgb reflectance" [.7 .7 .7] "float uroughness" .1 "float vroughness" .4 "bool remaproughness" false Shape "cylinder" "float radius" .6 "float zmin" -.75 "float zmax" .75 AttributeEnd\n');

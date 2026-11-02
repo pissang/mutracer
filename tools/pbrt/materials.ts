@@ -7,6 +7,15 @@ import { Textures } from './textures';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { packMaterialParams } from '../../src/renderer/materialParams';
 export type Warn = (entity: Entity, handling: string, code?: string) => void;
+/** Inverse of OpenPBR 1.1.1's RMS-preserving GGX parameterization. */
+export function anisotropicRoughness(alphaU: number, alphaV: number) {
+  const maximum = Math.max(alphaU, alphaV), minimum = Math.min(alphaU, alphaV);
+  return {
+    roughness: Math.pow((alphaU * alphaU + alphaV * alphaV) / 2, .25),
+    anisotropy: maximum > 0 ? 1 - minimum / maximum : 0,
+    rotation: alphaV > alphaU ? Math.PI / 2 : 0
+  };
+}
 /** A material medium occupies the normal's negative half-space. Camera medium
  * is already represented by SceneVolume; it is not another interior layer. */
 export function interiorMedium(shape: Shape, scene: Scene, warn?: Warn): { name: string; flip: boolean } {
@@ -100,13 +109,10 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   }
   const remap = first(p, 'remaproughness', true) !== false;
   const u = roughness(scalar(p, 'uroughness', scalar(p, 'roughness', 0)), remap), v = roughness(scalar(p, 'vroughness', scalar(p, 'roughness', 0)), remap);
-  result.roughness = Math.sqrt(u * v); open.specularRoughness = result.roughness;
-  if (u !== v) {
-    const max = Math.max(u * u, v * v), min = Math.min(u * u, v * v);
-    open.specularAnisotropy = Math.min(1, (1 - min / max) / .9);
-    if (min / max < .1) warn(entity, 'Extreme microfacet anisotropy limited by the OpenPBR aspect model', 'material');
-    open.specularAnisotropyRotation = v > u ? Math.PI / 2 : 0;
-  }
+  const specular = anisotropicRoughness(u * u, v * v);
+  result.roughness = specular.roughness; open.specularRoughness = specular.roughness;
+  open.specularAnisotropy = specular.anisotropy;
+  open.specularAnisotropyRotation = specular.rotation;
   if (p.roughness?.type === 'texture' && !p.uroughness && !p.vroughness) {
     const value = await textures.value(p, 'roughness', [.5, .5, .5], entity);
     if (value.map) {
@@ -126,10 +132,11 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const cv = await textures.value(coat, coat.vroughness ? 'vroughness' : 'roughness', [0,0,0], entity);
     if (cu.map || cv.map) warn(entity, 'Coat roughness maps approximated by their means', 'material');
     const u = roughness(textures.average(cu)[0], remap), v = roughness(textures.average(cv)[0], remap);
-    result.clearcoat = 1; result.clearcoatRoughness = Math.sqrt(u*v); open.coatRoughness = result.clearcoatRoughness;
+    result.clearcoat = 1; result.clearcoatRoughness = anisotropicRoughness(u*u,v*v).roughness; open.coatRoughness = result.clearcoatRoughness;
     open.coatWeight = 1; open.coatDarkening = 1; open.coatIor = scalar(coat, 'eta', 1.5);
     if (coat.eta?.type === 'spectrum') { const eta = await textures.spectrum(coat.eta); if (eta) open.coatIor = glass(eta).ior; warn(entity, 'Coat dispersion approximated by its d-line IOR', 'spectrum'); }
-    if (u !== v) { open.coatAnisotropy = Math.min(1,(1-Math.min(u*u,v*v)/Math.max(u*u,v*v))/.9); open.coatAnisotropyRotation = v>u ? Math.PI/2 : 0; }
+    const mapped = anisotropicRoughness(u*u,v*v);
+    open.coatAnisotropy = mapped.anisotropy; open.coatAnisotropyRotation = mapped.rotation;
   }
   if (type === 'subsurface') {
     const preset = (presets as Record<string, { sigma_a: number[]; sigma_s: number[] }>)[String(first(p, 'name', ''))];

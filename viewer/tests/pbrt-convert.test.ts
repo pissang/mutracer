@@ -75,6 +75,25 @@ describe('PBRT conversion semantics', () => {
     expect(meshes[0].material).not.toBe(meshes[1].material);
     expect(scene.warnings.some(w=>w.code==='medium-interface' && w.statement==='Shape')).toBe(true);
   });
+  it.each(['conductor', 'coatedconductor'])('round trips both GGX axes for %s through OpenPBR', async type => {
+    for (const [au,av] of [[.1,.4],[.4,.1],[.001,.8],[.2,.2],[0,0]]) {
+      const params = (prefix: string) => `"float ${prefix}uroughness" ${au} "float ${prefix}vroughness" ${av}`;
+      const { root } = await load(`WorldBegin Material "${type}" "bool remaproughness" false ${params(type==='coatedconductor'?'conductor.':'')} ${type==='coatedconductor'?params('interface.'):''} Shape "sphere"`);
+      const m = (root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.Material;
+      const open = m.userData.mutracerOpenPBR;
+      for(const layer of type==='coatedconductor'?['specular','coat']:['specular']) {
+        const r = open[layer+'Roughness'], a = open[layer+'Anisotropy'], angle = open[layer+'AnisotropyRotation'];
+        const at = r*r*Math.sqrt(2/(1+(1-a)**2)), ab = (1-a)*at;
+        const recovered = angle===0?[at,ab]:[ab,at];
+        expect(recovered[0]).toBeCloseTo(au,10); expect(recovered[1]).toBeCloseTo(av,10);
+      }
+    }
+  });
+  it('keeps the zero-rotation anisotropy tangent on dpdu', async () => {
+    const {root}=await load('WorldBegin Material "conductor" "float uroughness" .4 "float vroughness" .1 "bool remaproughness" false Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 0 1 0] "point2 uv" [0 0 1 0 0 1]');
+    const g=(root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).geometry;
+    expect(g.attributes.tangent.getX(0)).toBeCloseTo(1);expect(g.attributes.tangent.getY(0)).toBeCloseTo(0);
+  });
   it('mirrors the world and camera together and keeps the camera basis right handed', async () => {
     const { root } = await load('LookAt 0 0 -4 0 0 0 0 1 0 Camera "perspective" WorldBegin Shape "sphere"');
     let camera: THREE.Camera | undefined; root.traverse(o => { if ((o as THREE.Camera).isCamera) camera = o as THREE.Camera; });

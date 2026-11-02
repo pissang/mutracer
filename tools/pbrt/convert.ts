@@ -60,7 +60,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     let g = await geometry(shape, scene.entry, resolver, decodePLY);
     if (!g) { warn(shape, `${shape.type} shape skipped`, 'shape'); return null; }
     const m = await getMaterial(shape);
-    if (!g.attributes.uv && (m.map || m.alphaMap || m.normalMap || m.displacementMap || m.roughnessMap || m.emissiveMap)) {
+    if (!g.attributes.uv && (m.map || m.alphaMap || m.normalMap || m.displacementMap || m.roughnessMap || m.emissiveMap || Number(m.userData.mutracerOpenPBR.specularAnisotropy) > 0 || Number(m.userData.mutracerOpenPBR.coatAnisotropy) > 0)) {
       // PBRT triangle meshes without authored UVs use these coordinates per
       // triangle. A nonindexed variant preserves them across shared vertices.
       if (g.index) g = g.toNonIndexed();
@@ -87,6 +87,12 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
         const a = point(i); area += point(i + 1).sub(a).cross(point(i + 2).sub(a)).length() / 2;
       }
       m.emissiveIntensity *= scalar(shape.areaLight.params, 'power', 1) / (Math.PI * Math.max(1e-12, area) * (m.side === THREE.DoubleSide ? 2 : 1));
+    }
+    const open = m.userData.mutracerOpenPBR;
+    if (Number(open.specularAnisotropy) > 0 || Number(open.coatAnisotropy) > 0) {
+      // Zero rotation uses the mesh tangent in MuTracer; supply PBRT's dpdu
+      // frame as well as the explicit rotated-direction path.
+      if (g.attributes.uv) { if (!g.attributes.normal) g.computeVertexNormals(); g.computeTangents(); }
     }
     const value = { geometry: g, material: m }; meshes.set(shape, value); return value;
   };

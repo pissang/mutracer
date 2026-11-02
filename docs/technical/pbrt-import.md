@@ -36,8 +36,11 @@ precedence. Sensor and white-balance differences are warned about.
 The pinned `TrowbridgeReitzDistribution::RoughnessToAlpha` returns `sqrt(r)`.
 Since OpenPBR uses `alpha = roughness²`, the imported roughness is `r^(1/4)` with
 remapping and `sqrt(r)` without it. For anisotropic alphas, the scalar roughness
-is `(alphaU*alphaV)^(1/4)`; the anisotropy parameter follows the existing OpenPBR
-aspect model. Extreme ratios are limited by that model.
+is `((alphaU²+alphaV²)/2)^(1/4)` and anisotropy is
+`1-min(alphaU,alphaV)/max(alphaU,alphaV)` (zero for two zero axes). This inverts
+OpenPBR's RMS-preserving formula for both base and coat. The larger alpha is
+assigned to the tangent axis; rotation is π/2 when v is larger, so u stays dpdu.
+Anisotropic meshes also carry UV-derived tangents for the zero-rotation path.
 
 ## Colors and light units
 
