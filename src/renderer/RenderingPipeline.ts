@@ -123,6 +123,13 @@ export interface ShaderCompilationDiagnostics {
 }
 
 export interface RenderingDiagnostics {
+  /** Volume status when available; default undefined before renderer initialization. */
+  volumes?: {
+    /** Number of committed volumes. Default 0. */
+    count: number;
+    /** Why caustic estimators are inactive; undefined without volumes. */
+    causticsDisabledReason?: string;
+  };
   /** Label of the last complete target presented; undefined before the first image. */
   presentedTarget?: string;
   /** Whether the displayed target contains a complete image. Default false. */
@@ -198,6 +205,7 @@ export interface SceneResources {
   setTextureAtlasBudget(maxBytes: number): boolean;
   setLights(lights: SceneLight[]): void;
   setBackground(background?: SceneBackground): void;
+  setVolumes?(volumes?: import('../scene/SceneVolume.js').SceneVolume[]): void;
   getDiagnostics(): RenderingDiagnostics;
   dispose(): void;
   readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;

@@ -36,6 +36,8 @@ export async function run(backend: 'webgpu' | 'webgl' = 'webgpu', textureBinding
     engine.display.channel = enabled ? 'depth' : 'final';
   };
   const edits: Record<string, () => void> = {
+    volumes: () => { scene.volumes = [{density: .3, bounds: {min: [-3, 0, -3], max: [3, 4, 3]}, color: [.8, .9, 1]}]; },
+    noVolume: () => { scene.volumes = []; },
     pattern: () => { final.samplingPattern = final.samplingPattern === 'sobol' ? 'random' : 'sobol'; },
     bevel: () => { final.bevelSamples = final.bevelSamples % 32 + 3; },
     bounces: () => { final.bounces = final.bounces % 8 + 1; },
@@ -100,7 +102,7 @@ export async function run(backend: 'webgpu' | 'webgl' = 'webgpu', textureBinding
     await settled(`random ${round}`);
   }
   const convergence = {resolved: 0, rejected: 0};
-  const convergenceEdits = ['pattern', 'bounces', 'camera', 'addMesh', 'coat', ...(backend === 'webgpu' ? ['lightTracing'] : [])];
+  const convergenceEdits = ['pattern', 'bounces', 'camera', 'addMesh', 'coat', 'volumes', 'noVolume', ...(backend === 'webgpu' ? ['lightTracing'] : [])];
   for (let run = 0; run < 14; run++) {
     const task = loop.converge({samples: 32, samplesPerBatch: 4}).then(() => 'resolved', () => 'rejected');
     if (run % 2) {

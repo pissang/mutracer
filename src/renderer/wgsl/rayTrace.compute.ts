@@ -1,5 +1,6 @@
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
+import {volumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -41,6 +42,7 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  hasVolumes?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -70,12 +72,13 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
-  const research = researchTransport()?.compute(options);
+  const research = options.hasVolumes ? undefined : researchTransport()?.compute(options);
   const enabled = research?.enabled ?? false;
   const partitionDepth = research?.maxDepth ?? 20;
   const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
   let {
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
+  hasVolumes = false,
   lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
@@ -147,7 +150,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ hasVolumes, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
@@ -217,7 +220,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumes ? volumeWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -312,7 +315,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           (*path).ray,
           (*si).spectralChannel
         );
-        (*path).li += (*path).beta * bg.rgb * bg.a;
+        ${hasVolumes ? 'if (!(*path).volumeScattered) { ' : ''}(*path).li += (*path).beta * bg.rgb * bg.a;${hasVolumes ? ' }' : ''}
       }
       (*path).abort = true;
       return;
@@ -347,7 +350,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
       if (!USE_ENVMAP) {
         // A display background is not an illumination environment, but a
         // visible secondary ray (e.g. through glass) still resolves it.
-        if (towardsCam) {
+        if (towardsCam${hasVolumes ? ' && !(*path).volumeScattered' : ''}) {
           // This is a terminal BSDF-hit contribution, not a replacement for
           // NEE accumulated at earlier vertices on the same path.
           (*path).li += (*path).beta *
@@ -412,7 +415,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
 
   // Russian roulette with throughput compensation.
   if (USE_RR) {
-    if (*depth >= RR_MAX && !(*sampleIgnoredOut)) {
+    if (*depth >= ${hasVolumes ? 'select(2, RR_MAX, HAS_MEDIUM || (*path).volumeScattered)' : 'RR_MAX'} && !(*sampleIgnoredOut)) {
       let rouletteBeta = (*path).beta;
       // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
       let maxComponent = max(max(rouletteBeta.x, rouletteBeta.y), rouletteBeta.z);
@@ -712,7 +715,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;

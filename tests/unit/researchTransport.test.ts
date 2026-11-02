@@ -40,3 +40,23 @@ it('keeps the pipeline identity stable when an installed experiment is disabled'
   mneeDiagnostics.mnee=false;
   pass.setQuality(settings); expect(pass._causticKey).toBe(plain);
 });
+
+it('suppresses MNEE ownership while volumes is present and restores its configured state', async () => {
+  const {researchTransport} = await import('../../src/renderer/researchTransport');
+  const {mneeDiagnostics} = await import('../../src/research/mnee/index');
+  const {Mesh, OpenPBRMaterial, createPlaneGeometry} = await import('../../src/main');
+  const {vi} = await import('vitest');
+  registerMnee(); mneeDiagnostics.mnee = true;
+  try {
+    const setShader = vi.fn();
+    const pass = {_meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0}))], _mainPass: {setShader}};
+    const extension = researchTransport()!;
+    expect(extension.configure(pass, 'webgl').enabled).toBe(true);
+    setShader.mockClear();
+    expect(extension.configure(pass, 'webgl', true).enabled).toBe(false);
+    expect(setShader).not.toHaveBeenCalled();
+    expect(extension.configure(pass, 'webgl').enabled).toBe(true);
+    expect(setShader).toHaveBeenCalledOnce();
+    expect(extension.configure(pass, 'webgpu', true).enabled).toBe(false);
+  } finally {mneeDiagnostics.mnee = false;}
+});

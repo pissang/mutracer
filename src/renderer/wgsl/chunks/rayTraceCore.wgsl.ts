@@ -11,12 +11,14 @@ import {
 export default function rayTraceCore({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
+  hasVolumes = false,
   hasSceneAlpha = true,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
+  hasVolumes?: boolean;
   hasSceneAlpha?: boolean;
   caustics?: boolean;
   lightCapabilities?: number;
@@ -45,7 +47,8 @@ struct Ray {
   d: vec3f,
 };
 
-struct SurfaceInteraction {
+struct SurfaceInteraction {${hasVolumes ? /* wgsl */ `
+  volumeSuppressed: bool,` : ''}
   position: vec3f,
   // For perfect specular or transmission surface
   // We use the albedo and normal of first diffuse or glossy surface hit instead for denoising
@@ -166,7 +169,8 @@ ${hasCoatNormals ? /* wgsl */ `
   thinWalled: bool,
 };
 
-struct Path {
+struct Path {${hasVolumes ? /* wgsl */ `
+  volumeScattered: bool,` : ''}
   ray: Ray,
   li: vec3f,
   alpha: f32,
@@ -253,7 +257,12 @@ struct CameraUniform {
   focusDistance: f32,
 };
 
-struct RayTraceUniform {
+${hasVolumes ? /* wgsl */ `struct VolumeRecord {
+  worldToLocal: mat4x4f,
+  colorAnisotropy: vec4f,
+  params: vec4f,
+}
+` : ''}struct RayTraceUniform {
   outputSize: vec2f,
   sampleCount: f32,
   scaleOffset: vec4f,
@@ -290,7 +299,9 @@ struct RayTraceUniform {
   environmentRotation: mat4x4f,
   backgroundMapTransform: vec4f,
   backgroundMapRotation: mat4x4f,
-}
+${hasVolumes ? /* wgsl */ `  volumeCount: i32,
+  volumeRecords: array<VolumeRecord, 8>,
+` : ''}}
 
 // Buffers
 @group(0) @binding(0) var<storage, read> bvhBuffer: array<vec4f>;

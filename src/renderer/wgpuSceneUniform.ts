@@ -8,9 +8,8 @@ export const WGPU_SCENE_BUFFER_MIN_BYTES = 200;
 const FIXED_LIGHT_COUNT = 64;
 const PIXELS_PER_LIGHT = 6;
 
-export function makeRayTraceUniform() {
+function makeRayTraceUniformCore(RayTraceUniformValues: ArrayBuffer) {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(320);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
     sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
@@ -61,6 +60,18 @@ export function makeRayTraceUniform() {
     views: RayTraceUniformViews
   };
 }
+// Native continues to use the original no-volumes record and scene ABI.
+export function makeRayTraceUniform() { return makeRayTraceUniformCore(new ArrayBuffer(320)); }
+
+// Web reserves the entire volumes capacity once; volume count edits never resize it.
+export function makeWebRayTraceUniform() {
+  const uniform = makeRayTraceUniformCore(new ArrayBuffer(1104));
+  return {buffer: uniform.buffer, views: {...uniform.views,
+    volumeCount: new Int32Array(uniform.buffer, 320, 1),
+    volumeRecords: new Float32Array(uniform.buffer, 336, 192)
+  }};
+}
+
 export function packWgpuAnalyticLights(
   lights: AnalyticLight[],
   texturesIndices: number[],

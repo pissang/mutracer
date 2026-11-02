@@ -1,3 +1,4 @@
+import {packVolumes, type PackedVolumes} from './volumeData.js';
 import { openPbrSchema } from '../scene/openPbrSchema.js';
 import { materialParametersEqual, materialTexturesChanged } from './materialComparison.generated.js';
 export { materialParametersEqual } from './materialComparison.generated.js';
@@ -17,6 +18,8 @@ export interface SceneChanges {
   materials: OpenPBRMaterial[];
   lights: boolean;
   background: boolean;
+  volumes?: boolean;
+  volumeStructure?: boolean;
 }
 
 /** Small scalar/identity snapshots for lights, backgrounds and texture metadata. */
@@ -104,7 +107,16 @@ const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnap
 /** Detects edits without accepting them until the pipeline has received the scene. */
 export class SceneChangeDetector {
   private _tracker = new SceneChangeTracker(webAdapter);
-  detect(scene: Scene): SceneChanges { return this._tracker.detect(scene) as SceneChanges; }
-  commit() { this._tracker.commit(); }
-  reset() { this._tracker.reset(); }
+  private _volume?: PackedVolumes;
+  private _pendingVolume?: PackedVolumes;
+  detect(scene: Scene): SceneChanges {
+    const volumes = packVolumes(scene.volumes);
+    const changes = this._tracker.detect(scene) as SceneChanges;
+    changes.volumes = !this._volume || volumes.count !== this._volume.count || volumes.data.some((v, i) => !Object.is(v, this._volume!.data[i]));
+    changes.volumeStructure = !!volumes.count !== !!this._volume?.count;
+    this._pendingVolume = volumes;
+    return changes;
+  }
+  commit() { this._tracker.commit(); this._volume = this._pendingVolume; }
+  reset() { this._tracker.reset(); this._volume = undefined; this._pendingVolume = undefined; }
 }

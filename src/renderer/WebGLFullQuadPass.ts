@@ -67,10 +67,14 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     );
   }
 
-  setShader(shader: FragmentShader) {
+  setShader(shader: FragmentShader, discardUniforms: readonly string[] = [], discardDefines: readonly string[] = []) {
+    const uniforms = {...shader.uniforms, ...this._bindings.uniforms};
+    const defines = {...shader.defines, ...this._bindings.defines};
+    for (const name of discardUniforms) delete uniforms[name];
+    for (const name of discardDefines) delete defines[name];
     this._sourceShader = shader;
     this._bindings = new WebGLProgramBindings(this._samplingShader(
-      shader, this._reserveCapacity, {...shader.uniforms, ...this._bindings.uniforms}, this._bindings.defines
+      shader, this._reserveCapacity, uniforms, defines
     ));
   }
 

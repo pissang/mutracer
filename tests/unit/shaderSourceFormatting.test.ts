@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
 import {shaderSourceLoader, shaderIdentifierMap} from './shaderSourceLoader';
 import {renameShaderIdentifiers} from '../../scripts/shader-identifiers.mjs';
-import {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
+import {makeRayTraceUniform, makeWebRayTraceUniform} from '../../src/renderer/wgpuSceneUniform';
 import {WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags} from '../../src/renderer/WGPUSceneFeatures';
 import {original, stripped, rayTrace, compactRayTrace, tokens, gpu} from './shaderSourceFormattingFixture';
 
@@ -11,9 +11,9 @@ afterEach(() => { vi.unstubAllGlobals(); });
 describe('shader generation independent of source formatting', () => {
   it('preserves specialized RGB, spectral and source-over shaders through the build transform', () => {
     gpu();
-    for (const spectral of [false, true]) for (const hasAlpha of [false, true]) {
+    for (const hasVolumes of [false, true]) for (const spectral of [false, true]) for (const hasAlpha of [false, true]) {
       for (const full of [false, true]) for (const dynamicEnvironment of [false, true]) {
-        const options = {hasDisplacement: false, hasAlpha, hasSceneAlpha: hasAlpha,
+        const options = {hasVolumes, hasDisplacement: false, hasAlpha, hasSceneAlpha: hasAlpha,
           hasAnisotropyDirections: full, hasCoatNormals: full, blasLayoutMask: full ? 15 : 1,
           spectral, sceneCapabilities: full ? 0x7fffff : 0, materialCapabilities: full ? 3 : 0,
           lightCapabilities: full ? 31 : 1, dynamicEnvironment};
@@ -22,7 +22,7 @@ describe('shader generation independent of source formatting', () => {
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
         expect(Object.keys(parsed.entryPoints).sort()).toEqual(['aovTrace', 'aovTraceCenter', 'depthQuery', 'main']);
-        expect(parsed.uniforms.rtUniform.size).toBe(makeRayTraceUniform().buffer.byteLength);
+        expect(parsed.uniforms.rtUniform.size).toBe(hasVolumes ? makeWebRayTraceUniform().buffer.byteLength : makeRayTraceUniform().buffer.byteLength);
       }
     }
   });

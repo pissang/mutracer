@@ -1,3 +1,5 @@
+import {packVolumes} from './volumeData.js';
+import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport} from './researchTransport.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
 import {prepareWebGLLightSampling} from './webglLightSampling.js';
@@ -406,6 +408,29 @@ class WebGLRayTracePass {
     this._hasEnvMap = !!envImage;
   }
 
+  private _hasVolumes = false;
+  setVolumes(volumes?: SceneVolume[]) {
+    const packed = packVolumes(volumes), hasVolumes = packed.count > 0;
+    if (!hasVolumes && !this._hasVolumes) return;
+    if (hasVolumes !== this._hasVolumes) {
+      this._hasVolumes = hasVolumes;
+      researchTransport()?.configure(this, 'webgl', true);
+      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true}) : createRayTraceFragmentShader();
+      shader.parallelCompile = true;
+      this._mainPass.setShader(shader, hasVolumes ? [] : ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'], hasVolumes ? [] : ['HAS_VOLUMES']);
+    }
+    if (hasVolumes) {
+      const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
+      for (let i = 0; i < 8; i++) {
+        matrices.set(packed.data.subarray(i * 24, i * 24 + 16), i * 16);
+        colors.set(packed.data.subarray(i * 24 + 16, i * 24 + 20), i * 4);
+        params.set(packed.data.subarray(i * 24 + 20, i * 24 + 24), i * 4);
+      }
+      this._mainPass.setUniforms({volumeCount: packed.count, volumeWorldToLocal: matrices, volumeColorAnisotropy: colors, volumeParams: params});
+    }
+    this._mainPass.setDefines({RR_MAX: hasVolumes || !!this._preparedMeshData?.materials.some(materialUsesMedium) ? 12 : 2});
+  }
+
   setBackground(background?: SceneBackground) {
     this._backgroundMapTransform.set(backgroundMapTransform(background));
     const rotation = backgroundMapRotation(background);
@@ -577,7 +602,7 @@ class WebGLRayTracePass {
   }
 
   getDiagnostics() {
-    return { textureAtlas: this._materialData?.textureAtlasStats };
+    return { textureAtlas: this._materialData?.textureAtlasStats, volumes: {count: this._hasVolumes ? this._mainPass.getUniform('volumeCount') : 0, causticsDisabledReason: this._hasVolumes ? 'Scene volumes use ordinary path tracing; caustic estimators are disabled.' : undefined} };
   }
 
   private _updateMeshData() {
@@ -717,7 +742,7 @@ class WebGLRayTracePass {
         // Multiple-scattering SSS paths need enough collisions to return to
         // the boundary before roulette; terminating at depth five produces
         // dark materials and a handful of very large surviving samples.
-        RR_MAX: HAS_MEDIUM ? 12 : 2,
+        RR_MAX: HAS_MEDIUM || this._hasVolumes ? 12 : 2,
 
         ...materialData.defines
       });
@@ -978,7 +1003,7 @@ class WebGLRayTracePass {
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
-    researchTransport()?.configure(this, 'webgl');
+    researchTransport()?.configure(this, 'webgl', this._hasVolumes);
     this._tracePasses.forEach(pass => {
       pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
       pass.setUniform('bevelEnabled', options.bevel);
@@ -1022,7 +1047,7 @@ class WebGLRayTracePass {
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
 
-    researchTransport()?.prepare(this, 'webgl');
+    if (!this._hasVolumes) researchTransport()?.prepare(this, 'webgl');
 
     const res=this._preparedMeshData;
     if(res) {

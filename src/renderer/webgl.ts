@@ -503,6 +503,8 @@ function setUniform(
     else if (uniform.type === 'vec2') gl.uniform2fv(location, data as number[]);
     else if (uniform.type === 'vec3') gl.uniform3fv(location, data as number[]);
     else if (uniform.type === 'vec4') gl.uniform4fv(location, data as number[]);
+    else if (uniform.type === 'mat3') gl.uniformMatrix3fv(location, false, data as number[]);
+    else if (uniform.type === 'mat4') gl.uniformMatrix4fv(location, false, data as number[]);
     else gl.uniform1fv(location, data as number[]);
     return;
   }
