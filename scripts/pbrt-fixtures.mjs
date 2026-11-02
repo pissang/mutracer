@@ -5,6 +5,7 @@ const floor = 'AttributeBegin Material "diffuse" "rgb reflectance" [.5 .5 .5]\nS
 const sphere = (material = 'Material "diffuse" "rgb reflectance" [.6 .2 .1]') => `AttributeBegin ${material}\nShape "sphere" "float radius" .75 AttributeEnd\n`;
 const light = 'LightSource "point" "point3 from" [-2 3 -3] "rgb I" [30 30 30]\n';
 const fixtures = {
+  'back-face-surface': light + 'Material "diffuse" "rgb reflectance" [.6 .2 .1]\nShape "trianglemesh" "point3 P" [-1 -.75 0 1 -.75 0 0 1 0]\n',
   handedness: light + floor + sphere() + 'AttributeBegin Translate 1.4 0 0 Material "diffuse" "rgb reflectance" [.1 .6 .2] Shape "sphere" "float radius" .3 AttributeEnd\n',
   'short-edge-fov': light + floor + sphere(),
   point: light + floor + sphere(),
