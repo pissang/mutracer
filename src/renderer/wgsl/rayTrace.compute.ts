@@ -1,5 +1,6 @@
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
+import {fogWgsl, fogIntegratorWgsl} from './chunks/fog.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -71,7 +72,7 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
-  const research = researchTransport()?.compute(options);
+  const research = options.hasFog ? undefined : researchTransport()?.compute(options);
   const enabled = research?.enabled ?? false;
   const partitionDepth = research?.maxDepth ?? 20;
   const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
@@ -219,7 +220,8 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasFog ? fogWgsl : ''}
+${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasFog)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -314,7 +316,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           (*path).ray,
           (*si).spectralChannel
         );
-        (*path).li += (*path).beta * bg.rgb * bg.a;
+        ${hasFog ? 'if (!(*path).fogScattered) { ' : ''}(*path).li += (*path).beta * bg.rgb * bg.a;${hasFog ? ' }' : ''}
       }
       (*path).abort = true;
       return;
@@ -349,7 +351,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
       if (!USE_ENVMAP) {
         // A display background is not an illumination environment, but a
         // visible secondary ray (e.g. through glass) still resolves it.
-        if (towardsCam) {
+        if (towardsCam${hasFog ? ' && !(*path).fogScattered' : ''}) {
           // This is a terminal BSDF-hit contribution, not a replacement for
           // NEE accumulated at earlier vertices on the same path.
           (*path).li += (*path).beta *
@@ -714,7 +716,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasFog ? fogIntegratorWgsl : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;

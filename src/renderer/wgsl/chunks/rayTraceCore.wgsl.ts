@@ -47,7 +47,8 @@ struct Ray {
   d: vec3f,
 };
 
-struct SurfaceInteraction {
+struct SurfaceInteraction {${hasFog ? /* wgsl */ `
+  fogSuppressed: bool,` : ''}
   position: vec3f,
   // For perfect specular or transmission surface
   // We use the albedo and normal of first diffuse or glossy surface hit instead for denoising
@@ -168,7 +169,8 @@ ${hasCoatNormals ? /* wgsl */ `
   thinWalled: bool,
 };
 
-struct Path {
+struct Path {${hasFog ? /* wgsl */ `
+  fogScattered: bool,` : ''}
   ray: Ray,
   li: vec3f,
   alpha: f32,

@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false,hasFog=false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {
@@ -115,7 +115,7 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     lightSample.isDelta
   );
   if (misWeight > 0.0) {
-    let unweightedContribution = Li * f / lightPdf * (*path).beta;
+    let unweightedContribution = Li * f / lightPdf * (*path).beta${hasFog ? /* wgsl */ ` * select(1.0, fogTransmittance(lightRay, visibilityDistance), !(*si).fogSuppressed || (isSurface && !ma.thinWalled && ma.transmissionWeight > 0.0 && dot((*si).faceNormal, lightDir) > 0.0))` : ''};
     (*shadowWork).risTarget = max(
       dot(max(unweightedContribution * lightSelectionPmf, vec3f(0.0)), luminance),
       0.0
@@ -438,7 +438,8 @@ ${hasCoatNormals ? /* wgsl */ `
 
   (*path).fromEye = false;
 
-  if (HAS_MEDIUM) {
+${hasFog ? /* wgsl */ `  if (!mediumSampled && crossedBoundary) { (*si).fogSuppressed = ndv1 >= 0.0; }
+` : ''}  if (HAS_MEDIUM) {
     // Reflections stay in the current medium. Enter or leave only after the
     // BSDF actually sampled transmission through a medium boundary.
     if (!mediumSampled & crossedBoundary & ((*ma).mediumType > 0)) {

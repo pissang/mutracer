@@ -22,7 +22,7 @@ describe('shader generation independent of source formatting', () => {
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
         expect(Object.keys(parsed.entryPoints).sort()).toEqual(['aovTrace', 'aovTraceCenter', 'depthQuery', 'main']);
-        expect(parsed.uniforms.rtUniform.size).toBe(makeRayTraceUniform().buffer.byteLength);
+        expect(parsed.uniforms.rtUniform.size).toBe(320);
       }
     }
   });

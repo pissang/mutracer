@@ -1655,6 +1655,7 @@ class WGPURayTracePass {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
       textureAtlas: atlas,
+      fog: {count: this._rtUniform.views.fogCount[0], causticsDisabledReason: this._constants.HAS_FOG ? 'Scene fog uses ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
       materialTextures: {
         requested: this._textureSelection.requested,
         active: this._bindless ? 'bindless' as const : 'atlas' as const,
@@ -1780,10 +1781,10 @@ class WGPURayTracePass {
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
     this._causticSettings = settings;
-    const transport = researchTransport()?.configure(this, 'webgpu');
+    const transport = this._constants.HAS_FOG ? undefined : researchTransport()?.configure(this, 'webgpu');
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
-    const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
+    const hasCaster = !this._constants.HAS_FOG && !!(settings?.lightTracing || settings?.photonMapping) &&
       this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
