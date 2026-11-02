@@ -59,12 +59,16 @@ copies to coexist in browser memory.
 | goniometric / projection | Skipped with a warning. |
 | homogeneous | Interior material medium, or a bounded exterior volume. Colored exterior extinction is averaged with a warning. |
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
-| normalmap / alpha | Normal map and material opacity variants. Bump and displacement maps use a warned height-field approximation. |
+| normalmap / alpha | Normal map and material opacity variants. Material bump is baked to UV-space normals; shape displacement keeps the height-field approximation. |
 
 Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
 region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
+PBRT camera media stay active in the viewer; enabling Volumes adds ground fog.
+Material bump changes shading only. Its UV-space bake assumes unit tangents and
+approximates ray footprints and curved-surface derivatives, with a warning.
+When normalmap is also present, it takes precedence and bump is warned and ignored.
 Ordinary surfaces are double-sided. One-sided emitters also hide their back faces
 from primary rays; this visibility limitation is reported as a warning.
 Subsurface mean free paths below 0.001 scene units are limited by the existing

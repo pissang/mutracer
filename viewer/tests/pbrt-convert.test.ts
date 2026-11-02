@@ -15,6 +15,13 @@ describe('PBRT conversion semantics', () => {
     expect(verticalFov(60, 2)).toBe(60); expect(verticalFov(60, .5)).toBeCloseTo(98.21321);
     expect(roughness(.0625)).toBe(.5); expect(roughness(.25, false)).toBe(.5);
   });
+  it('routes material bump to normals and retains shape displacement', async () => {
+    const { root, scene } = await load('WorldBegin Texture "h" "float" "checkerboard" Material "diffuse" "texture displacement" "h" Shape "sphere" Shape "sphere" "texture displacement" "h"');
+    const meshes = root.children.filter(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>[];
+    expect(meshes[0].material.normalMap).not.toBeNull(); expect(meshes[0].material.displacementMap).toBeNull();
+    expect(meshes[1].material.normalMap).not.toBeNull(); expect(meshes[1].material.displacementMap).not.toBeNull();
+    expect(scene.warnings.some(w=>w.code==='bump')).toBe(true);
+  });
   it('mirrors the world and camera together and keeps the camera basis right handed', async () => {
     const { root } = await load('LookAt 0 0 -4 0 0 0 0 1 0 Camera "perspective" WorldBegin Shape "sphere"');
     let camera: THREE.Camera | undefined; root.traverse(o => { if ((o as THREE.Camera).isCamera) camera = o as THREE.Camera; });

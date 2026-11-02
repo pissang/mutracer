@@ -94,6 +94,15 @@ reprojected to world-space latitude/longitude. The direct importer uses nearest
 source lookup to match ImageInfiniteLight, while the existing glTF metadata
 adapter retains its previous bilinear reprojection.
 
+Material displacement uses forward UV finite differences with PBRT's `.0005`
+fallback step, including scalar texture scale and UV repeat. The image-row
+v derivative changes sign for `(s,1-t)`. The result is a tangent normal
+`normalize(-dh/du,-dh/dv,1)`, never a geometric height field. This static bake
+assumes unit tangents and omits footprint-dependent steps and curvature terms;
+it is warned and excluded from strict comparison. Only shape displacement uses
+the height-field mapping. In the pinned `interaction.cpp`, NormalMap and BumpMap
+are alternatives (`if/else`): normalmap takes precedence when both exist.
+
 ## Comparison and memory
 
 Ordinary byte color maps retain their original data and declared color space;

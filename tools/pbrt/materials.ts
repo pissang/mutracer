@@ -146,12 +146,24 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const image = await textures.image(path), map = new THREE.DataTexture(image.data, image.width, image.height, THREE.RGBAFormat, image.data instanceof Float32Array ? THREE.FloatType : THREE.UnsignedByteType);
     map.flipY = true; map.needsUpdate = true; result.normalMap = map;
   }
-  if (p.displacement || shape.params.displacement) {
-    const parameters = shape.params.displacement ? shape.params : p;
-    const value = await textures.value(parameters, 'displacement', [0, 0, 0], entity);
+  if (p.displacement) {
+    if (result.normalMap) {
+      warn(entity, 'Material bump ignored when normalmap is present; the pinned PBRT renderer gives normalmap precedence', 'bump');
+      result.userData.pbrtComparable = false;
+    } else {
+      const value = await textures.value(p, 'displacement', [0, 0, 0], entity);
+      result.normalMap = textures.bumpMap(value);
+      if (result.normalMap) {
+        warn(entity, 'Material bump baked in UV space with unit tangents; per-hit footprint and curved-surface derivatives approximated', 'bump');
+        result.userData.pbrtComparable = false;
+      }
+    }
+  }
+  if (shape.params.displacement) {
+    const value = await textures.value(shape.params, 'displacement', [0, 0, 0], shape);
     if (value.map) {
-      result.displacementMap = textures.heightMap(value.map, entity); result.displacementScale = value.color[0];
-      warn(entity, 'PBRT bump/displacement approximated by MuTracer height-field displacement', 'displacement');
+      result.displacementMap = textures.heightMap(value.map, shape); result.displacementScale = value.color[0];
+      warn(shape, 'Shape displacement approximated by MuTracer height-field displacement', 'displacement');
       result.userData.pbrtComparable = false;
     }
   }

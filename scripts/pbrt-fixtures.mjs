@@ -39,3 +39,21 @@ for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) pixels.set([x < 8 ? .8
 const exr = await new EXRExporter().parse(new DataTexture(pixels, 16, 16, RGBAFormat, FloatType), { type: FloatType });
 await writeFile('tests/fixtures/pbrt/equal-area.exr', exr);
 await writeFile('tests/fixtures/pbrt/equal-area-environment.pbrt', film + 'LightSource "infinite" "string filename" "equal-area.exr"\n' + floor + sphere());
+// Smooth, generated scalar height in top-down image rows (PBRT samples s,1-t).
+const bumpPixels = new Float32Array(64*64*4);
+for(let y=0;y<64;y++) for(let x=0;x<64;x++) {
+  const h = .5 + .2*Math.sin(2*Math.PI*(x+.5)/64) + .1*Math.sin(4*Math.PI*(y+.5)/64);
+  bumpPixels.set([h,h,h,1],(y*64+x)*4);
+}
+await writeFile('tests/fixtures/pbrt/bump.exr', await new EXRExporter().parse(new DataTexture(bumpPixels,64,64,RGBAFormat,FloatType), {type:FloatType}));
+await writeFile('tests/fixtures/pbrt/bump.pbrt', `Film "rgb" "integer xresolution" 128 "integer yresolution" 96
+Sampler "sobol" "integer pixelsamples" 64
+Integrator "path" "integer maxdepth" 5
+LookAt 0 0 2 0 0 0 0 1 0
+Camera "perspective" "float fov" 40
+WorldBegin
+Texture "height" "float" "imagemap" "string filename" "bump.exr" "float scale" .08
+Material "diffuse" "rgb reflectance" [.5 .5 .5] "texture displacement" "height"
+LightSource "point" "point3 from" [-1 2 2] "rgb I" [12 12 12]
+Shape "trianglemesh" "point3 P" [-.5 -.5 0 .5 -.5 0 .5 .5 0 -.5 .5 0] "point2 uv" [0 0 1 0 1 1 0 1] "integer indices" [0 1 2 0 2 3]
+`);
