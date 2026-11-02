@@ -8,6 +8,7 @@ const heightLabel = (height: number) => height === 2160 ? '4K' : `${height}p`;
 /** Render resolution, as a share of the viewport or a fixed height that keeps the viewport's shape. */
 export function ResolutionSelect({ prefix }: { prefix?: string }) {
   const scale = useViewer((s) => s.settings.resolutionScale);
+  const aspect = useViewer(s => s.settings.outputAspect);
   const height = useViewer((s) => s.settings.resolutionHeight);
   // Rerenders with the stats, which change whenever the canvas is resized.
   useViewer((s) => s.stats.width);
@@ -16,6 +17,14 @@ export function ResolutionSelect({ prefix }: { prefix?: string }) {
   const scales = [...new Set([...SCALES, scale])].sort((a, b) => a - b);
   const heights = [...new Set([...RESOLUTION_HEIGHTS, ...(height === null ? [] : [height])])].sort((a, b) => a - b);
   return (
+    <>
+    <Select
+      label="Output aspect ratio"
+      prefix="Aspect"
+      value={String(aspect)}
+      options={[{ value: 'null', label: 'Viewport' }, ...[...new Set([1, 4/3, 16/9, ...(aspect ? [aspect] : [])])].map(value => ({ value: String(value), label: value.toFixed(3) }))]}
+      onChange={value => setSettings({ outputAspect: value === 'null' ? null : Number(value) })}
+    />
     <Select
       label="Render resolution"
       prefix={prefix}
@@ -28,5 +37,6 @@ export function ResolutionSelect({ prefix }: { prefix?: string }) {
         ? { resolutionHeight: parseInt(value) }
         : { resolutionHeight: null, resolutionScale: Number(value) })}
     />
+    </>
   );
 }

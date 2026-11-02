@@ -54,8 +54,17 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   const create = async (shape: Shape) => {
     onProgress?.(loaded++, total);
     if (shape.type === 'loopsubdiv') warn(shape, 'Loop subdivision uses area-weighted vertex normals', 'shape');
-    const g = await geometry(shape, scene.entry, resolver, decodePLY);
+    let g = await geometry(shape, scene.entry, resolver, decodePLY);
     if (!g) { warn(shape, `${shape.type} shape skipped`, 'shape'); return null; }
+    const m = await getMaterial(shape);
+    if (!g.attributes.uv && (m.map || m.alphaMap || m.normalMap || m.displacementMap || m.roughnessMap || m.emissiveMap)) {
+      // PBRT triangle meshes without authored UVs use these coordinates per
+      // triangle. A nonindexed variant preserves them across shared vertices.
+      if (g.index) g = g.toNonIndexed();
+      const uv = new Float32Array(g.attributes.position.count * 2);
+      for (let i = 0; i < g.attributes.position.count; i += 3) uv.set([0, 0, 1, 0, 1, 1], i * 2);
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    }
     const matrix = mirror.clone().multiply(new THREE.Matrix4().fromArray(shape.transform));
     g.applyMatrix4(matrix);
     const flipWinding = (matrix.determinant() < 0) !== shape.reverse;
@@ -66,7 +75,6 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
       for (let i = 0; i < data.count; i += 3) { const a = data.getX(i); data.setX(i, data.getX(i + 1)); data.setX(i + 1, a); }
     }
     if (shape.reverse) { const n = g.attributes.normal; if (n) for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i)); }
-    const m = await getMaterial(shape);
     if (shape.areaLight?.params.power) {
       let area = 0;
       const positions = g.attributes.position, indices = g.index;

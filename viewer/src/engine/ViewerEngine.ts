@@ -7,7 +7,7 @@ import {
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, setUi, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -87,6 +87,7 @@ export class ViewerEngine {
   private readonly studioRig = new THREE.Group();
   private sync: THREESync;
   private model: LoadedModel | null = null;
+  private modelController?: AbortController;
   private modelCameras: ViewCamera[] = [];
   /** Objects hidden in the loaded file, restored by {@link resetAll}. */
   private hiddenAtLoad = new Set<string>();
@@ -200,7 +201,7 @@ export class ViewerEngine {
     });
 
     this.resizeObserver = new ResizeObserver(() => { this.needsResize = true; });
-    this.resizeObserver.observe(canvas);
+    this.resizeObserver.observe(canvas.parentElement ?? canvas);
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pagehide', this.saveCamera);
@@ -210,6 +211,7 @@ export class ViewerEngine {
   }
 
   dispose() {
+    this.modelController?.abort();
     this.disposed = true;
     ++this.focusQueryVersion;
     clearTimeout(this.denoiserUpdateTimer);
@@ -243,14 +245,14 @@ export class ViewerEngine {
     this.cachedPresetId = cached?.meta.presetId ?? null;
     if (cached && (!presetId || cached.meta.presetId === presetId)) {
       const { meta } = cached;
-      const loaded = await this.load(meta.name, (progress) => cached.source
-        ? loadModelFromSource(cached.source, progress)
+      const loaded = await this.load(meta.name, (progress, signal) => cached.source
+        ? loadModelFromSource(cached.source, progress, signal)
         : Promise.resolve(createMaterialSpheres()), meta, cached, false);
       if (loaded || token + 1 !== this.loadToken) return;
       await clearModelCache();
       if (token + 1 !== this.loadToken) return;
       if (!meta.presetId && meta.sourceUrl) {
-        return this.load(meta.name, (progress) => loadModelFromURL(meta.sourceUrl!, progress), meta, cached);
+        return this.load(meta.name, (progress, signal) => loadModelFromURL(meta.sourceUrl!, progress, signal), meta, cached);
       }
     }
     return this.loadPreset(presetId ?? 'spheres', true);
@@ -270,8 +272,8 @@ export class ViewerEngine {
     // CC-BY models are credited in the viewport; CC0 ones only in the Examples menu.
     const meta = { presetId: preset.id, credit: preset.license !== 'CC0' ? `${preset.name} · ${preset.credit}` : null, sourceUrl: preset.sourceUrl };
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
-    return this.load(preset.name, async (progress) => {
-      const model = preset.url ? await loadModelFromURL(preset.url, progress) : createMaterialSpheres();
+    return this.load(preset.name, async (progress, signal) => {
+      const model = preset.url ? await loadModelFromURL(preset.url, progress, signal) : createMaterialSpheres();
       if (preset.category === 'research' && model.lighting) model.lighting.useByDefault = true;
       if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
       return model;
@@ -285,7 +287,7 @@ export class ViewerEngine {
 
   loadUrl(url: string) {
     if (isHDRFile(url.split('?')[0])) return this.loadEnvironmentFromURL(url);
-    return this.load(url.split('/').pop() || url, (progress) => loadModelFromURL(url, progress),
+    return this.load(url.split('/').pop() || url, (progress, signal) => loadModelFromURL(url, progress, signal),
       { presetId: null, credit: null, sourceUrl: url });
   }
 
@@ -295,6 +297,8 @@ export class ViewerEngine {
       if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
       return this.importMaterialX(material.id, files);
     }
+    const pbrt = files.some(f => /\.pbrt(?:\.gz)?$/i.test(f.path));
+    if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal), { presetId: null, credit: null, sourceUrl: null });
     const hdr = files.find((f) => isHDRFile(f.path));
     const models = files.filter((f) => !isHDRFile(f.path));
     if (hdr) {
@@ -304,23 +308,25 @@ export class ViewerEngine {
         showToast(`Could not read ${hdr.file.name}: ${(error as Error).message}`, 'error');
       }
     }
-    if (!models.some((f) => /\.(glb|gltf)$/i.test(f.path))) {
+    if (!models.some((f) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(f.path))) {
       if (!hdr) showToast(MATERIALX_IMPORT ? 'Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip'
         : 'Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
       return;
     }
-    const main = models.find((f) => /\.(glb|gltf)$/i.test(f.path))!;
-    return this.load(main.file.name, (progress) => loadModelFromFiles(models, progress),
+    const main = models.find((f) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(f.path))!;
+    return this.load(main.file.name, (progress, signal) => loadModelFromFiles(models, progress, signal),
       { presetId: null, credit: null, sourceUrl: null });
   }
 
   private async load(
     name: string,
-    loader: (progress: (stage: 'download' | 'parse', loaded?: number, total?: number) => void) => Promise<LoadedModel>,
+    loader: (progress: (stage: 'download' | 'parse', loaded?: number, total?: number) => void, signal: AbortSignal) => Promise<LoadedModel>,
     meta: { presetId: string | null; credit: string | null; sourceUrl: string | null },
     restored?: CachedModel,
     persist = true
   ) {
+    this.modelController?.abort();
+    const controller = new AbortController(); this.modelController = controller;
     const token = ++this.loadToken;
     this.awaitingFirstSample = false;
     set({ loading: { name, stage: 'download', loaded: 0, total: 0 }, toast: null });
@@ -328,7 +334,8 @@ export class ViewerEngine {
     try {
       model = await loader((stage, loaded = 0, total = 0) => {
         if (token === this.loadToken) set({ loading: { name, stage, loaded, total } });
-      });
+      }, controller.signal);
+      if (model.pbrt) name = model.name;
     } catch (error) {
       if (token !== this.loadToken) return;
       set({ loading: null });
@@ -365,6 +372,11 @@ export class ViewerEngine {
     if (meta.presetId && !reopened || leavingStage) {
       setSettings(presetStageSettings(stage, DEFAULT_SETTINGS, this.initialURLSettings), { record: false });
     }
+    if (!model.pbrt && !reopened) setSettings({ outputAspect: null }, { record: false });
+    if (model.pbrt && !reopened) {
+      const { bounces, samples, exposure, fStop, focusDistance } = model.pbrt.settings;
+      setSettings({ bounces, maxSamples: samples, outputAspect: model.pbrt.settings.width / model.pbrt.settings.height, exposure, fStop, focusDistance, metersPerUnit: 1, autoFocus: false, groundShadow: false }, { record: false });
+    }
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !reopened) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
@@ -386,6 +398,7 @@ export class ViewerEngine {
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
     });
     this.awaitingFirstSample = true;
+    if (model.pbrt?.warnings.length) showToast(`${model.pbrt.warnings.length} PBRT import warnings`, 'warning', [{ label: 'Details', onClick: () => setUi({ right: true, tab: 'environment' }) }]);
     writeHash(this.settings, meta.presetId);
     this.saveCamera();
     if (persist) {
@@ -532,7 +545,7 @@ export class ViewerEngine {
   private createSync() {
     this.materials.clearConversions();
     const owner = this;
-    return new THREESync(this.engine, {
+    const sync = new THREESync(this.engine, {
       scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
       get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
@@ -542,6 +555,11 @@ export class ViewerEngine {
         if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);
       }
     });
+    if (sync.scene && this.model?.pbrt) {
+      const transform = this.model.root.matrixWorld;
+      sync.scene.volumes = this.model.pbrt.volumes.map(volume => ({ ...volume, transform: Array.from(transform.elements) }));
+    }
+    return sync;
   }
 
   // ------------------------------------------------------------ environment
@@ -700,7 +718,7 @@ export class ViewerEngine {
     if (changed('lighting') || changed('envId') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
       changed('groundedRadius') || changed('envIntensity') || changed('envRotation') ||
       changed('studioAmbient') || changed('studioAmbientColor')) this.applyBackground();
-    if (changed('cameraIndex')) this.needsResize = true;
+    if (changed('cameraIndex') || changed('outputAspect')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) {
       this.pull = null;
@@ -1519,6 +1537,13 @@ export class ViewerEngine {
   private resize() {
     this.needsResize = false;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const frame = this.canvas.parentElement;
+    if (frame) {
+      const aspect = this.settings.outputAspect;
+      const width = aspect ? Math.min(frame.clientWidth, frame.clientHeight * aspect) : frame.clientWidth;
+      const height = aspect ? width / aspect : frame.clientHeight;
+      this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; this.canvas.style.margin = 'auto';
+    }
     const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const size = this.engine.display.canvas;

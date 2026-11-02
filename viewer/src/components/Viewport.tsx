@@ -77,7 +77,7 @@ export function Viewport() {
       <LoadingCard />
       {dragging && (
         <div className="drop-layer">
-          <div><Upload size={28} />Drop to open<small>.glb · .gltf with .bin and textures · folder · .hdr{MATERIALX_IMPORT && ' · MaterialX .mtlx or .zip'}</small></div>
+          <div><Upload size={28} />Drop to open<small>.glb · .gltf · .pbrt with its files · folder · .hdr{MATERIALX_IMPORT && ' · MaterialX .mtlx or .zip'}</small></div>
         </div>
       )}
     </section>

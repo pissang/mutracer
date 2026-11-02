@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { buildScene } from '../../tools/pbrt/scene';
 import { Textures } from '../../tools/pbrt/textures';
 const image = async () => ({ width: 1, height: 1, data: new Float32Array([.2,.4,.6,1]) });
@@ -17,6 +18,12 @@ describe('PBRT image and texture parameter semantics', () => {
     const { textures, owner } = await setup('WorldBegin Texture "t" "spectrum" "imagemap" "string filename" "x.jpg" "float scale" 2 "bool invert" true Material "diffuse" "texture reflectance" "t" Shape "sphere"');
     const map = (await textures.value(owner.params,'reflectance',[0,0,0],owner)).map!;
     expect(Array.from(map.image.data).slice(0,3)).toEqual(expect.arrayContaining([expect.closeTo(.6),expect.closeTo(.2),0]));
+  });
+  it('prepares nonsquare height maps with a reusable supported layout', async () => {
+    const { textures, owner } = await setup('WorldBegin Shape "sphere"');
+    const data = new Float32Array(2*3*4).fill(.5), source = new THREE.DataTexture(data,2,3,THREE.RGBAFormat,THREE.FloatType);
+    source.flipY = true; source.repeat.set(2,3);
+    const map = textures.heightMap(source,owner); expect(map.image.width).toBe(4); expect(map.image.height).toBe(4); expect(map.image.data.every(v=>Math.abs(v-.5)<1e-6)).toBe(true); expect(map.flipY).toBe(true); expect(map.repeat.toArray()).toEqual([2,3]); expect(textures.heightMap(source,owner)).toBe(map);
   });
   it('uses nonopaque alpha for float images and opaque RGB mean otherwise', async () => {
     for (const alpha of [.25,1]) {

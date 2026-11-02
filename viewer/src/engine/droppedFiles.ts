@@ -7,7 +7,7 @@ export interface PathedFile {
   path: string;
 }
 
-export const isModelFile = (name: string) => /\.(glb|gltf)$/i.test(name);
+export const isModelFile = (name: string) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(name);
 export const isHDRFile = (name: string) => name.toLowerCase().endsWith('.hdr');
 /** A MaterialX document, or a zip package of one with its textures. */
 export const isMaterialXFile = (name: string) => /\.(mtlx|zip)$/i.test(name);

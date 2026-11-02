@@ -163,3 +163,11 @@ noncommercial use, and Yamaha adaptations retain ShareAlike. Jaguar and the
 octopus remain local previews and are excluded from the public list. HDRIs come
 from [Poly Haven](https://polyhaven.com/hdris) (CC0). The material spheres and the
 procedural sky work offline.
+
+PBRT scenes can be opened from **Examples → PBRT scenes**, from a `.pbrt` URL,
+or by dropping a folder or selecting the scene together with its assets. Relative
+paths follow the main scene's directory. Scene cameras and lighting load with the
+model; aspect ratio, bounce limit and sample target start from the scene and remain
+editable. The Lighting panel expands import warnings. Downloads of 1 GB or more
+require confirmation, and scenes above the browser import memory budget are
+rejected before binary downloads. See [supported features and limits](../tools/pbrt/README.md).

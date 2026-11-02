@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { PbrtCatalog } from './PbrtCatalog';
 import { Button, Dialog, DialogTrigger, Heading, Popover, Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { ChevronDown, ExternalLink, Pin, PinOff, Sparkles, X } from 'lucide-react';
 import { setUi, useViewer } from '../store';
@@ -67,14 +68,16 @@ function ExamplesBrowser({ onChoose }: { onChoose?: () => void }) {
   const collection = useViewer((s) => s.ui.examplesCollection) ?? (current?.startsWith('research-') ? 'research' : 'models');
   return (
     <Tabs className="example-tabs" selectedKey={collection}
-      onSelectionChange={(key) => setUi({ examplesCollection: key === 'research' ? 'research' : 'models' })}>
+      onSelectionChange={(key) => setUi({ examplesCollection: key === 'pbrt' ? 'pbrt' : key === 'research' ? 'research' : 'models' })}>
       <TabList aria-label="Example collections" className="example-tabs__list">
         <Tab id="models">MuTracer collection</Tab>
         <Tab id="research">
           <span title="Independently maintained by glTF Research Scenes contributors">glTF Research Scenes</span>
           <ExternalLink size={12} aria-hidden="true" />
         </Tab>
+        <Tab id="pbrt">PBRT scenes</Tab>
       </TabList>
+      <TabPanel id="pbrt"><PbrtCatalog onChoose={onChoose} /></TabPanel>
       {(['models', 'research'] as const).map((category) => (
         <TabPanel key={category} id={category}>
           {category === 'research' && <p className="hint example-note">

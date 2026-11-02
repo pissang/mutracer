@@ -52,6 +52,7 @@ export interface Settings {
   resolutionScale: number;
   /** Fixed render height that keeps the viewport's shape; overrides resolutionScale. */
   resolutionHeight: number | null;
+  outputAspect: number | null;
   samplingPattern: SamplingPattern;
   bvhBuilder: BVHBuilder;
   clamping: number;
@@ -130,6 +131,7 @@ export const DEFAULT_SETTINGS: Settings = {
   causticLightTracing:true,causticPhotonMapping:false,
   resolutionScale: 0.5,
   resolutionHeight: null,
+  outputAspect: null,
   samplingPattern: 'sobol',
   // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
   bvhBuilder: 'tinybvh',
@@ -299,7 +301,7 @@ export interface ViewerState {
     /** Viewport debug overlay expanded. */
     debug: boolean;
     exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean;
-    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
+    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | 'pbrt' | null;
     mobileTab: InspectorTab | 'scene';
   };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
@@ -308,7 +310,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'resolutionHeight', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'resolutionHeight', 'outputAspect', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'
@@ -375,6 +377,7 @@ function validateSettings(settings: Settings): Settings {
     fStop: settings.fStop > 0 ? number('fStop', 0.5, 64) : 0,
     metersPerUnit: typeof settings.metersPerUnit === 'number' && settings.metersPerUnit > 0 && Number.isFinite(settings.metersPerUnit)
       ? settings.metersPerUnit : null,
+    outputAspect: typeof settings.outputAspect === 'number' && settings.outputAspect > 0 && Number.isFinite(settings.outputAspect) ? settings.outputAspect : null,
     bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh',
     denoiseModel,
     oidnModel: denoiseModel !== 'jnlm' ? denoiseModel : oidnModels.includes(settings.oidnModel) ? settings.oidnModel : 'standard',

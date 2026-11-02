@@ -154,7 +154,7 @@ function OpenMenu() {
           <div className="menu-note">Or drop files anywhere on the viewport.</div>
         </Popover>
       </MenuTrigger>
-      <input ref={files} id="open-files" type="file" hidden multiple accept=".glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.ktx2,.hdr" onChange={(e) => { onFiles(e.currentTarget.files); e.currentTarget.value = ''; }} />
+      <input ref={files} id="open-files" type="file" hidden multiple accept=".glb,.gltf,.pbrt,.gz,.ply,.bin,.png,.jpg,.jpeg,.webp,.ktx2,.hdr,.exr,.tga,.tif,.tiff,.spd" onChange={(e) => { onFiles(e.currentTarget.files); e.currentTarget.value = ''; }} />
       <input ref={folder} type="file" hidden {...{ webkitdirectory: '' }} onChange={(e) => { onFiles(e.currentTarget.files); e.currentTarget.value = ''; }} />
       <input ref={hdr} type="file" hidden accept=".hdr" onChange={(e) => { onFiles(e.currentTarget.files); e.currentTarget.value = ''; }} />
       <UrlDialog open={urlOpen} onOpenChange={setUrlOpen} />
@@ -178,8 +178,8 @@ function UrlDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open:
               <Heading slot="title" className="dialog__title">Open from URL
                 <button type="button" className="icon-btn icon-btn--bare sm" aria-label="Close" onClick={close}><X size={14} /></button>
               </Heading>
-              <input className="text-input" autoFocus placeholder="https://…/model.glb or environment.hdr" value={url} onChange={(e) => setUrl(e.currentTarget.value)} />
-              <p className="hint">The server must allow cross-origin requests. .gltf files load their resources relative to the URL.</p>
+              <input className="text-input" autoFocus placeholder="https://…/scene.pbrt, model.glb or environment.hdr" value={url} onChange={(e) => setUrl(e.currentTarget.value)} />
+              <p className="hint">The server must allow cross-origin requests. .gltf and .pbrt files load resources relative to the scene URL.</p>
               <div className="actions">
                 <button type="button" className="btn" onClick={close}>Cancel</button>
                 <button type="submit" className="btn btn--primary" disabled={!url.trim()}>Open</button>

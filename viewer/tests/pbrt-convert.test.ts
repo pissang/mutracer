@@ -27,6 +27,11 @@ describe('PBRT conversion semantics', () => {
     expect((meshes[0].material as THREE.Material).opacity).toBe(.5);
     expect((meshes[1].material as THREE.Material).opacity).toBe(1);
   });
+  it('preserves PBRT per-triangle UV defaults when a mapped mesh has no UVs', async () => {
+    const { root } = await load('WorldBegin Texture "t" "spectrum" "checkerboard" Material "diffuse" "texture reflectance" "t" Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 1 1 0 0 1 0] "integer indices" [0 1 2 0 2 3]');
+    const mesh = root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh;
+    expect(mesh.geometry.attributes.position.count).toBe(6); expect(Array.from(mesh.geometry.attributes.uv.array)).toEqual([0,0,1,0,1,1,0,0,1,0,1,1]);
+  });
   it('maps named glass dispersion and conductor normal/edge Fresnel', () => {
     const bk7 = glass(namedSpectrum('glass-BK7')!); expect(bk7.ior).toBeCloseTo(1.5168, 3); expect(bk7.abbe).toBeGreaterThan(60); expect(bk7.abbe).toBeLessThan(66);
     const gold = conductor(namedSpectrum('metal-Au-eta')!, namedSpectrum('metal-Au-k')!);

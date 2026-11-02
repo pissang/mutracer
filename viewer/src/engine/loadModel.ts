@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { Converted } from '../../../tools/pbrt/convert';
+import type { Warning } from '../../../tools/pbrt/source';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 // The bundled typings point at the uninstalled meshoptimizer package.
@@ -14,6 +16,7 @@ export interface LoadedModel {
   root: THREE.Object3D;
   animations: THREE.AnimationClip[];
   lighting?: ModelLighting;
+  pbrt?: { settings: Converted['settings']; warnings: Warning[]; volumes: Converted['volumes'] };
   /** Original files, including external buffers/textures, for reloads from OPFS. */
   source?: ModelSource;
   /** Releases blob URLs created for local files. */
@@ -105,15 +108,23 @@ async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, 
  * Loads a .glb, or a .gltf with its .bin and textures picked or dropped
  * together. Relative resource URIs are resolved against the dropped paths.
  */
-export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadProgress): Promise<LoadedModel> {
+export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
   const main = files.find((f) => f.path.toLowerCase().endsWith('.glb')) ??
     files.find((f) => f.path.toLowerCase().endsWith('.gltf'));
-  if (!main) throw new Error('No .glb or .gltf file found');
-  return loadModelFromSource({ files, mainPath: main.path, base: '' }, onProgress);
+  if (!main) {
+    const candidates = files.filter(f => /\.pbrt(?:\.gz)?$/i.test(f.path)).sort((a, b) => a.path.localeCompare(b.path));
+    for (const file of candidates) {
+      if (/WorldBegin/.test(await file.file.slice(0, 65536).text())) return loadModelFromSource({ files, mainPath: file.path, base: '' }, onProgress, signal);
+    }
+    if (candidates.length) return loadModelFromSource({ files, mainPath: candidates[0].path, base: '' }, onProgress, signal);
+  }
+  if (!main) throw new Error('No .glb, .gltf or .pbrt scene found');
+  return loadModelFromSource({ files, mainPath: main.path, base: '' }, onProgress, signal);
 }
 
 /** Parses the same bytes for downloaded, dropped and restored models. */
 export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
+  if (/\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(source.mainPath)) return (await import('./pbrt')).loadPBRT(source, onProgress, signal);
   const { files, mainPath, base } = source;
   const main = files.find((file) => file.path === mainPath);
   if (!main) throw new Error('Missing main model file');

@@ -103,7 +103,7 @@ export function EnvironmentPanel() {
         <Scrub label="Intensity" value={s.envIntensity} min={0} max={4} step={0.01} onChange={(v) => setSettings({ envIntensity: v })} />
         <Scrub label="Rotation" value={s.envRotation} min={0} max={360} step={1} unit="°" onChange={(v) => setSettings({ envRotation: v })} />
       </Section>}
-      {modelLighting?.warnings.map((warning) => <Hint key={warning}>{warning}</Hint>)}
+      {!!modelLighting?.warnings.length && <details><summary>{modelLighting.warnings.length} scene warnings</summary>{modelLighting.warnings.map((warning, i) => <Hint key={i}>{warning}</Hint>)}</details>}
 
       <Section title="Background" icon={<Image size={14} />}>
         <div className="bg-cards" data-count={backgrounds.length} role="radiogroup" aria-label="Background">
