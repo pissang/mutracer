@@ -25,7 +25,9 @@ The tool writes raw linear HDR, a PBRT EXR, region metrics and a preview ordered
 PBRT, MuTracer, then absolute difference amplified 10 times. Approximate material
 pixels are reported separately. Metrics alone do not establish noise equivalence.
 
-`--noise` also renders independent seed pairs for regional mean-noise estimates.
+`--noise` also renders PBRT seeds 0/1 and MuTracer sample blocks `[0,N)` and
+`[N,2N)` for noise estimates. MuTracer's blocks share a Sobol scramble; they are
+disjoint, not independent Monte Carlo replicas.
 The reference pixel filter is set to a box of radius 0.5. Film sensor exposure is
 removed from the reference HDR before comparison. Numerical reports never use the
 scene repository's preview images.
@@ -35,7 +37,7 @@ match, saving CPU rendering time while testing importer changes. Use a fresh
 output directory after changing the reference renderer or comparison settings.
 `--timeout <milliseconds>` limits each browser render (default 300000).
 `--load-only` skips PBRT and HDR comparison for unsupported-feature smoke tests.
-Noise pairs use separate browser processes, so large scenes do not need two
+The two MuTracer runs use separate browser processes, so large scenes do not need two
 copies to coexist in browser memory.
 
 ## Supported features
@@ -61,8 +63,8 @@ copies to coexist in browser memory.
 
 Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
-region; the primary-surface mask cannot separate those paths. An independent-seed
-pair estimates noise but does not by itself establish matching renderer behavior.
+region; the primary-surface mask cannot separate those paths. The two-run noise
+estimate does not by itself establish matching renderer behavior.
 
 The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
 an estimated working set above 8 GiB, using eight times the encoded input size.
@@ -72,7 +74,7 @@ in path order. Open an individual scene and its dependencies to choose another.
 Standalone code export is unavailable for PBRT scenes; use the viewer or the
 comparison tool to render them.
 
-With `--noise`, comparable regions whose HDR RMSE exceeds the independent-seed
+With `--noise`, comparable regions whose HDR RMSE exceeds the two-run
 noise estimate are reported as mismatches (exit code 2); approximate regions do
 not fail this check. The statistical margin assumes independent pixel errors,
 so a mismatch needs diagnosis, particularly near geometry edges and indirect

@@ -87,10 +87,11 @@ uniform pixel jitter. It overrides spp and output resolution, removes Film crop
 windows and pixel bounds, preserves maxdepth,
 sets an opaque black background when no environment exists, removes Film sensor exposure from the reference HDR and never tone maps numerical
 inputs. AOV material IDs identify approximate surface regions. This primary-hit
-mask does not isolate indirect paths that touch approximate materials. Independent
-seed pairs give a diagnostic estimate of regional mean noise, not a statistical
-proof of equivalence from a single pair.
-Each seed runs in a fresh Chrome process to avoid retaining both scenes' caches
+mask does not isolate indirect paths that touch approximate materials. PBRT uses
+seeds 0/1; MuTracer uses disjoint sample blocks starting at 0/N with the same Sobol
+scramble. Their difference gives a diagnostic noise estimate, not independent
+Monte Carlo replicas or statistical proof of equivalence.
+Each MuTracer run uses a fresh Chrome process to avoid retaining both scenes' caches
 and allocations during memory measurement.
 
 Text and gzip Includes are decoded by statements to avoid the single-string size
