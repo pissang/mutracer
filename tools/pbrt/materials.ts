@@ -7,6 +7,18 @@ import { Textures } from './textures';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { packMaterialParams } from '../../src/renderer/materialParams';
 export type Warn = (entity: Entity, handling: string, code?: string) => void;
+/** A material medium occupies the normal's negative half-space. Camera medium
+ * is already represented by SceneVolume; it is not another interior layer. */
+export function interiorMedium(shape: Shape, scene: Scene, warn?: Warn): { name: string; flip: boolean } {
+  for (const name of [shape.inside, shape.outside]) if (name && !scene.media[name]) throw new Error(`Undefined medium ${name}`);
+  const inside = shape.inside !== scene.cameraMedium ? shape.inside : '';
+  const outside = shape.outside !== scene.cameraMedium ? shape.outside : '';
+  if (inside && outside) {
+    warn?.(shape, 'Both sides have non-camera media; uses inside medium only', 'medium-interface');
+    return { name: inside, flip: false };
+  }
+  return outside ? { name: outside, flip: true } : { name: inside, flip: false };
+}
 // Invert the existing OpenPBR artist-color -> single-scattering-albedo mapping
 // through its own packer, rather than duplicating its fitted coefficients.
 function subsurfaceColor(albedo: number[], anisotropy: number): number[] {
@@ -169,9 +181,25 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   }
   const alpha = await textures.value(shape.params, 'alpha', [1, 1, 1], entity);
   result.opacity = alpha.color[0]; result.alphaMap = alpha.map ?? null; result.transparent = result.opacity < 1 || !!alpha.map;
-  if (shape.inside) {
-    const medium = scene.media[shape.inside];
-    if (!medium) throw new Error(`Undefined medium ${shape.inside}`);
+  const interior = interiorMedium(shape, scene, warn);
+  // PBRT DielectricBxDF exchanges eta on the back side of its final normal.
+  // ReverseOrientation and transform handedness already affect both PBRT and
+  // imported normals; only the extra medium-side reversal exchanges that ratio.
+  // ThinDielectricBxDF uses AbsCosTheta, so its eta is orientation-independent.
+  if (interior.flip && type === 'dielectric') {
+    result.ior = 1 / result.ior;
+    if (open.transmissionDispersionScale) {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Reversed dielectric uses reciprocal d-line IOR and retains Abbe number; reciprocal spectral dispersion is approximated by the existing Cauchy model', 'ior-dispersion');
+    }
+  }
+  if (type.startsWith('coated') && (interior.flip || Number(open.coatIor) < 1)) {
+    result.userData.pbrtComparable = false;
+    warn(shape, 'Coat IOR orientation cannot be represented: MuTracer clamps coat IOR to at least 1 and applies the coat only on the exterior side; excluded from strict comparison', 'ior-orientation');
+  }
+  if (shape.inside && shape.outside && shape.inside !== scene.cameraMedium && shape.outside !== scene.cameraMedium) result.userData.pbrtComparable = false;
+  if (interior.name) {
+    const medium = scene.media[interior.name];
     if (medium.type === 'homogeneous') {
       const a = await textures.value(medium.params, 'sigma_a', [1, 1, 1], medium), s = await textures.value(medium.params, 'sigma_s', [1, 1, 1], medium), scale = scalar(medium.params, 'scale', 1);
       const extinction = a.color.map((v, i) => (v + s.color[i]) * scale);

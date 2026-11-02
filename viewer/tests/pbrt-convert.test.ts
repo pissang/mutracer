@@ -22,6 +22,59 @@ describe('PBRT conversion semantics', () => {
     expect(meshes[1].material.normalMap).not.toBeNull(); expect(meshes[1].material.displacementMap).not.toBeNull();
     expect(scene.warnings.some(w=>w.code==='bump')).toBe(true);
   });
+  it('preserves outside absorption by reversing the boundary, including reflected transforms', async () => {
+    for (const transform of ['', 'Scale -1 1 1']) {
+      const prefix = 'WorldBegin MakeNamedMedium "m" "string type" "homogeneous" "rgb sigma_a" [.1 .2 .5] "rgb sigma_s" [0 0 0] Material "dielectric" ' + transform;
+      const a = await load(prefix + ' MediumInterface "m" "" Shape "sphere"');
+      const b = await load(prefix + ' MediumInterface "" "m" ReverseOrientation Shape "sphere"');
+      const mesh = (root: THREE.Group) => root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry,THREE.MeshPhysicalMaterial>;
+      const ma = mesh(a.root), mb = mesh(b.root);
+      expect(mb.geometry.index!.array).toEqual(ma.geometry.index!.array);
+      expect(mb.geometry.attributes.normal.array).toEqual(ma.geometry.attributes.normal.array);
+      const source = new THREE.Scene(); source.add(b.root);
+      const packed = packMaterialParams([fromTHREEScene(source).meshes[0].materials[0]]);
+      [.1,.2,.5].forEach((v,i)=>expect(packed.mediumExtinction[0][i]).toBeCloseTo(v,5));
+    }
+  });
+  it('exchanges only thick dielectric IOR across medium-side reversal', async () => {
+    for (const outside of [false, true]) for (const reverse of [false, true]) for (const reflected of [false, true]) {
+      const { root } = await load(`WorldBegin MakeNamedMedium "m" "string type" "homogeneous"
+        ${reflected ? 'Scale -1 1 1 CoordinateSystem "reflected" Identity CoordSysTransform "reflected"' : ''}
+        ${reverse ? 'ReverseOrientation' : ''} MediumInterface ${outside ? '"" "m"' : '"m" ""'}
+        Material "dielectric" "float eta" 1.5 Shape "trianglemesh"
+        "point3 P" [0 0 0 1 0 0 0 1 0] "normal N" [0 0 1 0 0 1 0 0 1] "integer indices" [0 1 2]`);
+      const mesh = root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
+      const g = mesh.geometry, p = g.attributes.position, indices = g.index!;
+      const a = new THREE.Vector3().fromBufferAttribute(p, indices.getX(0));
+      const b = new THREE.Vector3().fromBufferAttribute(p, indices.getX(1)).sub(a);
+      const c = new THREE.Vector3().fromBufferAttribute(p, indices.getX(2)).sub(a);
+      expect(Math.sign(b.cross(c).z)).toBe(reverse !== outside ? 1 : -1);
+      expect(Math.sign(g.attributes.normal.getZ(0))).toBe(reverse !== outside ? 1 : -1);
+      const source = new THREE.Scene(); source.add(root);
+      expect(packMaterialParams([fromTHREEScene(source).meshes[0].materials[0]]).ior[0]).toBeCloseTo(outside ? 2 / 3 : 1.5, 10);
+    }
+  });
+  it('keeps thin dielectric eta independent of orientation and warns for reversed coats', async () => {
+    for (const type of ['thindielectric', 'coateddiffuse', 'coatedconductor']) {
+      const { root, scene } = await load(`WorldBegin MakeNamedMedium "m" "string type" "homogeneous"
+        MediumInterface "" "m" Material "${type}" "float eta" 1.5 Shape "sphere"`);
+      const m = (root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
+      if (type === 'thindielectric') { expect(m.ior).toBe(1.5); expect(scene.warnings.some(w => w.code === 'ior-orientation')).toBe(false); }
+      else { expect(m.userData.pbrtComparable).toBe(false); expect(scene.warnings.some(w => w.code === 'ior-orientation')).toBe(true); }
+    }
+  });
+  it('warns that reciprocal spectral dispersion retains an approximate Abbe mapping', async () => {
+    const { root, scene } = await load('WorldBegin MakeNamedMedium "m" "string type" "homogeneous" MediumInterface "" "m" Material "dielectric" "spectrum eta" "glass-BK7" Shape "sphere"');
+    const m = (root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
+    expect(m.ior).toBeLessThan(1); expect(m.userData.mutracerOpenPBR.transmissionDispersionAbbeNumber).toBeGreaterThan(1);
+    expect(m.userData.pbrtComparable).toBe(false); expect(scene.warnings.some(w => w.code === 'ior-dispersion')).toBe(true);
+  });
+  it('separates medium variants and warns when two non-camera media meet', async () => {
+    const { root, scene } = await load('WorldBegin MakeNamedMedium "a" "string type" "homogeneous" MakeNamedMedium "b" "string type" "homogeneous" Material "dielectric" MediumInterface "a" "" Shape "sphere" MediumInterface "" "b" Shape "sphere" MediumInterface "a" "b" Shape "sphere"');
+    const meshes = root.children.filter(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh[];
+    expect(meshes[0].material).not.toBe(meshes[1].material);
+    expect(scene.warnings.some(w=>w.code==='medium-interface' && w.statement==='Shape')).toBe(true);
+  });
   it('mirrors the world and camera together and keeps the camera basis right handed', async () => {
     const { root } = await load('LookAt 0 0 -4 0 0 0 0 1 0 Camera "perspective" WorldBegin Shape "sphere"');
     let camera: THREE.Camera | undefined; root.traverse(o => { if ((o as THREE.Camera).isCamera) camera = o as THREE.Camera; });

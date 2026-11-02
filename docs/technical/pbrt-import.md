@@ -83,6 +83,24 @@ Interior homogeneous media encode total extinction, not absorption, in
 transmission color: choose depth `d=1/max(1,max(sigma_t))`, set color
 `exp(-sigma_t*d)` and scatter color `sigma_s/sigma_t`, with scaled coefficients.
 This preserves the existing packer's coefficients without hitting its color floor.
+`MediumInterface` orders inside then outside. The geometric normal points toward
+outside, after ReverseOrientation and handedness. The camera medium is handled
+by SceneVolume. If only the other outside medium remains, conversion flips
+winding and normals together and encodes it as the material interior. Both
+non-camera media cannot be represented: conversion warns and uses inside only.
+Material variants include both names to avoid sharing different boundaries.
+
+The extra medium-side reversal reciprocates thick dielectric IOR: PBRT's
+DielectricBxDF exchanges eta across its final normal. ReverseOrientation and
+coordinate handedness already affect both normals and do not independently
+reciprocate IOR. ThinDielectricBxDF uses AbsCosTheta and keeps eta unchanged.
+Base specular IOR below one survives Three conversion and material packing;
+both backends use the ratio for Fresnel, total internal reflection and refraction.
+Coat IOR is clamped to at least one and the coat is exterior-only, so reversed
+coats and coat IOR below one receive an ior-orientation warning and are excluded
+from strict comparison. Reciprocal spectral dispersion retains the original
+Abbe number, but a reciprocal Cauchy curve is not itself the same Cauchy fit;
+this receives an ior-dispersion approximation warning and comparison exclusion.
 
 Ordinary PBRT surfaces accept primary back-face hits. One-sided area emission
 uses FrontSide because MuTracer couples primary visibility and emission sidedness;

@@ -6,6 +6,7 @@ const sphere = (material = 'Material "diffuse" "rgb reflectance" [.6 .2 .1]') =>
 const light = 'LightSource "point" "point3 from" [-2 3 -3] "rgb I" [30 30 30]\n';
 const fixtures = {
   'back-face-surface': light + 'Material "diffuse" "rgb reflectance" [.6 .2 .1]\nShape "trianglemesh" "point3 P" [-1 -.75 0 1 -.75 0 0 1 0]\n',
+  'outside-medium': 'MakeNamedMedium \"m\" \"string type\" \"homogeneous\" \"rgb sigma_a\" [.1 .4 .9] \"rgb sigma_s\" [0 0 0]\n' + light + floor + sphere('MediumInterface \"\" \"m\" ReverseOrientation Material \"dielectric\" \"float eta\" 1.5'),
   'interior-homogeneous': 'MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [.1 .1 .1] "rgb sigma_s" [.5 .5 .5]\n' + light + floor + sphere('MediumInterface "fog" "" Material "interface"'),
   handedness: light + floor + sphere() + 'AttributeBegin Translate 1.4 0 0 Material "diffuse" "rgb reflectance" [.1 .6 .2] Shape "sphere" "float radius" .3 AttributeEnd\n',
   'short-edge-fov': light + floor + sphere(),
@@ -24,7 +25,7 @@ const fixtures = {
 for (const [name, text] of Object.entries(fixtures)) {
   let header = film;
   if (name === 'short-edge-fov') header = header.replace('xresolution" 128', 'xresolution" 64').replace('yresolution" 96', 'yresolution" 128');
-  if (name === 'interior-homogeneous') header = header.replace('Integrator "path"', 'Integrator "volpath"').replace('maxdepth" 5', 'maxdepth" 12');
+  if (['interior-homogeneous', 'outside-medium'].includes(name)) header = header.replace('Integrator "path"', 'Integrator "volpath"').replace('maxdepth" 5', 'maxdepth" 12');
   await writeFile(`tests/fixtures/pbrt/${name}.pbrt`, header + text);
 }
 // A small authored TGA makes the vertical orientation observable.

@@ -50,14 +50,14 @@ copies to coexist in browser memory.
 | ObjectBegin / ObjectInstance | Shared instanced geometry, including mirrored instances. |
 | loopsubdiv / curve | Loop subdivision with area-weighted normals / skipped with a warning. |
 | perspective / orthographic | Film aspect ratio and short-edge field of view; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
-| diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. |
-| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients. |
+| diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. Outside-medium reversal reciprocates thick dielectric IOR; thin-wall IOR stays unchanged. Reciprocal dispersion retains an approximate Abbe mapping with a warning. |
+| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients; reversed coats or coat IOR below 1 are unsupported and warned. |
 | mix / hair / measured / interface | Dominant constant-weight branch / diffuse fallback / diffuse fallback / transmissive medium boundary. |
 | imagemap | PNG/JPEG, EXR, TGA and TIFF; encoding, invert, scale, UV scale/offset and repeat/clamp. Black wrap approximates clamp. |
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
 | point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments are reprojected. Portals are ignored with a warning. |
 | goniometric / projection | Skipped with a warning. |
-| homogeneous | Interior material medium, or a bounded exterior volume. Colored exterior extinction is averaged with a warning. |
+| homogeneous | Inside or outside material medium (outside reverses the boundary), or a bounded camera volume. Two non-camera media use inside only, with a warning. Colored camera extinction is averaged with a warning. |
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
 | normalmap / alpha | Normal map and material opacity variants. Material bump is baked to UV-space normals; shape displacement keeps the height-field approximation. |
 

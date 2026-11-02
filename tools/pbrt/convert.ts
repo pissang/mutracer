@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SceneVolume } from '../../src/scene/SceneVolume';
 import { geometry, type PLYDecoder } from './geometry';
-import { material, type Warn } from './materials';
+import { material, interiorMedium, type Warn } from './materials';
 import { first, scalar, vector, type Entity, type Scene, type Shape } from './scene';
 import { Textures, type DecodeImage, type Image } from './textures';
 import { verticalFov } from './spectrum';
@@ -47,7 +47,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   const getMaterial = (shape: Shape) => {
     let variants = materials.get(shape.material);
     if (!variants) { variants = new Map(); materials.set(shape.material, variants); }
-    const key = JSON.stringify([shape.params.alpha, shape.params.displacement, shape.areaLight, shape.inside, shape.areaLight?.params.power ? shape.loc : null]);
+    const key = JSON.stringify([shape.params.alpha, shape.params.displacement, shape.areaLight, shape.inside, shape.outside, shape.areaLight?.params.power ? shape.loc : null]);
     if (!variants.has(key)) variants.set(key, material(shape, scene, textures, warn));
     return variants.get(key)!;
   };
@@ -70,14 +70,15 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     }
     const matrix = mirror.clone().multiply(new THREE.Matrix4().fromArray(shape.transform));
     g.applyMatrix4(matrix);
-    const flipWinding = (matrix.determinant() < 0) !== shape.reverse;
+    const reverse = shape.reverse !== interiorMedium(shape, scene).flip;
+    const flipWinding = (matrix.determinant() < 0) !== reverse;
     if (flipWinding) {
       const index = g.index;
       if (!index) g.setIndex(Array.from({length: g.attributes.position.count}, (_, i) => i));
       const data = g.index!;
       for (let i = 0; i < data.count; i += 3) { const a = data.getX(i); data.setX(i, data.getX(i + 1)); data.setX(i + 1, a); }
     }
-    if (shape.reverse) { const n = g.attributes.normal; if (n) for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i)); }
+    if (reverse) { const n = g.attributes.normal; if (n) for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i)); }
     if (shape.areaLight?.params.power) {
       let area = 0;
       const positions = g.attributes.position, indices = g.index;
