@@ -548,7 +548,10 @@ export class ViewerEngine {
     const scene = this.sync.scene;
     if (!scene) return;
     const preset = MODEL_PRESETS.find((p) => p.id === get().model?.presetId);
-    scene.volumes = sceneVolumes(this.settings, this.modelBounds(), preset?.volumes);
+    const authored = this.model?.pbrt?.volumes.map(volume => ({
+      ...volume, transform: Array.from(this.model!.root.matrixWorld.elements)
+    })) ?? [];
+    scene.volumes = [...authored, ...sceneVolumes(this.settings, this.modelBounds(), preset?.volumes)];
   }
 
   private createSync() {
@@ -564,10 +567,6 @@ export class ViewerEngine {
         if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);
       }
     });
-    if (sync.scene && this.model?.pbrt) {
-      const transform = this.model.root.matrixWorld;
-      sync.scene.volumes = this.model.pbrt.volumes.map(volume => ({ ...volume, transform: Array.from(transform.elements) }));
-    }
     return sync;
   }
 
