@@ -10,14 +10,14 @@ import {generateVertexTangents} from '../../src/util/geometry.js';
 type Quality = Partial<Pick<Render, 'samplingPattern' | 'bounces' | 'dispersionWavelengths' |
   'alphaBlendStrategy' | 'directLightCandidates' | 'transmissiveOutputAlphaMin'>>;
 
-export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: readonly string[]) {
+export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: readonly string[], samples = 8, sampleSequenceOffset = 17) {
   const canvas = document.createElement('canvas');
   document.body.append(canvas);
   const engine = new Engine({canvas, backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   engine.bvhLayout = layout;
   engine.bvhBuilder = layout === 'bvh2' ? 'builtin' : 'tinybvh';
   engine.display.setSize(32, 24);
-  const render = new Render(engine, {bounces: 4, batchSamples: true});
+  const render = new Render(engine, {width: 32, height: 24, bounces: 4, batchSamples: true});
   try {
     const info = await engine.init();
     const camera = new Camera({projection: 'perspective', aspect: 4 / 3});
@@ -101,6 +101,10 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       {name: 'rect-zsobol', lights: [rect], quality: {samplingPattern: 'zsobol', directLightCandidates: 2}},
       {name: 'spot-and-sun', lights: [spot, sun]},
       {name: 'emissive', lights: [], emission: true},
+      {name: 'emissive-sphere', lights: [sphereLight], emission: true, quality: {directLightCandidates: 1}},
+      {name: 'emissive-rect', lights: [rect], emission: true, quality: {directLightCandidates: 1}},
+      {name: 'emissive-spot', lights: [spot], emission: true, quality: {directLightCandidates: 1}},
+      {name: 'emissive-directional', lights: [sun], emission: true, quality: {directLightCandidates: 1}},
       {name: 'environment', lights: [environment]},
       {name: 'catcher', catcher: true},
       {name: 'bevel', params: {bevelSize: .08}, quality: {bounces: 1}},
@@ -118,8 +122,14 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
         alphaBlendStrategy: 'stochastic', directLightCandidates: 4, transmissiveOutputAlphaMin: 1}, test.quality);
       engine.scene = {meshes: [sphere, ground, emitter], lights: test.lights ?? [sphereLight], background: [.1, .15, .2, 1]};
       engine.update();
-      await render.converge({samples: 8, sampleSequenceOffset: 17});
+      await render.converge({samples, sampleSequenceOffset});
       const pixels = await render.readPixels('hdr');
+      if (test.emission) {
+        if (!pixels.data.every(Number.isFinite)) throw new Error(`${test.name}: non-finite HDR`);
+        if (!pixels.data.some((value, index) => index % 4 !== 3 && value > 0)) {
+          throw new Error(`${test.name}: black HDR`);
+        }
+      }
       const albedo = await render.readPixels('albedo');
       const normals = await render.readPixels('normal');
       const depth = await engine.readDepthSamples({x: .5, y: .5, size: .3});
