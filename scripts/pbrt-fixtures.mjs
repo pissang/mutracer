@@ -6,6 +6,7 @@ const sphere = (material = 'Material "diffuse" "rgb reflectance" [.6 .2 .1]') =>
 const light = 'LightSource "point" "point3 from" [-2 3 -3] "rgb I" [30 30 30]\n';
 const fixtures = {
   'back-face-surface': light + 'Material "diffuse" "rgb reflectance" [.6 .2 .1]\nShape "trianglemesh" "point3 P" [-1 -.75 0 1 -.75 0 0 1 0]\n',
+  'interior-homogeneous': 'MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [.1 .1 .1] "rgb sigma_s" [.5 .5 .5]\n' + light + floor + sphere('MediumInterface "fog" "" Material "interface"'),
   handedness: light + floor + sphere() + 'AttributeBegin Translate 1.4 0 0 Material "diffuse" "rgb reflectance" [.1 .6 .2] Shape "sphere" "float radius" .3 AttributeEnd\n',
   'short-edge-fov': light + floor + sphere(),
   point: light + floor + sphere(),
@@ -20,7 +21,12 @@ const fixtures = {
   'named-glass': light + floor + sphere('Material "dielectric" "spectrum eta" "glass-BK7"'),
   'texture-direction': 'Texture "checker" "spectrum" "checkerboard" "rgb tex1" [1 .1 .1] "rgb tex2" [.1 .1 1] "float uscale" 4 "float vscale" 2\n' + light + floor + sphere('Material "diffuse" "texture reflectance" "checker"')
 };
-for (const [name, text] of Object.entries(fixtures)) await writeFile(`tests/fixtures/pbrt/${name}.pbrt`, (name === 'short-edge-fov' ? film.replace('xresolution" 128', 'xresolution" 64').replace('yresolution" 96', 'yresolution" 128') : film) + text);
+for (const [name, text] of Object.entries(fixtures)) {
+  let header = film;
+  if (name === 'short-edge-fov') header = header.replace('xresolution" 128', 'xresolution" 64').replace('yresolution" 96', 'yresolution" 128');
+  if (name === 'interior-homogeneous') header = header.replace('Integrator "path"', 'Integrator "volpath"').replace('maxdepth" 5', 'maxdepth" 12');
+  await writeFile(`tests/fixtures/pbrt/${name}.pbrt`, header + text);
+}
 // A small authored TGA makes the vertical orientation observable.
 const tga = new Uint8Array(18 + 8 * 4 * 3); tga[2] = 2; tga[12] = 8; tga[14] = 4; tga[16] = 24; tga[17] = 0x20;
 for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) { const i = 18 + (y * 8 + x) * 3; tga.set(y < 2 ? [0, 0, 255] : [255, 0, 0], i); }
