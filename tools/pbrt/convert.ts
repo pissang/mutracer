@@ -116,11 +116,11 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     if (type === 'orthographic') camera = new THREE.OrthographicCamera(-Math.max(1, aspect), Math.max(1, aspect), Math.max(1, 1 / aspect), -Math.max(1, 1 / aspect), .0001, 1e8);
     else {
       camera = new THREE.PerspectiveCamera(fov, aspect, .0001, 1e8);
+      camera.filmGauge = 24 * Math.max(1, aspect); camera.focus = focusDistance;
       if (type !== 'perspective') warn(scene.camera, `${type} camera approximated as perspective`, 'camera');
     }
     camera.name = 'PBRT camera'; camera.matrixAutoUpdate = false;
     camera.matrix.copy(mirror).multiply(new THREE.Matrix4().fromArray(scene.camera.transform)).multiply(mirror);
-    camera.userData.mutracerCamera = { fStop, focusDistance };
     root.add(camera);
     if (cp.screenwindow) warn(scene.camera, 'Custom screenwindow ignored', 'camera');
   }
