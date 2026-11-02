@@ -26,6 +26,7 @@ async function run(sequenceOffset = 0, prefix = '') {
   if (parsed.film) for (const [name, value] of [['xresolution', width], ['yresolution', height]] as const) parsed.film.params[name] = { type: 'integer', name, values: [value], loc: parsed.film.loc };
   await checkpoint('convert');
   const model = await convert(parsed, resolver, decodeImage);
+  await save(prefix + 'import.json', JSON.stringify({ settings: model.settings, warnings: parsed.warnings, downloadBytes, elapsedMs: performance.now() - started }));
   const scene = new THREE.Scene(); scene.add(model.root);
   if (model.environment) {
     const image = model.environment, map = new THREE.DataTexture(image.data, image.width, image.height, THREE.RGBAFormat, THREE.FloatType);
