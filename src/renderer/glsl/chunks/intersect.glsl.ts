@@ -310,22 +310,22 @@ function getBVHTraverseCode(
 }
 
 export default createShaderMixin({
+  defines: {
+    VERTEX_ATTRIBUTE_STRIDE: 2
+  },
   uniforms: {
     positionBuffer: Shader.uniform('sampler2D'),
-    normalBuffer: Shader.uniform('sampler2D'),
-    tangentBuffer: Shader.uniform('sampler2D'),
-    uvBuffer: Shader.uniform('sampler2D'),
-    uv1Buffer: Shader.uniform('sampler2D'),
-    colorBuffer: Shader.uniform('sampler2D'),
-    materialIndexBuffer: Shader.uniform('sampler2D'),
+    // Interleaved shading attributes; layout in webglVertexAttributes.ts.
+    vertexAttributes: Shader.uniform('sampler2D'),
 
+    // TLAS, BLASes and then the instance records.
     bvhBuffer: Shader.uniform('sampler2D'),
-    instancesBuffer: Shader.uniform('sampler2D'),
 
     bvhColumns: Shader.uniform('int', 1),
     vertexColumns: Shader.uniform('int', 1),
+    vertexAttributeColumns: Shader.uniform('int', 1),
 
-    instancesColumns: Shader.uniform('int', 1),
+    instancesOffset: Shader.uniform('int', 0),
 
     blasOffset: Shader.uniform('int'),
 
@@ -543,6 +543,25 @@ int randomPickMaterial(ivec4 m0, ivec4 m1, ivec4 m2, vec3 bary) {
 
 vec4 fetchIns(int i);
 
+vec4 fetchVertexAttribute(int vertex, int slot) {
+  return fetchData(vertexAttributes, vertex * VERTEX_ATTRIBUTE_STRIDE + slot, vertexAttributeColumns);
+}
+vec3 fetchVertexNormal(int vertex) { return fetchVertexAttribute(vertex, 0).xyz; }
+vec2 fetchVertexUv(int vertex) { return fetchVertexAttribute(vertex, 1).xy; }
+ivec4 fetchVertexMaterial(int vertex) {
+  return ivec4(fetchVertexAttribute(vertex, 0).w, fetchVertexAttribute(vertex, 1).zw, 0.0);
+}
+vec2 fetchVertexUv1(int vertex) {
+#ifdef USE_UV1
+  return fetchVertexAttribute(vertex, VERTEX_UV1_SLOT).xy;
+#else
+  return vec2(0.0);
+#endif
+}
+#ifdef USE_TANGENT
+vec4 fetchVertexTangent(int vertex) { return fetchVertexAttribute(vertex, VERTEX_TANGENT_SLOT); }
+#endif
+
 
 mat2x3 anisotropy_axes(vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2, vec4 inputTangent) {
   float determinant = duv1.x * duv2.y - duv1.y * duv2.x;
@@ -571,19 +590,16 @@ mat2x3 anisotropy_axes(vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2, ve
 void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric, ivec3 index) {
   si.hit = true;
   si.position = barycentric.x * tri.p0 + barycentric.y * tri.p1 + barycentric.z * tri.p2;
-  ivec2 i0 = unpackTexel(index.x, vertexColumns);
-  ivec2 i1 = unpackTexel(index.y, vertexColumns);
-  ivec2 i2 = unpackTexel(index.z, vertexColumns);
   si.vertexColor = vec3(1.0);
 #ifdef USE_VERTEX_COLOR
-  si.vertexColor = barycentric.x * texelFetch(colorBuffer, i0, 0).rgb
-    + barycentric.y * texelFetch(colorBuffer, i1, 0).rgb
-    + barycentric.z * texelFetch(colorBuffer, i2, 0).rgb;
+  si.vertexColor = barycentric.x * fetchVertexAttribute(index.x, VERTEX_COLOR_SLOT).rgb
+    + barycentric.y * fetchVertexAttribute(index.y, VERTEX_COLOR_SLOT).rgb
+    + barycentric.z * fetchVertexAttribute(index.z, VERTEX_COLOR_SLOT).rgb;
 #endif
 
-  vec3 n0 = texelFetch(normalBuffer, i0, 0).xyz;
-  vec3 n1 = texelFetch(normalBuffer, i1, 0).xyz;
-  vec3 n2 = texelFetch(normalBuffer, i2, 0).xyz;
+  vec3 n0 = fetchVertexNormal(index.x);
+  vec3 n1 = fetchVertexNormal(index.y);
+  vec3 n2 = fetchVertexNormal(index.z);
   vec3 normal = normalize(barycentric.x * n0 + barycentric.y * n1 + barycentric.z * n2);
   si.vertexNormal = normal;
 
@@ -619,23 +635,22 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   }
   si.shadowOffset = smoothNormal * h;
 
-  // TODO currently isampler doesn't work
-  ivec4 m0 = ivec4(texelFetch(materialIndexBuffer, i0, 0));
-  ivec4 m1 = ivec4(texelFetch(materialIndexBuffer, i1, 0));
-  ivec4 m2 = ivec4(texelFetch(materialIndexBuffer, i2, 0));
+  ivec4 m0 = fetchVertexMaterial(index.x);
+  ivec4 m1 = fetchVertexMaterial(index.y);
+  ivec4 m2 = fetchVertexMaterial(index.z);
   
   if (m0.x > 0 || m1.x > 0 || m2.x > 0) {
     si.materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
   }
   
-  vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
-  vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
-  vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
+  vec2 uv0 = fetchVertexUv(index.x);
+  vec2 uv1 = fetchVertexUv(index.y);
+  vec2 uv2 = fetchVertexUv(index.z);
   #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS) || defined(NUM_COAT_NORMAL_MAPS)
     vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
-    vec2 secondaryUv0 = texelFetch(uv1Buffer, i0, 0).xy;
-    vec2 secondaryUv1 = texelFetch(uv1Buffer, i1, 0).xy;
-    vec2 secondaryUv2 = texelFetch(uv1Buffer, i2, 0).xy;
+    vec2 secondaryUv0 = fetchVertexUv1(index.x);
+    vec2 secondaryUv1 = fetchVertexUv1(index.y);
+    vec2 secondaryUv2 = fetchVertexUv1(index.z);
     vec2 secondaryUv = barycentric.x * secondaryUv0
       + barycentric.y * secondaryUv1
       + barycentric.z * secondaryUv2;
@@ -671,9 +686,9 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec3 dp2 = tri.p1 - tri.p2;
     vec4 inputTangent = vec4(0.0);
 #ifdef USE_TANGENT
-    inputTangent = barycentric.x * texelFetch(tangentBuffer, i0, 0)
-      + barycentric.y * texelFetch(tangentBuffer, i1, 0)
-      + barycentric.z * texelFetch(tangentBuffer, i2, 0);
+    inputTangent = barycentric.x * fetchVertexTangent(index.x)
+      + barycentric.y * fetchVertexTangent(index.y)
+      + barycentric.z * fetchVertexTangent(index.z);
 #endif
     mat2x3 geometryAxes = anisotropy_axes(normal, dp1, dp2, uv0-uv2, uv1-uv2, inputTangent);
     si.geometryTangent = geometryAxes[0];
@@ -681,9 +696,9 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     mat2x3 directionAxes = geometryAxes;
 #ifdef NUM_ANISOTROPY_MAPS
     if (directionMaterial.x >= 0.0 && mapUvChannel[int(directionMaterial.x)] > 0.5) {
-      vec2 a = texelFetch(uv1Buffer, i0, 0).xy;
-      vec2 b = texelFetch(uv1Buffer, i1, 0).xy;
-      vec2 c = texelFetch(uv1Buffer, i2, 0).xy;
+      vec2 a = fetchVertexUv1(index.x);
+      vec2 b = fetchVertexUv1(index.y);
+      vec2 c = fetchVertexUv1(index.z);
       directionAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c, (inputTangent.w == 0.0 ? vec4(0.0) : inputTangent));
     }
 #endif
@@ -694,9 +709,9 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
       int coatIndex = int(coatNormalIndex);
       mat2x3 coatAxes = geometryAxes;
       if (mapUvChannel[coatIndex] > 0.5) {
-        vec2 a = texelFetch(uv1Buffer, i0, 0).xy;
-        vec2 b = texelFetch(uv1Buffer, i1, 0).xy;
-        vec2 c = texelFetch(uv1Buffer, i2, 0).xy;
+        vec2 a = fetchVertexUv1(index.x);
+        vec2 b = fetchVertexUv1(index.y);
+        vec2 c = fetchVertexUv1(index.z);
         coatAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c,
           inputTangent.w == 0.0 ? vec4(0.0) : inputTangent);
       }
@@ -712,9 +727,9 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   si.uv1 = secondaryUv;
 
   #ifdef USE_TANGENT
-    vec3 t0 = texelFetch(tangentBuffer, i0, 0).xyz;
-    vec3 t1 = texelFetch(tangentBuffer, i1, 0).xyz;
-    vec3 t2 = texelFetch(tangentBuffer, i2, 0).xyz;
+    vec3 t0 = fetchVertexTangent(index.x).xyz;
+    vec3 t1 = fetchVertexTangent(index.y).xyz;
+    vec3 t2 = fetchVertexTangent(index.z).xyz;
     si.tangent = normalize(barycentric.x * t0 + barycentric.y * t1 + barycentric.z * t2);
   #endif
   #if defined(NUM_NORMAL_MAPS)
@@ -740,7 +755,7 @@ vec4 fetchBVH(int i) {
 }
 
 vec4 fetchIns(int i) {
-  return fetchData(instancesBuffer, i, instancesColumns);
+  return fetchData(bvhBuffer, instancesOffset + i, bvhColumns);
 }
 
 // GLSL ES 3.00 has no bitCount intrinsic. Count the CWBVH mask bits using
@@ -1037,12 +1052,9 @@ ${getBVHTraverseCode(
   if (isOccluded) {
 #ifdef HAS_ALPHA
     int materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
-    ivec2 i0 = unpackTexel(index.x, vertexColumns);
-    ivec2 i1 = unpackTexel(index.y, vertexColumns);
-    ivec2 i2 = unpackTexel(index.z, vertexColumns);
-    ivec4 m0 = ivec4(texelFetch(materialIndexBuffer, i0, 0));
-    ivec4 m1 = ivec4(texelFetch(materialIndexBuffer, i1, 0));
-    ivec4 m2 = ivec4(texelFetch(materialIndexBuffer, i2, 0));
+    ivec4 m0 = fetchVertexMaterial(index.x);
+    ivec4 m1 = fetchVertexMaterial(index.y);
+    ivec4 m2 = fetchVertexMaterial(index.z);
       
     if (m0.x > 0 || m1.x > 0 || m2.x > 0) {
       materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
@@ -1055,9 +1067,9 @@ ${getBVHTraverseCode(
     if (mapAlphaUsage == ${mapAlphaUsageConstants.alpha + ''}) {
       int diffuseMapIndex = int(fetchMatData(ii + MAT_ROW_METALLIC_MAPS).z);
       if (diffuseMapIndex >= 0) {
-        vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
-        vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
-        vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
+        vec2 uv0 = fetchVertexUv(index.x);
+        vec2 uv1 = fetchVertexUv(index.y);
+        vec2 uv2 = fetchVertexUv(index.z);
         vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
         vec4 uvInfo = fetchMatData(ii + MAT_ROW_UV);
         int uvProjection = int(uvInfo.r);
@@ -1074,9 +1086,9 @@ ${getBVHTraverseCode(
   #ifdef NUM_ALPHA_MAPS
     int alphaMapIndex = int(fetchMatData(ii + MAT_ROW_STANDALONE_MAPS).z);
     if (alphaMapIndex >= 0) {
-      vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
-      vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
-      vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
+      vec2 uv0 = fetchVertexUv(index.x);
+      vec2 uv1 = fetchVertexUv(index.y);
+      vec2 uv2 = fetchVertexUv(index.z);
       vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
       vec4 uvInfo = fetchMatData(ii + MAT_ROW_UV);
       int uvProjection = int(uvInfo.r);
