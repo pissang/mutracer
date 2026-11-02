@@ -103,6 +103,8 @@ fn fogGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
 fn fogSegmentMaximum(path: Path, si: SurfaceInteraction) -> f32 {
   var maximum = INF;
   if (si.hit) { maximum = distance(si.position, path.ray.o); }
+  // Analytic emitters are invisible along camera/alpha-null continuations.
+  if (path.fromEye) { return maximum; }
   for (var i = 0; i < rtUniform.lightsCount; i++) {
     var sample: LightSampleRec;
     let d = intersectLight(path.ray, analyticLights[i], &sample);

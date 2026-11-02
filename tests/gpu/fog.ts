@@ -1,5 +1,5 @@
 // Real-GPU regression fixture; run fog.html (?webgl for WebGL 2).
-import {Engine, Render, Camera, AmbientLight, Mesh, OpenPBRMaterial,
+import {Engine, Render, Camera, AmbientLight, SphereLight, Mesh, OpenPBRMaterial,
   createCubeGeometry, createPlaneGeometry, type Scene, type SceneFog} from '../../src/main.js';
 
 export async function captureFogCombination(backend: 'webgpu' | 'webgl', name: string, withoutFog = false) {
@@ -52,3 +52,52 @@ export async function captureFogCombination(backend: 'webgpu' | 'webgl', name: s
   } finally {render.dispose(); engine.dispose(); canvas.remove();}
 }
 (window as any).captureFogCombination = captureFogCombination;
+
+/** Camera-visible analytic lights must not change the camera segment. */
+export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: string, control = false) {
+  const canvas = document.createElement('canvas'); document.body.append(canvas);
+  const engine = new Engine({canvas, backend}); engine.display.setSize(24, 24);
+  const camera = new Camera({projection: 'orthographic', left: -.75, right: .75, top: .75, bottom: -.75, near: .1, far: 100});
+  camera.position = [0, 0, 5]; camera.lookAt([0, 0, 0]); engine.camera = camera;
+  const fog: SceneFog = {density: .5, bounds: {min: [100, 100, 100], max: [101, 101, 101]}};
+  const scene: Scene = {meshes: [], lights: [], background: [.5, .5, .5, 1], fog: control ? [] : [fog]};
+  const sheet = (material: OpenPBRMaterial, z: number) => {
+    const mesh = new Mesh(createPlaneGeometry(), material);
+    mesh.transform = [4, 0, 0, 0, 0, 0, 4, 0, 0, -4, 0, 0, 0, 0, z, 1];
+    scene.meshes.push(mesh);
+  };
+  scene.lights.push(new SphereLight({radius: .5}));
+  if (name === 'analytic-alpha') sheet(new OpenPBRMaterial({unlit: true,
+    emissionColor: [.1, .1, .1], emissionLuminance: 1, alphaMode: 'blend', opacity: .35}), 2);
+  if (name === 'analytic-in-fog') {
+    fog.bounds = {min: [-2, -2, -2], max: [2, 2, 2]}; fog.color = [0, 0, 0];
+    scene.fog = [fog]; if (control) scene.lights = [];
+    sheet(new OpenPBRMaterial({unlit: true, emissionColor: [.5, .5, .5], emissionLuminance: 1}), -3);
+  }
+  engine.scene = scene; engine.update();
+  const render = new Render(engine, {width: 24, height: 24, bounces: 2, maxSamples: 2048, clamping: 0,
+    samplingPattern: 'sobol', alphaBlendStrategy: 'deterministic-source-over'});
+  const errors: string[] = []; engine.on('error', event => errors.push(event.message));
+  try {
+    await engine.init(); engine.device?.addEventListener('uncapturederror', event => errors.push((event as GPUUncapturedErrorEvent).error.message));
+    await render.converge({samples: 2048, sampleSequenceOffset: 17, timeoutMs: 120000});
+    const images = await Promise.all(['hdr', 'albedo', 'normal'].map(kind => render.readPixels(kind as 'hdr')));
+    if (images.some(image => image.data.some((value: number) => !Number.isFinite(value)))) throw new Error('Nonfinite fog output');
+    if (errors.length) throw new Error(errors.join('\n'));
+    return {name, errors, pixels: Array.from(images[0].data), albedo: Array.from(images[1].data), normal: Array.from(images[2].data)};
+  } finally {render.dispose(); engine.dispose(); canvas.remove();}
+}
+
+/** Run in the console on fog.html; rejects on a real GPU regression. */
+export async function checkFogInvariants(backend: 'webgpu' | 'webgl', names = ['analytic-primary', 'analytic-alpha', 'analytic-in-fog']) {
+  const results = [];
+  for (const name of names) {
+    const actual = await captureFogInvariant(backend, name), expected = await captureFogInvariant(backend, name, true);
+    const differences = Object.fromEntries((['pixels'] as const).map(kind => [kind,
+      Math.max(...actual[kind].map((value, i) => Math.abs(value - expected[kind][i])))]));
+    if (Object.values(differences).some(value => value > .00025)) throw new Error(`${backend} ${name}: ${JSON.stringify(differences)}`);
+    results.push({name, differences});
+  }
+  return results;
+}
+Object.assign(window, {captureFogInvariant, checkFogInvariants});

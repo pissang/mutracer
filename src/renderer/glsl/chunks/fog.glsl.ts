@@ -84,6 +84,8 @@ void fogGuides(Ray ray, float maximum, inout RayTraceAuxiliary outAux) {
 }
 float fogSegmentMaximum(Path path, SurfaceInteraction si) {
   float maximum = si.hit ? distance(si.position, path.ray.o) : INF;
+  // Match primary and alpha-null visibility in the surface integrator.
+  if (path.fromEye) return maximum;
 #ifdef NUM_LIGHTS
   for (int i = 0; i < NUM_LIGHTS; i++) {
     LightSampleRec lightHit;
