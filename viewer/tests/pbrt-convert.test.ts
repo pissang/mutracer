@@ -43,6 +43,13 @@ describe('PBRT conversion semantics', () => {
     expect(meshes[0].material).not.toBe(meshes[1].material);
     expect(meshes[0].material.displacementMap!.image.data[0]).not.toBe(meshes[1].material.displacementMap!.image.data[0]);
   });
+  it('excludes a dominant mix branch from strict comparisons even when the branch is diffuse', async () => {
+    const { root, scene } = await load('WorldBegin MakeNamedMaterial "a" "string type" "diffuse" "rgb reflectance" [1 0 0] MakeNamedMaterial "b" "string type" "diffuse" "rgb reflectance" [0 0 1] Material "mix" "string materials" ["a" "b"] "float amount" .75 Shape "sphere"');
+    const mesh = root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
+    expect(mesh.material.color.toArray()).toEqual([0,0,1]);
+    expect(mesh.material.userData.pbrtComparable).toBe(false);
+    expect(scene.warnings.some(w => w.handling.includes('larger weight'))).toBe(true);
+  });
   it('maps named glass dispersion and conductor normal/edge Fresnel', () => {
     const bk7 = glass(namedSpectrum('glass-BK7')!); expect(bk7.ior).toBeCloseTo(1.5168, 3); expect(bk7.abbe).toBeGreaterThan(60); expect(bk7.abbe).toBeLessThan(66);
     const gold = conductor(namedSpectrum('metal-Au-eta')!, namedSpectrum('metal-Au-k')!);

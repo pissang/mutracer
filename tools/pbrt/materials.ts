@@ -12,7 +12,10 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const amount = scalar(entity.params, 'amount', .5), choices = entity.params.materials?.values ?? [];
     const selected = scene.materials[String(choices[amount >= .5 ? 1 : 0])];
     warn(entity, 'Mix uses the material with the larger weight', 'material');
-    if (selected) return material({ ...shape, material: selected }, scene, textures, warn, new Set(active).add(entity));
+    if (selected) {
+      const result = await material({ ...shape, material: selected }, scene, textures, warn, new Set(active).add(entity));
+      result.userData.pbrtComparable = false; return result;
+    }
   }
   const p = entity.params, type = entity.type;
   const result = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: .5, side: THREE.FrontSide });
