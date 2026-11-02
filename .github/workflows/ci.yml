@@ -49,12 +49,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Icon Composer rendering needs the macOS 26 asset runtime.
         include: >-
           ${{ fromJSON(
-            inputs.native_platform == 'macos-arm64' && '[{"os":"macos-15","platform":"macos-arm64"}]' ||
+            inputs.native_platform == 'macos-arm64' && '[{"os":"macos-26","platform":"macos-arm64"}]' ||
             inputs.native_platform == 'windows-x64' && '[{"os":"windows-2025","platform":"windows-x64"}]' ||
             inputs.native_platform == 'linux-x64' && '[{"os":"ubuntu-24.04","platform":"linux-x64"}]' ||
-            '[{"os":"macos-15","platform":"macos-arm64"},{"os":"ubuntu-24.04","platform":"linux-x64"},{"os":"windows-2025","platform":"windows-x64"}]'
+            '[{"os":"macos-26","platform":"macos-arm64"},{"os":"ubuntu-24.04","platform":"linux-x64"},{"os":"windows-2025","platform":"windows-x64"}]'
           ) }}
     runs-on: ${{ matrix.os }}
     defaults:

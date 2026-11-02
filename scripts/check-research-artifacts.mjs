@@ -1,5 +1,5 @@
 import {existsSync,readFileSync,readdirSync,statSync} from 'node:fs';
-import {resolve,relative,extname,dirname,sep} from 'node:path';
+import {resolve,relative,extname,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -19,6 +19,11 @@ export function assertNoResearchArtifacts(root){
  }
  if(violations.length)throw Error(`Research code in ${root}:\n${violations.join('\n')}`);
 }
+// TypeScript normalizes source filenames to '/', including on Windows.
+export function isResearchSource(root,filename){
+ const researchRoot=resolve(root,'src/research').replaceAll('\\','/')+'/';
+ return filename.replaceAll('\\','/').startsWith(researchRoot);
+}
 export function assertNoProductionResearchImports(root=project){
  const config=ts.readConfigFile(resolve(root,'tsconfig.json'),ts.sys.readFile);
  const parsed=ts.parseJsonConfigFileContent(config.config,ts.sys,root);
@@ -26,8 +31,7 @@ export function assertNoProductionResearchImports(root=project){
   ...files(resolve(root,'examples')).filter(p=>p.endsWith('.ts')).map(p=>relative(root,p))]
   .map(p=>resolve(root,p)).filter(existsSync);
  const program=ts.createProgram(entries,{...parsed.options,noEmit:true});
- const researchRoot=resolve(root,'src/research')+sep;
- const unexpected=program.getSourceFiles().filter(file=>file.fileName.startsWith(researchRoot));
+ const unexpected=program.getSourceFiles().filter(file=>isResearchSource(root,file.fileName));
  if(unexpected.length)throw Error(`Production imports research modules:\n${unexpected.map(file=>relative(root,file.fileName)).join('\n')}`);
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

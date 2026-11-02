@@ -1,4 +1,4 @@
-import {assertNoResearchArtifacts, assertNoProductionResearchImports} from './check-research-artifacts.mjs';
+import {assertNoResearchArtifacts, assertNoProductionResearchImports, isResearchSource} from './check-research-artifacts.mjs';
 import ts from 'typescript';
 import { createShaderFormattingTransformer } from './shader-formatting.mjs';
 import { loadShaderIdentifierMap } from './shader-identifiers.mjs';
@@ -21,8 +21,7 @@ const configPath = path.join(projectRoot, 'tsconfig.json');
 const config = ts.readConfigFile(configPath, ts.sys.readFile);
 const parsed = ts.parseJsonConfigFileContent(config.config ?? {}, ts.sys, projectRoot);
 assertNoProductionResearchImports(projectRoot);
-const researchRoot = path.join(projectRoot, 'src', 'research') + path.sep;
-const program = ts.createProgram(parsed.fileNames.filter(filename => !filename.startsWith(researchRoot)), parsed.options);
+const program = ts.createProgram(parsed.fileNames.filter(filename => !isResearchSource(projectRoot, filename)), parsed.options);
 const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
   ...ts.getPreEmitDiagnostics(program)];
 if (!diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) {
