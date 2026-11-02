@@ -1,4 +1,4 @@
-import {packFog, type PackedFog} from './fogData.js';
+import {packVolumes, type PackedVolumes} from './volumeData.js';
 import { openPbrSchema } from '../scene/openPbrSchema.js';
 import { materialParametersEqual, materialTexturesChanged } from './materialComparison.generated.js';
 export { materialParametersEqual } from './materialComparison.generated.js';
@@ -18,8 +18,8 @@ export interface SceneChanges {
   materials: OpenPBRMaterial[];
   lights: boolean;
   background: boolean;
-  fog?: boolean;
-  fogStructure?: boolean;
+  volumes?: boolean;
+  volumeStructure?: boolean;
 }
 
 /** Small scalar/identity snapshots for lights, backgrounds and texture metadata. */
@@ -107,16 +107,16 @@ const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnap
 /** Detects edits without accepting them until the pipeline has received the scene. */
 export class SceneChangeDetector {
   private _tracker = new SceneChangeTracker(webAdapter);
-  private _fog?: PackedFog;
-  private _pendingFog?: PackedFog;
+  private _volume?: PackedVolumes;
+  private _pendingVolume?: PackedVolumes;
   detect(scene: Scene): SceneChanges {
-    const fog = packFog(scene.fog);
+    const volumes = packVolumes(scene.volumes);
     const changes = this._tracker.detect(scene) as SceneChanges;
-    changes.fog = !this._fog || fog.count !== this._fog.count || fog.data.some((v, i) => !Object.is(v, this._fog!.data[i]));
-    changes.fogStructure = !!fog.count !== !!this._fog?.count;
-    this._pendingFog = fog;
+    changes.volumes = !this._volume || volumes.count !== this._volume.count || volumes.data.some((v, i) => !Object.is(v, this._volume!.data[i]));
+    changes.volumeStructure = !!volumes.count !== !!this._volume?.count;
+    this._pendingVolume = volumes;
     return changes;
   }
-  commit() { this._tracker.commit(); this._fog = this._pendingFog; }
-  reset() { this._tracker.reset(); this._fog = undefined; this._pendingFog = undefined; }
+  commit() { this._tracker.commit(); this._volume = this._pendingVolume; }
+  reset() { this._tracker.reset(); this._volume = undefined; this._pendingVolume = undefined; }
 }

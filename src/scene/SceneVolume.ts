@@ -1,13 +1,13 @@
 import type {ColorRGB, Mat4, Vec3} from '../types.js';
 
-/** Maximum number of participating fog volumes in a scene. */
-export const MAX_FOG_VOLUMES = 8;
+/** Maximum number of participating volumes in a scene. */
+export const MAX_VOLUMES = 8;
 
 /** A participating medium filling a bounded box or ellipsoid. */
-export interface SceneFog {
-  /** Required finite, nonnegative extinction per world unit, at baseHeight. */
+export interface SceneVolume {
+  /** Required finite, nonnegative density multiplier: extinction per world unit at baseHeight, before any density field. */
   density: number;
-  /** Required local bounds, each min strictly below max. Fog is absent outside its shape. */
+  /** Required local bounds, each min strictly below max. Volume is absent outside its shape. */
   bounds: {min: Vec3; max: Vec3};
   /** Box or inscribed ellipsoid. Default 'box'. */
   shape?: 'box' | 'ellipsoid';

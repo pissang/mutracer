@@ -1,4 +1,4 @@
-import type {SceneFog} from './SceneFog.js';
+import type {SceneVolume} from './SceneVolume.js';
 import type { ColorRGBA, Mat4 } from '../types.js';
 import AmbientLight from './AmbientLight.js';
 import DirectionalLight from './DirectionalLight.js';
@@ -72,7 +72,7 @@ export interface Scene {
   lights: SceneLight[];
   /** Camera-ray background; defaults to the environment light when omitted. */
   background?: SceneBackground;
-  /** Fog volumes, at most MAX_FOG_VOLUMES (8). Default none. Edits are detected automatically. */
-  fog?: SceneFog[];
+  /** Scene volumes, at most MAX_VOLUMES (8). Default none. Edits are detected automatically. */
+  volumes?: SceneVolume[];
 
 }

@@ -1,8 +1,8 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
-import {packFog} from './fogData.js';
-import type {SceneFog} from '../scene/SceneFog.js';
+import {packVolumes} from './volumeData.js';
+import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
@@ -878,7 +878,7 @@ class WGPURayTracePass {
       if (this._needsRefitTLAS) this._refitMeshInstances();
       if (this._dirtyColorMeshes.size) this._updateMeshColors();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
-      this._constants.RR_MAX = this._constants.HAS_FOG || this._constants.HAS_MEDIUM ? 12 : 2;
+      this._constants.RR_MAX = this._constants.HAS_VOLUMES || this._constants.HAS_MEDIUM ? 12 : 2;
       this._setCaustics(this._causticSettings);
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
@@ -922,7 +922,7 @@ class WGPURayTracePass {
       const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
       const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
-        hasFog: !!this._constants.HAS_FOG,
+        hasVolumes: !!this._constants.HAS_VOLUMES,
         hasDisplacement: this._hasDisplacement,
         caustics: this._causticKey,
         bindless: !!this._bindless,
@@ -1600,7 +1600,7 @@ class WGPURayTracePass {
       pass.setBindGroup(idx, bindGroup);
     });
 
-    if (!this._constants?.HAS_FOG) researchTransport()?.capture(this);
+    if (!this._constants?.HAS_VOLUMES) researchTransport()?.capture(this);
     pass.dispatchWorkgroups(
       Math.ceil(dispatchWidth / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
       Math.ceil(dispatchHeight / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
@@ -1655,7 +1655,7 @@ class WGPURayTracePass {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
       textureAtlas: atlas,
-      fog: {count: this._rtUniform.views.fogCount?.[0] ?? 0, causticsDisabledReason: this._constants.HAS_FOG ? 'Scene fog uses ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
+      volumes: {count: this._rtUniform.views.volumeCount?.[0] ?? 0, causticsDisabledReason: this._constants.HAS_VOLUMES ? 'Scene volumes use ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
       materialTextures: {
         requested: this._textureSelection.requested,
         active: this._bindless ? 'bindless' as const : 'atlas' as const,
@@ -1781,10 +1781,10 @@ class WGPURayTracePass {
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
     this._causticSettings = settings;
-    const transport = researchTransport()?.configure(this, 'webgpu', !!this._constants?.HAS_FOG);
+    const transport = researchTransport()?.configure(this, 'webgpu', !!this._constants?.HAS_VOLUMES);
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
-    const hasCaster = !this._constants?.HAS_FOG && !!(settings?.lightTracing || settings?.photonMapping) &&
+    const hasCaster = !this._constants?.HAS_VOLUMES && !!(settings?.lightTracing || settings?.photonMapping) &&
       this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
@@ -2120,12 +2120,12 @@ class WGPURayTracePass {
     return true;
   }
 
-  setFog(fog?: SceneFog[]) {
-    const packed = packFog(fog);
-    this._rtUniform.views.fogCount[0] = packed.count;
-    this._rtUniform.views.fogVolumes.set(packed.data);
-    if (packed.count) this._constants.HAS_FOG = true;
-    else delete this._constants.HAS_FOG;
+  setVolumes(volumes?: SceneVolume[]) {
+    const packed = packVolumes(volumes);
+    this._rtUniform.views.volumeCount[0] = packed.count;
+    this._rtUniform.views.volumeRecords.set(packed.data);
+    if (packed.count) this._constants.HAS_VOLUMES = true;
+    else delete this._constants.HAS_VOLUMES;
     this._constants.RR_MAX = packed.count || this._constants.HAS_MEDIUM ? 12 : 2;
   }
 
@@ -2226,7 +2226,7 @@ class WGPURayTracePass {
       this._lightSamplingScratch,
       this._shadowCatcherLightChoices
     );
-    if (!this._constants?.HAS_FOG) researchTransport()?.prepare(this, 'webgpu', lighting);
+    if (!this._constants?.HAS_VOLUMES) researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;

@@ -1,4 +1,4 @@
-import {fogGlsl, fogPathGlsl} from './chunks/fog.glsl.js';
+import {volumeGlsl, volumePathGlsl} from './chunks/volume.glsl.js';
 import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
@@ -60,23 +60,23 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 `;
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
-  const hasFog = (options[0] as {hasFog?: boolean} | undefined)?.hasFog ?? false;
-  const research = hasFog ? undefined : researchTransport()?.fragment(options);
+  const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
+  const research = hasVolumes ? undefined : researchTransport()?.fragment(options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
-  const rayTraceCore = createRayTraceCoreGlsl(fragments, hasFog);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasFog);
+  const rayTraceCore = createRayTraceCoreGlsl(fragments, hasVolumes);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
     BOUNCES: 2,
-    ...(hasFog ? {HAS_FOG: true} : {})
+    ...(hasVolumes ? {HAS_VOLUMES: true} : {})
   },
   uniforms: {
-    ...(hasFog ? {fogCount: Shader.uniform('int'), fogWorldToLocal: Shader.arrayUniform('mat4', 8), fogColorAnisotropy: Shader.arrayUniform('vec4', 8), fogParams: Shader.arrayUniform('vec4', 8)} : {}),
+    ...(hasVolumes ? {volumeCount: Shader.uniform('int'), volumeWorldToLocal: Shader.arrayUniform('mat4', 8), volumeColorAnisotropy: Shader.arrayUniform('vec4', 8), volumeParams: Shader.arrayUniform('vec4', 8)} : {}),
     emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
     emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
     emissiveWeightTotal: Shader.uniform('float',0),
@@ -122,7 +122,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${hasFog ? fogGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
+${hasVolumes ? volumeGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -140,7 +140,7 @@ void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
   // It will cause shader compilation too slow.
-${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
+${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
 
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
   if (isShadowCatcher) {
@@ -181,7 +181,7 @@ ${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
 #else
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
       bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
-      ${hasFog ? 'if (!path.fogScattered) ' : ''}path.li += path.beta * bg.rgb * bg.a;
+      ${hasVolumes ? 'if (!path.volumeScattered) ' : ''}path.li += path.beta * bg.rgb * bg.a;
 #endif
       path.abort = true;
       return;
@@ -213,7 +213,7 @@ ${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
       }
 #if !defined(USE_ENVMAP)
       // TODO treat background as a light source
-      if (towardsCam${hasFog ? ' && !path.fogScattered' : ''}) {
+      if (towardsCam${hasVolumes ? ' && !path.volumeScattered' : ''}) {
         path.li += path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
       }
 #endif
@@ -268,11 +268,11 @@ ${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
 
   // Russian Roulette sampling
 #ifdef USE_RR
-${hasFog ? `  int rouletteStart = RR_MAX;
+${hasVolumes ? `  int rouletteStart = RR_MAX;
 #ifndef HAS_MEDIUM
-  if (!path.fogScattered) rouletteStart = 2;
+  if (!path.volumeScattered) rouletteStart = 2;
 #endif
-` : ''}  if (depth >= ${hasFog ? 'rouletteStart' : 'RR_MAX'} && !sampleIgnored) {
+` : ''}  if (depth >= ${hasVolumes ? 'rouletteStart' : 'RR_MAX'} && !sampleIgnored) {
     // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
     float maxComponent = max(max(path.beta.x, path.beta.y), path.beta.z);
     float q = max(0.0, 1.0 - maxComponent);
@@ -292,12 +292,12 @@ ${hasFog ? `  int rouletteStart = RR_MAX;
     return;
   }
 
-${hasFog ? /* glsl */ `  si.fogResample = sampleIgnored;
+${hasVolumes ? /* glsl */ `  si.volumeResample = sampleIgnored;
   return;
 }
-void completeFogVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
+void completeVolumeVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
 ` : ''}  // Next ray hit
-${hasFog ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
+${hasVolumes ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 `}
@@ -481,7 +481,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   return dot(result, result) > 1e-12 ? normalize(result) : source.normal;
 }
 
-${hasFog ? fogPathGlsl + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+${hasVolumes ? volumePathGlsl + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
   Path path;
   path.ray = ray;
   path.li = vec3(0);
@@ -594,8 +594,8 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
       mat.dispersionAbbeNumber
     );
   }
-  ${hasFog ? /* glsl */ `float maximum = si.hit ? distance(si.position, ray.o) : INF;
-  si.mediumType = 0; si.mediumAnisotropy = 0.0; si.fogSuppressed = false; si.fogResample = false;
+  ${hasVolumes ? /* glsl */ `float maximum = si.hit ? distance(si.position, ray.o) : INF;
+  si.mediumType = 0; si.mediumAnisotropy = 0.0; si.volumeSuppressed = false; si.volumeResample = false;
   if (si.hit && mat.materialType == SHADOW_CATCHER) {
     outAux.albedo = vec3(1.0); outAux.normal = dot(si.normal, ray.d) > 0.0 ? -si.normal : si.normal;
     si.albedoSampled = true;
@@ -603,21 +603,21 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   RayTraceAuxiliary originalAux = outAux;
   uvec4 guideRng = s0; uint guideCounter = hashedCounter;
   float guideWavelength = pathWavelength; int guideChannel = pathChannel;
-  vec4 result = integrateFogPath(si, ray, mat, true, outAux);
-  if (fogTransmittance(ray, maximum) < 1.0) {
+  vec4 result = integrateVolumePath(si, ray, mat, true, outAux);
+  if (volumeTransmittance(ray, maximum) < 1.0) {
     if (si.hit && !si.albedoSampled && (mat.alpha < 1.0 || (mat.specularRoughness <= 0.02 && mat.baseMetalness > 0.98))) {
       uvec4 endRng = s0; uint endCounter = hashedCounter;
       float endWavelength = pathWavelength; int endChannel = pathChannel;
       s0 = guideRng; hashedCounter = guideCounter; samplingBounce = 0u;
       pathWavelength = guideWavelength; pathChannel = guideChannel;
       RayTraceAuxiliary guideAux = originalAux;
-      vec4 ignored = integrateFogPath(si, ray, mat, false, guideAux);
+      vec4 ignored = integrateVolumePath(si, ray, mat, false, guideAux);
       outAux.albedo = guideAux.albedo; outAux.normal = guideAux.normal;
       s0 = endRng; hashedCounter = endCounter;
       pathWavelength = endWavelength; pathChannel = endChannel;
     } else { outAux.albedo = originalAux.albedo; outAux.normal = originalAux.normal; }
   }
-  fogGuides(ray, maximum, outAux);
+  volumeGuides(ray, maximum, outAux);
   return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
 }
 

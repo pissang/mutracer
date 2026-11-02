@@ -112,4 +112,4 @@ export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 
 export type {AovKind} from './renderer/aov.js';
 
-export {MAX_FOG_VOLUMES, type SceneFog} from './scene/SceneFog.js';
+export {MAX_VOLUMES, type SceneVolume} from './scene/SceneVolume.js';

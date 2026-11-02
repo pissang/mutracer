@@ -41,7 +41,7 @@ it('keeps the pipeline identity stable when an installed experiment is disabled'
   pass.setQuality(settings); expect(pass._causticKey).toBe(plain);
 });
 
-it('suppresses MNEE ownership while fog is present and restores its configured state', async () => {
+it('suppresses MNEE ownership while volumes is present and restores its configured state', async () => {
   const {researchTransport} = await import('../../src/renderer/researchTransport');
   const {mneeDiagnostics} = await import('../../src/research/mnee/index');
   const {Mesh, OpenPBRMaterial, createPlaneGeometry} = await import('../../src/main');

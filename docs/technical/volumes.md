@@ -1,7 +1,7 @@
 # Bounded participating media
 
 This contributor note describes the WebGPU and WebGL 2 fog integrators.
-User-facing configuration, costs and limits live in [the fog guide](../fog.md).
+User-facing configuration, costs and limits live in [the fog guide](../volumes.md).
 
 A fog-enabled shader has up to eight uniform records: normalized world-to-local
 matrix, scattering albedo/anisotropy, and density/height falloff/base height/shape.

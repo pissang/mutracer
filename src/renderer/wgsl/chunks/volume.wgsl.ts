@@ -1,7 +1,7 @@
 import {MAX_PATH_EVENTS} from '../../pathLimits.js';
-// Fog-only source. The no-fog generator never includes these declarations.
-export const fogWgsl = /* wgsl */ `
-fn fogInterval(ray: Ray, volume: FogVolume, maximum: f32) -> vec2f {
+// Volume-only source. The no-volumes generator never includes these declarations.
+export const volumeWgsl = /* wgsl */ `
+fn volumeInterval(ray: Ray, volume: VolumeRecord, maximum: f32) -> vec2f {
   let origin = (volume.worldToLocal * vec4f(ray.o, 1.0)).xyz;
   let direction = (volume.worldToLocal * vec4f(ray.d, 0.0)).xyz;
   if (volume.params.w > 0.5) {
@@ -29,7 +29,7 @@ fn fogInterval(ray: Ray, volume: FogVolume, maximum: f32) -> vec2f {
 }
 // log((1-exp(-z))/z), with a series around zero. The large-z
 // branch evaluates density at the denser endpoint, avoiding overflow in a.
-fn fogOpticalDepth(ray: Ray, volume: FogVolume, interval: vec2f) -> f32 {
+fn volumeOpticalDepth(ray: Ray, volume: VolumeRecord, interval: vec2f) -> f32 {
   let length = interval.y - interval.x;
   let density = volume.params.x;
   if (length <= 0.0 || density <= 0.0) { return 0.0; }
@@ -51,11 +51,11 @@ fn fogOpticalDepth(ray: Ray, volume: FogVolume, interval: vec2f) -> f32 {
   // for both event selection and float32 shadow transmittance.
   return exp(clamp(logTau, -100.0, 80.0));
 }
-fn fogDistance(ray: Ray, volume: FogVolume, interval: vec2f, opticalTarget: f32) -> f32 {
+fn volumeDistance(ray: Ray, volume: VolumeRecord, interval: vec2f, opticalTarget: f32) -> f32 {
   let density = volume.params.x;
   if (density <= 0.0) { return INF; }
   if (volume.params.y == 0.0) { return interval.x + opticalTarget / density; }
-  if (opticalTarget >= fogOpticalDepth(ray, volume, interval)) { return INF; }
+  if (opticalTarget >= volumeOpticalDepth(ray, volume, interval)) { return INF; }
   let k = volume.params.y;
   let s = k * ray.d.y;
   let logA = log(density) - k * (ray.o.y + interval.x * ray.d.y - volume.params.z);
@@ -75,19 +75,19 @@ fn fogDistance(ray: Ray, volume: FogVolume, interval: vec2f, opticalTarget: f32)
   }
   return interval.x + length;
 }
-fn fogTransmittance(ray: Ray, maximum: f32) -> f32 {
+fn volumeTransmittance(ray: Ray, maximum: f32) -> f32 {
   var tau = 0.0;
-  for (var i = 0; i < rtUniform.fogCount; i++) {
-    let volume = rtUniform.fogVolumes[i];
-    tau += fogOpticalDepth(ray, volume, fogInterval(ray, volume, maximum));
+  for (var i = 0; i < rtUniform.volumeCount; i++) {
+    let volume = rtUniform.volumeRecords[i];
+    tau += volumeOpticalDepth(ray, volume, volumeInterval(ray, volume, maximum));
   }
   return exp(-tau);
 }
-fn fogGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
+fn volumeGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
   var tau = 0.0; var weight = 0.0; var albedo = vec3f(0.0);
-  for (var i = 0; i < rtUniform.fogCount; i++) {
-    let volume = rtUniform.fogVolumes[i];
-    let opticalDepth = fogOpticalDepth(ray, volume, fogInterval(ray, volume, maximum));
+  for (var i = 0; i < rtUniform.volumeCount; i++) {
+    let volume = rtUniform.volumeRecords[i];
+    let opticalDepth = volumeOpticalDepth(ray, volume, volumeInterval(ray, volume, maximum));
     let w = 1.0 - exp(-opticalDepth);
     tau += opticalDepth; weight += w; albedo += w * volume.colorAnisotropy.rgb;
   }
@@ -100,7 +100,7 @@ fn fogGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
 }
 // Restrict free flight to the nearest visible analytic emitter as well as
 // geometry. Sampling beyond a terminating light would attenuate it twice.
-fn fogSegmentMaximum(path: Path, si: SurfaceInteraction) -> f32 {
+fn volumeSegmentMaximum(path: Path, si: SurfaceInteraction) -> f32 {
   var maximum = INF;
   if (si.hit) { maximum = distance(si.position, path.ray.o); }
   // Analytic emitters are invisible along camera/alpha-null continuations.
@@ -112,33 +112,33 @@ fn fogSegmentMaximum(path: Path, si: SurfaceInteraction) -> f32 {
   }
   return maximum;
 }
-fn sampleFogEvent(path: ptr<function, Path>, si: ptr<function, SurfaceInteraction>, maximum: f32, resample: bool) -> i32 {
-  if ((*si).mediumType > 0 || (*si).fogSuppressed) { return -1; }
+fn sampleVolumeEvent(path: ptr<function, Path>, si: ptr<function, SurfaceInteraction>, maximum: f32, resample: bool) -> i32 {
+  if ((*si).mediumType > 0 || (*si).volumeSuppressed) { return -1; }
   var nearest = maximum; var winner = -1;
-  for (var i = 0; i < rtUniform.fogCount; i++) {
-    let volume = rtUniform.fogVolumes[i];
-    let interval = fogInterval((*path).ray, volume, maximum);
+  for (var i = 0; i < rtUniform.volumeCount; i++) {
+    let volume = rtUniform.volumeRecords[i];
+    let interval = volumeInterval((*path).ray, volume, maximum);
     if (interval.y <= interval.x || volume.params.x <= 0.0) { continue; }
     var u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - u32(i)));
     if (resample) { u = hashedSample(0xf091u + u32(i)); }
     // The surface sampler avoids endpoints with an EPS remapping. Free-flight
     // survival needs the full uniform distribution, especially for thin overlaps.
     u = clamp((u - EPS) / (1.0 - 2.0 * EPS), 0.0, 1.0 - 1.0 / 16777216.0);
-    let candidate = fogDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));
+    let candidate = volumeDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));
     if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
   }
   if (winner >= 0) {
     (*path).ray.o += nearest * (*path).ray.d;
     (*si).position = (*path).ray.o;
-    // A fog event is not attached to the surface at the end of the segment.
+    // A volumes event is not attached to the surface at the end of the segment.
     (*si).triangleIndex = -1; (*si).instanceIndex = -1;
   }
   return winner;
 }
-fn shadeFogVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInteraction>, winner: i32, depth: ptr<function, i32>) {
-  let volume = rtUniform.fogVolumes[winner];
+fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInteraction>, winner: i32, depth: ptr<function, i32>) {
+  let volume = rtUniform.volumeRecords[winner];
   (*path).beta *= volume.colorAnisotropy.rgb;
-  (*path).alpha = 1.0; (*path).fogScattered = true;
+  (*path).alpha = 1.0; (*path).volumeScattered = true;
   if (max(max((*path).beta.x, (*path).beta.y), (*path).beta.z) <= 0.0) { (*path).abort = true; return; }
   let originalAnisotropy = (*si).mediumAnisotropy;
   (*si).mediumAnisotropy = volume.colorAnisotropy.w;
@@ -158,8 +158,8 @@ fn shadeFogVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInteractio
 }
 `;
 
-export function createFogIntegratorWgsl(deterministicPrimaryAlpha: boolean) { return /* wgsl */ `
-fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceFog: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean) { return /* wgsl */ `
+fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceVolume: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si = initialSi; var ma = initialMa;
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
@@ -169,7 +169,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
   var coverage = 1.0; var split = false; var front = false;
   var back: vec4f; var backAux: RayTraceAuxiliary;
   var depth = 0; var event = 0; var query = false; var resample = false;
-  var skipFog = false; var first = true;
+  var skipVolume = false; var first = true;
   var isOpaque = false;
   let limit = min(max(rtUniform.bounces, 0) * 3, ${MAX_PATH_EVENTS});
   for (var step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
@@ -185,16 +185,16 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
     query = true;
     let completionBounce = samplingBounce;
     samplingBounce = u32(depth);
-    let maximum = fogSegmentMaximum(path, si);
+    let maximum = volumeSegmentMaximum(path, si);
     var winner = -1;
-    if (traceFog && !skipFog) { winner = sampleFogEvent(&path, &si, maximum, resample); }
-    skipFog = false;
+    if (traceVolume && !skipVolume) { winner = sampleVolumeEvent(&path, &si, maximum, resample); }
+    skipVolume = false;
     if (winner >= 0) {
-      // A camera fog event establishes an opaque primary path. Surface
+      // A camera volumes event establishes an opaque primary path. Surface
       // transparency otherwise retains the legacy three-events-per-bounce budget.
       if (event == 0) { isOpaque = true; }
       if ((isOpaque && event > rtUniform.bounces) || event >= limit) { path.abort = true; }
-      else { shadeFogVertex(&path, &si, winner, &depth); }
+      else { shadeVolumeVertex(&path, &si, winner, &depth); }
       first = false; resample = false; event++;
     } else {
       if (${deterministicPrimaryAlpha ? 'true' : 'false'} && first && path.fromEye && si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT) && ma.alpha < 1.0) {
@@ -242,7 +242,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
       back = result; backAux = *outAux;
       front = true; path = originalPath; si = primarySi; ma = primaryMa; ma.alpha = 1.0;
       *outAux = originalAux;
-      depth = 0; event = 0; query = false; resample = false; skipFog = true;
+      depth = 0; event = 0; query = false; resample = false; skipVolume = true;
     }
   }
   return vec4f(path.li, path.alpha);
@@ -265,9 +265,9 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   var maximum = INF;
   if (si.hit) { maximum = distance(si.position, ray.o); }
   let originalAux = *outAux;
-  let guideTr = fogTransmittance(ray, maximum);
+  let guideTr = volumeTransmittance(ray, maximum);
   // Rough surfaces/glass already have a stable fallback. Delta and coverage
-  // paths need their ordinary continuation even when fog scatters before it.
+  // paths need their ordinary continuation even when volumes scatters before it.
   let replayGuides = guideTr < 1.0 && si.hit && !si.albedoSampled &&
     (ma.alpha < 1.0 || (ma.specularRoughness <= 0.02 && ma.baseMetalness > 0.98));
   let wavelengthSample = sample1D(CAMERA_WAVELENGTH);
@@ -286,13 +286,13 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       wavelengthSi.wavelength = spectrumCameraWavelength(u32(wavelengthSi.spectralChannel - 1), select(wavelengthSample, fract(wavelengthSample * 3.0), single));
       wavelengthMa.specularIor = sampling_cauchy_ior(wavelengthSi.wavelength, ma.specularIor, ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
     }
-    let result = integrateFogPath(uv, ray, wavelengthSi, wavelengthMa, true, &aux);
+    let result = integrateVolumePath(uv, ray, wavelengthSi, wavelengthMa, true, &aux);
     if (guideTr < 1.0) {
       if (replayGuides) {
         let endRng = s0; let endCounter = hashedCounter;
         s0 = rng; hashedCounter = counter; samplingBounce = 0u;
         var guideAux = originalAux;
-        let ignored = integrateFogPath(uv, ray, wavelengthSi, wavelengthMa, false, &guideAux);
+        let ignored = integrateVolumePath(uv, ray, wavelengthSi, wavelengthMa, false, &guideAux);
         aux.albedo = guideAux.albedo; aux.normal = guideAux.normal;
         s0 = endRng; hashedCounter = endCounter;
       } else { aux.albedo = originalAux.albedo; aux.normal = originalAux.normal; }
@@ -303,7 +303,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   }
   (*outAux).albedo = guides / f32(count); (*outAux).normal = normals / f32(count);
   (*outAux).isBlank = allBlank;
-  fogGuides(ray, maximum, outAux);
+  volumeGuides(ray, maximum, outAux);
   return vec4f(color, alpha);
 }
 `;

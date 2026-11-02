@@ -60,15 +60,15 @@ function makeRayTraceUniformCore(RayTraceUniformValues: ArrayBuffer) {
     views: RayTraceUniformViews
   };
 }
-// Native continues to use the original no-fog record and scene ABI.
+// Native continues to use the original no-volumes record and scene ABI.
 export function makeRayTraceUniform() { return makeRayTraceUniformCore(new ArrayBuffer(320)); }
 
-// Web reserves the entire fog capacity once; volume count edits never resize it.
+// Web reserves the entire volumes capacity once; volume count edits never resize it.
 export function makeWebRayTraceUniform() {
   const uniform = makeRayTraceUniformCore(new ArrayBuffer(1104));
   return {buffer: uniform.buffer, views: {...uniform.views,
-    fogCount: new Int32Array(uniform.buffer, 320, 1),
-    fogVolumes: new Float32Array(uniform.buffer, 336, 192)
+    volumeCount: new Int32Array(uniform.buffer, 320, 1),
+    volumeRecords: new Float32Array(uniform.buffer, 336, 192)
   }};
 }
 

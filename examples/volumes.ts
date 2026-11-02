@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
 import {Engine, RenderLoop, THREESync, Mesh, OpenPBRMaterial, SpotLight, AmbientLight,
-  createPlaneGeometry, createCubeGeometry, createSphereGeometry, type SceneFog} from '@meimu/mutracer';
+  createPlaneGeometry, createCubeGeometry, createSphereGeometry, type SceneVolume} from '@meimu/mutracer';
 import {showStatus} from './shared/status';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#main')!;
@@ -22,22 +22,22 @@ const warm = new SpotLight({color: [1, .72, .4], intensity: 160, radius: .08, in
 warm.position = [-2.5, 4, -2]; warm.lookAt([.8, 0, 1]);
 const cool = new SpotLight({color: [.35, .6, 1], intensity: 120, radius: .06, innerAngle: 15, outerAngle: 25});
 cool.position = [2.7, 3.5, -2]; cool.lookAt([-.8, 0, 1]);
-const fog: SceneFog[] = [
+const volumes: SceneVolume[] = [
   {density: .18, bounds: {min: [-6, 0, -5], max: [6, 5, 5]}, heightFalloff: .65, anisotropy: .35},
   {density: .35, bounds: {min: [-1, -1, -1], max: [1, 1, 1]}, shape: 'ellipsoid',
     transform: [1.5, 0, 0, 0, 0, .45, 0, 0, 0, 0, .85, 0, 1.5, .6, 1.2, 1], color: [.7, .85, 1]}
 ];
-engine.scene = {meshes, lights: [warm, cool, new AmbientLight({intensity: .015})], background: [.005, .008, .015, 1], fog};
+engine.scene = {meshes, lights: [warm, cool, new AmbientLight({intensity: .015})], background: [.005, .008, .015, 1], volumes};
 const camera = new THREE.PerspectiveCamera(45, 1, .1, 100);
 camera.position.set(6, 3.2, 7);
 const controls = new OrbitControls(camera, canvas); controls.target.set(0, 1.1, 0); controls.update();
 const sync = new THREESync(engine, {camera, controls});
 const loop = new RenderLoop(engine, {sync, final: {bounces: 12, maxSamples: 1024}});
-document.querySelector<HTMLInputElement>('#fog')!.onchange = event => {
-  engine.scene!.fog = (event.target as HTMLInputElement).checked ? fog : [];
+document.querySelector<HTMLInputElement>('#volumes')!.onchange = event => {
+  engine.scene!.volumes = (event.target as HTMLInputElement).checked ? volumes : [];
 };
 document.querySelector<HTMLInputElement>('#density')!.oninput = event => {
-  fog[0].density = Number((event.target as HTMLInputElement).value);
+  volumes[0].density = Number((event.target as HTMLInputElement).value);
 };
 function resize() {
   engine.display.setSize(canvas.clientWidth, canvas.clientHeight);
