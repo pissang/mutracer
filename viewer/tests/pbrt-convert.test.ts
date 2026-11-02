@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { buildScene } from '../../tools/pbrt/scene';
 import { convert } from '../../tools/pbrt/convert';
@@ -63,6 +64,18 @@ describe('PBRT conversion semantics', () => {
       else { expect(m.userData.pbrtComparable).toBe(false); expect(scene.warnings.some(w => w.code === 'ior-orientation')).toBe(true); }
     }
   });
+  it.each(['thindielectric', 'diffusetransmission'])('warns when %s drops an interior medium', async type => {
+    const { root, scene } = await load(`WorldBegin MakeNamedMedium "m" "string type" "homogeneous"
+      "rgb sigma_a" [.1 .2 .5] "rgb sigma_s" [0 0 0]
+      MediumInterface "m" "" Material "${type}" Shape "sphere"`);
+    const m = (root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.Material;
+    expect(m.userData.pbrtComparable).toBe(false);
+    expect(scene.warnings).toContainEqual(expect.objectContaining({ code: 'thin-medium', statement: 'Shape', file: 'main.pbrt', handling: expect.stringContaining('skipped') }));
+    const source = new THREE.Scene(); source.add(root);
+    const packed = packMaterialParams([fromTHREEScene(source).meshes[0].materials[0]]);
+    expect(packed.mediumType[0]).toBe(0);
+    expect(packed.mediumExtinction[0]).toEqual([0, 0, 0]);
+  });
   it('warns that reciprocal spectral dispersion retains an approximate Abbe mapping', async () => {
     const { root, scene } = await load('WorldBegin MakeNamedMedium "m" "string type" "homogeneous" MediumInterface "" "m" Material "dielectric" "spectrum eta" "glass-BK7" Shape "sphere"');
     const m = (root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
@@ -88,6 +101,21 @@ describe('PBRT conversion semantics', () => {
         expect(recovered[0]).toBeCloseTo(au,10); expect(recovered[1]).toBeCloseTo(av,10);
       }
     }
+  });
+  it.each([['interface', 'homogeneous'], ['', 'homogeneous'], ['interface', 'uniformgrid'], ['', 'uniformgrid']])('marks %s/%s interior boundaries incomparable with a structured warning', async (type, mediumType) => {
+    const { root, scene } = await load(`WorldBegin MakeNamedMedium "m" "string type" "${mediumType}" MediumInterface "m" "" Material "${type}" Shape "sphere"`);
+    const m = (root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.Material;
+    expect(m.userData.pbrtComparable).toBe(false);
+    expect(root.userData.pbrtComparable).toBe(false);
+    expect(scene.warnings).toContainEqual(expect.objectContaining({ code:'medium-shadow',statement:'Shape',file:'main.pbrt',handling:expect.stringContaining('point and area') }));
+  });
+  it('excludes the interior-homogeneous scene including its indirect shadow regions', async () => {
+    const { root } = await load(await readFile(new URL('../../tests/fixtures/pbrt/interior-homogeneous.pbrt', import.meta.url), 'utf8'));
+    expect(root.userData.pbrtComparable).toBe(false);
+    const materials: THREE.Material[] = [];
+    root.traverse(o => { if ((o as THREE.Mesh).isMesh) materials.push((o as THREE.Mesh).material as THREE.Material); });
+    expect(materials.some(m => m.userData.pbrtComparable === true)).toBe(true);
+    expect(materials.some(m => m.userData.pbrtComparable === false)).toBe(true);
   });
   it('keeps the zero-rotation anisotropy tangent on dpdu', async () => {
     const {root}=await load('WorldBegin Material "conductor" "float uroughness" .4 "float vroughness" .1 "bool remaproughness" false Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 0 1 0] "point2 uv" [0 0 1 0 0 1]');

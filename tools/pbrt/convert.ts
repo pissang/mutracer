@@ -7,6 +7,7 @@ import { Textures, type DecodeImage, type Image } from './textures';
 import { verticalFov } from './spectrum';
 import type { Resolver } from './source';
 import { reprojectEnvironment } from './environment';
+import { mediumBoundary } from './mediumBoundary';
 export interface Converted {
   root: THREE.Group; environment: Image | null; volumes: SceneVolume[];
   settings: { width: number; height: number; bounces: number; samples: number; exposure: number; fStop: number; focusDistance: number };
@@ -54,6 +55,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   let loaded = 0;
   const total = scene.shapes.length + Object.values(scene.objects).reduce((n, shapes) => n + shapes.length, 0);
   const meshes = new Map<Shape, { geometry: THREE.BufferGeometry; material: THREE.MeshPhysicalMaterial }>();
+  const mediumInterfaces = new Map<THREE.BufferGeometry, Shape>();
   const create = async (shape: Shape) => {
     onProgress?.(loaded++, total);
     if (shape.type === 'loopsubdiv') warn(shape, 'Loop subdivision uses area-weighted vertex normals', 'shape');
@@ -79,6 +81,18 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
       for (let i = 0; i < data.count; i += 3) { const a = data.getX(i); data.setX(i, data.getX(i + 1)); data.setX(i + 1, a); }
     }
     if (reverse) { const n = g.attributes.normal; if (n) for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i)); }
+    if (shape.inside !== shape.outside) {
+      mediumInterfaces.set(g, shape);
+      const boundary = mediumBoundary(g);
+      if (!boundary.closed) {
+        m.userData.pbrtComparable = false;
+        warn(shape, 'Medium boundary is not closed; ray medium state is ambiguous and the scene is excluded from strict comparison', 'medium-topology');
+      }
+      if (!boundary.oriented) {
+        m.userData.pbrtComparable = false;
+        warn(shape, 'Medium boundary winding or authored normals are inconsistent; the scene is excluded from strict comparison', 'medium-orientation');
+      }
+    }
     // PBRT Triangle::NormalBounds / InteractionFromIntersection face-forward
     // the geometric normal to authored shading normals. Match that by winding.
     if (g.attributes.normal) {
@@ -133,6 +147,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
         const indices = g.index!;
         for (let i = 0; i < indices.count; i += 3) { const a = indices.getX(i); indices.setX(i, indices.getX(i + 1)); indices.setX(i + 1, a); }
       }
+      if (shape.inside !== shape.outside) mediumInterfaces.set(g, shape);
       const mesh = new THREE.InstancedMesh(g, value.material, selected.length); mesh.name = name;
       selected.forEach((matrix, i) => mesh.setMatrixAt(i, negative ? matrix.multiply(reflection) : matrix));
       root.add(mesh);
@@ -232,5 +247,40 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   if (film.sensor && first(film, 'sensor', 'cie1931') !== 'cie1931') warn(scene.film!, 'Sensor approximated by CIE 1931', 'camera');
   if (film.whitebalance) warn(scene.film!, 'White balance ignored', 'camera');
   root.updateMatrixWorld(true);
+  if (scene.camera && mediumInterfaces.size) {
+    const eye = new THREE.Vector3().setFromMatrixPosition(mirror.clone().multiply(new THREE.Matrix4().fromArray(scene.camera.transform)));
+    const boundaries: THREE.Mesh[] = [];
+    root.traverse(o => { if (o instanceof THREE.Mesh && mediumInterfaces.has(o.geometry)) boundaries.push(o); });
+    const raycaster = new THREE.Raycaster(), center = new THREE.Vector3(), instance = new THREE.Matrix4();
+    // Check the incoming side of the first interface on each probe ray,
+    // rather than extrapolating every nested boundary's region to the camera.
+    for (const target of boundaries) {
+      target.geometry.computeBoundingSphere();
+      const count = target instanceof THREE.InstancedMesh ? target.count : 1;
+      for (let i = 0; i < count; i++) {
+        center.copy(target.geometry.boundingSphere!.center);
+        if (target instanceof THREE.InstancedMesh) { target.getMatrixAt(i, instance); center.applyMatrix4(instance); }
+        center.applyMatrix4(target.matrixWorld).sub(eye);
+        if (center.lengthSq() === 0) center.set(1, .317, .123);
+        raycaster.set(eye, center.normalize());
+        const hit = raycaster.intersectObjects(boundaries, false)[0];
+        if (!hit?.face) continue;
+        const object = hit.object as THREE.Mesh, material = object.material as THREE.Material;
+        const shape = mediumInterfaces.get(object.geometry)!;
+        const world = object.matrixWorld.clone();
+        if (object instanceof THREE.InstancedMesh && hit.instanceId !== undefined) { object.getMatrixAt(hit.instanceId, instance); world.multiply(instance); }
+        const normal = hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(world));
+        if (interiorMedium(shape, scene).flip) normal.negate();
+        const expected = normal.dot(raycaster.ray.direction) < 0 ? shape.outside : shape.inside;
+        if (expected !== scene.cameraMedium) {
+          material.userData.pbrtComparable = false;
+          warn(shape, `Camera medium ${JSON.stringify(scene.cameraMedium)} disagrees with the first boundary's incoming medium ${JSON.stringify(expected)}; the scene is excluded from strict comparison`, 'medium-camera');
+        }
+      }
+    }
+  }
+  // A primary-surface mask cannot isolate shadows or indirect paths through
+  // null or inconsistent medium boundaries. Preserve all measurements.
+  root.userData.pbrtComparable = !scene.warnings.some(w => ['medium-shadow', 'medium-topology', 'medium-orientation', 'medium-camera'].includes(w.code));
   return { root, environment, volumes, settings: { width, height, bounces: scalar(scene.integrator?.params ?? {}, 'maxdepth', 5), samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
 }

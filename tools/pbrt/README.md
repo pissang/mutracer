@@ -66,13 +66,25 @@ light can still pass through an approximate material before reaching a comparabl
 region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
 PBRT camera media stay active in the viewer; enabling Volumes adds ground fog.
-Material bump changes shading only. Its UV-space bake assumes unit tangents and
-approximates ray footprints and curved-surface derivatives, with a warning.
+Material bump changes shading only; its appearance on curved surfaces and at
+different texture scales is approximate, with a warning.
 When normalmap is also present, it takes precedence and bump is warned and ignored.
+Interface or empty-material boundaries with an interior medium are excluded
+from strict comparison: MuTracer shadow rays block point and area direct light
+at these boundaries. Import emits a warning. Scenes containing these boundaries
+are excluded as a whole because their shadows and indirect light can affect
+other surfaces; reports retain measurements with `not-comparable` status.
+Open or inconsistently oriented medium boundaries and detected camera/interface
+medium mismatches also produce warnings and exclude the whole scene from strict
+comparison.
 Ordinary surfaces are double-sided. One-sided emitters also hide their back faces
 from primary rays; this visibility limitation is reported as a warning.
 Subsurface mean free paths below 0.001 scene units are limited by the existing
 OpenPBR medium; this can change fine-scale skin scattering and is warned about.
+Thin-walled materials cannot retain interior absorption or scattering media;
+import warns and excludes these surfaces from strict comparison.
+Scenes with media render noticeably more slowly. Absorbing gemstones can still
+differ in color from PBRT, and rough colored metals can appear too bright.
 Optical constants accept named spectra or SPD files. Spatial optical-constant
 maps and coat roughness maps use warned mean-value approximations.
 

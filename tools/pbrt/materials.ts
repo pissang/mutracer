@@ -213,7 +213,14 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   if (shape.inside && shape.outside && shape.inside !== scene.cameraMedium && shape.outside !== scene.cameraMedium) result.userData.pbrtComparable = false;
   if (interior.name) {
     const medium = scene.media[interior.name];
-    if (medium.type === 'homogeneous') {
+    if (type === 'interface' || type === '') {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Interface interior medium excluded from strict comparison: point and area direct lighting is blocked at the boundary by MuTracer shadow rays', 'medium-shadow');
+    }
+    if (open.thinWalled) {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Thin-walled materials cannot retain an interior medium; absorption and scattering are skipped', 'thin-medium');
+    } else if (medium.type === 'homogeneous') {
       const a = await textures.value(medium.params, 'sigma_a', [1, 1, 1], medium), s = await textures.value(medium.params, 'sigma_s', [1, 1, 1], medium), scale = scalar(medium.params, 'scale', 1);
       const extinction = a.color.map((v, i) => (v + s.color[i]) * scale);
       // The existing packer takes extinction transmittance and scattering

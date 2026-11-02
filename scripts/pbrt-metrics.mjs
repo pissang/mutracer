@@ -17,14 +17,15 @@ export function idBoundaryMask(ids, width, height) {
   }
   return mask;
 }
-export function comparePixels({mu,reference,ids,noiseA,noiseB,width,height,approximateMaterialIds=[]}) {
+export function comparePixels({mu,reference,ids,noiseA,noiseB,width,height,approximateMaterialIds=[],sceneComparable=true}) {
   const excluded = new Set(approximateMaterialIds), regions = [], boundary = idBoundaryMask(ids,width,height);
+  const isApproximate = id => !sceneComparable || excluded.has(id);
   const measure = (name,x0,y0,x1,y1,approximate,materialId,excludeBoundary=false) => {
     let count=0,abs=0,square=0,signal=0,noiseSquare=0;
     const sumA=[0,0,0],sumB=[0,0,0],noiseVariance=[0,0,0];
     for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++) {
       const pixel=y*width+x,offset=pixel*4;
-      if(excludeBoundary && boundary[pixel] || excluded.has(ids[offset+2])!==approximate || materialId!==undefined && ids[offset+2]!==materialId) continue;
+      if(excludeBoundary && boundary[pixel] || isApproximate(ids[offset+2])!==approximate || materialId!==undefined && ids[offset+2]!==materialId) continue;
       count++;
       for(let c=0;c<3;c++) {
         const a=mu[offset+c],b=reference[offset+c],d=a-b;
@@ -51,10 +52,10 @@ export function comparePixels({mu,reference,ids,noiseA,noiseB,width,height,appro
   };
   measure('comparable',0,0,width,height,false);measure('approximate',0,0,width,height,true);
   for(let y=0;y<4;y++) for(let x=0;x<4;x++) measure(`tile-${x}-${y}`,Math.floor(x*width/4),Math.floor(y*height/4),Math.floor((x+1)*width/4),Math.floor((y+1)*height/4),false,undefined,true);
-  for(const id of new Set(Array.from(ids).filter((_,i)=>i%4===2))) measure(`material-${id}`,0,0,width,height,excluded.has(id),id,true);
+  for(const id of new Set(Array.from(ids).filter((_,i)=>i%4===2))) measure(`material-${id}`,0,0,width,height,isApproximate(id),id,true);
   const frame=regions.find(r=>r.name==='comparable');
   const frameErrors=noiseA && frame && frame.relativeRMSE>frame.noiseRelativeRMSE*(1+6*Math.sqrt(2/(frame.pixels*3)))?['comparable']:[];
   const regionErrors=noiseA?regions.filter(r=>r.boundaryExcluded && !r.approximate && r.meanBiasZScore.some(z=>z>6)).map(r=>r.name):[];
-  const status=errors=>!noiseA?'unassessed-noise':errors.length?'mismatch':'within-estimated-noise';
+  const status=errors=>!sceneComparable?'not-comparable':!noiseA?'unassessed-noise':errors.length?'mismatch':'within-estimated-noise';
   return {regions,comparisonErrors:[...frameErrors,...regionErrors],frameStatus:status(frameErrors),regionStatus:status(regionErrors),excludedBoundaryPixels:boundary.reduce((a,b)=>a+b,0)};
 }

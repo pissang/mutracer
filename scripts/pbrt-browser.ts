@@ -77,7 +77,7 @@ async function run(sequenceOffset = 0, prefix = '') {
       if (!hdr.data.every((value, i) => value === after.data[i])) throw new Error('Denoising changed linear HDR samples');
       await save(prefix + 'mutracer-oidn.png', await engine.display.toBlob(render)); oidnMs = performance.now() - start;
     }
-    return { loadedMs, downloadBytes, oidnMs, peakJSHeapBytes, elapsedMs: performance.now() - started, samples: render.samples, width, height, warnings: parsed.warnings, approximateMaterialIds: [...approximate], errors, adapter, exposure: model.settings.exposure,
+    return { sceneComparable: model.root.userData.pbrtComparable !== false, loadedMs, downloadBytes, oidnMs, peakJSHeapBytes, elapsedMs: performance.now() - started, samples: render.samples, width, height, warnings: parsed.warnings, approximateMaterialIds: [...approximate], errors, adapter, exposure: model.settings.exposure,
       memory: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize };
   } finally { clearInterval(memoryTimer); sync.dispose(); render.dispose(); engine.dispose(); }
 }
