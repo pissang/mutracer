@@ -77,17 +77,21 @@ adapter retains its previous bilinear reprojection.
 ## Comparison and memory
 
 Ordinary byte color maps retain their original data and declared color space;
-scale graphs carry separate multipliers. Scalar and transformed maps retain
+unmodified linear HDR maps also share decoded pixel data. Scale graphs carry
+separate multipliers. Scalar and transformed maps retain
 floating-point values. Rectangular/non-power-of-two height fields are resampled
 to the existing displacement layout, with a warning.
 
 The comparison sets PBRT's pixel filter to box with radius 0.5 to match MuTracer's
-uniform pixel jitter. It overrides spp and output resolution, preserves maxdepth,
+uniform pixel jitter. It overrides spp and output resolution, removes Film crop
+windows and pixel bounds, preserves maxdepth,
 sets an opaque black background when no environment exists, removes Film sensor exposure from the reference HDR and never tone maps numerical
 inputs. AOV material IDs identify approximate surface regions. This primary-hit
 mask does not isolate indirect paths that touch approximate materials. Independent
 seed pairs give a diagnostic estimate of regional mean noise, not a statistical
 proof of equivalence from a single pair.
+Each seed runs in a fresh Chrome process to avoid retaining both scenes' caches
+and allocations during memory measurement.
 
 Text and gzip Includes are decoded by statements to avoid the single-string size
 limit. The viewer parses them and PLY data in a Worker. The download preflight
