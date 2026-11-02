@@ -67,6 +67,9 @@ Run browser GPU tests, captures and benchmarks in headless Chrome
 (`--headless=new`) with a temporary profile, so results do not depend on a
 visible window, focus or an unlocked screen. Use a visible window only for checks
 that need real presentation, such as native window and HDR surface tests.
+Never lock, sleep or suspend the session, or change display or power settings;
+if a check needs a visible, unlocked screen that is not available, record it as
+blocked.
 
 Scale verification to the change. While iterating on display, denoising or
 scheduling, run `npm run test:parity` and the affected tests only; run the complete
@@ -110,6 +113,10 @@ of stopping for confirmation.
 ## Rendering changes
 
 - Keep correctness fixes even when the visual change is small.
+- For an algorithm that both web and native implement, develop and evaluate it
+  on web first. Port it to native only after the web version passes review and
+  is merged, then validate native once against the merged web behavior. Do not
+  port, test or run native gates while the algorithm is still being tuned.
 - When matching a reference renderer or paper, treat the reference as the
   behavior contract: align data semantics, pass order, random streams,
   candidate counts, and scene and display settings before judging image
@@ -148,11 +155,17 @@ of stopping for confirmation.
   commit bodies or contributor guides.
 - Review edited documentation passages separately, including retained text;
   remove details that do not affect usage and briefly report the review.
+- `docs/technical/` holds design notes for contributors: how an algorithm works,
+  why it was chosen and its limits. Keep usage in the guides.
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
 
 ## Multi-session tasks
 
+- Keep multi-stage tasks moving. When an item stalls, record what was tried
+  and the evidence, then continue with the next item. Collect unresolved items
+  and report them together at the end, so the maintainer can decide how to
+  proceed.
 - A task split across several sessions keeps one progress file beside its plan
   in `plans/`. It is a snapshot of the current state, not a log. It holds only:
   the status of each task with its commit, the remaining work in order, open

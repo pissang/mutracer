@@ -124,17 +124,13 @@ fn sampling_orthonormal_basis(
     );
 }
 
-fn sampling_spectral_rgb_filter(rgb: vec3f, wavelength: f32) -> vec3f {
-    if (wavelength == 0.0) {
+fn sampling_spectral_rgb_filter(rgb: vec3f, channel: i32) -> vec3f {
+    if (channel == 0) {
         return rgb;
     }
-    if (wavelength > 600.0) {
-        return vec3f(rgb.r, 0.0, 0.0);
-    }
-    if (wavelength > 500.0) {
-        return vec3f(0.0, rgb.g, 0.0);
-    }
-    return vec3f(0.0, 0.0, rgb.b);
+    var filtered = vec3f(0.0);
+    filtered[channel - 1] = rgb[channel - 1];
+    return filtered;
 }
 
 fn sampling_cauchy_ior(

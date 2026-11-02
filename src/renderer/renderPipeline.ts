@@ -11,6 +11,7 @@ export interface TraceSettings {
   transmissiveOutputAlphaMin: number;
   bounces: number; clamping: number; bevel: boolean; bevelSamples: number;
   dispersionWavelengths: 1 | 3; directLightCandidates: number;
+  caustics?: import('../Render.js').CausticSettings;
   alphaBlendStrategy: AlphaBlendStrategy; samplingPattern: SamplingPattern; maxSamples: number;
   timeBudgetMs: number; maxTiles: number; batchSamples: boolean;
 }

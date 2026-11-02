@@ -97,10 +97,11 @@ the substrate through the attenuation term.
 **Interior media.** Transmission describes a homogeneous volume:
 `transmissionColor` is the color that survives one `transmissionDepth`, and
 `transmissionScatter` is the scattering albedo. With `transmissionDepth = 0`
-the tint is applied at the surface. Subsurface is a separate layer driven by its
-color and per-channel radius. When both are active, their coefficients combine
-into one volume. Dispersion (`transmissionDispersionScale > 0`) samples
-wavelengths spectrally.
+the tint is applied at the surface. Subsurface has its own color and per-channel
+radius. A positive `transmissionDispersionScale` enables
+wavelength-dependent refraction; values above `1` increase color separation,
+and `0` disables it. Lower `transmissionDispersionAbbeNumber` values also
+increase color separation.
 
 ## Compatibility names
 

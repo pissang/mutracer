@@ -25,8 +25,8 @@ export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising
 /** Execution overrides for one refine call; accumulated samples are retained. */
 export interface RefineOptions {
   /** Batch several samples in this call. Default this render's batchSamples. */ batchSamples?: boolean;
-  /** Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
-  /** Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
+  /** @deprecated Use refineUntil; this option will be removed in a later release. Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
+  /** @deprecated Use refineUntil; this option will be removed in a later release. Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
 }
 /** When a render filters its complete samples. Default converged. */
 export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
@@ -34,7 +34,7 @@ export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
 export interface Denoiser {
   /** Optional preallocation before first use or after device/dimension changes. Default undefined. The device may change after recovery; recreate device-owned resources then. */
   prepare?(input: {device: GPUDevice; width: number; height: number}): Promise<void>;
-  /** Write all output RGB, then resolve after submitting GPU work. Abort on input changes, restart, replacement or disposal; aborted results are discarded even if this resolves. Buffers are borrowed until settlement; do not retain or destroy them. */
+  /** Write all output RGB, then resolve after submitting GPU work. Abort on input changes, restart, replacement or disposal; aborted results are discarded even if this resolves. Settle within 10 seconds of an abort, or later denoising continues without waiting. Buffers are borrowed until settlement; do not retain or destroy them. */
   denoise(input: DenoiseInput, context: {signal: AbortSignal; schedule: DenoiseSchedule}): Promise<void>;
 }
 /** Borrowed, tightly packed rgba32float buffers, top row first, width*height*16 bytes of image data. */
@@ -89,6 +89,22 @@ export type OIDNDenoiserOptions = OIDNSettings & (
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
 export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
+/** Optional caustic estimators. All are disabled by default. Both fall back to path tracing when a smooth caster has stochastic blend coverage. */
+export interface CausticSettings {
+  /** WebGPU progressive photon mapping; ignored on WebGL. Used alone, it can reduce denoising blotches on directly visible receivers, with noisier raw output. Default `false`. */
+  photonMapping?: boolean | {
+    /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default. Default pixel count / 4, at most 262144. */ photonsPerSample?: number;
+    /** Positive first-batch gather radius in scene units, independent of photonsPerSample; shrinks as batches accumulate. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
+  };
+  /**
+   * WebGPU light tracing for directly visible caustic paths; ignored on WebGL.
+   * Default `false`.
+   */ lightTracing?: boolean | {
+    /** Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit. Default pixel count / 4. */
+    photonsPerSample?: number;
+  };
+}
+
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
@@ -96,6 +112,7 @@ export interface RenderSettings {
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Complete caustic light-to-camera paths can be longer than this depth.
    * Total path events, including transmission and alpha skips, are capped at 20
    * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
@@ -103,15 +120,16 @@ export interface RenderSettings {
    */ bounces?: number;
   /** Radiance clamp; 0 disables it. Default 0. */ clamping?: number;
   /** Sampling sequence. Default sobol. */ samplingPattern?: SamplingPattern;
+  /** Caustic estimators. All are disabled by default. */ caustics?: CausticSettings;
   /** Light candidates per vertex; WebGPU only, ignored on WebGL. Default 4. */ directLightCandidates?: number;
   /** Rounded material edges. Default true. */ bevel?: boolean;
   /** Bevel neighborhood probes, clamped to 1–32. Default 8. */ bevelSamples?: number;
-  /** Wavelengths per dispersion sample. Default 3; 1 selects one random wavelength. */ dispersionWavelengths?: 1 | 3;
+  /** Wavelength paths per dispersion sample, each carrying one RGB channel. Default 3; 1 selects one random channel. */ dispersionWavelengths?: 1 | 3;
   /** Primary-ray alpha blend strategy; WebGPU only. Default stochastic. */ alphaBlendStrategy?: AlphaBlendStrategy;
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;
-  /** Maximum tiles per frame. Default Infinity. */ maxTiles?: number;
-  /** Let one refine submit several samples, up to timeBudgetMs of GPU work; WebGPU requires GPU timestamps. RenderLoop also keeps batching between display frames. Default false. */ batchSamples?: boolean;
+  /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles?: number;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. RenderLoop also batches between display frames when individual tiles fit the budget. Default false. */ batchSamples?: boolean;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */ allowMultipleSamplesPerFrame?: boolean;
   /** Adapt scale to frame timing; minScale must not exceed resolutionScale. Default false. */ adaptiveResolution?: {targetFrameMs: number; minScale: number} | false;
   /** Single-level fallback on the same engine. Default null. */ fallback?: Render | null;
@@ -216,6 +234,7 @@ export default class Render {
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Complete caustic light-to-camera paths can be longer than this depth.
    * Total path events, including transmission and alpha skips, are capped at 20
    * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
@@ -223,6 +242,7 @@ export default class Render {
    */ bounces = 3;
   /** Per-sample radiance clamp; 0 disables it. Default 0. */ clamping = 0;
   /** Sampling sequence. Default sobol. */ samplingPattern: SamplingPattern = 'sobol';
+  /** Caustic estimators. Default undefined (all disabled). */ caustics?: CausticSettings;
   /** WebGPU light candidates per vertex; ignored on WebGL. Default 4. */ directLightCandidates = 4;
   /** Rounded material edges. Default true. */ bevel = true;
   /** Bevel probes, clamped to 1–32. Default 8. */ bevelSamples = 8;
@@ -230,8 +250,8 @@ export default class Render {
   /** WebGPU primary-ray alpha policy; ignored on WebGL. Default stochastic. */ alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
   /** Minimum transmissive path alpha. Default 1. Changing it restarts this render. */ transmissiveOutputAlphaMin = 1;
   /** Execution budget in milliseconds. Default 21. */ timeBudgetMs = 21;
-  /** Maximum tiles per frame. Default Infinity. */ maxTiles = Infinity;
-  /** Let one refine submit several samples within timeBudgetMs; WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
+  /** Maximum tile grid size per sample, rounded up to a rectangular grid. Fewer tiles make each tile larger; this does not cap work per frame or refine call. Default Infinity. */ maxTiles = Infinity;
+  /** Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it. WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
   /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */
   get allowMultipleSamplesPerFrame(): boolean { return this.batchSamples; }
   set allowMultipleSamplesPerFrame(value: boolean) { this.batchSamples = value; }
@@ -283,6 +303,7 @@ export default class Render {
   private _disposed = false;
   private _busy = false;
   private _refineOptions?: RefineOptions;
+  private _refillController?: AbortController;
   private _offlineCamera = false;
   private _input = {scene: -1, camera: -1, settings: ''};
   private _adaptiveScale = 1;
@@ -328,8 +349,8 @@ export default class Render {
     engine._register(this);
     if (denoiser) void this.setDenoiser(denoiser).catch(error => this._engine._notifyError(error));
   }
-  /** Actual target width; before allocation uses the requested dimensions. */ get width() { return this._target?.getMemory().width || this._size().width; }
-  /** Actual target height; before allocation uses the requested dimensions. */ get height() { return this._target?.getMemory().height || this._size().height; }
+  /** Output width: exact for fixed renders; otherwise the target width, or the requested width before allocation. */ get width() { return this._fixed?.width ?? (this._target?.getMemory().width || this._size().width); }
+  /** Output height: exact for fixed renders; otherwise the target height, or the requested height before allocation. */ get height() { return this._fixed?.height ?? (this._target?.getMemory().height || this._size().height); }
   /** Complete beauty samples since the last restart; stale engine inputs report 0. Default 0. */
   get samples() { return this._current ? this._target?.getTotalSamplesRendered() ?? 0 : 0; }
   /** Whether complete beauty samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
@@ -341,12 +362,28 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
-  /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
-  get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
-  /** Waits for the next release of WebGPU sampling queue capacity. Resolves immediately if no sampling is queued or on WebGL; does not submit work. Throws after disposal. */
-  whenReadyToRefine(): Promise<void> {
+  /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
+  /** @internal Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get _gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** @internal Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuTileTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeTileTime?.() : undefined; }
+  /**
+   * @deprecated Use refineUntil; this will be removed in a later release. Waits for the
+   * next release of WebGPU sampling queue capacity and returns true when sampling was
+   * queued. Returns false immediately with no queued sampling, on WebGL, or for only
+   * denoising, display or offline convergence work. Does not submit work. Throws after
+   * disposal.
+   */
+  whenReadyToRefine(): Promise<boolean> { return this._whenReadyToRefine(); }
+  /** @internal Waits for the next release of WebGPU sampling queue capacity and returns true
+   * when sampling was queued. Returns false immediately with no queued sampling,
+   * on WebGL, or for only denoising, display or offline convergence work.
+   * Does not submit work. Throws after disposal.
+   */
+  _whenReadyToRefine(): Promise<boolean> {
     if (this._disposed) throw new Error('Render is disposed.');
-    return this._target?.whenTraceAvailable?.() ?? Promise.resolve();
+    return !this._busy ? this._target?.whenTraceAvailable?.() ?? Promise.resolve(false) : Promise.resolve(false);
   }
   /** Complete surface-output samples since restart; stale inputs report 0. Independent of beauty samples. Default 0. */
   get aovSamplesRendered(): number { return this._current ? this._target?.getAovSamples?.() ?? 0 : 0; }
@@ -377,7 +414,7 @@ export default class Render {
     if (!target) return this._status = 'preparing';
     const before = target.getAovSamples?.() ?? 0;
     const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples);
-    if (!target.refineAovs?.(this._engine._inputs.value!, Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
+    if (!target.refineAovs?.(this._targetCamera(this._engine._inputs.value!), Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
     if ((target.getAovSamples?.() ?? 0) > before) {
       this._frameTime = Math.max(.001, performance.now() - started);
       this._frameStart = started; this._frameScale = this._adaptiveScale;
@@ -397,6 +434,40 @@ export default class Render {
     if (this._fixed) return this._fixed;
     const scale = this.adaptiveResolution ? Math.min(this._adaptiveScale, this._resolutionScale) : this._resolutionScale;
     return {width: Math.max(1, Math.round(this._engine.display.canvas.width * scale)), height: Math.max(1, Math.round(this._engine.display.canvas.height * scale))};
+  }
+  /**
+   * Backends may round targets up. A fixed render widens the view over the extra
+   * pixels so the requested centered rectangle keeps its framing and square pixels.
+   */
+  private _targetCamera(camera: Camera) {
+    const memory = this._target?.getMemory(), fixed = this._fixed;
+    if (!memory || !fixed || (memory.width === fixed.width && memory.height === fixed.height)) return camera;
+    const scaleX = memory.width / fixed.width, scaleY = memory.height / fixed.height;
+    const widened = camera.clone();
+    widened.transform = camera.transform;
+    if (camera.projection === 'perspective') {
+      widened.fov = Math.atan(Math.tan(camera.fov * Math.PI / 360) * scaleY) * 360 / Math.PI;
+      widened.aspect = (camera.aspect ?? fixed.width / fixed.height) * scaleX / scaleY;
+      // Keeps the lens focal length, and with it depth of field.
+      widened.sensorHeight = camera.sensorHeight * scaleY;
+    } else {
+      const x = (camera.left + camera.right) / 2, y = (camera.bottom + camera.top) / 2;
+      widened.left = x + (camera.left - x) * scaleX; widened.right = x + (camera.right - x) * scaleX;
+      widened.bottom = y + (camera.bottom - y) * scaleY; widened.top = y + (camera.top - y) * scaleY;
+    }
+    return widened;
+  }
+  /** @internal Crops a target-sized RGBA image to a fixed render's requested rectangle. */
+  _cropOutput<T extends Float32Array | Uint32Array>(image: {width: number; height: number; data: T}): {width: number; height: number; data: T} {
+    const fixed = this._fixed;
+    if (!fixed || !image.width || (image.width === fixed.width && image.height === fixed.height)) return image;
+    const {width, height} = fixed, data = new (image.data.constructor as new (length: number) => T)(width * height * 4);
+    const left = (image.width - width) >> 1, top = (image.height - height) >> 1;
+    for (let y = 0; y < height; y++) {
+      const start = ((y + top) * image.width + left) * 4;
+      data.set(image.data.subarray(start, start + width * 4) as T, y * width * 4);
+    }
+    return {width, height, data};
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
     const settings=collectTraceSettings(this,sampleCap);
@@ -434,7 +505,7 @@ export default class Render {
   }
   private _trace(target: RenderTarget, limit: number) {
     if (this._sampleStart === undefined) { this._sampleStart = performance.now(); this._sampleScale = this._adaptiveScale; }
-    const compiling = target.trace(this._engine._inputs.value!, limit);
+    const compiling = target.trace(this._targetCamera(this._engine._inputs.value!), limit);
     if (compiling) this._sampleStart = undefined;
     return compiling;
   }
@@ -479,6 +550,76 @@ export default class Render {
     catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
     finally { this._refineOptions = previous; this._engine._reportShaderProgress(); }
   }
+  /**
+   * Calls refine() once synchronously, then keeps sampling on WebGPU until deadline.
+   * Call present() right after it; later samples appear at the next presentation.
+   * Sampling continues only with batchSamples on, the final channel displayed, a
+   * visible page and tiles that fit timeBudgetMs. It stops on abort or convergence.
+   * Preparing, compiling, denoising and the first incomplete sample advance only
+   * through the synchronous call, which is all WebGL runs. A new call ends the
+   * previous one. Asynchronous errors set status to error and resolve; synchronous
+   * errors follow refine().
+   * @param deadline End time in performance.now() milliseconds.
+   * @param options.signal Optional application cancellation; default none. An
+   * already aborted signal still permits the synchronous refine().
+   */
+  refineUntil(deadline: number, options?: {signal?: AbortSignal}): Promise<void> {
+    return this._refineToDeadline(deadline, options?.signal);
+  }
+  private _refineToDeadline(deadline: number, signal?: AbortSignal, options?: RefineOptions, beforeRefill?: () => void): Promise<void> {
+    this._refillController?.abort();
+    const controller = this._refillController = new AbortController();
+    // Keep lifecycle exceptions synchronous, just like refine(). Install the
+    // controller first so a synchronous sample listener can revoke this call.
+    try { this.refine(undefined, options); }
+    catch (error) { controller.abort(); if (this._refillController === controller) this._refillController = undefined; throw error; }
+    const device = this._engine.device;
+    const canContinue = (afterWait = false) => !controller.signal.aborted && !signal?.aborted &&
+      !this._disposed && !this._busy && device !== undefined && device === this._engine.device &&
+      (typeof document === 'undefined' || !document.hidden) && performance.now() < deadline &&
+      this.batchSamples && this.status === 'converging' && !this.denoising && this.samples > 0 &&
+      this.gpuTileTimeMs !== undefined && this.gpuTileTimeMs <= this.timeBudgetMs &&
+      this._engine.display.channel === 'final' && (!afterWait || this._engine._isPresented(this._target));
+    if (!canContinue()) {
+      if (this._refillController === controller) this._refillController = undefined;
+      return Promise.resolve();
+    }
+    return (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const abort = () => controller.abort();
+      const visibility = () => { if (document.hidden) abort(); };
+      let stopped!: () => void;
+      const cancelled = new Promise<false>(resolve => { stopped = () => resolve(false); });
+      controller.signal.addEventListener('abort', stopped, {once: true});
+      signal?.addEventListener('abort', abort, {once: true});
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility);
+      if (Number.isFinite(deadline)) timer = setTimeout(abort, Math.min(2147483647, Math.max(0, deadline - performance.now())));
+      try {
+        while (canContinue()) {
+          if (!await Promise.race([this._whenReadyToRefine(), cancelled])) break;
+          beforeRefill?.();
+          if (!canContinue(true)) break;
+          this.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && !this._disposed) {
+          this._engine._setRenderError(this._engine._notifyError(error)); this._status = 'error';
+        }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        controller.signal.removeEventListener('abort', stopped);
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility);
+        if (this._refillController === controller) this._refillController = undefined;
+      }
+    })();
+  }
+  /** @internal Whether this render currently has a between-frame lease. */
+  get _refilling() { return !!this._refillController && !this._refillController.signal.aborted; }
+  /** @internal Preserve loop-specific synchronous overrides while using refineUntil. */
+  _refineUntil(deadline: number, signal: AbortSignal, options: RefineOptions, beforeRefill: () => void): Promise<void> {
+    return this._refineToDeadline(deadline, signal, options, beforeRefill);
+  }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
     this._reloadDenoiser();
@@ -499,7 +640,7 @@ export default class Render {
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (this._trace(target, limit)) return this._status = 'compiling';
-    } else if (target.refineAovs && !target.refineAovs(this._engine._inputs.value!)) {
+    } else if (target.refineAovs && !target.refineAovs(this._targetCamera(this._engine._inputs.value!))) {
       return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);
@@ -576,15 +717,16 @@ export default class Render {
   }
 
   private _cancelDenoise() { this._denoiseController?.abort(); this._denoiseController = undefined; this._denoiseRevision++; this._target?.cancelDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
-  /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
+  /** @internal */ _inputsChanged(resetTiming = false) { this._refillController?.abort(); this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
   /** @internal */ _deviceLost(recovering: boolean) {
+    this._refillController?.abort();
     this._cancelAdaptiveFrames();
     this._cancelDenoise(); this._filterRevision++;
     this._filter = undefined; this._filterPending = undefined; this._filterKey = '';
     this._target = undefined; this._input = {scene: -1, camera: -1, settings: ''};
     this._status = recovering ? 'preparing' : 'error';
   }
-  /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
+  /** @internal */ _displayChanged() { this._refillController?.abort(); this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
     const target = this._target, filter = this._filter;
     if (!target || !filter || this._denoisePending || this.samples < 1 || this._denoisedSamples === this.samples) return;
@@ -610,7 +752,7 @@ export default class Render {
         target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now();
         if (frameStart !== undefined) this._frameTime = Math.max(this._frameTime, this._lastDenoiseTime - frameStart);
       }
-    });
+    }, controller.signal);
     this._denoisePending = task;
     void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => {
       if (this._denoisePending === task) {
@@ -631,14 +773,14 @@ export default class Render {
       aovMask(this.aovs);
       if (!this.aovs.includes(aov)) throw new Error(`AOV ${aov} is not enabled`);
       if (!target?.readAov) throw new Error('AOV output is not ready');
-      target.activate(); return target.readAov(aov);
+      target.activate(); return this._cropOutput(await target.readAov(aov));
     }
     if (!target || this.samples === 0) return {width: 0, height: 0, data: new Float32Array(0)};
     if (kind === 'denoised' && this._denoisedSamples === 0) {
       if (!this._warnedDenoisedReadback) { this._warnedDenoisedReadback = true; console.warn('Denoised output is not ready; reading HDR samples instead.'); }
       kind = 'hdr';
     }
-    target.activate(); return target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal');
+    target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
@@ -646,10 +788,11 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
+    this._refillController?.abort();
     this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise(); this._cancelAdaptiveFrames();
     if (this._target) this._engine._releaseTarget(this._target);
     if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
@@ -678,6 +821,7 @@ export default class Render {
       const current = this._engine._inputs;
       if (current.scene !== inputs.scene || current.camera !== inputs.camera) throw new Error('Engine inputs changed during converge.');
     };
+    this._refillController?.abort();
     this._busy = true;
     const abortConverge = () => this._cancelDenoise();
     options.signal?.addEventListener('abort', abortConverge, {once: true});
@@ -701,7 +845,7 @@ export default class Render {
           check(); if (performance.now() - started > timeout) throw new Error(`Timed out rendering the offline ${name} pass.`);
           target!.activate(); target!.setOfflineRenderOptions({samplesPerBatch: batch, deferPostProcess: true, sampleSequenceOffset: offset});
           const before = target!.getTotalSamplesRendered(), batchStarted = performance.now();
-          this._status = target!.trace(camera, cap) ? 'compiling' : 'converging';
+          this._status = target!.trace(this._targetCamera(camera), cap) ? 'compiling' : 'converging';
           const count = target!.getTotalSamplesRendered();
           if (count !== previous) {
             previous = count; options.onProgress?.({stage: name, samples: Math.min(count, cap), targetSamples: cap});

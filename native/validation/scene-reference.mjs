@@ -96,7 +96,7 @@ export async function referenceScene(bytes, sourceRoot) {
     pass.setSampleTiles(1, 1, 0, 0);
     pass.setSampleCount(0);
     pass.setJitter(.5, .5);
-    await pass.updatePipeline();
+    for (let pending; (pending = pass.updatePipeline());) await pending;
     if (!pass.isPipelineReady())
         throw pass.getPipelineError() ?? new Error('Reference pipeline not ready');
     pass.createPass(device.createCommandEncoder(), true, [1, 1]);

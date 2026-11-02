@@ -1,0 +1,12 @@
+{
+  "fill": { "solid": "srgb:0.15,0.15,0.15,1" },
+  "groups": [
+    {
+      "layers": [{ "image-name": "artwork.png", "name": "MuTracer" }],
+      "shadow": { "kind": "neutral", "opacity": 0 },
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}

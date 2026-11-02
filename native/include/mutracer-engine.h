@@ -26,7 +26,7 @@ extern "C" {
  * Event/progress callbacks run synchronously on the calling thread inside
  * mt_engine_update,
  * mt_engine_read_depth_samples,
- * mt_render_refine, mt_render_converge and the render loop calls, and may call
+ * mt_render_refine, mt_render_refine_until, mt_render_converge and the render loop calls, and may call
  * back into this API, except into the render loop that is running them
  * (MT_ERROR_INVALID_STATE).
  *
@@ -328,7 +328,9 @@ typedef enum mt_alpha_blend_strategy {
 typedef struct mt_render_options {
   uint32_t struct_size;
   uint32_t max_samples; /* 1..16384. Default 2048. */
-  uint32_t bounces; /* Clamped to 1..20. Default 3. */
+  /* Scattering depth, clamped to 1..20. Default 3. Complete caustic
+   * light-to-camera paths can be longer than this depth. */
+  uint32_t bounces;
   uint32_t sampling_pattern; /* mt_sampling_pattern. Default MT_SAMPLING_SOBOL. */
   uint32_t direct_light_candidates; /* Clamped to 1..16. Default 4. */
   uint32_t bevel; /* Rounded material edges. Default 1. */
@@ -357,8 +359,16 @@ typedef struct mt_render_options {
    * GPU cost; secondary coverage remains stochastic. */
   uint32_t alpha_blend_strategy; /* mt_alpha_blend_strategy. */
   uint32_t reserved_tail; /* Must be 0. */
+  uint32_t caustic_flags; /* MT_CAUSTIC_* mask. Default 0 (all disabled). */
+  uint32_t light_photons; /* 0 selects pixel count / 4. Default 0. */
+  /* 0 selects pixel count / 4, at most 262144. Default 0. 28 bytes per photon plus up to 13 MiB
+     overhead; reduced to fit device limits and the 128 MiB batch budget. */
+  uint32_t photon_map_photons;
+  /* Nonnegative first-batch radius in scene units, independent of photon_map_photons;
+     shrinks with accumulated batches. 0 selects 3% of caster sphere radius. Default 0. */
+  float photon_map_radius;
 } mt_render_options;
-MT_ENGINE_LAYOUT(mt_render_options, 112);
+MT_ENGINE_LAYOUT(mt_render_options, 128);
 /* Initializes the full current record, including struct_size. Other render
  * option calls require struct_size == sizeof(mt_render_options). */
 int32_t mt_render_options_default(mt_render_options *output);
@@ -446,6 +456,22 @@ int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser
  * status (optional) receives mt_render_status. A render failure returns MT_OK
  * with MT_RENDER_ERROR and an error event. */
 int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t capacity);
+/* Runs one ordinary refine, then blocks collecting/refilling queued samples until
+ * a monotonic deadline budget_ms milliseconds after entry. budget_ms must be finite and >=0;
+ * 0 runs only the initial refine. Invalid input returns MT_ERROR_INVALID_ARGUMENT
+ * before scheduling. Preparation, compilation and initial sampling may exceed
+ * the budget; deadlines/cancellation do not interrupt a refine or callback already
+ * in progress. status is optional and receives mt_render_status, as in refine.
+ * Present this render first to enable refills, then present again after return.
+ * Refills require the Final display channel, batching, a completed sample, GPU
+ * timing within time_budget_ms, queued sampling, and no pending inputs/filter or
+ * convergence. No inputs are committed and no image is presented by this call.
+ * mt_render_cancel may interrupt from another thread; cancellation retains work
+ * already submitted and returns MT_OK with the current status. No cancellation
+ * is retained from an earlier call. Other same-engine calls follow the ordinary
+ * calling-thread rules; callbacks run as for refine. No pointers are retained. */
+int32_t mt_render_refine_until(mt_render render, double budget_ms, uint32_t *status,
+  char *error, size_t capacity);
 /* JNLM filters the composed SDR image, including PNG export, without
  * changing raw HDR, HDR window output or sample counts. Initialize with mt_jnlm_options_default. */
 typedef struct mt_jnlm_options {
@@ -516,8 +542,9 @@ int32_t mt_converge_options_default(uint32_t samples, mt_converge_options *outpu
  * same render returns MT_ERROR_INVALID_STATE meanwhile. */
 int32_t mt_render_converge(mt_render render, const mt_converge_options *options, uint32_t *samples,
   char *error, size_t capacity);
-/* Cancels a running converge of this render (or of the loop owning it as final
- * render). The only call allowed from another thread. Idempotent. */
+/* Cancels a running converge or refine_until of this render (or converge on
+ * the loop owning it as final render). The only call allowed from another thread.
+ * Idempotent; refine_until retains submitted work and returns its current status. */
 int32_t mt_render_cancel(mt_render render, char *error, size_t capacity);
 
 typedef struct mt_render_snapshot {

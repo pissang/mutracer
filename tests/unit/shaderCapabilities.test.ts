@@ -10,6 +10,8 @@ import MaterialTable from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import {createPlaneGeometry} from '../../src/util/commonGeometry';
+import Mesh from '../../src/scene/Mesh';
+import {MaterialChangeTracker} from '../../src/renderer/materialChanges';
 
 const texture = () => new Texture({width: 1, height: 1, data: new Uint8Array([128, 128, 128, 128])});
 function materialCapabilities(materials: OpenPBRMaterial[]) {
@@ -76,31 +78,188 @@ describe('shader capabilities', () => {
   });
 });
 
+// Compilation settles between frames; the next request installs the result.
+async function prepared(pass: any) {
+  await pass.updatePipeline();
+  pass.updatePipeline();
+}
+
 function pipelinePass() {
   const compile = vi.fn(async (_descriptor: GPUComputePipelineDescriptor) => ({} as GPUComputePipeline));
   const device = {createShaderModule: () => ({getCompilationInfo: async () => ({messages: []})}),
     createComputePipelineAsync: compile, pushErrorScope() {}, popErrorScope: async () => null} as unknown as GPUDevice;
   const pass = Object.create(WGPURayTracePass.prototype) as any;
   Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(),
-    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _prevPipelineConstants: {},
+    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _activeTarget: {}, _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
-    _rayTracePipelineLayout: {}, _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
+    _createPipelineLayout: vi.fn(() => ({})), _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
     _bevelSamples: 8, _hasDisplacement: false,
     _updateBindGroups: vi.fn(() => {pass._rayTraceBindGroups = [];})});
-  return {pass, compile};
+  return {pass, compile, device};
 }
 
 describe('retained WebGPU pipeline capabilities', () => {
+  function photonPass() {
+    const fixture = pipelinePass();
+    const {pass, compile} = fixture;
+    const targets = new Map<object, {data: object}>();
+    const ensure = vi.fn((target: object) => {
+      if (!targets.has(target)) targets.set(target, {data: {}});
+      return targets.get(target)!;
+    });
+    Object.assign(pass, {
+      _meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0}))],
+      _analyticLights: [], _emissiveTriangles: [], _targetOutputs: new Map(),
+      _width: 16, _height: 16,
+      _photonMap: {get: (target: object) => targets.get(target), ensure,
+        emission: {setDistribution() {}, use() {}, prepare: async () => ({})}}
+    });
+    compile.mockImplementation(async () => ({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline));
+    const quality = (enabled: boolean) => pass.setQuality({bounces: 3, bevel: false,
+      dispersionWavelengths: 1, directLightCandidates: 4,
+      caustics: enabled ? {photonMapping: true} : undefined});
+    quality(true);
+    pass.useTarget({});
+    return {...fixture, targets, ensure, quality};
+  }
+
+  it('prepares photon resources for the target activated during compilation', async () => {
+    const {pass, compile, targets, ensure} = photonPass();
+    let finish!: (pipeline: GPUComputePipeline) => void;
+    compile.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    pass._updateBindGroups.mockImplementation(() => {
+      expect(targets.get(pass._activeTarget)?.data).toBeDefined();
+      pass._rayTraceBindGroups = [];
+    });
+    const pending = pass.updatePipeline();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(1));
+    const target = {};
+    pass.useTarget(target);
+    finish({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline);
+    await pending;
+    pass.updatePipeline();
+    expect(pass.getPipelineError()).toBeUndefined();
+    expect(ensure).toHaveBeenLastCalledWith(target, 64);
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebinds alternating photon targets without reporting compilation', async () => {
+    const {pass, compile} = photonPass();
+    pass._updateBindGroups.mockImplementation(() => {pass._rayTraceBindGroups = [];});
+    const preview = {}, final = {};
+    // The first activation allocates each target's photon map.
+    for (const target of [preview, final]) {
+      pass.useTarget(target);
+      await prepared(pass);
+    }
+    // Each target retains its output bind group for the current pipeline.
+    for (const target of [preview, final])
+      pass._targetOutputs.set(target, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    const binds = pass._updateBindGroups.mock.calls.length;
+    for (const target of [preview, final, preview, final]) {
+      pass.useTarget(target);
+      void pass.updatePipeline();
+      expect(pass.isCompilingShader()).toBe(false);
+      expect(pass.isPipelineReady()).toBe(true);
+    }
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(binds + 4);
+    expect(compile).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['light tracing', 'photon mapping', 'both'])('resumes final sampling with %s while an old preview dirties resource bindings', async mode => {
+    const {pass, compile} = photonPass();
+    // A prepared emitter has no asynchronous work left on resource-only edits.
+    pass._photonMap.emission.prepare = vi.fn(async () => ({}));
+    pass._causticLight = {setDistribution() {}, use() {}, prepare: vi.fn(async () => ({}))};
+    pass.setQuality({bounces: 3, bevel: true, dispersionWavelengths: 1, directLightCandidates: 4,
+      caustics: {lightTracing: mode !== 'photon mapping', photonMapping: mode !== 'light tracing'}});
+    const preview = {}, final = {};
+    pass.useTarget(preview);
+    await prepared(pass);
+    pass._targetOutputs.set(preview, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    pass._constants.USE_NORMAL_MAPS = true;
+    pass.useTarget(final);
+    await prepared(pass);
+    pass._targetOutputs.set(final, {buffers: [], bindGroup: {}, pipeline: pass._rayTracePipeline});
+    const compilations = compile.mock.calls.length;
+    for (let frame = 0; frame < 3; frame++) {
+      // Display keeps the last completed preview visible until final samples.
+      pass.useTarget(preview);
+      expect(pass._needsUpdateBindGroups).toBe(false);
+      pass.useTarget(final);
+      void pass.updatePipeline();
+      expect(pass.isCompilingShader()).toBe(false);
+      expect(pass.isPipelineReady()).toBe(true);
+    }
+    expect(compile).toHaveBeenCalledTimes(compilations);
+    const bindings = pass._updateBindGroups.mock.calls.length;
+    pass._needsUpdateBindGroups = true;
+    pass.useTarget(preview); pass.useTarget(final);
+    void pass.updatePipeline();
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(bindings + 1);
+    expect(pass.isCompilingShader()).toBe(false);
+  });
+
+  it('recovers when caustics are toggled during compilation', async () => {
+    const {pass, compile, quality} = photonPass();
+    let finish!: () => void;
+    compile.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({getBindGroupLayout: () => ({})} as unknown as GPUComputePipeline);
+    }));
+    const pending = pass.updatePipeline();
+    quality(false);
+    await prepared(pass);
+    expect(pass.isPipelineReady()).toBe(true);
+    expect(pass.getPipelineError()).toBeUndefined();
+    finish();
+    await pending;
+    quality(true);
+    await prepared(pass);
+    expect(pass.isPipelineReady()).toBe(true);
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['ray pipeline', 'light emitter', 'photon emitter'] as const)(
+    'ignores an obsolete %s failure and retries when it is requested again', async stage => {
+      const {pass, compile} = photonPass();
+      pass._causticLight = {setDistribution() {}, use() {}, prepare: vi.fn(async () => ({}))};
+      pass._photonMap.emission.prepare = vi.fn(async () => ({}));
+      const both = () => pass.setQuality({bounces: 3, bevel: true, dispersionWavelengths: 1, directLightCandidates: 4,
+        caustics: {lightTracing: true, photonMapping: true}});
+      both();
+      let fail!: () => void;
+      const reject = () => new Promise((_resolve, rejected) => {fail = () => rejected(new Error('Obsolete'));});
+      if (stage === 'ray pipeline') compile.mockImplementationOnce(reject as never);
+      else (stage === 'light emitter' ? pass._causticLight : pass._photonMap.emission).prepare.mockImplementationOnce(reject);
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const pending = pass.updatePipeline();
+        await vi.waitFor(() => expect(fail).toBeDefined());
+        pass._constants.SAMPLING_PATTERN = 9;
+        await prepared(pass);
+        expect(pass.isPipelineReady()).toBe(true);
+        fail(); await pending;
+        expect(pass.getPipelineError()).toBeUndefined();
+        expect(log).not.toHaveBeenCalled();
+        delete pass._constants.SAMPLING_PATTERN;
+        await prepared(pass);
+        expect(pass.getPipelineError()).toBeUndefined();
+        expect(pass.isPipelineReady()).toBe(true);
+      } finally {log.mockRestore();}
+    }
+  );
+
   it('skips steady capability lookup but still updates dirty resource bindings', async () => {
     const {pass, compile} = pipelinePass();
     const find = vi.spyOn(pass._shaderCapabilities, 'find');
-    await pass.updatePipeline();
-    await pass.updatePipeline();
-    expect(find).toHaveBeenCalledTimes(1);
+    await prepared(pass);
+    const lookups = find.mock.calls.length;
+    await prepared(pass);
+    expect(find).toHaveBeenCalledTimes(lookups);
     expect(pass._updateBindGroups).toHaveBeenCalledTimes(1);
     pass._needsUpdateBindGroups = true;
-    await pass.updatePipeline();
-    expect(find).toHaveBeenCalledTimes(2);
+    await prepared(pass);
+    expect(find).toHaveBeenCalledTimes(lookups + 1);
     expect(pass._updateBindGroups).toHaveBeenCalledTimes(2);
     expect(compile).toHaveBeenCalledTimes(1);
   });
@@ -113,8 +272,8 @@ describe('retained WebGPU pipeline capabilities', () => {
     pass._constants.HAS_THIN_FILM = true;
     finish({} as GPUComputePipeline);
     await pending;
-    expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(0);
-    await pass.updatePipeline();
+    expect(pass._retainedShaderCapabilities).toBeUndefined();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(2);
     expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM);
   });
@@ -128,7 +287,7 @@ describe('retained WebGPU pipeline capabilities', () => {
       for (const metalness of [0, .25, .5, 1, .5, 0]) {
         material.baseMetalness = metalness;
         pass._updateMaterialConstants([material], new MaterialTable([material], []), geometry);
-        await pass.updatePipeline();
+        await prepared(pass);
         base ??= pass._rayTracePipeline;
         expect(pass._rayTracePipeline).toBe(base);
         expect(pass._retainedShaderCapabilities.MATERIAL_CAPABILITIES).toBe(MATERIAL_SHADER_CAPABILITIES.metal);
@@ -140,20 +299,20 @@ describe('retained WebGPU pipeline capabilities', () => {
 
   it('compiles coat/fuzz support together on first use while keeping metalness editable', async () => {
     const {pass, compile} = pipelinePass();
-    await pass.updatePipeline();
+    await prepared(pass);
     const base = pass._rayTracePipeline;
     expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(0);
     pass._constants.HAS_COAT = true;
-    await pass.updatePipeline();
+    await prepared(pass);
     const coated = pass._rayTracePipeline;
     pass._constants.HAS_COAT = false;
     pass._constants.HAS_FUZZ = true;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(pass._rayTracePipeline).toBe(coated);
     expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(WGPU_SCENE_FEATURE_BITS.HAS_FUZZ);
     pass._constants.HAS_FUZZ = false;
     pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.metal;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(pass._rayTracePipeline).toBe(base);
     expect(pass._constants.HAS_COAT).toBe(false);
     expect(compile).toHaveBeenCalledTimes(2);
@@ -162,19 +321,19 @@ describe('retained WebGPU pipeline capabilities', () => {
 
   it('prepares transmission on demand and reuses both base and transmission pipelines', async () => {
     const {pass, compile} = pipelinePass();
-    await pass.updatePipeline();
+    await prepared(pass);
     const base = pass._rayTracePipeline;
     pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.transmission;
-    await pass.updatePipeline();
+    await prepared(pass);
     const transmission = pass._rayTracePipeline;
     expect(transmission).not.toBe(base);
     expect(pass._retainedShaderCapabilities.MATERIAL_CAPABILITIES)
       .toBe(MATERIAL_SHADER_CAPABILITIES.metal | MATERIAL_SHADER_CAPABILITIES.transmission);
     pass._constants.MATERIAL_CAPABILITIES = 0;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(pass._rayTracePipeline).toBe(base);
     pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.transmission;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(pass._rayTracePipeline).toBe(transmission);
     expect(compile).toHaveBeenCalledTimes(2);
   });
@@ -182,37 +341,65 @@ describe('retained WebGPU pipeline capabilities', () => {
   it('reuses the expanded pipeline when a supported feature is removed or re-enabled', async () => {
     const {pass, compile} = pipelinePass();
     pass._constants.HAS_THIN_FILM = true;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(1);
     pass._constants.HAS_THIN_FILM = false;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(1);
     expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(0);
     pass._constants.HAS_SUBSURFACE = true;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(2);
     pass._constants.HAS_THIN_FILM = true;
     pass._constants.HAS_SUBSURFACE = false;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(2);
     expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM);
   });
 
   it('does not retain failed capabilities and can recover with the previous supported scene', async () => {
     const {pass, compile} = pipelinePass();
-    await pass.updatePipeline();
+    await prepared(pass);
     const supported = pass._retainedShaderCapabilities;
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       pass._constants.HAS_THIN_FILM = true;
       compile.mockRejectedValueOnce(new Error('test compilation failure'));
-      await pass.updatePipeline();
+      await prepared(pass);
       expect(pass.getPipelineError()).toBeDefined();
       expect(pass._retainedShaderCapabilities).toEqual(supported);
       pass._constants.HAS_THIN_FILM = false;
-      await pass.updatePipeline();
+      await prepared(pass);
       expect(pass.getPipelineError()).toBeUndefined();
       expect(pass._rayTracePipeline).toBeDefined();
+      expect(compile).toHaveBeenCalledTimes(2);
+    } finally {error.mockRestore();}
+  });
+
+  it('retries a failed pipeline after a material resource edit with unchanged shader capabilities', async () => {
+    const {pass, compile} = pipelinePass();
+    const material = new OpenPBRMaterial();
+    const geometry = createPlaneGeometry();
+    const materials = new MaterialTable([material], []);
+    pass._preparedMeshData = {materials: [material], geometry};
+    pass._materialData = materials;
+    pass._materialChanges = new MaterialChangeTracker();
+    pass._updateGPUBuffer = vi.fn(() => ({}));
+    pass._updateMaterialConstants([material], materials, geometry);
+    const constants = {...pass._constants};
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      compile.mockRejectedValueOnce(new Error('Resource validation failed'));
+      await prepared(pass);
+      expect(pass.getPipelineError()).toBeDefined();
+      await prepared(pass);
+      expect(compile).toHaveBeenCalledTimes(1);
+      material.baseColor = [.2, .3, .4];
+      pass._pendingMaterialUpdate = {level: 'params', materials: new Set([material])};
+      await prepared(pass);
+      expect(pass._constants).toEqual(constants);
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass.isPipelineReady()).toBe(true);
       expect(compile).toHaveBeenCalledTimes(2);
     } finally {error.mockRestore();}
   });
@@ -220,17 +407,17 @@ describe('retained WebGPU pipeline capabilities', () => {
   it('keeps transport support separate and returns to an earlier lean pipeline', async () => {
     const {pass, compile} = pipelinePass();
     Object.assign(pass._constants, {HAS_MEDIUM: false, HAS_THIN_FILM: false, HAS_SUBSURFACE: false});
-    await pass.updatePipeline();
+    await prepared(pass);
     const plain = pass._rayTracePipeline;
     pass._constants.HAS_THIN_FILM = true;
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(2);
     Object.assign(pass._constants, {HAS_THIN_FILM: false, HAS_MEDIUM: true, HAS_SUBSURFACE: true});
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(compile).toHaveBeenCalledTimes(3);
     expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE);
     Object.assign(pass._constants, {HAS_MEDIUM: false, HAS_SUBSURFACE: false});
-    await pass.updatePipeline();
+    await prepared(pass);
     expect(pass._rayTracePipeline).toBe(plain);
     expect(compile).toHaveBeenCalledTimes(3);
   });

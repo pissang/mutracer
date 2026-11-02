@@ -100,7 +100,8 @@ int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length
  * or MT_SAMPLING_RANDOM. max_samples configures the
  * sequence; render still allows total 1..16384 samples. seed is any u32.
  * bounces clamp to 1..20, direct-light candidates to 1..16 and bevel samples to
- * 1..32. clamping must be finite; 0 disables it. Transmissive alpha must be
+ * 1..32. Complete caustic light-to-camera paths can exceed bounces.
+ * clamping must be finite; 0 disables it. Transmissive alpha must be
  * finite. Scene quality flags still select bevel and dispersion.
  * sample_sequence_offset selects the first sequence index. struct_size must be
  * sizeof(mt_render_settings).
@@ -114,11 +115,17 @@ typedef struct mt_render_settings {
   uint32_t struct_size, sampling_pattern, seed, max_samples;
   uint32_t bounces, direct_light_candidates, bevel_samples, sample_sequence_offset;
   double clamping, transmissive_output_alpha_min;
+  uint32_t caustic_flags; /* MT_CAUSTIC_* bit mask, default 0 (all disabled). */
+  uint32_t light_photons, photon_map_photons; /* Default 0: pixel count / 4, capped by device limits;
+                                                photon_map_photons also at most 262144. */
+  /* Nonnegative first-batch radius in scene units, independent of photon_map_photons;
+     shrinks with accumulated batches. Default 0: 3% of the caster sphere radius. */
+  float photon_map_radius;
 } mt_render_settings;
 #if defined(__cplusplus) && __cplusplus >= 201103L
-static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+static_assert(sizeof(mt_render_settings) == 64, "mt_render_settings layout");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+_Static_assert(sizeof(mt_render_settings) == 64, "mt_render_settings layout");
 #endif
 /* Pure initialization, no device requirement. NULL returns MT_ERROR_INVALID_ARGUMENT. */
 int32_t mt_render_settings_default(mt_render_settings *output);

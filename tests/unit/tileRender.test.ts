@@ -70,6 +70,18 @@ describe('predictive tile rendering', () => {
     expect(firstSample.columns * firstSample.rows).toBeLessThan(16);
   });
 
+  it('caps the sample grid rather than the number of refine submissions', () => {
+    const tiles = makeTileRenderWithPredict();
+    tiles.setSize(1920, 1080); tiles.setDesiredMsPerTile(21); tiles.setMaxTiles(2);
+    const first = tiles.nextTile();
+    // Rectangular rounding of a two-tile limit produces 2 columns by 1 row.
+    expect(first.columns * first.rows).toBe(2);
+    expect(first.isLastTile).toBe(false); expect(tiles.nextTile().isLastTile).toBe(true);
+    expect(tiles.nextTile().isFirstTile).toBe(true);
+    tiles.setMaxTiles(1); tiles.reset();
+    const whole = tiles.nextTile(); expect(whole.isLastTile).toBe(true);
+    expect([whole.tileWidth, whole.tileHeight]).toEqual([1920, 1080]);
+  });
   it('drops old timing averages when requesting a fresh prediction', () => {
     const renderers = [makeTileRenderWithPredict(), makeTileRenderWithPredict()];
     for (const tiles of renderers) {

@@ -1,3 +1,7 @@
+import {photonQuerySource} from './photonMap.compute.js';
+import backgroundWgsl from './chunks/background.wgsl.js';
+import {researchTransport} from '../researchTransport.js';
+import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import reflectanceWGSL from './aovReflectance.wgsl.js';
@@ -19,6 +23,7 @@ import { createSampleMaterialWgsl } from './chunks/sampleMaterial.wgsl.js';
 import sampleLightWgsl from './chunks/sampleLight.wgsl.js';
 import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
+import {spectrumWgsl} from '../spectrum.js';
 import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
@@ -36,6 +41,14 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  debugGroup?: number;
+  /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
+  workgroupSize?:number;
+  lightTracing?: boolean;
+  photonMapping?:boolean;
+  photonMaxDepth?:number;
+  /** Internal A/B override for directly visible PM receivers. Default true; ignored with light tracing. */
+  photonDirectSubset?:boolean;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
   hasAnisotropyDirections?: boolean;
   /** Include independent coat normals only when a material uses that slot. */
@@ -56,8 +69,14 @@ export interface RayTraceShaderOptions {
 }
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
-export default function rayTraceCompute({
-  hasDisplacement,
+export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+  const research = researchTransport()?.compute(options);
+  const enabled = research?.enabled ?? false;
+  const partitionDepth = research?.maxDepth ?? 20;
+  const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
+  let {
+  hasDisplacement,workgroupSize=WORKGROUP_SIZE,
+  lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
   hasAlpha = true,
@@ -68,7 +87,7 @@ export default function rayTraceCompute({
   dynamicEnvironment = false,
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
-}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+} = options;
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
@@ -128,11 +147,12 @@ export default function rayTraceCompute({
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities })}
+${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
 ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
+  caustics: enabled || lightTracing || photonMapping,
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
@@ -142,6 +162,7 @@ ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
+${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
 ${sampleLightWgsl}${inputHooks?.declarations ?? ''}
 
@@ -192,7 +213,11 @@ fn bsdfMISWeight(scatteringPdf: f32, lightPdf: f32) -> f32 {
     max(scatteringPdf + weightedLightPdf, 1e-20);
 }
 
-${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals)}
+${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, lightTracing,photonMapping,partitionDepth,debugGroup>=30,photonMaxDepth) : ''}${research?.declarations ?? ''}${photonMapping?`const CAUSTIC_LIGHT_TRACING=${lightTracing};
+const CAUSTIC_MNEE=${enabled};
+const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
+const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -235,110 +260,10 @@ struct RayTraceAuxiliary {
   shadowCounts: vec2f,
 }
 
-fn groundedSurfaceDistance(point: vec3f, height: f32, radius: f32) -> f32 {
-  let pointLength = length(point);
-  if (pointLength < 0.00001) {
-    return -radius;
-  }
-
-  let originalY = radius * point.y / pointLength;
-  let transitionY = -1.5 * height;
-  var surfaceRadius: f32;
-  if (originalY >= 0.0) {
-    surfaceRadius = radius;
-  }
-  else if (originalY < transitionY) {
-    surfaceRadius = -height * pointLength / point.y;
-  }
-  else {
-    let factor = 1.0
-      - originalY * originalY / (3.0 * transitionY * transitionY);
-    surfaceRadius = radius * factor;
-  }
-  return pointLength - surfaceRadius;
-}
-
-fn groundedBackgroundDirection(origin: vec3f, direction: vec3f) -> vec3f {
-  if (!USE_GROUNDED_BACKGROUND) {
-    return direction;
-  }
-  let params = rtUniform.groundedBackgroundParams;
-  let rayDirection = normalize(direction);
-  let center = vec3f(
-    rtUniform.groundedBackgroundCenter.x,
-    params.z + params.x,
-    rtUniform.groundedBackgroundCenter.y
-  );
-  let localOrigin = origin - center;
-  let projectedOrigin = dot(localOrigin, rayDirection);
-  let discriminant = projectedOrigin * projectedOrigin
-    - dot(localOrigin, localOrigin) + params.y * params.y;
-  if (
-    discriminant <= 0.0
-    || groundedSurfaceDistance(localOrigin, params.x, params.y) > 0.0
-  ) {
-    return direction;
-  }
-
-  var farDistance = -projectedOrigin + sqrt(discriminant);
-  if (farDistance <= 0.0) {
-    return direction;
-  }
-
-  let sphereHit = localOrigin + rayDirection * farDistance;
-  if (sphereHit.y >= 0.0) {
-    return normalize(sphereHit);
-  }
-
-  if (rayDirection.y < -0.00001 && params.y > 1.5 * params.x) {
-    let groundDistance = (-params.x - localOrigin.y) / rayDirection.y;
-    let groundHit = localOrigin + rayDirection * groundDistance;
-    let groundRadius = (2.0 / 3.0)
-      * sqrt(params.y * params.y - 2.25 * params.x * params.x);
-    if (groundDistance > 0.0 && length(groundHit.xz) <= groundRadius) {
-      return normalize(groundHit);
-    }
-  }
-
-  var nearDistance = 0.0;
-  for (var i = 0; i < 14; i++) {
-    let middleDistance = (nearDistance + farDistance) * 0.5;
-    let middlePoint = localOrigin + rayDirection * middleDistance;
-    if (groundedSurfaceDistance(middlePoint, params.x, params.y) > 0.0) {
-      farDistance = middleDistance;
-    }
-    else {
-      nearDistance = middleDistance;
-    }
-  }
-  let hit = localOrigin + rayDirection * ((nearDistance + farDistance) * 0.5);
-  return normalize(hit);
-}
-
-fn sampleSceneBackground(ray: Ray) -> vec4f {
-  var bg = vec4f(0.0);
-  if (USE_BACKGROUND_MAP) {
-    let d = groundedBackgroundDirection(ray.o, ray.d);
-    let t = rtUniform.backgroundMapTransform;
-    let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-    let rotation = rtUniform.backgroundMapRotation;
-    let mapDirection = transpose(mat3x3f(rotation[0].xyz, rotation[1].xyz, rotation[2].xyz)) * backgroundDirection;
-    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(mapDirection));
-    bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
-  }
-  else if (USE_BACKGROUND) {
-    bg = rtUniform.backgroundColor;
-  }
-  else if (USE_ENVMAP) {
-    bg = textureLinear(envMap, environmentUv(ray.d));
-  }
-  return bg;
-}
-
-fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
+${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, channel: i32) -> vec4f {
   let bg = sampleSceneBackground(ray);
   if (SPECTRAL) {
-    return vec4f(sampling_spectral_rgb_filter(bg.rgb, wavelength), bg.a);
+    return vec4f(sampling_spectral_rgb_filter(bg.rgb, channel), bg.a);
   }
   return bg;
 }
@@ -364,7 +289,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           // before the grounded skybox. Preserve the displayed projection.
           let bg = sampleSpectralSceneBackground(
             (*path).ray,
-            (*si).wavelength
+            (*si).spectralChannel
           );
           let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
             envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
@@ -376,7 +301,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
           let envUv = environmentUv((*path).ray.d);
           var emission = textureLinear(envMap, envUv).rgb;
           if (SPECTRAL) {
-            emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
+            emission = sampling_spectral_rgb_filter(emission, (*si).spectralChannel);
           }
           (*path).li += (*path).beta * emission *
             bsdfMISWeight((*path).scatteringPdf, envMapPdf(envUv));
@@ -385,7 +310,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
       else {
         let bg = sampleSpectralSceneBackground(
           (*path).ray,
-          (*si).wavelength
+          (*si).spectralChannel
         );
         (*path).li += (*path).beta * bg.rgb * bg.a;
       }
@@ -399,7 +324,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
     // reconstruct the skybox instead of adding three full RGB copies.
     let bg = sampleSpectralSceneBackground(
       (*path).ray,
-      (*si).wavelength
+      (*si).spectralChannel
     );
     if ((*path).fromEye) {
       // Sample from background if first ray not hit anything.
@@ -539,23 +464,24 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
     if (d != INF && !(occluded && isAlphaOccluded)) {
       let misWeight = bsdfMISWeight((*path).scatteringPdf, lightSample.pdf);
       if (SPECTRAL) {
-        lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).wavelength);
+        lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, (*si).spectralChannel);
       }
-      (*path).li += misWeight * (*path).beta * lightSample.emission;
+      ${enabled || lightTracing || photonMapping ? 'if (!causticHitOwned(*path, true, true)) { causticHotRecord(*path,misWeight*lightSample.emission,2u); ' : ''}(*path).li += misWeight * (*path).beta * lightSample.emission;${enabled || lightTracing || photonMapping ? ' }' : ''}
       (*path).alpha = 1.0;
       (*path).abort = true;
     }
   }
 
   if (USE_ENVMAP) {
-    if (!((*si).hit && isAlphaOccluded)) {
+    if (!((*si).hit && isAlphaOccluded)) {${lightTracing||photonMapping ? /* wgsl */ `
+      if(causticHitOwned(*path,false,true)){(*path).abort=true;return;}` : ''}
       if ((*path).isNextRefraction) {
         // Camera-visible transmission follows the displayed background,
         // including grounded projection. Other rays use the raw environment
         // map as the physically sampled lighting source.
         let bg = sampleSpectralSceneBackground(
           (*path).ray,
-          (*si).wavelength
+          (*si).spectralChannel
         );
         let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
             envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
@@ -572,7 +498,7 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
         envMapPdf(_uv) * rtUniform.envLightPmf
       );
       if (SPECTRAL) {
-        emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
+        emission = sampling_spectral_rgb_filter(emission, (*si).spectralChannel);
       }
       // TODO force the min alpha to be 1 when showing envmap as background
       if (!USE_BACKGROUND) {
@@ -908,10 +834,10 @@ ${primaryVariables}
   let singleWavelength = rtUniform.dispersionWavelengths == 1;
   var dispersivePrimary = false;
   var heroWavelengthIndex = 0;
+  var wavelengthSample = 0.0;
   var wavelengthRngState: vec4u;
   var wavelengthHashedCounter = 0u;
   var wavelengthAux: RayTraceAuxiliary;
-  let wavelengths = array<f32, 3>(650.0, 510.0, 475.0);
   var color = vec3f(0.0); var alpha = 0.0;
   var accumulatedGuideAlbedo = vec3f(0.0);
   var accumulatedGuideNormal = vec3f(0.0);
@@ -929,20 +855,24 @@ ${primaryVariables}
       if (!primaryReady) {
 ${primaryGuides}
         primarySi = si; primaryMa = ma; primaryReady = true;
-        wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
         dispersivePrimary = si.hit & (ma.transmissionWeight > 0.001) & (ma.transmissionDispersionScale > 0.001);
-        if (singleWavelength & dispersivePrimary) {
-          heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
+        wavelengthSample = sample1D(CAMERA_WAVELENGTH);
+        if (singleWavelength) {
+          heroWavelengthIndex = min(i32(floor(wavelengthSample * 3.0)), 2);
+          wavelengthSample = fract(wavelengthSample * 3.0);
         }
+        wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
       }
       si = primarySi; ma = primaryMa; wavelengthAux = *outAux;
       if (!singleWavelength) {
         s0 = wavelengthRngState; hashedCounter = wavelengthHashedCounter; samplingBounce = 0u;
         wavelengthAux.isBlank = false; wavelengthAux.isShadowCatcher = false;
       }
-      si.wavelength = 0.0;
+      si.wavelength = 0.0; si.spectralChannel = 0;
       if (!singleWavelength | dispersivePrimary) {
-        si.wavelength = wavelengths[select(wavelengthIndex, heroWavelengthIndex, singleWavelength)];
+        let channel = select(wavelengthIndex, heroWavelengthIndex, singleWavelength);
+        si.spectralChannel = channel + 1;
+        si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
         ma.specularIor = sampling_cauchy_ior(si.wavelength, ma.specularIor,
           ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
       }
@@ -990,7 +920,6 @@ ${primaryGuides}
       // preview and offline RGB splitting. A runtime loop bound prevents the
       // WGSL compiler from cloning the full path graph three times while the
       // uniform still selects the exact existing preview/offline behavior.
-      let rgbWaveLengths = array<f32, 3>(650.0, 510.0, 475.0);
       var colAccum = vec3f(0.0);
       var alpha = 0.0;
       var accumulatedGuideAlbedo = vec3f(0.0);
@@ -998,6 +927,7 @@ ${primaryGuides}
       var allBlank = true;
       var si2 = si;
       var ma2 = ma;
+      var wavelengthSample = sample1D(CAMERA_WAVELENGTH);
       let wavelengthRngState = s0;
       let wavelengthHashedCounter = hashedCounter;
       let singleWavelength = rtUniform.dispersionWavelengths == 1;
@@ -1006,10 +936,11 @@ ${primaryGuides}
         ma.transmissionDispersionScale > 0.001;
       let wavelengthCount = select(3, 1, singleWavelength);
       var heroWavelengthIndex = 0;
-      if (singleWavelength && dispersivePrimary) {
+      if (singleWavelength) {
         // Stochastic hero wavelength: one RGB channel per pixel keeps the
         // preview spectral at one-third of the full three-path cost.
-        heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
+        heroWavelengthIndex = min(i32(floor(wavelengthSample * 3.0)), 2);
+        wavelengthSample = fract(wavelengthSample * 3.0);
       }
       for (var i = 0; i < wavelengthCount; i++) {
         // Common random numbers keep Monte Carlo error correlated between
@@ -1021,8 +952,11 @@ ${primaryGuides}
           samplingBounce = 0u;
         }
         si.wavelength = 0.0;
+        si.spectralChannel = 0;
         if (!singleWavelength || dispersivePrimary) {
-          si.wavelength = rgbWaveLengths[select(i, heroWavelengthIndex, singleWavelength)];
+          let channel = select(i, heroWavelengthIndex, singleWavelength);
+          si.spectralChannel = channel + 1;
+          si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
           ma.specularIor = sampling_cauchy_ior(
             si.wavelength,
             ma.specularIor,
@@ -1073,7 +1007,7 @@ fn sampleCircle(ip: vec2f) -> vec2f {
 }
 
 
-@compute @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE}, 1)
+@compute @workgroup_size(${workgroupSize}, ${workgroupSize}, 1)
 fn main(@builtin(global_invocation_id) globalId: vec3u) {
   let outputSize = rtUniform.outputSize;
   let scaleOffset = rtUniform.scaleOffset;
@@ -1130,7 +1064,8 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   outAux.isShadowCatcher = false;
 ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 ${inputHooks?.unclampedColor ?? ''}
-  // Clamp at Integration Level to reduce fireflies.
+${(enabled||lightTracing||photonMapping) && debugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${debugGroup>=50?`vec4f(photonQueryStats,1.0)`:debugGroup>=30?`vec4f(causticHot[${debugGroup-30}],1.0)`:research?.debugOutput ?? 'liAndAlpha'};
+` : ''}  // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {
     let clamping = rtUniform.clamping;

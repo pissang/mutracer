@@ -1,6 +1,10 @@
 export {displayAovKind as aovChannel} from './aovDisplay.js';
 import type Render from '../Render.js';
 import type Display from '../Display.js';
+import { traceSchema } from '../settings/render.js';
+
+// Every setting that changes the traced image, including caustics.
+const imageFields = Object.values(traceSchema).filter(field => field.kind === 'image').map(field => field.key);
 
 export interface ProgressiveState { previousChanged: boolean; lastContinuousChange: number; changing: boolean; }
 /** Pure consecutive-edit policy; isolated changes start final immediately. */
@@ -12,9 +16,7 @@ export function updateProgressiveState(state: ProgressiveState, changed: boolean
 /** Public state used to leave a finished canvas idle while still noticing settings edits. */
 export function loopImageState(render: Render, display: Display): string {
   return JSON.stringify([
-    render.samples, render.width, render.height, render.maxSamples, render.bounces, render.clamping,
-    render.samplingPattern, render.directLightCandidates, render.bevel, render.bevelSamples,
-    render.dispersionWavelengths, render.alphaBlendStrategy, render.transmissiveOutputAlphaMin,
+    render.samples, render.width, render.height, render.maxSamples, imageFields.map(key => render[key]),
     render.resolutionScale, render.adaptiveResolution, render.denoiser, render.denoising,
     render.aovs, render.aovSamples,
     display.canvas.width, display.canvas.height, display.toneMapping, display.toneMappingExposure,

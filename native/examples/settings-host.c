@@ -5,7 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include "host-time.h"
-_Static_assert(sizeof(mt_render_settings)==48,"settings ABI");
+_Static_assert(sizeof(mt_render_settings)==64,"settings ABI");
 static char error[4096];
 static unsigned checks=0;
 #define REQUIRE(x) do {checks++;if(!(x)){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,#x);return 1;}} while(0)

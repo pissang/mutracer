@@ -21,8 +21,15 @@ pub struct Tree {
 struct Row {
     node: usize,
     depth: usize,
+    material: Option<usize>,
 }
-fn rows(nodes: &[Node], expanded: &HashSet<usize>, query: &str) -> Vec<Row> {
+fn rows(
+    nodes: &[Node],
+    expanded: &HashSet<usize>,
+    query: &str,
+    materials: &[Vec<usize>],
+    names: &[&str],
+) -> Vec<Row> {
     fn walk(
         id: usize,
         depth: usize,
@@ -30,16 +37,43 @@ fn rows(nodes: &[Node], expanded: &HashSet<usize>, query: &str) -> Vec<Row> {
         expanded: &HashSet<usize>,
         query: &str,
         out: &mut Vec<Row>,
+        materials: &[Vec<usize>],
+        names: &[&str],
     ) {
         if depth > 512 || nodes[id].unused {
             return;
         }
         let start = out.len();
-        let matching = query.is_empty() || nodes[id].name.to_lowercase().contains(query);
-        out.push(Row { node: id, depth });
+        let material_ids = materials.get(id).map(Vec::as_slice).unwrap_or(&[]);
+        let matching = query.is_empty()
+            || nodes[id].name.to_lowercase().contains(query)
+            || material_ids
+                .iter()
+                .any(|&material| names[material].to_lowercase().contains(query));
+        out.push(Row {
+            node: id,
+            depth,
+            material: None,
+        });
         if !query.is_empty() || expanded.contains(&id) {
+            if matching {
+                out.extend(material_ids.iter().map(|&material| Row {
+                    node: id,
+                    depth: depth + 1,
+                    material: Some(material),
+                }));
+            }
             for &child in &nodes[id].children {
-                walk(child, depth + 1, nodes, expanded, query, out);
+                walk(
+                    child,
+                    depth + 1,
+                    nodes,
+                    expanded,
+                    query,
+                    out,
+                    materials,
+                    names,
+                );
             }
         }
         if !matching && out.len() == start + 1 {
@@ -54,20 +88,22 @@ fn rows(nodes: &[Node], expanded: &HashSet<usize>, query: &str) -> Vec<Row> {
         .collect();
     roots.sort_by_key(|(_, node)| node.root_order);
     for (i, _) in roots {
-        walk(i, 0, nodes, expanded, query, &mut out);
+        walk(i, 0, nodes, expanded, query, &mut out, materials, names);
     }
     out
 }
 impl Viewer {
     pub(super) fn scene_rows(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing = egui::vec2(2., 4.);
         if !self.scene_tree.initialized {
             self.scene_tree.initialized = true;
             // Match the web tree: reveal the first two levels of authored groups.
             for (id, node) in self.model.1.nodes.iter().enumerate() {
-                if node.parent.is_none()
-                    || node
-                        .parent
-                        .is_some_and(|p| self.model.1.nodes[p].parent.is_none())
+                if node.meshes.is_empty()
+                    && (node.parent.is_none()
+                        || node
+                            .parent
+                            .is_some_and(|p| self.model.1.nodes[p].parent.is_none()))
                 {
                     self.scene_tree.expanded.insert(id);
                 }
@@ -94,10 +130,33 @@ impl Viewer {
             }
         }
         let nodes = self.model.1.nodes.clone();
+        let materials: Vec<Vec<usize>> = nodes
+            .iter()
+            .map(|node| {
+                let mut ids = Vec::new();
+                for &mesh in &node.meshes {
+                    let mesh = &self.model.meshes[mesh];
+                    for id in std::iter::once(mesh.material).chain(mesh.materials.iter().copied()) {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+                ids
+            })
+            .collect();
+        let material_names: Vec<_> = self
+            .model
+            .materials
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
         let items = rows(
             &nodes,
             &self.scene_tree.expanded,
-            &self.object_query.to_lowercase(),
+            &self.object_query.trim().to_lowercase(),
+            &materials,
+            &material_names,
         );
         if items.is_empty() {
             ui.weak("No matching objects");
@@ -111,18 +170,99 @@ impl Viewer {
                 self.selected_mesh
                     .is_some_and(|m| nodes[r.node].meshes.contains(&m))
             }) {
-                scroll = scroll.vertical_scroll_offset(index as f32 * 32.);
+                let offset =
+                    egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id("objects"))
+                        .unwrap_or_default()
+                        .offset
+                        .y;
+                let height = ui.available_height();
+                let pitch = 24. + ui.spacing().item_spacing.y;
+                let top = index as f32 * pitch;
+                let bottom = top + 24.;
+                let target = if top < offset {
+                    top
+                } else if bottom > offset + height {
+                    bottom - height
+                } else {
+                    offset
+                };
+                scroll = scroll.vertical_scroll_offset(
+                    target.clamp(0., (items.len() as f32 * pitch - height).max(0.)),
+                );
             }
         }
-        scroll.show_rows(ui, 32., items.len(), |ui, range| {
+        scroll.show_rows(ui, 24., items.len(), |ui, range| {
             for row in &items[range] {
                 let node = &nodes[row.node];
-                ui.push_id(row.node, |ui| {
+                ui.push_id((row.node, row.material), |ui| {
+                    if let Some(material) = row.material {
+                        ui.horizontal(|ui| {
+                            ui.add_space(row.depth as f32 * 10. + 14.);
+                            let selected = self.selected == material
+                                && self.selected_mesh.is_some_and(|m| node.meshes.contains(&m));
+                            let response = ui.add_sized(
+                                [ui.available_width() - 24., 24.],
+                                egui::Button::new("").selected(selected).frame(false),
+                            );
+                            let mat = &self.model.materials[material];
+                            let color: egui::Color32 =
+                                egui::Rgba::from_rgb(mat.color[0], mat.color[1], mat.color[2])
+                                    .into();
+                            ui.painter().circle_filled(
+                                response.rect.left_center() + egui::vec2(10., 0.),
+                                4.,
+                                color,
+                            );
+                            let text = egui::WidgetText::from(
+                                egui::RichText::new(&mat.name).color(if selected {
+                                    theme::ACCENT
+                                } else {
+                                    theme::SUBTLE
+                                }),
+                            )
+                            .into_galley(
+                                ui,
+                                Some(egui::TextWrapMode::Truncate),
+                                (response.rect.width() - 24.).max(1.),
+                                egui::TextStyle::Button,
+                            );
+                            ui.painter().galley(
+                                response.rect.left_center() + egui::vec2(22., -text.size().y * 0.5),
+                                text,
+                                theme::SUBTLE,
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    ui.is_enabled(),
+                                    selected,
+                                    &mat.name,
+                                )
+                            });
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new(("scene-material", row.node, material)),
+                                    response.rect,
+                                )
+                            });
+                            if response.on_hover_text(&mat.name).clicked() {
+                                self.selected_mesh = node.meshes.iter().copied().find(|&m| {
+                                    self.model.meshes[m].material == material
+                                        || self.model.meshes[m].materials.contains(&material)
+                                });
+                                self.selected = material;
+                                self.tab = 1;
+                                self.inspector_open = true;
+                            }
+                        });
+                        return;
+                    }
                     ui.horizontal(|ui| {
-                        ui.add_space(row.depth as f32 * 12.);
-                        if !node.children.is_empty() {
+                        ui.add_space(row.depth as f32 * 10.);
+                        if !node.children.is_empty() || !materials[row.node].is_empty() {
                             let response =
-                                ui.add_sized([18., 28.], egui::Button::new("").frame(false));
+                                ui.add_sized([14., 24.], egui::Button::new("").frame(false));
                             let c = response.rect.center();
                             let open = self.scene_tree.expanded.contains(&row.node);
                             let points = if open {
@@ -143,27 +283,36 @@ impl Viewer {
                                 theme::MUTED,
                                 egui::Stroke::NONE,
                             ));
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new(("scene-expand", row.node)),
+                                    response.rect,
+                                )
+                            });
                             if response.clicked() {
                                 if !self.scene_tree.expanded.remove(&row.node) {
                                     self.scene_tree.expanded.insert(row.node);
                                 }
                             }
                         } else {
-                            ui.add_space(18.);
+                            ui.add_space(14.);
                         }
                         let selected = self.selected_mesh.is_some_and(|m| node.meshes.contains(&m));
                         let response = ui.add_sized(
-                            [ui.available_width() - 28., 28.],
+                            [ui.available_width() - 24., 24.],
                             egui::Button::new("").selected(selected).frame(selected),
                         );
                         let color = if selected { theme::ACCENT } else { theme::TEXT };
                         controls::paint_icon(
                             ui,
-                            response.rect.left_center() + egui::vec2(12., 0.),
+                            response.rect.left_center() + egui::vec2(10., 0.),
                             if node.camera.is_some() {
                                 controls::Icon::Camera
                             } else if node.light {
                                 controls::Icon::Lighting
+                            } else if node.meshes.is_empty() {
+                                controls::Icon::Folder
                             } else {
                                 controls::Icon::Object
                             },
@@ -172,11 +321,11 @@ impl Viewer {
                         let galley = egui::WidgetText::from(node.name.as_str()).into_galley(
                             ui,
                             Some(egui::TextWrapMode::Truncate),
-                            (response.rect.width() - 30.).max(1.),
+                            (response.rect.width() - 24.).max(1.),
                             egui::TextStyle::Button,
                         );
                         ui.painter().galley(
-                            response.rect.left_center() + egui::vec2(26., -galley.size().y * 0.5),
+                            response.rect.left_center() + egui::vec2(22., -galley.size().y * 0.5),
                             galley,
                             color,
                         );
@@ -213,7 +362,7 @@ impl Viewer {
                             let visible =
                                 descendants.iter().any(|m| !self.model.1.hidden.contains(m));
                             let response =
-                                ui.add_sized([22., 28.], egui::Button::new("").frame(false));
+                                ui.add_sized([22., 24.], egui::Button::new("").frame(false));
                             let c = response.rect.center();
                             let stroke = egui::Stroke::new(1., theme::MUTED);
                             let points = (0..24)
@@ -344,6 +493,50 @@ pub fn from_gltf(
 mod tests {
     use super::*;
     #[test]
+    fn materials_are_expandable_children_and_search_keeps_their_ancestors() {
+        let nodes = vec![
+            Node {
+                name: "Scene".into(),
+                children: vec![1],
+                ..Default::default()
+            },
+            Node {
+                name: "Mesh".into(),
+                parent: Some(0),
+                meshes: vec![0],
+                ..Default::default()
+            },
+        ];
+        let materials = vec![vec![], vec![0, 1]];
+        let names = ["Ceramic", "Gold"];
+        assert_eq!(
+            rows(&nodes, &HashSet::new(), "", &materials, &names).len(),
+            1
+        );
+        assert_eq!(
+            rows(&nodes, &HashSet::from([0]), "", &materials, &names).len(),
+            2
+        );
+        let expanded = rows(&nodes, &HashSet::from([0, 1]), "", &materials, &names);
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|r| (r.node, r.depth, r.material))
+                .collect::<Vec<_>>(),
+            [(0, 0, None), (1, 1, None), (1, 2, Some(0)), (1, 2, Some(1))]
+        );
+        let found = rows(&nodes, &HashSet::new(), "gold", &materials, &names);
+        assert_eq!(
+            found
+                .iter()
+                .map(|r| (r.node, r.depth, r.material))
+                .collect::<Vec<_>>(),
+            [(0, 0, None), (1, 1, None), (1, 2, Some(0)), (1, 2, Some(1))]
+        );
+        assert!(rows(&nodes, &HashSet::new(), "missing", &materials, &names).is_empty());
+    }
+
+    #[test]
     fn imported_gltf_keeps_groups_root_order_and_mesh_mapping() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb");
         let bytes = std::fs::read(&path).unwrap();
@@ -373,7 +566,7 @@ mod tests {
         )
         .unwrap();
         let nodes = from_gltf(&json, &model);
-        let visible = rows(&nodes, &HashSet::from([0, 1]), "");
+        let visible = rows(&nodes, &HashSet::from([0, 1]), "", &[], &[]);
         assert_eq!(
             visible
                 .iter()
@@ -406,10 +599,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        assert_eq!(rows(&nodes, &HashSet::new(), "").len(), 1);
-        let result = rows(&nodes, &HashSet::new(), "camera");
+        assert_eq!(rows(&nodes, &HashSet::new(), "", &[], &[]).len(), 1);
+        let result = rows(&nodes, &HashSet::new(), "camera", &[], &[]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[1].depth, 1);
-        assert!(rows(&nodes, &HashSet::new(), "missing").is_empty());
+        assert!(rows(&nodes, &HashSet::new(), "missing", &[], &[]).is_empty());
     }
 }

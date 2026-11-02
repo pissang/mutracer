@@ -5,6 +5,7 @@ import Camera from '../../src/scene/Camera';
 import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
 import WGPUBloomPass from '../../src/renderer/WGPUBloomPass';
 import type { OIDNWeb } from '../../src/renderer/denoiser';
+import {WGPUAov} from '../../src/renderer/WGPUAov';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
 const mocks = vi.hoisted(() => {
@@ -56,19 +57,20 @@ const mocks = vi.hoisted(() => {
     releaseTarget() {}
     setTransmissiveOutputAlphaMin() {}
     useTarget() {}
-    setQuality() {}
+    setQuality(_options: {caustics?: {photonMapping?: boolean | object}}) {}
     updatePipeline() {}
     isCompilingShader() { return false; }
     isPipelineReady() { return true; }
+    getPipelineError(): unknown { return undefined; }
     hasShadowCatcher() { return false; }
     needsDenoiseAlpha() { return false; }
     getOutputBuffer() { return {}; }
     setBounce() { return true; }
     setClamping() { return true; }
     setDirectLightCandidates() { return true; }
-    setAlphaBlendStrategy() { return true; }
-    setBevelSamples() { return true; }
-    setSamplingPattern = vi.fn(() => true);
+    setAlphaBlendStrategy(_strategy: 'stochastic' | 'deterministic-source-over') { return true; }
+    setBevelSamples(_samples: number) { return true; }
+    setSamplingPattern = vi.fn((_pattern: 'sobol' | 'zsobol' | 'random', _maxSamples: number) => true);
   }
   class OutputPass extends Pass {
     outputs = new Map<string, Pass['texture']>();
@@ -86,15 +88,15 @@ vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass
 vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
 
-function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n, mapState: () => GPUBufferMapState = () => 'unmapped') {
+function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n, mapState: () => GPUBufferMapState = () => 'unmapped',causticTimeNs=0n) {
   const device = {
     features: new Set(timestamps ? ['timestamp-query'] : []),
-    createQuerySet: () => ({ count: 2, destroy() {} }),
+    createQuerySet: (options:GPUQuerySetDescriptor) => ({ count: options.count, destroy() {} }),
     createBuffer: (opts: GPUBufferDescriptor) => ({
       size: opts.size, get mapState() {return mapState();}, destroy() {}, unmap() {},
       mapAsync: async () => {},
       getMappedRange: () => new BigInt64Array([
-        0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs
+        0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs,0n,causticTimeNs,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n,0n
       ]).buffer
     }),
     createTexture: (opts: GPUTextureDescriptor) => ({
@@ -143,7 +145,163 @@ async function warmRealtime(pipeline: ReturnType<typeof createPipeline>, camera:
   enableRealtime(pipeline);
 }
 
+it.each(['beauty', 'aov'] as const)('reports a failed %s pipeline instead of waiting forever for compilation', kind => {
+  const pipeline = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 8, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false, aovs: ['depth']});
+  const pass = mocks.TracePass.latest;
+  const error = new Error('Texture pipeline validation failed');
+  vi.spyOn(pass, 'getPipelineError').mockReturnValue(error);
+  vi.spyOn(pass, 'isPipelineReady').mockReturnValue(false);
+  const refine = () => kind === 'beauty' ? pipeline.trace(camera, 8) : pipeline.refineAovs!(camera, 1);
+  expect(refine).toThrow(error);
+  vi.spyOn(pass, 'getPipelineError').mockReturnValue(undefined);
+  vi.spyOn(pass, 'isPipelineReady').mockReturnValue(true);
+  expect(refine).not.toThrow();
+  pipeline.manager.dispose();
+});
+
+it('prepares the selected pipeline when an AOV read follows another target', async () => {
+  const pipeline = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4,
+    dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 8,
+    transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false, aovs: ['depth']});
+  pipeline.trace(camera, 8); pipeline.trace(camera, 8);
+  const pass = mocks.TracePass.latest;
+  let compiling = false, ready = false;
+  vi.spyOn(pass, 'isCompilingShader').mockImplementation(() => compiling);
+  vi.spyOn(pass, 'isPipelineReady').mockImplementation(() => ready);
+  const update = vi.spyOn(pass, 'updatePipeline').mockImplementation(() => {
+    if (ready || compiling) return;
+    compiling = true;
+    queueMicrotask(() => {compiling = false; ready = true;});
+  });
+  const render = vi.spyOn(pass, 'renderAovs').mockImplementation(() => ready);
+  const pixels = {width: 80, height: 64, data: new Float32Array(80 * 64 * 4)};
+  vi.spyOn(WGPUAov.prototype, 'read').mockResolvedValue(pixels);
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    queueMicrotask(() => callback(performance.now())); return 1;
+  });
+  expect(await pipeline.readAov!('depth')).toBe(pixels);
+  expect(update).toHaveBeenCalledTimes(2);
+  expect(render).toHaveBeenCalledOnce();
+  pipeline.manager.dispose();
+});
+
+it.each([false, true])('finishes a caustic pipeline switch while presenting the previous preview (PM: %s)', photonMapping => {
+  const preview = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  const final = preview.manager.createTarget('final');
+  const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const, samplingPattern: 'sobol' as const, maxSamples: 8, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+  preview.configure({...settings, caustics: {photonMapping: !photonMapping}});
+  preview.activate(); preview.trace(camera, 8); preview.trace(camera, 8);
+  expect(preview.getTotalSamplesRendered()).toBeGreaterThan(0);
+  final.configure({...settings, caustics: {photonMapping}}); final.setSize(80, 64);
+  const pass = mocks.TracePass.latest;
+  let quality = !photonMapping, revision = 0, compiling = false, ready = false;
+  let complete!: () => void;
+  vi.spyOn(pass, 'setQuality').mockImplementation(options => {
+    const next = !!options.caustics?.photonMapping;
+    if (next !== quality) { quality = next; revision++; ready = false; }
+  });
+  vi.spyOn(pass, 'isCompilingShader').mockImplementation(() => compiling);
+  vi.spyOn(pass, 'isPipelineReady').mockImplementation(() => ready);
+  vi.spyOn(pass, 'updatePipeline').mockImplementation(() => {
+    if (ready || compiling) return;
+    const started = revision; compiling = true;
+    complete = () => { compiling = false; ready = started === revision; };
+  });
+  final.activate(); expect(final.trace(camera, 8)).toBe(true);
+  preview.activate(); preview.drawPostProcess(); preview.present();
+  complete();
+  final.activate(); final.trace(camera, 8); final.trace(camera, 8);
+  expect(final.getTotalSamplesRendered()).toBeGreaterThan(0);
+  preview.manager.dispose();
+});
+
+it.each(['bevelSamples', 'alphaBlendStrategy', 'samplingPattern'] as const)(
+  'does not change %s while presenting a fallback during compilation', key => {
+    const preview = createPipeline(false), camera = new Camera({projection: 'perspective'});
+    const final = preview.manager.createTarget('final');
+    const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4,
+      dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const,
+      samplingPattern: 'sobol' as const, maxSamples: 8, transmissiveOutputAlphaMin: 1,
+      timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+    preview.configure(settings);
+    preview.trace(camera, 8); preview.trace(camera, 8);
+    final.configure({...settings, bevelSamples: 4, alphaBlendStrategy: 'deterministic-source-over', samplingPattern: 'random'});
+    final.setSize(80, 64);
+    const pass = mocks.TracePass.latest;
+    let value: unknown = settings[key], revision = 0, compiling = false, ready = false;
+    const change = (next: unknown) => {
+      if (next !== value) {value = next; revision++; ready = false;}
+      return true;
+    };
+    if (key === 'bevelSamples') vi.spyOn(pass, 'setBevelSamples').mockImplementation(change);
+    if (key === 'alphaBlendStrategy') vi.spyOn(pass, 'setAlphaBlendStrategy').mockImplementation(change);
+    if (key === 'samplingPattern') vi.spyOn(pass, 'setSamplingPattern').mockImplementation(change);
+    vi.spyOn(pass, 'isCompilingShader').mockImplementation(() => compiling);
+    vi.spyOn(pass, 'isPipelineReady').mockImplementation(() => ready);
+    let complete!: () => void;
+    const update = vi.spyOn(pass, 'updatePipeline').mockImplementation(() => {
+      if (compiling || ready) return;
+      const started = revision; compiling = true;
+      complete = () => {compiling = false; ready = revision === started;};
+    });
+    final.activate(); expect(final.trace(camera, 8)).toBe(true);
+    preview.activate(); preview.drawPostProcess(); preview.present();
+    complete();
+    final.activate(); final.trace(camera, 8); final.trace(camera, 8);
+    expect(final.getTotalSamplesRendered()).toBeGreaterThan(0);
+    expect(update).toHaveBeenCalledTimes(3);
+    preview.manager.dispose();
+  }
+);
+
+it.each([false, true])('resolves deferred samples with their own caustic outputs after another target traces (PM: %s)', photonMapping => {
+  const preview = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const, samplingPattern: 'sobol' as const, maxSamples: 8, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+  const pass = mocks.TracePass.latest;
+  let activePhotonMapping = false;
+  const caustic = {} as GPUBuffer;
+  vi.spyOn(pass, 'setQuality').mockImplementation(options => {activePhotonMapping = !!options.caustics?.photonMapping;});
+  vi.spyOn(pass, 'getOutputBuffer').mockImplementation(() => activePhotonMapping ? {wideHdr: true, caustic} : {});
+  preview.configure({...settings, batchSamples: true, caustics: {photonMapping}});
+  preview.setRealtimeDeferPostProcess!(true);
+  preview.trace(camera, 8); preview.trace(camera, 8);
+  const output = [...mocks.Pass.all.values()].flat().find(p => p instanceof mocks.OutputPass)!;
+  output.createPass.mockClear();
+  const final = preview.manager.createTarget('final');
+  final.configure({...settings, caustics: {photonMapping: !photonMapping}}); final.setSize(80, 64);
+  final.activate(); final.trace(camera, 8);
+  preview.activate(); preview.drawPostProcess();
+  expect(output.createPass).toHaveBeenCalledOnce();
+  expect(output.createPass.mock.calls[0][1]).toEqual(photonMapping ? {wideHdr: true, caustic} : {});
+  preview.manager.dispose();
+});
+
 describe('WebGPU realtime sampling', () => {
+  it('includes independent caustic timestamps in the frame budget',async()=>{
+    vi.spyOn(performance,'now').mockReturnValue(0);
+    const pipeline=createPipeline(true,1_000_000n,()=> 'unmapped',2_000_000n),camera=new Camera({projection:'perspective'});
+    mocks.TracePass.latest.createPass.mockReturnValue(true);
+    await warmRealtime(pipeline,camera);pipeline.trace(camera,128);await pipeline.flushDiagnostics();
+    const timing=pipeline.getDiagnostics().gpuTraceTiming;
+    expect(timing?.causticTimeMs).toBe(2);expect(timing?.estimatedFullFrameTimeMs).toBeGreaterThanOrEqual(3);
+    pipeline.manager.dispose();
+  });
+
+  it('extrapolates the public sample estimate from tile GPU time', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const pipeline = createPipeline(true, 100_000_000n), camera = new Camera({projection: 'perspective'});
+    pipeline.setSize(1920, 1088);
+    for (let i = 0; i < 4; i++) {pipeline.trace(camera, 128); await pipeline.flushDiagnostics();}
+    const timing = pipeline.getDiagnostics().gpuTraceTiming!;
+    expect(timing.tileCount).toBeGreaterThan(1);
+    expect(pipeline.getRealtimeTileTime!()).toBe(timing.tileTimePerSampleMs);
+    expect(pipeline.getRealtimeSampleTime!()).toBe(timing.estimatedFullFrameTimeMs);
+    expect(timing.estimatedFullFrameTimeMs).toBe(timing.tileTimeMs * timing.tileCount);
+    pipeline.manager.dispose();
+  });
+
   it('tops up only completed samples, preserves sequence indices and stops at the sample cap', async () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});

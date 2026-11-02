@@ -31,6 +31,15 @@ describe('viewer URL settings', () => {
     });
   });
 
+  it('reads a fixed render height and scales it to the canvas', async () => {
+    vi.stubGlobal('location', new URL('https://viewer.example.com/viewer/#resolutionHeight=1440'));
+    const { renderResolutionScale, useViewer } = await import('../src/store');
+    const { settings } = useViewer.getState();
+    expect(settings.resolutionHeight).toBe(1440);
+    expect(renderResolutionScale(settings, 720)).toBe(2);
+    expect(renderResolutionScale({ resolutionScale: 0.5, resolutionHeight: null }, 720)).toBe(0.5);
+  });
+
   it.each(['false', '0'])('explicit %s disables a saved HDR preference', async (value) => {
     localStorage.setItem('mutracer-viewer:render:v6', JSON.stringify({ hdrOutputEnabled: true }));
     vi.stubGlobal('location', new URL(`https://viewer.example.com/viewer/#hdrOutputEnabled=${value}`));

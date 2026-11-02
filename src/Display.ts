@@ -140,7 +140,7 @@ export default class Display {
   async toBlob(render: Render, options: BlobOptions = {}): Promise<Blob> {
     const target = this.compose(render);
     if (!target) throw new Error('Render has no complete image.');
-    const image = await target.readPresentation();
+    const image = render._cropOutput(await target.readPresentation());
     const canvas = createCanvas(image.width, image.height, 'convertToBlob' in this.canvas);
     const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('The image encoding context is not available.');

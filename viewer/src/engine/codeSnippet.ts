@@ -1,3 +1,4 @@
+import {causticOptions} from '../caustics';
 import * as THREE from 'three';
 import { DEFAULT_JNLM_OPTIONS, VERSION, type DenoiserOptions } from '@meimu/mutracer';
 import { VIEWER_AOVS, type Settings } from '../store';
@@ -289,6 +290,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   for (const [key, fallback] of Object.entries(RENDER_DEFAULTS) as [keyof typeof RENDER_DEFAULTS, unknown][]) {
     if (s[key] !== fallback) final[key] = s[key];
   }
+  if (s.caustics) final.caustics = causticOptions(s);
   if (aovs.length) final.aovs = aovs;
   final.denoiser = denoiser(s, snapshot.webgpu, false);
   let preview: Record<string, unknown> | false = false;
@@ -302,6 +304,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
       bounces: Math.min(PREVIEW_DEFAULTS.bounces, s.bounces) !== PREVIEW_DEFAULTS.bounces ? s.bounces : undefined,
       samplingPattern: s.samplingPattern !== RENDER_DEFAULTS.samplingPattern ? s.samplingPattern : undefined,
       clamping: s.clamping !== RENDER_DEFAULTS.clamping ? s.clamping : undefined,
+      caustics: causticOptions(s),
       denoiser: denoiser(s, snapshot.webgpu, true)
     };
   }

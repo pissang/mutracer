@@ -15,7 +15,8 @@ export interface TargetPipeline extends RenderPasses {
   setRealtimeBatchBudget?(milliseconds: number): void;
   setRealtimeDeferPostProcess?(defer: boolean): void;
   getRealtimeSampleTime?(): number | undefined;
-  whenTraceAvailable?(): Promise<void>;
+  getRealtimeTileTime?(): number | undefined;
+  whenTraceAvailable?(): Promise<boolean>;
   present(): void;
   readPresentation(): Promise<{width: number; height: number; data: Float32Array}>;
   readonly presentationComplete: boolean;

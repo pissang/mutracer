@@ -1,5 +1,6 @@
 import type { EnvResolution } from '../store';
 import type { ModelCamera } from './modelCamera';
+import type { PresetStage, PresetRenderSettings } from '../presetSettings';
 import { PUBLIC_MODEL_PRESETS } from './publicModelPresets';
 import { RESEARCH_MODEL_PRESETS } from './researchModelPresets';
 
@@ -25,6 +26,10 @@ export interface ModelPreset {
   sizeMB?: number;
   /** Default preview view in grounded model coordinates. */
   camera?: ModelCamera;
+  /** Default stage and lighting, applied the first time the example opens. */
+  stage?: PresetStage;
+  /** Render choices applied on a fresh load or Reset all. */
+  renderSettings?: Partial<PresetRenderSettings>;
   category?: 'research';
 }
 

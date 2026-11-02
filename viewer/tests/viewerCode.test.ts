@@ -92,6 +92,12 @@ describe('viewer code snippet', () => {
     }
   });
 
+  it('preserves caustics in generated final and preview renders', () => {
+    const code=generateCode(snapshot({caustics:true,previewEnabled:true}));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code.match(/caustics: \{ lightTracing: true, photonMapping: false \}/g)).toHaveLength(2);
+  });
+
   it('uses JNLM on WebGL like the viewer', () => {
     const code = generateCode(snapshot({ denoise: true, denoiseWhileConverging: false }, { webgpu: false }));
     expect(code).toContain("denoiser: { type: 'jnlm' }");

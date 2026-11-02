@@ -456,6 +456,19 @@ impl Viewer {
             2 => "Random",
             _ => "Sobol",
         };
+        let c = render_settings(&self.settings, self.size, false).caustics;
+        let caustics = if self.settings.caustic_flags == 0 {
+            String::new()
+        } else {
+            format!(
+                "            caustics: CausticSettings {{ light_tracing: {}, photon_mapping: {}, light_photons: {}, photon_map_photons: {}, photon_map_radius: {:?} }},\n",
+                c.light_tracing,
+                c.photon_mapping,
+                c.light_photons,
+                c.photon_map_photons,
+                c.photon_map_radius
+            )
+        };
         format!(
             r#"use mutracer_native_probe::{{api::*, scene_api::Scene}};
 
@@ -475,7 +488,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {{
         final_render: LoopRender::Settings(RenderSettings {{
             max_samples: {}, bounces: {}, clamping: {:?}, batch_samples: true,
             sampling_pattern: SamplingPattern::{pattern},
-            ..Default::default()
+{caustics}            ..Default::default()
         }}),
         ..Default::default()
     }})?;

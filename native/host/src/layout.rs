@@ -166,7 +166,11 @@ pub mod settings {
     pub const TRANSMISSIVE_ALPHA_MIN: usize = 12;
     pub const SEQUENCE_OFFSET: usize = 14;
     pub const VARIANTS: usize = 15;
-    pub const WORDS: usize = 16;
+    pub const CAUSTIC_FLAGS: usize = 16;
+    pub const LIGHT_PHOTONS: usize = 17;
+    pub const PHOTON_MAP_PHOTONS: usize = 18;
+    pub const PHOTON_MAP_RADIUS: usize = 19;
+    pub const WORDS: usize = 20;
 }
 pub mod write_entry {
     pub const ID: usize = 0;
@@ -215,6 +219,7 @@ pub mod version {
     pub const SCENE: usize = 4;
     pub const RESOURCE_PACKET: usize = 1;
     pub const RESOURCE_WRITES: usize = 3;
+    pub const TARGET_PACKET: usize = 4;
     pub const GEOMETRY_KERNELS: usize = 1;
 }
 pub mod resource {

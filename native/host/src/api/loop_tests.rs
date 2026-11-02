@@ -815,7 +815,7 @@ fn collect_accounts_a_batch_without_submitting_another() {
 fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
     let _test = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = super::aov_tests::aov_engine(Backend::Software);
-    engine.display().set_size(16, 12).unwrap();
+    engine.display().set_size(64, 48).unwrap();
     engine.set_scene(&lit_scene()).unwrap();
     let updates = Arc::new(std::sync::atomic::AtomicU32::new(0));
     struct CountSync(Arc<std::sync::atomic::AtomicU32>, SyncActivity);
@@ -839,9 +839,10 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         RenderLoopOptions {
             preview: None,
             final_render: LoopRender::Settings(RenderSettings {
-                // This fixture must stay unfinished long enough to observe a
-                // refill lease, even when a tiny GPU scene batches very fast.
+                // Keep enough work and short tick batches to observe several
+                // refill leases before this fixture reaches its sample cap.
                 max_samples: 16384,
+                time_budget_ms: 1.,
                 batch_samples: true,
                 aovs: 1,
                 aov_samples: 3,
@@ -852,8 +853,31 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         },
     )
     .unwrap();
+    assert!(
+        !render_loop.final_render().refill_ready(),
+        "no queued sampling must not grant a refill"
+    );
     tick_until(&mut render_loop, |l, _| l.needs_refill());
     assert!(render_loop.final_render().gpu_sample_time_ms().unwrap() > 0.);
+    let table: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/display-schedule.json"
+    ))
+    .unwrap();
+    for ms in table["refillSampleTimesMs"].as_array().unwrap() {
+        let render = render_loop.final_render();
+        let mut settings = render.settings().unwrap();
+        settings.time_budget_ms = render.gpu_sample_time_ms().unwrap() * 21. / ms.as_f64().unwrap();
+        render.set_settings(settings).unwrap();
+        assert_eq!(
+            render_loop.needs_refill(),
+            ms.as_f64().unwrap() <= 21.,
+            "an individual native sample must fit the input latency budget"
+        );
+    }
+
+    let mut settings = render_loop.final_render().settings().unwrap();
+    settings.time_budget_ms = 1.;
+    render_loop.final_render().set_settings(settings).unwrap();
     let samples = render_loop.samples();
     let presentations = render_loop.presentations();
     let sync_updates = updates.load(std::sync::atomic::Ordering::Relaxed);
@@ -1116,4 +1140,92 @@ fn grounded_background_edits_match_fresh_contexts() {
         }
         previous = Some(actual[0].clone());
     }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn custom_loop_refine_until_respects_deadline_cancellation_and_display() {
+    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    engine.display().set_size(64, 48).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    let mut render_loop = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            preview: None,
+            final_render: LoopRender::Settings(RenderSettings {
+                max_samples: 16384,
+                time_budget_ms: 1.,
+                batch_samples: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    let render = render_loop.final_render();
+    let mut settings = render.settings().unwrap();
+    settings.time_budget_ms = 1000.;
+    render.set_settings(settings).unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let before = render.samples();
+    render
+        .refine_until(Instant::now() + Duration::from_secs(10), Some(&cancel))
+        .unwrap();
+    assert!(render.samples() >= before);
+    // Restore a queued batch and ordinary presentation without the loop policy.
+    render.refine().unwrap();
+    engine.display().present(render).unwrap();
+    let entered = Instant::now();
+    render.refine_until(entered, None).unwrap();
+    assert!(entered.elapsed() < Duration::from_secs(1));
+    render.refine().unwrap();
+    engine.display().present(render).unwrap();
+    let warm = Instant::now();
+    while render.gpu_sample_time_ms().is_none() && warm.elapsed() < Duration::from_secs(5) {
+        render.refine().unwrap();
+        engine.display().present(render).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(render.gpu_sample_time_ms().is_some());
+    let before = render.samples();
+    render
+        .refine_until(Instant::now() + Duration::from_millis(100), None)
+        .unwrap();
+    assert!(
+        render.samples() > before,
+        "an application loop must collect/refill sampling: before={before}, after={}, status={:?}, ready={}, gpu={:?}",
+        render.samples(),
+        render.status(),
+        render.refill_ready(),
+        render.gpu_sample_time_ms()
+    );
+    // An auxiliary channel cannot grant a between-frame refill.
+    let mut display = engine.display().settings();
+    display.channel = Channel::Albedo;
+    engine.display().set_settings(display).unwrap();
+    let entered = Instant::now();
+    render
+        .refine_until(entered + Duration::from_secs(10), None)
+        .unwrap();
+    assert!(entered.elapsed() < Duration::from_secs(1));
+    // Cancellation may arrive on another application thread during the wait.
+    display.channel = Channel::Final;
+    engine.display().set_settings(display).unwrap();
+    render.refine().unwrap();
+    engine.display().present(render).unwrap();
+    let cancel = CancelToken::new();
+    let other = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(5));
+        other.cancel();
+    });
+    let entered = Instant::now();
+    render
+        .refine_until(entered + Duration::from_secs(10), Some(&cancel))
+        .unwrap();
+    worker.join().unwrap();
+    assert!(entered.elapsed() < Duration::from_secs(1));
 }

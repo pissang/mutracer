@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadedModel } from '../src/engine/loadModel';
+import {readURLSettings} from '../src/urlSettings';
 import type { CachedModel } from '../src/engine/modelCache';
 
 vi.hoisted(() => {
@@ -27,7 +28,7 @@ import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } 
 function engine() {
   const viewer = Object.create(ViewerEngine.prototype);
   Object.assign(viewer, {
-    loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
+    initialURLSettings: readURLSettings(), loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
     modelGroup: new THREE.Group(), hiddenAtLoad: new Set(), ground: new THREE.Mesh(),
     canvas: { clientWidth: 800, clientHeight: 600 }, needsResize: false,
     perspectiveCamera: new THREE.PerspectiveCamera(35, 4 / 3),
@@ -59,6 +60,7 @@ function model(count: number): LoadedModel {
 }
 
 beforeEach(() => {
+  Object.assign(location,{search:'',hash:''});
   useViewer.setState({ settings: { ...DEFAULT_SETTINGS }, toast: null, cameras: [] });
 });
 
@@ -67,7 +69,7 @@ describe('AOV preview settings', () => {
     'only requests the visible %s channel on both renders', output => {
       const viewer = engine();
       const final = { aovs: [] }, preview = { aovs: [] };
-      Object.assign(viewer, { engine: { display: {} }, final, preview });
+      Object.assign(viewer, { engine: { display: { canvas: { height: 1 } } }, final, preview });
       const apply = viewer as unknown as { applySettings(s: Settings, previous: Settings): void };
       const settings = { ...DEFAULT_SETTINGS, output };
       apply.applySettings(settings, settings);
@@ -106,7 +108,7 @@ describe('imported camera choice', () => {
     const controls = new OrbitControls(orbit.perspectiveCamera);
     controls.enableDamping = true;
     orbit.controls = controls;
-    Object.assign(viewer, { engine: { display: {} }, final: {}, preview: {}, focusQueryVersion: 0 });
+    Object.assign(viewer, { engine: { display: { canvas: { height: 1 } } }, final: {}, preview: {}, focusQueryVersion: 0 });
     viewer.applyModelCamera(source.uuid);
     // Exercise the real settings path that previously disabled scene-camera input.
     controls.enabled = false;
@@ -175,7 +177,7 @@ describe('imported camera choice', () => {
     const viewer = engine(), scene = new THREE.Scene();
     const pixels = { width: 1, height: 1, data: new Float32Array([5, 2, 1, 1]) };
     Object.assign(viewer, {
-      scene, engine: { display: {} }, final: {}, preview: {}, studioRig: new THREE.Group(),
+      scene, engine: { display: { canvas: { height: 1 } } }, final: {}, preview: {}, studioRig: new THREE.Group(),
       environment: new Environment({ ...pixels, data: new Float32Array([1, 1, 1, 1]) }),
       studioAmbient: new Environment(pixels),
       applyBackground: (ViewerEngine.prototype as unknown as { applyBackground(): void }).applyBackground
@@ -219,35 +221,64 @@ describe('imported camera choice', () => {
     (viewer as unknown as { applySettings(s: Settings, previous: Settings): void }).applySettings(settings, settings);
     expect(useViewer.getState().settings).toMatchObject({ envId: 'sky', envIntensity: 1, envRotation: 0 });
   });
-  it('offers only Apply camera while retaining all cameras for manual selection', async () => {
+  it('opens imported models in their first camera without a prompt', async () => {
     const viewer = engine();
     await viewer.loadModel(model(2));
     expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    const toast = useViewer.getState().toast!;
-    expect(toast.message).toContain('2 cameras');
-    expect(toast.actions?.map((action) => action.label)).toEqual(['Apply camera']);
-    setSettings({ cameraIndex: 1 });
-    expect(useViewer.getState().settings.cameraIndex).toBe(1);
-    toast.actions![0].onClick();
     expect(useViewer.getState().settings.cameraIndex).toBe(0);
-  });
-
-  it('starts replacement models in Orbit even when the previous camera index exists', async () => {
-    const viewer = engine();
-    await viewer.loadModel(model(2));
-    const oldApply = useViewer.getState().toast!.actions![0].onClick;
-    setSettings({ cameraIndex: 1 });
-    await viewer.loadModel(model(2));
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    oldApply();
-    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
-    await viewer.loadModel(model(0));
-    expect(useViewer.getState().cameras).toEqual([]);
     expect(useViewer.getState().toast).toBeNull();
   });
 
-  it.each([false, true])('prompts on initial/cached loads only if no camera was restored (%s)', async (restored) => {
+  it('keeps a curated view over cameras inside the file', async () => {
+    const viewer = engine();
+    const data = model(2);
+    data.root.userData.mutracerCamera = { position: [1, 1, 1], target: [0, 0, 0], fov: 35, space: 'grounded' };
+    await viewer.loadModel(data);
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+  });
+
+  it('keeps a close preview camera from clipping the subject after fitting a large floor', async () => {
+    const viewer = engine(), data = model(0);
+    data.root.add(new THREE.Mesh(new THREE.PlaneGeometry(72, 72).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial()));
+    data.root.userData.mutracerCamera = { position: [0, 4, 4], target: [0, 0.5, 0], fov: 22, space: 'grounded' };
+    await viewer.loadModel(data);
+    const camera = (viewer as unknown as { perspectiveCamera: THREE.PerspectiveCamera }).perspectiveCamera;
+    camera.updateMatrixWorld(true);
+    const projected = new THREE.Vector3(0, 0.5, 0).project(camera);
+    expect(projected.z).toBeGreaterThan(-1);
+    expect(projected.z).toBeLessThan(1);
+  });
+
+  it.each(['perspective', 'orthographic'] as const)('resets to the authored %s camera after fitting', async (projection) => {
+    const viewer = engine(), data = model(0);
+    const camera = projection === 'perspective'
+      ? new THREE.PerspectiveCamera(24, 4 / 3)
+      : new THREE.OrthographicCamera(-3, 3, 2.25, -2.25);
+    camera.position.set(3, 5, 8);
+    camera.lookAt(0, 1, 0);
+    data.root.add(camera);
+    await viewer.loadModel(data);
+    const view = viewer as unknown as { activeCamera(): THREE.Camera; resetView(): void };
+    expect(view.activeCamera()).toBe(camera);
+    viewer.fit();
+    expect(view.activeCamera()).not.toBe(camera);
+    view.resetView();
+    expect(view.activeCamera()).toBe(camera);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
+  it('starts each replacement model from its own first camera', async () => {
+    const viewer = engine();
+    await viewer.loadModel(model(2));
+    setSettings({ cameraIndex: 1 });
+    await viewer.loadModel(model(2));
+    expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    await viewer.loadModel(model(0));
+    expect(useViewer.getState().cameras).toEqual([]);
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+  });
+
+  it.each([false, true])('uses the first camera on initial/cached loads only if none was restored (%s)', async (restored) => {
     const viewer = engine();
     viewer.restoreCamera.mockImplementation(() => {
       if (restored) setSettings({ cameraIndex: 1 });
@@ -259,8 +290,8 @@ describe('imported camera choice', () => {
     };
     await viewer.load(data.name, async () => data, cached.meta, cached);
     expect(viewer.restoreCamera).toHaveBeenCalledWith(cached.id);
-    expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : -1);
-    expect(useViewer.getState().toast !== null).toBe(!restored);
+    expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : 0);
+    expect(useViewer.getState().toast).toBeNull();
   });
 
   it.each([false, true])('automatically applies the first research-scene camera on fresh/cached loads (%s)', async (cached) => {
@@ -300,4 +331,57 @@ describe('imported camera choice', () => {
     expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
+});
+
+describe('initial link and preset precedence',()=>{
+ it.each([false,true])('keeps explicit incoming values on initial and refreshed loads (cached=%s)',async restored=>{
+  Object.assign(location,{search:'?causticLightTracing=true',hash:'#caustics=false&causticLightTracing=false&causticPhotonMapping=false&groundShadow=true&maxSamples=128&bounces=12&denoise=false&denoiseModel=small'});
+  const viewer=engine(),url=readURLSettings();
+  setSettings(url);
+  const meta={presetId:'research-cornell-caustic',credit:null,sourceUrl:null};
+  const data=model(1);
+  await viewer.load('Cornell',async()=>data,meta,restored?{id:'preset:research-cornell-caustic',meta:{name:'Cornell',...meta}}:undefined);
+  expect(useViewer.getState().settings).toMatchObject(url);
+  // A second engine represents refreshing the normalized share link.
+  const refreshed=engine();setSettings({...DEFAULT_SETTINGS,...readURLSettings()});
+  await refreshed.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject(url);
+ });
+ it('consumes initial overrides so switching models still resets Cornell caustics',async()=>{
+  Object.assign(location,{hash:'#caustics=true&causticLightTracing=false&causticPhotonMapping=true'});
+  const viewer=engine();setSettings(readURLSettings());
+  const meta={presetId:'research-cornell-caustic',credit:null,sourceUrl:null};
+  await viewer.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:false,causticPhotonMapping:true});
+  await viewer.load('Spheres',async()=>model(0),{...meta,presetId:'spheres'});
+  expect(useViewer.getState().settings).toMatchObject({caustics:false,causticLightTracing:true,causticPhotonMapping:false});
+  await viewer.load('Cornell',async()=>model(1),meta);
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:true,causticPhotonMapping:true});
+ });
+ it('applies a link edited in an open viewer over the scene it loads',async()=>{
+  const viewer=engine() as ReturnType<typeof engine>&Pick<ViewerEngine,'openURL'|'loadPreset'>;
+  const meta=(presetId:string)=>({presetId,credit:null,sourceUrl:null});
+  viewer.loadPreset=async id=>viewer.load(id,async()=>model(1),meta(id));
+  await viewer.load('Spheres',async()=>model(0),meta('spheres'));
+  useViewer.setState({model:{name:'Spheres',...meta('spheres')}});
+  Object.assign(location,{hash:'#model=research-cornell-caustic&caustics=true&causticLightTracing=false&causticPhotonMapping=false'});
+  await viewer.openURL('research-cornell-caustic');
+  expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:false,causticPhotonMapping:false});
+  // The same scene only takes the edited settings.
+  useViewer.setState({model:{name:'Cornell',...meta('research-cornell-caustic')}});
+  Object.assign(location,{hash:'#model=research-cornell-caustic&causticPhotonMapping=true'});
+  const load=vi.spyOn(viewer,'loadPreset');
+  await viewer.openURL('research-cornell-caustic');
+  expect(load).not.toHaveBeenCalled();
+  expect(useViewer.getState().settings).toMatchObject({causticLightTracing:false,causticPhotonMapping:true});
+ });
+ it('keeps incoming authored-lighting overrides on a fresh initial load only',async()=>{
+  Object.assign(location,{hash:'#lighting=studio&envId=sky&envIntensity=2&envRotation=35'});
+  const viewer=engine(),data=model(0);data.lighting={available:true,environment:null,warnings:[]};
+  await viewer.loadModel(data);
+  expect(useViewer.getState().settings).toMatchObject({lighting:'studio',envId:'sky',envIntensity:2,envRotation:35});
+  const replacement=model(0);replacement.lighting=data.lighting;
+  await viewer.loadModel(replacement);
+  expect(useViewer.getState().settings).toMatchObject({lighting:'environment',envId:'model',envIntensity:1,envRotation:0});
+ });
 });

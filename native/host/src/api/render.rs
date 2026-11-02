@@ -53,9 +53,37 @@ impl Default for RenderSize {
         Self::Scale(1.)
     }
 }
+/// Optional caustic estimators. Every estimator is disabled by default.
+/// Photon estimators use PT for scenes containing smooth BLEND casters.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct CausticSettings {
+    /// Directly visible light paths; default false.
+    pub light_tracing: bool,
+    /// Photons per batch; 0 selects pixel count / 4. Default 0.
+    pub light_photons: u32,
+    /// Progressive caustic density estimate; default false.
+    /// Without light tracing, directly visible receivers can have fewer
+    /// denoising blotches and more raw noise. Receivers seen through reflection
+    /// or refraction are unchanged.
+    pub photon_mapping: bool,
+    /// Photons per batch; 0 selects pixel count / 4, at most 262144. Default 0.
+    /// Uses 28 bytes each plus up to 13 MiB of overhead; capped by device limits
+    /// and 128 MiB.
+    pub photon_map_photons: u32,
+    /// First-batch gather radius in scene units, independent of `photon_map_photons`;
+    /// shrinks as batches accumulate. 0 selects 3% of the caster sphere radius. Default 0.
+    pub photon_map_radius: f32,
+}
+impl CausticSettings {
+    pub(super) fn flags(self) -> u32 {
+        (if self.light_tracing { 2 } else { 0 }) | (if self.photon_mapping { 4 } else { 0 })
+    }
+}
 /// Per-render execution and image-quality settings. Defaults match the browser library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderSettings {
+    /// Caustic estimators. Default: all disabled.
+    pub caustics: CausticSettings,
     /// Optional AOV bit mask; bit 0 depth, 1 position, 2 roughness, 3 diffuse
     /// reflectance, 4 specular reflectance, 5 ID, 6 motion. Default 0.
     pub aovs: u32,
@@ -65,6 +93,7 @@ pub struct RenderSettings {
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
     /// Maximum scattering depth, clamped to 1–20. Default 3.
+    /// Complete caustic light-to-camera paths can be longer than this depth.
     pub bounces: u32,
     /// Per-sample radiance clamp; 0 disables it. Default 0.
     pub clamping: f64,
@@ -136,6 +165,7 @@ pub struct AdaptiveResolution {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            caustics: CausticSettings::default(),
             aovs: 0,
             aov_samples: 16,
             max_samples: 2048,
@@ -162,6 +192,9 @@ impl RenderSettings {
     /// call it and return its `InvalidArgument` error.
     pub fn validate(&self) -> Result<()> {
         let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
+        if !self.caustics.photon_map_radius.is_finite() || self.caustics.photon_map_radius < 0. {
+            return invalid("photon_map_radius must be finite and nonnegative");
+        }
         if self.aovs & !127 != 0 || self.aov_samples == 0 {
             return invalid("Invalid AOV mask or sample cap");
         }
@@ -218,6 +251,10 @@ impl RenderSettings {
     /// The L0 settings record; `cap` and `offset` differ only for converge.
     pub(super) fn l0(&self, cap: u32, offset: u32) -> L0Settings {
         L0Settings {
+            caustic_flags: self.caustics.flags(),
+            light_photons: self.caustics.light_photons,
+            photon_map_photons: self.caustics.photon_map_photons,
+            photon_map_radius: self.caustics.photon_map_radius,
             sampling_pattern: match self.sampling_pattern {
                 SamplingPattern::Sobol => 0,
                 SamplingPattern::ZSobol => 1,
@@ -428,7 +465,7 @@ pub struct DenoiserOptions {
     /// Smaller tiles reduce temporary GPU memory at extra work cost.
     pub max_tile_size: u32,
 }
-/// Cross-thread cancellation for [`Render::converge`].
+/// Cross-thread cancellation for [`Render::converge`] and [`Render::refine_until`].
 #[derive(Clone, Debug, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
 impl CancelToken {
@@ -436,8 +473,8 @@ impl CancelToken {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Requests cancellation from any thread; the converge call using this token
-    /// returns [`Status::Cancelled`].
+    /// Requests cancellation from any thread. Converge returns [`Status::Cancelled`];
+    /// refine_until returns its current render status.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
@@ -682,6 +719,7 @@ pub(super) struct RenderState {
     sample_ms: Option<f64>,
     gpu_sample_ms: Option<f64>,
     refine_options: RefineOptions,
+    refill_cancel: Option<CancelToken>,
     pub(super) capture: Option<Capture>,
     pub(super) output: super::post_process::OutputState,
     capture_key: Option<TargetKey>,
@@ -2072,6 +2110,7 @@ impl Render {
                 sample_ms: None,
                 gpu_sample_ms: None,
                 refine_options: RefineOptions::default(),
+                refill_cancel: None,
                 capture: None,
                 output: Default::default(),
                 capture_key: None,
@@ -2483,9 +2522,121 @@ impl Render {
             }
         })
     }
+    /// Runs one ordinary [`Render::refine`] even when the deadline has passed or
+    /// `cancel` is already cancelled, then collects/refills sampling until a
+    /// monotonic deadline. `None` disables application cancellation. Cancellation
+    /// returns the current status, retaining submitted samples.
+    ///
+    /// This call blocks while polling GPU completion with 1 ms sleep intervals.
+    /// Present this render first to permit refills, then present again after this
+    /// call. Refills require the engine's Final display channel, batching, at least
+    /// one complete sample, valid GPU timing within `time_budget_ms`, queued
+    /// sampling and no filtering, input changes or convergence. No syncs, input
+    /// commits or presentation run here. Preparation/compilation/first-sample work
+    /// advances only in the initial refine and can exceed the deadline.
+    /// Deadlines and cancellation do not interrupt an in-progress refine or callback.
+    /// A newer call cancels the previous refill. Errors follow [`Render::refine`].
+    pub fn refine_until(
+        &self,
+        deadline: Instant,
+        cancel: Option<&CancelToken>,
+    ) -> Result<RenderStatus> {
+        let lease = CancelToken::new();
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if let Some(previous) = render.refill_cancel.replace(lease.clone()) {
+                previous.cancel();
+            }
+            Ok(())
+        })?;
+        let result = (|| {
+            self.refine()?;
+            let revision = self.get(|state, r| {
+                (
+                    state.scene_revision,
+                    state.camera_revision,
+                    r.input_generation,
+                )
+            });
+            let can_continue = || {
+                !lease.is_cancelled()
+                    && !cancel.is_some_and(CancelToken::is_cancelled)
+                    && Instant::now() < deadline
+                    && !self.engine.inputs_pending()
+                    && self.status() == RenderStatus::Converging
+                    && self
+                        .get(|state, r| {
+                            revision
+                                == Some((
+                                    state.scene_revision,
+                                    state.camera_revision,
+                                    r.input_generation,
+                                ))
+                                && state.display.settings.channel == super::Channel::Final
+                                && state.display.presented_render == Some(self.id)
+                                && !r.busy
+                                && r.job.is_some()
+                                && r.denoise.worker.is_none()
+                                && r.samples > 0
+                                && r.samples < next_target(r)
+                                && r.status == RenderStatus::Converging
+                                && (r.settings.batch_samples
+                                    || r.settings.allow_multiple_samples_per_frame)
+                                && r.gpu_sample_ms
+                                    .is_some_and(|ms| ms <= r.settings.time_budget_ms)
+                        })
+                        .unwrap_or(false)
+            };
+            while can_continue() {
+                let ready = Arc::new(AtomicBool::new(false));
+                let completed = ready.clone();
+                self.engine
+                    .inner
+                    .gpu
+                    .queue
+                    .on_submitted_work_done(move || completed.store(true, Ordering::Release));
+                while !ready.load(Ordering::Acquire) && can_continue() {
+                    self.engine.poll_device();
+                    if !ready.load(Ordering::Acquire) {
+                        std::thread::sleep(
+                            deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_millis(1)),
+                        );
+                    }
+                }
+                if !can_continue() {
+                    break;
+                }
+                self.refine_with_options(RefineOptions {
+                    target_batch_time_ms: Some(4.),
+                    defer_resolve: true,
+                    ..Default::default()
+                })?;
+            }
+            Ok(self.status())
+        })();
+        lease.cancel();
+        let _ = self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if render
+                .refill_cancel
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.0, &lease.0))
+            {
+                render.refill_cancel = None;
+            }
+            Ok(())
+        });
+        result
+    }
+    // Match the browser capacity wait: only sampling in flight can wake a refill.
+    // Display, filtering and offline jobs do not grant background sampling.
     pub(super) fn refill_ready(&self) -> bool {
-        self.get(|_, r| r.denoise.worker.is_none() && r.samples < next_target(r))
-            .unwrap_or(false)
+        self.get(|_, r| {
+            !r.busy && r.job.is_some() && r.denoise.worker.is_none() && r.samples < next_target(r)
+        })
+        .unwrap_or(false)
     }
     /// Last measured GPU time per beauty sample, or `None` before a valid
     /// timestamp or after inputs restart. CPU polling time is excluded.

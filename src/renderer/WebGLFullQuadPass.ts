@@ -25,7 +25,7 @@ export interface WebGLPassOptions {
 export class WebGLFullQuadPass<I extends string, O extends string> {
   private readonly _renderer: WebGLDevice;
   private _bindings: WebGLProgramBindings;
-  private readonly _sourceShader: FragmentShader;
+  private _sourceShader: FragmentShader;
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
   private _outputTextures = {} as Record<O, Texture2D>;
@@ -65,6 +65,13 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
         ])
       ) as Record<O, WebGLFullQuadPassOutput>
     );
+  }
+
+  setShader(shader: FragmentShader) {
+    this._sourceShader = shader;
+    this._bindings = new WebGLProgramBindings(this._samplingShader(
+      shader, this._reserveCapacity, {...shader.uniforms, ...this._bindings.uniforms}, this._bindings.defines
+    ));
   }
 
   reserveCapacity() {

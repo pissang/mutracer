@@ -122,15 +122,12 @@ void sampling_orthonormal_basis(in vec3 normal, out vec3 tangent, out vec3 bitan
     );
 }
 
-vec3 sampling_spectral_rgb_filter(vec3 rgb, float wavelength) {
-    if (wavelength == 0.0) {
+vec3 sampling_spectral_rgb_filter(vec3 rgb, int channel) {
+    if (channel == 0) {
         return rgb;
     }
-    vec3 channelMask = wavelength > 600.0
-        ? vec3(1.0, 0.0, 0.0)
-        : wavelength > 500.0
-            ? vec3(0.0, 1.0, 0.0)
-            : vec3(0.0, 0.0, 1.0);
+    vec3 channelMask = vec3(0.0);
+    channelMask[channel - 1] = 1.0;
     return rgb * channelMask;
 }
 

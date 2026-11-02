@@ -1014,7 +1014,7 @@ fn commit_inner(
                 Some(&snapshot.spare_hardware),
                 !snapshot.scene_only,
             );
-            let (mut candidate, target) = match candidate {
+            let (mut candidate, mut target) = match candidate {
                 Ok(candidate) => candidate,
                 Err(error) if snapshot.backend == 1 && options.flags & 4 != 0 => {
                     fallback_reason = format!("HWRT upload unavailable: {error}");
@@ -1057,6 +1057,25 @@ fn commit_inner(
                 );
             }
             cancelled(&cancel)?;
+            if settings.caustic_flags != 0 && target.is_some() {
+                let word =
+                    |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
+                let size = [word(layout::header::WIDTH), word(layout::header::HEIGHT)];
+                let camera_offset = word(layout::header::CAMERA_OFFSET) as usize * 4;
+                let packet = retained
+                    .target(
+                        &settings,
+                        size,
+                        word(layout::header::QUALITY_FLAGS) & 3,
+                        0,
+                        candidate.hwrt_shader,
+                        &bytes[camera_offset..camera_offset + 128],
+                        &snapshot.gpu.loss,
+                        false,
+                    )
+                    .map_err(rejected)?;
+                target = Some(candidate.target(packet, size, target.take())?);
+            }
             candidate.retained = Some(retained);
             Ok((candidate, target, fallback_reason))
         })();
@@ -1875,7 +1894,15 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     }
     let count = budget.min(job.requested - job.submitted);
     let start = job.base + job.submitted;
-    let timer = crate::profiling::GpuTimer::realtime(&gpu.device, count, false);
+    let timer = crate::profiling::GpuTimer::realtime(
+        &gpu.device,
+        count
+            * target
+                .as_ref()
+                .and_then(|t| t.caustics.as_ref())
+                .map_or(1, |c| c.pass_count()),
+        false,
+    );
     let scene = owner
         .or(own.as_ref())
         .ok_or("Missing render target scene")?;

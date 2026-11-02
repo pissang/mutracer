@@ -4,7 +4,6 @@ import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
 import {aovMask} from './aov.js';
-import {scheduleFrame} from '../util/frame.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -102,7 +101,7 @@ function createTimeQuery(device: GPUDevice) {
   try {
     const querySet = device.createQuerySet({
       type: 'timestamp',
-      count: 2
+      count: 16
     });
     const resolveBuffer = device.createBuffer({
       size: querySet.count * 8,
@@ -144,6 +143,9 @@ function makeWGPUAccumulationTarget(
   // the next presentation or read resolves them once.
   let realtimeDeferPostProcess = false;
   let postProcessPending = false;
+  // Resolve uses the configuration that produced these buffers, even if another
+  // target has since changed the shared trace pass's caustic settings.
+  let sampledOutput: ReturnType<WGPURayTracePass['getOutputBuffer']> | undefined;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
@@ -154,8 +156,13 @@ function makeWGPUAccumulationTarget(
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
   let tileTimingGeneration = 0;
+  let causticBatchTimeMs=0,photonBatchTimeMs=0;
   let lastGpuTraceTiming:
     | {
+      causticTimeMs?:number;
+      photonMappingTimeMs?:number;
+      photonStagesMs?:number[];
+      pathTracingTimeMs?:number;
       tileTimeMs: number;
       tileTimePerSampleMs?: number;
       estimatedFullFrameTimeMs: number;
@@ -310,7 +317,7 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
   function invalidateTilePrediction() {
     tileTimingGeneration++;
     tileRenderWithPredict?.needsUpdatePredicting();
-    lastGpuTraceTiming = undefined;
+    lastGpuTraceTiming = undefined;causticBatchTimeMs=0;photonBatchTimeMs=0;
     // A changed render configuration needs fresh timing. Refresh
     // its estimator without submitting a hidden probe in that mode.
     needsUpdatePredicting = offlineSamplesPerBatch === 0;
@@ -525,12 +532,13 @@ output.color = color;
     _updateSeed(renderWidth, renderHeight);
     const activeTimeQuery = timeQuery;
     const isUnmapped = activeTimeQuery?.resultBuffer.mapState === 'unmapped';
-    rayTracePass.createPass(
+    const measuredCausticBatch=rayTracePass.createPass(
       encoder,
       clear,
       tiles,
       activeTimeQuery ? { querySet: activeTimeQuery.querySet } : undefined
     );
+    sampledOutput = rayTracePass.getOutputBuffer();
     if (activeTimeQuery) {
       encoder.resolveQuerySet(
         activeTimeQuery.querySet,
@@ -561,15 +569,24 @@ output.color = color;
       diagnosticsReadbackPromise = activeTimeQuery.resultBuffer
         .mapAsync(GPUMapMode.READ).then(() => {
           const mappedRange = activeTimeQuery.resultBuffer.getMappedRange();
-          const times = new BigInt64Array(mappedRange, 0, 2);
-          const traceTime = Math.max(Number(times[1] - times[0]) / 1_000_000, 0.1);
+          const times = new BigInt64Array(mappedRange, 0, 16);
+          const causticTime=(measuredCausticBatch&1)?Math.max(Number(times[3]-times[2]+times[5]-times[4])/1_000_000,0):0;
+          // Independent timestamp pairs avoid Metal's cross-pass counter bug.
+          const photonTime=(measuredCausticBatch&2)?Math.max(Number(times[7]-times[6]+times[9]-times[8]+times[11]-times[10]+times[13]-times[12]+times[15]-times[14])/1_000_000,0):0;
+          const ptTime=Math.max(Number(times[1]-times[0])/1_000_000,0);
           // A readback may finish after scene preparation or a mode switch.
           // It must not overwrite throughput learned for the current scene.
           const timingIsCurrent =
             !disposed && submittedTimingGeneration === tileTimingGeneration &&
             !isFirstFrame;
           if (timingIsCurrent) {
+            if(measuredCausticBatch&1)causticBatchTimeMs=causticTime;
+            if(measuredCausticBatch&2)photonBatchTimeMs=photonTime;
+            const traceTime=Math.max(ptTime+(causticBatchTimeMs+photonBatchTimeMs)/submittedTileCount,.1);
             lastGpuTraceTiming = {
+              causticTimeMs:causticBatchTimeMs,photonMappingTimeMs:photonBatchTimeMs,
+              photonStagesMs:(measuredCausticBatch&2)?[6,8,10,12,14].map(i=>Math.max(Number(times[i+1]-times[i])/1_000_000,0)):undefined,
+              pathTracingTimeMs:ptTime,
               tileTimeMs: traceTime,
               tileTimePerSampleMs: traceTime,
               estimatedFullFrameTimeMs: traceTime * submittedTileCount,
@@ -696,7 +713,7 @@ output.color = color;
     );
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
-      rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), resolvedHasShadowCatcher);
+      rayTraceOutputPass.createPass(encoder, sampledOutput ?? rayTracePass.getOutputBuffer(), resolvedHasShadowCatcher);
     }
 
     composePass.setUniform(
@@ -826,21 +843,25 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   function trace(camera: Camera, maxSamples: number) {
+    applyTraceQuality();
     // A call to draw means accumulation has been invalidated. Cancel OIDN
     // before checking shader compilation: pipeline-affecting parameter changes
     // otherwise leave the previous asynchronous denoise alive while resources
     // and bind groups are being replaced.
     cancelDenoise();
 
-    if (rayTracePass.isCompilingShader()) {
-      isFirstFrame = true;
-      sampleCount = 0;
-      return true;
-    }
-
     // Update the camera before compiling and sampling.
     rayTracePass.setCamera(camera);
     aovCamera = camera;
+    rayTracePass.updatePipeline();
+    const pipelineError = rayTracePass.getPipelineError();
+    if (pipelineError) throw pipelineError;
+
+    // Waiting for a shader is not an input change: this render's samples and
+    // complete image stay valid, and only Render's restart discards them.
+    if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return true;
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
+
     const resetAccumulation = isFirstFrame;
     if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
@@ -849,22 +870,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       denoiseValid = false;
       tileTimingGeneration++;
       elapsedTileTime = undefined;
-      rayTracePass.setCamera(camera);
       (tileRenderWithPredict || tileRender).reset();
 
       // Reset
       isFirstFrame = false;
       sampleCount = 0;
     }
-
-    rayTracePass.updatePipeline();
-
-    if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) {
-      isFirstFrame = true;
-      sampleCount = 0;
-      return true;
-    }
-    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
 
     // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
@@ -1024,6 +1035,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // The target retains its complete presentation texture through the resize.
     clearDenoisedOutput();
     tileTimingGeneration++;
+    sampledOutput = undefined;
     renderWidth = nextRenderWidth;
     renderHeight = nextRenderHeight;
     (tileRenderWithPredict || tileRender).setSize(renderWidth, renderHeight);
@@ -1524,16 +1536,23 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     });
   }
 
+  // Keep tracing quality out of presentation: an old fallback must not
+  // invalidate a new caustic pipeline while it is compiling.
+  function applyTraceQuality() {
+    if (execution) {
+      rayTracePass.setQuality(execution);
+      rayTracePass.setBevelSamples(execution.bevelSamples);
+      rayTracePass.setAlphaBlendStrategy(execution.alphaBlendStrategy);
+      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
+    }
+  }
+
   function activate() {
     rayTracePass.useTarget(targetKey);
     if (renderWidth && renderHeight) rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
     if (execution) {
-      rayTracePass.setQuality(execution);
       rayTracePass.setClamping(execution.clamping);
       rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
-      rayTracePass.setBevelSamples(execution.bevelSamples);
-      rayTracePass.setAlphaBlendStrategy(execution.alphaBlendStrategy);
-      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
     }
   }
 
@@ -1541,7 +1560,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {
-      const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
+      const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin', 'caustics'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
       if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
       const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
@@ -1567,7 +1586,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     },
     setRealtimeBatchBudget(milliseconds) { realtimeBatchBudgetMs = milliseconds; },
     setRealtimeDeferPostProcess(defer) { realtimeDeferPostProcess = defer; },
-    getRealtimeSampleTime() { return lastGpuTraceTiming?.tileCount === 1 ? lastGpuTraceTiming.estimatedFullFrameTimeMs : undefined; },
+    getRealtimeSampleTime() { return lastGpuTraceTiming?.estimatedFullFrameTimeMs; },
+    getRealtimeTileTime() { return lastGpuTraceTiming?.tileTimePerSampleMs; },
     whenTraceAvailable() { return traceQueue.whenAvailable(); },
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },
@@ -1649,17 +1669,28 @@ width: renderWidth, height: renderHeight,
     restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
       if (samples < 1 || !execution?.aovs?.length) return true;
+      applyTraceQuality();
       rayTracePass.setCamera(camera); aovCamera = camera;
       rayTracePass.updatePipeline();
+      const pipelineError = rayTracePass.getPipelineError();
+      if (pipelineError) throw pipelineError;
       if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
       return rayTracePass.renderAovs(aov, camera, samples, execution.aovSamples ?? 16, execution.aovs);
     },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
-      rayTracePass.setCamera(aovCamera);
-      while (!rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) {
+      for (;;) {
         if (disposed) throw new Error('AOV compilation was interrupted');
-        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+        activate();
+        applyTraceQuality();
+        rayTracePass.setCamera(aovCamera);
+        rayTracePass.updatePipeline();
+        const pipelineError = rayTracePass.getPipelineError();
+        if (pipelineError) throw pipelineError;
+        if (!rayTracePass.isCompilingShader() && rayTracePass.isPipelineReady() &&
+          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) break;
+        // Display frames stop on a hidden page, but compilation still completes.
+        await new Promise<void>(resolve => setTimeout(resolve, 16));
       }
       return aov.read(kind);
     },
@@ -1737,7 +1768,7 @@ width: renderWidth, height: renderHeight,
           setSize(input.width, input.height);
           rayTracePass.useTarget(targetKey);
           rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-          const buffers = rayTracePass.getOutputBuffer();
+          const buffers = sampledOutput = rayTracePass.getOutputBuffer();
           const shadow = new Float32Array(input.width * input.height * 12);
           for (let i = 0; i < input.width * input.height; i++) {
             shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);

@@ -52,8 +52,12 @@ fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSa
       radius * radius / (centerDistance * centerDistance)
     );
     let cosThetaMax = sqrt(max(0.0, 1.0 - sinThetaMaxSquared));
-    let cosTheta = mix(1.0, cosThetaMax, randomV2.x);
-    let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    // Rationalize 1 - cos(thetaMax): subtracting nearly equal f32 values
+    // quantizes small emitters' solid angles into visible irradiance bands.
+    let oneMinusCosThetaMax = sinThetaMaxSquared / (1.0 + cosThetaMax);
+    let oneMinusCosTheta = randomV2.x * oneMinusCosThetaMax;
+    let cosTheta = 1.0 - oneMinusCosTheta;
+    let sinTheta = sqrt(max(0.0, oneMinusCosTheta * (2.0 - oneMinusCosTheta)));
     let azimuth = TWOPI * randomV2.y;
     var tangent: vec3f;
     var bitangent: vec3f;
@@ -62,7 +66,7 @@ fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSa
       + tangent * (sinTheta * cos(azimuth))
       + bitangent * (sinTheta * sin(azimuth));
     (*lightSample).pdf = 1.0 / max(
-      TWOPI * (1.0 - cosThetaMax),
+      TWOPI * oneMinusCosThetaMax,
       1e-8
     );
   }

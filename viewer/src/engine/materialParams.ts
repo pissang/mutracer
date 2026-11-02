@@ -54,7 +54,7 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
       { kind: 'number', key: 'transmissionWeight', label: 'Weight', min: 0, max: 1, texture: 'transmissionMap' },
       { kind: 'color', key: 'transmissionColor', label: 'Color' },
       { kind: 'number', key: 'transmissionDepth', label: 'Depth', min: 0, max: 5, unit: 'm' },
-      { kind: 'number', key: 'transmissionDispersionScale', label: 'Dispersion', min: 0, max: 1 },
+      { kind: 'number', key: 'transmissionDispersionScale', label: 'Dispersion', min: 0, max: 10 },
       { kind: 'boolean', key: 'thinWalled', label: 'Thin walled' }
     ]
   },

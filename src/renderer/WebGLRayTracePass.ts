@@ -1,3 +1,6 @@
+import {researchTransport} from './researchTransport.js';
+import {EmissiveTriangleCache} from './lightSampling.js';
+import {prepareWebGLLightSampling} from './webglLightSampling.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
@@ -135,6 +138,10 @@ class WebGLRayTracePass {
   private _aovPrimitiveCache = new AovPrimitiveCache();
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
+  private _emissiveActive=false;
+  private _directLightLegacy?: {env:number;pmfs:Float32Array};
+  private _emissiveCache=new EmissiveTriangleCache();
+  private _emissiveTex=new WebGLTexture2D(commonNearestFloatProps);
   private _sceneEnvironment = new SceneEnvironmentCache();
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
@@ -866,6 +873,7 @@ class WebGLRayTracePass {
             POWER_WEIGHTED_LIGHT_MIX * (weight / totalWeight)
           : fallbackPmf
     );
+    this._directLightLegacy={env:this._envLightSelectionPmf,pmfs:this._analyticLightSelectionPmfs};
     let cumulativePmf = this._envLightSelectionPmf;
     this._analyticLightSelectionCdfs = Float32Array.from(
       this._analyticLightSelectionPmfs,
@@ -969,7 +977,8 @@ class WebGLRayTracePass {
     this._shadowCatcherPass.useTarget(target);
   }
 
-  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
+  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
+    researchTransport()?.configure(this, 'webgl');
     this._tracePasses.forEach(pass => {
       pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
       pass.setUniform('bevelEnabled', options.bevel);
@@ -977,9 +986,9 @@ class WebGLRayTracePass {
     });
   }
 
-  setWavelength(wavelength: number) {
+  setSpectralChannel(channel: number) {
     this._tracePasses.forEach((pass) => {
-      pass.setUniform('wavelength', wavelength);
+      pass.setUniform('spectralChannel', channel);
     });
   }
 
@@ -1012,6 +1021,31 @@ class WebGLRayTracePass {
     if (this._dirtyColorMeshes.size) this._updateMeshColors();
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
+
+    researchTransport()?.prepare(this, 'webgl');
+
+    const res=this._preparedMeshData;
+    if(res) {
+      const triangles=this._emissiveCache.collect(res.emissiveBindings,res.materials);
+      this._mainPass.setDefines({HAS_EMISSIVE_LIGHTS:triangles.length>0});
+      if(!triangles.length&&this._emissiveActive&&this._directLightLegacy) {
+        this._envLightSelectionPmf=this._directLightLegacy.env;
+        this._analyticLightSelectionPmfs=Float32Array.from(this._directLightLegacy.pmfs);
+        this._tracePasses.forEach(pass=>pass.setUniform('envLightSelectionPmf',this._envLightSelectionPmf));
+        this._needsUpdateAnalyticLightsBuffer=true;
+      }
+      this._emissiveActive=triangles.length>0;
+      if(triangles.length) {
+        const lighting=prepareWebGLLightSampling(this._analyticLights,triangles,estimateEnvironmentPower(this._envImageSource));
+        this._envLightSelectionPmf=lighting.environmentPmf;
+        this._analyticLightSelectionPmfs=Float32Array.from(lighting.analyticPmfs);
+        const columns=setDataTexture(this._emissiveTex,lighting.data,4).columnsLog;
+        this._mainPass.setUniforms({emissiveLightData:this._emissiveTex,emissiveLightColumns:columns,
+          emissiveChoiceOffset:lighting.emissiveTexels,emissiveChoiceCount:lighting.choiceCount,
+          emissivePmfOffset:lighting.pmfOffset,emissiveWeightTotal:lighting.totalWeight,envLightSelectionPmf:lighting.environmentPmf});
+        this._needsUpdateAnalyticLightsBuffer=true;
+      }
+    }
 
     if (this._needsUpdateAnalyticLightsBuffer) {
       const analyticLights = this._analyticLights;
@@ -1085,10 +1119,13 @@ class WebGLRayTracePass {
   setSampleSequenceOffset(_offset: number) {}
 
   prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
-    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
+    if (!kinds.length) return true;
+    // An AOV channel may be the first thing to render a new scene.
+    this.prepare();
+    if (!this._preparedMeshData || !this._tlas) return true;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
-    this.prepare(); state.resize(width,height);
+    state.resize(width,height);
     this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & 24) !== 0});
     if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas)); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
@@ -1100,8 +1137,8 @@ class WebGLRayTracePass {
   }
 
   renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
-    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
     if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
     if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
     const target=Math.min(samples,cap);
     if ((aovMask(kinds) & 31) === 0) state.samples = target;
@@ -1128,6 +1165,7 @@ class WebGLRayTracePass {
   }
 
   dispose() {
+    researchTransport()?.dispose(this, 'webgl');
     this._skySource.dispose();
     this._depthAbort.abort();
     this._materialData?.dispose(this._renderer.gl);
@@ -1136,6 +1174,7 @@ class WebGLRayTracePass {
     const gl = this._renderer.gl;
     [
       this._lightTex,
+      this._emissiveTex,
       this._openPbrEnergyLut,
       this._envMap,
       this._envMapDistribution,

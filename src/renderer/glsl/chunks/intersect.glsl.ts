@@ -378,6 +378,16 @@ float intersectRect(vec3 pos, vec3 u, vec3 v, vec3 n, Ray r) {
   return INF;
 }
 
+float sphereSolidAnglePdf(vec3 origin, vec3 center, float radius) {
+  float centerDistance = distance(origin, center);
+  if (centerDistance <= radius) return INV4PI;
+  float sinThetaMaxSquared = min(1.0, radius * radius / (centerDistance * centerDistance));
+  float cosThetaMax = sqrt(max(0.0, 1.0 - sinThetaMaxSquared));
+  // Match the cancellation-free solid angle used by direct light sampling.
+  float oneMinusCosThetaMax = sinThetaMaxSquared / (1.0 + cosThetaMax);
+  return 1.0 / max(TWOPI * oneMinusCosThetaMax, 1e-8);
+}
+
 float intersectLight(Ray r, Light light, out LightSampleRec lightSample) {
   // Directional lights are delta sources without finite geometry. Start at
   // INF so they cannot accidentally terminate a BSDF continuation as a
@@ -430,14 +440,8 @@ float intersectLight(Ray r, Light light, out LightSampleRec lightSample) {
       d = INF;
     }
     else {
-      float centerDistance = distance(r.o, light.position);
-      float cosThetaMax = centerDistance <= light.radius
-        ? -1.0
-        : sqrt(max(0.0, 1.0 - light.radius * light.radius / (centerDistance * centerDistance)));
       if (light.radius > 0.0) {
-        lightSample.pdf = centerDistance <= light.radius
-          ? INV4PI
-          : 1.0 / max(TWOPI * (1.0 - cosThetaMax), 1e-8);
+        lightSample.pdf = sphereSolidAnglePdf(r.o, light.position, light.radius);
       }
       lightSample.emission = light.radius <= 0.0
         ? light.emission / max(d * d, 1e-8)
@@ -466,14 +470,8 @@ float intersectLight(Ray r, Light light, out LightSampleRec lightSample) {
       vec3 hitPt = r.o + d * r.d;
       float multiplier = evaluateSpotEmissionMultiplier(light, normalize(r.o - hitPt));
       if (multiplier <= 0.0) return INF;
-      float centerDistance = distance(r.o, light.position);
-      float cosThetaMax = centerDistance <= light.radius
-        ? -1.0
-        : sqrt(max(0.0, 1.0 - light.radius * light.radius / (centerDistance * centerDistance)));
       if (light.radius > 0.0) {
-        lightSample.pdf = centerDistance <= light.radius
-          ? INV4PI
-          : 1.0 / max(TWOPI * (1.0 - cosThetaMax), 1e-8);
+        lightSample.pdf = sphereSolidAnglePdf(r.o, light.position, light.radius);
       }
       lightSample.emission = light.emission * multiplier * (light.radius <= 0.0
         ? 1.0 / max(d * d, 1e-8)

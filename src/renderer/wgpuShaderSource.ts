@@ -1,9 +1,17 @@
+import {researchTransport} from './researchTransport.js';
 import rayTraceCompute, {type RayTraceInputHooks} from './wgsl/rayTrace.compute.js';
 import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 export interface WGPUShaderFeatures {
   hasDisplacement: boolean;
+  debugGroup?: number;
+  /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
+  workgroupSize?:number;
+  lightTracing?: boolean;
+  photonMapping?:boolean;
+  photonMaxDepth?:number;
+  photonDirectSubset?:boolean;
   hasAlpha: boolean;
   hasSceneAlpha: boolean;
   hasAnisotropyDirections: boolean;
@@ -31,6 +39,7 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   return `\n${defineCode}\n${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
+  constants = researchTransport()?.constants(constants, features) ?? constants;
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,

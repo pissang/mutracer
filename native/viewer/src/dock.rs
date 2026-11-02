@@ -94,7 +94,7 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 fn floating_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(Color32::from_rgba_unmultiplied(26, 27, 31, 219))
-        .corner_radius(24)
+        .corner_radius(16)
         .shadow(egui::epaint::Shadow {
             offset: [0, 6],
             blur: 20,
@@ -168,29 +168,44 @@ impl Viewer {
         }
     }
     pub(super) fn render_dock(&mut self, ctx: &egui::Context, viewport: egui::Rect) -> egui::Rect {
-        let camera_width = if self.model.1.cameras.is_empty() {
+        let available = (viewport.width() - 24.).max(1.);
+        let tiny = available < 220.;
+        let camera_width: f32 = if self.model.1.cameras.is_empty() {
             44.
         } else {
             168.
         };
-        let available = (viewport.width() - 24. - camera_width - 8.).max(1.);
-        let compact = available < 440.;
         let focus_width = if self.camera.f_stop > 0. && !self.camera.orthographic {
             44.
         } else {
             0.
         };
-        let inline_width = if self.denoise { 500. } else { 380. } + focus_width;
-        let overflow = available < inline_width;
-        let width = available.min(if compact {
-            292.
-        } else if overflow {
-            380. + focus_width
-        } else {
+        let inline_width = if self.denoise { 560. } else { 420. } + focus_width;
+        let inline = available >= inline_width + camera_width + 8.;
+        let stacked = !tiny && !inline && available < 260. + camera_width + 8.;
+        let width = if tiny {
+            available.min(180.)
+        } else if inline {
             inline_width
-        });
-        let height = if compact { 80. } else { 46. }
-            + if self.model.0.animation.is_some() {
+        } else {
+            available.min(260.)
+        };
+        let camera_width = camera_width.min(available);
+        let total_width = if tiny {
+            width
+        } else if stacked {
+            width.max(camera_width)
+        } else {
+            width + camera_width + 8.
+        };
+        let height = if tiny {
+            46.
+        } else if inline {
+            46.
+        } else {
+            80.
+        } + if stacked { 54. } else { 0. }
+            + if !tiny && self.model.0.animation.is_some() {
                 72.
             } else {
                 0.
@@ -201,54 +216,70 @@ impl Viewer {
             .order(egui::Order::Foreground)
             .movable(false)
             .constrain(false)
-            .default_size(egui::vec2(width + camera_width + 8., height))
+            .default_size(egui::vec2(total_width, height))
             .anchor(Align2::CENTER_BOTTOM, offset)
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.x = 8.;
-                ui.horizontal(|ui| {
-                    floating_frame().show(ui, |ui| {
-                        ui.scope_builder(
-                            egui::UiBuilder::new().layout(egui::Layout::top_down(egui::Align::Min)),
-                            |ui| {
-                                ui.set_max_width(width - 16.);
-                                ui.spacing_mut().item_spacing = egui::vec2(4., 4.);
-                                ui.spacing_mut().interact_size.y = 28.;
-                                ui.spacing_mut().button_padding = egui::vec2(5., 2.);
-                                ui.spacing_mut().icon_width = 13.;
-                                let widgets = &mut ui.visuals_mut().widgets;
-                                for widget in [&mut widgets.inactive, &mut widgets.hovered] {
-                                    widget.corner_radius = 9.into();
-                                    widget.bg_stroke = Stroke::NONE;
-                                }
-                                ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                                ui.visuals_mut().widgets.inactive.weak_bg_fill =
-                                    Color32::TRANSPARENT;
-                                if compact {
-                                    ui.horizontal(|ui| {
-                                        self.dock_status(ui);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        self.dock_settings(ui, overflow);
-                                    });
-                                } else {
-                                    ui.horizontal(|ui| {
-                                        self.dock_status(ui);
-                                        ui.separator();
-                                        self.dock_settings(ui, overflow);
-                                    });
-                                }
-                                if self.model.0.animation.is_some() {
-                                    ui.separator();
-                                    self.animation_controls(ui);
-                                }
-                            },
-                        );
+                ui.set_width(total_width);
+                ui.spacing_mut().item_spacing = egui::vec2(8., 8.);
+                if tiny {
+                    self.dock_main(ui, width, false, true);
+                } else if stacked {
+                    ui.vertical_centered(|ui| {
+                        self.dock_main(ui, width, false, false);
+                        floating_frame().show(ui, |ui| {
+                            ui.set_width(camera_width - 16.);
+                            self.dock_camera(ui);
+                        });
                     });
-                    floating_frame().show(ui, |ui| self.dock_camera(ui));
-                });
+                } else {
+                    ui.horizontal(|ui| {
+                        self.dock_main(ui, width, inline, false);
+                        floating_frame().show(ui, |ui| {
+                            ui.set_width(camera_width - 16.);
+                            self.dock_camera(ui);
+                        });
+                    });
+                }
             })
             .response
             .rect
+    }
+    fn dock_main(&mut self, ui: &mut egui::Ui, width: f32, inline: bool, tiny: bool) {
+        floating_frame().show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width((width - 16.).max(1.));
+                ui.spacing_mut().item_spacing = egui::vec2(4., 4.);
+                ui.spacing_mut().interact_size.y = 28.;
+                ui.spacing_mut().button_padding = egui::vec2(5., 2.);
+                ui.spacing_mut().icon_width = 13.;
+                let widgets = &mut ui.visuals_mut().widgets;
+                for widget in [&mut widgets.inactive, &mut widgets.hovered] {
+                    widget.corner_radius = 9.into();
+                    widget.bg_stroke = Stroke::NONE;
+                }
+                ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                if tiny {
+                    ui.horizontal(|ui| {
+                        self.dock_status(ui, true);
+                        self.dock_options(ui, true);
+                    });
+                } else if inline {
+                    ui.horizontal(|ui| {
+                        self.dock_status(ui, false);
+                        ui.separator();
+                        self.dock_settings(ui, false);
+                    });
+                } else {
+                    ui.horizontal(|ui| self.dock_status(ui, false));
+                    ui.horizontal(|ui| self.dock_settings(ui, true));
+                }
+                if !tiny && self.model.0.animation.is_some() {
+                    ui.separator();
+                    self.animation_controls(ui);
+                }
+            });
+        });
     }
     fn dock_camera(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().interact_size.y = 28.;
@@ -259,19 +290,31 @@ impl Viewer {
         ui.horizontal(|ui| {
             if !self.model.1.cameras.is_empty() {
                 let previous = self.camera_index;
-                egui::ComboBox::from_id_salt("viewport-camera")
-                    .width(120.)
-                    .selected_text(
-                        self.camera_index
-                            .and_then(|i| self.model.1.cameras.get(i))
-                            .map_or("Orbit", |c| c.name.as_str()),
-                    )
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.camera_index, None, "Orbit");
-                        for (i, view) in self.model.1.cameras.iter().enumerate() {
-                            ui.selectable_value(&mut self.camera_index, Some(i), &view.name);
-                        }
-                    });
+                let selector_width = (ui.available_width() - 32.).max(40.);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(selector_width, 28.),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        egui::ComboBox::from_id_salt("viewport-camera")
+                            .width(selector_width)
+                            .wrap_mode(egui::TextWrapMode::Truncate)
+                            .selected_text(
+                                self.camera_index
+                                    .and_then(|i| self.model.1.cameras.get(i))
+                                    .map_or("Orbit", |c| c.name.as_str()),
+                            )
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.camera_index, None, "Orbit");
+                                for (i, view) in self.model.1.cameras.iter().enumerate() {
+                                    ui.selectable_value(
+                                        &mut self.camera_index,
+                                        Some(i),
+                                        &view.name,
+                                    );
+                                }
+                            });
+                    },
+                );
                 if previous != self.camera_index {
                     if let Some(i) = self.camera_index {
                         self.model.1.cameras[i].apply(&mut self.camera, self.model.center);
@@ -353,17 +396,24 @@ impl Viewer {
                 let previous = animation.clip;
                 if animation.clips().len() > 1 {
                     let mut clip = previous;
-                    egui::ComboBox::from_id_salt("animation-clip")
-                        .width((ui.available_width() - 126.).clamp(60., 220.))
-                        .truncate()
-                        .selected_text(&animation.clips()[clip].name)
-                        .show_ui(ui, |ui| {
-                            for (id, option) in animation.clips().iter().enumerate() {
-                                ui.selectable_value(&mut clip, id, &option.name);
-                            }
-                        })
-                        .response
-                        .on_hover_text("Animation clip");
+                    let clip_width = (ui.available_width() - 126.).clamp(60., 220.);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(clip_width, 28.),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            egui::ComboBox::from_id_salt("animation-clip")
+                                .width(clip_width)
+                                .truncate()
+                                .selected_text(&animation.clips()[clip].name)
+                                .show_ui(ui, |ui| {
+                                    for (id, option) in animation.clips().iter().enumerate() {
+                                        ui.selectable_value(&mut clip, id, &option.name);
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Animation clip");
+                        },
+                    );
                     if clip != previous {
                         animation.select(clip);
                         self.animation_clock = Instant::now();
@@ -388,7 +438,7 @@ impl Viewer {
             });
         });
     }
-    fn dock_status(&mut self, ui: &mut egui::Ui) {
+    fn dock_focus(&mut self, ui: &mut egui::Ui) {
         if self.camera.f_stop > 0. && !self.camera.orthographic {
             if self.focus.enabled {
                 let response = action(
@@ -414,6 +464,11 @@ impl Viewer {
                 self.picking_focus = !self.picking_focus;
             }
             ui.separator();
+        }
+    }
+    fn dock_status(&mut self, ui: &mut egui::Ui, tiny: bool) {
+        if !tiny {
+            self.dock_focus(ui);
         }
         let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
         let animating = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
@@ -496,19 +551,23 @@ impl Viewer {
         if spinning {
             ui.ctx().request_repaint_after(Duration::from_millis(32));
         }
+        response.on_hover_text(format!("{label} · {} spp", self.samples));
+        if tiny {
+            return;
+        }
         let (rect, _) = ui.allocate_exact_size(egui::vec2(72., 30.), Sense::hover());
         ui.painter().text(
             rect.left_top(),
             Align2::LEFT_TOP,
             label,
-            FontId::proportional(11.5),
+            FontId::proportional(theme::FONT_LABEL),
             theme::TEXT,
         );
         ui.painter().text(
             rect.left_bottom(),
             Align2::LEFT_BOTTOM,
             format!("{} spp", self.samples),
-            FontId::monospace(10.5),
+            FontId::monospace(theme::FONT_SMALL),
             theme::SUBTLE,
         );
         if (!done || !self.running)
@@ -579,20 +638,47 @@ impl Viewer {
             .response
             .on_hover_text(self.resolution_label());
         if compact {
-            let response = action(ui, "Render settings", Action::Settings);
-            egui::Popup::menu(&response).show(|ui| {
-                ui.set_min_width(200.);
-                self.dock_denoise(ui);
-                ui.separator();
-                if ui.button("All render settings…").clicked() {
-                    self.tab = 0;
-                    self.inspector_open = true;
-                    ui.close();
-                }
-            });
+            self.dock_options(ui, false);
         } else {
             self.dock_denoise(ui);
         }
+    }
+    fn dock_options(&mut self, ui: &mut egui::Ui, all: bool) {
+        let response = action(ui, "Render settings", Action::Settings);
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("dock-options-rect"), response.rect));
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_width(260.);
+            if all {
+                self.dock_settings(ui, false);
+                ui.separator();
+                if ui
+                    .button(if self.running {
+                        "Pause rendering"
+                    } else {
+                        "Resume rendering"
+                    })
+                    .clicked()
+                {
+                    self.running = !self.running;
+                }
+                ui.horizontal(|ui| self.dock_focus(ui));
+                self.dock_camera(ui);
+                if self.model.0.animation.is_some() {
+                    ui.separator();
+                    self.animation_controls(ui);
+                }
+            } else {
+                self.dock_denoise(ui);
+            }
+            ui.separator();
+            if ui.button("All render settings…").clicked() {
+                self.tab = 0;
+                self.inspector_open = true;
+                ui.close();
+            }
+        });
     }
     fn dock_denoise(&mut self, ui: &mut egui::Ui) {
         toggle(ui, &mut self.denoise, "Denoise").on_hover_text(&self.denoise_status);

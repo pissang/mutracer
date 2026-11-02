@@ -221,7 +221,7 @@ function getBVHTraverseCode(
       for (var k = 0; k < primitiveCount; k++) {
         let triangleIndex = primitiveOffset + k;
         ${skipTriangleCode}
-        if (bounces > 0 && triangleIndex == currentTriangleIndex) {
+        if (bounces > 0 && triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
           continue;
         }
         
@@ -633,6 +633,7 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
   let doubleSided = false;
   let isRefractionRay = false;
   let currentTriangleIndex = -1;
+  let currentInstanceIndex = -1;
   var tMax = RAY_MAX_DISTANCE;
   var maxDim: i32;
   var shear: vec3f;
@@ -669,6 +670,7 @@ fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32,
   var hitTri: Triangle;
   var hitInsIdx: i32;
   var currentTriangleIndex: i32 = (*si).triangleIndex;
+  let currentInstanceIndex = (*si).instanceIndex;
 
   ${getBVHTraverseCode(
     `
@@ -716,6 +718,7 @@ fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: 
   var hitTri: Triangle;
   var hitInsIdx: i32;
   var currentTriangleIndex: i32 = -1;
+  let currentInstanceIndex = instanceIndex;
 
   ${getBVHTraverseCode(
     `
@@ -784,7 +787,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   }
 }
 
-fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32, currInstanceIndex:i32) -> bool {
   if (rtUniform.isEmpty > 0) {
     return false;
   }
@@ -798,6 +801,7 @@ fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
   let bounces = 1;
   var isRefractionRay = false;
   var currentTriangleIndex: i32 = currTriangleIndex;
+  let currentInstanceIndex = currInstanceIndex;
 
   ${getBVHTraverseCode(
     /*wgsl */ `
@@ -917,7 +921,9 @@ fn sphereSolidAnglePdf(origin: vec3f, center: vec3f, radius: f32) -> f32 {
   if (centerDistance <= radius) { return INV4PI; }
   let sinThetaMaxSquared = min(1.0, radius * radius / (centerDistance * centerDistance));
   let cosThetaMax = sqrt(max(0.0, 1.0 - sinThetaMaxSquared));
-  return 1.0 / max(TWOPI * (1.0 - cosThetaMax), 1e-8);
+  // Match the cancellation-free solid angle used by direct light sampling.
+  let oneMinusCosThetaMax = sinThetaMaxSquared / (1.0 + cosThetaMax);
+  return 1.0 / max(TWOPI * oneMinusCosThetaMax, 1e-8);
 }
 
 fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRec>) -> f32 {

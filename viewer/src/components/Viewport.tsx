@@ -30,10 +30,7 @@ export function Viewport() {
       void engine.loadInitialModel(hashModelPreset());
     }
     // Our own hash writes use replaceState, so this only fires for edits by the user.
-    const onHashChange = () => {
-      const id = hashModelPreset();
-      if (id && id !== useViewer.getState().model?.presetId) void engine.loadPreset(id);
-    };
+    const onHashChange = () => void engine.openURL(hashModelPreset());
     window.addEventListener('hashchange', onHashChange);
     return () => {
       window.removeEventListener('hashchange', onHashChange);

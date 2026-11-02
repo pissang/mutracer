@@ -9,6 +9,7 @@ use crate::status;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// A caller-owned callback argument, passed back unchanged.
 #[derive(Clone, Copy)]
@@ -32,7 +33,7 @@ struct EngineEntry {
 struct RenderEntry {
     engine: u64,
     render: Arc<Render>,
-    /// Replaced at each converge; `mt_render_cancel` cancels the current one.
+    /// Replaced at each converge/refine_until; `mt_render_cancel` cancels it.
     cancel: Arc<Mutex<CancelToken>>,
     /// The loop that owns this render, if any.
     owner: Option<u64>,
@@ -406,6 +407,10 @@ pub struct MtRenderOptions {
     adaptive_min_scale: f64,
     alpha_blend_strategy: u32,
     reserved_tail: u32,
+    caustic_flags: u32,
+    light_photons: u32,
+    photon_map_photons: u32,
+    photon_map_radius: f32,
 }
 #[repr(C)]
 pub struct MtRenderDenoiser {
@@ -519,11 +524,16 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
             .map_or(0., |a| a.target_frame_ms),
         adaptive_min_scale: settings.adaptive_resolution.map_or(0., |a| a.min_scale),
         alpha_blend_strategy: settings.alpha_blend_strategy as u32,
+        caustic_flags: settings.caustics.flags(),
+        light_photons: settings.caustics.light_photons,
+        photon_map_photons: settings.caustics.photon_map_photons,
+        photon_map_radius: settings.caustics.photon_map_radius,
         reserved_tail: 0,
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
-    if options.reserved_tail != 0
+    if options.caustic_flags & !6 != 0
+        || options.reserved_tail != 0
         || options.bevel > 1
         || options.allow_multiple_samples_per_frame > 1
     {
@@ -535,6 +545,13 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
         (width, height) => RenderSize::Fixed { width, height },
     };
     let settings = RenderSettings {
+        caustics: CausticSettings {
+            light_tracing: options.caustic_flags & 2 != 0,
+            photon_mapping: options.caustic_flags & 4 != 0,
+            light_photons: options.light_photons,
+            photon_map_photons: options.photon_map_photons,
+            photon_map_radius: options.photon_map_radius,
+        },
         aovs: options.aovs,
         aov_samples: if options.aov_samples == 0 {
             16
@@ -707,7 +724,7 @@ unsafe fn converge_options(
         cancel: Some(cancel),
     })
 }
-/// A fresh cancel token for the render `handle`'s next converge.
+/// A fresh cancel token for the render handle's next blocking sampling call.
 fn arm_cancel(handle: u64) -> Result<CancelToken> {
     registry(|r| match r.objects.get(&handle) {
         Some(Object::Render(e)) => {
@@ -1589,6 +1606,30 @@ pub unsafe extern "C" fn mt_render_refine(
 ) -> i32 {
     call(error_out, capacity, || {
         let status = render_of(handle)?.refine()?;
+        unsafe { write_optional(status_out, render_status(status)) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_refine_until(
+    handle: u64,
+    budget_ms: f64,
+    status_out: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        if !budget_ms.is_finite() || budget_ms < 0. {
+            return Err(invalid("Invalid refill budget"));
+        }
+        let duration = Duration::try_from_secs_f64(budget_ms / 1000.)
+            .map_err(|_| invalid("Invalid refill budget"))?;
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .ok_or_else(|| invalid("Invalid refill budget"))?;
+        let render = render_of(handle)?;
+        let cancel = arm_cancel(handle)?;
+        let status = render.refine_until(deadline, Some(&cancel))?;
         unsafe { write_optional(status_out, render_status(status)) };
         Ok(())
     })
@@ -2650,7 +2691,7 @@ mod tests {
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
-        assert_eq!(size_of::<MtRenderOptions>(), 112);
+        assert_eq!(size_of::<MtRenderOptions>(), 128);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_target_frame_ms), 88);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_min_scale), 96);
         assert_eq!(offset_of!(MtRenderOptions, alpha_blend_strategy), 104);
@@ -2691,7 +2732,7 @@ mod tests {
             "mt_engine_snapshot, 268",
             "mt_display_settings, 68",
             "mt_presented, 20",
-            "mt_render_options, 112",
+            "mt_render_options, 128",
             "mt_render_snapshot, 364",
             "mt_render_loop_snapshot, 48",
         ] {
@@ -2703,19 +2744,19 @@ mod tests {
     }
     #[test]
     fn render_options_default_initializes_the_current_record() {
-        let mut output = [0xdeadbeefu64; 16];
+        let mut output = [0xdeadbeefu64; 18];
         assert_eq!(
             unsafe { mt_render_options_default(output.as_mut_ptr().cast()) },
             0
         );
         let current = unsafe { record::<MtRenderOptions>(output.as_ptr().cast()) }.unwrap();
         assert_eq!(render_settings(current).unwrap(), RenderSettings::default());
-        assert_eq!(output[14..], [0xdeadbeef; 2]);
+        assert_eq!(output[16..], [0xdeadbeef; 2]);
         assert_eq!(
             unsafe { mt_render_options_default(std::ptr::null_mut()) },
             Status::InvalidArgument as i32
         );
-        for size in [0, 104, 108, 111, 113] {
+        for size in [0, 104, 112, 127, 129] {
             output[0] = (output[0] & !0xffffffff) | size as u64;
             assert!(unsafe { record::<MtRenderOptions>(output.as_ptr().cast()) }.is_err());
         }
@@ -2744,6 +2785,10 @@ mod tests {
             |o: &mut MtRenderOptions| o.max_samples = 0,
             |o: &mut MtRenderOptions| o.alpha_blend_strategy = 2,
             |o: &mut MtRenderOptions| o.reserved_tail = 1,
+            |o: &mut MtRenderOptions| o.caustic_flags = 16,
+            |o: &mut MtRenderOptions| o.caustic_flags = 8,
+            |o: &mut MtRenderOptions| o.photon_map_radius = -1.,
+            |o: &mut MtRenderOptions| o.photon_map_radius = f32::NAN,
         ] {
             let mut invalid = options;
             edit(&mut invalid);

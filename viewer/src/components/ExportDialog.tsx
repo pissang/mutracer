@@ -5,7 +5,9 @@ import { VIEWER_AOVS, setSettings, setUi, useViewer, showToast } from '../store'
 import { getEngine } from '../engine/ViewerEngine';
 import { Field, Scrub, Segmented, Switch } from './ui/controls';
 
-type SizePreset = 'viewport' | '1080p' | '2k' | '4k' | 'square';
+type SizePreset = 'viewport' | '1080p' | '2k' | '4k' | 'square' | 'custom';
+
+const validDimension = (value: number, max: number) => Number.isInteger(value) && value >= 1 && value <= max;
 
 export function ExportDialog() {
   const open = useViewer((s) => s.ui.exportOpen);
@@ -16,6 +18,8 @@ export function ExportDialog() {
   const denoise = useViewer((s) => s.settings.denoise);
   const background = useViewer((s) => s.settings.background);
   const [size, setSize] = useState<SizePreset>('viewport');
+  const [customWidth, setCustomWidth] = useState('1920');
+  const [customHeight, setCustomHeight] = useState('1080');
   const [samples, setSamples] = useState(maxSamples);
   const [transparent, setTransparent] = useState(background === 'transparent');
   const [downloading, setDownloading] = useState(false);
@@ -42,8 +46,10 @@ export function ExportDialog() {
     return () => { cancelled = true; cancelAnimationFrame(id); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : [stats.width, stats.height];
-  const estimate = !VIEWER_AOVS.some(kind => kind === output) && stats.msPerSample > 0 ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
+  const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : size === 'custom' ? [Number(customWidth), Number(customHeight)] : [stats.width, stats.height];
+  const maxDimension = getEngine()?.engine.info?.limits.maxTextureDimension2D ?? 8192;
+  const validSize = size !== 'custom' || dims.every(value => validDimension(value, maxDimension));
+  const estimate = !VIEWER_AOVS.some(kind => kind === output) && stats.msPerSample > 0 && validSize ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
   const busy = progress !== null || downloading;
   const close = () => {
     if (progress) getEngine()?.cancelExport();
@@ -72,9 +78,20 @@ export function ExportDialog() {
           <Field label="Size">
             <Segmented label="Image size" value={size} disabled={busy} onChange={setSize} options={[
               { value: 'viewport', label: 'Viewport' }, { value: '1080p', label: '1080p' },
-              { value: '2k', label: '2K' }, { value: '4k', label: '4K' }, { value: 'square', label: 'Square' }
+              { value: '2k', label: '2K' }, { value: '4k', label: '4K' }, { value: 'square', label: 'Square' }, { value: 'custom', label: 'Custom' }
             ]} />
           </Field>
+          {size === 'custom' && <div className="export-size">
+            <label><span className="field-label">Width</span>
+              <input className="text-input mono" type="number" min={1} max={maxDimension} step={1} value={customWidth} disabled={busy}
+                aria-invalid={!validDimension(dims[0], maxDimension)} onChange={(e) => setCustomWidth(e.currentTarget.value)} />
+            </label>
+            <label><span className="field-label">Height</span>
+              <input className="text-input mono" type="number" min={1} max={maxDimension} step={1} value={customHeight} disabled={busy}
+                aria-invalid={!validDimension(dims[1], maxDimension)} onChange={(e) => setCustomHeight(e.currentTarget.value)} />
+            </label>
+          </div>}
+          {!validSize && <p className="hint hint--warn">Use whole numbers from 1 to {maxDimension}.</p>}
           <Scrub label="Samples" value={samples} min={16} max={16384} log disabled={busy} onChange={setSamples} />
           <Switch label="Denoise" checked={denoise} disabled={busy} onChange={(v) => setSettings({ denoise: v })}>
             <span className="field-label">Denoise</span>
@@ -89,9 +106,9 @@ export function ExportDialog() {
             </div>
           )}
           <div className="actions">
-            <span className="est mono">{dims[0]} × {dims[1]}{estimate > 0 && !busy ? ` · ≈ ${Math.max(1, Math.round(estimate))} s` : ''}</span>
+            <span className="est mono">{validSize && `${dims[0]} × ${dims[1]}`}{estimate > 0 && !busy ? ` · ≈ ${Math.max(1, Math.round(estimate))} s` : ''}</span>
             <button className="btn" onClick={close}>{progress ? 'Cancel render' : 'Cancel'}</button>
-            <button className="btn btn--primary" disabled={busy} onClick={async () => {
+            <button className="btn btn--primary" disabled={busy || !validSize} onClick={async () => {
               await getEngine()?.exportImage({ width: dims[0], height: dims[1], samples, transparent });
               setUi({ exportOpen: false });
             }}>

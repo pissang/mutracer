@@ -1,3 +1,4 @@
+import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -5,18 +6,19 @@ import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import commonGlsl from './chunks/common.glsl.js';
-import rayTraceCore from './chunks/rayTraceCore.glsl.js';
+import {createRayTraceCoreGlsl} from './chunks/rayTraceCore.glsl.js';
 import textureLinear from './chunks/textureLinear.glsl.js';
-import materialBufferGlsl from './chunks/materialBuffer.glsl.js';
+import {createMaterialBufferGlsl} from './chunks/materialBuffer.glsl.js';
 import intersect from './chunks/intersect.glsl.js';
 import randGlsl from './chunks/rand.glsl.js';
 import random from './chunks/random.glsl.js';
 import envMap from './chunks/envMap.glsl.js';
-import sampleMaterialGlsl from './chunks/sampleMaterial.glsl.js';
+import {createSampleMaterialGlsl} from './chunks/sampleMaterial.glsl.js';
 import sampleLightGlsl from './chunks/sampleLight.glsl.js';
 import { FragmentShader, glsl, Shader } from '../shader.js';
 import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl.js';
 import samplingGlsl from './chunks/sampling.glsl.js';
+import {spectrumGlsl} from '../spectrum.js';
 import { isIntelMac } from '../util.js';
 import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
@@ -56,7 +58,13 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 }
 `;
 
-export default function createRayTraceFragmentShader() {
+export default function createRayTraceFragmentShader(...options: unknown[]) {
+  const research = researchTransport()?.fragment(options);
+  const enabled = research?.enabled ?? false;
+  const fragments = research?.fragments;
+  const materialBufferGlsl = createMaterialBufferGlsl(fragments);
+  const rayTraceCore = createRayTraceCoreGlsl(fragments);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
@@ -65,6 +73,9 @@ export default function createRayTraceFragmentShader() {
     BOUNCES: 2
   },
   uniforms: {
+    emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
+    emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
+    emissiveWeightTotal: Shader.uniform('float',0),
     cameraApertureRadius: Shader.uniform('float', 0),
     cameraFocusDistance: Shader.uniform('float', 10),
 
@@ -75,12 +86,12 @@ export default function createRayTraceFragmentShader() {
 
     viewportSize: Shader.uniform('vec2'),
 
-    wavelength: Shader.uniform('float', 0),
+    spectralChannel: Shader.uniform('int', 0),
     bevelEnabled: Shader.uniform('bool', true),
     dispersionWavelengths: Shader.uniform('int', 3),
     bounceLimit: Shader.uniform('int', 8)
   },
-  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap],
+  includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap, ...(research?.mixin ? [research.mixin] : [])],
   main: glsl`
 ${commonGlsl}
 
@@ -98,13 +109,16 @@ ${intersect.main}
 ${envMap.main}
 
 ${samplingGlsl}
+${spectrumGlsl}
 ${openPbrBsdfGlsl}
 
 float heroWavelength;
 float pathWavelength;
+int heroChannel;
+int pathChannel;
 
 ${sampleLightGlsl}
-${sampleMaterialGlsl}
+${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -143,7 +157,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
         // the grounded skybox. Use the displayed background here instead of
         // terminating early with the raw lighting environment.
         vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-        bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+        bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
         float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
               envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
@@ -153,7 +167,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       else {
         vec2 envUv = environmentUv(path.ray.d);
         vec3 emission = textureLinear(envMap, envUv).rgb;
-        emission = sampling_spectral_rgb_filter(emission, pathWavelength);
+        emission = sampling_spectral_rgb_filter(emission, pathChannel);
         path.li += path.beta * emission *
           sampling_power_heuristic(
             path.scatteringPdf,
@@ -162,7 +176,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       }
 #else
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
       path.li += path.beta * bg.rgb * bg.a;
 #endif
       path.abort = true;
@@ -176,7 +190,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
     // Dispersion renders one additive pass per RGB wavelength. Background
     // radiance has to be split in the same way as lights and emissive
     // surfaces, otherwise the full skybox is accumulated three times.
-    bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+    bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
     if (path.fromEye) {
       path.li = bg.rgb * bg.a;
       path.alpha = bg.a;
@@ -196,7 +210,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 #if !defined(USE_ENVMAP)
       // TODO treat background as a light source
       if (towardsCam) {
-        path.li = path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
+        path.li += path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
       }
 #endif
     }
@@ -280,6 +294,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   // opaque materials stay full RGB and therefore remain noise-free.
   if (dispersionWavelengths == 1 && si.hit && mat.transmissionWeight > 0.001 && mat.transmissionDispersionScale > 0.001) {
     pathWavelength = heroWavelength;
+    pathChannel = heroChannel;
   }
   if (mat.transmissionWeight > 0.001 && pathWavelength > 0.0) {
     mat.specularIor = sampling_cauchy_ior(
@@ -306,8 +321,8 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
     if (d != INF && !(occluded && isAlphaOccluded)) {
       lightSample.pdf *= light.selectionPmf;
       float misWeight = sampling_power_heuristic(path.scatteringPdf, lightSample.pdf);
-      lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathWavelength);
-      path.li += misWeight * path.beta * lightSample.emission;
+      lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
+      ${enabled ? 'if (!causticHitOwned(path)) { ' : ''}path.li += misWeight * path.beta * lightSample.emission;${enabled ? ' }' : ''}
       // TODO set alpha to 1.0 will cause some sharp edges
       path.alpha = 1.0;
       path.abort = true;
@@ -321,7 +336,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       // Camera-visible transmission must use the displayed background. The
       // raw environment remains the lighting source for non-transmission rays.
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
-      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
+      bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
       float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
               envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
@@ -336,7 +351,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       path.scatteringPdf,
       envMapPdf(uv) * envLightSelectionPmf
     );
-    emission = sampling_spectral_rgb_filter(emission, pathWavelength);
+    emission = sampling_spectral_rgb_filter(emission, pathChannel);
     path.li += path.beta * emission * misWeight;
 
   // TODO force the min alpha to be 1 when showing envmap as background
@@ -460,7 +475,9 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.li = vec3(0);
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.beta = vec3(1.0);
-  path.fromEye = true;
+  path.fromEye = true;${enabled ? /* glsl */ `
+  path.causticK = 0; path.causticSingleT = false;
+  path.causticReceiverPrimary = false; path.causticHasReceiver = false; path.causticMneeReceiver=false;` : ''}
   path.scatteringPdf = 0.0;
   path.scatteringIsDelta = false;
   path.isNextRefraction = false;
@@ -570,15 +587,21 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 
 void main() {
 
-  initRandom();
+${fragments?.debugInit ?? ''}  initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
-  pathWavelength = dispersionWavelengths == 1 ? 0.0 : wavelength;
-  heroWavelength = wavelength;
-  if (dispersionWavelengths == 1 && wavelength > 0.0) {
-    float channel = floor(sample1D(CAMERA_WAVELENGTH) * 3.0);
-    heroWavelength = channel < 1.0 ? 650.0 : channel < 2.0 ? 510.0 : 475.0;
+  pathWavelength = 0.0;
+  pathChannel = 0;
+  if (spectralChannel > 0) {
+    float wavelengthSample = sample1D(CAMERA_WAVELENGTH);
+    if (dispersionWavelengths == 1) {
+      heroChannel = min(int(wavelengthSample * 3.0), 2) + 1;
+      heroWavelength = spectrumCameraWavelength(heroChannel - 1, fract(wavelengthSample * 3.0));
+    } else {
+      pathChannel = spectralChannel;
+      pathWavelength = spectrumCameraWavelength(spectralChannel - 1, wavelengthSample);
+    }
   }
 
   // Thin lens model with depth-of-field
@@ -614,7 +637,7 @@ void main() {
     liAndAlpha = vec4(0, 0, 0, 1);
   }
 
-  out_color = liAndAlpha;
+  out_color = ${research?.debugOutput || 'liAndAlpha'};
   out_albedo = vec4(outAux.albedo, outAux.isBlank ? 0.0 : 1.0);
   out_normal = vec4(outAux.normal, 1.0);
   // Moments and count of the built-in denoiser's guide value. The catcher

@@ -4,7 +4,7 @@ import { textureBytes } from './gpuMemory.js';
 import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
-export function createNormalizeRayTraceOutputWGSL(layers = false, catcher = true) {
+export function createNormalizeRayTraceOutputWGSL(layers = false, catcher = true, caustics = false) {
   return /* wgsl */ `
 ${hdrResolveWGSL}
 @group(0) @binding(0) var<storage, read> colorBuffer: array<vec4f>;
@@ -13,7 +13,8 @@ ${hdrResolveWGSL}
 ${shadowCatcherAccumulationWGSL}
 @group(0) @binding(3) var<storage, read> shadowCatcherBuffer: array<ShadowCatcherAccumulation>;
 
-@group(1) @binding(0) var<uniform> sampleCount: f32;
+${caustics ? /* wgsl */ `@group(0) @binding(4) var<storage, read> causticBuffer: array<vec4f>;
+` : ''}@group(1) @binding(0) var<uniform> sampleCount: f32;
 @group(1) @binding(1) var<uniform> sampleTileGrid: vec2u;
 
 override outputWidth: f32;
@@ -96,7 +97,9 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
   output.shadowCatcher = vec4f(shadow.mask.rgb / total,
     shadow.mask.r / total * select(0.0, shadow.moments.z / shadow.moments.w, shadow.moments.w > 0.0));` : ''}
   `}
-  return output;
+${caustics ? /* wgsl */ `  let causticColor=causticBuffer[idx].rgb/max(causticBuffer[idx].a,1.0);
+  ${layers ? 'output.foreground = vec4f(output.foreground.rgb+causticColor,output.foreground.a);' : 'output.color = vec4f(output.color.rgb+causticColor,output.color.a);'}
+` : ''}  return output;
 }
 `;
 }
@@ -105,6 +108,8 @@ type RayTraceOutput = 'color' | 'normal' | 'albedo' | 'shadowCatcher'
   | 'foreground' | 'catcherBackground';
 type RayTraceBuffers = {
   color: GPUBuffer;
+  caustic?: GPUBuffer;
+  wideHdr?:boolean;
   normal: GPUBuffer;
   albedo: GPUBuffer;
   shadowCatcher: GPUBuffer;
@@ -130,6 +135,12 @@ export class WGPURayTraceOutputPass {
   private _height = 1;
 
   private _hasCatcher = false;
+  private _hasCaustics = false;
+  private _hasWideHdr=false;
+  private _maskPipeline?:GPURenderPipeline;
+  private _wideColor?:GPUTexture;
+  private _wideForeground?:GPUTexture;
+  private _causticPipeline?:GPURenderPipeline;
   private _needsUpdatePipeline = true;
 
   constructor(device: GPUDevice, private readonly zeroTexture?: GPUTexture) {
@@ -161,6 +172,8 @@ export class WGPURayTraceOutputPass {
 
   getOutput(label: RayTraceOutput): GPUTexture {
 
+    if(this._hasCaustics&&label==='color'&&this._wideColor)return this._wideColor;
+    if(this._hasCaustics&&label==='foreground'&&this._wideForeground)return this._wideForeground;
     return this[`_${label}Texture`] ?? this.zeroTexture!;
   }
 
@@ -180,7 +193,7 @@ export class WGPURayTraceOutputPass {
     this._colorTexture = device.createTexture({
       ...textureDescriptor,
       label: 'Ray Trace Color',
-      format: 'rgba16float',
+      format: this._hasWideHdr?'rgba32float':'rgba16float',
       usage:
         GPUTextureUsage.RENDER_ATTACHMENT |
         GPUTextureUsage.TEXTURE_BINDING |
@@ -195,11 +208,16 @@ export class WGPURayTraceOutputPass {
       ...textureDescriptor,
       label: 'Ray Trace Albedo'
     });
+    this._wideColor=this._wideForeground=undefined;
+    if(this._hasCaustics){
+      this._wideColor=device.createTexture({...textureDescriptor,label:'Caustic HDR color',format:'rgba32float'});
+      if(this._hasCatcher)this._wideForeground=device.createTexture({...textureDescriptor,label:'Caustic HDR foreground',format:'rgba32float'});
+    }
     if (this._hasCatcher) {
     this._foregroundTexture = device.createTexture({
       ...textureDescriptor,
       label: 'Ray Trace Foreground',
-      format: 'rgba16float'
+      format: this._hasWideHdr?'rgba32float':'rgba16float'
     });
     this._catcherBackgroundTexture = device.createTexture({
       ...textureDescriptor,
@@ -255,12 +273,12 @@ export class WGPURayTraceOutputPass {
       },
       fragment: {
         module: getTargetShaderCache(device).createShaderModule({
-          code: createNormalizeRayTraceOutputWGSL(false, this._hasCatcher)
+          code: createNormalizeRayTraceOutputWGSL(false, this._hasCatcher&&!this._hasWideHdr, false)
         }),
         entryPoint: 'main',
         targets: [
           {
-            format: 'rgba16float'
+            format: this._hasWideHdr?'rgba32float':'rgba16float'
           },
           {
             format: 'rgba8unorm'
@@ -268,7 +286,7 @@ export class WGPURayTraceOutputPass {
           {
             format: 'rgba8unorm'
           },
-          ...(this._hasCatcher ? [{format: 'rgba16float' as const}] : [])
+          ...(this._hasCatcher&&!this._hasWideHdr ? [{format: 'rgba16float' as const}] : [])
         ],
         constants: {
           outputWidth: this._width,
@@ -285,9 +303,9 @@ export class WGPURayTraceOutputPass {
         entryPoint: 'main'
       },
       fragment: {
-        module: getTargetShaderCache(device).createShaderModule({ code: createNormalizeRayTraceOutputWGSL(true) }),
+        module: getTargetShaderCache(device).createShaderModule({ code: createNormalizeRayTraceOutputWGSL(true, true, false) }),
         entryPoint: 'main',
-        targets: [{ format: 'rgba16float' }, { format: 'rgba16float' }],
+        targets: [{ format: this._hasWideHdr?'rgba32float':'rgba16float' }, { format: 'rgba16float' }],
         constants: { outputWidth: this._width, outputHeight: this._height }
       }
     });
@@ -301,7 +319,7 @@ export class WGPURayTraceOutputPass {
       !this._colorTexture
     ) {
       this._width = width;
-      this._height = height;
+      this._height = height;this._maskPipeline=undefined;
       this._createTextures();
       this._needsUpdatePipeline = true;
     }
@@ -328,12 +346,21 @@ export class WGPURayTraceOutputPass {
     inputBuffers: RayTraceBuffers,
     separateCatcher = false
   ) {
+    if(this._hasWideHdr!==!!inputBuffers.wideHdr){this._hasWideHdr=!!inputBuffers.wideHdr;this._createTextures();this._needsUpdatePipeline=true;}
+    if (this._hasCaustics !== !!inputBuffers.caustic) {
+      this._hasCaustics=!!inputBuffers.caustic;this._createTextures();this._needsUpdatePipeline=true;
+    }
     if (this._hasCatcher !== separateCatcher) {
       this._hasCatcher = separateCatcher; this._createTextures(); this._needsUpdatePipeline = true;
     }
     this._updatePipeline();
     this._createOutputPass(encoder, inputBuffers, false);
     if (separateCatcher) this._createOutputPass(encoder, inputBuffers, true);
+    if(this._hasWideHdr&&separateCatcher)this._resolveMask(encoder,inputBuffers);
+    if(inputBuffers.caustic){
+      this._addCaustics(encoder,this._colorTexture,this._wideColor!,inputBuffers.caustic);
+      if(separateCatcher)this._addCaustics(encoder,this._foregroundTexture,this._wideForeground!,inputBuffers.caustic);
+    }
   }
 
   private _createOutputPass(
@@ -344,7 +371,7 @@ export class WGPURayTraceOutputPass {
     const pipeline = layers ? this._layersPipeline : this._pipeline;
     const textures = layers
       ? [this._foregroundTexture, this._catcherBackgroundTexture]
-      : [this._colorTexture, this._normalTexture, this._albedoTexture, ...(this._hasCatcher ? [this._shadowCatcherTexture] : [])];
+      : [this._colorTexture, this._normalTexture, this._albedoTexture, ...(this._hasCatcher&&!this._hasWideHdr ? [this._shadowCatcherTexture] : [])];
     const pass = encoder.beginRenderPass({
       colorAttachments: textures.map((texture) => ({
         view: texture.createView(),
@@ -371,7 +398,9 @@ export class WGPURayTraceOutputPass {
             buffer,
             ...(idx === 3 ? { offset: inputBuffers.shadowCatcherOffset ?? 0 } : {})
           }
-        })).filter(entry => entry.binding < 3 || this._hasCatcher || layers)
+        })).filter(entry => entry.binding < 3 || (this._hasCatcher&&!this._hasWideHdr) || layers).concat(
+          []
+        )
       })
     );
     pass.setBindGroup(1, layers ? this._device.createBindGroup({
@@ -386,6 +415,28 @@ export class WGPURayTraceOutputPass {
 
   }
 
+  private _resolveMask(encoder:GPUCommandEncoder,input:RayTraceBuffers){
+    const device=this._device;
+    this._maskPipeline??=device.createRenderPipeline({label:'Wide HDR catcher mask',layout:'auto',
+      vertex:{module:device.createShaderModule({code:fullScreenQuadVertexShaderWGSL}),entryPoint:'main'},
+      fragment:{module:device.createShaderModule({code:shadowMaskResolveWGSL}),entryPoint:'main',constants:{IMAGE_WIDTH:this._width,IMAGE_HEIGHT:this._height},targets:[{format:'rgba16float'}]}});
+    const pass=encoder.beginRenderPass({label:'Wide HDR catcher mask',colorAttachments:[{view:this._shadowCatcherTexture.createView(),loadOp:'clear',storeOp:'store'}]});
+    pass.setPipeline(this._maskPipeline);pass.setBindGroup(0,device.createBindGroup({layout:this._maskPipeline.getBindGroupLayout(0),entries:[
+      {binding:0,resource:{buffer:input.normal}},{binding:1,resource:{buffer:input.shadowCatcher}},
+      {binding:2,resource:{buffer:this._uniformsBuffers.sampleTileGrid}},{binding:3,resource:{buffer:this._uniformsBuffers.sampleCount}}]}));
+    pass.draw(6);pass.end();
+  }
+
+  private _addCaustics(encoder:GPUCommandEncoder,base:GPUTexture,target:GPUTexture,caustics:GPUBuffer){
+    const device=this._device;
+    this._causticPipeline??=device.createRenderPipeline({label:'Caustic HDR resolve',layout:'auto',
+      vertex:{module:device.createShaderModule({code:fullScreenQuadVertexShaderWGSL}),entryPoint:'main'},
+      fragment:{module:device.createShaderModule({code:causticCompositeWGSL}),entryPoint:'main',targets:[{format:'rgba32float'}]}});
+    const pass=encoder.beginRenderPass({label:'Caustic HDR resolve',colorAttachments:[{view:target.createView(),loadOp:'clear',storeOp:'store'}]});
+    pass.setPipeline(this._causticPipeline);pass.setBindGroup(0,device.createBindGroup({layout:this._causticPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:base.createView()},{binding:1,resource:{buffer:caustics}}]}));
+    pass.draw(6);pass.end();
+  }
+
   private _destroyTextures() {
     if (!this._colorTexture) return;
 
@@ -395,6 +446,7 @@ export class WGPURayTraceOutputPass {
     // far has completed; destroying them synchronously can make Dawn validate
     // the pending submit against an already-destroyed texture.
     const textures = [
+      this._wideColor,this._wideForeground,
       this._colorTexture,
       this._normalTexture,
       this._albedoTexture,
@@ -425,3 +477,36 @@ export class WGPURayTraceOutputPass {
     });
   }
 }
+
+// A separate color attachment preserves float32 caustics within the baseline
+// 32-byte MRT budget, including when the catcher needs its fourth attachment.
+export const causticCompositeWGSL=/* wgsl */ `
+@group(0)@binding(0)var base:texture_2d<f32>;
+@group(0)@binding(1)var<storage,read>caustics:array<vec4f>;
+@fragment fn main(@builtin(position)position:vec4f)->@location(0)vec4f{
+ let pixel=vec2u(position.xy);let size=textureDimensions(base);
+ let c=textureLoad(base,vec2i(pixel),0);let photon=caustics[pixel.x+(size.y-pixel.y-1u)*size.x];
+ return vec4f(c.rgb+photon.rgb/max(photon.a,1.0),c.a);
+}
+`;
+
+export const shadowMaskResolveWGSL=/* wgsl */ `
+${shadowCatcherAccumulationWGSL}
+override IMAGE_WIDTH:u32;override IMAGE_HEIGHT:u32;
+@group(0)@binding(0)var<storage,read>normal:array<vec4f>;
+@group(0)@binding(1)var<storage,read>shadow:array<ShadowCatcherAccumulation>;
+@group(0)@binding(2)var<uniform>grid:vec2u;
+@group(0)@binding(3)var<uniform>samples:f32;
+@fragment fn main(@builtin(position)position:vec4f)->@location(0)vec4f{
+ // Image dimensions are supplied by the actual attachment through a uniform.
+ let size=vec2u(IMAGE_WIDTH,IMAGE_HEIGHT);
+ let pixel=vec2u(u32(position.x),size.y-u32(position.y)-1u);var index=pixel.x+pixel.y*size.x;
+ if(samples<1.0&&normal[index].a<=0.0){
+  let tile=max(grid,vec2u(1u));let nearest=min(((pixel+tile/2u)/tile)*tile,((size-vec2u(1u))/tile)*tile);
+  let candidate=nearest.x+nearest.y*size.x;if(normal[candidate].a>0.0){index=candidate;}
+ }
+ if(normal[index].a<=0.0){return vec4f(0.0);}
+ let s=shadow[index];let total=max(normal[index].a,1.0);
+ return vec4f(s.mask.rgb/total,s.mask.r/total*select(0.0,s.moments.z/s.moments.w,s.moments.w>0.0));
+}
+`;

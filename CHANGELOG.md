@@ -3,6 +3,51 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.0 - 2026-11-02
+
+Experimental WebGPU caustics, continuous-wavelength dispersion and more responsive progressive rendering.
+
+### Added
+
+- Experimental WebGPU caustics with `render.caustics`, off by default and ignored on WebGL 2: `lightTracing` for directly visible receivers, `photonMapping` for receivers seen through glass or water. See the [caustics guide](docs/caustics.md).
+- `render.refineUntil(deadline, {signal})` refines once, then keeps sampling until the deadline or cancellation. Use it for custom frame loops; see [sample batching](docs/progressive-rendering.md#sample-batching).
+- `RenderLoop.lastError` holds the exception from the latest failed tick; `status` is `error` while it is set.
+- Viewer resolution presets and custom image export dimensions.
+- Viewer collection examples for crystals and Halloween Night, and a Product caustics example.
+
+### Changed
+
+- Dispersion samples continuous wavelengths, on camera paths and caustic photons, so rainbows and dispersive glass form smooth gradients instead of separate red, green and blue images. Scenes with dispersion render differently. `dispersionWavelengths` now counts paths per sample, each carrying one RGB channel.
+- `whenReadyToRefine()` returns `Promise<boolean>`: `true` when sampling was queued. Code typed against `Promise<void>` needs updating.
+- `gpuSampleTimeMs` also reports tiled samples, extrapolated from tile GPU time.
+- Viewer models with imported cameras open in their first camera; collection examples open in their curated views.
+
+### Deprecated
+
+Use `render.refineUntil()` instead of these. They keep working and will be removed in a later release.
+
+- `render.whenReadyToRefine()`
+- `render.gpuSampleTimeMs`
+- The `targetBatchTimeMs` and `deferResolve` options of `render.refine()`
+
+### Performance
+
+- RenderLoop keeps sampling expensive tiled renders between display frames instead of waiting for the next frame.
+
+### Fixed
+
+- Fixed-size renders, `readPixels()` and image exports return exactly the requested dimensions and keep their framing.
+- Renders with different caustic or shader settings no longer stall each other at 0 samples. Shader compilation keeps accumulated samples, and returning to a compiled configuration no longer waits for an obsolete compilation.
+- RenderLoop applies scene edits after a stalled preview denoiser, and resumes after caustic settings change on a finished render.
+- A cancelled denoiser that does not settle within 10 seconds no longer blocks later denoising, and new meshes no longer wait for obsolete BVH preparation.
+- Caustics stay visible in high-resolution renders and across clear interfaces.
+- Small spot lights no longer show precision banding.
+- One-sided emitters no longer emit from their back faces on secondary hits.
+- WebGL 2 samples emissive meshes as lights, so small emitters no longer produce heavy noise.
+- WebGL 2 keeps accumulated lighting when a path escapes to a flat or texture background.
+- WebGL 2 renders a selected AOV channel when it is the first thing drawn after a scene change, instead of staying at 0 samples.
+- Viewer links apply example settings while keeping explicit URL overrides. Switching examples restores their caustic and ground-shadow settings.
+
 ## 0.2.0 - 2026-10-28
 
 Faster WebGPU rendering, surface AOVs and procedural skies.

@@ -130,38 +130,40 @@ other sequences retain their completed samples.
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
+| `caustics` | `undefined` | Optional caustics; all estimators default to off. See [caustics](#caustics) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
 | `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
-| `dispersionWavelengths` | `3` | 3 wavelengths, or one randomly chosen wavelength |
+| `dispersionWavelengths` | `3` | One continuous wavelength per RGB channel, or one randomly chosen channel |
 | `alphaBlendStrategy` | `'stochastic'` | WebGPU primary BLEND policy; ignored on WebGL |
 | `transmissiveOutputAlphaMin` | `1` | Path-depth alpha rule over transparent backgrounds; changes restart this render |
 | `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |
-| `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
+| `width` / `height` | undefined | Paired fixed constructor dimensions; `toBlob`, `readPixels` and the getters return exactly this size |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
-| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
-| `batchSamples` | `false` | Let one refine submit several samples within timeBudgetMs; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
+| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Target tile time / maximum tile grid size per sample (rounded up to a rectangular grid); fewer tiles make larger tiles, without limiting work per frame or call |
+| `batchSamples` | `false` | Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
 `bounces` is rounded and clamped to [1, 20] in both backends; NaN becomes 1.
-The path loop allows at most `min(bounces * 3, 20)` events, including transmission,
-alpha skips and escape checks. Opaque paths also have their own scattering-depth
-termination. This event budget can truncate deep transparent paths even when
-the requested scattering depth is larger. Intel Mac WebGL retains its driver
-workaround: `min(bounces, 3)` loop events, doubled for scenes with transmission
-or alpha, plus its existing early depth termination.
+Paths allow at most `min(bounces * 3, 20)` events, including transmission,
+alpha skips and escape checks. Opaque paths also terminate at their scattering
+limit. The event budget can truncate deep transparent paths before the requested
+scattering depth. On Intel Mac WebGL, the event limit is `min(bounces, 3)`, doubled
+for scenes with transmission or alpha, with earlier scattering termination.
+See [caustic path-length limits](./caustics.md#limits) when comparing renderers.
 
 | Method / property | Meaning |
 | --- | --- |
 | `refine(channel?, options?)` | Trace beauty or an enabled AOV within this render's budget; returns status |
+| `refineUntil(deadline, {signal}?)` | For custom frame loops: refine once synchronously, then keep sampling until the `performance.now()` deadline or cancellation; returns `Promise<void>`; see [sample batching](progressive-rendering.md#sample-batching) |
 | `converge(options)` | Deterministic offline image; see below |
 | `readPixels(kind = 'hdr')` | Read this render; see [pixel outputs](#pixel-outputs) |
 | `engine` | Owning engine |
 | `denoising` | Queued/running inference, including intermediate updates; default false |
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
-| `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms; undefined without timestamps, for stale inputs or during converge |
-| `whenReadyToRefine()` | Wait for the next release of WebGPU sampling queue capacity; resolves immediately if none is queued or on WebGL; submits no work |
+| `gpuSampleTimeMs` | Deprecated; use `refineUntil` for custom frame loops. Latest WebGPU full beauty sample estimate in ms, extrapolated from tile GPU time when tiled; undefined without timestamps, for stale inputs or during converge |
+| `whenReadyToRefine()` | Deprecated; use `refineUntil`. Wait for WebGPU sampling capacity and return `true` if sampling was queued; return `false` immediately with no sampling, on WebGL, or for only denoising, display or offline convergence work; submits no work; throws after disposal |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
 | `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |
@@ -175,13 +177,10 @@ completed filtering. Synchronous execution failures return `'error'` and set
 engine.lastError. Invalid lifecycle operations (disposed render or refine during
 converge) throw.
 
-`refine(undefined, {batchSamples, targetBatchTimeMs, deferResolve})`
-overrides batching for one call without changing render settings or discarding
-samples. The first two options default to the render's execution settings.
-`targetBatchTimeMs` must be positive and finite, defaults to `timeBudgetMs`, is
-capped by that budget and is ignored on WebGL. `deferResolve` (default false,
-WebGPU only) leaves the displayed image unchanged for calls between display
-frames; the next presentation or pixel read updates it once with every new sample.
+`refine(undefined, {batchSamples})` overrides batching for one call without
+changing render settings or discarding samples; it defaults to the render's
+`batchSamples`. The `targetBatchTimeMs` and `deferResolve` refine options are
+deprecated; use `refineUntil`.
 
 A fallback gets one sample when the requested render cannot finish its first
 sample within budget and the fallback has no current complete image. A ready
@@ -206,6 +205,25 @@ Resolves `{samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling,
 varianceHistory?}` after filtering. It rejects if engine input revisions change.
 The same render cannot refine concurrently; other renders remain usable.
 
+### Caustics
+
+```ts
+render.caustics = {lightTracing: {photonsPerSample: 32768}};
+render.caustics = undefined; // Disable every estimator.
+```
+
+Changing any caustic option restarts accumulation. All estimators are experimental;
+see the [caustics guide](./caustics.md) for choosing estimators, supported paths,
+rendering cost and image-quality limitations.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `lightTracing` | `false` | `true` or an object enables directly visible caustic light paths on WebGPU; ignored on WebGL 2 |
+| `lightTracing.photonsPerSample` | pixel count / 4 | Emitted photons per sample, rounded to a positive integer and capped by the device dispatch limit |
+| `photonMapping` | `false` | `true` or an object enables progressive caustic photon mapping on WebGPU; ignored on WebGL 2. See [PM-only denoising limits](./caustics.md#limits) |
+| `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default |
+| `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive first-batch gather radius in scene units, independent of `photonsPerSample`; shrinks as batches accumulate. Smaller radii preserve detail but require more photons |
+
 ## RenderLoop and Sync
 
 `start()` uses requestAnimationFrame when available and a 16 ms setTimeout
@@ -226,6 +244,7 @@ otherwise. Worker visibility and control forwarding are described in
 
 `engine`, `display`, `preview` (possibly undefined) and `final` are read-only.
 `changing` defaults false; `samples` counts final beauty samples and reports 0 during preview; `status` starts preparing.
+An exception during a tick, such as from a sync, sets `status` to error and `lastError`; the next successful tick clears them.
 `select({changing})` defaults to changing ? preview : final. `addSync`/`removeSync`
 manage integrations without disposing them. `tick` executes a manual frame;
 `start`/`stop` manage animation frames. `converge` accepts the same options as
@@ -251,7 +270,7 @@ Use `engine.display`; creation of additional displays is outside this API.
 their next refine; fixed renders retain their dimensions.
 `present(render)` only presents: it returns the render or its ready fallback,
 or undefined without changing the canvas when neither is ready.
-`toBlob(render, {type?, quality?})` composes that render at its actual dimensions,
+`toBlob(render, {type?, quality?})` composes that render at its output dimensions,
 without resizing or changing the current canvas. MIME defaults to image/png;
 quality defaults to the browser encoder value.
 
@@ -580,7 +599,9 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
 `display.addPostProcess(pass)` returns unregister and runs on every present/export.
-Both are WebGPU-only. See [formats, lifecycle and overlay example](./post-processing.md).
+Both are WebGPU-only. Textures are rounded up to multiples of 16 pixels, so a
+fixed render's texture can include extra pixels around the requested image. See
+[formats, lifecycle and overlay example](./post-processing.md).
 
 Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.
 

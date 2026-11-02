@@ -42,7 +42,7 @@ fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, 
         if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
           var ray: Ray;
           initRay(&ray, si.position + EPS * lightDir, lightDir);
-          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex);
+          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex,si.instanceIndex);
           counts += vec2f(select(0.0, 1.0, occluded), 1.0);
         }
       }

@@ -50,10 +50,10 @@ pub use engine::{
 };
 pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
-    AdaptiveResolution, AlphaBlendStrategy, CancelToken, CommitKind, ConvergeOptions,
-    ConvergeProgress, ConvergeResult, ConvergeStage, DENOISE_OIDN_WEBGPU, DenoiseReport,
-    DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind, RefineOptions,
-    Render, RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
+    AdaptiveResolution, AlphaBlendStrategy, CancelToken, CausticSettings, CommitKind,
+    ConvergeOptions, ConvergeProgress, ConvergeResult, ConvergeStage, DENOISE_OIDN_WEBGPU,
+    DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind,
+    RefineOptions, Render, RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,
@@ -123,3 +123,6 @@ pub use temporal::{
 
 #[cfg(test)]
 mod aov_display_tests;
+
+#[cfg(test)]
+mod caustics_tests;

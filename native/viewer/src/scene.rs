@@ -134,21 +134,32 @@ impl Model {
         model.0.center = (bounds_min + bounds_max) * 0.5;
         model.0.radius = (bounds_max - bounds_min).length() * 0.5;
         model.0.ground_y = bounds_min.y;
-        model.0.node_indices = (0..model.meshes.len()).collect();
-        model.1.nodes = Arc::new(
+        model.0.node_indices = (1..=model.meshes.len()).collect();
+        let mut nodes = vec![crate::scene_tree::Node {
+            name: model.name.clone(),
+            children: (1..=model.meshes.len()).collect(),
+            ..Default::default()
+        }];
+        nodes.extend(
             model
                 .meshes
                 .iter()
                 .enumerate()
-                .map(|(i, m)| crate::scene_tree::Node {
-                    name: m.name.clone(),
+                .map(|(i, mesh)| crate::scene_tree::Node {
+                    name: mesh.name.clone(),
+                    parent: Some(0),
                     meshes: vec![i],
                     ..Default::default()
-                })
-                .collect(),
+                }),
         );
-        model.0.node_names = model.0.meshes.iter().map(|m| m.name.clone()).collect();
-        model.0.mesh_names = model.0.node_names.clone();
+        model.1.nodes = Arc::new(nodes);
+        model.0.mesh_names = model
+            .0
+            .meshes
+            .iter()
+            .map(|mesh| mesh.name.clone())
+            .collect();
+        model.0.node_names = model.1.nodes.iter().map(|node| node.name.clone()).collect();
         model.rebuild_picking()?;
         Ok(model)
     }
@@ -845,6 +856,13 @@ mod example_tests {
     fn procedural_example_uses_the_browser_geometry_and_layers() {
         let model = super::Model::spheres().unwrap();
         assert_eq!(model.meshes.len(), 7);
+        assert_eq!(model.1.nodes[0].name, "Material spheres");
+        assert_eq!(model.1.nodes[0].children, (1..=7).collect::<Vec<_>>());
+        for (mesh, &node) in model.node_indices.iter().enumerate() {
+            assert_eq!(model.1.nodes[node].parent, Some(0));
+            assert_eq!(model.1.nodes[node].meshes, [mesh]);
+            assert_eq!(model.node_names[node], model.mesh_names[mesh]);
+        }
         assert_eq!(model.geometries[0].positions.len(), 97 * 49 * 3);
         assert_eq!(model.geometries[0].indices.len() / 3, 9024);
         assert!(model.textures.is_empty());

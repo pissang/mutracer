@@ -1,3 +1,4 @@
+import emissive from './emissiveLight.glsl.js';
 import { glsl } from '../../shader.js';
 
 export default glsl`
@@ -29,6 +30,10 @@ void light_sample_sphere(
     return;
   }
   float radius = max(light.radius, 1e-6);
+#ifdef HAS_EMISSIVE_LIGHTS
+  sampleEmissiveSceneLight(shadingPoint,randomSampleValue,result);return;
+#endif
+  result.sourceType=0;result.sourceIndex=-1;
   result.isDelta = false;
   vec3 direction;
 
@@ -46,8 +51,12 @@ void light_sample_sphere(
       radius * radius / (centerDistance * centerDistance)
     );
     float cosineLimit = sqrt(max(0.0, 1.0 - sineLimitSquared));
-    float cosine = mix(1.0, cosineLimit, samplePoint.x);
-    float sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    // Keep the small solid angle and sampled sine without subtracting
+    // nearly equal floats; otherwise small emitters produce irradiance bands.
+    float oneMinusCosineLimit = sineLimitSquared / (1.0 + cosineLimit);
+    float oneMinusCosine = samplePoint.x * oneMinusCosineLimit;
+    float cosine = 1.0 - oneMinusCosine;
+    float sine = sqrt(max(0.0, oneMinusCosine * (2.0 - oneMinusCosine)));
     float azimuth = TWOPI * samplePoint.y;
     vec3 tangent;
     vec3 bitangent;
@@ -55,7 +64,7 @@ void light_sample_sphere(
     direction = axis * cosine
       + tangent * (sine * cos(azimuth))
       + bitangent * (sine * sin(azimuth));
-    result.pdf = 1.0 / max(TWOPI * (1.0 - cosineLimit), 1e-8);
+    result.pdf = 1.0 / max(TWOPI * oneMinusCosineLimit, 1e-8);
   }
 
   float projectedCenter = dot(direction, toCenter);
@@ -214,12 +223,20 @@ void sampleEnvLight(in vec2 samplePoint, inout LightSampleRec result) {
   result.dist = INF;
 }
 
+#ifdef HAS_EMISSIVE_LIGHTS
+${emissive}
+#endif
+
 void sampleLight(
   in vec3 shadingPoint,
   in vec3 randomSampleValue,
   inout LightSampleRec result,
   bool distByIntensity
 ) {
+#ifdef HAS_EMISSIVE_LIGHTS
+  sampleEmissiveSceneLight(shadingPoint,randomSampleValue,result);return;
+#endif
+  result.sourceType=0;result.sourceIndex=-1;
   result.isDelta = false;
   float selector = randomSampleValue.z;
   bool choseEnvironment = false;
@@ -240,6 +257,7 @@ void sampleLight(
         break;
       }
     }
+    result.sourceType=2;result.sourceIndex=selectedIndex;
     Light selectedLight = fetchLight(selectedIndex);
     sampleAnalyticLight(
       selectedLight,

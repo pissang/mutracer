@@ -259,6 +259,9 @@ int main(int argc, char **argv) {
   refine_options.batch_samples = 0;
   refine_options.target_batch_time_ms = -1;
   STATUS(mt_render_refine_with_options(render, &refine_options, NULL, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  STATUS(mt_render_refine_until(render, -1., NULL, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  STATUS(mt_render_refine_until(render, NAN, NULL, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  QUIET(mt_render_refine_until(render, 0., NULL, error, sizeof error));
   refine_options.target_batch_time_ms = 4;
   uint32_t status = MT_RENDER_PREPARING;
   for (int i = 0; i < 600000 && status != MT_RENDER_FINISHED; i++) {

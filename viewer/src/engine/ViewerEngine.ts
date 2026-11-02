@@ -1,3 +1,5 @@
+import {causticOptions} from '../caustics';
+import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -5,7 +7,7 @@ import {
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -46,8 +48,7 @@ export interface ExportOptions {
 const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
-const INITIAL_LIGHTING = Object.fromEntries(Object.entries(readURLSettings())
-  .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key)));
+
 
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
@@ -108,6 +109,13 @@ export class ViewerEngine {
   private needsResize = true;
   private loadToken = 0;
   private modelId: string | null = null;
+  // Capture the incoming link before writeHash normalizes it or model loading
+  // applies defaults. Consume once; later model selections retain their resets.
+  private initialURLSettings: Partial<Settings> | undefined = readURLSettings();
+  /** A link naming only an example asks for its own look, even when that example is cached. */
+  private bareLink = false;
+  /** The example shown before this page load, whose look the stored settings may still carry. */
+  private cachedPresetId: string | null = null;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
   private envAbort?: AbortController;
@@ -231,6 +239,8 @@ export class ViewerEngine {
     const token = ++this.loadToken;
     const cached = await readModelCache();
     if (token !== this.loadToken) return;
+    this.bareLink = !!presetId && !Object.keys(this.initialURLSettings ?? {}).length;
+    this.cachedPresetId = cached?.meta.presetId ?? null;
     if (cached && (!presetId || cached.meta.presetId === presetId)) {
       const { meta } = cached;
       const loaded = await this.load(meta.name, (progress) => cached.source
@@ -244,6 +254,15 @@ export class ViewerEngine {
       }
     }
     return this.loadPreset(presetId ?? 'spheres', true);
+  }
+
+  /** A link edited in an open viewer: its settings apply and win over the defaults of the scene it names. */
+  async openURL(presetId: string | null) {
+    const url = readURLSettings();
+    if (Object.keys(url).length) setSettings(url, { record: false });
+    if (!presetId || presetId === get().model?.presetId) return;
+    this.initialURLSettings = url;
+    return this.loadPreset(presetId);
   }
 
   async loadPreset(id: string, restoreCamera = false) {
@@ -329,17 +348,36 @@ export class ViewerEngine {
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
-    const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
-    if (researchScene) setSettings({ groundShadow: false }, { record: false });
+    const preset = MODEL_PRESETS.find((preset) => preset.id === meta.presetId);
+    const researchScene = preset?.category === 'research';
+    // A saved view marks a reopened scene, unless a bare link asks for the example itself.
+    const reopened = cameraRestored && !this.bareLink;
+    if (!reopened) {
+      const previousId = get().model?.presetId ?? this.cachedPresetId;
+      const previous = MODEL_PRESETS.find((preset) => preset.id === previousId);
+      setSettings(leavingDisplaySettings(previous?.renderSettings, preset?.renderSettings, DEFAULT_SETTINGS), { record: false });
+    }
+    const presetPatch = presetSettings(meta.presetId, researchScene, reopened, DEFAULT_SETTINGS, this.initialURLSettings, preset?.renderSettings);
+    if (presetPatch) setSettings(presetPatch, { record: false });
+    // Imports do not inherit a stage that belongs to the example they replace.
+    const stage = preset?.stage;
+    const leavingStage = !meta.presetId && !restored && MODEL_PRESETS.some((preset) => preset.id === get().model?.presetId && preset.stage);
+    if (meta.presetId && !reopened || leavingStage) {
+      setSettings(presetStageSettings(stage, DEFAULT_SETTINGS, this.initialURLSettings), { record: false });
+    }
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
-    if (authoredLighting && !cameraRestored) {
+    if (authoredLighting && !reopened) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
-        ...(restored ? INITIAL_LIGHTING : {}) } });
+        ...Object.fromEntries(Object.entries(this.initialURLSettings ?? {})
+          .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key))) } });
       // A pending custom HDRI can exist even when the selection was already 'model'.
       if (get().settings.envId === 'model') this.cancelEnvironmentDownload();
-    } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
+    } else if ((!model.lighting?.available || !reopened && !authoredLighting) && get().settings.envId === 'model') {
       set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
     }
+    this.initialURLSettings = undefined;
+    this.bareLink = false;
+    this.cachedPresetId = null;
     this.modelId = id;
     this.materials.modelId = id;
     if (!edits) void clearMaterialEdits();
@@ -349,18 +387,6 @@ export class ViewerEngine {
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
-    if (!cameraRestored && this.modelCameras.length) {
-      if (researchScene) {
-        setSettings({ cameraIndex: 0 });
-      } else {
-        const count = this.modelCameras.length;
-        // An old prompt must never select a camera in a replacement model.
-        const valid = () => token === this.loadToken && model === this.model;
-        showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
-          { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
-        ]);
-      }
-    }
     this.saveCamera();
     if (persist) {
       if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
@@ -432,7 +458,7 @@ export class ViewerEngine {
     });
   }
 
-  /** Frames the model, or uses the view stored with it. */
+  /** Uses the curated view, the first authored camera, or an automatic frame. */
   private resetView() {
     this.fit();
     const defaultCamera = this.model && readModelCamera(this.model.root.userData.mutracerCamera);
@@ -441,6 +467,8 @@ export class ViewerEngine {
       this.perspectiveCamera.fov = defaultCamera.fov;
       this.perspectiveCamera.updateProjectionMatrix();
       this.lookAt(new THREE.Vector3(...defaultCamera.position), new THREE.Vector3(...defaultCamera.target));
+    } else if (this.modelCameras.length) {
+      setSettings({ cameraIndex: 0 }, { record: false });
     }
   }
 
@@ -452,6 +480,10 @@ export class ViewerEngine {
   resetAll() {
     recordGroup('Reset all', () => {
       resetSettings();
+      const preset = MODEL_PRESETS.find((preset) => preset.id === get().model?.presetId);
+      if (preset?.stage) setSettings(preset.stage);
+      const patch = presetSettings(preset?.id ?? null, preset?.category === 'research', false, DEFAULT_SETTINGS, {}, preset?.renderSettings);
+      if (patch) setSettings(patch);
       this.materials.resetAll();
       this.resetVisibility();
     });
@@ -529,7 +561,7 @@ export class ViewerEngine {
     try {
       await this.downloadEnvironment(url, id, name);
     } catch (error) {
-      showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'error');
+      showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'warning');
       useViewer.setState((s) => ({ settings: { ...s.settings, envId: 'sky' } }));
     }
   }
@@ -634,7 +666,8 @@ export class ViewerEngine {
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
-    r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
+    r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = renderResolutionScale(s, display.canvas.height);
+    r.caustics = this.preview.caustics = causticOptions(s);
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
     this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
@@ -928,6 +961,10 @@ export class ViewerEngine {
     this.controls.target.copy(target);
     this.controls.update();
     const distance = position.distanceTo(target);
+    // A previous Fit can include a large floor. Its near plane must not
+    // clip the subject after moving to a close preview camera.
+    this.camera.near = Math.min(this.camera.near, Math.max(distance / 1000, 1e-4));
+    this.camera.updateProjectionMatrix();
     useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1, focusDistance: Number(distance.toFixed(3)) } }));
   }
 
@@ -1226,7 +1263,7 @@ export class ViewerEngine {
       // MaterialX images have their origin at the bottom left.
       await this.materials.setTextures(materialId, maps, { ...MATERIAL_BASE, ...material.values }, `${name} MaterialX`,
         undefined, { uvScale: material.uvScale, flipY: true });
-      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`);
+      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`, warnings.length ? 'warning' : 'success');
       return true;
     } catch (error) {
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
@@ -1369,7 +1406,7 @@ export class ViewerEngine {
     link.href = url;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showToast(`Saved ${link.download}`);
+    showToast(`Saved ${link.download}`, 'success');
   }
 
   captureImage(type = 'image/png', quality?: number): Promise<Blob> {
@@ -1395,7 +1432,7 @@ export class ViewerEngine {
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
         aovs: this.final.aovs, aovSamples: this.final.aovSamples,
-        maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
+        maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping, caustics: this.final.caustics,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
         alphaBlendStrategy: this.final.alphaBlendStrategy, transmissiveOutputAlphaMin: this.final.transmissiveOutputAlphaMin,
@@ -1437,7 +1474,7 @@ export class ViewerEngine {
         position: light.getWorldPosition(new THREE.Vector3()).toArray(), target: light.target.getWorldPosition(new THREE.Vector3()).toArray() });
     });
     return generateCode({
-      settings: s,
+      settings: { ...s, resolutionScale: this.final.resolutionScale },
       webgpu: this.engine.backend === 'webgpu',
       modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
       environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
@@ -1486,6 +1523,7 @@ export class ViewerEngine {
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const size = this.engine.display.canvas;
     if (size.width !== width || size.height !== height) this.engine.display.setSize(width, height);
+    this.final.resolutionScale = renderResolutionScale(this.settings, height);
     setAspect(this.activeCamera(), this.viewAspect());
   }
 

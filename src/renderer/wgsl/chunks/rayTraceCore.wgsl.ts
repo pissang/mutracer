@@ -12,11 +12,13 @@ export default function rayTraceCore({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
+  caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
+  caustics?: boolean;
   lightCapabilities?: number;
 }) {
   return /*wgsl*/ `
@@ -77,6 +79,8 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   barycentrics: vec2f,
 
   wavelength: f32,
+  // RGB channel a spectral path carries, 1 to 3. Zero keeps full RGB.
+  spectralChannel: i32,
 
   mediumType: i32,
   mediumExtinction: vec3f,
@@ -97,7 +101,9 @@ struct OpenPbrResolvedMaterial {
 
   baseMetalness: f32,
   specularIor: f32,
-  specularRoughness: f32,
+  specularRoughness: f32,${caustics ? /* wgsl */ `
+  causticRoughness: f32,
+  causticNormalMapped: bool,` : ''}
 
   transmissionDispersionScale: f32,
   dispersionAbbeNumber: f32,
@@ -169,7 +175,13 @@ struct Path {
   abort: bool,
   scatteringPdf: f32,
   scatteringIsDelta: bool,
-  isNextRefraction: bool,
+  isNextRefraction: bool,${caustics ? /* wgsl */ `
+  causticK: u32,
+  causticSingleT: bool,
+  causticReceiverPrimary: bool,
+  causticHasReceiver: bool,
+  causticPhotonReceiver:bool,
+  causticMneeReceiver: bool,` : ''}
 };
 
 struct LightSampleRec {

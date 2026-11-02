@@ -87,24 +87,65 @@ are refined that frame. See [scene updates](updates.md) for notifications.
 
 ## Sample batching
 
-Without batching, a still image gets one sample per display frame, so a fast GPU
-idles for most of each frame. With `batchSamples`, sampling works on two levels:
+Without batching, each call advances one sample or tile, so a fast GPU can idle
+between display frames. With `batchSamples`, sampling works on two levels:
 
-- **Per call.** One `refine()` may submit several samples while at most
-  `timeBudgetMs` of GPU work is queued, and returns without waiting for them.
+- **Per call.** One `refine()` may submit several samples within an estimated
+  `timeBudgetMs` of GPU work, or one longer sample or tile, and returns without waiting for them.
   Without `batchSamples`, a call traces one sample or tile.
 - **Between frames.** RenderLoop also refines its final render each time the GPU
   finishes queued work, until the next display frame. It keeps about 4 ms of work
-  queued, or one sample if that is longer, so a camera edit waits behind at most
-  that much work at any refresh rate.
+  queued, or one sample or tile if that is longer. Expensive tiled samples can
+  continue between display frames when each measured tile fits `timeBudgetMs`;
+  longer tiles wait for display frames to bound input delay. Presentation still
+  follows the display frame rate.
 
 Batching is off by default. Enable it on the loop's final render with
 `final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
 batching while the view is changing.
 
-In your own loop, `batchSamples` gives the first level. For the second, call
-`render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true})` after each
-`await render.whenReadyToRefine()` until your next frame; see [Render](./api.md#render).
+Prefer RenderLoop for between-frame refilling. For a custom loop, use
+`refineUntil(deadline, {signal})`. It synchronously calls `refine()` once, so
+`present()` belongs immediately after the call. On WebGPU it then refills short
+batches until the deadline, cancellation, a hidden page or sampling/display
+conditions prevent more work. WebGL performs only the synchronous call.
+
+This example assumes `engine` and `render` are created with
+`render.batchSamples = true` and the final beauty channel selected. Adjust the
+60 Hz deadline to your application's cadence and update controls before
+`engine.update()`.
+
+<!-- own-loop-refill -->
+```js
+let refill;
+const stop = () => refill?.abort();
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'change'])
+  addEventListener(type, stop, {capture: true, passive: true});
+
+function frame(timestamp) {
+  requestAnimationFrame(frame);
+  stop();
+  engine.update();
+  refill = new AbortController();
+  void render.refineUntil(timestamp + 1000 / 60, {signal: refill.signal});
+  engine.display.present(render);
+}
+requestAnimationFrame(frame);
+```
+
+Call `stop()` before pausing, exporting or switching to another render, and skip
+`refineUntil()` while paused. A new call automatically ends the previous refill.
+The signal cancels future submissions; work already queued on the GPU completes.
+The returned Promise resolves when refilling stops, including after an
+asynchronous error (reported through `render.status` and `engine.lastError`).
+
+The library automatically continues the remaining tiles of the current sample
+between presentations. `samples` increases only after the whole sample;
+presentation keeps the previous complete sample until then. Committed scene or
+camera edits discard an unfinished sample and restart against the new inputs.
+`maxTiles` caps the sample's tile grid (rounded up to a rectangular grid), so a
+smaller value makes larger tiles. It does not cap work per frame or per call;
+use `timeBudgetMs` and the between-frame deadline to control queued work.
 
 ## Reading and exporting
 

@@ -353,6 +353,32 @@ describe('Three.js scene conversion', () => {
     expect(result.background && !Array.isArray(result.background)).toBe(true);
   });
 
+  it.each([
+    { value: 0, expected: 0 },
+    { value: 0.4, expected: 0.4 },
+    { value: 3, expected: 3 },
+    { value: -1, expected: 0 },
+    { value: NaN, expected: 0 },
+    { value: Infinity, expected: 0 }
+  ])('imports dispersion $value as $expected from physical materials and OpenPBR metadata', ({ value, expected }) => {
+    for (const source of ['physical', 'metadata']) {
+      const material = new THREE.MeshPhysicalMaterial({ transmission: 1 });
+      if (source === 'physical') material.dispersion = value;
+      else material.userData.mutracerOpenPBR = { transmissionDispersionScale: value };
+      const scene = new THREE.Scene();
+      scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+      expect(fromTHREEScene(scene).meshes[0].materials[0].transmissionDispersionScale, source).toBe(expected);
+    }
+  });
+
+  it('keeps the physical dispersion when OpenPBR metadata is non-finite', () => {
+    const material = new THREE.MeshPhysicalMaterial({ transmission: 1, dispersion: 0.4 });
+    material.userData.mutracerOpenPBR = { transmissionDispersionScale: Infinity };
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    expect(fromTHREEScene(scene).meshes[0].materials[0].transmissionDispersionScale).toBe(0.4);
+  });
+
   it('converts Three.js projective displacement settings', () => {
     const displacementMap = new THREE.DataTexture(
       new Uint8Array([128]),

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
+import { cameraFocalLength } from '../../src/renderer/cameraLens';
 import { renderFixture } from '../helpers/renderPipeline';
 
 function adaptiveFrames() {
@@ -11,6 +12,33 @@ function adaptiveFrames() {
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('independent Render', () => {
+  it('keeps fixed output exact and square when the backend rounds the target up', async () => {
+    const {engine, camera, targets, operations} = renderFixture();
+    const render = new Render(engine, {width: 1000, height: 390}); render.refine();
+    const target = targets[0];
+    target.getMemory = () => ({width: 1008, height: 400, bytes: 0});
+    expect([render.width, render.height]).toEqual([1000, 390]);
+
+    camera.fStop = 2.8;
+    camera.position = [1, 0, 0]; engine.update(); render.refine();
+    const traced = operations.filter(operation => operation.kind === 'draw').at(-1)!.camera!;
+    const committed = engine._inputs.value!;
+    const before = committed.getProjectionMatrix(1000 / 390), after = traced.getProjectionMatrix(1);
+    expect(after[0]).toBeCloseTo(before[0] * 1000 / 1008, 5);
+    expect(after[5]).toBeCloseTo(before[5] * 390 / 400, 5);
+    expect(cameraFocalLength(traced)).toBeCloseTo(cameraFocalLength(committed), 5);
+
+    // Each texel holds its own column and row, so the crop position is observable.
+    const data = new Float32Array(1008 * 400 * 4);
+    for (let y = 0; y < 400; y++) for (let x = 0; x < 1008; x++) data.set([x, y], (y * 1008 + x) * 4);
+    target.readOutput = vi.fn(async () => ({width: 1008, height: 400, data}));
+    const pixels = await render.readPixels('hdr');
+    expect([pixels.width, pixels.height, pixels.data.length]).toEqual([1000, 390, 1000 * 390 * 4]);
+    expect([...pixels.data.subarray(0, 2)]).toEqual([4, 5]);
+    expect([...pixels.data.subarray(-4, -2)]).toEqual([1003, 394]);
+    engine.dispose();
+  });
+
   it.each([false, true])('adapts from the whole tiled sample, including fallback rendering (%s)', fallback => {
     const frame = adaptiveFrames();
     let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
@@ -93,6 +121,27 @@ describe('independent Render', () => {
     a.refine(); expect(a.samples).toBe(4); expect(() => c.refine()).toThrow('disposed');
     engine.dispose();
   });
+  it.each(['webgpu', 'webgl'] as const)('publishes only complete tiled samples across repeated refines (%s)', backend => {
+    const {engine, targets} = renderFixture({tiles: 3, backend}); const render = new Render(engine);
+    render.refine(); render.refine(); expect(render.samples).toBe(0);
+    expect(engine.display.present(render)).toBeUndefined();
+    render.refine(); expect(render.samples).toBe(1); expect(engine.display.present(render)).toBe(render);
+    render.refine(); render.refine(); expect(render.samples).toBe(1);
+    expect(engine.display.present(render)).toBe(render);
+    expect(targets[0].trace).toHaveBeenCalledTimes(5);
+    render.refine(); expect(render.samples).toBe(2); engine.dispose();
+  });
+  it.each(['camera', 'scene'] as const)('discards unfinished tiles when committed %s inputs change', input => {
+    const {engine, camera, targets} = renderFixture({tiles: 3}); const render = new Render(engine);
+    render.refine(); render.refine();
+    if (input === 'camera') camera.position = [2, 0, 0];
+    else engine.scene = {meshes: [], lights: []};
+    engine.update(); render.refine(); expect(render.samples).toBe(0);
+    expect(engine.display.present(render)).toBeUndefined();
+    render.refine(); expect(render.samples).toBe(0);
+    render.refine(); expect(render.samples).toBe(1);
+    expect(targets[0].restartSamples).toHaveBeenCalledTimes(2); engine.dispose();
+  });
   it('uses committed camera state until update and restarts all renders afterwards', () => {
     const {engine, camera, targets, operations} = renderFixture(); const a = new Render(engine), b = new Render(engine);
     a.refine(); b.refine(); camera.position = [3, 0, 1]; a.refine();
@@ -150,20 +199,36 @@ describe('independent Render', () => {
   });
   it('exposes GPU sample timing only for a current, live render', () => {
     const {engine, camera, targets} = renderFixture(); const render = new Render(engine);
-    expect(render.gpuSampleTimeMs).toBeUndefined(); render.refine();
-    Object.assign(targets[0], {getRealtimeSampleTime: () => 2}); expect(render.gpuSampleTimeMs).toBe(2);
-    camera.position = [1, 0, 0]; engine.update(); expect(render.gpuSampleTimeMs).toBeUndefined();
-    render.refine(); expect(render.gpuSampleTimeMs).toBe(2);
-    render.dispose(); expect(render.gpuSampleTimeMs).toBeUndefined(); engine.dispose();
+    expect(render._gpuSampleTimeMs).toBeUndefined(); render.refine();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, getRealtimeTileTime: () => .5}); expect(render._gpuSampleTimeMs).toBe(2); expect(render.gpuTileTimeMs).toBe(.5);
+    camera.position = [1, 0, 0]; engine.update(); expect(render._gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined();
+    render.refine(); expect(render._gpuSampleTimeMs).toBe(2);
+    render.dispose(); expect(render._gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined(); engine.dispose();
   });
   it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
-    await render.whenReadyToRefine(); expect(targets).toHaveLength(0);
-    render.refine(); let complete!: () => void; const pending = new Promise<void>(resolve => {complete = resolve;});
+    expect(await render._whenReadyToRefine()).toBe(false); expect(targets).toHaveLength(0);
+    render.refine(); let complete!: () => void;
+    const pending = new Promise<boolean>(resolve => {complete = () => resolve(true);});
     Object.assign(targets[0], {whenTraceAvailable: () => pending});
-    expect(render.whenReadyToRefine()).toBe(pending); expect(targets[0].trace).toHaveBeenCalledOnce();
-    complete(); await pending; render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+    const ready = render._whenReadyToRefine(); expect(targets[0].trace).toHaveBeenCalledOnce();
+    complete(); expect(await ready).toBe(true);
+    Object.assign(targets[0], {whenTraceAvailable: () => Promise.resolve(false)});
+    expect(await render._whenReadyToRefine()).toBe(false);
+    render.dispose(); expect(() => render._whenReadyToRefine()).toThrow('disposed'); engine.dispose();
   });
+  it('keeps the deprecated capacity and timing members working', async () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    render.refine();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, whenTraceAvailable: () => Promise.resolve(true)});
+    expect(render.gpuSampleTimeMs).toBe(2); expect(await render.whenReadyToRefine()).toBe(true);
+    render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+  });
+  it('returns false on WebGL without waiting for display or denoising work', async () => {
+    const {engine} = renderFixture({backend: 'webgl'}); const render = new Render(engine);
+    render.refine(); expect(await render._whenReadyToRefine()).toBe(false); engine.dispose();
+  });
+
   it.each([0, -1, NaN, Infinity])('rejects an invalid realtime queue budget (%s) and restores subsequent calls', targetBatchTimeMs => {
     const {engine} = renderFixture(); const render = new Render(engine);
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -209,6 +274,7 @@ describe('converge selects one render', () => {
     const {engine, camera, targets, operations} = renderFixture(); const a = new Render(engine), b = new Render(engine);
     b.refine(); const exportCamera = camera.clone(); exportCamera.position = [8, 1, 2];
     const pending = a.converge({samples: 4, camera: exportCamera, sampleSequenceOffset: 19}); exportCamera.position = [9, 9, 9];
+    expect(await a._whenReadyToRefine()).toBe(false);
     expect(() => a.refine()).toThrow('converge'); b.refine();
     const result = await pending; expect(result.samples).toBe(4); expect(a.samples).toBe(4); expect(b.samples).toBe(2);
     expect(engine.camera).toBe(camera); expect(camera.position).toEqual([0, 0, 0]);

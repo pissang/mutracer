@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Aperture, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
 import type { OIDNModel } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
+import { ResolutionSelect } from '../ResolutionSelect';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
 
@@ -20,12 +21,7 @@ export function RenderPanel() {
         <Scrub label="Max samples" value={s.maxSamples} min={4} max={16384} log onChange={(v) => update({ maxSamples: v })} />
         <Scrub label="Bounces" value={s.bounces} min={1} max={16} step={1} onChange={(v) => update({ bounces: v })} />
         <Field label="Resolution">
-          <Segmented
-            label="Resolution"
-            value={String(s.resolutionScale)}
-            options={[{ value: '0.25', label: '25%' }, { value: '0.5', label: '50%' }, { value: '0.75', label: '75%' }, { value: '1', label: '100%' }]}
-            onChange={(v) => update({ resolutionScale: Number(v) })}
-          />
+          <ResolutionSelect />
         </Field>
         <Field label="Sampling">
           <Select
@@ -49,6 +45,14 @@ export function RenderPanel() {
           />
         </Field>
         <Scrub label="Clamping" value={s.clamping} min={0} max={100} step={1} format={(v) => (v === 0 ? 'Off' : String(v))} onChange={(v) => update({ clamping: v })} />
+      </Section>
+
+      <Section title="Caustics" icon={<Sun size={14} />} actions={<Switch label="Caustics" checked={s.caustics} onChange={v=>update({caustics:v})}/> }>
+        {s.caustics&&<>
+          <Switch label="Light tracing" checked={s.causticLightTracing} disabled={webgl} onChange={v=>update({causticLightTracing:v})}><span className="field-label">Light tracing</span></Switch>
+          <Switch label="Photon mapping" checked={s.causticPhotonMapping} disabled={webgl} onChange={v=>update({causticPhotonMapping:v})}><span className="field-label">Photon mapping</span></Switch>
+          {webgl&&<Hint>Light tracing and photon mapping require WebGPU.</Hint>}
+        </>}
       </Section>
 
       <Section

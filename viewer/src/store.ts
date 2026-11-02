@@ -46,7 +46,12 @@ export interface Settings {
 
   maxSamples: number;
   bounces: number;
+  caustics: boolean;
+  causticLightTracing:boolean;
+  causticPhotonMapping:boolean;
   resolutionScale: number;
+  /** Fixed render height that keeps the viewport's shape; overrides resolutionScale. */
+  resolutionHeight: number | null;
   samplingPattern: SamplingPattern;
   bvhBuilder: BVHBuilder;
   clamping: number;
@@ -121,7 +126,10 @@ export const DEFAULT_SETTINGS: Settings = {
   groundOpacity: 0.8,
   maxSamples: 64,
   bounces: 6,
+  caustics: false,
+  causticLightTracing:true,causticPhotonMapping:false,
   resolutionScale: 0.5,
+  resolutionHeight: null,
   samplingPattern: 'sobol',
   // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
   bvhBuilder: 'tinybvh',
@@ -259,6 +267,8 @@ export interface LensInfo {
 
 export type InspectorTab = 'environment' | 'material' | 'camera' | 'render';
 
+export type ToastTone = 'info' | 'success' | 'warning' | 'error';
+
 export interface ViewerState {
   settings: Settings;
   stats: Stats;
@@ -273,7 +283,7 @@ export interface ViewerState {
   /** Bounding radius of the loaded model in scene units. */
   modelRadius: number;
   error: string | null;
-  toast: { id: number; message: string; tone: 'info' | 'error'; actions?: { label: string; onClick(): void }[] } | null;
+  toast: { id: number; message: string; tone: ToastTone; actions?: { label: string; onClick(): void }[] } | null;
   animation: AnimationState | null;
   selection: { objectId: string | null; materialId: string | null };
   material: SelectedMaterial | null;
@@ -298,7 +308,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'resolutionHeight', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'
@@ -350,6 +360,8 @@ function validateSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    caustics: settings.caustics === true,
+    causticLightTracing: settings.causticLightTracing===true,causticPhotonMapping:settings.causticPhotonMapping===true,
     output: settings.output === 'shadow' ? 'final' : settings.output,
     lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
@@ -428,7 +440,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
   envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
-  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
+  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',
@@ -496,8 +508,15 @@ export function setUi(patch: Partial<ViewerState['ui']>) {
   useViewer.setState((s) => ({ ui: { ...s.ui, ...patch } }));
 }
 
+export const RESOLUTION_HEIGHTS = [720, 1080, 1440, 2160];
+
+/** The render scale for a canvas of this height. A fixed height can supersample small viewports. */
+export function renderResolutionScale(s: Pick<Settings, 'resolutionScale' | 'resolutionHeight'>, canvasHeight: number) {
+  return s.resolutionHeight === null ? s.resolutionScale : s.resolutionHeight / Math.max(1, canvasHeight);
+}
+
 let toastId = 0;
-export function showToast(message: string, tone: 'info' | 'error' = 'info', actions?: NonNullable<ViewerState['toast']>['actions']) {
+export function showToast(message: string, tone: ToastTone = 'info', actions?: NonNullable<ViewerState['toast']>['actions']) {
   useViewer.setState({ toast: { id: ++toastId, message, tone, actions } });
 }
 
