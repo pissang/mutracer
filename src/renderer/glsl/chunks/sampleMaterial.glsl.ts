@@ -2,7 +2,7 @@
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
 import { glsl } from '../../shader.js';
-export function createSampleMaterialGlsl(fragments: Readonly<Record<string, string>> = {}, hasVolumes = false) { return glsl`
+export function createSampleMaterialGlsl(fragments: Readonly<Record<string, string>> = {}, hasVolumes = false, hasVolumeNoise = false) { return glsl`
 float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
   // Secondary intersections remain two-sided, but one-sided emission does not.
   float facing=dot(si.faceNormal,-path.ray.d);
@@ -102,7 +102,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
 #endif
 
 ${hasVolumes ? /* glsl */ `  if (!si.volumeSuppressed || (isSurface && !mat.thinWalled && (mat.transmissionWeight > 0.0 || mat.subsurfaceWeight > 0.0) && dot(si.faceNormal, lightDir) > 0.0)) {
-    lightSample.emission *= volumeTransmittance(lightRay, shadowDistance);
+    lightSample.emission *= ${hasVolumeNoise ? 'volumeShadowTransmittance' : 'volumeTransmittance'}(lightRay, shadowDistance);
   }
 ` : ''}  // Delta lights cannot be sampled by the BSDF strategy, so their MIS weight
   // is exactly one even when their light-selection PMF is small.

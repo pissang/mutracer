@@ -1,5 +1,6 @@
+import {volumeTrackingGlsl, volumeNoiseGuidesGlsl} from './volumeTracking.glsl.js';
 import {MAX_PATH_EVENTS} from '../../pathLimits.js';
-export const volumeGlsl = /* glsl */ `
+export function createVolumeGlsl(hasVolumeNoise = false) { return /* glsl */ `
 vec2 volumeInterval(Ray ray, int index, float maximum) {
   vec3 origin = (volumeWorldToLocal[index] * vec4(ray.o, 1.0)).xyz;
   vec3 direction = (volumeWorldToLocal[index] * vec4(ray.d, 0.0)).xyz;
@@ -67,8 +68,9 @@ float volumeTransmittance(Ray ray, float maximum) {
   for (int i = 0; i < volumeCount; i++) tau += volumeOpticalDepth(ray, i, volumeInterval(ray, i, maximum));
   return exp(-tau);
 }
-`;
-export const volumePathGlsl = /* glsl */ `
+${hasVolumeNoise ? volumeTrackingGlsl + '\n' : ''}`;
+}
+export function createVolumePathGlsl(hasVolumeNoise = false) { return /* glsl */ `${hasVolumeNoise ? volumeNoiseGuidesGlsl : ''}
 void volumeGuides(Ray ray, float maximum, inout RayTraceAuxiliary outAux) {
   float tau = 0.0, weight = 0.0; vec3 albedo = vec3(0.0);
   for (int i = 0; i < volumeCount; i++) {
@@ -99,13 +101,14 @@ int sampleVolumeEvent(inout Path path, inout SurfaceInteraction si, float maximu
   if (si.mediumType > 0 || si.volumeSuppressed) return -1;
   float nearest = maximum; int winner = -1;
   for (int i = 0; i < volumeCount; i++) {
-    vec2 interval = volumeInterval(path.ray, i, maximum);
+    vec2 interval = volumeInterval(path.ray, i, ${hasVolumeNoise ? 'nearest' : 'maximum'});
     if (interval.y <= interval.x || volumeParams[i].x <= 0.0) continue;
     float u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - uint(i)));
     if (resample) u = hashedSample(0xf091u + uint(i));
     // Undo the surface sampler's endpoint remapping for unbiased free flight.
     u = clamp((u - EPS) / (1.0 - 2.0 * EPS), 0.0, 1.0 - 1.0 / 16777216.0);
-    float candidate = volumeDistance(path.ray, i, interval, -log(max(1.0 - u, 1e-7)));
+    float candidate = volumeDistance(path.ray, i, interval, -log(max(1.0 - u, 1e-7)));${hasVolumeNoise ? /* glsl */ `
+    if (volumeModulated(i)) candidate = volumeDeltaDistance(path.ray, i, interval, u, 0xc910u + uint(i) * 256u);` : ''}
     if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
   }
   if (winner >= 0) {
@@ -205,3 +208,4 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
   return vec4(path.li, path.alpha);
 }
 `;
+}
