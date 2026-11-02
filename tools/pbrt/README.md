@@ -17,7 +17,7 @@ Scenes have individual licenses listed in its README. Scene assets are downloade
 at runtime and are not included with MuTracer.
 
 Run `npm run pbrt:compare -- <local-scene.pbrt> --spp 64 --scale 0.25` with
-PBRT installed at `~/.codex/tools/pbrt-v4/build/pbrt`, or set `PBRT_BIN`.
+the PBRT executable selected by `PBRT_BIN`.
 `--webgl` selects WebGL 2; `--out <directory>` chooses the report destination.
 `--width N --height N` overrides the scaled Film dimensions. Comparisons use the
 whole frame; Film crop windows and pixel bounds are ignored in both renders.
@@ -49,9 +49,9 @@ copies to coexist in browser memory.
 | sphere / disk / cylinder | Tessellated geometry; sphere emitters retain visible emissive geometry. |
 | ObjectBegin / ObjectInstance | Shared instanced geometry, including mirrored instances. |
 | loopsubdiv / curve | Loop subdivision with area-weighted normals / skipped with a warning. |
-| perspective / orthographic | Film aspect ratio and short-edge field of view; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
+| perspective / orthographic | Film aspect ratio, ISO and camera shutter exposure, and short-edge field of view; Film exposuretime and whitebalance are warned and ignored; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
 | diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. Outside-medium reversal reciprocates thick dielectric IOR; thin-wall IOR stays unchanged. Reciprocal dispersion retains an approximate Abbe mapping with a warning. |
-| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients; reversed coats or coat IOR below 1 are unsupported and warned. |
+| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients; reversed coats or coat IOR below 1 are unsupported and warned; diffuse transmission defaults to reflectance/transmittance 0.25 and uses mean transmittance for its thin-wall approximation. |
 | mix / hair / measured / interface | Dominant constant-weight branch / diffuse fallback / diffuse fallback / transmissive medium boundary. |
 | imagemap | PNG/JPEG, EXR, TGA and TIFF; encoding, invert, scale, UV scale/offset and repeat/clamp. Black wrap approximates clamp. |
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
@@ -76,8 +76,9 @@ OpenPBR medium; this can change fine-scale skin scattering and is warned about.
 Optical constants accept named spectra or SPD files. Spatial optical-constant
 maps and coat roughness maps use warned mean-value approximations.
 
-The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
-an estimated working set above 8 GiB, using eight times the encoded input size.
+The viewer asks before downloading 1 GB or more, up to its 1 GiB encoded-input
+limit (about 1.074 GB). Larger inputs and unknown total sizes are rejected before
+binary downloads. The memory estimate is eight times input size, capped at 8 GiB.
 This is an estimate; available browser and GPU memory can impose a lower limit.
 Local folders with multiple scenes open the first entry containing `WorldBegin`
 in path order. Open an individual scene and its dependencies to choose another.

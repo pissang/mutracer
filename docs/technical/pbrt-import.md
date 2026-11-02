@@ -11,7 +11,9 @@ PBRT's camera looks along local +Z. With `M = diag(1,1,-1,1)`, geometry uses
 The world reflection is baked into geometry so emissive triangles have consistent
 world-space winding and normals. The winding changes when the baked transform
 changes handedness, XOR `ReverseOrientation`; explicit normals only change sign
-for `ReverseOrientation`. Instances retain shared geometry and use `M * T * M`.
+for `ReverseOrientation`. Triangle winding is then face-forwarded to shading
+normals, matching PBRT meshes with authored N. Instances retain shared geometry
+and use `M * T * M`.
 Loop shapes refine the control mesh and push vertices to the limit surface;
 area-weighted normals approximate the reference limit-surface tangents.
 A reflection is absorbed into a geometry variant for negative instance transforms.
@@ -30,8 +32,9 @@ otherwise `2 atan(tan(fov/2)/a)`. Lens conversion uses a 24 mm sensor height:
 `focalLength = .024/(2 tan(verticalFov/2))` metres and
 `fStop = focalLength/(2 lensRadius)` for metre scene units.
 The focus distance stays in scene units. The linear exposure multiplier is
-`ISO/100 * (shutterClose-shutterOpen)`, with an explicit Film exposuretime taking
-precedence. Sensor and white-balance differences are warned about.
+`ISO/100 * (shutterClose-shutterOpen)`. Film exposuretime is not a PBRT-v4
+parameter and is warned and ignored, as is whitebalance. Unsupported sensors
+produce a separate warning.
 
 The pinned `TrowbridgeReitzDistribution::RoughnessToAlpha` returns `sqrt(r)`.
 Since OpenPBR uses `alpha = roughness²`, the imported roughness is `r^(1/4)` with
@@ -155,7 +158,11 @@ Each MuTracer run uses a fresh Chrome process to avoid retaining both scenes' ca
 and allocations during memory measurement.
 
 Text and gzip Includes are decoded by statements to avoid the single-string size
-limit. The viewer parses them and PLY data in a Worker. The download preflight
+limit. The viewer parses them and PLY data in a Worker. Inline P/N/UV/index
+arrays become
+transferable typed views before leaving the Worker; statement locations share
+the same parameter objects. Binary assets are prefetched six at a time before
+conversion; progress sums completed and in-flight bytes. The download preflight
 uses unique encoded input sizes and an 8x expansion estimate against an 8 GiB
 working budget. This estimate is deliberately conservative and cannot predict
 total process/GPU memory or prevent every browser allocation failure.

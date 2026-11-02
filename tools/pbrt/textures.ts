@@ -23,7 +23,7 @@ export class Textures {
   }
   async spectrum(parameter: Parameter): Promise<number[] | undefined> {
     const value = parameter.values[0];
-    if (typeof value !== 'string') return parameter.values.map(Number);
+    if (typeof value !== 'string') return Array.from(parameter.values, Number);
     const named = namedSpectrum(value); if (named) return named;
     if (!/\.(spd|txt)$/i.test(value)) return undefined;
     const path = resolvePath(value, this.scene.entry);
@@ -67,7 +67,7 @@ export class Textures {
       const y = .2126 * color[0] + .7152 * color[1] + .0722 * color[2];
       return { color: emission && y > 0 ? color.map(v => v / y) : color };
     }
-    const values = parameter.values.map(Number);
+    const values = Array.from(parameter.values, Number);
     return { color: values.length === 1 ? [values[0], values[0], values[0]] : values.slice(0, 3) };
   }
   private async named(name: string, owner: Entity, stack: Set<string>, kind: 'float' | 'spectrum'): Promise<TextureValue> {

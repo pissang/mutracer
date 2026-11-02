@@ -94,6 +94,27 @@ describe('PBRT conversion semantics', () => {
     const g=(root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).geometry;
     expect(g.attributes.tangent.getX(0)).toBeCloseTo(1);expect(g.attributes.tangent.getY(0)).toBeCloseTo(0);
   });
+  it('ignores non-PBRT exposuretime and white balance with warnings', async () => {
+    const { settings, scene } = await load('Film "rgb" "float iso" 200 "float exposuretime" 20 "float whitebalance" 5500 Camera "perspective" "float shutteropen" .25 "float shutterclose" .75 WorldBegin Shape "sphere"');
+    expect(settings.exposure).toBe(1);
+    expect(scene.warnings).toContainEqual(expect.objectContaining({ handling:'Parameter exposuretime ignored' }));
+    expect(scene.warnings).toContainEqual(expect.objectContaining({ handling:'White balance ignored' }));
+  });
+  it('reads diffuse transmittance and its default reflectance', async () => {
+    const { root } = await load('WorldBegin Material "diffusetransmission" "rgb transmittance" [.2 .4 .8] Shape "sphere"');
+    const m=(root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
+    expect(m.color.toArray()).toEqual([.25,.25,.25]);expect(m.transmission).toBe(.8);
+    expect(m.userData.mutracerOpenPBR.transmissionColor).toEqual([.25,.5,1]);
+  });
+  it('face-forwards triangle winding to authored normals after orientation and reflection', async () => {
+    for(const orientation of ['', 'ReverseOrientation', 'Scale -1 1 1', 'Scale -1 1 1 ReverseOrientation']) {
+      const {root}=await load('WorldBegin '+orientation+' Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 0 1 0] "normal N" [0 0 -1 0 0 -1 0 0 -1]');
+      const g=(root.children.find(o=>(o as THREE.Mesh).isMesh) as THREE.Mesh).geometry;
+      const p=g.attributes.position,n=g.attributes.normal,i=g.index!;
+      const a=new THREE.Vector3().fromBufferAttribute(p,i.getX(0)),b=new THREE.Vector3().fromBufferAttribute(p,i.getX(1)),c=new THREE.Vector3().fromBufferAttribute(p,i.getX(2));
+      expect(b.sub(a).cross(c.sub(a)).dot(new THREE.Vector3().fromBufferAttribute(n,0))).toBeGreaterThan(0);
+    }
+  });
   it('mirrors the world and camera together and keeps the camera basis right handed', async () => {
     const { root } = await load('LookAt 0 0 -4 0 0 0 0 1 0 Camera "perspective" WorldBegin Shape "sphere"');
     let camera: THREE.Camera | undefined; root.traverse(o => { if ((o as THREE.Camera).isCamera) camera = o as THREE.Camera; });
@@ -153,7 +174,7 @@ describe('PBRT conversion semantics', () => {
     [5,11.5,17].forEach((v,i)=>expect(params.mediumExtinction[0][i]).toBeCloseTo(v,5));
     [5,10,15].forEach((v,i)=>expect(params.mediumScattering[0][i]).toBeCloseTo(v,5));
   });
-  it.each([['thindielectric',1],['diffusetransmission',.5]] as const)('retains %s transmission and thin-wall state through Three.js', async (type, weight) => {
+  it.each([['thindielectric',1],['diffusetransmission',.25]] as const)('retains %s transmission and thin-wall state through Three.js', async (type, weight) => {
     const { root } = await load(`WorldBegin Material "${type}" Shape "sphere"`);
     const source = new THREE.Scene(); source.add(root);
     const material = fromTHREEScene(source).meshes[0].materials[0];

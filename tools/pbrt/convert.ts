@@ -25,11 +25,11 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   const allowed: Record<string, string[]> = {
     Shape: ['P', 'N', 'uv', 'st', 'indices', 'filename', 'alpha', 'displacement', 'radius', 'zmin', 'zmax', 'phimax', 'height', 'innerradius', 'levels', 'nlevels'],
     Camera: ['fov', 'screenwindow', 'lensradius', 'focaldistance', 'shutteropen', 'shutterclose'],
-    Film: ['xresolution', 'yresolution', 'filename', 'iso', 'exposuretime', 'whitebalance', 'sensor', 'savefp16'],
+    Film: ['xresolution', 'yresolution', 'filename', 'iso', 'whitebalance', 'sensor', 'savefp16'],
     Sampler: ['pixelsamples'], Integrator: ['maxdepth'],
     LightSource: ['L', 'I', 'scale', 'power', 'illuminance', 'from', 'to', 'coneangle', 'conedeltaangle', 'filename', 'portal'],
     AreaLightSource: ['L', 'scale', 'power', 'twosided', 'filename'],
-    Material: ['type', 'reflectance', 'eta', 'k', 'roughness', 'uroughness', 'vroughness', 'remaproughness', 'normalmap', 'displacement', 'sigma_a', 'sigma_s', 'mfp', 'g', 'scale', 'name', 'amount', 'materials'],
+    Material: ['type', 'reflectance', 'transmittance', 'eta', 'k', 'roughness', 'uroughness', 'vroughness', 'remaproughness', 'normalmap', 'displacement', 'sigma_a', 'sigma_s', 'mfp', 'g', 'scale', 'name', 'amount', 'materials'],
     MakeNamedMedium: ['type', 'sigma_a', 'sigma_s', 'scale', 'g', 'Le']
   };
   const entities: Entity[] = [...scene.shapes, ...Object.values(scene.objects).flat(), ...Object.values(scene.materials), ...scene.lights, ...Object.values(scene.media), ...[scene.camera, scene.film, scene.sampler, scene.integrator].filter((e): e is Entity => !!e)];
@@ -79,6 +79,19 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
       for (let i = 0; i < data.count; i += 3) { const a = data.getX(i); data.setX(i, data.getX(i + 1)); data.setX(i + 1, a); }
     }
     if (reverse) { const n = g.attributes.normal; if (n) for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i)); }
+    // PBRT Triangle::NormalBounds / InteractionFromIntersection face-forward
+    // the geometric normal to authored shading normals. Match that by winding.
+    if (g.attributes.normal) {
+      if (!g.index) g.setIndex(Array.from({ length: g.attributes.position.count }, (_, i) => i));
+      const p = g.attributes.position, n = g.attributes.normal, indices = g.index!;
+      const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), ns = new THREE.Vector3();
+      for (let i = 0; i < indices.count; i += 3) {
+        const i0 = indices.getX(i), i1 = indices.getX(i+1), i2 = indices.getX(i+2);
+        a.fromBufferAttribute(p,i0); b.fromBufferAttribute(p,i1).sub(a); c.fromBufferAttribute(p,i2).sub(a);
+        ns.set(n.getX(i0)+n.getX(i1)+n.getX(i2), n.getY(i0)+n.getY(i1)+n.getY(i2), n.getZ(i0)+n.getZ(i1)+n.getZ(i2));
+        if (b.cross(c).dot(ns) < 0) { indices.setX(i,i1); indices.setX(i+1,i0); }
+      }
+    }
     if (shape.areaLight?.params.power) {
       let area = 0;
       const positions = g.attributes.position, indices = g.index;
@@ -217,7 +230,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     }
   }
   if (film.sensor && first(film, 'sensor', 'cie1931') !== 'cie1931') warn(scene.film!, 'Sensor approximated by CIE 1931', 'camera');
-  if (film.whitebalance) warn(scene.film!, 'White balance uses viewer display temperature', 'camera');
+  if (film.whitebalance) warn(scene.film!, 'White balance ignored', 'camera');
   root.updateMatrixWorld(true);
-  return { root, environment, volumes, settings: { width, height, bounces: scalar(scene.integrator?.params ?? {}, 'maxdepth', 5), samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * scalar(film, 'exposuretime', scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
+  return { root, environment, volumes, settings: { width, height, bounces: scalar(scene.integrator?.params ?? {}, 'maxdepth', 5), samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
 }

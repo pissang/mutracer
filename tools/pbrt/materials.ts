@@ -69,7 +69,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   const comparable = ['diffuse', 'conductor', 'dielectric', 'thindielectric', 'interface', ''].includes(type);
   result.userData.pbrtComparable = comparable;
   if (!comparable) warn(entity, `${type} approximated with OpenPBR; excluded from strict HDR comparison`, 'material');
-  const color = await textures.value(p, 'reflectance', type === 'conductor' ? [.9, .9, .9] : [.5, .5, .5], entity);
+  const color = await textures.value(p, 'reflectance', type === 'conductor' ? [.9, .9, .9] : type === 'diffusetransmission' ? [.25,.25,.25] : [.5, .5, .5], entity);
   result.color.setRGB(...color.color as [number, number, number]); result.map = color.map ?? null;
   if (['dielectric', 'thindielectric', 'interface', ''].includes(type)) {
     result.color.setRGB(1, 1, 1); result.transmission = 1; result.ior = p.eta?.type === 'spectrum' ? 1.5 : scalar(p, 'eta', 1.5);
@@ -158,7 +158,13 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     if ((open.subsurfaceRadius as number) * Math.min(...open.subsurfaceRadiusScale as number[]) < .001) warn(entity, 'Subsurface mean free paths below 0.001 scene units are limited by the existing OpenPBR medium', 'material');
     if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
-  if (type === 'diffusetransmission') { open.thinWalled = true; result.transmission = .5; }
+  if (type === 'diffusetransmission') {
+    const transmittance = await textures.value(p, 'transmittance', [.25,.25,.25], entity);
+    const color = textures.average(transmittance);
+    open.thinWalled = true; result.transmission = Math.min(1, Math.max(...color) * scalar(p, 'scale', 1));
+    open.transmissionColor = color.map(v => Math.max(...color) > 0 ? v / Math.max(...color) : 0);
+    if (transmittance.map) warn(entity, 'Diffuse transmittance map approximated by its mean', 'material');
+  }
   if (['hair', 'measured', 'mix'].includes(type)) result.color.setRGB(.5, .5, .5);
   if (p.normalmap) {
     const path = String(first(p, 'normalmap', ''));

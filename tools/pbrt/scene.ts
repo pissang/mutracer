@@ -18,7 +18,7 @@ interface State {
 }
 export const first = (p: Params, key: string, fallback: string | number | boolean) => p[key]?.values[0] ?? fallback;
 export const scalar = (p: Params, key: string, fallback: number) => Number(first(p, key, fallback));
-export const vector = (p: Params, key: string, fallback: number[]) => p[key] ? p[key].values.map(Number) : fallback;
+export const vector = (p: Params, key: string, fallback: number[]) => p[key] ? Array.from(p[key].values, Number) : fallback;
 const clone = (state: State): State => ({ ...state, transform: state.transform.clone(), defaults: { ...state.defaults } });
 
 export async function buildScene(entry: string, resolver: Resolver): Promise<Scene> {

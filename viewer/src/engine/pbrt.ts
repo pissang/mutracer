@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { convert } from '../../../tools/pbrt/convert';
+import { prefetchResources } from '../../../tools/pbrt/prefetch';
 import { decodeImage } from '../../../tools/pbrt/image-browser';
 import { SCENES_BASE, type Inspection, type Warning } from '../../../tools/pbrt/source';
 import type { Scene } from '../../../tools/pbrt/scene';
@@ -50,17 +51,20 @@ export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, si
     const built = await call<{ scene: Scene; files: ModelSource['files'] }>('build');
     const files = new Map([...source.files, ...built.files].map(item => [item.path, item]));
     let loaded = [...files.values()].reduce((sum, item) => sum + item.file.size, 0);
+    const inFlight = new Map<string, number>();
     const reads = new Map<string, Promise<ArrayBuffer>>();
     const resolver = { read(path: string): Promise<ArrayBuffer> {
       if (reads.has(path)) return reads.get(path)!;
       const promise = (async () => {
         const existing = files.get(path); if (existing) return existing.file.arrayBuffer();
         if (!source.base) throw new Error(`Include ${path} with the dropped folder`);
-        const data = await fetchWithProgress(path, (received) => onProgress('download', loaded + received, report.totalBytes), signal);
+        const data = await fetchWithProgress(path, received => { inFlight.set(path, received); onProgress('download', loaded + [...inFlight.values()].reduce((a,b)=>a+b,0), report.totalBytes); }, signal);
+        inFlight.delete(path);
         loaded += data.byteLength; files.set(path, { path, file: new File([data], path.split('/').pop()!) });
-        onProgress('download', loaded, report.totalBytes); return data;
+        onProgress('download', loaded + [...inFlight.values()].reduce((a,b)=>a+b,0), report.totalBytes); return data;
       })().finally(() => reads.delete(path)); reads.set(path, promise); return promise;
     } };
+    await prefetchResources(report.resources, resolver);
     const converted = await convert(built.scene, resolver, decodeImage, (value, total) => onProgress('parse', value, total), async bytes => {
       const result = await call<{ attributes: Record<string, { array: Float32Array; itemSize: number }>; index?: Uint32Array | Uint16Array }>('ply', { bytes }, [bytes]);
       const g = new THREE.BufferGeometry();
