@@ -9,7 +9,9 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   let entity = shape.material;
   if (active.has(entity)) throw new Error(`Cyclic mix material at ${entity.loc.file}:${entity.loc.line}`);
   if (entity.type === 'mix') {
-    const amount = scalar(entity.params, 'amount', .5), choices = entity.params.materials?.values ?? [];
+    const weight = await textures.value(entity.params, 'amount', [.5, .5, .5], entity);
+    const amount = textures.average(weight)[0], choices = entity.params.materials?.values ?? [];
+    if (weight.map) warn(entity, 'Spatial mix amount averaged before selecting the dominant material', 'material');
     const selected = scene.materials[String(choices[amount >= .5 ? 1 : 0])];
     warn(entity, 'Mix uses the material with the larger weight', 'material');
     if (selected) {
