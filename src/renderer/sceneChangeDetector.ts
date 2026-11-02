@@ -1,3 +1,4 @@
+import {packFog, type PackedFog} from './fogData.js';
 import { openPbrSchema } from '../scene/openPbrSchema.js';
 import { materialParametersEqual, materialTexturesChanged } from './materialComparison.generated.js';
 export { materialParametersEqual } from './materialComparison.generated.js';
@@ -17,6 +18,8 @@ export interface SceneChanges {
   materials: OpenPBRMaterial[];
   lights: boolean;
   background: boolean;
+  fog?: boolean;
+  fogStructure?: boolean;
 }
 
 /** Small scalar/identity snapshots for lights, backgrounds and texture metadata. */
@@ -104,7 +107,16 @@ const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnap
 /** Detects edits without accepting them until the pipeline has received the scene. */
 export class SceneChangeDetector {
   private _tracker = new SceneChangeTracker(webAdapter);
-  detect(scene: Scene): SceneChanges { return this._tracker.detect(scene) as SceneChanges; }
-  commit() { this._tracker.commit(); }
-  reset() { this._tracker.reset(); }
+  private _fog?: PackedFog;
+  private _pendingFog?: PackedFog;
+  detect(scene: Scene): SceneChanges {
+    const fog = packFog(scene.fog);
+    const changes = this._tracker.detect(scene) as SceneChanges;
+    changes.fog = !this._fog || fog.count !== this._fog.count || fog.data.some((v, i) => !Object.is(v, this._fog!.data[i]));
+    changes.fogStructure = !!fog.count !== !!this._fog?.count;
+    this._pendingFog = fog;
+    return changes;
+  }
+  commit() { this._tracker.commit(); this._fog = this._pendingFog; }
+  reset() { this._tracker.reset(); this._fog = undefined; this._pendingFog = undefined; }
 }

@@ -226,7 +226,7 @@ export default class Engine {
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
-      if (changes.meshes !== 'none' || changes.lights || changes.background || this.scene !== this._sourceScene || force) {
+      if (changes.meshes !== 'none' || changes.lights || changes.background || changes.fog || this.scene !== this._sourceScene || force) {
         this._committedScene = this._snapshot.capture(this.scene, changes);
         // Preparing meshes the next upload replaces would only delay that upload.
         if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) { this._pendingMeshes = 'full'; this._bvhPreparationController?.abort(); }
@@ -272,6 +272,7 @@ export default class Engine {
     });
     if (this._pendingLights) pipeline.setLights(scene.lights);
     if (this._pendingBackground) pipeline.setBackground(scene.background);
+    pipeline.setFog?.(scene.fog);
     this._pendingMeshes = 'none'; this._pendingLights = false; this._pendingBackground = false;
     this._pendingTransforms.clear(); this._pendingColors.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
     this._uploadedRevision = this._sceneRevision;

@@ -10,7 +10,7 @@ const PIXELS_PER_LIGHT = 6;
 
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(320);
+  const RayTraceUniformValues = new ArrayBuffer(1104);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
     sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
@@ -46,7 +46,9 @@ export function makeRayTraceUniform() {
     shadowCatcherChoiceCount: new Int32Array(RayTraceUniformValues, 172, 1),
     environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16),
     backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4),
-    backgroundMapRotation: new Float32Array(RayTraceUniformValues, 256, 16)
+    backgroundMapRotation: new Float32Array(RayTraceUniformValues, 256, 16),
+    fogCount: new Int32Array(RayTraceUniformValues, 320, 1),
+    fogVolumes: new Float32Array(RayTraceUniformValues, 336, 192)
   };
   // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
   // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.

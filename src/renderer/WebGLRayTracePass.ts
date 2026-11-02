@@ -1,3 +1,5 @@
+import {packFog} from './fogData.js';
+import type {SceneFog} from '../scene/SceneFog.js';
 import {researchTransport} from './researchTransport.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
 import {prepareWebGLLightSampling} from './webglLightSampling.js';
@@ -406,6 +408,25 @@ class WebGLRayTracePass {
     this._hasEnvMap = !!envImage;
   }
 
+  private _hasFog = false;
+  setFog(fog?: SceneFog[]) {
+    const packed = packFog(fog), hasFog = packed.count > 0;
+    if (hasFog !== this._hasFog) {
+      this._hasFog = hasFog;
+      this._mainPass.setShader(createRayTraceFragmentShader({hasFog}));
+    }
+    if (hasFog) {
+      const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
+      for (let i = 0; i < 8; i++) {
+        matrices.set(packed.data.subarray(i * 24, i * 24 + 16), i * 16);
+        colors.set(packed.data.subarray(i * 24 + 16, i * 24 + 20), i * 4);
+        params.set(packed.data.subarray(i * 24 + 20, i * 24 + 24), i * 4);
+      }
+      this._mainPass.setUniforms({fogCount: packed.count, fogWorldToLocal: matrices, fogColorAnisotropy: colors, fogParams: params});
+    }
+    this._mainPass.setDefines({RR_MAX: hasFog || !!this._preparedMeshData?.materials.some(materialUsesMedium) ? 12 : 2});
+  }
+
   setBackground(background?: SceneBackground) {
     this._backgroundMapTransform.set(backgroundMapTransform(background));
     const rotation = backgroundMapRotation(background);
@@ -717,7 +738,7 @@ class WebGLRayTracePass {
         // Multiple-scattering SSS paths need enough collisions to return to
         // the boundary before roulette; terminating at depth five produces
         // dark materials and a handful of very large surviving samples.
-        RR_MAX: HAS_MEDIUM ? 12 : 2,
+        RR_MAX: HAS_MEDIUM || this._hasFog ? 12 : 2,
 
         ...materialData.defines
       });

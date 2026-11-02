@@ -1,6 +1,8 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
+import {packFog} from './fogData.js';
+import type {SceneFog} from '../scene/SceneFog.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
@@ -876,6 +878,7 @@ class WGPURayTracePass {
       if (this._needsRefitTLAS) this._refitMeshInstances();
       if (this._dirtyColorMeshes.size) this._updateMeshColors();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
+      this._constants.RR_MAX = this._constants.HAS_FOG || this._constants.HAS_MEDIUM ? 12 : 2;
       this._setCaustics(this._causticSettings);
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
@@ -919,6 +922,7 @@ class WGPURayTracePass {
       const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
       const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
+        hasFog: !!this._constants.HAS_FOG,
         hasDisplacement: this._hasDisplacement,
         caustics: this._causticKey,
         bindless: !!this._bindless,
@@ -2113,6 +2117,15 @@ class WGPURayTracePass {
     this._maxTextureArrayBytes = next;
     this._needsUpdateMeshData = true;
     return true;
+  }
+
+  setFog(fog?: SceneFog[]) {
+    const packed = packFog(fog);
+    this._rtUniform.views.fogCount[0] = packed.count;
+    this._rtUniform.views.fogVolumes.set(packed.data);
+    if (packed.count) this._constants.HAS_FOG = true;
+    else delete this._constants.HAS_FOG;
+    this._constants.RR_MAX = packed.count || this._constants.HAS_MEDIUM ? 12 : 2;
   }
 
   setBackground(background?: SceneBackground) {

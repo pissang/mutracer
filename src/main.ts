@@ -111,3 +111,5 @@ export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';
 export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 
 export type {AovKind} from './renderer/aov.js';
+
+export {MAX_FOG_VOLUMES, type SceneFog} from './scene/SceneFog.js';

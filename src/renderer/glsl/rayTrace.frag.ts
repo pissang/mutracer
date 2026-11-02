@@ -59,6 +59,7 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 `;
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
+  const hasFog = (options[0] as {hasFog?: boolean} | undefined)?.hasFog ?? false;
   const research = researchTransport()?.fragment(options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
@@ -70,9 +71,11 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
   name: 'rayTraceFrag',
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
-    BOUNCES: 2
+    BOUNCES: 2,
+    ...(hasFog ? {HAS_FOG: true} : {})
   },
   uniforms: {
+    ...(hasFog ? {fogCount: Shader.uniform('int'), fogWorldToLocal: Shader.arrayUniform('mat4', 8), fogColorAnisotropy: Shader.arrayUniform('vec4', 8), fogParams: Shader.arrayUniform('vec4', 8)} : {}),
     emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
     emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
     emissiveWeightTotal: Shader.uniform('float',0),

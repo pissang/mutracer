@@ -198,6 +198,7 @@ export interface SceneResources {
   setTextureAtlasBudget(maxBytes: number): boolean;
   setLights(lights: SceneLight[]): void;
   setBackground(background?: SceneBackground): void;
+  setFog?(fog?: import('../scene/SceneFog.js').SceneFog[]): void;
   getDiagnostics(): RenderingDiagnostics;
   dispose(): void;
   readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;

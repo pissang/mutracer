@@ -42,6 +42,7 @@ export function wgpuShaderSource(constants: Record<string, boolean | number>, fe
   constants = researchTransport()?.constants(constants, features) ?? constants;
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
+    hasFog: Boolean(constants.HAS_FOG),
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,

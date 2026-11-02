@@ -41,6 +41,7 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  hasFog?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -76,6 +77,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
   let {
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
+  hasFog = false,
   lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
@@ -147,7 +149,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ hasFog, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
