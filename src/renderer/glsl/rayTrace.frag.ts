@@ -1,3 +1,4 @@
+import {volumeNoiseGlsl} from './chunks/volumeNoise.glsl.js';
 import {volumeGlsl, volumePathGlsl} from './chunks/volume.glsl.js';
 import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -125,7 +126,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${hasVolumes ? volumeGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
+${hasVolumeNoise ? volumeNoiseGlsl + '\n' : ''}${hasVolumes ? volumeGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {

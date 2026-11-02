@@ -163,3 +163,6 @@ export async function checkVolumeInvariants(backend: 'webgpu' | 'webgl', names =
   return results;
 }
 Object.assign(window, {captureVolumeInvariant, checkVolumeInvariants});
+
+import {checkVolumeNoiseValues} from './volumeNoise';
+Object.assign(window, {checkVolumeNoiseValues});

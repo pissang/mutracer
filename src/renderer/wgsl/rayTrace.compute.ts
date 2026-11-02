@@ -1,3 +1,4 @@
+import {volumeNoiseWgsl} from './chunks/volumeNoise.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
 import {volumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
@@ -222,7 +223,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumes ? volumeWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? volumeWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes)}
 ${sampleShadowCatcherWgsl}
 
 // Output
