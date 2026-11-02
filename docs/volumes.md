@@ -10,7 +10,9 @@ const volume: SceneVolume = {
   bounds: {min: [-10, 0, -10], max: [10, 8, 10]},
   color: [0.9, 0.95, 1],
   anisotropy: 0.3,
-  heightFalloff: 0.2
+  heightFalloff: 0.2,
+  noise: {size: [8, 1.5, 8], coverage: 0.6},
+  edgeFade: 0.2
 };
 scene.volumes = [volume];
 engine.update();
@@ -28,16 +30,26 @@ multiplier: extinction per world unit at `baseHeight`, before any density field.
 Scaling the shape increases the distance traveled through fog without changing
 this multiplier. Overlapping volumes add extinction and scattering.
 
+Noise is anchored in world space: moving or scaling the volume moves its boundary,
+while the density pattern stays in place. Use `noise.size` to stretch the pattern,
+for example `[8, 1.5, 8]` for layered ground fog. Move `noise.offset` to make it drift.
+Each edit resets accumulation, so drifting noise is best rendered as offline frames;
+a continuously animated preview remains noisy. `edgeFade` softens the boundary
+and can be used without noise.
+
 Edit parameters, bounds and transforms in place, then call `engine.update()`;
 RenderLoop does this on its next tick. See [scene updates](./updates.md).
 
 ## Options and cost
 
 [SceneVolume options and defaults](./api.md#scenevolume) include shape, color,
-anisotropy and height falloff. Positive anisotropy favors forward scattering;
+anisotropy, height falloff, noise and edge fading. Positive anisotropy favors
+forward scattering;
 negative values favor backward scattering. Height falloff reduces density
 exponentially above `baseHeight`, along world +Y, even for rotated volumes.
-Density increases below that height.
+Density increases below that height. Noise and edge fading multiply this density
+by values from zero to one, so they reduce average density relative to an
+otherwise identical volume. `density` remains a multiplier before these fields.
 
 Cost grows with volume count; the limit is `MAX_VOLUMES` (8). Dense, bright
 fog needs more samples and a larger `bounces` budget. Fog events consume that
@@ -45,12 +57,17 @@ budget; insufficient depth makes multiple scattering too dark. Glass and alpha
 transparency retain their usual bounce behavior. If fog scatters the camera ray
 before its first surface, the path uses the opaque bounce limit. Stable denoising
 guides add rendering cost for mirrors and alpha-blended surfaces behind fog.
+Noise adds sampling cost and shadow noise; higher octave counts, more volumes,
+and dense volumes with low coverage are especially expensive. Early denoising
+guides may also be noisy.
 
 ## Limits
 
 - Extinction is gray: colored fog tints scattered light, but cannot produce colored transmission.
-- Shapes are boxes and inscribed ellipsoids with hard edges. Mesh boundaries,
-  3D textures, VDB and noise density are unsupported.
+- Shapes are boxes and inscribed ellipsoids. Mesh boundaries, 3D textures, VDB
+  and custom density functions are unsupported.
+- Extremely dense volumes with sparse noise can reach the finite sampling limit,
+  making transmission too bright. Reduce density or extent, or increase coverage.
 - Fog disables MNEE, light tracing and photon mapping. Removing all fog restores
   the configured estimators. Diagnostics expose the reason.
 - Fog stays outside solid glass and subsurface materials. Nested solids and a

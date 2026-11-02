@@ -558,6 +558,18 @@ See [usage, costs and limits](./volumes.md).
 | `anisotropy` | `0` | Henyey–Greenstein parameter in `[-0.999, 0.999]` |
 | `heightFalloff` | `0` | Finite nonnegative exponential density decay per world unit along +Y; zero is uniform |
 | `baseHeight` | Lowest world Y of the shape | Finite world height where `density` applies |
+| `noise` | None | `SceneVolumeNoise`, world-space procedural density multiplier; moving or scaling the boundary does not move the pattern |
+| `edgeFade` | `0` | Boundary fade width in `[0, 1]`, as a fraction of local half extent; independent of noise |
+
+`SceneVolumeNoise` options:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `size` | Required | Largest noise feature size per world axis, finite and positive `Vec3` |
+| `octaves` | `4` | Integer fractal layer count from 1 to 6 |
+| `coverage` | `0.5` | Approximate filled fraction, in `[0, 1]` |
+| `softness` | `0.3` | Transition width, in `[0, 1]`; zero is a hard threshold |
+| `offset` | `[0, 0, 0]` | Finite world-space `Vec3`; edits move the pattern and reset accumulation |
 
 Values and transformed bounds must fit GPU float32 storage.
 

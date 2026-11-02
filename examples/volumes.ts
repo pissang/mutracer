@@ -23,9 +23,9 @@ warm.position = [-2.5, 4, -2]; warm.lookAt([.8, 0, 1]);
 const cool = new SpotLight({color: [.35, .6, 1], intensity: 120, radius: .06, innerAngle: 15, outerAngle: 25});
 cool.position = [2.7, 3.5, -2]; cool.lookAt([-.8, 0, 1]);
 const volumes: SceneVolume[] = [
-  {density: .18, bounds: {min: [-6, 0, -5], max: [6, 5, 5]}, heightFalloff: .65, anisotropy: .35},
+  {density: .18, bounds: {min: [-6, 0, -5], max: [6, 5, 5]}, heightFalloff: .65, anisotropy: .35, noise: {size: [3, .7, 3], coverage: .6, offset: [0, 0, 0]}, edgeFade: .2},
   {density: .35, bounds: {min: [-1, -1, -1], max: [1, 1, 1]}, shape: 'ellipsoid',
-    transform: [1.5, 0, 0, 0, 0, .45, 0, 0, 0, 0, .85, 0, 1.5, .6, 1.2, 1], color: [.7, .85, 1]}
+    transform: [1.5, 0, 0, 0, 0, .45, 0, 0, 0, 0, .85, 0, 1.5, .6, 1.2, 1], color: [.7, .85, 1], noise: {size: [1.4, .7, 1.4]}, edgeFade: .4}
 ];
 engine.scene = {meshes, lights: [warm, cool, new AmbientLight({intensity: .015})], background: [.005, .008, .015, 1], volumes};
 const camera = new THREE.PerspectiveCamera(45, 1, .1, 100);
@@ -44,6 +44,12 @@ function resize() {
   camera.aspect = canvas.clientWidth / canvas.clientHeight; camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
-function frame() { showStatus(document.querySelector('#status')!, engine, loop.final, loop.tick()); requestAnimationFrame(frame); }
+let previousTime = performance.now();
+function frame(time = performance.now()) {
+  const elapsed = Math.min((time - previousTime) / 1000, .1); previousTime = time;
+  if (document.querySelector<HTMLInputElement>('#drift')!.checked) volumes[0].noise!.offset![0] += elapsed * .15;
+  showStatus(document.querySelector('#status')!, engine, loop.final, loop.tick());
+  requestAnimationFrame(frame);
+}
 frame();
 addEventListener('pagehide', () => {loop.dispose(); sync.dispose(); controls.dispose(); engine.dispose();});
