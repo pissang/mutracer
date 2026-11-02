@@ -385,6 +385,7 @@ export class ViewerEngine {
       model: { name, ...meta },
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
     });
+    this.applyVolumes();
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
     this.saveCamera();
@@ -527,6 +528,19 @@ export class ViewerEngine {
     this.model.revoke();
     this.model = null;
     this.materials.setModel(null, null);
+  }
+
+  /** Example volumes follow the Volumes settings; other models have none. */
+  private applyVolumes() {
+    const scene = this.sync.scene;
+    if (!scene) return;
+    const s = this.settings;
+    const preset = MODEL_PRESETS.find((p) => p.id === get().model?.presetId);
+    scene.volumes = s.volumes ? (preset?.volumes ?? []).map((volume) => ({
+      ...volume,
+      density: volume.density * s.volumeDensity,
+      ...(volume.noise ? { noise: { ...volume.noise, warp: s.volumeWarp } } : {})
+    })) : [];
   }
 
   private createSync() {
@@ -689,6 +703,7 @@ export class ViewerEngine {
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = true;
+    if (changed('volumes') || changed('volumeDensity') || changed('volumeWarp')) this.applyVolumes();
 
     if ((changed('envId') || changed('envResolution') || (changed('skyTime') && s.envId === 'sky')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();

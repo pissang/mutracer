@@ -2,6 +2,7 @@ import {expect,it} from 'vitest';
 import {leavingDisplaySettings,presetSettings,presetStageSettings,STAGE_FIELDS} from '../src/presetSettings';
 import {ENVIRONMENT_PRESETS} from '../src/engine/presets';
 import {PUBLIC_MODEL_PRESETS} from '../src/engine/publicModelPresets';
+import {packVolumes} from '../../src/renderer/volumeData';
 const defaults={groundShadow:true,caustics:false,causticLightTracing:true,causticPhotonMapping:false,bounces:6};
 it('keeps research and Cornell settings to their own built-in scenes',()=>{
  const cornell={groundShadow:false,caustics:true,causticLightTracing:true,causticPhotonMapping:true};
@@ -50,4 +51,9 @@ it('keeps collection stages complete, on listed HDRIs and in the minority',()=>{
   expect(Object.keys(preset.stage!).sort()).toEqual([...STAGE_FIELDS].sort());
   expect(ENVIRONMENT_PRESETS.find((env)=>env.id===preset.stage!.envId)?.polyHaven).toBe(true);
  }
+});
+it('stores valid example volumes within the scene limit',()=>{
+ const volumes=PUBLIC_MODEL_PRESETS.filter((preset)=>preset.volumes);
+ expect(volumes.map((preset)=>preset.id)).toEqual(['halloween']);
+ for(const preset of volumes)expect(packVolumes(preset.volumes).count).toBe(preset.volumes!.length);
 });

@@ -1,8 +1,8 @@
 import { useId } from 'react';
 import { Button, FileTrigger } from 'react-aria-components';
-import { Globe, Image, Lamp, Square, Sun, Upload } from 'lucide-react';
+import { CloudFog, Globe, Image, Lamp, Square, Sun, Upload } from 'lucide-react';
 import { autoGroundedSkybox, setSettings, useViewer } from '../../store';
-import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS } from '../../engine/presets';
+import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS, MODEL_PRESETS } from '../../engine/presets';
 import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engine/studio';
 import { getEngine } from '../../engine/ViewerEngine';
 import { toPathedFiles } from '../../engine/loadModel';
@@ -18,6 +18,8 @@ export function EnvironmentPanel() {
   const envLoading = useViewer((state) => state.envLoading);
   const modelRadius = useViewer((state) => state.modelRadius);
   const modelLighting = useViewer((state) => state.modelLighting);
+  const presetId = useViewer((state) => state.model?.presetId);
+  const hasVolumes = !!MODEL_PRESETS.find((p) => p.id === presetId)?.volumes?.length;
   const grounded = autoGroundedSkybox(modelRadius, s.groundedHeight);
   const groundedAuto = s.groundedHeight === null && s.groundedRadius === null;
   const loadingFraction = envLoading?.total ? envLoading.loaded / envLoading.total : 0;
@@ -151,6 +153,21 @@ export function EnvironmentPanel() {
           </>
         )}
       </Section>
+
+      {hasVolumes && (
+        <Section
+          title="Volumes"
+          icon={<CloudFog size={14} />}
+          actions={<Switch label="Volumes" checked={s.volumes} onChange={(v) => setSettings({ volumes: v })} />}
+        >
+          {s.volumes && (
+            <>
+              <Scrub label="Density" value={s.volumeDensity} min={0} max={4} onChange={(v) => setSettings({ volumeDensity: v })} />
+              <Scrub label="Warp" title="Bends the noise edges, in multiples of the noise size" value={s.volumeWarp} min={0} max={4} onChange={(v) => setSettings({ volumeWarp: v })} />
+            </>
+          )}
+        </Section>
+      )}
     </>
   );
 }

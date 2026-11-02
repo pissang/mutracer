@@ -43,6 +43,12 @@ export interface Settings {
   backgroundColor: string;
   groundShadow: boolean;
   groundOpacity: number;
+  /** Shows the example's participating volumes. */
+  volumes: boolean;
+  /** Scales the density of every example volume; `1` is the example as designed. */
+  volumeDensity: number;
+  /** Noise warp of the example volumes, in multiples of their noise size. */
+  volumeWarp: number;
 
   maxSamples: number;
   bounces: number;
@@ -124,6 +130,9 @@ export const DEFAULT_SETTINGS: Settings = {
   groundedRadius: null,
   groundShadow: true,
   groundOpacity: 0.8,
+  volumes: true,
+  volumeDensity: 1,
+  volumeWarp: 0.5,
   maxSamples: 64,
   bounces: 6,
   caustics: false,
@@ -440,7 +449,8 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
   envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
-  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
+  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity',
+  volumes: 'Volumes', volumeDensity: 'Volume density', volumeWarp: 'Volume warp', maxSamples: 'Samples', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',
