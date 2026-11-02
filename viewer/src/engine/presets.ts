@@ -1,3 +1,4 @@
+import type { SceneVolume } from '@meimu/mutracer';
 import type { EnvResolution } from '../store';
 import type { ModelCamera } from './modelCamera';
 import type { PresetStage, PresetRenderSettings } from '../presetSettings';
@@ -30,6 +31,8 @@ export interface ModelPreset {
   stage?: PresetStage;
   /** Render choices applied on a fresh load or Reset all. */
   renderSettings?: Partial<PresetRenderSettings>;
+  /** Participating volumes in grounded model coordinates, shown while the Volumes setting is on. */
+  volumes?: SceneVolume[];
   category?: 'research';
 }
 

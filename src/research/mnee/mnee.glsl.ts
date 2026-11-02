@@ -43,7 +43,7 @@ MneeFrame mneeFrame(SurfaceInteraction si) {
   mat4 w2l=mat4(fetchIns(off+1),fetchIns(off+2),fetchIns(off+3),fetchIns(off+4));
   mat3 nm=transpose(mat3(w2l));
   vec3 p0=fetchData(positionBuffer,index.x,vertexColumns).xyz,p1=fetchData(positionBuffer,index.y,vertexColumns).xyz,p2=fetchData(positionBuffer,index.z,vertexColumns).xyz;
-  vec3 n0=nm*fetchData(normalBuffer,index.x,vertexColumns).xyz,n1=nm*fetchData(normalBuffer,index.y,vertexColumns).xyz,n2=nm*fetchData(normalBuffer,index.z,vertexColumns).xyz;
+  vec3 n0=nm*fetchVertexNormal(index.x),n1=nm*fetchVertexNormal(index.y),n2=nm*fetchVertexNormal(index.z);
   vec3 u=p1-p0,v=p2-p0,local=(w2l*vec4(si.position,1.0)).xyz-p0;
   float det=dot(u,u)*dot(v,v)-dot(u,v)*dot(u,v);
   float bu=(dot(local,u)*dot(v,v)-dot(local,v)*dot(u,v))/det,bv=(dot(local,v)*dot(u,u)-dot(local,u)*dot(u,v))/det;
