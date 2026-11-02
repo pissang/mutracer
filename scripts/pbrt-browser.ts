@@ -38,7 +38,7 @@ async function run(sequenceOffset = 0, prefix = '') {
   const approximate = new Set<number>();
   const engine = new Engine({ canvas: document.querySelector('canvas')!, backend: q.has('webgl') ? 'webgl' : 'webgpu' });
   engine.display.setSize(width, height); engine.display.toneMappingExposure = 1; engine.display.bloomIntensity = 0; engine.display.toneMapping = 'reinhard';
-  const render = new Render(engine, { width, height, bounces: model.settings.bounces, bevel: false, aovs: ['id'] });
+  const render = new Render(engine, { width, height, maxSamples: samples, bounces: model.settings.bounces, bevel: false, aovs: ['id'] });
   const sync = new THREESync(engine, { scene, camera, onMeshConverted(mesh, source) {
     const m = Array.isArray(source.material) ? source.material[0] : source.material;
     if (m.userData.pbrtComparable === false) approximate.add(mesh.materials[0].aovId);
@@ -61,7 +61,19 @@ async function run(sequenceOffset = 0, prefix = '') {
       await checkpoint('oidn');
       const start = performance.now();
       await render.setDenoiser({ type: 'oidn', model: 'standard', weightsBaseUrl: new URL('/oidn/weights/', location.href).href });
-      await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000, onProgress });
+      // refine at the completed cap filters the existing accumulation; converge
+      // starts a new render, which would charge a second beauty pass to OIDN.
+      onProgress({ stage: 'denoising', samples, targetSamples: samples });
+      while (true) {
+        const status = render.refine();
+        if (status === 'error') throw new Error(errors.at(-1) ?? 'OIDN failed');
+        if (render.samples !== samples) throw new Error('Denoising changed the completed sample count');
+        if (status === 'finished') break;
+        if (performance.now() - start > 600000) throw new Error('OIDN timed out');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const after = await render.readPixels('hdr');
+      if (!hdr.data.every((value, i) => value === after.data[i])) throw new Error('Denoising changed linear HDR samples');
       await save(prefix + 'mutracer-oidn.png', await engine.display.toBlob(render)); oidnMs = performance.now() - start;
     }
     return { loadedMs, downloadBytes, oidnMs, peakJSHeapBytes, elapsedMs: performance.now() - started, samples: render.samples, width, height, warnings: parsed.warnings, approximateMaterialIds: [...approximate], errors, adapter, exposure: model.settings.exposure,
