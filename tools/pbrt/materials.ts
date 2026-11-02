@@ -125,7 +125,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     }
     if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
-  if (type === 'diffusetransmission') { open.thinWalled = true; open.transmissionWeight = .5; }
+  if (type === 'diffusetransmission') { open.thinWalled = true; result.transmission = .5; }
   if (['hair', 'measured', 'mix'].includes(type)) result.color.setRGB(.5, .5, .5);
   if (p.normalmap) {
     const path = String(first(p, 'normalmap', ''));
@@ -148,8 +148,13 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     if (!medium) throw new Error(`Undefined medium ${shape.inside}`);
     if (medium.type === 'homogeneous') {
       const a = await textures.value(medium.params, 'sigma_a', [1, 1, 1], medium), s = await textures.value(medium.params, 'sigma_s', [1, 1, 1], medium), scale = scalar(medium.params, 'scale', 1);
-      open.transmissionColor = a.color.map(v => Math.exp(-v * scale)); open.transmissionDepth = 1;
-      open.transmissionScatter = s.color.map(v => v * scale); open.transmissionScatterAnisotropy = scalar(medium.params, 'g', 0);
+      const extinction = a.color.map((v, i) => (v + s.color[i]) * scale);
+      // The existing packer takes extinction transmittance and scattering
+      // albedo. Keep exponents near zero to avoid its log(1e-6) color floor.
+      const depth = 1 / Math.max(1, ...extinction);
+      result.attenuationColor.setRGB(...extinction.map(v => Math.exp(-v * depth)) as [number, number, number]);
+      result.attenuationDistance = depth;
+      open.transmissionScatter = s.color.map((v, i) => v / Math.max(1e-9, a.color[i] + v)); open.transmissionScatterAnisotropy = scalar(medium.params, 'g', 0);
     } else warn(medium, `${medium.type} medium skipped`, 'medium');
   }
   if (shape.areaLight) {

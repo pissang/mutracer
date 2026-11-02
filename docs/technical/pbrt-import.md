@@ -75,6 +75,10 @@ radius and channel ratios become radius scales. Single-scattering albedo
 by inverting the existing material packer's mapping. Authored diffuse reflectance
 is already an effective scattering color. These mappings preserve the RGB medium
 coefficients but do not reproduce PBRT's spectral diffusion model.
+Interior homogeneous media encode total extinction, not absorption, in
+transmission color: choose depth `d=1/max(1,max(sigma_t))`, set color
+`exp(-sigma_t*d)` and scatter color `sigma_s/sigma_t`, with scaled coefficients.
+This preserves the existing packer's coefficients without hitting its color floor.
 
 Ordinary PBRT surfaces accept primary back-face hits. One-sided area emission
 uses FrontSide because MuTracer couples primary visibility and emission sidedness;

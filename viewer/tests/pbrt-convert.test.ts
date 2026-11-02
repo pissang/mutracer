@@ -54,6 +54,20 @@ describe('PBRT conversion semantics', () => {
     [(.032+.74)*50,(.17+.88)*50,(.48+1.01)*50].forEach((v,i)=>expect(params.mediumExtinction[0][i]).toBeCloseTo(v,4));
     [.74*50,.88*50,1.01*50].forEach((v,i)=>expect(params.mediumScattering[0][i]).toBeCloseTo(v,4));
   });
+  it('preserves interior homogeneous scattering, including zero absorption and high extinction', async () => {
+    const { root } = await load('WorldBegin MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [0 .3 .4] "rgb sigma_s" [1 2 3] "float scale" 5 MediumInterface "fog" "" Material "interface" Shape "sphere"');
+    const source = new THREE.Scene(); source.add(root);
+    const params = packMaterialParams([fromTHREEScene(source).meshes[0].materials[0]]);
+    [5,11.5,17].forEach((v,i)=>expect(params.mediumExtinction[0][i]).toBeCloseTo(v,5));
+    [5,10,15].forEach((v,i)=>expect(params.mediumScattering[0][i]).toBeCloseTo(v,5));
+  });
+  it.each([['thindielectric',1],['diffusetransmission',.5]] as const)('retains %s transmission and thin-wall state through Three.js', async (type, weight) => {
+    const { root } = await load(`WorldBegin Material "${type}" Shape "sphere"`);
+    const source = new THREE.Scene(); source.add(root);
+    const material = fromTHREEScene(source).meshes[0].materials[0];
+    expect(material.transmissionWeight).toBe(weight);
+    expect(material.thinWalled).toBe(true);
+  });
   it('keeps shape displacement variants independent', async () => {
     const { root } = await load('WorldBegin Texture "a" "float" "checkerboard" "float tex1" 0 "float tex2" 1 Texture "b" "float" "checkerboard" "float tex1" .2 "float tex2" .8 Shape "sphere" "texture displacement" "a" Shape "sphere" "texture displacement" "b"');
     const meshes = root.children.filter(o => (o as THREE.Mesh).isMesh) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>[];
