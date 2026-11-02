@@ -39,11 +39,11 @@ export async function geometry(shape: Shape, entry: string, resolver: Resolver, 
     return new THREE.SphereGeometry(radius, 192, 96, 0, phi, thetaStart, thetaEnd - thetaStart).rotateX(Math.PI / 2).rotateZ(Math.PI);
   }
   if (shape.type === 'disk') {
-    const inner = scalar(p, 'innerradius', 0), g = new THREE.RingGeometry(inner, radius, 128, 1, 0, phi);
+    const segments = 128, inner = scalar(p, 'innerradius', 0), g = new THREE.RingGeometry(inner, radius, segments, 1, 0, phi);
     const positions = g.attributes.position, uv = g.attributes.uv;
     for (let i = 0; i < positions.count; i++) {
-      const x = positions.getX(i), y = positions.getY(i), angle = (Math.atan2(y, x) + 2 * Math.PI) % (2 * Math.PI);
-      uv.setXY(i, angle / phi, (radius - Math.hypot(x, y)) / (radius - inner));
+      const x = positions.getX(i), y = positions.getY(i);
+      uv.setXY(i, (i % (segments + 1)) / segments, (radius - Math.hypot(x, y)) / (radius - inner));
     }
     return g.translate(0, 0, scalar(p, 'height', 0));
   }

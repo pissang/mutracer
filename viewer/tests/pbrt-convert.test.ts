@@ -47,6 +47,15 @@ describe('PBRT conversion semantics', () => {
       expect(ray.intersectObject(root, true)).toHaveLength(1);
     }
   });
+  it('preserves both polar UV endpoints at the disk seam', async () => {
+    const { root } = await load('WorldBegin Shape "disk" "float innerradius" .2');
+    const mesh = root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh;
+    const p = mesh.geometry.attributes.position, uv = mesh.geometry.attributes.uv;
+    const first = new THREE.Vector3().fromBufferAttribute(p, 0), seam = new THREE.Vector3().fromBufferAttribute(p, 128);
+    expect(first.distanceTo(seam)).toBeLessThan(1e-6);
+    expect(uv.getX(0)).toBe(0); expect(uv.getX(128)).toBe(1);
+    expect(uv.getY(0)).toBeCloseTo(1); expect(uv.getY(129)).toBeCloseTo(0);
+  });
   it('preserves named subsurface extinction and scattering through the existing OpenPBR packer', async () => {
     const { root } = await load('WorldBegin Material "subsurface" "string name" "Skin1" "float scale" 50 "float eta" 1.5 Shape "sphere"');
     const source = new THREE.Scene(); source.add(root);
