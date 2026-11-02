@@ -15,7 +15,7 @@ export interface SceneVolumeNoise {
   softness?: number;
   /** World-space offset; edits reset accumulation. Default [0, 0, 0]. */
   offset?: Vec3;
-  /** Distorts the noise into wisps, in multiples of size, nonnegative and finite. Typical 0–1. Default 0. */
+  /** Breaks up and bends density edges, in multiples of size, nonnegative and finite. Default 0. */
   warp?: number;
 }
 

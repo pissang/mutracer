@@ -35,7 +35,7 @@ while the density pattern stays in place. Use `noise.size` to stretch the patter
 for example `[8, 1.5, 8]` for layered ground fog. Move `noise.offset` to make it drift.
 Each edit resets accumulation, so drifting noise is best rendered as offline frames;
 a continuously animated preview remains noisy. `edgeFade` softens the boundary
-and can be used without noise. Set `noise.warp` around 0.5–1 for curling wisps;
+and can be used without noise. Increase `noise.warp` to break up and bend density edges;
 `warp: 1` reduced throughput by 5–19% in measured four-octave scenes on an Apple
 M4 Max, and cost varies by scene and backend.
 
@@ -65,6 +65,10 @@ guides may also be noisy.
 
 ## Limits
 
+- When a sightline crosses many noise cells, their detail averages out and broad
+  haze still looks soft. To reveal shapes, bring the volume or a thin layer closer
+  to the camera, choose `size` near the distance traveled through fog and reduce
+  `softness`. Increasing `warp` alone does not increase visible contrast.
 - Extinction is gray: colored fog tints scattered light, but cannot produce colored transmission.
 - Shapes are boxes and inscribed ellipsoids. Mesh boundaries, 3D textures, VDB
   and custom density functions are unsupported.

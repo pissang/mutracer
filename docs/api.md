@@ -570,7 +570,7 @@ See [usage, costs and limits](./volumes.md).
 | `coverage` | `0.5` | Approximate filled fraction, in `[0, 1]` |
 | `softness` | `0.3` | Transition width, in `[0, 1]`; zero is a hard threshold |
 | `offset` | `[0, 0, 0]` | Finite world-space `Vec3`; edits move the pattern and reset accumulation |
-| `warp` | `0` | Finite nonnegative distortion strength in multiples of `size`; typical 0–1, with no prescribed upper limit |
+| `warp` | `0` | Breaks up and bends density edges, in multiples of `size`; finite and nonnegative |
 
 Values and transformed bounds must fit GPU float32 storage.
 

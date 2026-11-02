@@ -92,12 +92,20 @@ The final lookup is `fBm(q + warp * w)`. Offset is applied before both fields, s
 the entire pattern drifts together. Shape and exponential height are not warped.
 
 The distortion layers are fixed at two independently of the main octave count.
-At four main octaves this adds six fractal layers per noise lookup; the measured
-whole-render throughput loss stayed below 30% in completed measurements, so the
-one-layer fallback was not needed. At zero warp, execution returns through the original
-mask body and performs no distortion lookup.
+At four main octaves this adds six fractal layers per noise lookup. At zero warp,
+execution performs no distortion lookup.
 
 Thresholding, local edge fading and the final [0,1] clamp are unchanged. Distortion
 only changes where the noise is evaluated, so height density remains a valid
 majorant; delta/ratio tracking and their unbiasedness before finite-loop truncation
 do not change. No stochastic density estimate enters RIS candidate construction.
+
+Warp amplitude is a multiplier of a bounded distortion field, not a full-cell
+displacement. CPU measurements with `size: [6, 0.7, 6]` put the per-axis RMS
+displacement at about `0.20 * size` for `warp: 1`, with a median of `0.14 * size`.
+Warp mostly breaks up density edges: over a sightline of length 1, the integrated
+density gradient at `warp: 4` was about 2.8 times that at zero warp. It does not
+increase integrated contrast. Over length 60, contrast was about 0.20, 0.18 and
+0.12 for warp 0, 1 and 4. Crossing many cells averages out local variations;
+increasing warp introduces finer edge detail that also averages out. Raising warp
+alone therefore cannot strengthen visible structure in broad haze.
