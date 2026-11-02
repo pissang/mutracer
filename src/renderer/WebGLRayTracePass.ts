@@ -415,7 +415,9 @@ class WebGLRayTracePass {
     if (hasFog !== this._hasFog) {
       this._hasFog = hasFog;
       researchTransport()?.configure(this, 'webgl', true);
-      this._mainPass.setShader(hasFog ? createRayTraceFragmentShader({hasFog: true}) : createRayTraceFragmentShader(), hasFog ? [] : ['fogCount', 'fogWorldToLocal', 'fogColorAnisotropy', 'fogParams'], hasFog ? [] : ['HAS_FOG']);
+      const shader = hasFog ? createRayTraceFragmentShader({hasFog: true}) : createRayTraceFragmentShader();
+      shader.parallelCompile = true;
+      this._mainPass.setShader(shader, hasFog ? [] : ['fogCount', 'fogWorldToLocal', 'fogColorAnisotropy', 'fogParams'], hasFog ? [] : ['HAS_FOG']);
     }
     if (hasFog) {
       const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
