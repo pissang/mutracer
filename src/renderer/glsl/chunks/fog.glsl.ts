@@ -143,6 +143,8 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
   RayTraceAuxiliary originalAux = outAux, backAux;
   float coverage = 1.0; bool split = false, front = false; vec4 back;
   int depth = 0, event = 0;
+  bool isOpaque = !si.isTransparency;
+  bool originalOpaque = isOpaque;
   bool query = false, resample = false, skipFog = false, first = true;
   int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
   for (int step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
@@ -156,7 +158,9 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
     if (!skipFog) winner = sampleFogEvent(path, si, maximum, resample);
     skipFog = false;
     if (winner >= 0) {
-      if (depth >= bounceLimit || event >= limit) path.abort = true;
+      // Match the surface event budget; camera fog establishes opacity.
+      if (event == 0) isOpaque = true;
+      if ((isOpaque && event > bounceLimit) || event >= limit) path.abort = true;
       else shadeFogVertex(path, si, winner, depth);
       first = false; resample = false; event++;
     } else {
@@ -166,7 +170,7 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
       }
       first = false;
       if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, resample); }
-      if (!path.abort && (depth > bounceLimit || event >= limit)) path.abort = true;
+      if (!path.abort && ((isOpaque && event > bounceLimit) || event >= limit)) path.abort = true;
       if (!path.abort) {
         si.fogResample = false;
         bounce(path, depth, si, mat, outAux);
@@ -187,6 +191,7 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
       }
       back = result; backAux = outAux; front = true;
       path = originalPath; si = primarySi; mat = primaryMat; mat.alpha = 1.0; outAux = originalAux;
+      isOpaque = originalOpaque;
       depth = 0; event = 0; query = false; resample = false; skipFog = true;
     }
   }

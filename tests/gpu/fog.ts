@@ -1,6 +1,6 @@
 // Real-GPU regression fixture; run fog.html (?webgl for WebGL 2).
 import {Engine, Render, Camera, AmbientLight, SphereLight, Mesh, OpenPBRMaterial,
-  createCubeGeometry, createPlaneGeometry, type Scene, type SceneFog} from '../../src/main.js';
+  createCubeGeometry, createPlaneGeometry, createSphereGeometry, type Scene, type SceneFog} from '../../src/main.js';
 
 export async function captureFogCombination(backend: 'webgpu' | 'webgl', name: string, withoutFog = false) {
   const canvas = document.createElement('canvas'); document.body.append(canvas);
@@ -74,6 +74,14 @@ export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: str
     scene.fog = [fog]; if (control) scene.lights = [];
     sheet(new OpenPBRMaterial({unlit: true, emissionColor: [.5, .5, .5], emissionLuminance: 1}), -3);
   }
+  if (name === 'glass-pair' || name === 'glass-single') {
+    scene.lights = [new AmbientLight({intensity: .5})];
+    for (const z of name === 'glass-pair' ? [1.5, -1.5] : [0]) {
+      const sphere = new Mesh(createSphereGeometry(64, 32), new OpenPBRMaterial({transmissionWeight: 1,
+        specularRoughness: 0, specularIor: name === 'glass-pair' ? 1.02 : 1.5}));
+      sphere.position = [0, 0, z]; scene.meshes.push(sphere);
+    }
+  }
   engine.scene = scene; engine.update();
   const render = new Render(engine, {width: 24, height: 24, bounces: 2, maxSamples: 2048, clamping: 0,
     samplingPattern: 'sobol', alphaBlendStrategy: 'deterministic-source-over'});
@@ -89,7 +97,7 @@ export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: str
 }
 
 /** Run in the console on fog.html; rejects on a real GPU regression. */
-export async function checkFogInvariants(backend: 'webgpu' | 'webgl', names = ['analytic-primary', 'analytic-alpha', 'analytic-in-fog']) {
+export async function checkFogInvariants(backend: 'webgpu' | 'webgl', names = ['analytic-primary', 'analytic-alpha', 'analytic-in-fog', 'glass-pair', 'glass-single']) {
   const results = [];
   for (const name of names) {
     const actual = await captureFogInvariant(backend, name), expected = await captureFogInvariant(backend, name, true);

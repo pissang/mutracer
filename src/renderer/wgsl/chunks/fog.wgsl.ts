@@ -170,6 +170,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
   var back: vec4f; var backAux: RayTraceAuxiliary;
   var depth = 0; var event = 0; var query = false; var resample = false;
   var skipFog = false; var first = true;
+  var isOpaque = false;
   let limit = min(max(rtUniform.bounces, 0) * 3, ${MAX_PATH_EVENTS});
   for (var step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
     if (query) {
@@ -183,7 +184,10 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
     if (!skipFog) { winner = sampleFogEvent(&path, &si, maximum, resample); }
     skipFog = false;
     if (winner >= 0) {
-      if (depth >= rtUniform.bounces || event >= limit) { path.abort = true; }
+      // A camera fog event establishes an opaque primary path. Surface
+      // transparency otherwise retains the legacy three-events-per-bounce budget.
+      if (event == 0) { isOpaque = true; }
+      if ((isOpaque && event > rtUniform.bounces) || event >= limit) { path.abort = true; }
       else { shadeFogVertex(&path, &si, winner, &depth); }
       first = false; resample = false; event++;
     } else {
@@ -196,6 +200,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
         first = false; resample = true;
         continue;
       }
+      if (event == 0) { isOpaque = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99; }
       first = false;
       if (path.fromEye && si.hit && ma.materialType == SHADOW_CATCHER) {
         (*outAux).isShadowCatcher = true;
@@ -203,7 +208,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
         path.li = vec3f(1.0); path.alpha = 1.0; path.abort = true;
       } else {
         if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
-        if (!path.abort && (depth > rtUniform.bounces || event >= limit)) { path.abort = true; }
+        if (!path.abort && ((isOpaque && event > rtUniform.bounces) || event >= limit)) { path.abort = true; }
         if (!path.abort) {
           var ignored = false;
           shadeVertex(uv, &path, &depth, &si, &ma, outAux, &ignored);

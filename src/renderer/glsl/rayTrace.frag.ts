@@ -268,7 +268,11 @@ ${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
 
   // Russian Roulette sampling
 #ifdef USE_RR
-  if (depth >= RR_MAX && !sampleIgnored) {
+${hasFog ? `  int rouletteStart = RR_MAX;
+#ifndef HAS_MEDIUM
+  if (!path.fogScattered) rouletteStart = 2;
+#endif
+` : ''}  if (depth >= ${hasFog ? 'rouletteStart' : 'RR_MAX'} && !sampleIgnored) {
     // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
     float maxComponent = max(max(path.beta.x, path.beta.y), path.beta.z);
     float q = max(0.0, 1.0 - maxComponent);
