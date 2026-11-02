@@ -110,7 +110,7 @@ export async function buildScene(entry: string, resolver: Resolver): Promise<Sce
         if (!material) throw new PbrtError(`Undefined material ${s.args[0]}`, s);
         state.material = material; break;
       }
-      case 'Texture': scene.textures[String(s.args[0])] = { ...placed(s), type: String(s.args[2]) }; break;
+      case 'Texture': { const texture = { ...placed(s), type: String(s.args[2]) }; scene.textures[String(s.args[0])] = texture; scene.textures[`${s.args[1]}:${s.args[0]}`] = texture; break; }
       case 'MakeNamedMedium': scene.media[String(s.args[0])] = entity(s, String(first(s.params, 'type', 'homogeneous'))); break;
       case 'MediumInterface': state.inside = String(s.args[0]); state.outside = String(s.args[1]); break;
       case 'AreaLightSource': state.areaLight = s.args[0] ? entity(s) : undefined; break;

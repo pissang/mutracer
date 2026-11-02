@@ -29,7 +29,7 @@ export class Textures {
   async value(p: Params, key: string, fallback: number[], owner: Entity, stack = new Set<string>()): Promise<TextureValue> {
     const parameter = p[key];
     if (!parameter) return { color: fallback };
-    if (parameter.type === 'texture') return this.named(String(parameter.values[0]), owner, stack);
+    if (parameter.type === 'texture') return this.named(String(parameter.values[0]), owner, stack, ['alpha', 'roughness', 'uroughness', 'vroughness', 'amount', 'displacement', 'scale'].includes(key) || owner.loc.kind === 'Texture' && owner.loc.args[1] === 'float' ? 'float' : 'spectrum');
     if (parameter.type === 'blackbody') {
       const color = blackbody(Number(parameter.values[0]));
       const y = .2126 * color[0] + .7152 * color[1] + .0722 * color[2];
@@ -50,14 +50,15 @@ export class Textures {
     const values = parameter.values.map(Number);
     return { color: values.length === 1 ? [values[0], values[0], values[0]] : values.slice(0, 3) };
   }
-  private async named(name: string, owner: Entity, stack: Set<string>): Promise<TextureValue> {
-    if (stack.has(name)) throw new Error(`Cyclic texture ${name}`);
-    if (this.cache.has(name)) return this.cache.get(name)!;
-    const next = new Set(stack).add(name);
-    const entity = this.scene.textures[name];
+  private async named(name: string, owner: Entity, stack: Set<string>, kind: 'float' | 'spectrum'): Promise<TextureValue> {
+    const identity = `${kind}:${name}`;
+    if (stack.has(identity)) throw new Error(`Cyclic texture ${name}`);
+    if (this.cache.has(identity)) return this.cache.get(identity)!;
+    const next = new Set(stack).add(identity);
+    const entity = this.scene.textures[identity] ?? this.scene.textures[name];
     if (!entity) throw new Error(`${owner.loc.file}:${owner.loc.line}: Undefined texture ${name}`);
     const promise = this.create(entity, next);
-    this.cache.set(name, promise); return promise;
+    this.cache.set(identity, promise); return promise;
   }
   private async create(entity: Entity, stack: Set<string>): Promise<TextureValue> {
     const p = entity.params;
@@ -83,7 +84,7 @@ export class Textures {
     if (entity.type === 'imagemap') {
       const filename = String(first(p, 'filename', '')), image = await this.image(filename);
       const data = new Float32Array(image.width * image.height * 4);
-      const encoding = String(first(p, 'encoding', /\.(exr|hdr)$/i.test(filename) ? 'linear' : 'sRGB')).toLowerCase();
+      const encoding = String(first(p, 'encoding', /\.png$/i.test(filename) ? 'sRGB' : 'linear')).toLowerCase();
       if (!['linear', 'srgb'].includes(encoding) && !/^gamma\s+[\d.]+$/.test(encoding)) this.warn(entity, `Encoding ${encoding} treated as linear`, 'texture');
       const invert = first(p, 'invert', false), scale = scalar(p, 'scale', 1), bytes = !(image.data instanceof Float32Array);
       for (let i = 0; i < data.length; i++) {
@@ -91,10 +92,29 @@ export class Textures {
         if (i % 4 < 3) {
           if (encoding === 'srgb') value = value <= .04045 ? value / 12.92 : Math.pow((value + .055) / 1.055, 2.4);
           else if (encoding.startsWith('gamma')) value = Math.pow(value, Number(encoding.split(/\s+/)[1]) || 2.2);
-          if (invert) value = 1 - value;
           value *= scale;
+          if (invert) value = Math.max(0, 1 - value);
         }
         data[i] = value;
+      }
+      const isFloat = entity.loc.args[1] === 'float';
+      const sourceScale = image.data instanceof Float32Array ? 1 : 255;
+      const hasAlpha = isFloat && image.data.some((value, i) => i % 4 === 3 && value !== sourceScale);
+      for (let i = 0; i < data.length; i += 4) {
+        if (isFloat) {
+          // PBRT drops all-opaque alpha. Float image lookup then averages RGB,
+          // otherwise it samples alpha; invert follows scaling.
+          const linear = (c: number) => {
+            let v = image.data[i + c] / sourceScale;
+            if (encoding === 'srgb') v = v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4);
+            else if (encoding.startsWith('gamma')) v = Math.pow(v, Number(encoding.split(/\s+/)[1]) || 2.2);
+            return v;
+          };
+          let value = scale * (hasAlpha ? image.data[i + 3] / sourceScale : (linear(0) + linear(1) + linear(2)) / 3);
+          if (invert) value = Math.max(0, 1 - value);
+          data[i] = data[i + 1] = data[i + 2] = value;
+        }
+        data[i + 3] = 1;
       }
       const map = new THREE.DataTexture(data, image.width, image.height, THREE.RGBAFormat, THREE.FloatType);
       // PBRT ImageTexture evaluates (s, 1-t). Image data here starts at the top.

@@ -27,6 +27,8 @@ describe('PBRT file resolution and inspection', () => {
     expect(resolvePath('../maps/a.exr', '/scenes/a/main.pbrt')).toBe('/scenes/maps/a.exr');
     expect(resolvePath('mesh.ply', 'folder/main.pbrt')).toBe('folder/mesh.ply');
     expect(resolvePath('../x.ply', 'https://host/a/main.pbrt')).toBe('https://host/x.ply');
+    expect(resolvePath('maps/a #1.png', 'https://host/a/main.pbrt')).toBe('https://host/a/maps/a%20%231.png');
+    expect(resolvePath('../../a.ply', '/main.pbrt')).toBe('/a.ply');
   });
   it('inlines Include and brackets Import state, retaining file locations', async () => {
     const files = source({ 'a/main.pbrt': 'Include "sub/a.pbrt" Import "b.pbrt"', 'a/sub/a.pbrt': 'Include "b.pbrt"', 'a/b.pbrt': 'Shape "sphere"' });

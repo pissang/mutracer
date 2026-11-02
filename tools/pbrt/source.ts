@@ -12,11 +12,12 @@ export const SCENES_BASE = `https://raw.githubusercontent.com/mmp/pbrt-v4-scenes
 /** PBRT resolves every filename against the top-level scene, including nested
  * Includes (src/pbrt/util/file.cpp); it does not change directory per Include. */
 export function resolvePath(path: string, entry: string): string {
-  if (/^[a-z]+:\/\//i.test(entry)) return new URL(path, entry).href;
+  if (/^[a-z]+:\/\//i.test(entry)) return new URL(/^[a-z]+:\/\//i.test(path) ? path : encodeURI(path).replace(/[?#]/g, encodeURIComponent), entry).href;
   if (/^[a-z]+:\/\//i.test(path)) return path;
   const prefix = path.startsWith('/') ? '' : entry.slice(0, entry.lastIndexOf('/') + 1);
   const parts: string[] = [];
   for (const part of `${prefix}${path}`.split('/')) {
+    if (part === '..' && !parts.length && (prefix + path).startsWith('/')) continue;
     if (part === '..' && parts.length && parts[parts.length - 1] !== '..') parts.pop();
     else if (part === '..' || part && part !== '.') parts.push(part);
   }
