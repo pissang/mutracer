@@ -74,7 +74,7 @@ export async function buildScene(entry: string, resolver: Resolver): Promise<Sce
       case 'CoordinateSystem': coordinates.set(String(s.args[0]), state.transform.clone()); break;
       case 'CoordSysTransform': {
         const matrix = coordinates.get(String(s.args[0]));
-        if (!matrix) throw new PbrtError(`Undefined coordinate system ${s.args[0]}`, s);
+        if (!matrix) { warning(s, `Undefined coordinate system ${s.args[0]}; keeps current transform`); break; }
         if (state.active) state.transform.copy(matrix); break;
       }
       case 'Identity': if (state.active) state.transform.identity(); break;

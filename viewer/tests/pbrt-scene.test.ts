@@ -22,7 +22,7 @@ describe('PBRT scene state', () => {
   });
   it('uses the starting motion transform and named coordinates', async () => {
     const scene = await build('WorldBegin Translate 1 0 0 CoordinateSystem "a" ActiveTransform EndTime Translate 99 0 0 ActiveTransform All Translate 0 2 0 CoordSysTransform "a" Shape "sphere"');
-    expect(at(scene.shapes[0].transform)).toEqual([1, 0, 0]); expect(scene.warnings).toHaveLength(2);
+    expect(at(scene.shapes[0].transform)).toEqual([1, 0, 0]); expect(scene.warnings).toHaveLength(1); expect(scene.warnings[0].count).toBe(2);
   });
   it('captures inverse LookAt for the camera then resets the world transform', async () => {
     const scene = await build('LookAt 1 2 3 1 2 4 0 1 0 Camera "perspective" WorldBegin Shape "sphere"');

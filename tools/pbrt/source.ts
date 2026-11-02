@@ -1,3 +1,4 @@
+import { FEATURE_COVERAGE, type Coverage } from './coverage';
 import { PbrtError, parse, type Statement } from './parser';
 export interface Resolver {
   read(path: string): Promise<ArrayBuffer>;
@@ -104,7 +105,7 @@ export async function* walk(entry: string, resolver: Resolver, resources = new M
 const category: Record<string, string> = { Material: 'materials', MakeNamedMaterial: 'materials', Shape: 'shapes', LightSource: 'lights', AreaLightSource: 'lights', MakeNamedMedium: 'media', Texture: 'textures', Camera: 'cameras' };
 export interface Inspection {
   entry: string; features: Record<string, Record<string, number>>; resources: Resource[];
-  totalBytes: number; unknownSizes: number; warnings: Warning[];
+  totalBytes: number; unknownSizes: number; warnings: Warning[]; coverage: Record<string, Record<string, Coverage>>;
 }
 export async function inspect(entry: string, resolver: Resolver): Promise<Inspection> {
   const resources = new Map<string, Resource>();
@@ -121,7 +122,12 @@ export async function inspect(entry: string, resolver: Resolver): Promise<Inspec
   for await (const s of walk(entry, resolver, resources)) {
     if (s.kind === 'ImportEnd') continue;
     count('statements', s.kind);
-    if (category[s.kind]) count(category[s.kind], String(s.kind === 'Texture' ? s.args[2] : s.kind.startsWith('MakeNamed') ? s.params.type?.values[0] ?? '<missing type>' : s.args[0]));
+    if (category[s.kind]) {
+      const group = category[s.kind], type = String(s.kind === 'Texture' ? s.args[2] : s.kind.startsWith('MakeNamed') ? s.params.type?.values[0] ?? '<missing type>' : s.args[0]);
+      count(group, type);
+      const mode = FEATURE_COVERAGE[group]?.[type] ?? 'approximate';
+      if (mode !== 'supported') warn({ statement: s.kind, file: s.file, line: s.line, code: `${group}-${type}`, handling: `${type}: ${mode}` });
+    }
     for (const parameter of Object.values(s.params)) {
       const isFile = parameter.type === 'string' && /^(filename|normalmap|bsdffile)$/.test(parameter.name) && !['Film', 'Option'].includes(s.kind);
       const spectrum = parameter.type === 'spectrum' && parameter.values.some((value) => typeof value === 'string' && /\.(spd|txt)$/i.test(value));
@@ -132,9 +138,9 @@ export async function inspect(entry: string, resolver: Resolver): Promise<Inspec
       }
     }
     if (s.kind === 'Option' || s.kind === 'ActiveTransform' || s.kind === 'TransformTimes' ||
-      s.kind === 'ColorSpace' && s.args[0] !== 'srgb' || s.kind === 'Shape' && s.args[0] === 'curve') warn({
-      statement: s.kind, file: s.file, line: s.line, code: s.kind === 'Shape' ? 'unsupported-shape' : 'approximation',
-      handling: s.kind === 'Shape' ? 'Curve is skipped by the importer' : s.kind === 'ColorSpace' ? 'Uses sRGB' : s.kind === 'Option' ? 'Renderer option ignored' : 'Uses the start transform; no motion blur'
+      s.kind === 'ColorSpace' && s.args[0] !== 'srgb') warn({
+      statement: s.kind, file: s.file, line: s.line, code: 'approximation',
+      handling: s.kind === 'ColorSpace' ? 'Uses sRGB' : s.kind === 'Option' ? 'Renderer option ignored' : 'Uses the start transform; no motion blur'
     });
   }
   const list = [...resources.values()];
@@ -146,5 +152,6 @@ export async function inspect(entry: string, resolver: Resolver): Promise<Inspec
       if (item.bytes === undefined && resolver.size) item.bytes = await resolver.size(item.path);
     }
   }));
-  return { entry, features, resources: list, totalBytes: list.reduce((sum, item) => sum + (item.bytes ?? 0), 0), unknownSizes: list.filter((item) => item.bytes === undefined).length, warnings };
+  const coverage = Object.fromEntries(Object.entries(features).filter(([group]) => group !== 'statements').map(([group, values]) => [group, Object.fromEntries(Object.keys(values).map(type => [type, FEATURE_COVERAGE[group]?.[type] ?? 'approximate']))]));
+  return { entry, features, coverage, resources: list, totalBytes: list.reduce((sum, item) => sum + (item.bytes ?? 0), 0), unknownSizes: list.filter((item) => item.bytes === undefined).length, warnings };
 }

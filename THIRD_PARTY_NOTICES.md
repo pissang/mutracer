@@ -163,3 +163,11 @@ and MIT license are described in the TinyBVH section above; the full text is
 also included in [`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt).
 These license files are copied without modification from the installed
 packages and the checked-in TinyBVH license.
+
+## PBRT-v4 spectral data
+
+The developer/viewer PBRT importer includes spectral tables derived from
+[`mmp/pbrt-v4@b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f`](https://github.com/mmp/pbrt-v4/tree/b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f),
+`src/pbrt/util/spectrum.cpp`, copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob,
+and Greg Humphreys. Licensed under Apache-2.0; the license is reproduced in
+[`LICENSES/pbrt-v4-Apache-2.0.txt`](LICENSES/pbrt-v4-Apache-2.0.txt).
