@@ -25,8 +25,8 @@ export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising
 /** Execution overrides for one refine call; accumulated samples are retained. */
 export interface RefineOptions {
   /** Batch several samples in this call. Default this render's batchSamples. */ batchSamples?: boolean;
-  /** Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
-  /** Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
+  /** @deprecated Use refineUntil; this option will be removed in a later release. Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
+  /** @deprecated Use refineUntil; this option will be removed in a later release. Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
 }
 /** When a render filters its complete samples. Default converged. */
 export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
@@ -89,9 +89,9 @@ export type OIDNDenoiserOptions = OIDNSettings & (
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
 export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
-/** Optional caustic estimators. All are disabled by default. Photon estimators use PT when a smooth caster has stochastic blend coverage. */
+/** Optional caustic estimators. All are disabled by default. Both fall back to path tracing when a smooth caster has stochastic blend coverage. */
 export interface CausticSettings {
-  /** WebGPU progressive photon mapping; ignored on WebGL. PM-only sampling can reduce denoising blotches on directly visible receivers, with noisier raw output. Default `false`. */
+  /** WebGPU progressive photon mapping; ignored on WebGL. Used alone, it can reduce denoising blotches on directly visible receivers, with noisier raw output. Default `false`. */
   photonMapping?: boolean | {
     /** Emitted photons per batch; 28 bytes per photon plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default. Default pixel count / 4, at most 262144. */ photonsPerSample?: number;
     /** Positive first-batch gather radius in scene units, independent of photonsPerSample; shrinks as batches accumulate. Default 3% of the caster bounding sphere radius. */ initialRadius?: number;
@@ -362,16 +362,26 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
-  /** Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
-  get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
+  /** @internal Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get _gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
   /** @internal Latest WebGPU beauty tile estimate in milliseconds, including amortized caustic work; equal to the sample estimate without tiling. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuTileTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeTileTime?.() : undefined; }
-  /** Waits for the next release of WebGPU sampling queue capacity and returns true
+  /**
+   * @deprecated Use refineUntil; this will be removed in a later release. Waits for the
+   * next release of WebGPU sampling queue capacity and returns true when sampling was
+   * queued. Returns false immediately with no queued sampling, on WebGL, or for only
+   * denoising, display or offline convergence work. Does not submit work. Throws after
+   * disposal.
+   */
+  whenReadyToRefine(): Promise<boolean> { return this._whenReadyToRefine(); }
+  /** @internal Waits for the next release of WebGPU sampling queue capacity and returns true
    * when sampling was queued. Returns false immediately with no queued sampling,
    * on WebGL, or for only denoising, display or offline convergence work.
    * Does not submit work. Throws after disposal.
    */
-  whenReadyToRefine(): Promise<boolean> {
+  _whenReadyToRefine(): Promise<boolean> {
     if (this._disposed) throw new Error('Render is disposed.');
     return !this._busy ? this._target?.whenTraceAvailable?.() ?? Promise.resolve(false) : Promise.resolve(false);
   }
@@ -541,15 +551,14 @@ export default class Render {
     finally { this._refineOptions = previous; this._engine._reportShaderProgress(); }
   }
   /**
-   * Synchronously calls refine() once, then refills WebGPU sampling until deadline
-   * (the performance.now() time base). Call present() immediately afterwards: the
-   * first refine has already run; later refills leave resolving to presentation.
-   * Refilling stops on abort, a hidden page, unavailable sampling capacity, or when
-   * batching, convergence, tile timing/budget or this render's final display no
-   * longer permits it. Preparing, compiling, denoising and the first incomplete
-   * sample advance only through the synchronous call. WebGL runs only that call.
-   * A new call ends the previous refill. Asynchronous errors set status to error
-   * and resolve; synchronous errors follow refine().
+   * Calls refine() once synchronously, then keeps sampling on WebGPU until deadline.
+   * Call present() right after it; later samples appear at the next presentation.
+   * Sampling continues only with batchSamples on, the final channel displayed, a
+   * visible page and tiles that fit timeBudgetMs. It stops on abort or convergence.
+   * Preparing, compiling, denoising and the first incomplete sample advance only
+   * through the synchronous call, which is all WebGL runs. A new call ends the
+   * previous one. Asynchronous errors set status to error and resolve; synchronous
+   * errors follow refine().
    * @param deadline End time in performance.now() milliseconds.
    * @param options.signal Optional application cancellation; default none. An
    * already aborted signal still permits the synchronous refine().
@@ -587,7 +596,7 @@ export default class Render {
       if (Number.isFinite(deadline)) timer = setTimeout(abort, Math.min(2147483647, Math.max(0, deadline - performance.now())));
       try {
         while (canContinue()) {
-          if (!await Promise.race([this.whenReadyToRefine(), cancelled])) break;
+          if (!await Promise.race([this._whenReadyToRefine(), cancelled])) break;
           beforeRefill?.();
           if (!canContinue(true)) break;
           this.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});

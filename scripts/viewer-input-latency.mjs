@@ -24,9 +24,9 @@ try{for(const model of (process.env.MODELS?.split(',')??['research-cornell-caust
  const present=e.engine.display.present.bind(e.engine.display);
  e.engine.display.present=function(render){const shown=present(render),p=window.latencyPending;
   if(shown&&p&&!p.claimed&&shown._complete&&((p.kind==='camera'&&shown._input.camera!==p.camera)||(p.kind==='settings'&&shown===e.final&&shown.bounces===p.bounces))){
-   p.claimed=true;const submitted=performance.now();e.engine.device.queue.onSubmittedWorkDone().then(()=>{window.latencyRows.push({kind:p.kind,priorSampleMs:p.priorSampleMs,ms:performance.now()-p.start,submitMs:submitted-p.start,target:shown===e.final?'final':'preview',gpuSampleMs:e.final.gpuSampleTimeMs,width:e.final.width,height:e.final.height});window.latencyPending=null;});
+   p.claimed=true;const submitted=performance.now();e.engine.device.queue.onSubmittedWorkDone().then(()=>{window.latencyRows.push({kind:p.kind,priorSampleMs:p.priorSampleMs,ms:performance.now()-p.start,submitMs:submitted-p.start,target:shown===e.final?'final':'preview',gpuSampleMs:e.final._gpuSampleTimeMs,width:e.final.width,height:e.final.height});window.latencyPending=null;});
   }return shown;};
- window.beginLatency=(kind)=>{window.latencyPending={kind,start:performance.now(),camera:e.engine._inputs.camera,priorSampleMs:e.final.gpuSampleTimeMs,bounces:e.final.bounces===8?7:8};if(kind==='settings'){e.engine.display.canvas.dispatchEvent(new Event('input',{bubbles:true}));setSettings({bounces:window.latencyPending.bounces});}};
+ window.beginLatency=(kind)=>{window.latencyPending={kind,start:performance.now(),camera:e.engine._inputs.camera,priorSampleMs:e.final._gpuSampleTimeMs,bounces:e.final.bounces===8?7:8};if(kind==='settings'){e.engine.display.canvas.dispatchEvent(new Event('input',{bubbles:true}));setSettings({bounces:window.latencyPending.bounces});}};
  })()`);
  await delay(3000);
  const box=await page.tab.evaluate(`(()=>{const r=window.latencyViewer.engine.display.canvas.getBoundingClientRect();return{x:r.x+r.width*.4,y:r.y+r.height*.4};})()`);

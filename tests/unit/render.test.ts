@@ -199,27 +199,34 @@ describe('independent Render', () => {
   });
   it('exposes GPU sample timing only for a current, live render', () => {
     const {engine, camera, targets} = renderFixture(); const render = new Render(engine);
-    expect(render.gpuSampleTimeMs).toBeUndefined(); render.refine();
-    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, getRealtimeTileTime: () => .5}); expect(render.gpuSampleTimeMs).toBe(2); expect(render.gpuTileTimeMs).toBe(.5);
-    camera.position = [1, 0, 0]; engine.update(); expect(render.gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined();
-    render.refine(); expect(render.gpuSampleTimeMs).toBe(2);
-    render.dispose(); expect(render.gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined(); engine.dispose();
+    expect(render._gpuSampleTimeMs).toBeUndefined(); render.refine();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, getRealtimeTileTime: () => .5}); expect(render._gpuSampleTimeMs).toBe(2); expect(render.gpuTileTimeMs).toBe(.5);
+    camera.position = [1, 0, 0]; engine.update(); expect(render._gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined();
+    render.refine(); expect(render._gpuSampleTimeMs).toBe(2);
+    render.dispose(); expect(render._gpuSampleTimeMs).toBeUndefined(); expect(render.gpuTileTimeMs).toBeUndefined(); engine.dispose();
   });
   it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
-    expect(await render.whenReadyToRefine()).toBe(false); expect(targets).toHaveLength(0);
+    expect(await render._whenReadyToRefine()).toBe(false); expect(targets).toHaveLength(0);
     render.refine(); let complete!: () => void;
     const pending = new Promise<boolean>(resolve => {complete = () => resolve(true);});
     Object.assign(targets[0], {whenTraceAvailable: () => pending});
-    const ready = render.whenReadyToRefine(); expect(targets[0].trace).toHaveBeenCalledOnce();
+    const ready = render._whenReadyToRefine(); expect(targets[0].trace).toHaveBeenCalledOnce();
     complete(); expect(await ready).toBe(true);
     Object.assign(targets[0], {whenTraceAvailable: () => Promise.resolve(false)});
-    expect(await render.whenReadyToRefine()).toBe(false);
+    expect(await render._whenReadyToRefine()).toBe(false);
+    render.dispose(); expect(() => render._whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+  });
+  it('keeps the deprecated capacity and timing members working', async () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    render.refine();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2, whenTraceAvailable: () => Promise.resolve(true)});
+    expect(render.gpuSampleTimeMs).toBe(2); expect(await render.whenReadyToRefine()).toBe(true);
     render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
   });
   it('returns false on WebGL without waiting for display or denoising work', async () => {
     const {engine} = renderFixture({backend: 'webgl'}); const render = new Render(engine);
-    render.refine(); expect(await render.whenReadyToRefine()).toBe(false); engine.dispose();
+    render.refine(); expect(await render._whenReadyToRefine()).toBe(false); engine.dispose();
   });
 
   it.each([0, -1, NaN, Infinity])('rejects an invalid realtime queue budget (%s) and restores subsequent calls', targetBatchTimeMs => {
@@ -267,7 +274,7 @@ describe('converge selects one render', () => {
     const {engine, camera, targets, operations} = renderFixture(); const a = new Render(engine), b = new Render(engine);
     b.refine(); const exportCamera = camera.clone(); exportCamera.position = [8, 1, 2];
     const pending = a.converge({samples: 4, camera: exportCamera, sampleSequenceOffset: 19}); exportCamera.position = [9, 9, 9];
-    expect(await a.whenReadyToRefine()).toBe(false);
+    expect(await a._whenReadyToRefine()).toBe(false);
     expect(() => a.refine()).toThrow('converge'); b.refine();
     const result = await pending; expect(result.samples).toBe(4); expect(a.samples).toBe(4); expect(b.samples).toBe(2);
     expect(engine.camera).toBe(camera); expect(camera.position).toEqual([0, 0, 0]);

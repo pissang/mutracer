@@ -223,7 +223,7 @@ describe('RenderLoop edit liveness', () => {
     }
     expect(status === 'finished' || status === 'error', `ended ${status} at ${final.samples}`).toBe(true);
     if (status === 'finished' && engine.display.channel === 'final') expect(final.samples).toBeGreaterThanOrEqual(final.maxSamples);
-    if (status !== 'error') await expect(final.whenReadyToRefine()).resolves.toBe(false);
+    if (status !== 'error') await expect(final._whenReadyToRefine()).resolves.toBe(false);
     loop.dispose(); other?.dispose(); engine.dispose();
   });
 

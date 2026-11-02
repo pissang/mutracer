@@ -171,7 +171,7 @@ describe('Render.refineUntil', () => {
     if (stage === 'preparing') vi.spyOn(f.engine, '_ready', 'get').mockReturnValue(false);
     const render = new Render(f.engine, {batchSamples: true});
     if (stage === 'compiling') {render.refine(); vi.mocked(f.targets[0].trace).mockReturnValue(true);}
-    const capacity = vi.spyOn(render, 'whenReadyToRefine');
+    const capacity = vi.spyOn(render, '_whenReadyToRefine');
     await render.refineUntil(Infinity);
     expect(render.status).toBe(stage === 'first-sample' ? 'converging' : stage);
     expect(render.samples).toBe(0); expect(capacity).not.toHaveBeenCalled(); f.engine.dispose();

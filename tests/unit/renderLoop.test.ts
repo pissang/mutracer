@@ -351,7 +351,7 @@ describe('RenderLoop sampling between display frames', () => {
   });
   it('stops when the capacity wait reports no queued sampling', async () => {
     const f = refillFixture();
-    vi.spyOn(f.loop.final, 'whenReadyToRefine').mockResolvedValue(false);
+    vi.spyOn(f.loop.final, '_whenReadyToRefine').mockResolvedValue(false);
     const before = vi.mocked(f.target.trace).mock.calls.length;
     f.loop.tick(); await settle();
     expect(f.target.trace).toHaveBeenCalledTimes(before + 1);
