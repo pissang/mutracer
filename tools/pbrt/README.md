@@ -84,9 +84,9 @@ in path order. Open an individual scene and its dependencies to choose another.
 Standalone code export is unavailable for PBRT scenes; use the viewer or the
 comparison tool to render them.
 
-With `--noise`, comparable regions whose HDR RMSE exceeds the two-run
-noise estimate are reported as mismatches (exit code 2); approximate regions do
-not fail this check. The statistical margin assumes independent pixel errors,
-so a mismatch needs diagnosis, particularly near geometry edges and indirect
-paths through approximate materials. Without `--noise`, the report leaves noise
-agreement unassessed.
+With `--noise`, the report separates whole-frame HDR RMSE from regional mean
+bias divided by its standard error. Regional tests exclude ID discontinuities
+expanded by one pixel and flag channels above six standard errors. Either test
+can report mismatch (exit code 2); approximate regions do not fail these checks.
+The estimates assume independent pixel errors, so mismatches still need diagnosis.
+Without `--noise`, noise agreement remains unassessed.

@@ -145,6 +145,12 @@ mask does not isolate indirect paths that touch approximate materials. PBRT uses
 seeds 0/1; MuTracer uses disjoint sample blocks starting at 0/N with the same Sobol
 scramble. Their difference gives a diagnostic noise estimate, not independent
 Monte Carlo replicas or statistical proof of equivalence.
+Whole-frame RMSE retains every comparable pixel and its noise margin. Regional
+material/tile tests exclude discontinuities in object, instance or material IDs,
+dilated by one pixel. Their statistic is absolute channel mean bias / standard
+error, with threshold 6. Standard error is sqrt(sum of per-pixel replica-difference
+variances) / pixel count; squaring a region-sum difference instead gives an
+unstable single observation. Whole-frame and regional statuses are separate.
 Each MuTracer run uses a fresh Chrome process to avoid retaining both scenes' caches
 and allocations during memory measurement.
 
