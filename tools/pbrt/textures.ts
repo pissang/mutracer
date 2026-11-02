@@ -93,14 +93,14 @@ export class Textures {
       const encoding = String(first(p, 'encoding', /\.png$/i.test(filename) ? 'sRGB' : 'linear')).toLowerCase();
       if (!['linear', 'srgb'].includes(encoding) && !/^gamma\s+[\d.]+$/.test(encoding)) this.warn(entity, `Encoding ${encoding} treated as linear`, 'texture');
       const invert = first(p, 'invert', false), scale = scalar(p, 'scale', 1), bytes = !(image.data instanceof Float32Array);
-      if (entity.loc.args[1] !== 'float' && bytes && !invert && scale >= 0 && scale <= 1 && ['srgb', 'linear'].includes(encoding)) {
+      if (entity.loc.args[1] !== 'float' && !invert && scale >= 0 && scale <= 1 && (bytes && ['srgb', 'linear'].includes(encoding) || !bytes && encoding === 'linear')) {
         // Keep the source precision and let the existing texture color-space
         // path decode RGB. This avoids a fourfold CPU expansion and copies.
-        let data = image.data as Uint8Array | Uint8ClampedArray;
-        if (data.some((v, i) => i % 4 === 3 && v !== 255)) {
-          data = new Uint8Array(data); for (let i = 3; i < data.length; i += 4) data[i] = 255;
+        let data = image.data; const alpha = bytes ? 255 : 1;
+        if (data.some((v, i) => i % 4 === 3 && v !== alpha)) {
+          data = bytes ? new Uint8Array(data) : new Float32Array(data); for (let i = 3; i < data.length; i += 4) data[i] = alpha;
         }
-        const map = new THREE.DataTexture(data, image.width, image.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+        const map = new THREE.DataTexture(data, image.width, image.height, THREE.RGBAFormat, bytes ? THREE.UnsignedByteType : THREE.FloatType);
         map.colorSpace = encoding === 'srgb' ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace;
         return this.mapValue(map, p, entity, [scale, scale, scale]);
       }
