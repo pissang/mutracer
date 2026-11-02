@@ -12,6 +12,8 @@ The world reflection is baked into geometry so emissive triangles have consisten
 world-space winding and normals. The winding changes when the baked transform
 changes handedness, XOR `ReverseOrientation`; explicit normals only change sign
 for `ReverseOrientation`. Instances retain shared geometry and use `M * T * M`.
+Loop shapes refine the control mesh and push vertices to the limit surface;
+area-weighted normals approximate the reference limit-surface tangents.
 A reflection is absorbed into a geometry variant for negative instance transforms.
 
 `LookAt` sets world-to-camera, so its inverse is captured at `Camera`. `WorldBegin`
@@ -46,7 +48,9 @@ integrates the emitted spectrum; this cancels the illuminant normalization for
 white light. Consequently a point light's RGB intensity maps directly to the
 zero-radius SphereLight intensity, and an area light's RGB radiance maps to mesh
 emission. Spot cone angles are half angles and use cosine smoothstep on both sides.
-Distant intensity is irradiance facing the light.
+Distant intensity is irradiance facing the light. Sphere emitters retain meshes:
+MuTracer analytic sphere lights currently do not supply visible primary-ray
+emission, and adding a second emissive sampler would count the source twice.
 
 Power multiplies point intensity by `power/(4π)`. For a spot it multiplies by
 `power/[2π(1-(cos(inner)+cos(outer))/2)]`. Area-light power divides by
@@ -73,7 +77,7 @@ adapter retains its previous bilinear reprojection.
 
 The comparison sets PBRT's pixel filter to box with radius 0.5 to match MuTracer's
 uniform pixel jitter. It overrides spp and output resolution, preserves maxdepth,
-removes Film sensor exposure from the reference HDR and never tone maps numerical
+sets an opaque black background when no environment exists, removes Film sensor exposure from the reference HDR and never tone maps numerical
 inputs. AOV material IDs identify approximate surface regions. This primary-hit
 mask does not isolate indirect paths that touch approximate materials. Independent
 seed pairs give a diagnostic estimate of regional mean noise, not a statistical

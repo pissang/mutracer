@@ -9,3 +9,7 @@ const variables = Object.fromEntries([...source.matchAll(/Spectrum\s+(\w+)\s*=\s
 for (const [, name, variable] of source.matchAll(/\{"((?:metal|glass|stdillum)-[^"]+)",\s*(\w+)\}/g)) if (arrays[variables[variable]]) table[name] = arrays[variables[variable]];
 if (!table['metal-Au-eta'] || !table['glass-BK7']) throw new Error('Missing spectral data');
 await writeFile('tools/pbrt/spectra-data.json', JSON.stringify(table) + '\n');
+const media = await readFile(`${root}/src/pbrt/media.cpp`, 'utf8');
+const presets = Object.fromEntries([...media.matchAll(/\{"([^"]+)",\s*RGB\(([^)]+)\),\s*RGB\(([^)]+)\)\}/g)].map(([, name, s, a]) => [name, { sigma_s: s.split(',').map(Number), sigma_a: a.split(',').map(Number) }]));
+if (!presets.Skin1) throw new Error('Missing measured scattering presets');
+await writeFile('tools/pbrt/scattering-data.json', JSON.stringify(presets) + '\n');

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { subdivideLoop } from './subdivision';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { scalar, vector, type Shape } from './scene';
 import { decompress, resolvePath, type Resolver } from './source';
@@ -29,7 +30,7 @@ export async function geometry(shape: Shape, entry: string, resolver: Resolver, 
     if (indices.length % 3 || indices.some(i => !Number.isInteger(i) || i < 0 || i >= positions.length / 3)) throw new Error(`${shape.loc.file}:${shape.loc.line}: invalid triangle indices`);
     result.setIndex(indices);
     if (!normals.length) result.computeVertexNormals();
-    return result;
+    return shape.type === 'loopsubdiv' ? subdivideLoop(result, scalar(p, 'levels', scalar(p, 'nlevels', 3))) : result;
   }
   const radius = scalar(p, 'radius', 1), phi = THREE.MathUtils.degToRad(scalar(p, 'phimax', 360));
   if (shape.type === 'sphere') {

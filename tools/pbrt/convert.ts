@@ -52,7 +52,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   const meshes = new Map<Shape, { geometry: THREE.BufferGeometry; material: THREE.MeshPhysicalMaterial }>();
   const create = async (shape: Shape) => {
     onProgress?.(loaded++, total);
-    if (shape.type === 'loopsubdiv') warn(shape, 'Loop subdivision uses the control mesh', 'shape');
+    if (shape.type === 'loopsubdiv') warn(shape, 'Loop subdivision uses area-weighted vertex normals', 'shape');
     const g = await geometry(shape, scene.entry, resolver, decodePLY);
     if (!g) { warn(shape, `${shape.type} shape skipped`, 'shape'); return null; }
     const matrix = mirror.clone().multiply(new THREE.Matrix4().fromArray(shape.transform));
@@ -79,15 +79,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   };
   for (const shape of scene.shapes) {
     const value = await create(shape); if (!value) continue;
-    if (shape.type === 'sphere' && shape.areaLight && !shape.reverse && value.material.side !== THREE.DoubleSide && !value.material.emissiveMap && scalar(shape.params, 'phimax', 360) === 360 && !shape.params.zmin && !shape.params.zmax) {
-      const transform = mirror.clone().multiply(new THREE.Matrix4().fromArray(shape.transform));
-      const scales = [new THREE.Vector3().setFromMatrixColumn(transform, 0).length(), new THREE.Vector3().setFromMatrixColumn(transform, 1).length(), new THREE.Vector3().setFromMatrixColumn(transform, 2).length()];
-      if (Math.max(...scales) - Math.min(...scales) < 1e-6) {
-        const light = new THREE.PointLight(value.material.emissive, value.material.emissiveIntensity);
-        light.position.setFromMatrixPosition(transform); light.userData.mutracerRadius = scalar(shape.params, 'radius', 1) * scales[0]; light.name = 'PBRT sphere emitter'; root.add(light); continue;
-      }
-      warn(shape, 'Nonuniform sphere emitter uses a triangle mesh', 'shape');
-    }
+    if (shape.type === 'sphere' && shape.areaLight) warn(shape, 'Sphere emitter uses emissive geometry to preserve primary-ray visibility', 'light');
     const mesh = new THREE.Mesh(value.geometry, value.material); mesh.name = `${shape.type} ${shape.loc.line}`;
     mesh.matrixAutoUpdate = false; root.add(mesh);
   }

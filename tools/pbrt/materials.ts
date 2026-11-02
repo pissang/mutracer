@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+// PBRT-v4@b0bdf461 src/pbrt/media.cpp, Apache-2.0 (see LICENSES).
+import presets from './scattering-data.json';
 import { first, scalar, type Entity, type Scene, type Shape } from './scene';
 import { conductor, glass, namedSpectrum, roughness } from './spectrum';
 import { Textures } from './textures';
@@ -48,6 +50,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
       return [360, values[2], 460, values[2], 550, values[1], 610, values[0], 830, values[0]];
     };
     const eta = curve('eta', 'metal-Cu-eta'), k = curve('k', 'metal-Cu-k');
+    if (p.eta?.type === 'rgb' || p.k?.type === 'rgb') warn(entity, 'RGB optical constants use wavelength interpolation', 'spectrum');
     if (!p.reflectance && eta && k) {
       const colors = conductor(eta, k); result.color.setRGB(...colors.base as [number, number, number]); open.specularColor = colors.edge;
     } else if (p.eta || p.k) warn(entity, 'Numeric eta/k approximated by RGB reflectance', 'spectrum');
@@ -58,6 +61,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   if (u !== v) {
     const max = Math.max(u * u, v * v), min = Math.min(u * u, v * v);
     open.specularAnisotropy = Math.min(1, (1 - min / max) / .9);
+    if (min / max < .1) warn(entity, 'Extreme microfacet anisotropy limited by the OpenPBR aspect model', 'material');
     open.specularAnisotropyRotation = v > u ? Math.PI / 2 : 0;
   }
   if (p.roughness?.type === 'texture' && !p.uroughness && !p.vroughness) {
@@ -73,12 +77,14 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     warn(entity, 'Anisotropic roughness textures replaced by 0.5', 'texture');
     result.userData.pbrtComparable = false;
   }
-  if (type.startsWith('coated')) { result.clearcoat = 1; result.clearcoatRoughness = result.roughness; open.coatWeight = 1; }
+  if (type.startsWith('coated')) { result.clearcoat = 1; result.clearcoatRoughness = result.roughness; open.coatWeight = 1; open.coatDarkening = 1; open.coatIor = 1.5; }
   if (type === 'subsurface') {
-    const a = await textures.value(p, 'sigma_a', [.01, .01, .01], entity), s = await textures.value(p, 'sigma_s', [1, 1, 1], entity);
+    const preset = (presets as Record<string, { sigma_a: number[]; sigma_s: number[] }>)[String(first(p, 'name', ''))];
+    const a = preset ? { color: preset.sigma_a } : await textures.value(p, 'sigma_a', [.0011, .0024, .014], entity), s = preset ? { color: preset.sigma_s } : await textures.value(p, 'sigma_s', [2.55, 3.21, 3.77], entity);
+    open.specularWeight = 1; open.subsurfaceAnisotropy = preset ? 0 : scalar(p, 'g', 0);
     open.subsurfaceWeight = 1; open.subsurfaceColor = s.color.map((v, i) => v / Math.max(1e-6, v + a.color[i]));
     open.subsurfaceRadius = 1 / Math.max(1e-6, (a.color.reduce((x, y) => x + y) + s.color.reduce((x, y) => x + y)) / 3 * scalar(p, 'scale', 1));
-    if (p.name) warn(entity, 'Named subsurface coefficients use default sigma_a/sigma_s', 'material');
+    if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
   if (type === 'diffusetransmission') { open.thinWalled = true; open.transmissionWeight = .5; }
   if (['hair', 'measured', 'mix'].includes(type)) result.color.setRGB(.5, .5, .5);

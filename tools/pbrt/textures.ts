@@ -84,6 +84,7 @@ export class Textures {
       const filename = String(first(p, 'filename', '')), image = await this.image(filename);
       const data = new Float32Array(image.width * image.height * 4);
       const encoding = String(first(p, 'encoding', /\.(exr|hdr)$/i.test(filename) ? 'linear' : 'sRGB')).toLowerCase();
+      if (!['linear', 'srgb'].includes(encoding) && !/^gamma\s+[\d.]+$/.test(encoding)) this.warn(entity, `Encoding ${encoding} treated as linear`, 'texture');
       const invert = first(p, 'invert', false), scale = scalar(p, 'scale', 1), bytes = !(image.data instanceof Float32Array);
       for (let i = 0; i < data.length; i++) {
         let value = image.data[i] / (bytes ? 255 : 1);
@@ -100,6 +101,7 @@ export class Textures {
       map.flipY = true;
       map.repeat.set(scalar(p, 'uscale', 1), scalar(p, 'vscale', 1)); map.offset.set(scalar(p, 'udelta', 0), scalar(p, 'vdelta', 0));
       const wrap = String(first(p, 'wrap', 'repeat'));
+      if (!['repeat', 'clamp', 'black'].includes(wrap)) this.warn(entity, `Wrap ${wrap} uses repeat`, 'texture');
       map.wrapS = map.wrapT = wrap === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
       if (wrap === 'black') this.warn(entity, 'Black border wrapping approximated by clamp', 'texture');
       if (wrap === 'black') map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
