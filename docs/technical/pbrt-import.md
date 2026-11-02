@@ -112,8 +112,12 @@ its missing back-side surface visibility is warned about.
 PBRT image textures evaluate `(s,1-t)`. Decoded images use top-down rows and
 Three textures set `flipY=true`. Infinite lights use the equal-area square map,
 reprojected to world-space latitude/longitude. The direct importer uses nearest
-source lookup to match ImageInfiniteLight, while the existing glTF metadata
-adapter retains its previous bilinear reprojection.
+source lookup to match ImageInfiniteLight. Each target texel averages 4×4
+jittered samples uniform in azimuth and cos(theta), then per-channel spherical
+integrals correct residual quadrature energy error. Source texels use area 4π/N;
+target bands use exact cosine differences. This preserves small bright features'
+total energy while approximating their subpixel distribution. The existing glTF
+metadata adapter retains its previous bilinear reprojection.
 
 Material displacement uses forward UV finite differences with PBRT's `.0005`
 fallback step, including scalar texture scale and UV repeat. The image-row

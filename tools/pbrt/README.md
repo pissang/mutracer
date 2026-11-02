@@ -55,7 +55,7 @@ copies to coexist in browser memory.
 | mix / hair / measured / interface | Dominant constant-weight branch / diffuse fallback / diffuse fallback / transmissive medium boundary. |
 | imagemap | PNG/JPEG, EXR, TGA and TIFF; encoding, invert, scale, UV scale/offset and repeat/clamp. Black wrap approximates clamp. |
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
-| point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments are reprojected. Portals are ignored with a warning. |
+| point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments use solid-angle supersampling with total-energy preservation. Portals are ignored with a warning. |
 | goniometric / projection | Skipped with a warning. |
 | homogeneous | Inside or outside material medium (outside reverses the boundary), or a bounded camera volume. Two non-camera media use inside only, with a warning. Colored camera extinction is averaged with a warning. |
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
