@@ -13,5 +13,9 @@ describe('PBRT Loop subdivision', () => {
     const bounds = new THREE.Box3().setFromBufferAttribute(result.attributes.position as THREE.BufferAttribute); expect(bounds.getCenter(new THREE.Vector3()).length()).toBeLessThan(1e-7);
     for(const value of result.attributes.normal.array) expect(Number.isFinite(value)).toBe(true); source.dispose();
   });
+  it('matches PBRT last-face selection at a welded multi-fan boundary', () => {
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0,1,0,0,0,1,0,-1,0,0,0,-1,0],3)); g.setIndex([0,1,2,0,3,4]);
+    const result = subdivideLoop(g,0); expect(result.attributes.position.getX(0)).toBeCloseTo(-.2); expect(result.attributes.position.getY(0)).toBeCloseTo(-.2);
+  });
   it('bounds subdivision allocations', () => { expect(() => subdivideLoop(new THREE.BufferGeometry(),9)).toThrow('levels'); });
 });

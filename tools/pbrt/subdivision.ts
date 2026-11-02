@@ -18,6 +18,23 @@ export function subdivideLoop(input: THREE.BufferGeometry, levels: number): THRE
       edge.opposite.push(other); if (edge.opposite.length > 2) throw new Error('Non-manifold Loop edge');
     }
     for (const e of edges.values()) if (e.opposite.length === 1) { boundary[e.a].add(e.b); boundary[e.b].add(e.a); }
+    // Some scene control meshes weld several boundary fans at one vertex.
+    // PBRT uses the fan containing the last incident face (its startFace).
+    const fans = new Map<number, { links: Map<number, Set<number>>; start: number }>();
+    boundary.forEach((ring, v) => { if (ring.size > 2) fans.set(v, { links: new Map(), start: -1 }); });
+    if (fans.size) {
+      for (let i = 0; i < faces.length; i += 3) for (let j = 0; j < 3; j++) {
+        const fan = fans.get(faces[i + j]); if (!fan) continue;
+        const a = faces[i + (j + 1) % 3], b = faces[i + (j + 2) % 3];
+        if (!fan.links.has(a)) fan.links.set(a, new Set()); if (!fan.links.has(b)) fan.links.set(b, new Set());
+        fan.links.get(a)!.add(b); fan.links.get(b)!.add(a); fan.start = a;
+      }
+      for (const [v, fan] of fans) {
+        const connected = new Set([fan.start]), queue = [fan.start];
+        for (let i = 0; i < queue.length; i++) for (const next of fan.links.get(queue[i]) ?? []) if (!connected.has(next)) { connected.add(next); queue.push(next); }
+        neighbors[v] = connected; boundary[v] = new Set([...boundary[v]].filter(n => connected.has(n)));
+      }
+    }
     return { neighbors, boundary, edges };
   };
   const even = (neighbors: Set<number>[], boundary: Set<number>[], limit = false) => {
