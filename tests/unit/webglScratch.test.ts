@@ -48,3 +48,19 @@ it('keeps internal WebGL fixture methods out of Engine diagnostics', () => {
     expectDataOnlyDiagnostics(engine.getDiagnostics());
   } finally {engine.dispose(); vi.unstubAllGlobals();}
 });
+
+it('retains configured trace depth and removes fog bindings when changing shader variants', () => {
+  const {renderer} = context();
+  const compile = vi.fn((_shader: FragmentShader, _defines: Record<string, unknown>) => ({})); renderer.createProgram = compile as any;
+  const base = new FragmentShader({outputs: ['color'], defines: {BOUNCES: 2}, main: 'void main(){out_color=vec4(1.0);}'});
+  const pass = new WebGLFullQuadPass('variants', renderer, {shader: base});
+  pass.setDefines({BOUNCES: 8});
+  pass.setShader(new FragmentShader({outputs: ['color'], defines: {BOUNCES: 2, HAS_FOG: true},
+    uniforms: {fogCount: {type: 'int', value: 1}}, main: base.main}));
+  pass.isProgramReady();
+  expect(compile.mock.calls.at(-1)?.[1]).toMatchObject({BOUNCES: 8, HAS_FOG: true});
+  pass.setShader(base, ['fogCount'], ['HAS_FOG']); pass.isProgramReady();
+  const [shader, defines] = compile.mock.calls.at(-1)! as unknown as [FragmentShader, Record<string, unknown>];
+  expect(defines.BOUNCES).toBe(8); expect(defines).not.toHaveProperty('HAS_FOG');
+  expect(shader.uniforms).not.toHaveProperty('fogCount'); pass.dispose();
+});

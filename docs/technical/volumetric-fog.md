@@ -25,7 +25,9 @@ The camera free flight precedes deterministic alpha coverage splitting. A
 surviving camera prefix is shared by the front and back branches; it is not
 sampled again on the front. Alpha-null continuations use fresh hashed distances
 instead of repeating the same structured dimension. Fog uses bounce domains
-56–63; 16 NEE candidates occupy at most domain 53.
+56–63; 16 NEE candidates occupy at most domain 53. Free flight undoes the
+surface sampler's endpoint remapping to recover a uniform sample on [0, 1);
+otherwise many thin volumes accumulate an extinction bias.
 
 Height density is exponential in world Y. Its optical-depth integral and inverse
 are analytic. Small exponents use a series, and large exponents evaluate the

@@ -1,6 +1,6 @@
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
-import {fogWgsl, fogIntegratorWgsl} from './chunks/fog.wgsl.js';
+import {fogWgsl, createFogIntegratorWgsl} from './chunks/fog.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -220,8 +220,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasFog ? fogWgsl : ''}
-${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasFog)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasFog ? fogWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasFog)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -716,7 +715,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${hasFog ? fogIntegratorWgsl : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasFog ? createFogIntegratorWgsl(deterministicPrimaryAlpha) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;

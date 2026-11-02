@@ -119,6 +119,9 @@ fn sampleFogEvent(path: ptr<function, Path>, si: ptr<function, SurfaceInteractio
     if (interval.y <= interval.x || volume.params.x <= 0.0) { continue; }
     var u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - u32(i)));
     if (resample) { u = hashedSample(0xf091u + u32(i)); }
+    // The surface sampler avoids endpoints with an EPS remapping. Free-flight
+    // survival needs the full uniform distribution, especially for thin overlaps.
+    u = clamp((u - EPS) / (1.0 - 2.0 * EPS), 0.0, 1.0 - 1.0 / 16777216.0);
     let candidate = fogDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));
     if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
   }
@@ -153,7 +156,7 @@ fn shadeFogVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInteractio
 }
 `;
 
-export const fogIntegratorWgsl = /* wgsl */ `
+export function createFogIntegratorWgsl(deterministicPrimaryAlpha: boolean) { return /* wgsl */ `
 fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si = initialSi; var ma = initialMa;
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
@@ -168,7 +171,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
   let limit = min(max(rtUniform.bounces, 0) * 3, ${MAX_PATH_EVENTS});
   for (var step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
     if (query) {
-      intersectScene(path.ray, &si, depth, true, path.isNextRefraction);
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
     }
     query = true;
@@ -182,7 +185,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
       else { shadeFogVertex(&path, &si, winner, &depth); }
       first = false; resample = false; event++;
     } else {
-      if (first && path.fromEye && si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT) && ma.alpha < 1.0) {
+      if (${deterministicPrimaryAlpha ? 'true' : 'false'} && first && path.fromEye && si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT) && ma.alpha < 1.0) {
         // Camera free flight was sampled before splitting coverage. Both
         // branches share that prefix; the front branch must not resample it.
         split = true; coverage = clamp(ma.alpha, 0.0, 1.0);
@@ -197,7 +200,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
         (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
         path.li = vec3f(1.0); path.alpha = 1.0; path.abort = true;
       } else {
-        if (event > 0) { var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, false); }
+        if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
         if (!path.abort && (depth > rtUniform.bounces || event >= limit)) { path.abort = true; }
         if (!path.abort) {
           var ignored = false;
@@ -233,6 +236,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   var si: SurfaceInteraction; var ma: OpenPbrResolvedMaterial;
   intersectScene(ray, &si, 0, false, false);
   getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+  if (si.hit && HAS_BEVEL && rtUniform.bevel != 0 && ma.bevel > 0.0) { si.normal = getBevelNormal(si, ma.bevel); }
   if (si.hit) {
     (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
     (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
@@ -268,3 +272,4 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   return vec4f(color, alpha);
 }
 `;
+}

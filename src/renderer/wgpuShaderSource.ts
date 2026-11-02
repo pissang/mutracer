@@ -39,7 +39,7 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   return `\n${defineCode}\n${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
-  constants = researchTransport()?.constants(constants, features) ?? constants;
+  if (!constants.HAS_FOG) constants = researchTransport()?.constants(constants, features) ?? constants;
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     hasFog: Boolean(constants.HAS_FOG),

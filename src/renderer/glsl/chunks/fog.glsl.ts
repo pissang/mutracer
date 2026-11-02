@@ -86,8 +86,8 @@ float fogSegmentMaximum(Path path, SurfaceInteraction si) {
   float maximum = si.hit ? distance(si.position, path.ray.o) : INF;
 #ifdef NUM_LIGHTS
   for (int i = 0; i < NUM_LIGHTS; i++) {
-    LightSampleRec sample;
-    float d = intersectLight(path.ray, fetchLight(i), sample);
+    LightSampleRec lightHit;
+    float d = intersectLight(path.ray, fetchLight(i), lightHit);
     if (d > 0.0) maximum = min(maximum, d);
   }
 #endif
@@ -101,6 +101,8 @@ int sampleFogEvent(inout Path path, inout SurfaceInteraction si, float maximum, 
     if (interval.y <= interval.x || fogParams[i].x <= 0.0) continue;
     float u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - uint(i)));
     if (resample) u = hashedSample(0xf091u + uint(i));
+    // Undo the surface sampler's endpoint remapping for unbiased free flight.
+    u = clamp((u - EPS) / (1.0 - 2.0 * EPS), 0.0, 1.0 - 1.0 / 16777216.0);
     float candidate = fogDistance(path.ray, i, interval, -log(max(1.0 - u, 1e-7)));
     if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
   }
@@ -143,12 +145,13 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
   int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
   for (int step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
     if (query) {
-      intersectScene(path.ray, si, true);
+      intersectScene(path.ray, si, event != 0);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
     }
     query = true; samplingBounce = uint(depth);
     int winner = -1;
-    if (!skipFog) winner = sampleFogEvent(path, si, fogSegmentMaximum(path, si), resample);
+    float maximum = fogSegmentMaximum(path, si);
+    if (!skipFog) winner = sampleFogEvent(path, si, maximum, resample);
     skipFog = false;
     if (winner >= 0) {
       if (depth >= bounceLimit || event >= limit) path.abort = true;
@@ -160,7 +163,7 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
         path.ray.o = si.position + ray.d * (EPS * 0.02); first = false; resample = true; continue;
       }
       first = false;
-      if (event > 0) { int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, false); }
+      if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, resample); }
       if (!path.abort && (depth > bounceLimit || event >= limit)) path.abort = true;
       if (!path.abort) {
         si.fogResample = false;

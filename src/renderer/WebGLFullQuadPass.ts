@@ -69,7 +69,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
 
   setShader(shader: FragmentShader, discardUniforms: readonly string[] = [], discardDefines: readonly string[] = []) {
     const uniforms = {...shader.uniforms, ...this._bindings.uniforms};
-    const defines = {...this._bindings.defines, ...shader.defines};
+    const defines = {...shader.defines, ...this._bindings.defines};
     for (const name of discardUniforms) delete uniforms[name];
     for (const name of discardDefines) delete defines[name];
     this._sourceShader = shader;

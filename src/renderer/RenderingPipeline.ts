@@ -123,6 +123,13 @@ export interface ShaderCompilationDiagnostics {
 }
 
 export interface RenderingDiagnostics {
+  /** Fog status when available; default undefined before renderer initialization. */
+  fog?: {
+    /** Number of committed fog volumes. Default 0. */
+    count: number;
+    /** Why caustic estimators are inactive; undefined without fog. */
+    causticsDisabledReason?: string;
+  };
   /** Label of the last complete target presented; undefined before the first image. */
   presentedTarget?: string;
   /** Whether the displayed target contains a complete image. Default false. */

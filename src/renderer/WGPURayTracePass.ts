@@ -42,7 +42,7 @@ import {
 } from './wgpuBindless.js';
 import {wgpuMaterialConstants} from './wgpuMaterialConstants.js';
 import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} from './wgpuShaderSource.js';
-import {makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
+import {makeWebRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
 import {constants} from './webgl.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import {normalizeBounces} from './pathLimits.js';
@@ -353,7 +353,7 @@ class WGPURayTracePass {
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
   };
-  private _rtUniform = makeRayTraceUniform();
+  private _rtUniform = makeWebRayTraceUniform();
   private _mapInfoUniform!: GPUBuffer;
   private _attributeData?: Float32Array;
   private _attributeStride = 0;
@@ -1600,7 +1600,7 @@ class WGPURayTracePass {
       pass.setBindGroup(idx, bindGroup);
     });
 
-    researchTransport()?.capture(this);
+    if (!this._constants?.HAS_FOG) researchTransport()?.capture(this);
     pass.dispatchWorkgroups(
       Math.ceil(dispatchWidth / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
       Math.ceil(dispatchHeight / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
@@ -1655,7 +1655,7 @@ class WGPURayTracePass {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
       textureAtlas: atlas,
-      fog: {count: this._rtUniform.views.fogCount[0], causticsDisabledReason: this._constants.HAS_FOG ? 'Scene fog uses ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
+      fog: {count: this._rtUniform.views.fogCount?.[0] ?? 0, causticsDisabledReason: this._constants.HAS_FOG ? 'Scene fog uses ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
       materialTextures: {
         requested: this._textureSelection.requested,
         active: this._bindless ? 'bindless' as const : 'atlas' as const,
@@ -1781,10 +1781,10 @@ class WGPURayTracePass {
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
     this._causticSettings = settings;
-    const transport = this._constants.HAS_FOG ? undefined : researchTransport()?.configure(this, 'webgpu');
+    const transport = researchTransport()?.configure(this, 'webgpu', !!this._constants?.HAS_FOG);
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
-    const hasCaster = !this._constants.HAS_FOG && !!(settings?.lightTracing || settings?.photonMapping) &&
+    const hasCaster = !this._constants?.HAS_FOG && !!(settings?.lightTracing || settings?.photonMapping) &&
       this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
@@ -2226,7 +2226,7 @@ class WGPURayTracePass {
       this._lightSamplingScratch,
       this._shadowCatcherLightChoices
     );
-    researchTransport()?.prepare(this, 'webgpu', lighting);
+    if (!this._constants?.HAS_FOG) researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;

@@ -115,7 +115,7 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     lightSample.isDelta
   );
   if (misWeight > 0.0) {
-    let unweightedContribution = Li * f / lightPdf * (*path).beta${hasFog ? /* wgsl */ ` * select(1.0, fogTransmittance(lightRay, visibilityDistance), !(*si).fogSuppressed || (isSurface && !ma.thinWalled && ma.transmissionWeight > 0.0 && dot((*si).faceNormal, lightDir) > 0.0))` : ''};
+    let unweightedContribution = Li * f / lightPdf * (*path).beta${hasFog ? /* wgsl */ ` * select(1.0, fogTransmittance(lightRay, visibilityDistance), !(*si).fogSuppressed || (isSurface && !ma.thinWalled && (ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0) && dot((*si).faceNormal, lightDir) > 0.0))` : ''};
     (*shadowWork).risTarget = max(
       dot(max(unweightedContribution * lightSelectionPmf, vec3f(0.0)), luminance),
       0.0

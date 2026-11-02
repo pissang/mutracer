@@ -3,7 +3,7 @@ import {MAX_FOG_VOLUMES, type SceneFog} from '../../src/scene/SceneFog.js';
 import {packFog} from '../../src/renderer/fogData.js';
 import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
 import {CommittedScene} from '../../src/renderer/committedScene.js';
-import {makeRayTraceUniform} from '../../src/renderer/wgpuSceneUniform.js';
+import {makeWebRayTraceUniform as makeRayTraceUniform} from '../../src/renderer/wgpuSceneUniform.js';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
 import rayTraceCore from '../../src/renderer/wgsl/chunks/rayTraceCore.wgsl.js';
 const volume = (): SceneFog => ({density: .2, bounds: {min: [-1, -2, -3], max: [1, 2, 3]}});
@@ -27,7 +27,7 @@ describe('fog scene contract', () => {
     expect(packFog([f]).data[22]).toBeCloseTo(10 - Math.sqrt(14));
   });
   it('rejects invalid inputs and enforces capacity', () => {
-    for (const patch of [{density: -1}, {density: NaN}, {anisotropy: 1}, {heightFalloff: -1}, {baseHeight: Infinity}, {color: [1, 2, 0]}, {shape: 'sphere'}, {bounds: {min: [0, 0, 0], max: [0, 1, 1]}}, {transform: new Array(16).fill(0)}]) {
+    for (const patch of [{density: -1}, {density: NaN}, {anisotropy: null}, {color: null}, {transform: null}, {anisotropy: 1}, {heightFalloff: -1}, {baseHeight: Infinity}, {color: [1, 2, 0]}, {shape: 'sphere'}, {bounds: {min: [0, 0, 0], max: [0, 1, 1]}}, {transform: new Array(16).fill(0)}]) {
       expect(() => packFog([{...volume(), ...patch} as SceneFog])).toThrow(RangeError);
     }
     expect(packFog(Array.from({length: MAX_FOG_VOLUMES}, volume)).count).toBe(8);

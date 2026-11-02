@@ -26,10 +26,8 @@ describe('WebGPU ray-trace uniforms', () => {
       );
       const struct = definitions.structs.RayTraceUniform;
       const { buffer, views } = makeRayTraceUniform();
-      expect(definitions.uniforms.rtUniform.size).toBe(320);
-      expect(buffer.byteLength).toBeGreaterThanOrEqual(320);
+      expect(definitions.uniforms.rtUniform.size).toBe(buffer.byteLength);
       for (const [name, view] of Object.entries(views)) {
-        if (name === 'fogCount' || name === 'fogVolumes') continue;
         expect(struct.fields[name]?.offset, name).toBe(view.byteOffset);
       }
     } finally {

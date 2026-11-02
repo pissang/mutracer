@@ -23,7 +23,7 @@ export interface ResearchTransport {
   compute(options: object): ResearchShaderParts;
   fragment(options: readonly unknown[]): ResearchShaderParts;
   constants(constants: Record<string, boolean | number>, features: object): Record<string, boolean | number>;
-  configure(pass: object, backend: 'webgpu' | 'webgl'): ResearchPassState;
+  configure(pass: object, backend: 'webgpu' | 'webgl', disabled?: boolean): ResearchPassState;
   prepare(pass: object, backend: 'webgpu' | 'webgl', lighting?: unknown): void;
   capture(pass: object): void;
   dispose(pass: object, backend: 'webgpu' | 'webgl'): void;

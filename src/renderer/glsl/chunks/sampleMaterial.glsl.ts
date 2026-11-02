@@ -101,7 +101,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   }
 #endif
 
-${hasFog ? /* glsl */ `  if (!si.fogSuppressed || (isSurface && !mat.thinWalled && mat.transmissionWeight > 0.0 && dot(si.faceNormal, lightDir) > 0.0)) {
+${hasFog ? /* glsl */ `  if (!si.fogSuppressed || (isSurface && !mat.thinWalled && (mat.transmissionWeight > 0.0 || mat.subsurfaceWeight > 0.0) && dot(si.faceNormal, lightDir) > 0.0)) {
     lightSample.emission *= fogTransmittance(lightRay, shadowDistance);
   }
 ` : ''}  // Delta lights cannot be sampled by the BSDF strategy, so their MIS weight

@@ -140,7 +140,7 @@ void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
   // It will cause shader compilation too slow.
-${intelMac ? doubleTransmissionCheckCode : ''}
+${intelMac && !hasFog ? doubleTransmissionCheckCode : ''}
 
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
   if (isShadowCatcher) {
