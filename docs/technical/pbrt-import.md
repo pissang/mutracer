@@ -61,7 +61,8 @@ the pinned renderer's `2π/N * sum(Y(pixel)*max(z,0))` normalization in light sp
 
 Named optical data and CIE/D65 tables come from the pinned Apache-2.0 source.
 Conductor normal and edge reflectances integrate Fresnel at cosines 1 and 1/7
-under D65, then convert XYZ to linear sRGB. Glass uses interpolated eta at
+under D65, then convert XYZ to linear sRGB. OpenPBR takes an F82 **tint**,
+so the edge value is divided by `F0+(1-F0)*(6/7)^5` and limited to [0,1]. Glass uses interpolated eta at
 587.56 nm and Abbe `(etaD-1)/(etaF-etaC)`, at 486.13 and 656.27 nm.
 Blackbody emission is normalized to unit luminance before light scaling.
 An RGB renderer and PBRT's spectral renderer can retain material-dependent
@@ -74,6 +75,11 @@ source lookup to match ImageInfiniteLight, while the existing glTF metadata
 adapter retains its previous bilinear reprojection.
 
 ## Comparison and memory
+
+Ordinary byte color maps retain their original data and declared color space;
+scale graphs carry separate multipliers. Scalar and transformed maps retain
+floating-point values. Rectangular/non-power-of-two height fields are resampled
+to the existing displacement layout, with a warning.
 
 The comparison sets PBRT's pixel filter to box with radius 0.5 to match MuTracer's
 uniform pixel jitter. It overrides spp and output resolution, preserves maxdepth,

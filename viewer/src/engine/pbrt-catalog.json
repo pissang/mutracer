@@ -328,7 +328,7 @@
     {
       "path": "sanmiguel/sanmiguel-realistic-courtyard.pbrt",
       "group": "sanmiguel",
-      "bytes": 401018466,
+      "bytes": 401018948,
       "unknownSizes": 0
     },
     {
@@ -5370,6 +5370,7 @@
     "sanmiguel/geometry/troncoA_00001.ply": 9727208,
     "sanmiguel/geometry/troncoB-geom.pbrt": 181,
     "sanmiguel/geometry/troncoB_00001.ply": 7057362,
+    "sanmiguel/lenses/wide.22mm.dat": 482,
     "sanmiguel/sanmiguel-balcony-plants.pbrt": 2334,
     "sanmiguel/sanmiguel-courtyard-second.pbrt": 2421,
     "sanmiguel/sanmiguel-courtyard.pbrt": 2449,

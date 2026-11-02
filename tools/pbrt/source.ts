@@ -130,7 +130,7 @@ export async function inspect(entry: string, resolver: Resolver): Promise<Inspec
       if (mode !== 'supported') warn({ statement: s.kind, file: s.file, line: s.line, code: `${group}-${type}`, handling: `${type}: ${mode}` });
     }
     for (const parameter of Object.values(s.params)) {
-      const isFile = parameter.type === 'string' && /^(filename|normalmap|bsdffile)$/.test(parameter.name) && !['Film', 'Option'].includes(s.kind);
+      const isFile = parameter.type === 'string' && /^(filename|normalmap|bsdffile|lensfile)$/.test(parameter.name) && !['Film', 'Option'].includes(s.kind);
       const spectrum = parameter.type === 'spectrum' && parameter.values.some((value) => typeof value === 'string' && /\.(spd|txt)$/i.test(value));
       if (!isFile && !spectrum) continue;
       for (const value of parameter.values) if (typeof value === 'string' && value) {

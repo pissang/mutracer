@@ -10,9 +10,15 @@ export type DecodeImage = (bytes: ArrayBuffer, path: string) => Promise<Image>;
 export interface TextureValue { color: number[]; map?: THREE.DataTexture }
 export class Textures {
   private cache = new Map<string, Promise<TextureValue>>();
+  private images = new Map<string, Promise<Image>>();
   private heightMaps = new WeakMap<THREE.DataTexture, THREE.DataTexture>();
   constructor(private scene: Scene, private resolver: Resolver, private warn: (entity: Entity, handling: string, code?: string) => void, private decode?: DecodeImage) {}
-  async image(path: string): Promise<Image> {
+  image(path: string): Promise<Image> {
+    const key = resolvePath(path, this.scene.entry);
+    if (!this.images.has(key)) this.images.set(key, this.decodeFile(path));
+    return this.images.get(key)!;
+  }
+  private async decodeFile(path: string): Promise<Image> {
     const bytes = await this.resolver.read(resolvePath(path, this.scene.entry));
     if (/\.exr$/i.test(path)) {
       const image = new EXRLoader().setDataType(THREE.FloatType).parse(bytes);
@@ -84,10 +90,21 @@ export class Textures {
     }
     if (entity.type === 'imagemap') {
       const filename = String(first(p, 'filename', '')), image = await this.image(filename);
-      const data = new Float32Array(image.width * image.height * 4);
       const encoding = String(first(p, 'encoding', /\.png$/i.test(filename) ? 'sRGB' : 'linear')).toLowerCase();
       if (!['linear', 'srgb'].includes(encoding) && !/^gamma\s+[\d.]+$/.test(encoding)) this.warn(entity, `Encoding ${encoding} treated as linear`, 'texture');
       const invert = first(p, 'invert', false), scale = scalar(p, 'scale', 1), bytes = !(image.data instanceof Float32Array);
+      if (entity.loc.args[1] !== 'float' && bytes && !invert && scale >= 0 && scale <= 1 && ['srgb', 'linear'].includes(encoding)) {
+        // Keep the source precision and let the existing texture color-space
+        // path decode RGB. This avoids a fourfold CPU expansion and copies.
+        let data = image.data as Uint8Array | Uint8ClampedArray;
+        if (data.some((v, i) => i % 4 === 3 && v !== 255)) {
+          data = new Uint8Array(data); for (let i = 3; i < data.length; i += 4) data[i] = 255;
+        }
+        const map = new THREE.DataTexture(data, image.width, image.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+        map.colorSpace = encoding === 'srgb' ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace;
+        return this.mapValue(map, p, entity, [scale, scale, scale]);
+      }
+      const data = new Float32Array(image.width * image.height * 4);
       for (let i = 0; i < data.length; i++) {
         let value = image.data[i] / (bytes ? 255 : 1);
         if (i % 4 < 3) {
@@ -118,20 +135,23 @@ export class Textures {
         data[i + 3] = 1;
       }
       const map = new THREE.DataTexture(data, image.width, image.height, THREE.RGBAFormat, THREE.FloatType);
-      // PBRT ImageTexture evaluates (s, 1-t). Image data here starts at the top.
-      map.flipY = true;
-      map.repeat.set(scalar(p, 'uscale', 1), scalar(p, 'vscale', 1)); map.offset.set(scalar(p, 'udelta', 0), scalar(p, 'vdelta', 0));
-      const wrap = String(first(p, 'wrap', 'repeat'));
-      if (!['repeat', 'clamp', 'black'].includes(wrap)) this.warn(entity, `Wrap ${wrap} uses repeat`, 'texture');
-      map.wrapS = map.wrapT = wrap === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
-      if (wrap === 'black') this.warn(entity, 'Black border wrapping approximated by clamp', 'texture');
-      if (wrap === 'black') map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
-      if (p.mapping && first(p, 'mapping', 'uv') !== 'uv') this.warn(entity, 'Non-UV image mapping uses mesh UVs', 'texture');
-      map.needsUpdate = true; return { color: [1, 1, 1], map };
+      return this.mapValue(map, p, entity);
     }
     const a = await this.value(p, 'tex1', [.5, .5, .5], entity, stack), b = await this.value(p, 'tex2', [.5, .5, .5], entity, stack);
     this.warn(entity, `${entity.type} texture replaced by its constant mean`, 'texture');
     return { color: this.average(a).map((v, i) => (v + this.average(b)[i]) / 2) };
+  }
+  private mapValue(map: THREE.DataTexture, p: Params, entity: Entity, color = [1, 1, 1]): TextureValue {
+    // PBRT ImageTexture evaluates (s, 1-t). Image data here starts at the top.
+    map.flipY = true;
+    map.repeat.set(scalar(p, 'uscale', 1), scalar(p, 'vscale', 1)); map.offset.set(scalar(p, 'udelta', 0), scalar(p, 'vdelta', 0));
+    const wrap = String(first(p, 'wrap', 'repeat'));
+    if (!['repeat', 'clamp', 'black'].includes(wrap)) this.warn(entity, `Wrap ${wrap} uses repeat`, 'texture');
+    map.wrapS = map.wrapT = wrap === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+    if (wrap === 'black') this.warn(entity, 'Black border wrapping approximated by clamp', 'texture');
+    if (wrap === 'black') map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
+    if (p.mapping && first(p, 'mapping', 'uv') !== 'uv') this.warn(entity, 'Non-UV image mapping uses mesh UVs', 'texture');
+    map.needsUpdate = true; return { color, map };
   }
   heightMap(source: THREE.DataTexture, owner: Entity): THREE.DataTexture {
     const { width, height } = source.image;
@@ -152,17 +172,18 @@ export class Textures {
     const result = source.clone(); result.source = new THREE.Source({ width: size, height: size, data }); result.needsUpdate = true;
     this.heightMaps.set(source, result); this.warn(owner, `Height image resampled to ${size}×${size} for the supported displacement layout`, 'displacement'); return result;
   }
-  private average(value: TextureValue): number[] {
+  average(value: TextureValue): number[] {
     if (!value.map) return value.color;
-    const data = value.map.image.data as Float32Array, sum = [0, 0, 0];
-    for (let i = 0; i < data.length; i++) if (i % 4 < 3) sum[i % 4] += data[i];
+    const data = value.map.image.data!, sum = [0, 0, 0], bytes = !(data instanceof Float32Array);
+    for (let i = 0; i < data.length; i++) if (i % 4 < 3) {
+      let v = data[i] / (bytes ? 255 : 1);
+      if (value.map.colorSpace === THREE.SRGBColorSpace) v = v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4);
+      sum[i % 4] += v;
+    }
     return sum.map((v, c) => v / (data.length / 4) * value.color[c]);
   }
   private multiply(value: TextureValue, factor: number[]): TextureValue {
-    if (!value.map) return { color: value.color.map((v, i) => v * factor[i]) };
-    const map = value.map.clone(), input = value.map.image.data as Float32Array, data = new Float32Array(input);
-    for (let i = 0; i < data.length; i++) if (i % 4 < 3) data[i] *= factor[i % 4];
-    map.source = new THREE.Source({ ...value.map.image, data }); map.needsUpdate = true; return { color: value.color, map };
+    return { color: value.color.map((v, i) => v * factor[i]), map: value.map };
   }
 }
 export type { Warning };

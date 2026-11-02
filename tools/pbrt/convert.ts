@@ -29,7 +29,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     Sampler: ['pixelsamples'], Integrator: ['maxdepth'],
     LightSource: ['L', 'I', 'scale', 'power', 'illuminance', 'from', 'to', 'coneangle', 'conedeltaangle', 'filename', 'portal'],
     AreaLightSource: ['L', 'scale', 'power', 'twosided', 'filename'],
-    Material: ['type', 'reflectance', 'eta', 'k', 'roughness', 'uroughness', 'vroughness', 'remaproughness', 'normalmap', 'displacement', 'sigma_a', 'sigma_s', 'scale', 'name', 'amount', 'materials'],
+    Material: ['type', 'reflectance', 'eta', 'k', 'roughness', 'uroughness', 'vroughness', 'remaproughness', 'normalmap', 'displacement', 'sigma_a', 'sigma_s', 'mfp', 'g', 'scale', 'name', 'amount', 'materials'],
     MakeNamedMedium: ['type', 'sigma_a', 'sigma_s', 'scale', 'g', 'Le']
   };
   const entities: Entity[] = [...scene.shapes, ...Object.values(scene.objects).flat(), ...Object.values(scene.materials), ...scene.lights, ...Object.values(scene.media), ...[scene.camera, scene.film, scene.sampler, scene.integrator].filter((e): e is Entity => !!e)];

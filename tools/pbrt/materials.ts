@@ -2,7 +2,7 @@ import * as THREE from 'three';
 // PBRT-v4@b0bdf461 src/pbrt/media.cpp, Apache-2.0 (see LICENSES).
 import presets from './scattering-data.json';
 import { first, scalar, type Entity, type Scene, type Shape } from './scene';
-import { conductor, glass, namedSpectrum, roughness } from './spectrum';
+import { conductor, conductorFresnel, metalTint, glass, namedSpectrum, roughness } from './spectrum';
 import { Textures } from './textures';
 export type Warn = (entity: Entity, handling: string, code?: string) => void;
 export async function material(shape: Shape, scene: Scene, textures: Textures, warn: Warn, active = new Set<Entity>()): Promise<THREE.MeshPhysicalMaterial> {
@@ -52,7 +52,13 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const eta = curve('eta', 'metal-Cu-eta'), k = curve('k', 'metal-Cu-k');
     if (p.eta?.type === 'rgb' || p.k?.type === 'rgb') warn(entity, 'RGB optical constants use wavelength interpolation', 'spectrum');
     if (!p.reflectance && eta && k) {
-      const colors = conductor(eta, k); result.color.setRGB(...colors.base as [number, number, number]); open.specularColor = colors.edge;
+      const colors = conductor(eta, k); result.color.setRGB(...colors.base as [number, number, number]); open.specularColor = metalTint(colors.base, colors.edge);
+      if (colors.edge.some((v, i) => v > colors.base[i] + (1 - colors.base[i]) * Math.pow(6/7,5) + 1e-6)) warn(entity, 'Metal edge color limited to the OpenPBR tint range', 'spectrum');
+    } else if (p.reflectance) {
+      const base = textures.average(color).map(v => Math.min(.999999, Math.max(0, v)));
+      const edge = base.map(v => conductorFresnel(1, 2 * Math.sqrt(v / Math.max(1e-9, 1 - v)), 1 / 7));
+      open.specularColor = metalTint(base, edge);
+      if (color.map) warn(entity, 'Textured conductor reflectance uses a constant mean edge tint', 'material');
     } else if (p.eta || p.k) warn(entity, 'Numeric eta/k approximated by RGB reflectance', 'spectrum');
   }
   const remap = first(p, 'remaproughness', true) !== false;
@@ -70,7 +76,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
       const map = value.map.clone(), data = new Float32Array(value.map.image.data as Float32Array);
       for (let i = 0; i < data.length; i++) if (i % 4 < 3) data[i] = roughness(data[i], remap);
       map.source = new THREE.Source({ ...value.map.image, data }); map.needsUpdate = true; result.roughnessMap = map;
-      result.roughness = 1; open.specularRoughness = 1;
+      result.roughness = roughness(value.color[0], remap); open.specularRoughness = result.roughness;
     } else { result.roughness = roughness(value.color[0], remap); open.specularRoughness = result.roughness; }
   } else if (p.uroughness?.type === 'texture' || p.vroughness?.type === 'texture') {
     result.roughness = .5; open.specularRoughness = .5;
@@ -84,6 +90,13 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     open.specularWeight = 1; open.subsurfaceAnisotropy = preset ? 0 : scalar(p, 'g', 0);
     open.subsurfaceWeight = 1; open.subsurfaceColor = s.color.map((v, i) => v / Math.max(1e-6, v + a.color[i]));
     open.subsurfaceRadius = 1 / Math.max(1e-6, (a.color.reduce((x, y) => x + y) + s.color.reduce((x, y) => x + y)) / 3 * scalar(p, 'scale', 1));
+    if (p.reflectance) {
+      open.subsurfaceColor = textures.average(color);
+      const mfp = await textures.value(p, 'mfp', [1, 1, 1], entity);
+      const radii = mfp.color.map(v => v / Math.max(1e-9, scalar(p, 'scale', 1)));
+      const maximum = Math.max(...radii); open.subsurfaceRadius = maximum; open.subsurfaceRadiusScale = radii.map(v => maximum > 0 ? v / maximum : 0);
+      if (color.map) warn(entity, 'Subsurface reflectance map approximated by its mean color', 'material');
+    }
     if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
   if (type === 'diffusetransmission') { open.thinWalled = true; open.transmissionWeight = .5; }
@@ -97,7 +110,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const parameters = shape.params.displacement ? shape.params : p;
     const value = await textures.value(parameters, 'displacement', [0, 0, 0], entity);
     if (value.map) {
-      result.displacementMap = textures.heightMap(value.map, entity); result.displacementScale = 1;
+      result.displacementMap = textures.heightMap(value.map, entity); result.displacementScale = value.color[0];
       warn(entity, 'PBRT bump/displacement approximated by MuTracer height-field displacement', 'displacement');
       result.userData.pbrtComparable = false;
     }

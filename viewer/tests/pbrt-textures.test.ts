@@ -14,6 +14,11 @@ describe('PBRT image and texture parameter semantics', () => {
     expect((await textures.value(owner.params,'reflectance',[0,0,0],owner)).color).toEqual([.1,.2,.3]);
     expect((await textures.value(owner.params,'roughness',[0,0,0],owner)).color).toEqual([.7,.7,.7]);
   });
+  it('keeps byte RGB precision and factors scale without copying pixels', async () => {
+    const { textures, owner } = await setup('WorldBegin Texture "base" "spectrum" "imagemap" "string filename" "x.png" Texture "scaled" "spectrum" "scale" "texture tex" "base" "float scale" .25 Material "diffuse" "texture reflectance" "base" "texture secondary" "scaled" Shape "sphere"', async()=>({width:1,height:1,data:new Uint8Array([128,64,32,255])}));
+    const base = await textures.value(owner.params,'reflectance',[0,0,0],owner), scaled = await textures.value(owner.params,'secondary',[0,0,0],owner);
+    expect(base.map!.image.data).toBeInstanceOf(Uint8Array); expect(base.map!.colorSpace).toBe(THREE.SRGBColorSpace); expect(Array.from(base.map!.image.data)).toEqual([128,64,32,255]); expect(scaled.map).toBe(base.map); expect(scaled.color).toEqual([.25,.25,.25]);
+  });
   it('scales before invert and uses the pinned default encoding for JPEG', async () => {
     const { textures, owner } = await setup('WorldBegin Texture "t" "spectrum" "imagemap" "string filename" "x.jpg" "float scale" 2 "bool invert" true Material "diffuse" "texture reflectance" "t" Shape "sphere"');
     const map = (await textures.value(owner.params,'reflectance',[0,0,0],owner)).map!;

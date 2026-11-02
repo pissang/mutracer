@@ -29,16 +29,18 @@ export function glass(curve: number[]): { ior: number; abbe: number } {
   const ior = sample(curve, 587.56), dispersion = sample(curve, 486.13) - sample(curve, 656.27);
   return { ior, abbe: dispersion > 0 ? (ior - 1) / dispersion : Infinity };
 }
+export function conductorFresnel(e: number, extinction: number, cosine: number): number {
+  const c2 = cosine * cosine, s2 = 1 - c2, t0 = e * e - extinction * extinction - s2;
+  const a2b2 = Math.sqrt(t0 * t0 + 4 * e * e * extinction * extinction), a = Math.sqrt((a2b2 + t0) / 2), t1 = a2b2 + c2, t2 = 2 * cosine * a;
+  const rs = (t1 - t2) / (t1 + t2), t3 = c2 * a2b2 + s2 * s2, t4 = t2 * s2;
+  return .5 * rs * (1 + (t3 - t4) / (t3 + t4));
+}
+export function metalTint(base: number[], edge: number[]): number[] {
+  const schlick = Math.pow(6 / 7, 5);
+  return edge.map((v, i) => Math.max(0, Math.min(1, v / (base[i] + (1 - base[i]) * schlick))));
+}
 export function conductor(eta: number[], k: number[]): { base: number[]; edge: number[] } {
-  const fresnel = (w: number, cosine: number) => {
-    const e = sample(eta, w), extinction = sample(k, w), c2 = cosine * cosine, s2 = 1 - c2;
-    const t0 = e * e - extinction * extinction - s2;
-    const a2b2 = Math.sqrt(t0 * t0 + 4 * e * e * extinction * extinction);
-    const a = Math.sqrt((a2b2 + t0) / 2), t1 = a2b2 + c2, t2 = 2 * cosine * a;
-    const rs = (t1 - t2) / (t1 + t2), t3 = c2 * a2b2 + s2 * s2, t4 = t2 * s2;
-    return .5 * rs * (1 + (t3 - t4) / (t3 + t4));
-  };
-  return { base: spectralRGB(w => fresnel(w, 1), true), edge: spectralRGB(w => fresnel(w, 1 / 7), true) };
+  return { base: spectralRGB(w => conductorFresnel(sample(eta, w), sample(k, w), 1), true), edge: spectralRGB(w => conductorFresnel(sample(eta, w), sample(k, w), 1 / 7), true) };
 }
 /** PBRT-v4 alpha=sqrt(r) when remapped; OpenPBR alpha=r². */
 export function roughness(value: number, remap = true): number { return Math.pow(Math.max(0, value), remap ? .25 : .5); }

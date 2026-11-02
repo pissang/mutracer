@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildScene } from '../../tools/pbrt/scene';
 import { convert } from '../../tools/pbrt/convert';
-import { conductor, glass, namedSpectrum, roughness, verticalFov } from '../../tools/pbrt/spectrum';
+import { conductor, conductorFresnel, metalTint, glass, namedSpectrum, roughness, verticalFov } from '../../tools/pbrt/spectrum';
 import { parsePLY } from '../../tools/pbrt/geometry';
 const load = async (text: string) => {
   const resolver = { async read() { return new TextEncoder().encode(text).buffer; } };
@@ -31,6 +31,11 @@ describe('PBRT conversion semantics', () => {
     const { root } = await load('WorldBegin Texture "t" "spectrum" "checkerboard" Material "diffuse" "texture reflectance" "t" Shape "trianglemesh" "point3 P" [0 0 0 1 0 0 1 1 0 0 1 0] "integer indices" [0 1 2 0 2 3]');
     const mesh = root.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh;
     expect(mesh.geometry.attributes.position.count).toBe(6); expect(Array.from(mesh.geometry.attributes.uv.array)).toEqual([0,0,1,0,1,1,0,0,1,0,1,1]);
+  });
+  it('converts physical edge reflectance to the OpenPBR F82 tint', () => {
+    const base = [.7,.5,.1], edge = [.8,.7,.4], tint = metalTint(base,edge);
+    tint.forEach((v,i)=>expect(v*(base[i]+(1-base[i])*Math.pow(6/7,5))).toBeCloseTo(edge[i],12));
+    expect(conductorFresnel(1,2*Math.sqrt(.7/.3),1)).toBeCloseTo(.7,12);
   });
   it('maps named glass dispersion and conductor normal/edge Fresnel', () => {
     const bk7 = glass(namedSpectrum('glass-BK7')!); expect(bk7.ior).toBeCloseTo(1.5168, 3); expect(bk7.abbe).toBeGreaterThan(60); expect(bk7.abbe).toBeLessThan(66);
