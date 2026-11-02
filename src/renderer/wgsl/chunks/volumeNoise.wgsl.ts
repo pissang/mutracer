@@ -1,3 +1,4 @@
+import {VOLUME_WARP_OCTAVES} from '../../volumeNoise.js';
 // PCG3D uses the LCG and integer mixing operations of our rand.wgsl chunk.
 // The gradient and interpolation below are local, texture-free definitions.
 export const volumeNoiseWgsl = /* wgsl */ `
@@ -40,7 +41,23 @@ fn volumeFbm(position: vec3f, octaves: i32) -> f32 {
   }
   return clamp(0.5 + 0.5 * sum / weight, 0.0, 1.0);
 }
-fn volumeNoiseMask(p: vec3f, sizeOctaves: vec4f, offsetCoverage: vec4f, softness: f32) -> f32 {
+fn volumeWarpPosition(q: vec3f, warp: f32) -> vec3f {
+  let w = 2.0 * vec3f(
+    volumeFbm(q + vec3f(17.25, 3.5, 29.75), ${VOLUME_WARP_OCTAVES}),
+    volumeFbm(q + vec3f(41.5, 59.25, 7.125), ${VOLUME_WARP_OCTAVES}),
+    volumeFbm(q + vec3f(73.75, 11.125, 97.5), ${VOLUME_WARP_OCTAVES})) - vec3f(1.0);
+  return q + warp * w;
+}
+fn volumeNoiseThreshold(f: f32, coverage: f32, softness: f32) -> f32 {
+  let center = 1.0 - coverage;
+  if (softness <= 0.0) { return select(0.0, 1.0, f >= center); }
+  return smoothstep(center - softness * 0.5, center + softness * 0.5, f);
+}
+fn volumeNoiseMask(p: vec3f, sizeOctaves: vec4f, offsetCoverage: vec4f, softness: f32, warp: f32) -> f32 {
+  if (warp > 0.0) {
+    let q = volumeWarpPosition((p + offsetCoverage.xyz) / sizeOctaves.xyz, warp);
+    return volumeNoiseThreshold(volumeFbm(q, i32(sizeOctaves.w)), offsetCoverage.w, softness);
+  }
   let f = volumeFbm((p + offsetCoverage.xyz) / sizeOctaves.xyz, i32(sizeOctaves.w));
   let center = 1.0 - offsetCoverage.w;
   if (softness <= 0.0) { return select(0.0, 1.0, f >= center); }

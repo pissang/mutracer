@@ -30,8 +30,9 @@ export function packVolumes(volumes: readonly SceneVolume[] = []): PackedVolumes
           !Number.isInteger(noise.octaves === undefined ? 4 : noise.octaves) || (noise.octaves === undefined ? 4 : noise.octaves) < 1 || (noise.octaves === undefined ? 4 : noise.octaves) > 6 ||
           !unit(noise.coverage === undefined ? .5 : noise.coverage) ||
           !unit(noise.softness === undefined ? .3 : noise.softness) ||
+          (noise.warp !== undefined && (!finite(noise.warp) || noise.warp < 0)) ||
           (noise.offset !== undefined && (!noise.offset || noise.offset.length !== 3 || !Array.from(noise.offset).every(finite)))) {
-        throw new RangeError('Invalid volume noise size, octaves, coverage, softness or offset.');
+        throw new RangeError('Invalid volume noise size, octaves, coverage, softness, warp or offset.');
       }
     }
     const m = f.transform === undefined ? create() : f.transform;
@@ -53,7 +54,7 @@ export function packVolumes(volumes: readonly SceneVolume[] = []): PackedVolumes
     data.set([f.density, k, f.baseHeight ?? normalized[13] - extentY, +(f.shape === 'ellipsoid')], offset + 20);
     data.set([...(noise?.size ?? [1, 1, 1]), noise?.octaves ?? 4], offset + 24);
     data.set([...(noise?.offset ?? [0, 0, 0]), noise?.coverage ?? .5], offset + 28);
-    data.set([noise?.softness ?? .3, edgeFade, +(noise !== undefined), 0], offset + 32);
+    data.set([noise?.softness ?? .3, edgeFade, +(noise !== undefined), noise?.warp ?? 0], offset + 32);
     if (!Array.from(data.subarray(offset, offset + VOLUME_FLOATS)).every(Number.isFinite)) throw new RangeError('Volume values exceed GPU float32 range.');
   }
   return {count: volumes.length, hasNoise: volumes.some(v => v.noise !== undefined || (v.edgeFade ?? 0) > 0), data};

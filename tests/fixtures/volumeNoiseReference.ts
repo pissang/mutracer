@@ -19,9 +19,18 @@ export function volumeFbm(p: readonly number[],octaves=4) {
   for(let i=0;i<octaves;i++){sum+=amplitude*gradientNoise(p.map(x=>x*2**i));weight+=amplitude;amplitude*=.5;}
   return Math.max(0,Math.min(1,.5+.5*sum/weight));
 }
-export function noiseMask(p: readonly number[],size: readonly number[],offset: readonly number[]=[0,0,0],coverage=.5,softness=.3,octaves=4){
-  const f=volumeFbm(p.map((x,i)=>(x+offset[i])/size[i]),octaves),c=1-coverage;
+export function noiseMask(p: readonly number[],size: readonly number[],offset: readonly number[]=[0,0,0],coverage=.5,softness=.3,octaves=4,warp=0){
+  const original=p.map((x,i)=>(x+offset[i])/size[i]);
+  const q=warp>0?warpPosition(original,warp):original;
+  const f=volumeFbm(q,octaves),c=1-coverage;
   if(softness<=0)return +(f>=c);
   const t=Math.max(0,Math.min(1,(f-(c-softness/2))/softness));return t*t*(3-2*t);
 }
 export const noiseVectors = [[0,0,0],[.25,.5,.75],[-.25,-2.5,3.75],[1.125,-.875,.0625],[31.5,16.25,-63.75],[1000.125,-200.5,.25]];
+
+// Coordinates are rounded at the same world-to-noise and domain-offset steps as the GPU.
+export function warpPosition(position: readonly number[], warp: number, layers=2) {
+  const q=position.map(Math.fround);
+  const shifts=[[17.25,3.5,29.75],[41.5,59.25,7.125],[73.75,11.125,97.5]];
+  return q.map((v,i)=>Math.fround(v+warp*Math.fround(2*volumeFbm(q.map((x,j)=>Math.fround(x+shifts[i][j])),layers)-1)));
+}

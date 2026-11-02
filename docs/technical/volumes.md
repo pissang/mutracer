@@ -80,3 +80,24 @@ a ratio cap returns current transmittance. These truncations bias transmission
 upward when reached. Expected work is controlled by majorant optical thickness,
 including in regions where the actual mask is nearly empty. GPU evidence must
 measure the cap rate before approving an intended scene/parameter range.
+
+
+## Domain distortion
+
+`noiseParams.w` stores `warp`; neither the record stride nor the variant key changes.
+For positive warp, three signed, normalized two-octave fBm evaluations offset the
+normalized coordinate `q = (p + offset) / size`. Their fixed coordinate shifts are
+`[17.25, 3.5, 29.75]`, `[41.5, 59.25, 7.125]` and `[73.75, 11.125, 97.5]`.
+The final lookup is `fBm(q + warp * w)`. Offset is applied before both fields, so
+the entire pattern drifts together. Shape and exponential height are not warped.
+
+The distortion layers are fixed at two independently of the main octave count.
+At four main octaves this adds six fractal layers per noise lookup; the measured
+whole-render throughput loss stayed below 30% in completed measurements, so the
+one-layer fallback was not needed. At zero warp, execution returns through the original
+mask body and performs no distortion lookup.
+
+Thresholding, local edge fading and the final [0,1] clamp are unchanged. Distortion
+only changes where the noise is evaluated, so height density remains a valid
+majorant; delta/ratio tracking and their unbiasedness before finite-loop truncation
+do not change. No stochastic density estimate enters RIS candidate construction.

@@ -6,7 +6,7 @@ fn volumeModulated(volume: VolumeRecord) -> bool {
 fn volumeDensityMask(p: vec3f, volume: VolumeRecord) -> f32 {
   var mask = 1.0;
   if (volume.noiseParams.z > 0.5) {
-    mask = volumeNoiseMask(p, volume.noiseSizeOctaves, volume.noiseOffsetCoverage, volume.noiseParams.x);
+    mask = volumeNoiseMask(p, volume.noiseSizeOctaves, volume.noiseOffsetCoverage, volume.noiseParams.x, volume.noiseParams.w);
   }
   if (volume.noiseParams.y > 0.0) {
     let local = (volume.worldToLocal * vec4f(p, 1.0)).xyz;

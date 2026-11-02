@@ -23,7 +23,7 @@ warm.position = [-2.5, 4, -2]; warm.lookAt([.8, 0, 1]);
 const cool = new SpotLight({color: [.35, .6, 1], intensity: 120, radius: .06, innerAngle: 15, outerAngle: 25});
 cool.position = [2.7, 3.5, -2]; cool.lookAt([-.8, 0, 1]);
 const volumes: SceneVolume[] = [
-  {density: .18, bounds: {min: [-6, 0, -5], max: [6, 5, 5]}, heightFalloff: .65, anisotropy: .35, noise: {size: [3, .7, 3], coverage: .6, offset: [0, 0, 0]}, edgeFade: .2},
+  {density: .18, bounds: {min: [-6, 0, -5], max: [6, 5, 5]}, heightFalloff: .65, anisotropy: .35, noise: {size: [3, .7, 3], coverage: .5, softness: .18, warp: 1, offset: [0, 0, 0]}, edgeFade: .2},
   {density: .35, bounds: {min: [-1, -1, -1], max: [1, 1, 1]}, shape: 'ellipsoid',
     transform: [1.5, 0, 0, 0, 0, .45, 0, 0, 0, 0, .85, 0, 1.5, .6, 1.2, 1], color: [.7, .85, 1], noise: {size: [1.4, .7, 1.4]}, edgeFade: .4}
 ];
@@ -38,6 +38,9 @@ document.querySelector<HTMLInputElement>('#volumes')!.onchange = event => {
 };
 document.querySelector<HTMLInputElement>('#density')!.oninput = event => {
   volumes[0].density = Number((event.target as HTMLInputElement).value);
+};
+document.querySelector<HTMLInputElement>('#warp')!.oninput = event => {
+  volumes[0].noise!.warp = Number((event.target as HTMLInputElement).value);
 };
 function resize() {
   engine.display.setSize(canvas.clientWidth, canvas.clientHeight);

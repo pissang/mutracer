@@ -6,7 +6,7 @@ bool volumeModulated(int index) {
 float volumeDensityMask(vec3 p, int index) {
   float mask = 1.0;
   if (volumeNoiseParams[index].z > 0.5) {
-    mask = volumeNoiseMask(p, volumeNoiseSizeOctaves[index], volumeNoiseOffsetCoverage[index], volumeNoiseParams[index].x);
+    mask = volumeNoiseMask(p, volumeNoiseSizeOctaves[index], volumeNoiseOffsetCoverage[index], volumeNoiseParams[index].x, volumeNoiseParams[index].w);
   }
   if (volumeNoiseParams[index].y > 0.0) {
     vec3 local = (volumeWorldToLocal[index] * vec4(p, 1.0)).xyz;

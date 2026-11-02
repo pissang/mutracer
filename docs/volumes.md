@@ -35,7 +35,9 @@ while the density pattern stays in place. Use `noise.size` to stretch the patter
 for example `[8, 1.5, 8]` for layered ground fog. Move `noise.offset` to make it drift.
 Each edit resets accumulation, so drifting noise is best rendered as offline frames;
 a continuously animated preview remains noisy. `edgeFade` softens the boundary
-and can be used without noise.
+and can be used without noise. Set `noise.warp` around 0.5–1 for curling wisps;
+`warp: 1` reduced throughput by 5–19% in measured four-octave scenes on an Apple
+M4 Max, and cost varies by scene and backend.
 
 Edit parameters, bounds and transforms in place, then call `engine.update()`;
 RenderLoop does this on its next tick. See [scene updates](./updates.md).
