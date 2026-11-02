@@ -10,6 +10,13 @@ async function run(sequenceOffset = 0, prefix = '') {
   const q = new URLSearchParams(location.search), started = performance.now();
   const width = Number(q.get('width')), height = Number(q.get('height')), samples = Number(q.get('spp'));
   const checkpoint = async (stage: string) => save(prefix + 'stage.json', JSON.stringify({ stage, elapsedMs: performance.now() - started }));
+  let lastProgress = 0;
+  const onProgress = (progress: { stage: string; samples: number; targetSamples: number }) => {
+    const now = performance.now();
+    if (now - lastProgress < 1000 && progress.samples !== progress.targetSamples) return;
+    lastProgress = now;
+    void save(prefix + 'progress.json', JSON.stringify({ ...progress, elapsedMs: now - started })).catch(() => {});
+  };
   await checkpoint('parse');
   const baseResolver = urlResolver(); let downloadBytes = 0;
   const resolver = { async read(path: string) { const data = await baseResolver.read(path); downloadBytes += data.byteLength; return data; } };
@@ -45,7 +52,7 @@ async function run(sequenceOffset = 0, prefix = '') {
     const adapter = engine.info;
     const loadedMs = performance.now() - started;
     await checkpoint('render');
-    await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000 });
+    await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000, onProgress });
     const hdr = await render.readPixels('hdr'), ids = await render.readPixels('id');
     await save(prefix + 'mutracer.f32', hdr.data as unknown as BodyInit); await save(prefix + 'ids.u32', ids.data as unknown as BodyInit);
     await save(prefix + 'mutracer.png', await engine.display.toBlob(render));
@@ -54,7 +61,7 @@ async function run(sequenceOffset = 0, prefix = '') {
       await checkpoint('oidn');
       const start = performance.now();
       await render.setDenoiser({ type: 'oidn', model: 'standard', weightsBaseUrl: new URL('/oidn/weights/', location.href).href });
-      await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000 });
+      await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000, onProgress });
       await save(prefix + 'mutracer-oidn.png', await engine.display.toBlob(render)); oidnMs = performance.now() - start;
     }
     return { loadedMs, downloadBytes, oidnMs, peakJSHeapBytes, elapsedMs: performance.now() - started, samples: render.samples, width, height, warnings: parsed.warnings, approximateMaterialIds: [...approximate], errors, adapter, exposure: model.settings.exposure,
