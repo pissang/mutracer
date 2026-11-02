@@ -159,7 +159,7 @@ fn shadeFogVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInteractio
 `;
 
 export function createFogIntegratorWgsl(deterministicPrimaryAlpha: boolean) { return /* wgsl */ `
-fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceFog: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si = initialSi; var ma = initialMa;
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
@@ -176,12 +176,18 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
     if (query) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+      if (event == 0 && si.hit && ma.materialType == STANDARD) {
+        (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
+        (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0);
+        si.albedoSampled = ma.transmissionWeight > 0.5;
+      }
     }
     query = true;
+    let completionBounce = samplingBounce;
     samplingBounce = u32(depth);
     let maximum = fogSegmentMaximum(path, si);
     var winner = -1;
-    if (!skipFog) { winner = sampleFogEvent(&path, &si, maximum, resample); }
+    if (traceFog && !skipFog) { winner = sampleFogEvent(&path, &si, maximum, resample); }
     skipFog = false;
     if (winner >= 0) {
       // A camera fog event establishes an opaque primary path. Surface
@@ -196,6 +202,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
         // branches share that prefix; the front branch must not resample it.
         split = true; coverage = clamp(ma.alpha, 0.0, 1.0);
         primarySi = si; primaryMa = ma;
+        si.albedoSampled = false;
         path.ray.o = si.position + ray.d * (EPS * 0.02);
         first = false; resample = true;
         continue;
@@ -207,7 +214,7 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
         (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
         path.li = vec3f(1.0); path.alpha = 1.0; path.abort = true;
       } else {
-        if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
+        if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { samplingBounce = completionBounce; var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
         if (!path.abort && ((isOpaque && event > rtUniform.bounces) || event >= limit)) { path.abort = true; }
         if (!path.abort) {
           var ignored = false;
@@ -225,7 +232,8 @@ fn integrateFogPath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialM
       if (!split || coverage <= 0.0) { return result; }
       if (front) {
         (*outAux).albedo = mix(backAux.albedo, (*outAux).albedo, coverage);
-        (*outAux).normal = mix(backAux.normal, (*outAux).normal, coverage);
+        let blendedNormal = mix(backAux.normal, (*outAux).normal, coverage);
+        (*outAux).normal = select(vec3f(0.0), normalize(blendedNormal), dot(blendedNormal, blendedNormal) > 1e-12);
         (*outAux).isBlank = backAux.isBlank && (*outAux).isBlank;
         (*outAux).isShadowCatcher = backAux.isShadowCatcher && (*outAux).isShadowCatcher;
         (*outAux).shadowCounts = mix(backAux.shadowCounts, (*outAux).shadowCounts, coverage);
@@ -244,15 +252,24 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   intersectScene(ray, &si, 0, false, false);
   getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   if (si.hit && HAS_BEVEL && rtUniform.bevel != 0 && ma.bevel > 0.0) { si.normal = getBevelNormal(si, ma.bevel); }
-  if (si.hit) {
+  if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
     (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
+    (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0);
+    si.albedoSampled = ma.transmissionWeight > 0.5;
+  }
+  if (si.hit && ma.materialType == SHADOW_CATCHER) {
+    (*outAux).albedo = vec3f(1.0);
     (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
+    si.albedoSampled = true;
   }
   var maximum = INF;
   if (si.hit) { maximum = distance(si.position, ray.o); }
-  fogGuides(ray, maximum, outAux);
-  si.albedoSampled = true;
   let originalAux = *outAux;
+  let guideTr = fogTransmittance(ray, maximum);
+  // Rough surfaces/glass already have a stable fallback. Delta and coverage
+  // paths need their ordinary continuation even when fog scatters before it.
+  let replayGuides = guideTr < 1.0 && si.hit && !si.albedoSampled &&
+    (ma.alpha < 1.0 || (ma.specularRoughness <= 0.02 && ma.baseMetalness > 0.98));
   let wavelengthSample = sample1D(CAMERA_WAVELENGTH);
   let rng = s0; let counter = hashedCounter;
   let single = rtUniform.dispersionWavelengths == 1;
@@ -269,13 +286,24 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       wavelengthSi.wavelength = spectrumCameraWavelength(u32(wavelengthSi.spectralChannel - 1), select(wavelengthSample, fract(wavelengthSample * 3.0), single));
       wavelengthMa.specularIor = sampling_cauchy_ior(wavelengthSi.wavelength, ma.specularIor, ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
     }
-    let result = integrateFogPath(uv, ray, wavelengthSi, wavelengthMa, &aux);
+    let result = integrateFogPath(uv, ray, wavelengthSi, wavelengthMa, true, &aux);
+    if (guideTr < 1.0) {
+      if (replayGuides) {
+        let endRng = s0; let endCounter = hashedCounter;
+        s0 = rng; hashedCounter = counter; samplingBounce = 0u;
+        var guideAux = originalAux;
+        let ignored = integrateFogPath(uv, ray, wavelengthSi, wavelengthMa, false, &guideAux);
+        aux.albedo = guideAux.albedo; aux.normal = guideAux.normal;
+        s0 = endRng; hashedCounter = endCounter;
+      } else { aux.albedo = originalAux.albedo; aux.normal = originalAux.normal; }
+    }
     color += result.rgb * select(1.0, 3.0, SPECTRAL && single && dispersive);
     alpha = max(alpha, result.a); guides += aux.albedo; normals += aux.normal; allBlank = allBlank && aux.isBlank;
     (*outAux).isShadowCatcher = aux.isShadowCatcher; (*outAux).shadowCounts = aux.shadowCounts;
   }
   (*outAux).albedo = guides / f32(count); (*outAux).normal = normals / f32(count);
-  (*outAux).isBlank = allBlank && fogTransmittance(ray, maximum) >= 1.0;
+  (*outAux).isBlank = allBlank;
+  fogGuides(ray, maximum, outAux);
   return vec4f(color, alpha);
 }
 `;

@@ -38,10 +38,12 @@ negative values favor backward scattering. Height falloff reduces density
 exponentially above `baseHeight`, along world +Y, even for rotated volumes.
 Density increases below that height.
 
-Each segment and direct-light candidate visits every volume. Cost grows with
-volume count; the limit is `MAX_FOG_VOLUMES` (8). Dense, bright fog needs more
-samples and a larger `bounces` budget. Fog events consume that budget; insufficient
-depth makes multiple scattering too dark.
+Cost grows with volume count; the limit is `MAX_FOG_VOLUMES` (8). Dense, bright
+fog needs more samples and a larger `bounces` budget. Fog events consume that
+budget; insufficient depth makes multiple scattering too dark. Glass and alpha
+transparency retain their usual bounce behavior. If fog scatters the camera ray
+before its first surface, the path uses the opaque bounce limit. Stable denoising
+guides add rendering cost for mirrors and alpha-blended surfaces behind fog.
 
 ## Limits
 

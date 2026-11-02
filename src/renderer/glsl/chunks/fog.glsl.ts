@@ -135,7 +135,7 @@ void shadeFogVertex(inout Path path, inout SurfaceInteraction si, int winner, in
   }
 #endif
 }
-vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, bool traceFog, inout RayTraceAuxiliary outAux) {
   Path path; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.scatteringPdf = 0.0; path.scatteringIsDelta = false; path.isNextRefraction = false; path.fogScattered = false;
@@ -151,11 +151,16 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
     if (query) {
       intersectScene(path.ray, si, event != 0);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+      if (event == 0 && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT)) {
+        outAux.albedo = mat.transmissionWeight > 0.5 ? vec3(1.0) : mat.baseColor;
+        outAux.normal = dot(si.normal, si.position - vec3(viewInv[3])) > 0.0 ? -si.normal : si.normal;
+        si.albedoSampled = mat.transmissionWeight > 0.5;
+      }
     }
-    query = true; samplingBounce = uint(depth);
+    query = true; uint completionBounce = samplingBounce; samplingBounce = uint(depth);
     int winner = -1;
     float maximum = fogSegmentMaximum(path, si);
-    if (!skipFog) winner = sampleFogEvent(path, si, maximum, resample);
+    if (traceFog && !skipFog) winner = sampleFogEvent(path, si, maximum, resample);
     skipFog = false;
     if (winner >= 0) {
       // Match the surface event budget; camera fog establishes opacity.
@@ -166,10 +171,11 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
     } else {
       if (first && path.fromEye && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT) && mat.alpha < 1.0) {
         split = true; coverage = clamp(mat.alpha, 0.0, 1.0); primarySi = si; primaryMat = mat;
+        si.albedoSampled = false;
         path.ray.o = si.position + ray.d * (EPS * 0.02); first = false; resample = true; continue;
       }
       first = false;
-      if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, resample); }
+      if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { samplingBounce = completionBounce; int completionDepth = depth; completeFogVertex(path, completionDepth, si, mat, resample); }
       if (!path.abort && ((isOpaque && event > bounceLimit) || event >= limit)) path.abort = true;
       if (!path.abort) {
         si.fogResample = false;
@@ -184,7 +190,8 @@ vec4 integrateFogPath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
       if (!split || coverage <= 0.0) return result;
       if (front) {
         outAux.albedo = mix(backAux.albedo, outAux.albedo, coverage);
-        outAux.normal = mix(backAux.normal, outAux.normal, coverage);
+        vec3 blendedNormal = mix(backAux.normal, outAux.normal, coverage);
+        outAux.normal = dot(blendedNormal, blendedNormal) > 1e-12 ? normalize(blendedNormal) : vec3(0.0);
         outAux.isBlank = backAux.isBlank && outAux.isBlank;
         outAux.isShadowCatcher = backAux.isShadowCatcher && outAux.isShadowCatcher;
         return mix(back, result, coverage);

@@ -39,8 +39,18 @@ export async function captureFogCombination(backend: 'webgpu' | 'webgl', name: s
     scene.lights = []; scene.background = [.5, .5, .5, 1]; fog.color = [1, 1, 1]; fog.anisotropy = .8;
   }
   if (withoutFog) scene.fog = [];
+  if (name === 'glass-alpha-budget') {
+    scene.lights = [new AmbientLight({intensity: .5})];
+    const glass = new OpenPBRMaterial({transmissionWeight: 1, specularIor: 1, specularRoughness: 0});
+    for (let i = 0; i < 10; i++) {
+      const sphere = new Mesh(createSphereGeometry(16, 8), glass); sphere.position = [0, 0, 3 - i * 2.5];
+      scene.meshes.push(sphere);
+    }
+    sheet(new OpenPBRMaterial({transmissionWeight: 1, specularIor: 1, specularRoughness: 0,
+      thinWalled: true, alphaMode: 'blend', opacity: .35}), 4.5);
+  }
   engine.scene = scene; engine.update();
-  const render = new Render(engine, {width: 24, height: 24, bounces: 20, maxSamples: 2048,
+  const render = new Render(engine, {width: 24, height: 24, bounces: name === 'glass-alpha-budget' ? 7 : 20, maxSamples: 2048,
     bevel: name === 'bevel', clamping: 0, samplingPattern: 'sobol', alphaBlendStrategy: name === 'alpha-stochastic' ? 'stochastic' : 'deterministic-source-over', caustics: {lightTracing: true, photonMapping: true}});
   const errors: string[] = []; engine.on('error', event => errors.push(event.message));
   try {
@@ -53,7 +63,7 @@ export async function captureFogCombination(backend: 'webgpu' | 'webgl', name: s
 }
 (window as any).captureFogCombination = captureFogCombination;
 
-/** Camera-visible analytic lights must not change the camera segment. */
+/** Compare fog transport and guides against the ordinary surface integrator. */
 export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: string, control = false) {
   const canvas = document.createElement('canvas'); document.body.append(canvas);
   const engine = new Engine({canvas, backend}); engine.display.setSize(24, 24);
@@ -67,9 +77,9 @@ export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: str
     scene.meshes.push(mesh);
   };
   scene.lights.push(new SphereLight({radius: .5}));
-  if (name === 'analytic-alpha') sheet(new OpenPBRMaterial({unlit: true,
+  if (name === 'analytic-alpha' || name === 'analytic-alpha-in-fog') sheet(new OpenPBRMaterial({unlit: true,
     emissionColor: [.1, .1, .1], emissionLuminance: 1, alphaMode: 'blend', opacity: .35}), 2);
-  if (name === 'analytic-in-fog') {
+  if (name === 'analytic-in-fog' || name === 'analytic-alpha-in-fog') {
     fog.bounds = {min: [-2, -2, -2], max: [2, 2, 2]}; fog.color = [0, 0, 0];
     scene.fog = [fog]; if (control) scene.lights = [];
     sheet(new OpenPBRMaterial({unlit: true, emissionColor: [.5, .5, .5], emissionLuminance: 1}), -3);
@@ -82,14 +92,38 @@ export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: str
       sphere.position = [0, 0, z]; scene.meshes.push(sphere);
     }
   }
+  if (name.startsWith('mirror')) {
+    scene.lights = [new AmbientLight({intensity: .5})];
+    scene.meshes.push(new Mesh(createSphereGeometry(64, 32), new OpenPBRMaterial({baseMetalness: 1, specularRoughness: 0})));
+    sheet(new OpenPBRMaterial({baseColor: [.1, .8, .1], doubleSided: true}), 6);
+    if (name.includes('alpha')) sheet(new OpenPBRMaterial({baseColor: [.8, .3, .1],
+      alphaMode: 'blend', opacity: .35, specularWeight: 0}), 2);
+    if (name.includes('spectral')) {
+      const glass = new Mesh(createSphereGeometry(8, 4), new OpenPBRMaterial({transmissionWeight: 1, transmissionDispersionScale: 1}));
+      glass.position = [10, 0, 0]; scene.meshes.push(glass);
+    }
+    if (name.endsWith('-fog')) {
+      fog.bounds = {min: [-2, -2, 3], max: [2, 2, 4]}; fog.color = [.2, .4, .6];
+    }
+  }
+  if (name === 'glass-alpha-budget') {
+    scene.lights = [new AmbientLight({intensity: .5})];
+    const glass = new OpenPBRMaterial({transmissionWeight: 1, specularIor: 1, specularRoughness: 0});
+    for (let i = 0; i < 10; i++) {
+      const sphere = new Mesh(createSphereGeometry(16, 8), glass); sphere.position = [0, 0, 3 - i * 2.5];
+      scene.meshes.push(sphere);
+    }
+    sheet(new OpenPBRMaterial({transmissionWeight: 1, specularIor: 1, specularRoughness: 0,
+      thinWalled: true, alphaMode: 'blend', opacity: .35}), 4.5);
+  }
   engine.scene = scene; engine.update();
-  const render = new Render(engine, {width: 24, height: 24, bounces: 2, maxSamples: 2048, clamping: 0,
+  const render = new Render(engine, {width: 24, height: 24, bounces: name === 'glass-alpha-budget' ? 7 : 2, maxSamples: 2048, clamping: 0,
     samplingPattern: 'sobol', alphaBlendStrategy: 'deterministic-source-over'});
   const errors: string[] = []; engine.on('error', event => errors.push(event.message));
   try {
     await engine.init(); engine.device?.addEventListener('uncapturederror', event => errors.push((event as GPUUncapturedErrorEvent).error.message));
     await render.converge({samples: 2048, sampleSequenceOffset: 17, timeoutMs: 120000});
-    const images = await Promise.all(['hdr', 'albedo', 'normal'].map(kind => render.readPixels(kind as 'hdr')));
+    const images = await Promise.all((['hdr', 'albedo', 'normal'] as const).map(kind => render.readPixels(kind)));
     if (images.some(image => image.data.some((value: number) => !Number.isFinite(value)))) throw new Error('Nonfinite fog output');
     if (errors.length) throw new Error(errors.join('\n'));
     return {name, errors, pixels: Array.from(images[0].data), albedo: Array.from(images[1].data), normal: Array.from(images[2].data)};
@@ -97,13 +131,33 @@ export async function captureFogInvariant(backend: 'webgpu' | 'webgl', name: str
 }
 
 /** Run in the console on fog.html; rejects on a real GPU regression. */
-export async function checkFogInvariants(backend: 'webgpu' | 'webgl', names = ['analytic-primary', 'analytic-alpha', 'analytic-in-fog', 'glass-pair', 'glass-single']) {
+export async function checkFogInvariants(backend: 'webgpu' | 'webgl', names = [
+  'analytic-primary', 'analytic-alpha', 'analytic-in-fog', 'analytic-alpha-in-fog', 'glass-pair', 'glass-single', 'glass-alpha-budget',
+  'mirror', 'mirror-alpha', 'mirror-spectral', 'mirror-fog', 'mirror-alpha-fog', 'mirror-spectral-fog'
+]) {
   const results = [];
   for (const name of names) {
     const actual = await captureFogInvariant(backend, name), expected = await captureFogInvariant(backend, name, true);
-    const differences = Object.fromEntries((['pixels'] as const).map(kind => [kind,
-      Math.max(...actual[kind].map((value, i) => Math.abs(value - expected[kind][i])))]));
-    if (Object.values(differences).some(value => value > .00025)) throw new Error(`${backend} ${name}: ${JSON.stringify(differences)}`);
+    const tr = name.startsWith('mirror') && name.endsWith('-fog') ? Math.exp(-.5) : 1;
+    const differences = {pixels: 0, albedo: 0, normal: 0};
+    for (let i = 0; i < actual.pixels.length; i++) {
+      const channel = i % 4;
+      if (tr === 1) differences.pixels = Math.max(differences.pixels, Math.abs(actual.pixels[i] - expected.pixels[i]));
+      if (channel === 3) continue;
+      const fogAlbedo = [.2, .4, .6][channel];
+      differences.albedo = Math.max(differences.albedo, Math.abs(actual.albedo[i] - (tr * expected.albedo[i] + (1 - tr) * fogAlbedo)));
+      const pixel = i - channel;
+      const normal = actual.normal[pixel + 3] ? actual.normal[i] * 2 - 1 : 0;
+      let baseNormal = expected.normal[pixel + 3] ? expected.normal[i] * 2 - 1 : 0;
+      const squaredLength = [0, 1, 2].reduce((sum, c) => sum + (expected.normal[pixel + 3] ? (expected.normal[pixel + c] * 2 - 1) ** 2 : 0), 0);
+      // readPixels clears short normals in the normalized public output.
+      if (backend === 'webgl' && tr < 1 && !actual.normal[pixel + 3] && squaredLength * tr * tr <= .105) baseNormal = 0;
+      differences.normal = Math.max(differences.normal, Math.abs(normal - tr * baseNormal));
+    }
+    // Public guides are quantized to eight bits; account for both captures.
+    if (differences.pixels > .00025 || differences.albedo > 1.01 / 255 || differences.normal > 4.01 / 255) {
+      throw new Error(`${backend} ${name}: ${JSON.stringify(differences)}`);
+    }
     results.push({name, differences});
   }
   return results;

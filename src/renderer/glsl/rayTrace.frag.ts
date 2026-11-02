@@ -595,11 +595,29 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
     );
   }
   ${hasFog ? /* glsl */ `float maximum = si.hit ? distance(si.position, ray.o) : INF;
-  fogGuides(ray, maximum, outAux);
-  si.albedoSampled = true;
   si.mediumType = 0; si.mediumAnisotropy = 0.0; si.fogSuppressed = false; si.fogResample = false;
-  vec4 result = integrateFogPath(si, ray, mat, outAux);
-  outAux.isBlank = outAux.isBlank && fogTransmittance(ray, maximum) >= 1.0;
+  if (si.hit && mat.materialType == SHADOW_CATCHER) {
+    outAux.albedo = vec3(1.0); outAux.normal = dot(si.normal, ray.d) > 0.0 ? -si.normal : si.normal;
+    si.albedoSampled = true;
+  }
+  RayTraceAuxiliary originalAux = outAux;
+  uvec4 guideRng = s0; uint guideCounter = hashedCounter;
+  float guideWavelength = pathWavelength; int guideChannel = pathChannel;
+  vec4 result = integrateFogPath(si, ray, mat, true, outAux);
+  if (fogTransmittance(ray, maximum) < 1.0) {
+    if (si.hit && !si.albedoSampled && (mat.alpha < 1.0 || (mat.specularRoughness <= 0.02 && mat.baseMetalness > 0.98))) {
+      uvec4 endRng = s0; uint endCounter = hashedCounter;
+      float endWavelength = pathWavelength; int endChannel = pathChannel;
+      s0 = guideRng; hashedCounter = guideCounter; samplingBounce = 0u;
+      pathWavelength = guideWavelength; pathChannel = guideChannel;
+      RayTraceAuxiliary guideAux = originalAux;
+      vec4 ignored = integrateFogPath(si, ray, mat, false, guideAux);
+      outAux.albedo = guideAux.albedo; outAux.normal = guideAux.normal;
+      s0 = endRng; hashedCounter = endCounter;
+      pathWavelength = endWavelength; pathChannel = endChannel;
+    } else { outAux.albedo = originalAux.albedo; outAux.normal = originalAux.normal; }
+  }
+  fogGuides(ray, maximum, outAux);
   return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
 }
 
