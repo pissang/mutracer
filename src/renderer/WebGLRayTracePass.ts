@@ -88,6 +88,7 @@ import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged 
 import Geometry, { Attribute } from '../scene/Geometry.js';
 import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH.js';
 import { mergeMeshesToGeometry } from './mergeMeshesToGeometry.js';
+import { packVertexAttributes, vertexAttributeDefines, vertexAttributeLayout, type VertexAttributeLayout } from './webglVertexAttributes.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   normalizeBevelSamples
@@ -165,8 +166,9 @@ class WebGLRayTracePass {
   private _dirtyColorMeshes = new Set<Mesh>();
   private _tlas?: FlattendBVH;
   private _bvhData?: Float32Array;
-  private _instancesData?: Float32Array;
-  private _materialIndexData?: Float32Array;
+  private _instancesOffset = 0;
+  private _vertexAttributeData?: Float32Array;
+  private _vertexAttributeLayout?: VertexAttributeLayout;
   private _meshSnapshot: {
     mesh: Mesh;
     instanceCount: number;
@@ -225,17 +227,8 @@ class WebGLRayTracePass {
   private _zLogSPP = 0;
 
   private _positionBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _normalBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _colorBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _tangentBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _uvBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _uv1BufferTex = new WebGLTexture2D(commonNearestFloatProps);
+  private _vertexAttributeTex = new WebGLTexture2D(commonNearestFloatProps);
   private _bvhBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _instancesBufferTex = new WebGLTexture2D(commonNearestFloatProps);
-  private _matIndexBufferTex = new WebGLTexture2D({
-    ...commonNearestFloatProps
-    // type: constants.INT
-  });
 
   private _hasTransmission = false;
   private _hasAlpha = false;
@@ -629,38 +622,16 @@ class WebGLRayTracePass {
     this._needsUpdateMeshMembership = false;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
-    const tlas = buildTLAS(res.instances, res.blases);
-    this._tlas = tlas;
-    const tlasBuffer = new Float32Array(tlas.buffer);
-    const instancesBuffer = this._instancesData = new Float32Array(tlas.instancesBuffer!);
-    const blasBuffer = new Float32Array(concatBLASBuffers(res.blases));
-    const bvhBuffer = this._bvhData = new Float32Array(tlasBuffer.length + blasBuffer.length);
-    const blasOffset = tlasBuffer.length / 4;
-    bvhBuffer.set(tlasBuffer);
-    bvhBuffer.set(blasBuffer, blasOffset * 4);
+    this._tlas = buildTLAS(res.instances, res.blases);
+    this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
 
+    const layout = this._vertexAttributeLayout = vertexAttributeLayout(mergedGeometry);
+    let vertexAttributeColumns = 0;
     if (mergedGeometry.position.array.length > 0) {
       setDataTexture(this._positionBufferTex, mergedGeometry.position.array, 3);
-      setDataTexture(this._normalBufferTex, mergedGeometry.normal.array, 3);
-      mergedGeometry.color &&
-        setDataTexture(this._colorBufferTex, mergedGeometry.color.array, 3);
-      mergedGeometry.tangent &&
-        setDataTexture(this._tangentBufferTex, mergedGeometry.tangent.array, 4);
-      mergedGeometry.uv &&
-        setDataTexture(this._uvBufferTex, mergedGeometry.uv.array, 2);
-      mergedGeometry.uv1 &&
-        setDataTexture(this._uv1BufferTex, mergedGeometry.uv1.array, 2);
-      mergedGeometry.materialIndex &&
-        setDataTexture(
-          this._matIndexBufferTex,
-          // TODO currently int texture doesn't work
-          this._materialIndexData = new Float32Array(mergedGeometry.materialIndex.array),
-          4
-        );
-    }
-    if (bvhBuffer.length > 0) {
-      setDataTexture(this._bvhBufferTex, bvhBuffer, 4);
-      setDataTexture(this._instancesBufferTex, instancesBuffer, 4);
+      this._vertexAttributeData = packVertexAttributes(mergedGeometry, layout,
+        new Float32Array(mergedGeometry.vertexCount * layout.stride * 4));
+      vertexAttributeColumns = setDataTexture(this._vertexAttributeTex, this._vertexAttributeData, 4).columnsLog;
     }
 
     this._materialData?.dispose(this._renderer.gl);
@@ -682,22 +653,13 @@ class WebGLRayTracePass {
     this._tracePasses.forEach((pass) => {
       pass.setUniforms({
         bvhBuffer: this._bvhBufferTex,
-        instancesBuffer: this._instancesBufferTex,
         positionBuffer: this._positionBufferTex,
-        normalBuffer: this._normalBufferTex,
-        tangentBuffer: mergedGeometry.tangent ? this._tangentBufferTex : null,
-        colorBuffer: mergedGeometry.color ? this._colorBufferTex : null,
-        uvBuffer: mergedGeometry.uv ? this._uvBufferTex : null,
-        uv1Buffer: mergedGeometry.uv1 ? this._uv1BufferTex : null,
-        materialIndexBuffer: this._matIndexBufferTex,
+        vertexAttributes: this._vertexAttributeTex,
 
-        bvhColumns: textureDimensionsFromArray(bvhBuffer.length / 4).columnsLog,
         vertexColumns: textureDimensionsFromArray(
           Attribute.getCount(mergedGeometry.position)
         ).columnsLog,
-        instancesColumns: textureDimensionsFromArray(instancesBuffer.length / 4)
-          .columnsLog,
-        blasOffset,
+        vertexAttributeColumns,
 
         isEmptyScene: +(res.instances.length === 0)
       });
@@ -706,8 +668,32 @@ class WebGLRayTracePass {
     this._updateMaterialConstants(materials, materialData, mergedGeometry);
     this._materialChanges.capture(materials);
     this._pendingMaterialUpdate = undefined;
+  }
 
-    return bvhBuffer;
+  // One texture holds the TLAS, the BLASes and then the instance records.
+  private _uploadBVH(blas: Float32Array) {
+    const tlas = this._tlas!, instances = new Float32Array(tlas.instancesBuffer!);
+    const tlasLength = tlas.buffer.byteLength / 4, instancesOffset = tlasLength + blas.length;
+    const data = this._bvhData = new Float32Array(instancesOffset + instances.length);
+    data.set(new Float32Array(tlas.buffer));
+    data.set(blas, tlasLength);
+    data.set(instances, instancesOffset);
+    this._instancesOffset = instancesOffset / 4;
+    if (data.length > 0) setDataTexture(this._bvhBufferTex, data, 4);
+    this._tracePasses.forEach(pass => pass.setUniforms({
+      bvhColumns: textureDimensionsFromArray(data.length / 4).columnsLog,
+      blasOffset: tlasLength / 4,
+      instancesOffset: this._instancesOffset
+    }));
+  }
+
+  private _uploadInstanceRanges(ranges: Iterable<{ offset: number; size: number }>) {
+    const instances = new Uint8Array(this._tlas!.instancesBuffer!), data = this._bvhData!;
+    const base = this._instancesOffset * 16;
+    for (const { offset, size } of ranges) {
+      new Uint8Array(data.buffer).set(instances.subarray(offset, offset + size), base + offset);
+      this._bvhBufferTex.updateDataRange(this._renderer.gl, data, base + offset, size);
+    }
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
@@ -736,6 +722,7 @@ class WebGLRayTracePass {
         STACK_SIZE,
         USE_VERTEX_COLOR: mergedGeometry.color != null,
         USE_TANGENT: mergedGeometry.tangent != null,
+        ...vertexAttributeDefines(vertexAttributeLayout(mergedGeometry)),
         USE_COAT_NORMAL_FRAMES: materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap)),
         HAS_TRANSMISSION: this._hasTransmission,
         HAS_GLTF_ANISOTROPY: materials.some(m => m.specularAnisotropyModel === 'gltf' && m.specularAnisotropy > 0),
@@ -765,20 +752,9 @@ class WebGLRayTracePass {
   private _updateMeshMembership() {
     const res = this._pendingMembershipData!;
     this._preparedMeshData = res;
-    const tlas = this._tlas = buildTLAS(res.instances, res.blases);
-    const blas = new Float32Array(concatBLASBuffers(res.blases));
-    const data = this._bvhData = new Float32Array(tlas.buffer.byteLength / 4 + blas.length);
-    data.set(new Float32Array(tlas.buffer));
-    data.set(blas, tlas.buffer.byteLength / 4);
-    this._instancesData = new Float32Array(tlas.instancesBuffer!);
-    setDataTexture(this._bvhBufferTex, data, 4);
-    setDataTexture(this._instancesBufferTex, this._instancesData, 4);
-    this._tracePasses.forEach(pass => pass.setUniforms({
-      bvhColumns: textureDimensionsFromArray(data.length / 4).columnsLog,
-      instancesColumns: textureDimensionsFromArray(this._instancesData!.length / 4).columnsLog,
-      blasOffset: tlas.buffer.byteLength / 16,
-      isEmptyScene: +(res.instances.length === 0)
-    }));
+    this._tlas = buildTLAS(res.instances, res.blases);
+    this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
+    this._tracePasses.forEach(pass => pass.setUniform('isEmptyScene', +(res.instances.length === 0)));
     this._pendingMembershipData = undefined;
     this._needsUpdateMeshMembership = false;
     this._debugBvhData = undefined;
@@ -787,28 +763,21 @@ class WebGLRayTracePass {
   private _updateGeometryData() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
-    for (const { first, count, topologyChanged, deformationOnly } of update.vertices) {
-      for (const [attribute, texture] of [
-        [res.geometry.position, this._positionBufferTex], [res.geometry.normal, this._normalBufferTex],
-        [res.geometry.tangent, this._tangentBufferTex], [res.geometry.color, this._colorBufferTex],
-        [res.geometry.uv, this._uvBufferTex], [res.geometry.uv1, this._uv1BufferTex]
-      ] as const) if (attribute && (!deformationOnly || attribute === res.geometry.position || attribute === res.geometry.normal || attribute === res.geometry.tangent)) texture.updateDataRange(this._renderer.gl, attribute.array,
-        first * attribute.itemSize * 4, count * attribute.itemSize * 4);
-      if (!topologyChanged) continue;
-      const material = this._materialIndexData!;
-      for (let i = first * 4; i < (first + count) * 4; i++) material[i] = res.geometry.materialIndex!.array[i];
-      this._matIndexBufferTex.updateDataRange(this._renderer.gl, material, first * 16, count * 16);
+    const layout = this._vertexAttributeLayout!, attributes = this._vertexAttributeData!;
+    for (const { first, count } of update.vertices) {
+      const position = res.geometry.position;
+      this._positionBufferTex.updateDataRange(this._renderer.gl, position.array,
+        first * position.itemSize * 4, count * position.itemSize * 4);
+      packVertexAttributes(res.geometry, layout, attributes, first, count);
+      this._vertexAttributeTex.updateDataRange(this._renderer.gl, attributes,
+        first * layout.stride * 16, count * layout.stride * 16);
     }
     for (const mesh of update.meshes) this._dirtyTransformMeshes.add(mesh);
     if (update.relocated) for (const binding of res.instanceBindings) this._dirtyTransformMeshes.add(binding.mesh);
     if (update.resized) {
       res.instances = updateMeshInstanceTransforms(res.instanceBindings);
       refitTLAS(tlas, res.instances, res.blases);
-      const blas = new Float32Array(concatBLASBuffers(res.blases));
-      this._bvhData = new Float32Array(tlas.buffer.byteLength / 4 + blas.length);
-      this._bvhData.set(new Float32Array(tlas.buffer)); this._bvhData.set(blas, tlas.buffer.byteLength / 4);
-      setDataTexture(this._bvhBufferTex, this._bvhData, 4);
-      this._tracePasses.forEach(pass => pass.setUniform('bvhColumns', textureDimensionsFromArray(this._bvhData!.length / 4).columnsLog));
+      this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
     } else {
       const ranges = [];
       for (const { blas, offset } of update.blases) {
@@ -826,7 +795,7 @@ class WebGLRayTracePass {
     if (res && tlas) {
       const dirty = updateMeshInstanceColors(res.instanceBindings, res.instances, this._dirtyColorMeshes);
       const ranges = updateTLASInstanceColors(tlas, res.instances, dirty);
-      for (const {offset, size} of ranges) this._instancesBufferTex.updateDataRange(this._renderer.gl, this._instancesData!, offset, size);
+      this._uploadInstanceRanges(ranges);
     }
     this._dirtyColorMeshes.clear();
   }
@@ -845,7 +814,7 @@ class WebGLRayTracePass {
     const ranges = refitTLAS(tlas, res.instances, res.blases, dirty);
     this._bvhData!.set(new Float32Array(tlas.buffer));
     for (const { offset, size } of ranges.tlasRanges) this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, offset, size);
-    for (const { offset, size } of ranges.instanceRanges) this._instancesBufferTex.updateDataRange(this._renderer.gl, this._instancesData!, offset, size);
+    this._uploadInstanceRanges(ranges.instanceRanges);
     this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
     this._debugBvhData = undefined;
   }
@@ -1216,14 +1185,8 @@ class WebGLRayTracePass {
       this._envMapDistribution,
       this._backgroundTex,
       this._positionBufferTex,
-      this._normalBufferTex,
-      this._colorBufferTex,
-      this._tangentBufferTex,
-      this._uvBufferTex,
-      this._uv1BufferTex,
-      this._bvhBufferTex,
-      this._instancesBufferTex,
-      this._matIndexBufferTex
+      this._vertexAttributeTex,
+      this._bvhBufferTex
     ].forEach((texture) => texture.dispose(gl));
   }
 }
