@@ -22,9 +22,13 @@ export function volumeFbm(p: readonly number[],octaves=4) {
 export function noiseMask(p: readonly number[],size: readonly number[],offset: readonly number[]=[0,0,0],coverage=.5,softness=.3,octaves=4,warp=0){
   const original=p.map((x,i)=>(x+offset[i])/size[i]);
   const q=warp>0?warpPosition(original,warp):original;
-  const f=volumeFbm(q,octaves),c=1-coverage;
-  if(softness<=0)return +(f>=c);
-  const t=Math.max(0,Math.min(1,(f-(c-softness/2))/softness));return t*t*(3-2*t);
+  return volumeNoiseThreshold(volumeFbm(q,octaves),coverage,softness);
+}
+export function volumeNoiseThreshold(f: number, coverage: number, softness: number) {
+  const center=Math.fround(1-Math.fround(coverage)),half=Math.fround(Math.fround(softness)*.5);
+  const low=Math.fround(center-half),high=Math.fround(center+half);
+  if(low>=high)return +(f>=center);
+  const t=Math.max(0,Math.min(1,(f-low)/(high-low)));return t*t*(3-2*t);
 }
 export const noiseVectors = [[0,0,0],[.25,.5,.75],[-.25,-2.5,3.75],[1.125,-.875,.0625],[31.5,16.25,-63.75],[1000.125,-200.5,.25]];
 

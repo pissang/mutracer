@@ -4,8 +4,9 @@ import {gradientNoise, volumeFbm, noiseVectors, noiseMask} from '../fixtures/vol
 
 /** Execute the same fixed vectors in both shader languages and the CPU reference. */
 export async function checkVolumeNoiseValues(backend: 'webgpu' | 'webgl') {
-  const vectors=noiseVectors.flatMap(p=>[1,4,6].flatMap(o=>[0,.5,1,2].map(warp=>({p,o,warp})))), count=vectors.length;
-  const expected=vectors.flatMap(({p,o,warp})=>[gradientNoise(p),volumeFbm(p,o),noiseMask(p,[4,4,4],[.125,.25,-.375],.6,.4,o,warp),1]);
+  const vectors=noiseVectors.flatMap(p=>[1,4,6].flatMap(o=>[0,.5,1,2].map(warp=>({p,o,warp,coverage:.6,softness:.4}))))
+    .concat([[-.125,-.25,.375],...noiseVectors].flatMap(p=>[0,.5,1].map(warp=>({p,o:4,warp,coverage:.5,softness:1e-9})))), count=vectors.length;
+  const expected=vectors.flatMap(({p,o,warp,coverage,softness})=>[gradientNoise(p),volumeFbm(p,o),noiseMask(p,[4,4,4],[.125,.25,-.375],coverage,softness,o,warp),1]);
   let values: Float32Array;
   if(backend==='webgpu') {
     const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw Error('No GPU');
@@ -18,7 +19,9 @@ export async function checkVolumeNoiseValues(backend: 'webgpu' | 'webgl') {
 let p=array<vec3f,${count}>(${vectors.map(v=>`vec3f(${v.p.map(x=>x.toFixed(8)).join(',')})`).join(',')});
 let o=array<i32,${count}>(${vectors.map(v=>v.o).join(',')});
 let warp=array<f32,${count}>(${vectors.map(v=>v.warp.toFixed(1)).join(',')});
-output[id.x]=vec4f(volumeGradientNoise(p[id.x]),volumeFbm(p[id.x],o[id.x]),volumeNoiseMask(p[id.x],vec4f(4,4,4,f32(o[id.x])),vec4f(.125,.25,-.375,.6),.4,warp[id.x]),1);}`;
+let coverage=array<f32,${count}>(${vectors.map(v=>v.coverage).join(',')});
+let softness=array<f32,${count}>(${vectors.map(v=>v.softness).join(',')});
+output[id.x]=vec4f(volumeGradientNoise(p[id.x]),volumeFbm(p[id.x],o[id.x]),volumeNoiseMask(p[id.x],vec4f(4,4,4,f32(o[id.x])),vec4f(.125,.25,-.375,coverage[id.x]),softness[id.x],warp[id.x]),1);}`;
       const module=device.createShaderModule({code});const info=await module.getCompilationInfo();
       if(info.messages.some(m=>m.type==='error'))throw Error(JSON.stringify(info.messages));
       const pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module,entryPoint:'main'}});
@@ -39,7 +42,7 @@ output[id.x]=vec4f(volumeGradientNoise(p[id.x]),volumeFbm(p[id.x],o[id.x]),volum
 precision highp float;precision highp int;out vec4 color;
 ${volumeNoiseGlsl}
 void main(){int i=int(gl_FragCoord.x);vec3 p[${count}]=vec3[](${vectors.map(v=>`vec3(${v.p.map(x=>x.toFixed(8)).join(',')})`).join(',')});
-int o[${count}]=int[](${vectors.map(v=>v.o).join(',')});float warp[${count}]=float[](${vectors.map(v=>v.warp.toFixed(1)).join(',')});color=vec4(volumeGradientNoise(p[i]),volumeFbm(p[i],o[i]),volumeNoiseMask(p[i],vec4(4,4,4,float(o[i])),vec4(.125,.25,-.375,.6),.4,warp[i]),1);}`);
+int o[${count}]=int[](${vectors.map(v=>v.o).join(',')});float warp[${count}]=float[](${vectors.map(v=>v.warp.toFixed(1)).join(',')});float coverage[${count}]=float[](${vectors.map(v=>v.coverage).join(',')});float softness[${count}]=float[](${vectors.map(v=>v.softness).join(',')});color=vec4(volumeGradientNoise(p[i]),volumeFbm(p[i],o[i]),volumeNoiseMask(p[i],vec4(4,4,4,float(o[i])),vec4(.125,.25,-.375,coverage[i]),softness[i],warp[i]),1);}`);
     const program=gl.createProgram()!;gl.attachShader(program,vertex);gl.attachShader(program,fragment);gl.linkProgram(program);
     if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program)!);
     const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texStorage2D(gl.TEXTURE_2D,1,gl.RGBA32F,count,1);
@@ -51,6 +54,9 @@ int o[${count}]=int[](${vectors.map(v=>v.o).join(',')});float warp[${count}]=flo
     gl.getExtension('WEBGL_lose_context')?.loseContext();if(error)throw Error('GL error '+error);
   }
   const maxError=Math.max(...values.map((v,i)=>Math.abs(v-expected[i])));
-  if(maxError>8e-7)throw Error(`${backend} noise error ${maxError}`);
+  if(!values.every(Number.isFinite))throw Error(`${backend} non-finite noise value`);
+  for(let i=0;i<count;i++)if(vectors[i].softness===1e-9&&![0,1].includes(values[i*4+2]))throw Error(`${backend} non-binary tiny-softness mask`);
+  // The CPU fBm uses double arithmetic; float32 threshold edges add rounding.
+  if(maxError>1e-6)throw Error(`${backend} noise error ${maxError}`);
   return {backend,maxError,vectors,values:Array.from(values),expected};
 }

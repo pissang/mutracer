@@ -50,8 +50,11 @@ fn volumeWarpPosition(q: vec3f, warp: f32) -> vec3f {
 }
 fn volumeNoiseThreshold(f: f32, coverage: f32, softness: f32) -> f32 {
   let center = 1.0 - coverage;
-  if (softness <= 0.0) { return select(0.0, 1.0, f >= center); }
-  return smoothstep(center - softness * 0.5, center + softness * 0.5, f);
+  let low = center - softness * 0.5;
+  let high = center + softness * 0.5;
+  // Small widths can round both bounds to the same float32 value.
+  if (low >= high) { return select(0.0, 1.0, f >= center); }
+  return smoothstep(low, high, f);
 }
 fn volumeNoiseMask(p: vec3f, sizeOctaves: vec4f, offsetCoverage: vec4f, softness: f32, warp: f32) -> f32 {
   if (warp > 0.0) {
@@ -59,8 +62,6 @@ fn volumeNoiseMask(p: vec3f, sizeOctaves: vec4f, offsetCoverage: vec4f, softness
     return volumeNoiseThreshold(volumeFbm(q, i32(sizeOctaves.w)), offsetCoverage.w, softness);
   }
   let f = volumeFbm((p + offsetCoverage.xyz) / sizeOctaves.xyz, i32(sizeOctaves.w));
-  let center = 1.0 - offsetCoverage.w;
-  if (softness <= 0.0) { return select(0.0, 1.0, f >= center); }
-  return smoothstep(center - softness * 0.5, center + softness * 0.5, f);
+  return volumeNoiseThreshold(f, offsetCoverage.w, softness);
 }
 `;
