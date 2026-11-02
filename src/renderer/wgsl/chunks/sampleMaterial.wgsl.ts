@@ -1,10 +1,12 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false,hasVolumes=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false,hasVolumes=false,hasVolumeNoise=false) {
   return /* wgsl */ `
 
-struct ShadowRayWork {
+struct ShadowRayWork {${hasVolumeNoise ? /* wgsl */ `
+  // Preserve the boundary decision at proposal construction, across continuation.
+  volumeSuppressed: bool,` : ''}
   ray: Ray,
   maxDistance: f32,
   triangleIndex: i32,
@@ -115,9 +117,13 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     lightSample.isDelta
   );
   if (misWeight > 0.0) {
-    let unweightedContribution = Li * f / lightPdf * (*path).beta${hasVolumes ? /* wgsl */ ` * select(1.0, volumeTransmittance(lightRay, visibilityDistance), !(*si).volumeSuppressed || (isSurface && !ma.thinWalled && (ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0) && dot((*si).faceNormal, lightDir) > 0.0))` : ''};
+    ${hasVolumeNoise ? /* wgsl */ `let unweightedContribution = Li * f / lightPdf * (*path).beta;
+    (*shadowWork).volumeSuppressed = (*si).volumeSuppressed && !(isSurface && !ma.thinWalled && (ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0) && dot((*si).faceNormal, lightDir) > 0.0);
+    // Only the closed majorant enters RIS. A positive floor keeps proposal
+    // support when exp(-tau_bar) underflows for a mostly empty dense volume.
+    let targetTr = select(max(volumeTransmittance(lightRay, visibilityDistance), 1e-6), 1.0, (*shadowWork).volumeSuppressed);` : /* wgsl */ `let unweightedContribution = Li * f / lightPdf * (*path).beta${hasVolumes ? /* wgsl */ ` * select(1.0, volumeTransmittance(lightRay, visibilityDistance), !(*si).volumeSuppressed || (isSurface && !ma.thinWalled && (ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0) && dot((*si).faceNormal, lightDir) > 0.0))` : ''};`}
     (*shadowWork).risTarget = max(
-      dot(max(unweightedContribution * lightSelectionPmf, vec3f(0.0)), luminance),
+      dot(max(unweightedContribution * lightSelectionPmf${hasVolumeNoise ? ' * targetTr' : ''}, vec3f(0.0)), luminance),
       0.0
     );
     (*shadowWork).ray = lightRay;
@@ -174,7 +180,7 @@ fn sampleScattering(
         }
       }
       if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
-${caustics?`        var connection=*path;
+${hasVolumeNoise ? /* wgsl */ `        if (!selected.volumeSuppressed) { selected.contribution *= volumeShadowTransmittance(selected.ray, selected.maxDistance); }\n` : ''}${caustics?`        var connection=*path;
         if(isSurface&&isCausticSpecular(ma)){causticAdvance(&connection,ma,dot(ffnormal,selected.ray.d)<0.0,true);}
         connection.beta=vec3f(1.0);causticHotRecord(connection,selected.contribution*candidateUCW,0u);
 `:''}        (*path).li += selected.contribution * candidateUCW;

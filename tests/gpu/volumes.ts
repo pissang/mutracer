@@ -70,6 +70,7 @@ export async function captureVolumeInvariant(backend: 'webgpu' | 'webgl', name: 
   const camera = new Camera({projection: 'orthographic', left: -.75, right: .75, top: .75, bottom: -.75, near: .1, far: 100});
   camera.position = [0, 0, 5]; camera.lookAt([0, 0, 0]); engine.camera = camera;
   const volumes: SceneVolume = {density: .5, bounds: {min: [100, 100, 100], max: [101, 101, 101]}};
+  if (name.endsWith('-noise')) { volumes.noise = {size: [1, 2, 3]}; volumes.edgeFade = .3; name = name.slice(0, -6); }
   const scene: Scene = {meshes: [], lights: [], background: [.5, .5, .5, 1], volumes: control ? [] : [volumes]};
   const sheet = (material: OpenPBRMaterial, z: number) => {
     const mesh = new Mesh(createPlaneGeometry(), material);
@@ -132,7 +133,7 @@ export async function captureVolumeInvariant(backend: 'webgpu' | 'webgl', name: 
 
 /** Run in the console on volumes.html; rejects on a real GPU regression. */
 export async function checkVolumeInvariants(backend: 'webgpu' | 'webgl', names = [
-  'analytic-primary', 'analytic-alpha', 'analytic-in-volumes', 'analytic-alpha-in-volumes', 'glass-pair', 'glass-single', 'glass-alpha-budget',
+  'analytic-primary', 'analytic-primary-noise', 'glass-single-noise', 'mirror-noise', 'analytic-alpha', 'analytic-in-volumes', 'analytic-alpha-in-volumes', 'glass-pair', 'glass-single', 'glass-alpha-budget',
   'mirror', 'mirror-alpha', 'mirror-spectral', 'mirror-volumes', 'mirror-alpha-volumes', 'mirror-spectral-volumes'
 ]) {
   const results = [];

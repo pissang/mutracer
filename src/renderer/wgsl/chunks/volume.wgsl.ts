@@ -1,6 +1,7 @@
+import {volumeTrackingWgsl} from './volumeTracking.wgsl.js';
 import {MAX_PATH_EVENTS} from '../../pathLimits.js';
 // Volume-only source. The no-volumes generator never includes these declarations.
-export const volumeWgsl = /* wgsl */ `
+export function createVolumeWgsl(hasVolumeNoise = false) { return /* wgsl */ `
 fn volumeInterval(ray: Ray, volume: VolumeRecord, maximum: f32) -> vec2f {
   let origin = (volume.worldToLocal * vec4f(ray.o, 1.0)).xyz;
   let direction = (volume.worldToLocal * vec4f(ray.d, 0.0)).xyz;
@@ -83,7 +84,7 @@ fn volumeTransmittance(ray: Ray, maximum: f32) -> f32 {
   }
   return exp(-tau);
 }
-fn volumeGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
+${hasVolumeNoise ? volumeTrackingWgsl + '\n' : ''}fn volumeGuides(ray: Ray, maximum: f32, outAux: ptr<function, RayTraceAuxiliary>) {
   var tau = 0.0; var weight = 0.0; var albedo = vec3f(0.0);
   for (var i = 0; i < rtUniform.volumeCount; i++) {
     let volume = rtUniform.volumeRecords[i];
@@ -117,14 +118,15 @@ fn sampleVolumeEvent(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
   var nearest = maximum; var winner = -1;
   for (var i = 0; i < rtUniform.volumeCount; i++) {
     let volume = rtUniform.volumeRecords[i];
-    let interval = volumeInterval((*path).ray, volume, maximum);
+    let interval = volumeInterval((*path).ray, volume, ${hasVolumeNoise ? 'nearest' : 'maximum'});
     if (interval.y <= interval.x || volume.params.x <= 0.0) { continue; }
     var u = sample1D(bounceDim(BOUNCE_STRIDE - 1u - u32(i)));
     if (resample) { u = hashedSample(0xf091u + u32(i)); }
     // The surface sampler avoids endpoints with an EPS remapping. Free-flight
     // survival needs the full uniform distribution, especially for thin overlaps.
     u = clamp((u - EPS) / (1.0 - 2.0 * EPS), 0.0, 1.0 - 1.0 / 16777216.0);
-    let candidate = volumeDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));
+    ${hasVolumeNoise ? /* wgsl */ `var candidate = volumeDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));
+    if (volumeModulated(volume)) { candidate = volumeDeltaDistance((*path).ray, volume, interval, u, 0xc910u + u32(i) * 256u); }` : 'let candidate = volumeDistance((*path).ray, volume, interval, -log(max(1.0 - u, 1e-7)));'}
     if (candidate < interval.y && candidate < nearest) { nearest = candidate; winner = i; }
   }
   if (winner >= 0) {
@@ -157,8 +159,9 @@ fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
   }
 }
 `;
+}
 
-export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean) { return /* wgsl */ `
+export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false) { return /* wgsl */ `
 fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceVolume: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si = initialSi; var ma = initialMa;
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
@@ -265,7 +268,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   var maximum = INF;
   if (si.hit) { maximum = distance(si.position, ray.o); }
   let originalAux = *outAux;
-  let guideTr = volumeTransmittance(ray, maximum);
+  let guideTr = ${hasVolumeNoise ? 'select(1.0, 0.0, volumeHasDensity(ray, maximum))' : 'volumeTransmittance(ray, maximum)'};
   // Rough surfaces/glass already have a stable fallback. Delta and coverage
   // paths need their ordinary continuation even when volumes scatters before it.
   let replayGuides = guideTr < 1.0 && si.hit && !si.albedoSampled &&
@@ -303,7 +306,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   }
   (*outAux).albedo = guides / f32(count); (*outAux).normal = normals / f32(count);
   (*outAux).isBlank = allBlank;
-  volumeGuides(ray, maximum, outAux);
+  ${hasVolumeNoise ? 'volumeNoiseGuides' : 'volumeGuides'}(ray, maximum, outAux);
   return vec4f(color, alpha);
 }
 `;

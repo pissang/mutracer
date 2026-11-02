@@ -1,7 +1,7 @@
 import {volumeNoiseWgsl} from './chunks/volumeNoise.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
-import {volumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
+import {createVolumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -223,7 +223,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? volumeWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? createVolumeWgsl(hasVolumeNoise) + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes,hasVolumeNoise)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -718,7 +718,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;
