@@ -43,6 +43,7 @@ export function wgpuShaderSource(constants: Record<string, boolean | number>, fe
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     hasVolumes: Boolean(constants.HAS_VOLUMES),
+    hasVolumeNoise: Boolean(constants.HAS_VOLUME_NOISE),
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,

@@ -1,4 +1,5 @@
-import {volumeGlsl, volumePathGlsl} from './chunks/volume.glsl.js';
+import {volumeNoiseGlsl} from './chunks/volumeNoise.glsl.js';
+import {createVolumeGlsl, createVolumePathGlsl} from './chunks/volume.glsl.js';
 import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
@@ -61,22 +62,25 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
   const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
+  const hasVolumeNoise = (options[0] as {hasVolumeNoise?: boolean} | undefined)?.hasVolumeNoise ?? false;
   const research = hasVolumes ? undefined : researchTransport()?.fragment(options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
   const rayTraceCore = createRayTraceCoreGlsl(fragments, hasVolumes);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes, hasVolumeNoise);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
     BOUNCES: 2,
-    ...(hasVolumes ? {HAS_VOLUMES: true} : {})
+    ...(hasVolumes ? {HAS_VOLUMES: true} : {}),
+    ...(hasVolumeNoise ? {HAS_VOLUME_NOISE: true} : {})
   },
   uniforms: {
     ...(hasVolumes ? {volumeCount: Shader.uniform('int'), volumeWorldToLocal: Shader.arrayUniform('mat4', 8), volumeColorAnisotropy: Shader.arrayUniform('vec4', 8), volumeParams: Shader.arrayUniform('vec4', 8)} : {}),
+    ...(hasVolumeNoise ? {volumeNoiseSizeOctaves: Shader.arrayUniform('vec4', 8), volumeNoiseOffsetCoverage: Shader.arrayUniform('vec4', 8), volumeNoiseParams: Shader.arrayUniform('vec4', 8)} : {}),
     emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
     emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
     emissiveWeightTotal: Shader.uniform('float',0),
@@ -122,7 +126,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${hasVolumes ? volumeGlsl + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
+${hasVolumeNoise ? volumeNoiseGlsl + '\n' : ''}${hasVolumes ? createVolumeGlsl(hasVolumeNoise) + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -481,7 +485,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   return dot(result, result) > 1e-12 ? normalize(result) : source.normal;
 }
 
-${hasVolumes ? volumePathGlsl + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+${hasVolumes ? createVolumePathGlsl(hasVolumeNoise) + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
   Path path;
   path.ray = ray;
   path.li = vec3(0);
@@ -604,7 +608,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   uvec4 guideRng = s0; uint guideCounter = hashedCounter;
   float guideWavelength = pathWavelength; int guideChannel = pathChannel;
   vec4 result = integrateVolumePath(si, ray, mat, true, outAux);
-  if (volumeTransmittance(ray, maximum) < 1.0) {
+  if (${hasVolumeNoise ? 'volumeHasDensity(ray, maximum)' : 'volumeTransmittance(ray, maximum) < 1.0'}) {
     if (si.hit && !si.albedoSampled && (mat.alpha < 1.0 || (mat.specularRoughness <= 0.02 && mat.baseMetalness > 0.98))) {
       uvec4 endRng = s0; uint endCounter = hashedCounter;
       float endWavelength = pathWavelength; int endChannel = pathChannel;
@@ -617,7 +621,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
       pathWavelength = endWavelength; pathChannel = endChannel;
     } else { outAux.albedo = originalAux.albedo; outAux.normal = originalAux.normal; }
   }
-  volumeGuides(ray, maximum, outAux);
+  ${hasVolumeNoise ? 'volumeNoiseGuides' : 'volumeGuides'}(ray, maximum, outAux);
   return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
 }
 

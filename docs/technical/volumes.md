@@ -17,9 +17,13 @@ supports arbitrary overlaps without sorting boundary intervals.
 
 Events are sampled after scene intersection and before analytic-light and
 environment hit completion. Analytic emitters also bound the segment. Fog
-vertices clear triangle and instance exclusions before NEE. Shadow candidates
-include `exp(-sum(tau))` before the RIS target is formed. WebGL uses the same
-transmittance in its single-candidate direct-light estimator.
+vertices clear triangle and instance exclusions before NEE. Homogeneous shadow candidates include `exp(-sum(tau))` before the RIS target is
+formed. For heterogeneous records, the RIS target uses closed majorant
+transmittance, floored at 1e-6 to preserve proposal support after float underflow.
+The selected contribution retains its unattenuated value until visibility
+succeeds, then receives the complete ratio/closed transmittance once.
+`ShadowRayWork` stores suppression at proposal construction. WebGL also applies
+transmittance after visibility, with its single-candidate estimator.
 
 The camera free flight precedes deterministic alpha coverage splitting. A
 surviving camera prefix is shared by the front and back branches; it is not
@@ -43,5 +47,65 @@ is disabled while any fog record exists because those estimators have no volume
 transport.
 
 Camera denoising guides blend surface reflectance with weighted fog albedo using
-deterministic segment transmittance, and scale the surface normal by that
-transmittance. Fog paths do not change display composition or denoising order.
+closed transmittance for homogeneous records and one ratio estimate per record
+per sample for heterogeneous records. Surface guides for mirrors and alpha paths
+are replayed independently of camera scattering; the blend happens once, after
+path and wavelength composition. The surface normal is scaled by the resulting
+transmittance. `isBlank` is geometric: any positive-density intersected shape
+makes the camera sample nonblank, irrespective of the random estimate. Volume
+paths do not change display composition or denoising order.
+
+
+## Procedural density tracking
+
+Only `HAS_VOLUME_NOISE` includes PCG3D gradient fBm and the tracking loops. It
+extends a Web record from 24 to 36 floats with three aligned vec4 fields. The
+homogeneous shader/record layout and native no-volume ABI remain unchanged.
+The CPU reserves maximum Web capacity and packs homogeneous records compactly.
+
+The multiplier is the product of world-space noise and local-space boundary
+smoothstep masks, explicitly clamped to [0,1]. The exponential height profile is
+therefore an analytic majorant. Delta tracking repeatedly samples its inverse
+optical depth, using the current nearest event as the interval upper bound.
+The first distance retains its structured sample dimension; rejection and later
+distances use hashed samples with endpoint remapping undone.
+
+Ratio tracking multiplies one minus the mask at majorant events. A value below
+0.05 survives roulette with probability `Tr / 0.05`, with reciprocal weight on
+survival. Unmodulated records retain analytic transmittance. Neither RIS candidate
+construction nor blank classification calls the random estimator.
+
+Both backends use `MAX_VOLUME_TRACKING_STEPS` (64). A delta cap returns no event;
+a ratio cap returns current transmittance. These truncations bias transmission
+upward when reached. Expected work is controlled by majorant optical thickness,
+including in regions where the actual mask is nearly empty. GPU evidence must
+measure the cap rate before approving an intended scene/parameter range.
+
+
+## Domain distortion
+
+`noiseParams.w` stores `warp`; neither the record stride nor the variant key changes.
+For positive warp, three signed, normalized two-octave fBm evaluations offset the
+normalized coordinate `q = (p + offset) / size`. Their fixed coordinate shifts are
+`[17.25, 3.5, 29.75]`, `[41.5, 59.25, 7.125]` and `[73.75, 11.125, 97.5]`.
+The final lookup is `fBm(q + warp * w)`. Offset is applied before both fields, so
+the entire pattern drifts together. Shape and exponential height are not warped.
+
+The distortion layers are fixed at two independently of the main octave count.
+At four main octaves this adds six fractal layers per noise lookup. At zero warp,
+execution performs no distortion lookup.
+
+Thresholding, local edge fading and the final [0,1] clamp are unchanged. Distortion
+only changes where the noise is evaluated, so height density remains a valid
+majorant; delta/ratio tracking and their unbiasedness before finite-loop truncation
+do not change. No stochastic density estimate enters RIS candidate construction.
+
+Warp amplitude is a multiplier of a bounded distortion field, not a full-cell
+displacement. CPU measurements with `size: [6, 0.7, 6]` put the per-axis RMS
+displacement at about `0.20 * size` for `warp: 1`, with a median of `0.14 * size`.
+Warp mostly breaks up density edges: over a sightline of length 1, the integrated
+density gradient at `warp: 4` was about 2.8 times that at zero warp. It does not
+increase integrated contrast. Over length 60, contrast was about 0.20, 0.18 and
+0.12 for warp 0, 1 and 4. Crossing many cells averages out local variations;
+increasing warp introduces finer edge detail that also averages out. Raising warp
+alone therefore cannot strengthen visible structure in broad haze.

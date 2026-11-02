@@ -1,6 +1,7 @@
+import {volumeNoiseWgsl} from './chunks/volumeNoise.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
-import {volumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
+import {createVolumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
@@ -43,6 +44,7 @@ export interface RayTraceInputHooks {
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
   hasVolumes?: boolean;
+  hasVolumeNoise?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -79,6 +81,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   let {
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
   hasVolumes = false,
+  hasVolumeNoise = false,
   lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
   hasCoatNormals = false,
@@ -150,7 +153,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasVolumes, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ hasVolumes, hasVolumeNoise, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
@@ -220,7 +223,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumes ? volumeWgsl + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? createVolumeWgsl(hasVolumeNoise) + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes,hasVolumeNoise)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -715,7 +718,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;

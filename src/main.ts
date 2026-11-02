@@ -112,4 +112,4 @@ export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 
 export type {AovKind} from './renderer/aov.js';
 
-export {MAX_VOLUMES, type SceneVolume} from './scene/SceneVolume.js';
+export {MAX_VOLUMES, type SceneVolume, type SceneVolumeNoise} from './scene/SceneVolume.js';
