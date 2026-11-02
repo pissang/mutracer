@@ -2,7 +2,7 @@ import { Matrix4, Vector3, MathUtils } from 'three';
 import { PbrtError, type Parameter, type Statement } from './parser';
 import { walk, type Resolver, type Resource, type Warning } from './source';
 export type Params = Record<string, Parameter>;
-export interface Entity { type: string; params: Params; loc: Statement }
+export interface Entity { type: string; params: Params; loc: Statement; reference?: string }
 export interface PlacedEntity extends Entity { transform: number[] }
 export interface Shape extends PlacedEntity { material: Entity; areaLight?: Entity; reverse: boolean; inside: string; outside: string }
 export interface Instance { name: string; transform: number[]; loc: Statement }
@@ -105,11 +105,7 @@ export async function buildScene(entry: string, resolver: Resolver): Promise<Sce
       case 'Integrator': scene.integrator = entity(s); break;
       case 'Material': state.material = entity(s); break;
       case 'MakeNamedMaterial': scene.materials[String(s.args[0])] = entity(s, String(first(s.params, 'type', 'diffuse'))); break;
-      case 'NamedMaterial': {
-        const material = scene.materials[String(s.args[0])];
-        if (!material) throw new PbrtError(`Undefined material ${s.args[0]}`, s);
-        state.material = material; break;
-      }
+      case 'NamedMaterial': state.material = { type: 'named', reference: String(s.args[0]), params: {}, loc: s }; break;
       case 'Texture': { const texture = { ...placed(s), type: String(s.args[2]) }; scene.textures[String(s.args[0])] = texture; scene.textures[`${s.args[1]}:${s.args[0]}`] = texture; break; }
       case 'MakeNamedMedium': scene.media[String(s.args[0])] = entity(s, String(first(s.params, 'type', 'homogeneous'))); break;
       case 'MediumInterface': state.inside = String(s.args[0]); state.outside = String(s.args[1]); break;
@@ -140,6 +136,11 @@ export async function buildScene(entry: string, resolver: Resolver): Promise<Sce
   }
   if (stack.length) throw new PbrtError(`Unclosed ${stack[stack.length - 1].loc.kind}`, stack[stack.length - 1].loc);
   for (const instance of scene.instances) if (!scene.objects[instance.name]) throw new PbrtError(`Undefined object ${instance.name}`, instance.loc);
+  for (const shape of [...scene.shapes, ...Object.values(scene.objects).flat()]) if (shape.material.reference !== undefined) {
+    const named = scene.materials[shape.material.reference];
+    if (!named) throw new PbrtError(`Undefined material ${shape.material.reference}`, shape.material.loc);
+    shape.material = named;
+  }
   scene.resources = [...resources.values()];
   return scene;
 }

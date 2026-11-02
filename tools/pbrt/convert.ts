@@ -38,6 +38,7 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
     const kind = entity.loc.kind === 'MakeNamedMaterial' ? 'Material' : entity.loc.kind;
     for (const key of Object.keys(entity.params)) if (allowed[kind] && !allowed[kind].includes(key)) warn(entity, `Parameter ${key} ignored`, 'parameter');
   }
+  if (scene.integrator && !['path', 'volpath'].includes(scene.integrator.type)) warn(scene.integrator, `${scene.integrator.type} integrator replaced by MuTracer path tracing`, 'integrator');
   const textures = new Textures(scene, resolver, warn, decode);
   const materials = new Map<Entity, Map<string, Promise<THREE.MeshPhysicalMaterial>>>();
   const getMaterial = (shape: Shape) => {

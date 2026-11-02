@@ -20,6 +20,10 @@ describe('PBRT scene state', () => {
     expect(scene.objects.ball[0].inside).toBe('fog'); expect(scene.textures.t.type).toBe('constant');
     expect(at(scene.instances[0].transform)).toEqual([1, 0, 0]);
   });
+  it('resolves named materials defined after the shapes that use them', async () => {
+    const scene = await build('WorldBegin NamedMaterial "later" Shape "sphere" MakeNamedMaterial "later" "string type" "dielectric"');
+    expect(scene.shapes[0].material.type).toBe('dielectric');
+  });
   it('uses the starting motion transform and named coordinates', async () => {
     const scene = await build('WorldBegin Translate 1 0 0 CoordinateSystem "a" ActiveTransform EndTime Translate 99 0 0 ActiveTransform All Translate 0 2 0 CoordSysTransform "a" Shape "sphere"');
     expect(at(scene.shapes[0].transform)).toEqual([1, 0, 0]); expect(scene.warnings).toHaveLength(1); expect(scene.warnings[0].count).toBe(2);
@@ -32,7 +36,7 @@ describe('PBRT scene state', () => {
     const scene = await build('WorldBegin Attribute "shape" "float alpha" .5 Shape "sphere" Shape "sphere" "float alpha" 1');
     expect(scene.shapes.map(s => s.params.alpha.values[0])).toEqual([.5, 1]);
   });
-  it.each(['WorldBegin AttributeEnd', 'WorldBegin AttributeBegin', 'WorldBegin NamedMaterial "missing"', 'WorldBegin ObjectInstance "missing"'])('reports state errors at the source location', async (text) => {
+  it.each(['WorldBegin AttributeEnd', 'WorldBegin AttributeBegin', 'WorldBegin NamedMaterial "missing" Shape "sphere"', 'WorldBegin ObjectInstance "missing"'])('reports state errors at the source location', async (text) => {
     await expect(build(text)).rejects.toThrow(/scene\/main.pbrt:1:/);
   });
 });

@@ -97,7 +97,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const parameters = shape.params.displacement ? shape.params : p;
     const value = await textures.value(parameters, 'displacement', [0, 0, 0], entity);
     if (value.map) {
-      result.displacementMap = value.map; result.displacementScale = 1;
+      result.displacementMap = textures.heightMap(value.map, entity); result.displacementScale = 1;
       warn(entity, 'PBRT bump/displacement approximated by MuTracer height-field displacement', 'displacement');
       result.userData.pbrtComparable = false;
     }

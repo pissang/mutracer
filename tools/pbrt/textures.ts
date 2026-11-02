@@ -10,6 +10,7 @@ export type DecodeImage = (bytes: ArrayBuffer, path: string) => Promise<Image>;
 export interface TextureValue { color: number[]; map?: THREE.DataTexture }
 export class Textures {
   private cache = new Map<string, Promise<TextureValue>>();
+  private heightMaps = new WeakMap<THREE.DataTexture, THREE.DataTexture>();
   constructor(private scene: Scene, private resolver: Resolver, private warn: (entity: Entity, handling: string, code?: string) => void, private decode?: DecodeImage) {}
   async image(path: string): Promise<Image> {
     const bytes = await this.resolver.read(resolvePath(path, this.scene.entry));
@@ -131,6 +132,25 @@ export class Textures {
     const a = await this.value(p, 'tex1', [.5, .5, .5], entity, stack), b = await this.value(p, 'tex2', [.5, .5, .5], entity, stack);
     this.warn(entity, `${entity.type} texture replaced by its constant mean`, 'texture');
     return { color: this.average(a).map((v, i) => (v + this.average(b)[i]) / 2) };
+  }
+  heightMap(source: THREE.DataTexture, owner: Entity): THREE.DataTexture {
+    const { width, height } = source.image;
+    const size = 2 ** Math.ceil(Math.log2(Math.max(width, height)));
+    if (width === height && width === size) return source;
+    const previous = this.heightMaps.get(source); if (previous) return previous;
+    if (size > 8192) throw new Error('Displacement image exceeds the 8192-pixel texture limit');
+    const input = source.image.data as Float32Array, data = new Float32Array(size * size * 4);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const px = (x + .5) / size * width - .5, py = (y + .5) / size * height - .5;
+      const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy;
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+        const xx = Math.min(width - 1, Math.max(0, ix + dx)), yy = Math.min(height - 1, Math.max(0, iy + dy));
+        const weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+        for (let c = 0; c < 4; c++) data[(y * size + x) * 4 + c] += input[(yy * width + xx) * 4 + c] * weight;
+      }
+    }
+    const result = source.clone(); result.image = { width: size, height: size, data }; result.needsUpdate = true;
+    this.heightMaps.set(source, result); this.warn(owner, `Height image resampled to ${size}×${size} for the supported displacement layout`, 'displacement'); return result;
   }
   private average(value: TextureValue): number[] {
     if (!value.map) return value.color;
