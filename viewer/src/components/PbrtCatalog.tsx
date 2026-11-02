@@ -1,6 +1,8 @@
-import { PBRT_SCENES, PBRT_SOURCE } from '../engine/pbrt';
-import { SCENES_BASE } from '../../../tools/pbrt/source';
+import catalog from '../engine/pbrt-catalog.json';
 import { getEngine } from '../engine/ViewerEngine';
+const PBRT_SCENES = catalog.scenes;
+const PBRT_SOURCE = `https://github.com/mmp/pbrt-v4-scenes/blob/${catalog.commit}/README.md`;
+const SCENES_BASE = `https://raw.githubusercontent.com/mmp/pbrt-v4-scenes/${catalog.commit}/`;
 const groups = [...new Set(PBRT_SCENES.map(scene => scene.group))];
 export function PbrtCatalog({ onChoose }: { onChoose?: () => void }) {
   return <div className="pbrt-catalog">

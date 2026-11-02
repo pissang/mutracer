@@ -7,8 +7,6 @@ import type { ModelSource, LoadedModel, LoadProgress } from './loadModel';
 import { fetchWithProgress } from './fetchWithProgress';
 import { showToast, useViewer } from '../store';
 import catalog from './pbrt-catalog.json';
-export const PBRT_SCENES = catalog.scenes;
-export const PBRT_SOURCE = `https://github.com/mmp/pbrt-v4-scenes/blob/${catalog.commit}/README.md`;
 export const isPBRT = (path: string) => /\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(path);
 const CONFIRM_BYTES = 1_000_000_000;
 import { checkPbrtMemory } from './pbrtBudget';
