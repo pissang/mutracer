@@ -21,7 +21,7 @@ const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
 const output = resolve(option('--out', `${process.env.HOME}/.codex/experiments/mutracer-pbrt-${date}/${basename(input, '.pbrt')}-${samples}${args.includes('--webgl') ? '-webgl' : ''}`));
 const pbrt = option('--pbrt', process.env.PBRT_BIN ?? `${process.env.HOME}/.codex/tools/pbrt-v4/build/pbrt`);
 await mkdir(output, { recursive: true });
-let temporary, chrome, memoryTimer, page; let peakBrowserRSSBytes = 0;
+let temporary, chrome, memoryTimer, page, noiseFailure; let peakBrowserRSSBytes = 0;
 const server = await createServer({ root, configFile: false, optimizeDeps: { disabled: true }, server: { host: '127.0.0.1', port: 0, hmr: false, watch: { ignored: ['**/*'] }, fs: { allow: [root] } }, plugins: [{ name: 'pbrt-comparison', configureServer(s) {
   s.middlewares.use(async (req, res, next) => {
     try {
@@ -121,8 +121,17 @@ try {
   if (args.includes('--noise')) {
     // Keep independent seed pairs in separate processes: disposed scenes can
     // retain large CPU/GPU caches until GC, which would distort peak memory.
-    await page.close(); await chrome.close(); chrome = await launchChrome(); await openPage();
-    await runBrowser(`window.runBenchmark(${samples}, 'noise-')`);
+    try {
+      await page.close(); await chrome.close(); chrome = await launchChrome(); await openPage();
+      await runBrowser(`window.runBenchmark(${samples}, 'noise-')`);
+    }
+    catch (error) {
+      noiseFailure = String(error);
+      await writeFile(resolve(output, 'noise-failure.json'), JSON.stringify({ error: noiseFailure, primaryComplete: true }, null, 2) + '\n');
+      // Retain the complete primary comparison even if the optional replicate
+      // loses its browser. A fresh idle page can still draw the evidence PNGs.
+      await chrome.close(); chrome = await launchChrome(); await openPage();
+    }
   }
   if (args.includes('--load-only')) {
     const report = { scene: sceneFile, spp: samples, width, height, browser, peakBrowserRSSBytes, comparisonStatus: 'load-only' };
@@ -141,7 +150,7 @@ try {
   if (!mu.every(Number.isFinite) || !reference.every(Number.isFinite)) throw new Error('Non-finite linear HDR pixels');
   if (mu.length !== reference.length) throw new Error('MuTracer resolution mismatch');
   let noiseA, noiseB;
-  if (args.includes('--noise')) {
+  if (args.includes('--noise') && !noiseFailure) {
     const noise = await readFile(resolve(output, 'noise-mutracer.f32'));
     noiseA = new Float32Array(noise.buffer.slice(noise.byteOffset, noise.byteOffset + noise.byteLength));
     const bytes = await readFile(resolve(output, 'reference-noise.exr'));
@@ -165,7 +174,7 @@ try {
   for (const id of new Set(Array.from(ids).filter((_, i) => i % 4 === 2))) measure(`material-${id}`, 0, 0, width, height, excluded.has(id), id);
   const errors = regions.filter(region => !region.approximate && region.noiseRelativeRMSE !== undefined && region.relativeRMSE > region.noiseRelativeRMSE * (1 + 6 * Math.sqrt(2 / (region.pixels * 3)))).map(region => region.name);
   const sourceRevision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
-  const report = { sourceRevision, referenceReused, noiseMethod: noiseA ? { referenceSeeds: [0, 1], mutracerSampleOffsets: [0, samples], note: 'Disjoint Sobol blocks share a scramble; diagnostic estimate, not independent Monte Carlo replicas.' } : undefined, comparisonStatus: !noiseA ? 'unassessed-noise' : errors.length ? 'mismatch' : 'within-estimated-noise', comparisonErrors: errors, peakBrowserRSSBytes, memoryMeasurement: 'Sum of Chrome process-family RSS; includes shared pages', scene: sceneFile, spp: samples, width, height, referenceMs, browser, display: { comparison: 'linear HDR, top row first, no tone mapping', preview: 'v/(1+v), gamma 2.2', exposure: 1, referenceSensorScale: sensorScale, pixelFilter: 'box, radius 0.5 (PBRT override to match MuTracer)' }, regions, conclusion: 'Measurements only; two-run noise estimates require diagnosis and do not prove noise equivalence.' };
+  const report = { sourceRevision, referenceReused, primaryRendered: true, noiseFailure, noiseMethod: noiseA ? { referenceSeeds: [0, 1], mutracerSampleOffsets: [0, samples], note: 'Disjoint Sobol blocks share a scramble; diagnostic estimate, not independent Monte Carlo replicas.' } : undefined, comparisonStatus: noiseFailure ? 'noise-run-failed' : !noiseA ? 'unassessed-noise' : errors.length ? 'mismatch' : 'within-estimated-noise', comparisonErrors: errors, peakBrowserRSSBytes, memoryMeasurement: 'Sum of Chrome process-family RSS; includes shared pages', scene: sceneFile, spp: samples, width, height, referenceMs, browser, display: { comparison: 'linear HDR, top row first, no tone mapping', preview: 'v/(1+v), gamma 2.2', exposure: 1, referenceSensorScale: sensorScale, pixelFilter: 'box, radius 0.5 (PBRT override to match MuTracer)' }, regions, conclusion: 'Measurements only; two-run noise estimates require diagnosis and do not prove noise equivalence.' };
   await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   await page.tab.evaluate(`(async () => {
     const width=${width},height=${height};
@@ -182,7 +191,7 @@ try {
     return true;
   })()`);
   console.log(JSON.stringify({ output, ...report }, null, 2));
-  if (errors.length) process.exitCode = 2;
+  if (noiseFailure) process.exitCode = 1; else if (errors.length) process.exitCode = 2;
   await page.close();
   }
 } catch (error) {
