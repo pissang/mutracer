@@ -12,15 +12,12 @@ Experimental WebGPU caustics, continuous-wavelength dispersion and more responsi
 - Experimental WebGPU caustics with `render.caustics`, off by default and ignored on WebGL 2: `lightTracing` for directly visible receivers, `photonMapping` for receivers seen through glass or water. See the [caustics guide](docs/caustics.md).
 - `render.refineUntil(deadline, {signal})` refines once, then keeps sampling until the deadline or cancellation. Use it for custom frame loops; see [sample batching](docs/progressive-rendering.md#sample-batching).
 - `RenderLoop.lastError` holds the exception from the latest failed tick; `status` is `error` while it is set.
-- Viewer resolution presets and custom image export dimensions.
-- Viewer collection examples for crystals and Halloween Night, and a Product caustics example.
 
 ### Changed
 
 - Dispersion samples continuous wavelengths, on camera paths and caustic photons, so rainbows and dispersive glass form smooth gradients instead of separate red, green and blue images. Scenes with dispersion render differently. `dispersionWavelengths` now counts paths per sample, each carrying one RGB channel.
 - `whenReadyToRefine()` returns `Promise<boolean>`: `true` when sampling was queued. Code typed against `Promise<void>` needs updating.
 - `gpuSampleTimeMs` also reports tiled samples, extrapolated from tile GPU time.
-- Viewer models with imported cameras open in their first camera; collection examples open in their curated views.
 
 ### Deprecated
 
@@ -46,7 +43,6 @@ Use `render.refineUntil()` instead of these. They keep working and will be remov
 - WebGL 2 samples emissive meshes as lights, so small emitters no longer produce heavy noise.
 - WebGL 2 keeps accumulated lighting when a path escapes to a flat or texture background.
 - WebGL 2 renders a selected AOV channel when it is the first thing drawn after a scene change, instead of staying at 0 samples.
-- Viewer links apply example settings while keeping explicit URL overrides. Switching examples restores their caustic and ground-shadow settings.
 
 ## 0.2.0 - 2026-10-28
 
