@@ -61,6 +61,7 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
   const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
+  const hasVolumeNoise = (options[0] as {hasVolumeNoise?: boolean} | undefined)?.hasVolumeNoise ?? false;
   const research = hasVolumes ? undefined : researchTransport()?.fragment(options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
@@ -73,10 +74,12 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
     BOUNCES: 2,
-    ...(hasVolumes ? {HAS_VOLUMES: true} : {})
+    ...(hasVolumes ? {HAS_VOLUMES: true} : {}),
+    ...(hasVolumeNoise ? {HAS_VOLUME_NOISE: true} : {})
   },
   uniforms: {
     ...(hasVolumes ? {volumeCount: Shader.uniform('int'), volumeWorldToLocal: Shader.arrayUniform('mat4', 8), volumeColorAnisotropy: Shader.arrayUniform('vec4', 8), volumeParams: Shader.arrayUniform('vec4', 8)} : {}),
+    ...(hasVolumeNoise ? {volumeNoiseSizeOctaves: Shader.arrayUniform('vec4', 8), volumeNoiseOffsetCoverage: Shader.arrayUniform('vec4', 8), volumeNoiseParams: Shader.arrayUniform('vec4', 8)} : {}),
     emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
     emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
     emissiveWeightTotal: Shader.uniform('float',0),

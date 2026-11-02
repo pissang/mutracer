@@ -1,7 +1,7 @@
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
-import {packVolumes} from './volumeData.js';
+import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
 import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
@@ -353,7 +353,7 @@ class WGPURayTracePass {
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
   };
-  private _rtUniform = makeWebRayTraceUniform();
+  private _rtUniform = makeWebRayTraceUniform(true);
   private _mapInfoUniform!: GPUBuffer;
   private _attributeData?: Float32Array;
   private _attributeStride = 0;
@@ -923,6 +923,7 @@ class WGPURayTracePass {
       const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
         hasVolumes: !!this._constants.HAS_VOLUMES,
+        hasVolumeNoise: !!this._constants.HAS_VOLUME_NOISE,
         hasDisplacement: this._hasDisplacement,
         caustics: this._causticKey,
         bindless: !!this._bindless,
@@ -2123,7 +2124,12 @@ class WGPURayTracePass {
   setVolumes(volumes?: SceneVolume[]) {
     const packed = packVolumes(volumes);
     this._rtUniform.views.volumeCount[0] = packed.count;
-    this._rtUniform.views.volumeRecords.set(packed.data);
+    // Keep the compact homogeneous record ABI and its generated shader unchanged.
+    const stride = packed.hasNoise ? VOLUME_FLOATS : 24;
+    this._rtUniform.views.volumeRecords.fill(0);
+    for (let i = 0; i < 8; i++) this._rtUniform.views.volumeRecords.set(packed.data.subarray(i * VOLUME_FLOATS, i * VOLUME_FLOATS + stride), i * stride);
+    if (packed.hasNoise) this._constants.HAS_VOLUME_NOISE = true;
+    else delete this._constants.HAS_VOLUME_NOISE;
     if (packed.count) this._constants.HAS_VOLUMES = true;
     else delete this._constants.HAS_VOLUMES;
     this._constants.RR_MAX = packed.count || this._constants.HAS_MEDIUM ? 12 : 2;

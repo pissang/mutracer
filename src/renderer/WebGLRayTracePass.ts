@@ -1,4 +1,4 @@
-import {packVolumes} from './volumeData.js';
+import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
 import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport} from './researchTransport.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
@@ -409,22 +409,33 @@ class WebGLRayTracePass {
   }
 
   private _hasVolumes = false;
+  private _hasVolumeNoise = false;
   setVolumes(volumes?: SceneVolume[]) {
     const packed = packVolumes(volumes), hasVolumes = packed.count > 0;
     if (!hasVolumes && !this._hasVolumes) return;
-    if (hasVolumes !== this._hasVolumes) {
+    if (hasVolumes !== this._hasVolumes || packed.hasNoise !== this._hasVolumeNoise) {
       this._hasVolumes = hasVolumes;
+      this._hasVolumeNoise = packed.hasNoise;
       researchTransport()?.configure(this, 'webgl', true);
-      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true}) : createRayTraceFragmentShader();
+      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise}) : createRayTraceFragmentShader();
       shader.parallelCompile = true;
-      this._mainPass.setShader(shader, hasVolumes ? [] : ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'], hasVolumes ? [] : ['HAS_VOLUMES']);
+      this._mainPass.setShader(shader, [...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []), ...(!packed.hasNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])], [...(!hasVolumes ? ['HAS_VOLUMES'] : []), ...(!packed.hasNoise ? ['HAS_VOLUME_NOISE'] : [])]);
     }
     if (hasVolumes) {
       const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
       for (let i = 0; i < 8; i++) {
-        matrices.set(packed.data.subarray(i * 24, i * 24 + 16), i * 16);
-        colors.set(packed.data.subarray(i * 24 + 16, i * 24 + 20), i * 4);
-        params.set(packed.data.subarray(i * 24 + 20, i * 24 + 24), i * 4);
+        matrices.set(packed.data.subarray(i * VOLUME_FLOATS, i * VOLUME_FLOATS + 16), i * 16);
+        colors.set(packed.data.subarray(i * VOLUME_FLOATS + 16, i * VOLUME_FLOATS + 20), i * 4);
+        params.set(packed.data.subarray(i * VOLUME_FLOATS + 20, i * VOLUME_FLOATS + 24), i * 4);
+      }
+      if (packed.hasNoise) {
+        const size = new Float32Array(32), offset = new Float32Array(32), params = new Float32Array(32);
+        for (let i = 0; i < 8; i++) {
+          size.set(packed.data.subarray(i * VOLUME_FLOATS + 24, i * VOLUME_FLOATS + 28), i * 4);
+          offset.set(packed.data.subarray(i * VOLUME_FLOATS + 28, i * VOLUME_FLOATS + 32), i * 4);
+          params.set(packed.data.subarray(i * VOLUME_FLOATS + 32, i * VOLUME_FLOATS + 36), i * 4);
+        }
+        this._mainPass.setUniforms({volumeNoiseSizeOctaves: size, volumeNoiseOffsetCoverage: offset, volumeNoiseParams: params});
       }
       this._mainPass.setUniforms({volumeCount: packed.count, volumeWorldToLocal: matrices, volumeColorAnisotropy: colors, volumeParams: params});
     }

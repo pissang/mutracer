@@ -113,7 +113,7 @@ export class SceneChangeDetector {
     const volumes = packVolumes(scene.volumes);
     const changes = this._tracker.detect(scene) as SceneChanges;
     changes.volumes = !this._volume || volumes.count !== this._volume.count || volumes.data.some((v, i) => !Object.is(v, this._volume!.data[i]));
-    changes.volumeStructure = !!volumes.count !== !!this._volume?.count;
+    changes.volumeStructure = !!volumes.count !== !!this._volume?.count || volumes.hasNoise !== (this._volume?.hasNoise ?? false);
     this._pendingVolume = volumes;
     return changes;
   }

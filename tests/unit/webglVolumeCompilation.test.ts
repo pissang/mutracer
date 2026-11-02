@@ -17,7 +17,7 @@ it('requests asynchronous programs and removes volumes bindings on both speciali
     setVolumes([]);
     const disabled = setShader.mock.lastCall!;
     expect((disabled[0] as FragmentShader).parallelCompile).toBe(true);
-    expect(disabled[1]).toEqual(['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams']);
-    expect(disabled[2]).toEqual(['HAS_VOLUMES']);
+    expect(disabled[1]).toEqual(['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams', 'volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams']);
+    expect(disabled[2]).toEqual(['HAS_VOLUMES', 'HAS_VOLUME_NOISE']);
   }
 });

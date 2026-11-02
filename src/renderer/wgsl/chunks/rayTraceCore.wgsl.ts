@@ -12,6 +12,7 @@ export default function rayTraceCore({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasVolumes = false,
+  hasVolumeNoise = false,
   hasSceneAlpha = true,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
@@ -19,6 +20,7 @@ export default function rayTraceCore({
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasVolumes?: boolean;
+  hasVolumeNoise?: boolean;
   hasSceneAlpha?: boolean;
   caustics?: boolean;
   lightCapabilities?: number;
@@ -260,7 +262,10 @@ struct CameraUniform {
 ${hasVolumes ? /* wgsl */ `struct VolumeRecord {
   worldToLocal: mat4x4f,
   colorAnisotropy: vec4f,
-  params: vec4f,
+  params: vec4f,${hasVolumeNoise ? /* wgsl */ `
+  noiseSizeOctaves: vec4f,
+  noiseOffsetCoverage: vec4f,
+  noiseParams: vec4f,` : ''}
 }
 ` : ''}struct RayTraceUniform {
   outputSize: vec2f,
