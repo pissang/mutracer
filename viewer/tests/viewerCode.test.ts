@@ -29,6 +29,13 @@ function syntaxErrors(code: string) {
 }
 
 describe('viewer code snippet', () => {
+  it('explains the PBRT limitation instead of passing it to GLTFLoader', () => {
+    const code = generateCode(snapshot({}, { pbrt: true, modelUrl: 'https://example.com/scene.pbrt' }));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).toContain('Standalone code export is unavailable for PBRT scenes');
+    expect(code).not.toContain('GLTFLoader');
+    expect(code).not.toContain('loadAsync');
+  });
   it('uses the library sky with the selected solar time and grounded background', () => {
     const code = generateCode(snapshot({ envId: 'sky', skyTime: 9, background: 'grounded' }, { environmentUrl: null }));
     expect(syntaxErrors(code)).toEqual([]);

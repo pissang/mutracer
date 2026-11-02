@@ -12,6 +12,8 @@ export interface CodeSnapshot {
   webgpu: boolean;
   /** glTF URL; `null` writes a placeholder for local files and built-in scenes. */
   modelUrl: string | null;
+  /** PBRT scenes cannot be reproduced by the standalone glTF loader. */
+  pbrt?: boolean;
   /** .hdr URL; `null` writes a placeholder for the procedural sky and uploads. */
   environmentUrl: string | null;
   /** Scene lighting with no infinite emitter needs no environment download. */
@@ -88,6 +90,7 @@ function denoiser(settings: Settings, webgpu: boolean, preview: boolean) {
  * settings, leaving out anything at its library default.
  */
 export function generateCode(snapshot: CodeSnapshot): string {
+  if (snapshot.pbrt) return '// Standalone code export is unavailable for PBRT scenes.\n// Render this scene in the viewer or with npm run pbrt:compare.\n';
   const s = snapshot.settings;
   const studio = s.lighting === 'studio';
   const procedural = !studio && s.envId === 'sky' && !snapshot.environmentUrl && !snapshot.blackEnvironment;

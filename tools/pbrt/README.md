@@ -69,6 +69,8 @@ an estimated working set above 8 GiB, using eight times the encoded input size.
 This is an estimate; available browser and GPU memory can impose a lower limit.
 Local folders with multiple scenes open the first entry containing `WorldBegin`
 in path order. Open an individual scene and its dependencies to choose another.
+Standalone code export is unavailable for PBRT scenes; use the viewer or the
+comparison tool to render them.
 
 With `--noise`, comparable regions whose HDR RMSE exceeds the independent-seed
 noise estimate are reported as mismatches (exit code 2); approximate regions do

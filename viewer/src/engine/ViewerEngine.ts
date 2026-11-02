@@ -1495,6 +1495,7 @@ export class ViewerEngine {
       settings: { ...s, resolutionScale: this.final.resolutionScale },
       webgpu: this.engine.backend === 'webgpu',
       modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
+      pbrt: !!this.model?.pbrt,
       environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
       blackEnvironment: s.envId === 'model' && !this.model?.lighting?.environment,
       metadataLights,
