@@ -19,6 +19,8 @@ at runtime and are not included with MuTracer.
 Run `npm run pbrt:compare -- <local-scene.pbrt> --spp 64 --scale 0.25` with
 PBRT installed at `~/.codex/tools/pbrt-v4/build/pbrt`, or set `PBRT_BIN`.
 `--webgl` selects WebGL 2; `--out <directory>` chooses the report destination.
+`--width N --height N` overrides the scaled Film dimensions. Comparisons use the
+whole frame; Film crop windows and pixel bounds are ignored in both renders.
 The tool writes raw linear HDR, a PBRT EXR, region metrics and a preview ordered
 PBRT, MuTracer, then absolute difference amplified 10 times. Approximate material
 pixels are reported separately. Metrics alone do not establish noise equivalence.
@@ -27,6 +29,14 @@ pixels are reported separately. Metrics alone do not establish noise equivalence
 The reference pixel filter is set to a box of radius 0.5. Film sensor exposure is
 removed from the reference HDR before comparison. Numerical reports never use the
 scene repository's preview images.
+
+`--reuse-reference` reuses EXRs when input modification times, dimensions and spp
+match, saving CPU rendering time while testing importer changes. Use a fresh
+output directory after changing the reference renderer or comparison settings.
+`--timeout <milliseconds>` limits each browser render (default 300000).
+`--load-only` skips PBRT and HDR comparison for unsupported-feature smoke tests.
+Noise pairs use separate browser processes, so large scenes do not need two
+copies to coexist in browser memory.
 
 ## Supported features
 

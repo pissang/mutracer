@@ -9,12 +9,15 @@ const save = async (name: string, body: BodyInit) => { const response = await fe
 async function run(sequenceOffset = 0, prefix = '') {
   const q = new URLSearchParams(location.search), started = performance.now();
   const width = Number(q.get('width')), height = Number(q.get('height')), samples = Number(q.get('spp'));
+  const checkpoint = async (stage: string) => save(prefix + 'stage.json', JSON.stringify({ stage, elapsedMs: performance.now() - started }));
+  await checkpoint('parse');
   const baseResolver = urlResolver(); let downloadBytes = 0;
   const resolver = { async read(path: string) { const data = await baseResolver.read(path); downloadBytes += data.byteLength; return data; } };
   let peakJSHeapBytes = 0;
   const memoryTimer = setInterval(() => { peakJSHeapBytes = Math.max(peakJSHeapBytes, (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0); }, 50);
   const parsed = await buildScene(new URL('/asset/' + q.get('scene'), location.href).href, resolver);
   if (parsed.film) for (const [name, value] of [['xresolution', width], ['yresolution', height]] as const) parsed.film.params[name] = { type: 'integer', name, values: [value], loc: parsed.film.loc };
+  await checkpoint('convert');
   const model = await convert(parsed, resolver, decodeImage);
   const scene = new THREE.Scene(); scene.add(model.root);
   if (model.environment) {
@@ -36,16 +39,19 @@ async function run(sequenceOffset = 0, prefix = '') {
   const errors: string[] = [];
   engine.on('error', event => errors.push(event.message));
   try {
-    sync.update(); if (sync.scene) sync.scene.volumes = model.volumes; engine.update();
+    sync.update(); if (!engine.camera) throw new Error('PBRT camera synchronization failed'); engine.camera.fStop = model.settings.fStop; engine.camera.focusDistance = model.settings.focusDistance; engine.camera.metersPerUnit = 1; if (sync.scene) sync.scene.volumes = model.volumes; engine.update();
+    await checkpoint('device-and-pipelines');
     await engine.init();
     const adapter = engine.info;
     const loadedMs = performance.now() - started;
+    await checkpoint('render');
     await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000 });
     const hdr = await render.readPixels('hdr'), ids = await render.readPixels('id');
     await save(prefix + 'mutracer.f32', hdr.data as unknown as BodyInit); await save(prefix + 'ids.u32', ids.data as unknown as BodyInit);
     await save(prefix + 'mutracer.png', await engine.display.toBlob(render));
     let oidnMs: number | undefined;
     if (q.has('oidn') && !q.has('webgl')) {
+      await checkpoint('oidn');
       const start = performance.now();
       await render.setDenoiser({ type: 'oidn', model: 'standard', weightsBaseUrl: new URL('/oidn/weights/', location.href).href });
       await render.converge({ samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 600000 });
