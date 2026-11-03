@@ -34,6 +34,13 @@ describe('caustic contracts', () => {
   it('restores the original PM source through the internal opt-out', () => {
     expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('e444dfc72d5cae8a439c3628501d7f1c23526adcc868c388656377a9f1b7a535');
   });
+  it.each(['lightTracing', 'photonMapping'] as const)('keeps web %s leaf boxes within the existing storage contract', mode => {
+    gpu();
+    const definitions = makeShaderDataDefinitions(causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32},1,false,mode,'',true,true));
+    expect(definitions.uniforms.caustic.size).toBe(CAUSTIC_UNIFORM_BYTES);
+    expect(definitions.entryPoints.main.stage).toBe(4);
+    expect(Object.keys(definitions.storages)).toHaveLength(mode === 'lightTracing' ? 5 : 4);
+  });
   it('classifies resolved material combinations', () => {
     for (const [params, smooth] of [
       [{}, false], [{transmissionWeight: 1, specularRoughness: 0}, true],

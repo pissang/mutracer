@@ -33,7 +33,8 @@ export function causticLightCompute(
   hasDisplacement: boolean,
   mode: 'lightTracing' | 'photonMapping' = 'lightTracing',
   sceneIntersections = '',
-  fullEmissionRandom = true
+  fullEmissionRandom = true,
+  perInstanceBounds = false
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
@@ -48,6 +49,7 @@ ${core({hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${uv}
 ${createMaterialBufferWgsl({hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${intersect({
+  perInstanceBounds,
   hasDisplacement,
   blasLayoutMask,
   hasAnisotropyDirections: frames,

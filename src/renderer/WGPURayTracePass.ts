@@ -1024,7 +1024,7 @@ class WGPURayTracePass {
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
       const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
-        causticDiagnostics.fullEmissionRandom !== false);
+        causticDiagnostics.fullEmissionRandom !== false, true);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
