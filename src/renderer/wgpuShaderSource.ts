@@ -4,6 +4,8 @@ import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 export interface WGPUShaderFeatures {
+  /** Internal host budget. Default 20 preserves native shader generation. */
+  maxPathEvents?: number;
   hasDisplacement: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */

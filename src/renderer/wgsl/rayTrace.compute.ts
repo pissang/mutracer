@@ -4,7 +4,7 @@ import backgroundWgsl from './chunks/background.wgsl.js';
 import {createVolumeWgsl, createVolumeIntegratorWgsl} from './chunks/volume.wgsl.js';
 import {researchTransport} from '../researchTransport.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
-import { MAX_PATH_EVENTS } from '../pathLimits.js';
+import { MAX_PATH_EVENTS_WEBGL } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import reflectanceWGSL from './aovReflectance.wgsl.js';
 import aovTraceWGSL from './aovTrace.wgsl.js';
@@ -42,6 +42,8 @@ export interface RayTraceInputHooks {
 }
 
 export interface RayTraceShaderOptions {
+  /** Internal host budget. Default 20 preserves the native AOT contract. */
+  maxPathEvents?: number;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -74,6 +76,7 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+  const maxPathEvents = options.maxPathEvents ?? MAX_PATH_EVENTS_WEBGL;
   const research = options.hasVolumes ? undefined : researchTransport()?.compute(options);
   const enabled = research?.enabled ?? false;
   const partitionDepth = research?.maxDepth ?? 20;
@@ -643,7 +646,7 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.abort = false;
 
   let bounceLimit = max(rtUniform.bounces, 0);
-  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var depth = 0;
   var sampleIgnored = false;
   var isNotTransparent = false;
@@ -718,7 +721,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise, maxPathEvents) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;
@@ -734,12 +737,12 @@ ${primaryVariables}
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
   path.beta = vec3f(1.0); path.fromEye = true;
   let bounceLimit = max(rtUniform.bounces, 0);
-  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var event = 0; var depth = 0; var sampleIgnored = false;
   var isNotTransparent = false;
   // Share one query/material graph across the primary, back and front paths.
   // Complete the back path before the front path to preserve random streams.
-  for (var step = 0; step < (${MAX_PATH_EVENTS} + 1) * 2 + 2; step++) {
+  for (var step = 0; step < (${maxPathEvents} + 1) * 2 + 2; step++) {
     if (query) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
@@ -802,7 +805,7 @@ ${primaryVariables}
   path.beta = vec3f(1.0);
   path.fromEye = true;
   let bounceLimit = max(rtUniform.bounces, 0);
-  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var isNotTransparent = false;
   var depth = 0;
   var sampleIgnored = false;
@@ -833,7 +836,7 @@ ${primaryVariables}
   var primaryReady = false;
   var path: Path; path.ray = ray;
   let bounceLimit = max(rtUniform.bounces, 0);
-  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var depth = 0; var event = 0; var sampleIgnored = false;
   var isNotTransparent = false;
   var wavelengthIndex = 0;
@@ -851,7 +854,7 @@ ${primaryVariables}
   // Flatten the wavelength/path loops to share primary and secondary queries.
   // Each of the three paths uses at most MAX_PATH_EVENTS + 1 iterations,
   // including completion of its final query. The primary hit is reused.
-  let stepLimit = min((${MAX_PATH_EVENTS} + 1) * 3, i32(rtUniform.loopUnrollGuard * ${Math.ceil((MAX_PATH_EVENTS + 1) * 3 / 4)}u));
+  let stepLimit = min((${maxPathEvents} + 1) * 3, i32(rtUniform.loopUnrollGuard * ${Math.ceil((maxPathEvents + 1) * 3 / 4)}u));
   for (var step = 0; step < stepLimit; step++) {
     if (!primaryReady | ((event != 0) & !path.abort)) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);

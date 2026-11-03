@@ -1,5 +1,5 @@
 import {volumeTrackingWgsl} from './volumeTracking.wgsl.js';
-import {MAX_PATH_EVENTS} from '../../pathLimits.js';
+import {MAX_PATH_EVENTS_WEBGL} from '../../pathLimits.js';
 // Volume-only source. The no-volumes generator never includes these declarations.
 export function createVolumeWgsl(hasVolumeNoise = false) { return /* wgsl */ `
 fn volumeInterval(ray: Ray, volume: VolumeRecord, maximum: f32) -> vec2f {
@@ -162,7 +162,7 @@ fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
 `;
 }
 
-export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false) { return /* wgsl */ `
+export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false, maxPathEvents = MAX_PATH_EVENTS_WEBGL) { return /* wgsl */ `
 fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceVolume: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si = initialSi; var ma = initialMa;
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
@@ -175,8 +175,8 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
   var depth = 0; var event = 0; var query = false; var resample = false;
   var skipVolume = false; var first = true;
   var isOpaque = false;
-  let limit = min(max(rtUniform.bounces, 0) * 3, ${MAX_PATH_EVENTS});
-  for (var step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
+  let limit = min(max(rtUniform.bounces, 0) * 3, ${maxPathEvents});
+  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
     if (query) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);

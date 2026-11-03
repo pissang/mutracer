@@ -111,10 +111,12 @@ export interface RenderSettings {
   /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
-   * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
+   * [1, 20] on WebGL (NaN becomes 1).
    * Complete caustic light-to-camera paths can be longer than this depth.
-   * Total path events, including transmission and alpha skips, are capped at 20
-   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * Total path events, including transmission and alpha skips, are capped at 50
+   * on WebGPU or 20 on WebGL, and at three times this depth.
+   * Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
    * Default 3.
    */ bounces?: number;
@@ -233,10 +235,12 @@ export default class Render {
   /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
-   * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
+   * [1, 20] on WebGL (NaN becomes 1).
    * Complete caustic light-to-camera paths can be longer than this depth.
-   * Total path events, including transmission and alpha skips, are capped at 20
-   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * Total path events, including transmission and alpha skips, are capped at 50
+   * on WebGPU or 20 on WebGL, and at three times this depth.
+   * Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
    * Default 3.
    */ bounces = 3;

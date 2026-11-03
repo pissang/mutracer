@@ -1,5 +1,5 @@
 import {volumeTrackingGlsl, volumeNoiseGuidesGlsl} from './volumeTracking.glsl.js';
-import {MAX_PATH_EVENTS} from '../../pathLimits.js';
+import {MAX_PATH_EVENTS_WEBGL} from '../../pathLimits.js';
 export function createVolumeGlsl(hasVolumeNoise = false) { return /* glsl */ `
 vec2 volumeInterval(Ray ray, int index, float maximum) {
   vec3 origin = (volumeWorldToLocal[index] * vec4(ray.o, 1.0)).xyz;
@@ -150,8 +150,8 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
   bool isOpaque = !si.isTransparency;
   bool originalOpaque = isOpaque;
   bool query = false, resample = false, skipVolume = false, first = true;
-  int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
-  for (int step = 0; step < ${(MAX_PATH_EVENTS + 1) * 2 + 2}; step++) {
+  int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS_WEBGL});
+  for (int step = 0; step < ${(MAX_PATH_EVENTS_WEBGL + 1) * 2 + 2}; step++) {
     if (query) {
       intersectScene(path.ray, si, event != 0);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);

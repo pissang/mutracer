@@ -144,8 +144,9 @@ other sequences retain their completed samples.
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
-`bounces` is rounded and clamped to [1, 20] in both backends; NaN becomes 1.
-Paths allow at most `min(bounces * 3, 20)` events, including transmission,
+`bounces` is rounded and clamped to [1, 50] on WebGPU or [1, 20] on WebGL;
+NaN becomes 1. Paths allow at most `min(bounces * 3, 50)` events on WebGPU
+or `min(bounces * 3, 20)` on WebGL, including transmission,
 alpha skips and escape checks. Opaque paths also terminate at their scattering
 limit. The event budget can truncate deep transparent paths before the requested
 scattering depth. On Intel Mac WebGL, the event limit is `min(bounces, 3)`, doubled

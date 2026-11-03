@@ -2,7 +2,7 @@ import type Geometry from '../scene/Geometry.js';
 import type {AnalyticLightState} from '../scene/lightState.js';
 import {retainedShaderCapacity} from './shaderCapacity.js';
 import {makeRayTraceUniform, packWgpuAnalyticLights} from './wgpuSceneUniform.js';
-import {normalizeBounces} from './pathLimits.js';
+import {normalizeBounces, MAX_PATH_EVENTS_WEBGL} from './pathLimits.js';
 import {normalizeDirectLightCandidates, DEFAULT_BEVEL_SAMPLES} from './renderingLimits.js';
 import {samplingPatternCode, zSobolLog2SPP, type SamplingPattern} from './sampling.js';
 import {LightChoiceBuffer, buildLightAliasTable, buildShadowCatcherLightAliasTable, estimateAnalyticLightPower, packEmissiveTriangles, packIESProfiles,
@@ -35,8 +35,9 @@ export function sceneTraversalConstants(tlas: number, blas: number, previous: Re
     BLAS_STACK_SIZE: retainedShaderCapacity(blas, Number(previous.BLAS_STACK_SIZE ?? 0), 32)};
 }
 
-export function writeTraceQuality(views: TraceViews, options: {bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number}) {
-  views.bounces[0] = normalizeBounces(options.bounces);
+export function writeTraceQuality(views: TraceViews, options: {bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number}, maxPathEvents = MAX_PATH_EVENTS_WEBGL) {
+  // The AOT caller retains its existing 20-event contract; WebGPU opts into 50.
+  views.bounces[0] = normalizeBounces(options.bounces, maxPathEvents);
   views.bevel[0] = Number(options.bevel);
   views.dispersionWavelengths[0] = options.dispersionWavelengths;
   views.directLightCandidates[0] = normalizeDirectLightCandidates(options.directLightCandidates);

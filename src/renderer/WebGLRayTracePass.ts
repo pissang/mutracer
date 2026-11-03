@@ -9,7 +9,7 @@ import {WebGLAov} from './WebGLAov.js';
 import {packAovScene} from './aovScene.js';
 import {aovMask, type AovKind} from './aov.js';
 import { WebGLSkySource } from './WebGLSkySource.js';
-import { normalizeBounces } from './pathLimits.js';
+import { normalizeBounces, MAX_PATH_EVENTS_WEBGL } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
@@ -358,7 +358,7 @@ class WebGLRayTracePass {
   }
 
   setBounce(bounce: number) {
-    const next = normalizeBounces(bounce);
+    const next = normalizeBounces(bounce, MAX_PATH_EVENTS_WEBGL);
     const changed = this._bounces !== next;
     this._bounces = next;
     return changed;
@@ -984,7 +984,7 @@ class WebGLRayTracePass {
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
     researchTransport()?.configure(this, 'webgl', this._hasVolumes);
     this._tracePasses.forEach(pass => {
-      pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
+      pass.setUniform('bounceLimit', normalizeBounces(options.bounces, MAX_PATH_EVENTS_WEBGL));
       pass.setUniform('bevelEnabled', options.bevel);
       pass.setUniform('dispersionWavelengths', options.dispersionWavelengths);
     });

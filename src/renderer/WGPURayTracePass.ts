@@ -45,7 +45,7 @@ import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} fro
 import {makeWebRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
 import {constants} from './webgl.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
-import {normalizeBounces} from './pathLimits.js';
+import {normalizeBounces, MAX_PATH_EVENTS_WGPU} from './pathLimits.js';
 import {updateMeshInstanceColors} from './prepareMeshBVH.js';
 import {updateTLASInstanceColors} from './bvhAccel.js';
 import {getMaterialHashKey} from '../scene/openPbrSchema.js';
@@ -1055,6 +1055,7 @@ class WGPURayTracePass {
         let code = wgpuShaderSource(
           constants,
           {
+            maxPathEvents: MAX_PATH_EVENTS_WGPU,
             hasDisplacement,
             hasAlpha,
             hasSceneAlpha,
@@ -1696,7 +1697,7 @@ class WGPURayTracePass {
 
 
   setBounce(bounce: number) {
-    const next = normalizeBounces(bounce);
+    const next = normalizeBounces(bounce, MAX_PATH_EVENTS_WGPU);
     const changed = this._bounces !== next;
     this._bounces = next;
     this._rtUniform.views.bounces[0] = next;
@@ -1776,7 +1777,7 @@ class WGPURayTracePass {
     caustics?: import('../Render.js').CausticSettings;
   }) {
     WGPURayTracePass.prototype._setCaustics.call(this, options.caustics);
-    writeTraceQuality(this._rtUniform.views, options);
+    writeTraceQuality(this._rtUniform.views, options, MAX_PATH_EVENTS_WGPU);
   }
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {

@@ -17,12 +17,14 @@ describe('WebGPU ray-trace uniforms', () => {
     expect(wgpuSceneFeatureFlags({})).toBe(0);
   });
 
-  it.each(['sobol', 'zsobol', 'random'] as SamplingPattern[])('matches CPU uniforms for the generated %s WGSL shader', pattern => {
+  it.each(([20, 50] as const).flatMap(maxPathEvents =>
+    (['sobol', 'zsobol', 'random'] as SamplingPattern[]).map(pattern => ({maxPathEvents, pattern}))))(
+    'matches CPU uniforms for $pattern WGSL with a $maxPathEvents event budget', ({pattern, maxPathEvents}) => {
     vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
     try {
       const definitions = makeShaderDataDefinitions(
         `override SAMPLING_PATTERN: u32 = ${samplingPatternCode(pattern)}u;\n` +
-        rayTraceCompute({ hasDisplacement: false })
+        rayTraceCompute({ hasDisplacement: false, maxPathEvents })
       );
       const struct = definitions.structs.RayTraceUniform;
       const { buffer, views } = makeRayTraceUniform();
