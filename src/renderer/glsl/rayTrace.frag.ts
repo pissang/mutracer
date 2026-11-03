@@ -88,6 +88,7 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
     cameraFocusDistance: Shader.uniform('float', 10),
 
     viewProjectionInv: Shader.uniform('mat4'),
+    projectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4'),
     transmissiveOutputAlphaMin: Shader.uniform('float'),
     openPbrEnergyLut: Shader.uniform('sampler2D'),

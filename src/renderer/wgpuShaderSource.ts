@@ -7,6 +7,8 @@ export interface WGPUShaderFeatures {
   /** Internal host budget. Default 20 preserves native shader generation. */
   maxPathEvents?: number;
   hasDisplacement: boolean;
+  /** Browser camera extension; false preserves the native uniform layout. */
+  cameraProjectionInverse?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;

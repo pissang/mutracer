@@ -15,9 +15,7 @@ uint aovWord(int index) { ivec2 size = textureSize(aovScene,0); uvec4 v = texelF
 vec3 aovVector(int offset){return vec3(uintBitsToFloat(aovWord(offset)),uintBitsToFloat(aovWord(offset+1)),uintBitsToFloat(aovWord(offset+2)));}
 mat4 aovMatrix(int offset) { mat4 m; for (int i=0;i<4;i++) for(int j=0;j<4;j++) m[i][j]=uintBitsToFloat(aovWord(offset+i*4+j)); return m; }
 Ray aovRay(vec2 uv) {
-  vec4 origin = viewProjectionInv*vec4(uv*2.0-1.0,-1.0,1.0);
-  vec4 target = viewProjectionInv*vec4(uv*2.0-1.0,1.0,1.0);
-  Ray ray; initRay(ray, origin.xyz/origin.w, normalize(target.xyz*origin.w-origin.xyz*target.w)); return ray;
+  return initCameraRay(uv);
 }
 bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMaterial material) {
   Ray ray=inputRay; si.triangleIndex=-1;
@@ -35,7 +33,7 @@ export function aovTraceFragment(center: boolean) {
     outputs: center ? ['id','motion'] : ['geometry','position','diffuse','specular'],
     outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true},
     includes: [core,materials,intersect,random],
-    uniforms: {viewProjectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
+    uniforms: {viewProjectionInv: Shader.uniform('mat4'), projectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
       cameraApertureRadius: Shader.uniform('float',0), cameraFocusDistance: Shader.uniform('float',10),
       viewportSize: Shader.uniform('vec2'), aovScene: Shader.uniform('usampler2D'),
       previousId: Shader.uniform('usampler2D'), previousMotion: Shader.uniform('sampler2D'),

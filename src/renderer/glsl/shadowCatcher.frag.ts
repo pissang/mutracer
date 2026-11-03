@@ -28,6 +28,7 @@ export default new FragmentShader({
     spectralChannel: Shader.uniform('int', 0),
     viewportSize: Shader.uniform('vec2'),
     viewProjectionInv: Shader.uniform('mat4'),
+    projectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4'),
     cameraApertureRadius: Shader.uniform('float', 0),
     cameraFocusDistance: Shader.uniform('float', 10)

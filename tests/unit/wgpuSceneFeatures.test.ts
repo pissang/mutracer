@@ -24,7 +24,7 @@ describe('WebGPU ray-trace uniforms', () => {
     try {
       const definitions = makeShaderDataDefinitions(
         `override SAMPLING_PATTERN: u32 = ${samplingPatternCode(pattern)}u;\n` +
-        rayTraceCompute({ hasDisplacement: false, maxPathEvents })
+        rayTraceCompute({ hasDisplacement: false, maxPathEvents, cameraProjectionInverse: true })
       );
       const struct = definitions.structs.RayTraceUniform;
       const { buffer, views } = makeRayTraceUniform();
