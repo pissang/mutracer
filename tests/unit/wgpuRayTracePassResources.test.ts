@@ -200,7 +200,8 @@ describe('WGPURayTracePass output resource lifetime', () => {
 
   it('grows a stale empty Materials buffer to one WGSL material element', () => {
     const staleBuffer = { size: 200, destroy: vi.fn() };
-    const replacementBuffer = { size: 400, destroy: vi.fn() };
+    const mapped = new ArrayBuffer(400);
+    const replacementBuffer = { size: 400, destroy: vi.fn(), getMappedRange: () => mapped, unmap: vi.fn() };
     const createBuffer = vi.fn(() => replacementBuffer);
     const writeBuffer = vi.fn();
     const pass = Object.create(WGPURayTracePass.prototype) as any;
@@ -221,13 +222,11 @@ describe('WGPURayTracePass output resource lifetime', () => {
     expect(staleBuffer.destroy).toHaveBeenCalledOnce();
     expect(createBuffer).toHaveBeenCalledWith(expect.objectContaining({
       label: 'Materials',
-      size: 400
+      size: 400, mappedAtCreation: true
     }));
-    expect(writeBuffer).toHaveBeenCalledWith(
-      replacementBuffer,
-      0,
-      emptyMaterials.buffer
-    );
+    expect(writeBuffer).not.toHaveBeenCalled();
+    expect(replacementBuffer.unmap).toHaveBeenCalledOnce();
+    expect(new Uint8Array(mapped).every(value => value === 0)).toBe(true);
     expect(result).toBe(replacementBuffer);
     expect(pass._needsUpdateBindGroups).toBe(true);
   });

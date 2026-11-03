@@ -56,6 +56,7 @@ export interface RayTraceShaderOptions {
   hasVolumeNoise?: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;
+  compactVertices?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -91,6 +92,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   const partitionDepth = research?.maxDepth ?? 20;
   const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
   let {
+  compactVertices = false,
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
   hasVolumes = false,
   hasVolumeNoise = false,
@@ -178,7 +180,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ cameraProjectionInverse: options.cameraProjectionInverse, hasVolumes, hasVolumeNoise, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, hasVolumes, hasVolumeNoise, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
@@ -187,7 +189,7 @@ ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNorm
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
+${createIntersectionWgsl({ compactVertices, perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}

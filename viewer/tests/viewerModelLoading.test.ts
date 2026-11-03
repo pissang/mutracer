@@ -81,6 +81,15 @@ describe('viewer cached model loading', () => {
     restored.revoke();
   });
 
+
+  it('parses downloaded main bytes without reading them back through File.arrayBuffer', async () => {
+    network(glb(json));
+    const names: string[] = [], original = File.prototype.arrayBuffer;
+    const read = vi.spyOn(File.prototype, 'arrayBuffer').mockImplementation(function(this: File) {names.push(this.name); return original.call(this);});
+    const model = await loadModelFromURL('https://example.com/scene.glb', vi.fn());
+    expect(names).not.toContain('scene.glb');
+    model.revoke(); read.mockRestore();
+  });
   it('preserves dropped folder paths and resolves nested texture files', async () => {
     const requests = network('unexpected network');
     const files = [

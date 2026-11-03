@@ -28,7 +28,7 @@ async function confirmDownload(bytes: number, signal?: AbortSignal) {
     signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
   });
 }
-export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
+export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu', downloadedMain?: ArrayBuffer): Promise<LoadedModel> {
   const worker = new Worker(new URL('./pbrt.worker.ts', import.meta.url), { type: 'module' });
   let nextId = 0;
   const pending = new Map<number, { resolve(value: unknown): void; reject(reason: Error): void }>();
@@ -45,7 +45,7 @@ export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, si
   try {
     signal?.throwIfAborted(); onProgress('parse');
     const sizes = Object.fromEntries(Object.entries(catalog.sizes).map(([path, size]) => [new URL(path, SCENES_BASE).href, size]));
-    const report = await call<Inspection>('inspect', { source, sizes });
+    const report = await call<Inspection>('inspect', { source, sizes, mainBytes: downloadedMain }, downloadedMain ? [downloadedMain] : []);
     checkPbrtMemory(report); onProgress('download', 0, report.totalBytes);
     await confirmDownload(report.totalBytes, signal); signal?.throwIfAborted();
     const built = await call<{ scene: Scene; files: ModelSource['files'] }>('build');

@@ -28,6 +28,7 @@ import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } 
 function engine() {
   const viewer = Object.create(ViewerEngine.prototype);
   Object.assign(viewer, {
+    pickRequest: 0, pickObjects: new Map(), pickMaterials: new Map(),
     initialURLSettings: readURLSettings(), loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
     modelGroup: new THREE.Group(), hiddenAtLoad: new Set(), ground: new THREE.Mesh(),
     canvas: { clientWidth: 800, clientHeight: 600 }, needsResize: false,

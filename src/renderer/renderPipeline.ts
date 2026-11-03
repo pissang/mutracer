@@ -1,3 +1,4 @@
+import type {SurfaceHit} from './surfaceHit.js';
 import type {ScratchPool} from './ScratchPool.js';
 import type Camera from '../scene/Camera.js';
 import type { Scene } from '../scene/Scene.js';
@@ -36,6 +37,7 @@ export interface RenderPipeline {
   setVolumes?: SceneResources['setVolumes'];
   setTextureAtlasBudget: SceneResources['setTextureAtlasBudget'];
   readDepthSamples(camera: Camera, area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
+  pickSurface?(camera: Camera, x: number, y: number): Promise<SurfaceHit | null | undefined>;
   getDiagnostics(): ReturnType<SceneResources['getDiagnostics']>;
   dispose(): void;
 }
@@ -45,6 +47,7 @@ export function makeRenderPipeline(
   scene: Pick<RenderPipeline, 'setMeshes' | 'setLights' | 'setBackground' | 'setVolumes' | 'setTextureAtlasBudget' | 'getDiagnostics' | 'dispose'> & {
     setCamera(camera: Camera): void;
     readDepthSamples(area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
+    pickSurface?: SceneResources['pickSurface'];
     setBounce(bounces: number): boolean;
   },
   create: () => TargetPipeline,
@@ -85,6 +88,7 @@ export function makeRenderPipeline(
     },
     setTextureAtlasBudget: bytes => scene.setTextureAtlasBudget(bytes),
     async readDepthSamples(camera, area) { scene.setCamera(camera); return scene.readDepthSamples(area, camera.aspect); },
+    async pickSurface(camera, x, y) {scene.setCamera(camera); return scene.pickSurface?.(x, y, camera.aspect);},
     getDiagnostics() {
       return { ...scene.getDiagnostics(), ...latest?.getDiagnostics(), targets: Array.from(targets, t => ({label: t.label, ...t.getMemory()})) };
     },

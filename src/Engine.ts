@@ -1,3 +1,4 @@
+import type {SurfaceHit} from './renderer/surfaceHit.js';
 import InstancedMesh from './scene/InstancedMesh.js';
 import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
 import {createCanvas} from './util/canvas.js';
@@ -16,7 +17,7 @@ import { CommittedScene } from './renderer/committedScene.js';
 import { validateSceneLights } from './renderer/lightsUtil.js';
 import { ensureMeshGeometryAttributes, meshNeedsStaticBvh, getPreparedMeshGeometry } from './renderer/prepareMeshBVH.js';
 import { getGeometryBvh, type BvhBuildConfig } from './renderer/geometryBvh.js';
-import { prepareStaticBvhs } from './renderer/staticBvhPreparation.js';
+import { prepareStaticBvhs, type StaticBvhCache } from './renderer/staticBvhPreparation.js';
 import { canUseBvhWorker, BvhWorkerPool, resolveBvhWorkerCount } from './renderer/bvhWorkerClient.js';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MaterialTable.js';
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
@@ -120,6 +121,8 @@ export default class Engine {
   private _lastBudget = -1;
   private _shaderProgress = '';
   private _events = new Events<EngineEvents>();
+  /** @internal Optional viewer-owned persistent BLAS cache. */
+  _bvhCache?: StaticBvhCache;
   private _pipeline?: RenderPipeline;
   private _webglRenderer?: WebGLRenderer;
   private _gpuDevice?: GPUDevice;
@@ -160,6 +163,7 @@ export default class Engine {
   private _pendingBackground = true;
   private _disposed = false;
   private _readingDepth = false;
+  private _surfaceQuery?: Promise<unknown>;
   private _renders = new Set<Render>();
   private _targetCounter = 0;
   private _presented?: RenderTarget;
@@ -298,7 +302,7 @@ export default class Engine {
         config,
         ...config,
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
-        useWorker, workerPool: this._bvhWorkerPool, isCancelled,
+        useWorker, workerPool: this._bvhWorkerPool, isCancelled, cache: this._bvhCache,
         rebuild: false, onProgress: options.onProgress
       });
       if (isCancelled()) return;
@@ -523,10 +527,28 @@ export default class Engine {
     try {
       const camera = cameraSnapshot(this._committedCamera);
       camera.aspect ??= this.display.canvas.width / this.display.canvas.height;
-      const result = await this._pipeline!.readDepthSamples(camera, area);
+      const pending = this._pipeline!.readDepthSamples(camera, area);
+      this._surfaceQuery = pending;
+      const result = await pending;
       return this._disposed ? undefined : result;
     }
-    finally { this._readingDepth = false; }
+    finally { this._readingDepth = false; this._surfaceQuery = undefined; }
+  }
+  /** @internal Viewer GPU picking; undefined means unavailable/stale, null means background. */
+  async _pick(x: number, y: number): Promise<SurfaceHit | null | undefined> {
+    packDepthSampleArea({x, y, size: 0}, 1);
+    while (this._surfaceQuery) await this._surfaceQuery.catch(() => {});
+    if (!this._ready || !this._committedCamera) return;
+    const scene = this._sceneRevision, revision = this._cameraRevision;
+    const camera = cameraSnapshot(this._committedCamera);
+    camera.aspect ??= this.display.canvas.width / this.display.canvas.height;
+    this._readingDepth = true;
+    try {
+      const pending = this._pipeline!.pickSurface?.(camera, x, y);
+      this._surfaceQuery = pending;
+      const result = await pending;
+      return this._ready && scene === this._sceneRevision && revision === this._cameraRevision ? result : undefined;
+    } finally {this._readingDepth = false; this._surfaceQuery = undefined;}
   }
   /** Releases all renders, shared resources, CPU workers and owned denoisers. */
   dispose() {

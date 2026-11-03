@@ -1,3 +1,4 @@
+import {ViewerBvhCache} from './bvhCache';
 import {causticOptions} from '../caustics';
 import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
@@ -126,6 +127,9 @@ export class ViewerEngine {
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
+  private pickRequest = 0;
+  private pickObjects = new Map<number, string>();
+  private pickMaterials = new Map<number, string>();
   private pointerDown: { x: number; y: number } | null = null;
   /** Focus pull in progress; the settings hold its target only once it ends. */
   private pull: { from: number; to: number; start: number } | null = null;
@@ -145,6 +149,7 @@ export class ViewerEngine {
     this.canvas = canvas;
     this.settings = get().settings;
     this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+    this.engine._bvhCache = new ViewerBvhCache();
     this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
     this.final = new Render(this.engine, {fallback: this.preview, batchSamples: true});
@@ -520,6 +525,8 @@ export class ViewerEngine {
   }
 
   private clearModel() {
+    this.pickRequest++;
+    this.pickObjects.clear(); this.pickMaterials.clear();
     this.modelEnvironment?.dispose();
     this.modelEnvironment = null;
     if (!this.model) return;
@@ -557,6 +564,8 @@ export class ViewerEngine {
   }
 
   private createSync() {
+    this.pickRequest++;
+    this.pickObjects.clear(); this.pickMaterials.clear();
     this.materials.clearConversions();
     const owner = this;
     const sync = new THREESync(this.engine, {
@@ -566,9 +575,12 @@ export class ViewerEngine {
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
+        this.pickObjects.set(mesh.aovId, source.uuid);
+        if (material) this.pickMaterials.set(mesh.materials[0].aovId, material.uuid);
         if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);
       }
     });
+    sync._shareStaticGeometry = true;
     return sync;
   }
 
@@ -1138,6 +1150,7 @@ export class ViewerEngine {
   // ---------------------------------------------------------------- picking
 
   private onPointerDown = (event: PointerEvent) => {
+    this.pickRequest++;
     this.pointerDown = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
   };
 
@@ -1146,27 +1159,35 @@ export class ViewerEngine {
     this.pointerDown = null;
     if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
     const rect = this.canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, this.activeCamera());
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
     if (get().pickingFocus) {
       set({ pickingFocus: false });
-      const x = (event.clientX - rect.left) / rect.width;
-      const y = (event.clientY - rect.top) / rect.height;
       this.pickFocus(x, y);
       return;
     }
-    const hit = raycaster.intersectObject(this.modelGroup, true).find((h) => isVisible(h.object));
-    if (!hit) return this.select(null);
-    const materials = toArray((hit.object as THREE.Mesh).material);
-    const material = materials[hit.face?.materialIndex ?? 0] ?? materials[0];
-    this.select(hit.object.uuid, material?.uuid ?? null);
+    void this.pickAt(x, y, ++this.pickRequest);
   };
 
+  private async pickAt(x: number, y: number, request: number) {
+    try {
+      let hit = await this.engine._pick(x, y);
+      for (let attempt = 0; hit === undefined && attempt < 3 && request === this.pickRequest; attempt++) {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        hit = await this.engine._pick(x, y);
+      }
+      if (request !== this.pickRequest || hit === undefined) return;
+      if (!hit) {this.select(null); return;}
+      const objectId = this.pickObjects.get(hit.object);
+      if (objectId) this.select(objectId, this.pickMaterials.get(hit.material) ?? null);
+    } catch (error) {
+      if (request === this.pickRequest) showToast(`Could not select object: ${(error as Error).message}`, 'error');
+    }
+  }
+
   select(objectId: string | null, materialId?: string | null) {
+    this.pickRequest++;
     const object = objectId ? this.modelGroup.getObjectByProperty('uuid', objectId) : null;
     if (objectId && !object) return;
     if (materialId === undefined && object && (object as THREE.Mesh).isMesh) {

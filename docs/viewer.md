@@ -34,7 +34,17 @@ and frames the model.
 Reloading the current model restores your saved camera selection.
 
 Picking an object in the viewport reveals it in the scene tree and scrolls it
-into view. Material rows start collapsed; expand a mesh to see its materials.
+into view. Selection follows the rendered geometry, including
+[displacement on WebGPU](materials.md#displacement) and alpha-cutout holes;
+it becomes available once the scene is ready to render.
+Material rows start collapsed; expand a mesh to see its materials.
+
+The viewer caches prepared BVHs to speed up reopening unchanged models.
+Models still need to be loaded and decoded. The cache has a 4 GiB browser-storage
+budget; entries are removed as space is needed. Cached data is reused only when
+geometry, displacement and BVH settings match. Loading still works if storage
+is unavailable or full.
+Clear the site's browser storage to remove the cache.
 
 ## Sharing viewer settings
 
