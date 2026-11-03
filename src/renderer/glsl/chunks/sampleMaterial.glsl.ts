@@ -205,6 +205,9 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       // Move from the start of the segment, not from its end surface.
       path.ray.o = segmentOrigin + scatterDist * path.ray.d;
       si.position = path.ray.o;
+      // A volume vertex has no originating surface to skip on continuation or shadow rays.
+      si.triangleIndex = -1;
+      si.instanceIndex = -1;
       path.li += DirectLight(si, mat, prepared, path, ffnormal, false) * path.beta;
 
       // Pick a new direction based on the phase function

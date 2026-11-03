@@ -51,6 +51,7 @@ the textures they reference still share atlas space.
 
 Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 `thinFilmThickness` is in micrometres (`0.45` = 450 nm).
+Subsurface materials with short scattering radii may appear darker than in earlier releases.
 
 `baseWeight` scales diffuse reflection and the metallic normal-incidence color
 (`baseWeight * baseColor`). Dielectric specular, transmission and subsurface

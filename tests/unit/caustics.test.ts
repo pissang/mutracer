@@ -32,7 +32,7 @@ describe('caustic contracts', () => {
     }
   });
   it('restores the original PM source through the internal opt-out', () => {
-    expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('70b2dd8608ff5b459bde920a781ebff0f8201db6e3b72e6531f9fff5eabb46f9');
+    expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('e444dfc72d5cae8a439c3628501d7f1c23526adcc868c388656377a9f1b7a535');
   });
   it('classifies resolved material combinations', () => {
     for (const [params, smooth] of [
