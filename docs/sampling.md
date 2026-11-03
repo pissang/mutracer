@@ -23,6 +23,9 @@ render.samplingPattern = 'zsobol';
   `sampleSequenceOffset`. Use disjoint offset ranges for animation frames.
 - **Backends**: WebGPU and WebGL 2 can differ in floating-point rounding even
   with identical sequence points.
+- **Dispersion**: on WebGPU, `dispersionWavelengths: 3` with
+  `directLightCandidates > 1` can need more samples in individual RGB channels
+  under strongly colored lighting and materials.
 - **Fireflies**: very narrow specular lobes under directional lights can
   produce rare, large contributions with any pattern. Sampling does not clamp
   them; use `render.clamping` if needed.

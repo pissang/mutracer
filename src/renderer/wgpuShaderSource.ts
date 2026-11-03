@@ -8,6 +8,8 @@ export interface WGPUShaderFeatures {
   maxPathEvents?: number;
   /** Web TLAS leaf boxes. Default false retains the native layout. */
   perInstanceBounds?: boolean;
+  /** Full RGB reservoir targets for browser spectral paths. Default false. */
+  channelIndependentRis?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;

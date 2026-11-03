@@ -46,6 +46,8 @@ export interface RayTraceShaderOptions {
   maxPathEvents?: number;
   /** Web TLAS leaf boxes. Default false retains the native layout. */
   perInstanceBounds?: boolean;
+  /** Full RGB reservoir targets for browser spectral paths. Default false. */
+  channelIndependentRis?: boolean;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -230,7 +232,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? createVolumeWgsl(hasVolumeNoise) + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes,hasVolumeNoise)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${hasVolumeNoise ? volumeNoiseWgsl + '\n' : ''}${hasVolumes ? createVolumeWgsl(hasVolumeNoise) + '\n' : ''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,hasVolumes,hasVolumeNoise,options.channelIndependentRis)}
 ${sampleShadowCatcherWgsl}
 
 // Output

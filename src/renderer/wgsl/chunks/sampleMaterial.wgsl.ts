@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false,hasVolumes=false,hasVolumeNoise=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false,hasVolumes=false,hasVolumeNoise=false, channelIndependentRis=false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {${hasVolumeNoise ? /* wgsl */ `
@@ -105,7 +105,7 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     let background = sampleSceneBackground(lightRay);
     Li = background.rgb * background.a;
   }
-  if (SPECTRAL) {
+  if (SPECTRAL${channelIndependentRis ? ' && rtUniform.dispersionWavelengths == 1' : ''}) {
     Li = sampling_spectral_rgb_filter(Li, (*si).spectralChannel);
   }
 
@@ -129,7 +129,12 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     (*shadowWork).ray = lightRay;
     (*shadowWork).maxDistance = visibilityDistance;
     (*shadowWork).triangleIndex = (*si).triangleIndex;
-    (*shadowWork).contribution = misWeight * unweightedContribution;
+    (*shadowWork).contribution = misWeight * unweightedContribution;${channelIndependentRis ? /* wgsl */ `
+    // Use the full RGB target for all three wavelengths. Filtering only the
+    // estimator preserves the common reservoir and its UCW normalization.
+    if (SPECTRAL && rtUniform.dispersionWavelengths != 1) {
+      (*shadowWork).contribution = sampling_spectral_rgb_filter((*shadowWork).contribution, (*si).spectralChannel);
+    }` : ''}
     (*shadowWork).lightSelectionPmf = lightSelectionPmf;
     (*shadowWork).valid = true;
     return true;

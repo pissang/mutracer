@@ -1048,7 +1048,7 @@ class WGPURayTracePass {
       startedAt = shaderCompilationNow();
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
-      const moduleKey = JSON.stringify([causticKey, !!bindless, hasAlpha, hasSceneAlpha, hasDisplacement,
+      const moduleKey = JSON.stringify([causticKey, !!bindless, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
         bake && pipelineConstantsKeys.map((key) => constants[key])]);
       let source = this._traceModules.get(moduleKey);
@@ -1058,6 +1058,7 @@ class WGPURayTracePass {
           {
             maxPathEvents: MAX_PATH_EVENTS_WGPU,
             hasDisplacement,
+            channelIndependentRis: Boolean(constants.SPECTRAL),
             hasAlpha,
             hasSceneAlpha,
             ...transport?.features,
