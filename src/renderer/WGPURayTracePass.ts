@@ -1,3 +1,4 @@
+import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
@@ -21,7 +22,6 @@ import {proceduralEnvironmentPower} from './proceduralEnvironmentPower.js';
 import {WGPUSkyBaker} from './WGPUSkyBaker.js';
 import {
   initialSceneConstants,
-  sceneAttributeLayout,
   sceneTraversalConstants,
   prepareSceneLightSampling,
   writeTraceLighting,
@@ -64,12 +64,10 @@ import {
   type DepthSampleArea
 } from './depthQuery.js';
 import {MeshMembershipCache} from './meshMembership.js';
-import {mergeRefitRanges} from './bvhAccel.js';
 import {
   updatePreparedGeometries,
   canUpdateGeometries,
   geometryTopologyChanged,
-  packVertexAttributes
 } from './geometryUpdates.js';
 import {SceneEnvironmentCache, RectLightTextureTracker} from './sceneLightChanges.js';
 import {MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel} from './materialChanges.js';
@@ -108,7 +106,7 @@ import {
 import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
 import {
   buildWebTLAS,
-  concatBLASBuffers,
+  type BLASInstance,
   type FlattendBVH,
   getTraversalStackSizes,
   refitBLAS,
@@ -355,7 +353,7 @@ class WGPURayTracePass {
   };
   private _rtUniform = makeWebRayTraceUniform(true);
   private _mapInfoUniform!: GPUBuffer;
-  private _attributeData?: Float32Array;
+  private _attributeData?: Uint32Array;
   private _attributeStride = 0;
   private _attributeOffsets: number[] = [];
   private _attrBuffers?: GPUBuffer;
@@ -451,7 +449,8 @@ class WGPURayTracePass {
   private _depthTracePipeline?: GPUComputePipeline;
   private _depthPipeline?: Promise<GPUComputePipeline>;
   private _shaderCache: WGPUShaderCache;
-  private _debugBVHBuffer?: ArrayBuffer;
+  private _bvhCPU?: {tlas: FlattendBVH; blases: BLASInstance[]};
+  private _bvhDataBytes = 0;
 
   // Fold scene invariants before backend inlining; runtime edits use uniforms.
   private _bakePipelineConstants = true;
@@ -809,6 +808,8 @@ class WGPURayTracePass {
   ) {
     const device = this._device;
     const size = Math.max(data.byteLength, minSize);
+    const limit = Math.min(device.limits?.maxBufferSize ?? Infinity, device.limits?.maxStorageBufferBindingSize ?? Infinity);
+    if (size > limit) throw new RangeError(`${label} buffer requires ${size} bytes; device storage buffer limit is ${limit} bytes.`);
 
     if (gpuBuffer == null || gpuBuffer.size < size) {
       this._needsUpdateBindGroups = true;
@@ -821,10 +822,22 @@ class WGPURayTracePass {
         usage:
           GPUBufferUsage.STORAGE |
           GPUBufferUsage.COPY_DST |
-          GPUBufferUsage.COPY_SRC
+          GPUBufferUsage.COPY_SRC,
+        // Chromium's mapped-creation IPC payload is limited to a signed 32-bit
+        // size even when the adapter supports larger storage buffers.
+        mappedAtCreation: size < 0x80000000
       });
+      if (size < 0x80000000) {
+        new Uint8Array(gpuBuffer.getMappedRange()).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+        gpuBuffer.unmap();
+        return gpuBuffer;
+      }
     }
-    this._device.queue.writeBuffer(gpuBuffer, 0, data.buffer);
+    // Bound each staging allocation/IPC payload for large or reused buffers.
+    const chunkBytes = 64 * 1024 * 1024;
+    for (let offset = 0; offset < data.byteLength; offset += chunkBytes) {
+      this._device.queue.writeBuffer(gpuBuffer, offset, data.buffer, data.byteOffset + offset, Math.min(chunkBytes, data.byteLength - offset));
+    }
     return gpuBuffer;
   }
 
@@ -1024,7 +1037,7 @@ class WGPURayTracePass {
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
       const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
-        causticDiagnostics.fullEmissionRandom !== false, true);
+        causticDiagnostics.fullEmissionRandom !== false, true, true);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1072,6 +1085,7 @@ class WGPURayTracePass {
             blasLayoutMask,
             cameraProjectionInverse: true,
             perInstanceBounds: true,
+            compactVertices: true,
             dynamicEnvironment: true
           },
           bake
@@ -1645,14 +1659,11 @@ class WGPURayTracePass {
   }
 
   async getDebugBVHData() {
-    if (!this._debugBVHBuffer) {
-      throw new Error(
-        `software-bvh exposes no CPU-readable BVH debug buffer`
-      );
-    }
-    return {
-      buffer: this._debugBVHBuffer
-    };
+    if (!this._bvhCPU) throw new Error('software-bvh exposes no CPU-readable BVH debug buffer');
+    // Debug capture pays for a combined copy only when explicitly requested.
+    const buffer = new ArrayBuffer(this._bvhDataBytes);
+    this._writeBVH(buffer, this._bvhCPU.tlas, this._bvhCPU.blases);
+    return {buffer};
   }
 
   getDiagnostics() {
@@ -2293,29 +2304,55 @@ class WGPURayTracePass {
   }
 
   /** Uploads the combined TLAS/BLAS buffer and the instance records. */
-  private _uploadBVH(tlas: FlattendBVH, blases: Parameters<typeof concatBLASBuffers>[0]) {
+  private _uploadBVH(tlas: FlattendBVH, blases: BLASInstance[]) {
     const stacks = getTraversalStackSizes(tlas, blases);
     this._constants.TLAS_STACK_SIZE = retainedShaderCapacity(stacks.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0));
     this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
-    const tlasBuffer = new Float32Array(tlas.buffer);
-    const blasBuffer = new Float32Array(concatBLASBuffers(blases));
-    const bvhData = new Float32Array(tlasBuffer.length + blasBuffer.length);
-    const blasOffset = tlasBuffer.length / 4;
-    bvhData.set(tlasBuffer);
-    bvhData.set(blasBuffer, blasOffset * 4);
-    const bvhBuffer = this._updateGPUBuffer('BVH', this._bvhBuffer, bvhData);
+    const size = tlas.buffer.byteLength + blases.reduce((sum, b) => sum + b.bvh.buffer.byteLength, 0);
+    const limit = Math.min(this._device.limits.maxBufferSize, this._device.limits.maxStorageBufferBindingSize);
+    if (size > limit) throw new RangeError(`BVH buffer requires ${size} bytes; device storage buffer limit is ${limit} bytes.`);
+    let bvhBuffer = this._bvhBuffer;
+    if (!bvhBuffer || bvhBuffer.size < Math.max(size, WGPU_SCENE_BUFFER_MIN_BYTES)) {
+      bvhBuffer?.destroy();
+      bvhBuffer = this._device.createBuffer({label: 'BVH', size: Math.max(size, WGPU_SCENE_BUFFER_MIN_BYTES),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, mappedAtCreation: size < 0x80000000});
+      if (size < 0x80000000) {
+        this._writeBVH(bvhBuffer.getMappedRange(), tlas, blases);
+        bvhBuffer.unmap();
+      } else this._uploadBVHBlocks(bvhBuffer, tlas, blases);
+    } else this._uploadBVHBlocks(bvhBuffer, tlas, blases);
+    this._bvhCPU = {tlas, blases};
+    this._bvhDataBytes = size;
+    const blasOffset = tlas.buffer.byteLength / 16;
     const instancesBuffer = this._updateGPUBuffer(
-      'Instances',
-      this._instancesBuffer,
-      new Float32Array(tlas.instancesBuffer!)
+      'Instances', this._instancesBuffer, new Float32Array(tlas.instancesBuffer!)
     );
-    if (bvhBuffer !== this._bvhBuffer || instancesBuffer !== this._instancesBuffer) {
-      this._needsUpdateBindGroups = true;
-    }
+    if (bvhBuffer !== this._bvhBuffer || instancesBuffer !== this._instancesBuffer) this._needsUpdateBindGroups = true;
     this._bvhBuffer = bvhBuffer;
     this._instancesBuffer = instancesBuffer;
-    this._debugBVHBuffer = bvhData.buffer.slice(0);
     this._rtUniform.views.blasOffset.set([blasOffset]);
+  }
+
+  private _uploadBVHBlocks(buffer: GPUBuffer, tlas: FlattendBVH, blases: BLASInstance[]) {
+    this._device.queue.writeBuffer(buffer, 0, tlas.buffer);
+    let target = tlas.buffer.byteLength;
+    for (const blas of blases) {
+      const chunkBytes = 64 * 1024 * 1024;
+      for (let offset = 0; offset < blas.bvh.buffer.byteLength; offset += chunkBytes) {
+        this._device.queue.writeBuffer(buffer, target + offset, blas.bvh.buffer, offset, Math.min(chunkBytes, blas.bvh.buffer.byteLength - offset));
+      }
+      target += blas.bvh.buffer.byteLength;
+    }
+  }
+
+  private _writeBVH(buffer: ArrayBuffer, tlas: FlattendBVH, blases: BLASInstance[]) {
+    const bytes = new Uint8Array(buffer);
+    bytes.set(new Uint8Array(tlas.buffer));
+    let offset = tlas.buffer.byteLength;
+    for (const blas of blases) {
+      bytes.set(new Uint8Array(blas.bvh.buffer), offset);
+      offset += blas.bvh.buffer.byteLength;
+    }
   }
 
   private _updateMeshData() {
@@ -2335,7 +2372,7 @@ class WGPURayTracePass {
     }
     this._geometriesNeedRefit.clear();
     // TODO check bvh needs to change
-    const res = updateMeshInstances(meshes);
+    const res = updateMeshInstances(meshes, {mergeAttributes: false});
     this._preparedMeshData = res;
     this._membershipCache.capture(res);
     this._pendingMembershipData = undefined;
@@ -2362,20 +2399,23 @@ class WGPURayTracePass {
     );
     this._needsUpdateLightSamplingData = true;
 
-    const attributeLayout = sceneAttributeLayout(mergedGeometry);
+    // Displacement geometry and its CPU BVH bounds must use the same normal.
+    // Preserve f32 normals in these scenes, avoiding quantization outside bounds.
+    const attributeLayout = compactVertexLayout(res.geometries, materials.some(m => !!m.displacementMap));
     const {stride, offsets} = attributeLayout;
-
-    const attrBufferData = new F32(
-      mergedGeometry.vertexCount * stride
-    );
-    packVertexAttributes(mergedGeometry, attrBufferData, stride, offsets, 0, mergedGeometry.vertexCount);
-
+    const vertexWords = res.geometries.reduce((sum, g) => sum + g.vertexCount, 0) * stride;
+    const materialWords = attributeLayout.constants.HAS_TRIANGLE_MATERIAL ? this._bvhDataBytes / 16 : 0;
+    const attrBufferData = new Uint32Array(vertexWords + materialWords);
+    attributeLayout.constants.MATERIALINDEX_OFF = vertexWords;
+    for (const geometry of res.geometries) {
+      const region = res.geometryRegions.get(geometry)!;
+      packCompactVertices(geometry, attrBufferData, stride, offsets, 0, geometry.vertexCount,
+        region.vertexOffset, false, !!attributeLayout.constants.COLOR_FLOAT, !!attributeLayout.constants.NORMAL_FLOAT);
+    }
     this._attributeData = attrBufferData; this._attributeStride = stride; this._attributeOffsets = offsets;
-    this._attrBuffers = this._updateGPUBuffer(
-      'Attributes',
-      this._attrBuffers,
-      attrBufferData
-    );
+    Object.assign(this._constants, attributeLayout.constants);
+    this._packTriangleMaterials(res, tlas);
+    this._attrBuffers = this._updateGPUBuffer('Attributes', this._attrBuffers, attrBufferData);
 
     this._materialsBuffer = this._updateGPUBuffer(
       'Materials',
@@ -2438,11 +2478,48 @@ class WGPURayTracePass {
     if (this._bindless) this._constants.NUM_MAPS = 20;
   }
 
+  private _packTriangleMaterials(res: ReturnType<typeof updateMeshInstances>, tlas: FlattendBVH) {
+    if (!this._constants.HAS_TRIANGLE_MATERIAL) return;
+    let offset = Number(this._constants.MATERIALINDEX_OFF) + tlas.buffer.byteLength / 16;
+    res.geometries.forEach((g, i) => {
+      packTriangleMaterials(g, res.geometryRegions.get(g)!.materialIndices, res.blases[i].bvh.buffer, this._attributeData!, offset);
+      offset += res.blases[i].bvh.buffer.byteLength / 16;
+    });
+  }
+
+  private _refreshTriangleMaterials(res: ReturnType<typeof updateMeshInstances>, tlas: FlattendBVH) {
+    if (!this._constants.HAS_TRIANGLE_MATERIAL) return;
+    const vertexWords = Number(this._constants.MATERIALINDEX_OFF);
+    const required = vertexWords + this._bvhDataBytes / 16;
+    if (this._attributeData!.length !== required) {
+      const next = new Uint32Array(required);
+      next.set(this._attributeData!.subarray(0, vertexWords));
+      this._attributeData = next;
+    }
+    this._packTriangleMaterials(res, tlas);
+    if (this._attrBuffers!.size < this._attributeData!.byteLength) {
+      this._attrBuffers = this._updateGPUBuffer('Attributes', this._attrBuffers, this._attributeData!);
+    } else {
+      const first = vertexWords * 4, end = this._attributeData!.byteLength, chunk = 64 * 1024 * 1024;
+      for (let offset = first; offset < end; offset += chunk) {
+        this._device.queue.writeBuffer(this._attrBuffers!, offset, this._attributeData!.buffer, offset, Math.min(chunk, end - offset));
+      }
+    }
+  }
+
   private _updateGeometryData() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
+    // Promote the scene color plane if an edit introduces HDR/negative RGB.
+    if (!this._constants.COLOR_FLOAT && [...this._pendingGeometryUpdates].some(g =>
+      g.color?.array.some(value => !(value >= 0 && value <= 1)))) {
+      this._updateMeshData();
+      return;
+    }
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
-    for (const { first, count, topologyChanged, deformationOnly } of update.vertices) {
-      packVertexAttributes(res.geometry, this._attributeData!, this._attributeStride, this._attributeOffsets, first, count, topologyChanged, deformationOnly);
+    for (const { first, count, deformationOnly } of update.vertices) {
+      const geometry = res.geometries.find(g => res.geometryRegions.get(g)!.vertexOffset === first)!;
+      packCompactVertices(geometry, this._attributeData!, this._attributeStride, this._attributeOffsets,
+        0, count, first, deformationOnly, !!this._constants.COLOR_FLOAT, !!this._constants.NORMAL_FLOAT);
       const offset = first * this._attributeStride * 4, size = count * this._attributeStride * 4;
       this._device.queue.writeBuffer(this._attrBuffers!, offset, this._attributeData!.buffer, offset, size);
     }
@@ -2454,16 +2531,13 @@ class WGPURayTracePass {
       refitTLAS(tlas, res.instances, res.blases);
       this._uploadBVH(tlas, res.blases);
     } else {
-      const bytes = new Uint8Array(this._debugBVHBuffer!);
-      const ranges = [];
       for (const { blas, offset } of update.blases) {
-        const target = tlas.buffer.byteLength + offset;
-        bytes.set(new Uint8Array(blas.buffer), target);
-        ranges.push({offset: target, size: blas.buffer.byteLength});
+        this._device.queue.writeBuffer(this._bvhBuffer!, tlas.buffer.byteLength + offset, blas.buffer);
       }
-      for (const { offset, size } of mergeRefitRanges(ranges)) {
-        this._device.queue.writeBuffer(this._bvhBuffer!, offset, this._debugBVHBuffer!, offset, size);
-      }
+    }
+
+    if (this._constants.HAS_TRIANGLE_MATERIAL && (update.relocated || update.vertices.some(v => v.topologyChanged))) {
+      this._refreshTriangleMaterials(res, tlas);
     }
     const bits = { bvh2: 1, bvh4: 2, 'bvh-gpu': 4, cwbvh: 8 };
     this._blasLayoutMask = res.blases.reduce((mask, b) => mask | bits[b.bvh.layout ?? 'bvh2'], 0);
@@ -2530,6 +2604,7 @@ class WGPURayTracePass {
     const tlas = buildWebTLAS(instances, res.blases);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
+    this._refreshTriangleMaterials(res, tlas);
 
     this._emissiveTriangles = this._emissiveCache.collect(
       emissiveBindings,
@@ -2575,6 +2650,7 @@ class WGPURayTracePass {
     if (!sameInstanceMembership(previousInstances, res.instances)) {
       this._tlas = buildWebTLAS(res.instances, res.blases);
       this._uploadBVH(this._tlas, res.blases);
+      this._refreshTriangleMaterials(res, this._tlas);
       this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
       this._needsUpdateLightSamplingData = true;
       this._rtUniform.views.isEmpty[0] = +(res.instances.length === 0);
@@ -2587,7 +2663,6 @@ class WGPURayTracePass {
       res.blases,
       incremental ? dirtyIndices : undefined
     );
-    const tlasData = new Float32Array(tlas.buffer);
     for (const { offset, size } of ranges.tlasRanges) {
       this._device.queue.writeBuffer(
         this._bvhBuffer,
@@ -2605,9 +2680,6 @@ class WGPURayTracePass {
         offset,
         size
       );
-    }
-    if (this._debugBVHBuffer) {
-      new Float32Array(this._debugBVHBuffer).set(tlasData);
     }
 
     if (

@@ -1,0 +1,8 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Compact vertex contracts</title>
+<pre id="result">Running</pre>
+<script type="module">
+import {captureCompactVertices} from './compactVertices.ts';
+captureCompactVertices().then(result => document.querySelector('#result').textContent=JSON.stringify(result), error => document.querySelector('#result').textContent=String(error.stack||error));
+</script>

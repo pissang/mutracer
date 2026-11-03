@@ -38,6 +38,13 @@ A tuning checklist. Each item links to the page with the details.
 - Textures share an atlas bounded by `textureAtlasBudgetBytes`; larger textures
   are downscaled. Check `engine.getDiagnostics()?.textureAtlas`.
 
+WebGPU quantizes vertex normal and tangent directions; scenes with displacement
+retain full normal precision. Vertex RGB values in
+`[0, 1]` have at most `1/510` absolute error per channel; scenes containing
+negative or HDR vertex colors retain float32 RGB instead. Positions and UV
+coordinates retain float32 precision. Large scenes still depend on the device's
+buffer limits and the browser's available CPU memory.
+
 ## Animation and editing
 
 See [scene updates](./updates.md) for the cost of each kind of edit.

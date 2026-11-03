@@ -13,6 +13,7 @@ export interface GeometryUpdateBinding<M extends GeometryUpdateMesh = GeometryUp
 export interface GeometryUpdateRegion { vertexOffset: number; indexOffset: number; materialIndices: number[]; }
 export interface GeometryUpdateState<M extends GeometryUpdateMesh = GeometryUpdateMesh> {
   geometry: Geometry;
+  mergedAttributes?: boolean;
   geometries: Geometry[];
   geometryRegions: Map<Geometry, GeometryUpdateRegion>;
   geometryStates: Map<Geometry, {topologyVersion: number; indices: Geometry['indices']['array']; indexCount: number}>;

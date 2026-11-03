@@ -112,9 +112,9 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
         blases.push({blas: bvh, offset});
       }
       geometry.version = source.version;
-      copyRegion(source, prepared.geometry, region, topologyChanged, deformationOnly);
+      if (prepared.mergedAttributes !== false) copyRegion(source, prepared.geometry, region, topologyChanged, deformationOnly);
       const count = source.vertexCount, previousVertices = vertices[vertices.length - 1];
-      if (previousVertices && previousVertices.first + previousVertices.count === region.vertexOffset && previousVertices.topologyChanged === topologyChanged && previousVertices.deformationOnly === deformationOnly) previousVertices.count += count;
+      if (prepared.mergedAttributes !== false && previousVertices && previousVertices.first + previousVertices.count === region.vertexOffset && previousVertices.topologyChanged === topologyChanged && previousVertices.deformationOnly === deformationOnly) previousVertices.count += count;
       else vertices.push({first: region.vertexOffset, count, topologyChanged, deformationOnly});
       for (const binding of indices(prepared).prepared.get(geometry) ?? []) {
         const bounds = options.softwareBvhs === false ? computeGeometryBounds(geometry) : getBvhBounds(geometry);

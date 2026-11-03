@@ -148,7 +148,7 @@ export function dirtyPreparedInstanceIndices<M extends MeshState>(bindings: Prep
 
 export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
   prepareGeometry: (mesh: M) => {geometry: Geometry; displacementScale: number},
-  boundsForGeometry = getBvhBounds, softwareBvhs = true) {
+  boundsForGeometry = getBvhBounds, softwareBvhs = true, mergeAttributes = true) {
   const materialIndexMap = new Map<MaterialState, number>();
   const geometryIndexMap = new Map<Geometry, number>();
   const geometryBounds = new Map<Geometry, [Float64Array, Float64Array]>();
@@ -241,10 +241,18 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     .filter((instance) => instance != null) as TLASInstance[];
 
   const geometryRegions = new Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>();
-  const geometry = mergeGeometry(geometries, globalMaterialIndicesMap, geometryRegions);
+  const geometry = mergeAttributes ? mergeGeometry(geometries, globalMaterialIndicesMap, geometryRegions) : geometryLayout(geometries);
+  if (!mergeAttributes) {
+    let vertexOffset = 0, indexOffset = 0;
+    geometries.forEach((g, i) => {
+      geometryRegions.set(g, {vertexOffset, indexOffset, materialIndices: globalMaterialIndicesMap[i]});
+      vertexOffset += g.vertexCount; indexOffset += g.indexArray.length;
+    });
+  }
 
   return {
     geometry,
+    mergedAttributes: mergeAttributes,
     geometries,
     geometryRegions,
     geometryStates: new Map(instanceBindings.map(binding => {
@@ -262,6 +270,14 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
       trainglesCount: geo.indexArray.length / 3
     })) : []
   };
+}
+
+// Feature descriptor only: direct WebGPU packing retains the original geometries.
+function geometryLayout(geometries: Geometry[]) {
+  const empty = new Float32Array(0);
+  return new Geometry({position: new Attribute(empty, 3), normal: new Attribute(empty, 3),
+    indices: new Attribute(new Uint32Array(0), 1),
+    tangent: geometries.some(g => g.tangent) ? new Attribute(empty, 4) : undefined});
 }
 
 export function mergeGeometry(

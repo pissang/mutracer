@@ -13,6 +13,7 @@ import { buildBLAS } from './bvhAccel.js';
 import Texture, { isTextureDataSource } from '../scene/Texture.js';
 import { generateVertexTangents } from '../util/geometry.js';
 
+import { getBvhBounds } from './geometryBvhBounds.js';
 export { getBvhBounds } from './geometryBvhBounds.js';
 
 export { computeBounds, updateMeshInstanceTransforms } from './scenePreparation.js';
@@ -262,8 +263,8 @@ function prepareMeshGeometryBvh(mesh: Mesh, displacement = true) {
   return { geometry, displacementScale };
 }
 
-export function updateMeshInstances(meshes: Mesh[], options: { displacement?: boolean } = {}) {
-  return prepareSceneMeshes(meshes, mesh => prepareMeshGeometryBvh(mesh, options.displacement !== false));
+export function updateMeshInstances(meshes: Mesh[], options: { displacement?: boolean; mergeAttributes?: boolean } = {}) {
+  return prepareSceneMeshes(meshes, mesh => prepareMeshGeometryBvh(mesh, options.displacement !== false), getBvhBounds, true, options.mergeAttributes !== false);
 }
 
 export {dirtyPreparedInstanceIndices as dirtyMeshInstanceIndices} from './scenePreparation.js';
