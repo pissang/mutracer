@@ -310,7 +310,7 @@ export interface ViewerState {
     /** Viewport debug overlay expanded. */
     debug: boolean;
     exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean;
-    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | 'pbrt' | null;
+    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
     mobileTab: InspectorTab | 'scene';
   };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;

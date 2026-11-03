@@ -5,9 +5,9 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
-PBRT scenes can be opened from **Examples → PBRT scenes**, from a `.pbrt` URL,
-or by dropping a folder or selecting the scene together with its assets. Relative
-paths follow the main scene's directory. Scene cameras and lighting load with the
+PBRT scenes can be opened from a `.pbrt` URL, by dropping a folder, or by
+selecting the scene together with its assets. Relative paths follow the main
+scene's directory. Scene cameras and lighting load with the
 model; aspect ratio, bounce limit and sample target start from the scene and remain
 editable. The Lighting panel expands import warnings. Downloads of 1 GB or more
 require confirmation, and scenes above the browser import memory budget are
