@@ -69,7 +69,7 @@ function validateBlas(bvh: FlattendBVH, positions: ArrayLike<number>) {
 }
 
 describe('binned SAH builder', () => {
-  it.each([8, 16, 32])('references every primitive once and keeps siblings adjacent with %s bins', bins => {
+  it.each([8, 16, 32, 64])('references every primitive once and keeps siblings adjacent with %s bins', bins => {
     const count = 1000;
     const aabbs = new Float32Array(count * 6);
     let seed = 1;

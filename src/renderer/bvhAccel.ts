@@ -57,7 +57,7 @@ function unionBounds(bounds: Box3, a: Box3, b: Box3) {
 }
 
 // More TLAS bins separate overlapping static instances; native retains eight.
-export const WEB_TLAS_BINS = 32;
+export const WEB_TLAS_BINS = 64;
 
 export interface TLASInstance {
   blasIndex: number;
