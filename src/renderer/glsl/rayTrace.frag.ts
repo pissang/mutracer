@@ -272,11 +272,8 @@ ${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
 
   // Russian Roulette sampling
 #ifdef USE_RR
-${hasVolumes ? `  int rouletteStart = RR_MAX;
-#ifndef HAS_MEDIUM
-  if (!path.volumeScattered) rouletteStart = 2;
-#endif
-` : ''}  if (depth >= ${hasVolumes ? 'rouletteStart' : 'RR_MAX'} && !sampleIgnored) {
+  int rouletteStart = path.scatteringMediumEntered ? RR_MAX : 2;
+  if (depth >= rouletteStart && !sampleIgnored) {
     // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
     float maxComponent = max(max(path.beta.x, path.beta.y), path.beta.z);
     float q = max(0.0, 1.0 - maxComponent);
@@ -486,7 +483,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
 }
 
 ${hasVolumes ? createVolumePathGlsl(hasVolumeNoise) + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
-  Path path;
+  Path path; path.scatteringMediumEntered = false;
   path.ray = ray;
   path.li = vec3(0);
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;

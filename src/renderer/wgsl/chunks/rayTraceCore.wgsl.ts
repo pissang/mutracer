@@ -173,6 +173,8 @@ ${hasCoatNormals ? /* wgsl */ `
 
 struct Path {${hasVolumes ? /* wgsl */ `
   volumeScattered: bool,` : ''}
+  // Sticky for this path: an SSS walk must retain its chance to reach the boundary.
+  scatteringMediumEntered: bool,
   ray: Ray,
   li: vec3f,
   alpha: f32,

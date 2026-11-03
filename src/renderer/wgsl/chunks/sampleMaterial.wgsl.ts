@@ -369,12 +369,16 @@ ${hasCoatNormals ? /* wgsl */ `
       let mediumPdf = max((density.x + density.y + density.z) / 3.0, 1e-8);
       if (mediumSampled) {
         (*path).beta *= transmittance * scattering / mediumPdf;
+        // Zero throughput cannot contribute at subsequent vertices or light connections.
+        if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
         // Move from the start of the segment, not from its end surface.
         (*path).ray.o = segmentOrigin + scatterDist * (*path).ray.d;
         (*si).position = (*path).ray.o;
       }
       else {
         (*path).beta *= transmittance / mediumPdf;
+        // Zero throughput cannot contribute at subsequent vertices or light connections.
+        if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
       }
     }
   }
@@ -425,6 +429,8 @@ ${researchContribution}${photonMapping?/* wgsl */ `  if(!mediumSampled){let valu
       (prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6);
 ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
 ` : ''}    (*path).beta *= f / scatteringPdf;
+    // Zero throughput cannot contribute at subsequent vertices or light connections.
+    if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
 
     crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;
@@ -453,6 +459,7 @@ ${hasVolumes ? /* wgsl */ `  if (!mediumSampled && crossedBoundary) { (*si).volu
         (*si).mediumType = (*ma).mediumType;
         (*si).mediumExtinction = (*ma).mediumExtinction;
         (*si).mediumScattering = (*ma).mediumScattering;
+        (*path).scatteringMediumEntered = (*path).scatteringMediumEntered || any((*ma).mediumScattering > vec3f(0.0));
         (*si).mediumAnisotropy = (*ma).mediumAnisotropy;
       }
       else {

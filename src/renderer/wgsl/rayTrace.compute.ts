@@ -418,7 +418,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
 
   // Russian roulette with throughput compensation.
   if (USE_RR) {
-    if (*depth >= ${hasVolumes ? 'select(2, RR_MAX, HAS_MEDIUM || (*path).volumeScattered)' : 'RR_MAX'} && !(*sampleIgnoredOut)) {
+    if (*depth >= select(2, RR_MAX, (*path).scatteringMediumEntered) && !(*sampleIgnoredOut)) {
       let rouletteBeta = (*path).beta;
       // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
       let maxComponent = max(max(rouletteBeta.x, rouletteBeta.y), rouletteBeta.z);

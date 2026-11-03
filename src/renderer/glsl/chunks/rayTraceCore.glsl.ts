@@ -185,6 +185,8 @@ ivec4 fetchData(highp isampler2D s, int i, int columnsLog2) {
 
 struct Path {${hasVolumes ? /* glsl */ `
   bool volumeScattered;` : ''}
+  // Retain deferred roulette after an SSS walk reaches its boundary.
+  bool scatteringMediumEntered;
   Ray ray;
   vec3 li;
   float alpha;

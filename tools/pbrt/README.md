@@ -83,8 +83,8 @@ Subsurface mean free paths below 0.001 scene units are limited by the existing
 OpenPBR medium; this can change fine-scale skin scattering and is warned about.
 Thin-walled materials cannot retain interior absorption or scattering media;
 import warns and excludes these surfaces from strict comparison.
-Scenes with media render noticeably more slowly. Absorbing gemstones can still
-differ in color from PBRT, and rough colored metals can appear too bright.
+Absorbing gemstones can still differ in color from PBRT, and rough colored
+metals can appear too bright.
 Optical constants accept named spectra or SPD files. Spatial optical-constant
 maps and coat roughness maps use warned mean-value approximations.
 

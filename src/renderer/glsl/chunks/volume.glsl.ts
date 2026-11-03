@@ -119,6 +119,7 @@ int sampleVolumeEvent(inout Path path, inout SurfaceInteraction si, float maximu
 }
 void shadeVolumeVertex(inout Path path, inout SurfaceInteraction si, int winner, inout int depth) {
   path.beta *= volumeColorAnisotropy[winner].rgb; path.alpha = 1.0; path.volumeScattered = true;
+  path.scatteringMediumEntered = true;
   if (max(max(path.beta.x, path.beta.y), path.beta.z) <= 0.0) { path.abort = true; return; }
   float originalAnisotropy = si.mediumAnisotropy;
   si.mediumAnisotropy = volumeColorAnisotropy[winner].w;
@@ -139,7 +140,7 @@ void shadeVolumeVertex(inout Path path, inout SurfaceInteraction si, int winner,
 #endif
 }
 vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, bool traceVolume, inout RayTraceAuxiliary outAux) {
-  Path path; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
+  Path path; path.scatteringMediumEntered = false; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.scatteringPdf = 0.0; path.scatteringIsDelta = false; path.isNextRefraction = false; path.volumeScattered = false;
   Path originalPath = path; SurfaceInteraction primarySi = si; OpenPbrResolvedMaterial primaryMat = mat;

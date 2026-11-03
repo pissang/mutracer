@@ -141,6 +141,7 @@ fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
   let volume = rtUniform.volumeRecords[winner];
   (*path).beta *= volume.colorAnisotropy.rgb;
   (*path).alpha = 1.0; (*path).volumeScattered = true;
+  (*path).scatteringMediumEntered = true;
   if (max(max((*path).beta.x, (*path).beta.y), (*path).beta.z) <= 0.0) { (*path).abort = true; return; }
   let originalAnisotropy = (*si).mediumAnisotropy;
   (*si).mediumAnisotropy = volume.colorAnisotropy.w;
