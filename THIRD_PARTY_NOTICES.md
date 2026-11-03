@@ -45,10 +45,7 @@ The ideal-metal direction/average energy tables and multiple-scattering lobe
 additionally adapt `impl/openpbr_microfacet_multiple_scattering_lobes.h`,
 `impl/openpbr_microfacet_multiple_scattering_data.h`, and
 `impl/data/openpbr_ideal_metal_{,avg_}energy_complement_data.h` at the same
-`c91aad1d1ce1693e803f039d7c92c2965c4eb013` commit. Directional tables use
-row-normalized encoding; metal and ideal-dielectric averages retain exact u16
-values in compact rows. The uniform-hemisphere proposal is mixed within the
-existing metal sampling lobe.
+`c91aad1d1ce1693e803f039d7c92c2965c4eb013` commit.
 
 The ideal-dielectric reflection/transmission multiple-scattering lobe and
 three additional tables adapt the same commit's

@@ -57,6 +57,7 @@ Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 retain their own strengths. For metals, `specularColor` tints the F82 Fresnel
 curve near grazing angles and `specularWeight` scales the entire reflection,
 including thin-film reflection. At their default values, F82 reduces to Schlick.
+Low-roughness metals may appear slightly darker under broad lighting than in earlier releases.
 
 Native `specularRoughnessAnisotropy` and `coatRoughnessAnisotropy` use the OpenPBR GGX mapping:
 `alphaT = roughness² * sqrt(2 / (1 + (1 - anisotropy)²))` and
