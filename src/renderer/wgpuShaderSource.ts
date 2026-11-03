@@ -10,6 +10,8 @@ export interface WGPUShaderFeatures {
   perInstanceBounds?: boolean;
   /** Full RGB reservoir targets for browser spectral paths. Default false. */
   channelIndependentRis?: boolean;
+  /** Reuse browser RGB paths until the first wavelength-dependent IOR. Default false. */
+  shareSpectralPrefix?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;

@@ -1,3 +1,4 @@
+import {prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './spectralPrefix.wgsl.js';
 import {volumeTrackingWgsl} from './volumeTracking.wgsl.js';
 import {MAX_PATH_EVENTS_WEBGL} from '../../pathLimits.js';
 // Volume-only source. The no-volumes generator never includes these declarations.
@@ -162,9 +163,24 @@ fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
 `;
 }
 
-export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false, maxPathEvents = MAX_PATH_EVENTS_WEBGL) { return /* wgsl */ `
-fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceVolume: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
-  var si = initialSi; var ma = initialMa;
+export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false, maxPathEvents = MAX_PATH_EVENTS_WEBGL, sharePrefix = false) {
+  const bindings: PrefixBindings = {
+    path: ['Path', 'path'], si: ['SurfaceInteraction', 'si'], ma: ['OpenPbrResolvedMaterial', 'ma'],
+    aux: ['RayTraceAuxiliary', '*outAux'], depth: ['i32', 'depth'], event: ['i32', 'event'],
+    primarySi: ['SurfaceInteraction', 'primarySi'], primaryMa: ['OpenPbrResolvedMaterial', 'primaryMa'],
+    coverage: ['f32', 'coverage'], split: ['bool', 'split'], front: ['bool', 'front'],
+    back: ['vec4f', 'back'], backAux: ['RayTraceAuxiliary', 'backAux'],
+    query: ['bool', 'query'], resample: ['bool', 'resample'], skipVolume: ['bool', 'skipVolume'],
+    first: ['bool', 'first'], opaque: ['bool', 'isOpaque'],
+    completion: ['u32', 'completionBounce'], maximum: ['f32', 'maximum'], ...prefixRandomBindings
+  };
+  const activate = /* wgsl */ `spFork(&path, &si);
+    primarySi.spectralChannel = spChannel; primarySi.wavelength = spWavelength;
+    back = vec4f(sampling_spectral_rgb_filter(back.rgb, spChannel), back.a);`;
+  return /* wgsl */ `
+${sharePrefix ? prefixCheckpoint('spVolume', bindings) : ''}fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initialMa: OpenPbrResolvedMaterial, traceVolume: bool, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+  var si = initialSi; var ma = initialMa;${sharePrefix ? /* wgsl */ `
+  if (spEnabled) { si.spectralChannel = select(spChannel, 0, spActive); si.wavelength = spWavelength; }` : ''}
   var path: Path; path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
   let originalPath = path;
@@ -176,8 +192,15 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
   var skipVolume = false; var first = true;
   var isOpaque = false;
   let limit = min(max(rtUniform.bounces, 0) * 3, ${maxPathEvents});
-  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
-    if (query) {
+${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
+  if (spActive && spChannel > 1 && spCompleted[spSlot].ready) { return spReplay(spSlot, outAux); }
+  var spResume = false; var completionBounce = 0u; var maximum = 0.0;
+  if (spActive && spChannel > 1 && spForkCall == spSlot) {
+    ${prefixRestore('spVolume', bindings)}
+    spResume = true; ${activate}
+  }
+` : ''}  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
+    if (${sharePrefix ? '!spResume && query' : 'query'}) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
       if (event == 0 && si.hit && ma.materialType == STANDARD) {
@@ -187,11 +210,11 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
       }
     }
     query = true;
-    let completionBounce = samplingBounce;
+    ${sharePrefix ? 'if (!spResume) {\n      completionBounce = samplingBounce;' : 'let completionBounce = samplingBounce;'}
     samplingBounce = u32(depth);
-    let maximum = volumeSegmentMaximum(path, si);
-    var winner = -1;
-    if (traceVolume && !skipVolume) { winner = sampleVolumeEvent(&path, &si, maximum, resample); }
+    ${sharePrefix ? 'maximum =' : 'let maximum ='} volumeSegmentMaximum(path, si);
+${sharePrefix ? '    }\n' : ''}    var winner = -1;
+    if (${sharePrefix ? '!spResume && ' : ''}traceVolume && !skipVolume) { winner = sampleVolumeEvent(&path, &si, maximum, resample); }
     skipVolume = false;
     if (winner >= 0) {
       // A camera volumes event establishes an opaque primary path. Surface
@@ -218,7 +241,11 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
         (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
         path.li = vec3f(1.0); path.alpha = 1.0; path.abort = true;
       } else {
-        if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { samplingBounce = completionBounce; var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
+${sharePrefix ? /* wgsl */ `        if (spActive && (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) && ma.transmissionWeight > 0.001 && spDisperses(ma)) {
+          ${prefixSave('spVolume', bindings)}
+          spForkCall = spSlot; ${activate}
+        }
+` : ''}        if (event > 0 || maximum < select(INF, distance(si.position, path.ray.o), si.hit)) { samplingBounce = completionBounce; var completionDepth = depth; completeVertex(&path, &completionDepth, &si, &ma, resample); }
         if (!path.abort && ((isOpaque && event > rtUniform.bounces) || event >= limit)) { path.abort = true; }
         if (!path.abort) {
           var ignored = false;
@@ -231,9 +258,9 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
       }
       event++;
     }
-    if (path.abort) {
+${sharePrefix ? '    spResume = false;\n' : ''}    if (path.abort) {
       let result = vec4f(path.li, path.alpha);
-      if (!split || coverage <= 0.0) { return result; }
+      if (!split || coverage <= 0.0) { return ${sharePrefix ? 'spFinish(spSlot, result, *outAux)' : 'result'}; }
       if (front) {
         (*outAux).albedo = mix(backAux.albedo, (*outAux).albedo, coverage);
         let blendedNormal = mix(backAux.normal, (*outAux).normal, coverage);
@@ -241,7 +268,7 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
         (*outAux).isBlank = backAux.isBlank && (*outAux).isBlank;
         (*outAux).isShadowCatcher = backAux.isShadowCatcher && (*outAux).isShadowCatcher;
         (*outAux).shadowCounts = mix(backAux.shadowCounts, (*outAux).shadowCounts, coverage);
-        return mix(back, result, coverage);
+        return ${sharePrefix ? 'spFinish(spSlot, mix(back, result, coverage), *outAux)' : 'mix(back, result, coverage)'};
       }
       back = result; backAux = *outAux;
       front = true; path = originalPath; si = primarySi; ma = primaryMa; ma.alpha = 1.0;
@@ -249,7 +276,7 @@ fn integrateVolumePath(uv: vec2f, ray: Ray, initialSi: SurfaceInteraction, initi
       depth = 0; event = 0; query = false; resample = false; skipVolume = true;
     }
   }
-  return vec4f(path.li, path.alpha);
+  return ${sharePrefix ? 'spFinish(spSlot, vec4f(path.li, path.alpha), *outAux)' : 'vec4f(path.li, path.alpha)'};
 }
 fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si: SurfaceInteraction; var ma: OpenPbrResolvedMaterial;
@@ -288,7 +315,9 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       let hero = min(i32(wavelengthSample * 3.0), 2);
       wavelengthSi.spectralChannel = select(channel, hero, single) + 1;
       wavelengthSi.wavelength = spectrumCameraWavelength(u32(wavelengthSi.spectralChannel - 1), select(wavelengthSample, fract(wavelengthSample * 3.0), single));
-      wavelengthMa.specularIor = sampling_cauchy_ior(wavelengthSi.wavelength, ma.specularIor, ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
+${sharePrefix ? /* wgsl */ `      spBegin(wavelengthSi.spectralChannel, wavelengthSi.wavelength, spDisperses(ma));
+      if (spActive) { wavelengthSi.spectralChannel = 0; }
+` : ''}      wavelengthMa.specularIor = sampling_cauchy_ior(wavelengthSi.wavelength, ma.specularIor, ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
     }
     let result = integrateVolumePath(uv, ray, wavelengthSi, wavelengthMa, true, &aux);
     if (guideTr < 1.0) {

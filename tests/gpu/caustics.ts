@@ -26,8 +26,8 @@ async function capture(caustics?: CausticSettings & {mnee?: boolean | {method?: 
     if(variant==='reflection'){caster.materials[0].transmissionWeight=0;caster.materials[0].baseMetalness=1;caster.materials[0].baseColor=[.9,.8,.7];}
     if(variant==='alpha'){caster.materials[0].opacity=.5;caster.materials[0].alphaMode='blend';}
     if(variant==='volume'){caster.materials[0].transmissionDepth=.8;caster.materials[0].transmissionColor=[.3,.6,.8];}
-    if(variant==='catcher')floor.materials[0].shadowCatcher=true;
-    if(variant==='dispersion')caster.materials[0].transmissionDispersionScale=1;
+    if(variant==='catcher'||variant==='catcher-dispersion')floor.materials[0].shadowCatcher=true;
+    if(variant==='dispersion'||variant==='catcher-dispersion')caster.materials[0].transmissionDispersionScale=1;
     const light=variant==='indirect'?new SpotLight({intensity:120,radius:.25,innerAngle:25,outerAngle:35}):variant==='directional'?new DirectionalLight({intensity:8}):variant==='environment'?new EnvironmentLight({map:new Texture({data:new Float32Array([1,1,1,1]),width:1,height:1})}):spot?new SpotLight({intensity:120,radius:0,innerAngle:25,outerAngle:35}):new RectLight({intensity:8,size:[3,3]});
     light.position=spot||variant==='indirect'?[-1.5,3,0]:[0,3,0];if(light.type!=='EnvironmentLight')light.lookAt([0,0,0]);
     const wall=new Mesh(createPlaneGeometry(1,1,'vertical'),new OpenPBRMaterial({baseColor:[.6,.6,.6]}));wall.position=[0,1.5,-2.5];wall.transform[0]=3;wall.transform[5]=1.5;

@@ -1,3 +1,4 @@
+import {spectralPrefixWgsl, prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './chunks/spectralPrefix.wgsl.js';
 import {volumeNoiseWgsl} from './chunks/volumeNoise.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
@@ -48,6 +49,8 @@ export interface RayTraceShaderOptions {
   perInstanceBounds?: boolean;
   /** Full RGB reservoir targets for browser spectral paths. Default false. */
   channelIndependentRis?: boolean;
+  /** Reuse browser RGB paths until the first wavelength-dependent IOR. Default false. */
+  shareSpectralPrefix?: boolean;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -106,6 +109,19 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
+  // MNEE can refract a wavelength-dependent connection at an ordinary receiver,
+  // before the camera path reaches any Cauchy boundary. Preserve its independent
+  // wavelength paths until a connection-solver checkpoint is available.
+  const sharePrefix = options.shareSpectralPrefix ?? false;
+  const surfacePrefix: PrefixBindings = {
+    path: ['Path', 'path'], si: ['SurfaceInteraction', '*si'], ma: ['OpenPbrResolvedMaterial', '*ma'],
+    aux: ['RayTraceAuxiliary', '*outAux'], depth: ['i32', 'depth'], event: ['i32', 'event'],
+    ignored: ['bool', 'sampleIgnored'], opaque: ['bool', 'isNotTransparent'], ...prefixRandomBindings
+  };
+  const flatPrefix: PrefixBindings = {
+    ...surfacePrefix, si: ['SurfaceInteraction', 'si'], ma: ['OpenPbrResolvedMaterial', 'ma'],
+    aux: ['RayTraceAuxiliary', 'wavelengthAux']
+  };
   const primaryVariables = /* wgsl */ `
   var si: SurfaceInteraction;
   var ma: OpenPbrResolvedMaterial;
@@ -651,7 +667,7 @@ fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   return source.normal;
 }
 
-fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
+${sharePrefix ? spectralPrefixWgsl(!enabled) + prefixCheckpoint('spSurface', surfacePrefix) + prefixCheckpoint('spFlat', flatPrefix) : ''}fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
   var path: Path;
   path.ray = ray;
   path.li = vec3f(0.0);
@@ -668,12 +684,20 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   var depth = 0;
   var sampleIgnored = false;
   var isNotTransparent = false;
-  // Back branches and subsequent bounces share one query/material call site.
+${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
+  if (spActive && spChannel > 1 && spCompleted[spSlot].ready) { return spReplay(spSlot, outAux); }
+  var spEvent = 0; var spResume = false;
+  if (spActive && spChannel > 1 && spForkCall == spSlot) {
+    var event = 0;
+    ${prefixRestore('spSurface', surfacePrefix)}
+    spEvent = event; spResume = true; spFork(&path, si);
+  } else if (spEnabled) { (*si).spectralChannel = select(spChannel, 0, spActive); (*si).wavelength = spWavelength; }
+` : ''}  // Back branches and subsequent bounces share one query/material call site.
   // Keep wavelength/branch loops separate so GPU lanes reconverge between
   // paths. Include the final query, which the legacy bounce completed before
   // testing its event budget. Even a zero-bounce back branch resolves guides.
-  for (var event = 0; event <= eventLimit; event++) {
-    if ((event != 0) | initialQuery) {
+  for (var event = ${sharePrefix ? 'spEvent' : '0'}; event <= eventLimit; event++) {
+    if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
       intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
       getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
     }
@@ -685,16 +709,20 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
         (*si).albedoSampled = (*ma).transmissionWeight > 0.5;
       }
       isNotTransparent = ((*ma).transmissionWeight < 0.001) & ((*ma).subsurfaceWeight < 0.001) & ((*ma).alpha > 0.99);
-    } else {
+    } else {${sharePrefix ? /* wgsl */ `
+      if (spActive && (*ma).transmissionWeight > 0.001 && spDisperses(*ma)) {
+        ${prefixSave('spSurface', surfacePrefix)}
+        spForkCall = spSlot; spFork(&path, si);
+      }` : ''}
       completeVertex(&path, &depth, si, ma, sampleIgnored);
     }
-    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
+${sharePrefix ? '    spResume = false;\n' : ''}    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
     if (path.abort | (event >= eventLimit)) { break; }
     shadeVertex(uv, &path, &depth, si, ma, outAux, &sampleIgnored);
     if (path.abort) { break; }
   }
 
-  return vec4f(path.li, path.alpha);
+  return ${sharePrefix ? 'spFinish(spSlot, vec4f(path.li, path.alpha), *outAux)' : 'vec4f(path.li, path.alpha)'};
 }
 
 fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
@@ -739,7 +767,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise, maxPathEvents) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${hasVolumes ? createVolumeIntegratorWgsl(deterministicPrimaryAlpha, hasVolumeNoise, maxPathEvents, sharePrefix) : spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   var primarySi: SurfaceInteraction;
   var primaryMa: OpenPbrResolvedMaterial;
@@ -900,16 +928,29 @@ ${primaryGuides}
         let channel = select(wavelengthIndex, heroWavelengthIndex, singleWavelength);
         si.spectralChannel = channel + 1;
         si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
-        ma.specularIor = sampling_cauchy_ior(si.wavelength, ma.specularIor,
+${sharePrefix ? /* wgsl */ `        spBegin(channel + 1, si.wavelength, spDisperses(ma));
+        if (spActive) { si.spectralChannel = 0; }
+` : ''}        ma.specularIor = sampling_cauchy_ior(si.wavelength, ma.specularIor,
           ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
       }
       path = Path(); path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
       path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
       depth = 0; sampleIgnored = false;
       isNotTransparent = (ma.transmissionWeight < 0.001) & (ma.subsurfaceWeight < 0.001) & (ma.alpha > 0.99);
-    } else if (!path.abort) {
-      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+${sharePrefix ? /* wgsl */ `      if (spActive && wavelengthIndex > 0 && spForkCall == 0) {
+        ${prefixRestore('spFlat', flatPrefix)}
+        spFork(&path, &si);
+      }
     }
+    if (event > 0 && !path.abort) {
+      if (spActive && ma.transmissionWeight > 0.001 && spDisperses(ma)) {
+        ${prefixSave('spFlat', flatPrefix)}
+        spForkCall = 0; spFork(&path, &si);
+      }
+      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+    }` : /* wgsl */ `    } else if (!path.abort) {
+      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+    }`}
     if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
     if (!path.abort & (event < eventLimit)) {
       shadeVertex(uv, &path, &depth, &si, &ma, &wavelengthAux, &sampleIgnored);
@@ -921,7 +962,14 @@ ${primaryGuides}
         let scale = select(1.0, 3.0, dispersivePrimary);
         return vec4f(result.rgb * scale, result.a);
       }
-      color += result.rgb; alpha = max(alpha, result.a);
+${sharePrefix ? /* wgsl */ `      if (spActive) {
+        (*outAux).isBlank = wavelengthAux.isBlank;
+        // Match the original three identical guide additions and division.
+        (*outAux).albedo = (wavelengthAux.albedo + wavelengthAux.albedo + wavelengthAux.albedo) / 3.0;
+        (*outAux).normal = (wavelengthAux.normal + wavelengthAux.normal + wavelengthAux.normal) / 3.0;
+        return result;
+      }
+` : ''}      color += result.rgb; alpha = max(alpha, result.a);
       accumulatedGuideAlbedo += wavelengthAux.albedo;
       accumulatedGuideNormal += wavelengthAux.normal;
       allBlank = allBlank & wavelengthAux.isBlank;
@@ -984,7 +1032,9 @@ ${primaryGuides}
           let channel = select(i, heroWavelengthIndex, singleWavelength);
           si.spectralChannel = channel + 1;
           si.wavelength = spectrumCameraWavelength(u32(channel), wavelengthSample);
-          ma.specularIor = sampling_cauchy_ior(
+${sharePrefix ? /* wgsl */ `          spBegin(channel + 1, si.wavelength, spDisperses(ma));
+          if (spActive) { si.spectralChannel = 0; }
+` : ''}          ma.specularIor = sampling_cauchy_ior(
             si.wavelength,
             ma.specularIor,
             ma.transmissionDispersionScale,

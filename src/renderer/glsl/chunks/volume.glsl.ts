@@ -1,3 +1,4 @@
+import {prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './spectralPrefix.glsl.js';
 import {volumeTrackingGlsl, volumeNoiseGuidesGlsl} from './volumeTracking.glsl.js';
 import {MAX_PATH_EVENTS_WEBGL} from '../../pathLimits.js';
 export function createVolumeGlsl(hasVolumeNoise = false) { return /* glsl */ `
@@ -70,7 +71,20 @@ float volumeTransmittance(Ray ray, float maximum) {
 }
 ${hasVolumeNoise ? volumeTrackingGlsl + '\n' : ''}`;
 }
-export function createVolumePathGlsl(hasVolumeNoise = false) { return /* glsl */ `${hasVolumeNoise ? volumeNoiseGuidesGlsl : ''}
+export function createVolumePathGlsl(hasVolumeNoise = false, sharePrefix = false) {
+  const bindings: PrefixBindings = {
+    path: ['Path', 'path'], si: ['SurfaceInteraction', 'si'], mat: ['OpenPbrResolvedMaterial', 'mat'],
+    aux: ['RayTraceAuxiliary', 'outAux'], depth: ['int', 'depth'], event: ['int', 'event'],
+    primarySi: ['SurfaceInteraction', 'primarySi'], primaryMat: ['OpenPbrResolvedMaterial', 'primaryMat'],
+    coverage: ['float', 'coverage'], split: ['bool', 'split'], front: ['bool', 'front'],
+    back: ['vec4', 'back'], backAux: ['RayTraceAuxiliary', 'backAux'],
+    query: ['bool', 'query'], resample: ['bool', 'resample'], skipVolume: ['bool', 'skipVolume'],
+    first: ['bool', 'first'], opaque: ['bool', 'isOpaque'],
+    completion: ['uint', 'completionBounce'], maximum: ['float', 'maximum'], ...prefixRandomBindings
+  };
+  const activate = /* glsl */ `spFork(path);
+    back = vec4(sampling_spectral_rgb_filter(back.rgb, spChannel), back.a);`;
+  return /* glsl */ `${hasVolumeNoise ? volumeNoiseGuidesGlsl : ''}
 void volumeGuides(Ray ray, float maximum, inout RayTraceAuxiliary outAux) {
   float tau = 0.0, weight = 0.0; vec3 albedo = vec3(0.0);
   for (int i = 0; i < volumeCount; i++) {
@@ -139,8 +153,8 @@ void shadeVolumeVertex(inout Path path, inout SurfaceInteraction si, int winner,
   }
 #endif
 }
-vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, bool traceVolume, inout RayTraceAuxiliary outAux) {
-  Path path; path.scatteringMediumEntered = false; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
+${sharePrefix ? prefixCheckpoint('spVolume', bindings) : ''}vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, bool traceVolume, inout RayTraceAuxiliary outAux) {
+${sharePrefix ? '  pathChannel = spActive ? 0 : spChannel;\n' : ''}  Path path; path.scatteringMediumEntered = false; path.ray = ray; path.beta = vec3(1.0); path.li = vec3(0.0); path.fromEye = true; path.abort = false;
   path.alpha = transmissiveOutputAlphaMin < 1.0 ? 0.0 : 1.0;
   path.scatteringPdf = 0.0; path.scatteringIsDelta = false; path.isNextRefraction = false; path.volumeScattered = false;
   Path originalPath = path; SurfaceInteraction primarySi = si; OpenPbrResolvedMaterial primaryMat = mat;
@@ -151,8 +165,15 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
   bool originalOpaque = isOpaque;
   bool query = false, resample = false, skipVolume = false, first = true;
   int limit = min(bounceLimit * 3, ${MAX_PATH_EVENTS_WEBGL});
-  for (int step = 0; step < ${(MAX_PATH_EVENTS_WEBGL + 1) * 2 + 2}; step++) {
-    if (query) {
+${sharePrefix ? /* glsl */ `  int spSlot = spCall++;
+  if (spActive && spChannel > 1 && spCompleted[spSlot].ready) return spReplay(spSlot, outAux);
+  bool spResume = false; uint completionBounce = 0u; float maximum = 0.0;
+  if (spActive && spChannel > 1 && spForkCall == spSlot) {
+    ${prefixRestore('spVolume', bindings)}
+    spResume = true; ${activate}
+  }
+` : ''}  for (int step = 0; step < ${(MAX_PATH_EVENTS_WEBGL + 1) * 2 + 2}; step++) {
+    if (${sharePrefix ? '!spResume && query' : 'query'}) {
       intersectScene(path.ray, si, event != 0);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
       if (event == 0 && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT)) {
@@ -161,10 +182,13 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
         si.albedoSampled = mat.transmissionWeight > 0.5;
       }
     }
-    query = true; uint completionBounce = samplingBounce; samplingBounce = uint(depth);
+${sharePrefix ? /* glsl */ `    query = true;
+    if (!spResume) { completionBounce = samplingBounce; samplingBounce = uint(depth);
+      maximum = volumeSegmentMaximum(path, si); }
+    int winner = -1;` : /* glsl */ `    query = true; uint completionBounce = samplingBounce; samplingBounce = uint(depth);
     int winner = -1;
-    float maximum = volumeSegmentMaximum(path, si);
-    if (traceVolume && !skipVolume) winner = sampleVolumeEvent(path, si, maximum, resample);
+    float maximum = volumeSegmentMaximum(path, si);`}
+    if (${sharePrefix ? '!spResume && ' : ''}traceVolume && !skipVolume) winner = sampleVolumeEvent(path, si, maximum, resample);
     skipVolume = false;
     if (winner >= 0) {
       // Match the surface event budget; camera volumes establishes opacity.
@@ -179,7 +203,11 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
         path.ray.o = si.position + ray.d * (EPS * 0.02); first = false; resample = true; continue;
       }
       first = false;
-      if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { samplingBounce = completionBounce; int completionDepth = depth; completeVolumeVertex(path, completionDepth, si, mat, resample); }
+${sharePrefix ? /* glsl */ `      if (spActive && (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) && mat.transmissionWeight > 0.001 && spDisperses(mat)) {
+        ${prefixSave('spVolume', bindings)}
+        spForkCall = spSlot; ${activate}
+      }
+` : ''}      if (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) { samplingBounce = completionBounce; int completionDepth = depth; completeVolumeVertex(path, completionDepth, si, mat, resample); }
       if (!path.abort && ((isOpaque && event > bounceLimit) || event >= limit)) path.abort = true;
       if (!path.abort) {
         si.volumeResample = false;
@@ -189,16 +217,16 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
       }
       event++;
     }
-    if (path.abort) {
+${sharePrefix ? '    spResume = false;\n' : ''}    if (path.abort) {
       vec4 result = vec4(path.li, path.alpha);
-      if (!split || coverage <= 0.0) return result;
+      if (!split || coverage <= 0.0) return ${sharePrefix ? 'spFinish(spSlot, result, outAux)' : 'result'};
       if (front) {
         outAux.albedo = mix(backAux.albedo, outAux.albedo, coverage);
         vec3 blendedNormal = mix(backAux.normal, outAux.normal, coverage);
         outAux.normal = dot(blendedNormal, blendedNormal) > 1e-12 ? normalize(blendedNormal) : vec3(0.0);
         outAux.isBlank = backAux.isBlank && outAux.isBlank;
         outAux.isShadowCatcher = backAux.isShadowCatcher && outAux.isShadowCatcher;
-        return mix(back, result, coverage);
+        return ${sharePrefix ? 'spFinish(spSlot, mix(back, result, coverage), outAux)' : 'mix(back, result, coverage)'};
       }
       back = result; backAux = outAux; front = true;
       path = originalPath; si = primarySi; mat = primaryMat; mat.alpha = 1.0; outAux = originalAux;
@@ -206,7 +234,7 @@ vec4 integrateVolumePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial
       depth = 0; event = 0; query = false; resample = false; skipVolume = true;
     }
   }
-  return vec4(path.li, path.alpha);
+  return ${sharePrefix ? 'spFinish(spSlot, vec4(path.li, path.alpha), outAux)' : 'vec4(path.li, path.alpha)'};
 }
 `;
 }

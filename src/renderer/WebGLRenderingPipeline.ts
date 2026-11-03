@@ -165,9 +165,15 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         rayTracePass.setSpectralChannel(1);
         rayTracePass.createPass(clear, tile);
       } else {
-        for (let channel = 1; channel <= 3; channel++) {
-          rayTracePass.setSpectralChannel(channel);
-          rayTracePass.createPass(clear && channel === 1, tile, channel > 1);
+        if (rayTracePass.hasSharedSpectralPrefix()) {
+          // The fragment retains the original normalization and moments.
+          rayTracePass.setSpectralChannel(1);
+          rayTracePass.createPass(clear, tile);
+        } else {
+          for (let channel = 1; channel <= 3; channel++) {
+            rayTracePass.setSpectralChannel(channel);
+            rayTracePass.createPass(clear && channel === 1, tile, channel > 1);
+          }
         }
       }
     } else {

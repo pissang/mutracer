@@ -890,6 +890,7 @@ class WGPURayTracePass {
       this._preparePhotonTarget();
       const pipelineInputs = JSON.stringify([
         this._constants,
+        Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
         this._hasDisplacement,
         this._alphaBlendStrategy,
         this._blasLayoutMask,
@@ -922,6 +923,7 @@ class WGPURayTracePass {
       const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
       const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
+        shareSpectralPrefix: Boolean(constants.SPECTRAL) && this._shareSpectralPrefix,
         hasVolumes: !!this._constants.HAS_VOLUMES,
         hasVolumeNoise: !!this._constants.HAS_VOLUME_NOISE,
         hasDisplacement: this._hasDisplacement,
@@ -1017,6 +1019,7 @@ class WGPURayTracePass {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
     structureKey: string; capabilities: ShaderCapabilities;
   }) {
+    const shareSpectralPrefix = Boolean(constants.SPECTRAL) && this._shareSpectralPrefix;
     const bake = this._bakePipelineConstants, bindless = this._bindless;
     const hasDisplacement = this._hasDisplacement, blasLayoutMask = this._blasLayoutMask;
     const lightTracing = this._lightTracing, photonMapping = this._photonMapping;
@@ -1048,7 +1051,7 @@ class WGPURayTracePass {
       startedAt = shaderCompilationNow();
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
-      const moduleKey = JSON.stringify([causticKey, !!bindless, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
+      const moduleKey = JSON.stringify([causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
         bake && pipelineConstantsKeys.map((key) => constants[key])]);
       let source = this._traceModules.get(moduleKey);
@@ -1059,6 +1062,7 @@ class WGPURayTracePass {
             maxPathEvents: MAX_PATH_EVENTS_WGPU,
             hasDisplacement,
             channelIndependentRis: Boolean(constants.SPECTRAL),
+            shareSpectralPrefix,
             hasAlpha,
             hasSceneAlpha,
             ...transport?.features,
@@ -1773,6 +1777,8 @@ class WGPURayTracePass {
     );
   }
 
+  private _shareSpectralPrefix = true;
+
   setQuality(options: {
     bounces: number;
     bevel: boolean;
@@ -1780,6 +1786,7 @@ class WGPURayTracePass {
     directLightCandidates: number;
     caustics?: import('../Render.js').CausticSettings;
   }) {
+    this._shareSpectralPrefix = options.dispersionWavelengths !== 1;
     WGPURayTracePass.prototype._setCaustics.call(this, options.caustics);
     writeTraceQuality(this._rtUniform.views, options, MAX_PATH_EVENTS_WGPU);
   }

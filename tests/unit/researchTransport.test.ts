@@ -63,3 +63,30 @@ it('suppresses MNEE ownership while volumes is present and restores its configur
   } finally {mneeDiagnostics.mnee = false;}
 });
 
+it('restores shared spectral rendering after leaving an experimental connection solver', async () => {
+  const {default: Pass} = await import('../../src/renderer/WebGLRayTracePass');
+  const {Mesh, OpenPBRMaterial, createPlaneGeometry} = await import('../../src/main');
+  const {mneeDiagnostics} = await import('../../src/research/mnee/index');
+  const {vi} = await import('vitest');
+  const setShader = vi.fn();
+  const pass = Object.assign(Object.create(Pass.prototype), {
+    _meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial({transmissionWeight: 1, transmissionDispersionScale: 1, specularRoughness: 0}))],
+    _mainPass: {setShader}, _tracePasses: [{setUniform: vi.fn()}],
+    _spectral: true, _shareSpectralPrefix: true, _hasVolumes: false
+  });
+  const quality = {bounces: 8, bevel: false, dispersionWavelengths: 3 as 1 | 3, directLightCandidates: 4};
+  registerMnee(); mneeDiagnostics.mnee = true;
+  try {
+    pass.setQuality(quality);
+    expect(pass.hasSharedSpectralPrefix()).toBe(false);
+    mneeDiagnostics.mnee = false;
+    pass.setQuality(quality);
+    expect(pass.hasSharedSpectralPrefix()).toBe(true);
+    expect(setShader.mock.lastCall![0].main).toBe(fragment({channelIndependentLight: true, shareSpectralPrefix: true}).main);
+    quality.dispersionWavelengths = 1; pass.setQuality(quality);
+    expect(pass.hasSharedSpectralPrefix()).toBe(false);
+    expect(setShader.mock.lastCall![0].main).toBe(fragment({channelIndependentLight: true}).main);
+    quality.dispersionWavelengths = 3; pass.setQuality(quality);
+    expect(pass.hasSharedSpectralPrefix()).toBe(true);
+  } finally {mneeDiagnostics.mnee = false;}
+});

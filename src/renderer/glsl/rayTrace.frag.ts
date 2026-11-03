@@ -1,3 +1,4 @@
+import {spectralPrefixGlsl, prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './chunks/spectralPrefix.glsl.js';
 import {volumeNoiseGlsl} from './chunks/volumeNoise.glsl.js';
 import {createVolumeGlsl, createVolumePathGlsl} from './chunks/volume.glsl.js';
 import {researchTransport} from '../researchTransport.js';
@@ -62,6 +63,12 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS_WEBGL}); idx++) {
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
   const channelIndependentLight = (options[0] as {channelIndependentLight?: boolean} | undefined)?.channelIndependentLight ?? false;
+  const sharePrefix = (options[0] as {shareSpectralPrefix?: boolean} | undefined)?.shareSpectralPrefix ?? false;
+  const surfacePrefix: PrefixBindings = {
+    path: ['Path', 'path'], si: ['SurfaceInteraction', 'si'], mat: ['OpenPbrResolvedMaterial', 'mat'],
+    aux: ['RayTraceAuxiliary', 'outAux'], depth: ['int', 'depth'], event: ['int', 'idx'],
+    ignored: ['bool', 'sampleIgnored'], opaque: ['bool', 'isOpaque'], ...prefixRandomBindings
+  };
   const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
   const hasVolumeNoise = (options[0] as {hasVolumeNoise?: boolean} | undefined)?.hasVolumeNoise ?? false;
   const research = hasVolumes ? undefined : researchTransport()?.fragment(typeof options[0] === 'object' ? [] : options);
@@ -140,7 +147,7 @@ struct RayTraceAuxiliary {
   bool isShadowCatcher;
 };
 
-void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+${sharePrefix ? spectralPrefixGlsl + prefixCheckpoint('spSurface', surfacePrefix) : ''}void ${sharePrefix && !hasVolumes ? 'shadeSurfaceVertex' : 'bounce'}(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux${sharePrefix && !hasVolumes ? ', out bool sampleIgnored' : ''}) {${sharePrefix && !hasVolumes ? '\n  sampleIgnored = false;' : ''}
   samplingBounce = uint(max(depth, 0));
   // The bounce will be doubled on the transmission material.
   // For other materials. We will quite early
@@ -228,7 +235,7 @@ ${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
     return;
   }
 
-  bool sampleIgnored = false;
+${sharePrefix && !hasVolumes ? '  sampleIgnored = false;' : '  bool sampleIgnored = false;'}
   if ((mat.materialType == STANDARD || mat.materialType == UNLIT)) {
     if (transmissiveOutputAlphaMin < 1.0) {
       // TODO increase the alpha when there are more bounces.
@@ -299,8 +306,11 @@ ${hasVolumes ? /* glsl */ `  si.volumeResample = sampleIgnored;
   return;
 }
 void completeVolumeVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
+` : sharePrefix ? /* glsl */ `  return;
+}
+void completeSurfaceVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
 ` : ''}  // Next ray hit
-${hasVolumes ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
+${hasVolumes || sharePrefix ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 `}
@@ -484,7 +494,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   return dot(result, result) > 1e-12 ? normalize(result) : source.normal;
 }
 
-${hasVolumes ? createVolumePathGlsl(hasVolumeNoise) + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+${hasVolumes ? createVolumePathGlsl(hasVolumeNoise, sharePrefix) + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
   Path path; path.scatteringMediumEntered = false;
   path.ray = ray;
   path.li = vec3(0);
@@ -498,8 +508,39 @@ ${hasVolumes ? createVolumePathGlsl(hasVolumeNoise) + '\n' : ''}vec4 integrateOn
   path.isNextRefraction = false;
   path.abort = false;
   int depth = 0;
-${intelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
-  return vec4(path.li, path.alpha);
+${sharePrefix && !hasVolumes ? /* glsl */ `  int spSlot = spCall++;
+  if (spActive && spChannel > 1 && spCompleted[spSlot].ready) return spReplay(spSlot, outAux);
+  bool isOpaque = !si.isTransparency;
+  bool sampleIgnored = false, spResume = false;
+  int spEvent = 0;
+  if (spActive && spChannel > 1 && spForkCall == spSlot) {
+    int idx = 0;
+    ${prefixRestore('spSurface', surfacePrefix)}
+    spEvent = idx; spResume = true; spFork(path);
+  }
+  int activeBounceLimit = min(BOUNCES, bounceLimit);
+  for (int idx = ${intelMac ? '0' : 'spEvent'}; idx < ${intelMac ? 'BOUNCES' : `min(BOUNCES * 3, ${MAX_PATH_EVENTS_WEBGL})`}; idx++) {
+${intelMac ? '    if (idx < spEvent) continue;' : '    if (isOpaque && idx > activeBounceLimit) path.abort = true;'}
+    if (path.abort) break;
+    if (!spResume) {
+      shadeSurfaceVertex(path, depth, si, mat, outAux, sampleIgnored);
+      if (!path.abort) {
+        intersectScene(path.ray, si, true);
+        getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+        si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
+      }
+    }
+    spResume = false;
+    if (!path.abort) {
+      if (spActive && mat.transmissionWeight > 0.001 && spDisperses(mat)) {
+        ${prefixSave('spSurface', surfacePrefix)}
+        spForkCall = spSlot; spFork(path);
+      }
+      completeSurfaceVertex(path, depth, si, mat, sampleIgnored);
+    }
+  }
+  return spFinish(spSlot, vec4(path.li, path.alpha), outAux);` : /* glsl */ `${intelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
+  return vec4(path.li, path.alpha);`}
 }
 
 vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
@@ -567,7 +608,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   si.mediumAnisotropy = 0.0;
 #endif
 
-  intersectScene(ray, si, false);
+${sharePrefix ? '  if (spChannel == 1) {\n' : ''}  intersectScene(ray, si, false);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 
@@ -589,7 +630,15 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
     si.albedoSampled = mat.transmissionWeight > 0.5;
   }
 
-  if (mat.transmissionDispersionScale > 0.001) {
+${sharePrefix ? /* glsl */ `    spPrimary = SpectralPrimary(si, mat, outAux, s0, hashedCounter, samplingBounce);
+  } else {
+    si = spPrimary.si; mat = spPrimary.mat; outAux = spPrimary.aux;
+    s0 = spPrimary.rng; hashedCounter = spPrimary.counter; samplingBounce = spPrimary.bounce;
+  }
+  spActive = ${enabled ? 'false' : '!(mat.transmissionDispersionScale > 0.001 && mat.specularIor != 1.0)'};
+  pathChannel = spActive ? 0 : spChannel;
+  spCall = 0;
+` : ''}  if (mat.transmissionDispersionScale > 0.001) {
     mat.specularIor = sampling_cauchy_ior(
       pathWavelength,
       mat.specularIor,
@@ -624,13 +673,13 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
 }
 
-void main() {
+void ${sharePrefix ? 'traceSpectralWavelength' : 'main'}(${sharePrefix ? 'int channel' : ''}) {
 
 ${fragments?.debugInit ?? ''}  initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
-  pathWavelength = 0.0;
+${sharePrefix ? '  spChannel = channel;\n' : ''}  pathWavelength = 0.0;
   pathChannel = 0;
   if (spectralChannel > 0) {
     float wavelengthSample = sample1D(CAMERA_WAVELENGTH);
@@ -638,8 +687,8 @@ ${fragments?.debugInit ?? ''}  initRandom();
       heroChannel = min(int(wavelengthSample * 3.0), 2) + 1;
       heroWavelength = spectrumCameraWavelength(heroChannel - 1, fract(wavelengthSample * 3.0));
     } else {
-      pathChannel = spectralChannel;
-      pathWavelength = spectrumCameraWavelength(spectralChannel - 1, wavelengthSample);
+      pathChannel = ${sharePrefix ? 'spChannel' : 'spectralChannel'};
+      pathWavelength = spectrumCameraWavelength(${sharePrefix ? 'spChannel' : 'spectralChannel'} - 1, wavelengthSample);
     }
   }
 
@@ -686,6 +735,17 @@ ${fragments?.debugInit ?? ''}  initRandom();
     ? vec4(0.0)
     : vec4(guideValue, guideValue * guideValue, 1.0, 0.0);
 
-}`
+}${sharePrefix ? /* glsl */ `
+void main() {
+  spCompleted[0].ready = false; spCompleted[1].ready = false;
+  vec4 color = vec4(0.0), albedo = vec4(0.0), normal = vec4(0.0), moments = vec4(0.0);
+  // A uniform bound keeps the driver from cloning the complete optical graph.
+  for (int channel = 1; channel <= dispersionWavelengths; channel++) {
+    traceSpectralWavelength(channel);
+    color += out_color; albedo += out_albedo; normal += out_normal; moments += out_moments;
+  }
+  out_color = color; out_albedo = albedo; out_normal = normal; out_moments = moments;
+}
+` : ''}`
   });
 }

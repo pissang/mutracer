@@ -258,6 +258,8 @@ class WebGLRayTracePass {
   private _depthAspect = 1;
   private _hasShadowCatcher = false;
   private _spectral = false;
+  private _shareSpectralPrefix = true;
+  private _independentSpectralPaths = false;
 
   constructor(renderer: WebGLRenderer) {
     this._renderer = renderer;
@@ -411,7 +413,7 @@ class WebGLRayTracePass {
       this._hasVolumes = hasVolumes;
       this._hasVolumeNoise = packed.hasNoise;
       researchTransport()?.configure(this, 'webgl', true);
-      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise, channelIndependentLight: this._spectral}) : createRayTraceFragmentShader({channelIndependentLight: this._spectral});
+      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise, channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix}) : createRayTraceFragmentShader({channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix});
       shader.parallelCompile = true;
       this._mainPass.setShader(shader, [...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []), ...(!packed.hasNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])], [...(!hasVolumes ? ['HAS_VOLUMES'] : []), ...(!packed.hasNoise ? ['HAS_VOLUME_NOISE'] : [])]);
     }
@@ -717,7 +719,7 @@ class WebGLRayTracePass {
       this._spectral = spectral;
       const shader = createRayTraceFragmentShader({
         hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
-        channelIndependentLight: spectral
+        channelIndependentLight: spectral, shareSpectralPrefix: spectral && this._shareSpectralPrefix
       });
       if (!researchTransport()?.configure(this, 'webgl', this._hasVolumes)?.enabled) {
         shader.parallelCompile = true;
@@ -996,7 +998,18 @@ class WebGLRayTracePass {
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
-    researchTransport()?.configure(this, 'webgl', this._hasVolumes);
+    const wasIndependent = this._independentSpectralPaths;
+    const research = researchTransport()?.configure(this, 'webgl', this._hasVolumes);
+    this._independentSpectralPaths = !!research?.enabled;
+    const share = options.dispersionWavelengths !== 1;
+    if (this._spectral && (share !== this._shareSpectralPrefix || wasIndependent) && !research?.enabled) {
+      const shader = createRayTraceFragmentShader({
+        hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
+        channelIndependentLight: true, shareSpectralPrefix: share
+      });
+      shader.parallelCompile = true; this._mainPass.setShader(shader);
+    }
+    this._shareSpectralPrefix = share;
     this._tracePasses.forEach(pass => {
       pass.setUniform('bounceLimit', normalizeBounces(options.bounces, MAX_PATH_EVENTS_WEBGL));
       pass.setUniform('bevelEnabled', options.bevel);
@@ -1026,6 +1039,11 @@ class WebGLRayTracePass {
 
   hasDispersion() {
     return this._spectral;
+  }
+
+  hasSharedSpectralPrefix() {
+    // Research connections can disperse before the camera reaches a boundary.
+    return this._shareSpectralPrefix && !this._independentSpectralPaths;
   }
 
   prepare(): void {
