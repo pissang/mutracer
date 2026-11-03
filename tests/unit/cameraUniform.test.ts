@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { mat4 } from 'gl-matrix';
 import { packCameraUniform } from '../../src/renderer/cameraUniform.js';
 import { cameraParameters, materialParameters } from '../../native/src/render-core.js';
-import { makeShaderDataDefinitions } from 'webgpu-utils';
-import rayTraceCore from '../../src/renderer/wgsl/chunks/rayTraceCore.wgsl';
-
-afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('shared native/browser camera block', () => {
   const world = new Float32Array(16);
@@ -19,21 +15,6 @@ describe('shared native/browser camera block', () => {
     const expected = new Float32Array([...inverse, ...world, .025, 7.5, 0, 0]);
     const actual = packCameraUniform(inverse, world, .025, 7.5);
     expect(new Uint8Array(actual.buffer)).toEqual(new Uint8Array(expected.buffer));
-  });
-
-  it('appends the browser inverse projection without changing the native block', () => {
-    vi.stubGlobal('GPUShaderStage', {VERTEX: 1, FRAGMENT: 2, COMPUTE: 4});
-    const projectionInverse = new Float32Array(16);
-    mat4.invert(projectionInverse, projection);
-    const legacy = packCameraUniform(inverse, world, .025, 7.5);
-    const browser = packCameraUniform(inverse, world, .025, 7.5, projectionInverse);
-    const layouts = [false, true].map(cameraProjectionInverse =>
-      makeShaderDataDefinitions(rayTraceCore({cameraProjectionInverse})).structs.CameraUniform);
-    expect(legacy.byteLength).toBe(layouts[0].size);
-    expect(browser.byteLength).toBe(layouts[1].size);
-    expect(layouts[1].fields.projectionInv.offset).toBe(legacy.byteLength);
-    expect(browser.slice(0, 36)).toEqual(legacy);
-    expect(browser.slice(36)).toEqual(projectionInverse);
   });
 
   it('translates in world space and preserves the lens parameters', () => {

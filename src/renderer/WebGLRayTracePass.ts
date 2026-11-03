@@ -251,7 +251,6 @@ class WebGLRayTracePass {
   >;
 
   private _viewProjInv = mat4.create();
-  private _projectionInv = mat4.create();
   private _apertureRadius = 0;
   private _focusDistance = 10;
 
@@ -932,11 +931,9 @@ class WebGLRayTracePass {
     const viewProjectionInv = this._viewProjInv;
     this._apertureRadius = cameraApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
-    mat4.invert(this._projectionInv, camera.getProjectionMatrix(this._depthAspect));
-    mat4.mul(viewProjectionInv, camera.transform, this._projectionInv);
+    this._getViewProjInv(camera, viewProjectionInv);
     this._tracePasses.forEach((pass) => {
       pass.setUniform('viewProjectionInv', viewProjectionInv);
-      pass.setUniform('projectionInv', this._projectionInv);
       pass.setUniform('viewInv', camera.transform);
       // Zero for orthographic cameras, which have no depth of field.
       pass.setUniform('cameraApertureRadius', this._apertureRadius);

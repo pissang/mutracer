@@ -429,7 +429,6 @@ class WGPURayTracePass {
   private _transmissiveAlphaMin = 1;
 
   private _viewProjInv = mat4.create();
-  private _projectionInv = mat4.create();
   private _cameraWorld = mat4.create();
   private _apertureRadius = 0;
   private _focusDistance = 10;
@@ -462,7 +461,7 @@ class WGPURayTracePass {
     if (_textureSelection.support) this._bindless = new WGPUBindlessTextures(device);
 
     this._uniforms = {
-      cameraUniform: this._uniformBuffer(52 * 4),
+      cameraUniform: this._uniformBuffer(36 * 4),
       rtUniform: this._uniformBuffer(this._rtUniform.buffer.byteLength),
       analyticLights: this._uniformBuffer(
         FIXED_LIGHT_COUNT * PIXELS_PER_LIGHT * 4 * 4
@@ -1065,7 +1064,6 @@ class WGPURayTracePass {
             hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
             hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
             blasLayoutMask,
-            cameraProjectionInverse: true,
             dynamicEnvironment: true
           },
           bake
@@ -1265,7 +1263,7 @@ class WGPURayTracePass {
       state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
     this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
-    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance, this._projectionInv));
+    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance));
     const device = this._device;
     const run = (pipeline: GPUComputePipeline, sample: number) => {
       // A fresh uniform for each queued dispatch keeps batch samples independent.
@@ -2764,8 +2762,7 @@ class WGPURayTracePass {
     const viewProjectionInvMat = this._viewProjInv;
     this._apertureRadius = cameraApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
-    mat4.invert(this._projectionInv, projection);
-    mat4.mul(viewProjectionInvMat, camera.transform, this._projectionInv);
+    this._updateViewProjInv(camera, viewProjectionInvMat);
     mat4.copy(this._cameraWorld, camera.transform);
   }
 
@@ -2834,7 +2831,7 @@ class WGPURayTracePass {
       this._uniforms.cameraUniform,
       0,
       packCameraUniform(this._viewProjInv, this._cameraWorld,
-        this._apertureRadius, this._focusDistance, this._projectionInv)
+        this._apertureRadius, this._focusDistance)
     );
   }
 

@@ -2,11 +2,17 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import cameraProjection from './cameraProjection.glsl.js';
-
 // Shared primary-ray construction keeps beauty and catcher coverage aligned.
 export default /* glsl */ `
-${cameraProjection}
+Ray initCameraRay(vec2 coord) {
+  vec4 origin = viewProjectionInv * vec4(coord * 2.0 - 1.0, -1.0, 1.0);
+  vec4 target = viewProjectionInv * vec4(coord * 2.0 - 1.0, 1.0, 1.0);
+  Ray cam;
+  initRay(cam, origin.xyz / origin.w, normalize(target.xyz * origin.w - origin.xyz * target.w));
+
+  return cam;
+}
+
 vec2 sampleCircle(vec2 p) {
   p = 2.0 * p - 1.0;
   bool greater = abs(p.x) > abs(p.y);

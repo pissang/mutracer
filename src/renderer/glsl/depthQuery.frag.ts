@@ -1,4 +1,3 @@
-import cameraProjection from './chunks/cameraProjection.glsl.js';
 import { FragmentShader, Shader } from '../shader.js';
 import { DEPTH_SAMPLE_GRID } from '../depthQuery.js';
 import common from './chunks/common.glsl.js';
@@ -16,7 +15,6 @@ export default new FragmentShader({
   uniforms: {
     depthArea: Shader.uniform('vec4'),
     viewProjectionInv: Shader.uniform('mat4'),
-    projectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4')
   },
   main: /* glsl */ `
@@ -27,14 +25,16 @@ ${core.main}
 ${uvProjection}
 ${materials.main}
 ${intersect.main}
-${cameraProjection}
 
 void main() {
   vec2 offset = floor(gl_FragCoord.xy) / ${DEPTH_SAMPLE_GRID - 1}.0 * 2.0 - 1.0;
   vec2 uv = depthArea.xy + depthArea.zw * offset * vec2(1.0, -1.0);
   out_depth = vec4(0.0);
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return;
-  Ray ray = initCameraRay(uv);
+  vec4 origin = viewProjectionInv * vec4(uv * 2.0 - 1.0, -1.0, 1.0);
+  vec4 target = viewProjectionInv * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+  Ray ray;
+  initRay(ray, origin.xyz / origin.w, normalize(target.xyz * origin.w - origin.xyz * target.w));
   vec3 eye = viewInv[3].xyz;
   vec3 forward = -normalize(viewInv[2].xyz);
   SurfaceInteraction si;
