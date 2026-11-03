@@ -61,14 +61,15 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS_WEBGL}); idx++) {
 `;
 
 export default function createRayTraceFragmentShader(...options: unknown[]) {
+  const channelIndependentLight = (options[0] as {channelIndependentLight?: boolean} | undefined)?.channelIndependentLight ?? false;
   const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
   const hasVolumeNoise = (options[0] as {hasVolumeNoise?: boolean} | undefined)?.hasVolumeNoise ?? false;
-  const research = hasVolumes ? undefined : researchTransport()?.fragment(options);
+  const research = hasVolumes ? undefined : researchTransport()?.fragment(typeof options[0] === 'object' ? [] : options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
   const rayTraceCore = createRayTraceCoreGlsl(fragments, hasVolumes);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes, hasVolumeNoise);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes, hasVolumeNoise, channelIndependentLight);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',

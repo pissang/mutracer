@@ -1,5 +1,9 @@
 import {expect, it, vi} from 'vitest';
 import WebGLRayTracePass from '../../src/renderer/WebGLRayTracePass';
+import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import MaterialTable from '../../src/renderer/MaterialTable';
+import {createSphereGeometry} from '../../src/util/commonGeometry';
+import createRayTraceFragmentShader from '../../src/renderer/glsl/rayTrace.frag';
 import type {FragmentShader} from '../../src/renderer/shader';
 
 it('requests asynchronous programs and removes volumes bindings on both specialization transitions', () => {
@@ -20,4 +24,24 @@ it('requests asynchronous programs and removes volumes bindings on both speciali
     expect(disabled[1]).toEqual(['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams', 'volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams']);
     expect(disabled[2]).toEqual(['HAS_VOLUMES', 'HAS_VOLUME_NOISE']);
   }
+});
+
+it('retains volume support when spectral materials enter and leave the scene', () => {
+  const setShader = vi.fn(), setDefines = vi.fn();
+  const receiver = {_hasVolumes: true, _hasVolumeNoise: true, _spectral: false,
+    _mainPass: {setShader}, _tracePasses: [{setDefines}], _bevelSamples: 4};
+  const update = (WebGLRayTracePass.prototype as any)._updateMaterialConstants.bind(receiver);
+  const table = {defines: {}, setToPass: vi.fn()} as unknown as MaterialTable;
+  const geometry = createSphereGeometry(4, 2);
+  update([new OpenPBRMaterial({transmissionDispersionScale: 1})], table, geometry);
+  const spectral = setShader.mock.lastCall![0] as FragmentShader;
+  expect(spectral.parallelCompile).toBe(true);
+  expect(spectral.defines.HAS_VOLUMES).toBe(true);
+  expect(spectral.defines.HAS_VOLUME_NOISE).toBe(true);
+  update([new OpenPBRMaterial({transmissionDispersionScale: 1})], table, geometry);
+  expect(setShader).toHaveBeenCalledTimes(1);
+  update([new OpenPBRMaterial()], table, geometry);
+  const ordinary = setShader.mock.lastCall![0] as FragmentShader;
+  expect(ordinary.main).toBe(createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: true}).main);
+  expect(setShader).toHaveBeenCalledTimes(2);
 });

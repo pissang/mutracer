@@ -9,6 +9,7 @@ afterEach(() => registerResearchTransport(undefined));
 it('requires explicit registration and preserves disabled sources when registered', () => {
   registerResearchTransport(undefined);
   const plain = rayTrace({hasDisplacement:false}), glsl = fragment().main;
+  const spectral = fragment({channelIndependentLight: true}).main;
   expect(rayTrace({hasDisplacement:false,mnee:true,mneeMethod:'sms'})).toBe(plain);
   expect(fragment(true,-1,'sms').main).toBe(glsl);
   const options = {casterSphere:[0,0,0,1],viewProjection:new Float32Array(16),photons:1,batch:0,cameraScale:1,mnee:true};
@@ -16,6 +17,7 @@ it('requires explicit registration and preserves disabled sources when registere
   registerMnee();
   expect(rayTrace({hasDisplacement:false,mnee:false})).toBe(plain);
   expect(fragment(false).main).toBe(glsl);
+  expect(fragment({channelIndependentLight: true}).main).toBe(spectral);
   expect(rayTrace({hasDisplacement:false,mnee:true})).toContain('fn mneeContribution');
   expect(fragment(true).main).toContain('vec3 mneeContribution');
   expect(new Uint32Array(packCausticLightUniform(options))[22]).toBe(1);
@@ -60,3 +62,4 @@ it('suppresses MNEE ownership while volumes is present and restores its configur
     expect(extension.configure(pass, 'webgpu', true).enabled).toBe(false);
   } finally {mneeDiagnostics.mnee = false;}
 });
+

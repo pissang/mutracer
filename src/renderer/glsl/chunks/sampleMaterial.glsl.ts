@@ -2,7 +2,7 @@
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
 import { glsl } from '../../shader.js';
-export function createSampleMaterialGlsl(fragments: Readonly<Record<string, string>> = {}, hasVolumes = false, hasVolumeNoise = false) { return glsl`
+export function createSampleMaterialGlsl(fragments: Readonly<Record<string, string>> = {}, hasVolumes = false, hasVolumeNoise = false, channelIndependentLight = false) { return glsl`
 float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
   // Secondary intersections remain two-sided, but one-sided emission does not.
   float facing=dot(si.faceNormal,-path.ray.d);
@@ -23,7 +23,9 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
 
   LightSampleRec lightSample;
   sampleLight(si.position, lightRnd, lightSample, false);${fragments['sample0'] ?? ''}
-  lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
+${channelIndependentLight ? /* glsl */ `  if (dispersionWavelengths == 1) {
+    lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
+  }` : /* glsl */ `  lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);`}
 
   vec3 lightDir = lightSample.direction;
   vec3 viewDir = -path.ray.d;
@@ -41,7 +43,12 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
     return vec3(0.0);
   }
 
-  float scatteringPdf = 0.0;
+${channelIndependentLight ? /* glsl */ `  // Test the full emission before filtering, so black spectral components
+  // still consume the same visibility walk and random stream.
+  if (dispersionWavelengths != 1) {
+    lightSample.emission = sampling_spectral_rgb_filter(lightSample.emission, pathChannel);
+  }
+` : ''}  float scatteringPdf = 0.0;
   vec3 f = vec3(0.0);
   if (isSurface) {
     if (cosThetaL <= 0.0 && mat.transmissionWeight <= 0.0 && mat.subsurfaceWeight <= 0.0) {

@@ -411,7 +411,7 @@ class WebGLRayTracePass {
       this._hasVolumes = hasVolumes;
       this._hasVolumeNoise = packed.hasNoise;
       researchTransport()?.configure(this, 'webgl', true);
-      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise}) : createRayTraceFragmentShader();
+      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise, channelIndependentLight: this._spectral}) : createRayTraceFragmentShader({channelIndependentLight: this._spectral});
       shader.parallelCompile = true;
       this._mainPass.setShader(shader, [...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []), ...(!packed.hasNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])], [...(!hasVolumes ? ['HAS_VOLUMES'] : []), ...(!packed.hasNoise ? ['HAS_VOLUME_NOISE'] : [])]);
     }
@@ -712,7 +712,18 @@ class WebGLRayTracePass {
     this._hasAlpha = materials.some(
       (m) => resolveMaterialAlphaMode(m) !== 'opaque'
     );
-    this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
+    const spectral = materials.some((m) => m.transmissionDispersionScale > 0);
+    if (spectral !== !!this._spectral) {
+      this._spectral = spectral;
+      const shader = createRayTraceFragmentShader({
+        hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
+        channelIndependentLight: spectral
+      });
+      if (!researchTransport()?.configure(this, 'webgl', this._hasVolumes)?.enabled) {
+        shader.parallelCompile = true;
+        this._mainPass.setShader(shader);
+      }
+    }
 
 
     this._tracePasses.forEach(pass => {
