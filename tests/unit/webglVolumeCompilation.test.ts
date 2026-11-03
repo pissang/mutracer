@@ -4,6 +4,8 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import MaterialTable from '../../src/renderer/MaterialTable';
 import {createSphereGeometry} from '../../src/util/commonGeometry';
 import createRayTraceFragmentShader from '../../src/renderer/glsl/rayTrace.frag';
+import {WebGLFullQuadPass} from '../../src/renderer/WebGLFullQuadPass';
+import type {WebGLDevice} from '../../src/renderer/webgl';
 import type {FragmentShader} from '../../src/renderer/shader';
 
 it('requests asynchronous programs and removes volumes bindings on both specialization transitions', () => {
@@ -44,4 +46,39 @@ it('retains volume support when spectral materials enter and leave the scene', (
   const ordinary = setShader.mock.lastCall![0] as FragmentShader;
   expect(ordinary.main).toBe(createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: true}).main);
   expect(setShader).toHaveBeenCalledTimes(2);
+});
+
+it('excludes volume bindings from compiled programs after spectral and wavelength transitions', () => {
+  const compile = vi.fn(() => ({}));
+  const renderer = {gl: {}, createProgram: compile, isProgramCompiled: () => true} as unknown as WebGLDevice;
+  const main = new WebGLFullQuadPass('trace', renderer, {shader: createRayTraceFragmentShader()});
+  const receiver = {_hasVolumes: false, _hasVolumeNoise: false, _spectral: false,
+    _shareSpectralPrefix: true, _mainPass: main, _tracePasses: [main], _bevelSamples: 4};
+  const update = (WebGLRayTracePass.prototype as any)._updateMaterialConstants.bind(receiver);
+  const quality = WebGLRayTracePass.prototype.setQuality.bind(receiver as unknown as WebGLRayTracePass);
+  const table = {defines: {}, setToPass: vi.fn()} as unknown as MaterialTable;
+  const geometry = createSphereGeometry(4, 2);
+  const assertCompiled = () => {
+    main.isProgramReady();
+    const [shader, defines] = compile.mock.lastCall! as unknown as [FragmentShader, Record<string, unknown>];
+    expect(defines).not.toHaveProperty('HAS_VOLUMES');
+    expect(defines).not.toHaveProperty('HAS_VOLUME_NOISE');
+    expect(shader.uniforms).not.toHaveProperty('volumeCount');
+    expect(shader.uniforms).not.toHaveProperty('volumeNoiseParams');
+  };
+  update([new OpenPBRMaterial({transmissionDispersionScale: 1})], table, geometry);
+  assertCompiled();
+  for (const dispersionWavelengths of [1, 3] as const) {
+    quality({bounces: 8, bevel: false, dispersionWavelengths, directLightCandidates: 1});
+    assertCompiled();
+  }
+  update([new OpenPBRMaterial()], table, geometry);
+  assertCompiled();
+  const volumes = WebGLRayTracePass.prototype.setVolumes.bind(receiver as unknown as WebGLRayTracePass);
+  volumes([{density: .5, bounds: {min: [-1, -1, -1], max: [1, 1, 1]}, noise: {size: [1, 1, 1]}}]);
+  main.isProgramReady();
+  expect((compile.mock.lastCall! as unknown as [FragmentShader, Record<string, unknown>])[1]).toMatchObject({HAS_VOLUMES: true, HAS_VOLUME_NOISE: true});
+  volumes([]);
+  update([new OpenPBRMaterial({transmissionDispersionScale: 1})], table, geometry);
+  assertCompiled();
 });

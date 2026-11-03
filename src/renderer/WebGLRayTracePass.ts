@@ -105,6 +105,20 @@ type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 // imperfect scalar power estimate while still favoring dominant emitters.
 const POWER_WEIGHTED_LIGHT_MIX = 0.25;
 
+// setShader preserves existing bindings; remove bindings absent from this variant.
+function volumeBindingExclusions(hasVolumes: boolean, hasVolumeNoise: boolean) {
+  return {
+    uniforms: [
+      ...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []),
+      ...(!hasVolumeNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])
+    ],
+    defines: [
+      ...(!hasVolumes ? ['HAS_VOLUMES'] : []),
+      ...(!hasVolumeNoise ? ['HAS_VOLUME_NOISE'] : [])
+    ]
+  };
+}
+
 function packLightsToTexture(
   texture: WebGLTexture2D,
   lights: AnalyticLight[],
@@ -416,7 +430,8 @@ class WebGLRayTracePass {
       researchTransport()?.configure(this, 'webgl', true);
       const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise, channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix}) : createRayTraceFragmentShader({channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix});
       shader.parallelCompile = true;
-      this._mainPass.setShader(shader, [...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []), ...(!packed.hasNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])], [...(!hasVolumes ? ['HAS_VOLUMES'] : []), ...(!packed.hasNoise ? ['HAS_VOLUME_NOISE'] : [])]);
+      const excluded = volumeBindingExclusions(hasVolumes, packed.hasNoise);
+      this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
     }
     if (hasVolumes) {
       const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
@@ -723,8 +738,9 @@ class WebGLRayTracePass {
         channelIndependentLight: spectral, shareSpectralPrefix: spectral && this._shareSpectralPrefix
       });
       if (!researchTransport()?.configure(this, 'webgl', this._hasVolumes)?.enabled) {
+        const excluded = volumeBindingExclusions(this._hasVolumes, this._hasVolumeNoise);
         shader.parallelCompile = true;
-        this._mainPass.setShader(shader);
+        this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
       }
     }
 
@@ -1008,7 +1024,8 @@ class WebGLRayTracePass {
         hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
         channelIndependentLight: true, shareSpectralPrefix: share
       });
-      shader.parallelCompile = true; this._mainPass.setShader(shader);
+      const excluded = volumeBindingExclusions(this._hasVolumes, this._hasVolumeNoise);
+      shader.parallelCompile = true; this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
     }
     this._shareSpectralPrefix = share;
     this._tracePasses.forEach(pass => {
