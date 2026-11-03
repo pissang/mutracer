@@ -4,7 +4,7 @@
 // Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 // MIT License, see src/tinybvh/LICENSE.
 //
-// Like the reference, it bins primitive centroids into 8 bins on all three
+// By default, like the reference, it bins primitive centroids into 8 bins on all three
 // axes, sweeps the bins for the lowest surface area heuristic cost and stops
 // splitting when a leaf is cheaper (C_INT = C_TRAV = 1). Siblings are stored
 // next to each other: an interior node's children are leftFirst and
@@ -32,24 +32,24 @@ export interface BinnedSahBvh {
 }
 
 // Scratch shared by all builds; the builder is synchronous.
-const binMin = new Float64Array(3 * BINS * 3);
-const binMax = new Float64Array(3 * BINS * 3);
-const binCount = new Uint32Array(3 * BINS);
+const defaultBinMin = new Float64Array(3 * BINS * 3);
+const defaultBinMax = new Float64Array(3 * BINS * 3);
+const defaultBinCount = new Uint32Array(3 * BINS);
 // Per split position: half area times primitive count of each side.
-const leftCost = new Float64Array(BINS - 1);
-const rightCost = new Float64Array(BINS - 1);
+const defaultLeftCost = new Float64Array(BINS - 1);
+const defaultRightCost = new Float64Array(BINS - 1);
 
 /**
  * Bin of a centroid along one axis. Binning and partitioning both use this,
  * so every primitive ends up on the side whose bounds include its bin.
  */
-function binOf(center: number, nodeMin: number, scale: number) {
+function binOf(center: number, nodeMin: number, scale: number, bins: number) {
   const bin = ((center - nodeMin) * scale) | 0;
-  return bin < 0 ? 0 : bin > BINS - 1 ? BINS - 1 : bin;
+  return bin < 0 ? 0 : bin > bins - 1 ? bins - 1 : bin;
 }
 
 function growBin(
-  o: number,
+  binMin: Float64Array, binMax: Float64Array, o: number,
   minX: number, minY: number, minZ: number,
   maxX: number, maxY: number, maxZ: number
 ) {
@@ -65,8 +65,15 @@ function growBin(
  * Builds a binary BVH over axis-aligned boxes.
  * @param aabbs min x, y, z, max x, y, z for each primitive.
  * @param count number of primitives in `aabbs`.
+ * @param bins SAH resolution; default 8 retains the shared/native build contract.
  */
-export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSahBvh {
+export function buildBinnedSahBvh(aabbs: Float32Array, count: number, bins = BINS): BinnedSahBvh {
+  const BINS = bins;
+  const binMin = bins === 8 ? defaultBinMin : new Float64Array(3 * bins * 3);
+  const binMax = bins === 8 ? defaultBinMax : new Float64Array(3 * bins * 3);
+  const binCount = bins === 8 ? defaultBinCount : new Uint32Array(3 * bins);
+  const leftCost = bins === 8 ? defaultLeftCost : new Float64Array(bins - 1);
+  const rightCost = bins === 8 ? defaultRightCost : new Float64Array(bins - 1);
   const capacity = Math.max(1, count * 2 - 1);
   const bounds = new Float32Array(capacity * 6);
   const leftFirst = new Uint32Array(capacity);
@@ -135,13 +142,13 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSah
         const minX = aabbs[b], minY = aabbs[b + 1], minZ = aabbs[b + 2];
         const maxX = aabbs[b + 3], maxY = aabbs[b + 4], maxZ = aabbs[b + 5];
         // Axis a, bin i: bounds at ((a * BINS) + i) * 3.
-        const bx = binOf(centers[c], nMinX, scaleX);
-        const by = BINS + binOf(centers[c + 1], nMinY, scaleY);
-        const bz = 2 * BINS + binOf(centers[c + 2], nMinZ, scaleZ);
+        const bx = binOf(centers[c], nMinX, scaleX, BINS);
+        const by = BINS + binOf(centers[c + 1], nMinY, scaleY, BINS);
+        const bz = 2 * BINS + binOf(centers[c + 2], nMinZ, scaleZ, BINS);
         binCount[bx]++; binCount[by]++; binCount[bz]++;
-        growBin(bx * 3, minX, minY, minZ, maxX, maxY, maxZ);
-        growBin(by * 3, minX, minY, minZ, maxX, maxY, maxZ);
-        growBin(bz * 3, minX, minY, minZ, maxX, maxY, maxZ);
+        growBin(binMin, binMax, bx * 3, minX, minY, minZ, maxX, maxY, maxZ);
+        growBin(binMin, binMax, by * 3, minX, minY, minZ, maxX, maxY, maxZ);
+        growBin(binMin, binMax, bz * 3, minX, minY, minZ, maxX, maxY, maxZ);
       }
 
       // Sweep the bins of each axis for the lowest split cost.
@@ -187,7 +194,7 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSah
       let j = first + nodePrims, src = first;
       for (let i = 0; i < nodePrims; i++) {
         const p = primIndices[src];
-        if (binOf(centers[p * 3 + bestAxis], nMin, scale) <= bestPos) {
+        if (binOf(centers[p * 3 + bestAxis], nMin, scale, BINS) <= bestPos) {
           src++;
         } else {
           // Explicit numeric expression also supports scriptc typed-array stores.

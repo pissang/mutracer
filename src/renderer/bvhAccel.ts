@@ -56,6 +56,9 @@ function unionBounds(bounds: Box3, a: Box3, b: Box3) {
   return bounds;
 }
 
+// More TLAS bins separate overlapping static instances; native retains eight.
+export const WEB_TLAS_BINS = 32;
+
 export interface TLASInstance {
   blasIndex: number;
   bounds: Box3;
@@ -380,7 +383,8 @@ export function refitLinearInstances(buffer: ArrayBuffer, instances: MeshInstanc
  */
 export function buildTLAS(
   instances: MeshInstances,
-  blases: BLASInstance[]
+  blases: BLASInstance[],
+  bins = 8
 ): FlattendBVH {
   if (!meshInstancesLength(instances)) return emptyBvh(true);
   const placement = getBlasPlacement(blases);
@@ -389,7 +393,7 @@ export function buildTLAS(
     instanceBounds(readMeshInstance(instances, i), aabbs, i * 6);
   }
 
-  const bvh = buildBinnedSahBvh(aabbs, meshInstancesLength(instances));
+  const bvh = buildBinnedSahBvh(aabbs, meshInstancesLength(instances), bins);
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   const buffer = new ArrayBuffer(vec4Count * 16);

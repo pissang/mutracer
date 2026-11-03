@@ -69,7 +69,7 @@ function validateBlas(bvh: FlattendBVH, positions: ArrayLike<number>) {
 }
 
 describe('binned SAH builder', () => {
-  it('references every primitive once and keeps siblings adjacent', () => {
+  it.each([8, 16, 32])('references every primitive once and keeps siblings adjacent with %s bins', bins => {
     const count = 1000;
     const aabbs = new Float32Array(count * 6);
     let seed = 1;
@@ -78,7 +78,7 @@ describe('binned SAH builder', () => {
       const x = random() * 100, y = random() * 100, z = random() * 100, s = random();
       aabbs.set([x, y, z, x + s, y + s, z + s], i * 6);
     }
-    const bvh = buildBinnedSahBvh(aabbs, count);
+    const bvh = buildBinnedSahBvh(aabbs, count, bins);
     expect(Array.from(bvh.primIndices).sort((a, b) => a - b)).toEqual(
       Array.from({ length: count }, (_, i) => i)
     );
@@ -207,7 +207,7 @@ describe('BLAS build', () => {
 });
 
 describe('TLAS build', () => {
-  it('writes each instance record once and keeps its source index', () => {
+  it.each([8, 32])('writes each instance record once and keeps its source index with %s bins', bins => {
     const blases: BLASInstance[] = [
       { bvh: { buffer: new ArrayBuffer(48), maxDepth: 1, layout: 'bvh2' }, trainglesCount: 1, verticesCount: 3 },
       { bvh: { buffer: new ArrayBuffer(96), maxDepth: 1, layout: 'bvh2' }, trainglesCount: 2, verticesCount: 4 }
@@ -220,7 +220,7 @@ describe('TLAS build', () => {
       transform[12] = i;
       return { blasIndex: i % 2, bounds, transform, materialsIndices: [i] };
     });
-    const tlas = buildTLAS(instances, blases);
+    const tlas = buildTLAS(instances, blases, bins);
     const ints = new Int32Array(tlas.buffer);
     const records = new Int32Array(tlas.instancesBuffer!);
     const recordFloats = new Float32Array(tlas.instancesBuffer!);
