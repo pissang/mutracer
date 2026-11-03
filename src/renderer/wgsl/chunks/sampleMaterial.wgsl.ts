@@ -387,9 +387,15 @@ ${hasCoatNormals ? /* wgsl */ `
   }
 
   if (!mediumSampled) {
+    // Each spectral path carries one channel, including directly hit emitters.
+    // Keep the full material emission in the light-selection/MIS density.
+    var surfaceEmission = (*ma).emission;
+    if (SPECTRAL) {
+      surfaceEmission = sampling_spectral_rgb_filter(surfaceEmission, (*si).spectralChannel);
+    }
 ${caustics?`    let emissionWeight=emissiveHitMisWeight(si,path);
-    causticHotRecord(*path,emissionWeight*(*ma).emission,1u);causticEmitterRecord(*si,*path,emissionWeight,(*ma).emission);
-    (*path).li+=emissionWeight*(*ma).emission*(*path).beta;`:'    (*path).li += emissiveHitMisWeight(si, path) * (*ma).emission * (*path).beta;'}
+    causticHotRecord(*path,emissionWeight*surfaceEmission,1u);causticEmitterRecord(*si,*path,emissionWeight,surfaceEmission);
+    (*path).li+=emissionWeight*surfaceEmission*(*path).beta;`:'    (*path).li += emissiveHitMisWeight(si, path) * surfaceEmission * (*path).beta;'}
   }
   if ((*ma).materialType == UNLIT) {
     (*path).abort = true;

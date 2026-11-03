@@ -231,7 +231,9 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 
   // Direct lighting
   if (!mediumSampled) {
-    ${fragments['sample2'] ?? ''}path.li += emissiveHitMisWeight(si,path) * mat.emission * path.beta;${fragments['sample3'] ?? ''}
+    // Match NEE and background radiance when RGB wavelength passes are added.
+    vec3 surfaceEmission = sampling_spectral_rgb_filter(mat.emission, pathChannel);
+    ${fragments['sample2'] ?? ''}path.li += emissiveHitMisWeight(si,path) * surfaceEmission * path.beta;${fragments['sample3'] ?? ''}
     if (mat.materialType == UNLIT) {
       path.abort = true;
       return;
