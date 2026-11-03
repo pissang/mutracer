@@ -51,12 +51,14 @@ the textures they reference still share atlas space.
 
 Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 `thinFilmThickness` is in micrometres (`0.45` = 450 nm).
+Subsurface materials with short scattering radii may appear darker than in earlier releases.
 
 `baseWeight` scales diffuse reflection and the metallic normal-incidence color
 (`baseWeight * baseColor`). Dielectric specular, transmission and subsurface
 retain their own strengths. For metals, `specularColor` tints the F82 Fresnel
 curve near grazing angles and `specularWeight` scales the entire reflection,
 including thin-film reflection. At their default values, F82 reduces to Schlick.
+Low-roughness metals may appear slightly darker under broad lighting than in earlier releases.
 
 Native `specularRoughnessAnisotropy` and `coatRoughnessAnisotropy` use the OpenPBR GGX mapping:
 `alphaT = roughness² * sqrt(2 / (1 + (1 - anisotropy)²))` and

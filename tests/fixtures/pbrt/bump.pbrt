@@ -1,0 +1,10 @@
+Film "rgb" "integer xresolution" 128 "integer yresolution" 96
+Sampler "sobol" "integer pixelsamples" 64
+Integrator "path" "integer maxdepth" 5
+LookAt 0 0 2 0 0 0 0 1 0
+Camera "perspective" "float fov" 40
+WorldBegin
+Texture "height" "float" "imagemap" "string filename" "bump.exr" "float scale" .08
+Material "diffuse" "rgb reflectance" [.5 .5 .5] "texture displacement" "height"
+LightSource "point" "point3 from" [-1 2 2] "rgb I" [12 12 12]
+Shape "trianglemesh" "point3 P" [-.5 -.5 0 .5 -.5 0 .5 .5 0 -.5 .5 0] "point2 uv" [0 0 1 0 1 1 0 1] "integer indices" [0 1 2 0 2 3]

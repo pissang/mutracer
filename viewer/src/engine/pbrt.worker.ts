@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { inspect, urlResolver, type Resolver } from '../../../tools/pbrt/source';
+import { compactScene } from '../../../tools/pbrt/transfer';
 import { buildScene } from '../../../tools/pbrt/scene';
 import { parsePLY } from '../../../tools/pbrt/geometry';
 import type { ModelSource } from './loadModel';
@@ -11,6 +12,7 @@ self.onmessage = async (event: MessageEvent) => {
   const { id, command } = event.data;
   try {
     let result: unknown;
+    let sceneBuffers: ArrayBuffer[] = [];
     if (command === 'inspect') {
       source = event.data.source;
       const sizes = event.data.sizes as Record<string, number>;
@@ -32,12 +34,13 @@ self.onmessage = async (event: MessageEvent) => {
       result = await inspect(source.mainPath, resolver);
     } else if (command === 'build') {
       const scene = await buildScene(source.mainPath, resolver);
+      sceneBuffers = compactScene(scene);
       result = { scene, files: [...cached].map(([path, file]) => ({ path, file })) };
     } else if (command === 'ply') {
       const geometry = parsePLY(event.data.bytes);
       result = { attributes: Object.fromEntries(Object.entries(geometry.attributes).map(([key, attribute]) => [key, { array: attribute.array, itemSize: attribute.itemSize }])), index: geometry.index?.array };
     } else throw new Error(`Unknown PBRT worker command ${command}`);
-    const transfer = command === 'ply' ? [...new Set(Object.values((result as { attributes: Record<string, { array: Float32Array }> }).attributes).map(a => a.array.buffer))] : [];
+    const transfer = command === 'ply' ? [...new Set(Object.values((result as { attributes: Record<string, { array: Float32Array }> }).attributes).map(a => a.array.buffer))] : sceneBuffers;
     const index = (result as { index?: Uint32Array }).index;
     if (command === 'ply' && index && !transfer.includes(index.buffer)) transfer.push(index.buffer);
     self.postMessage({ id, result }, transfer);

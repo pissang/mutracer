@@ -200,9 +200,14 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     );
     if (mediumSampled) {
       path.beta *= transmittance * scattering / mediumPdf;
+      // Zero throughput cannot contribute at subsequent vertices or light connections.
+      if (all(equal(path.beta, vec3(0.0)))) { path.abort = true; return; }
       // Move from the start of the segment, not from its end surface.
       path.ray.o = segmentOrigin + scatterDist * path.ray.d;
       si.position = path.ray.o;
+      // A volume vertex has no originating surface to skip on continuation or shadow rays.
+      si.triangleIndex = -1;
+      si.instanceIndex = -1;
       path.li += DirectLight(si, mat, prepared, path, ffnormal, false) * path.beta;
 
       // Pick a new direction based on the phase function
@@ -218,6 +223,8 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     }
     else {
       path.beta *= transmittance / mediumPdf;
+      // Zero throughput cannot contribute at subsequent vertices or light connections.
+      if (all(equal(path.beta, vec3(0.0)))) { path.abort = true; return; }
     }
   }
 #endif
@@ -262,6 +269,8 @@ ${fragments['sample4'] ?? ''}    // Sample BSDF for color and outgoing direction
       return;
     }
 ${fragments['sample5'] ?? ''}    path.beta *= f / scatteringPdf;
+    // Zero throughput cannot contribute at subsequent vertices or light connections.
+    if (all(equal(path.beta, vec3(0.0)))) { path.abort = true; return; }
     crossedBoundary = !mat.thinWalled &&
       isNextRefraction;
     path.isNextRefraction = isNextRefraction;
@@ -289,6 +298,7 @@ ${hasVolumes ? /* glsl */ `  if (!mediumSampled && crossedBoundary) si.volumeSup
       si.mediumType = mat.mediumType;
       si.mediumExtinction = mat.mediumExtinction;
       si.mediumScattering = mat.mediumScattering;
+      path.scatteringMediumEntered = path.scatteringMediumEntered || any(greaterThan(mat.mediumScattering, vec3(0.0)));
       si.mediumAnisotropy = mat.mediumAnisotropy;
     }
     else {

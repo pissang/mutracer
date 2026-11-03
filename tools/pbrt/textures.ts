@@ -13,6 +13,7 @@ export class Textures {
   private cache = new Map<string, Promise<TextureValue>>();
   private images = new Map<string, Promise<Image>>();
   private heightMaps = new WeakMap<THREE.DataTexture, THREE.DataTexture>();
+  private bumpMaps = new WeakMap<THREE.DataTexture, Map<number, THREE.DataTexture>>();
   private spectra = new Map<string, Promise<number[]>>();
   constructor(private scene: Scene, private resolver: Resolver, private warn: (entity: Entity, handling: string, code?: string) => void, private decode?: DecodeImage) {}
   image(path: string): Promise<Image> {
@@ -22,7 +23,7 @@ export class Textures {
   }
   async spectrum(parameter: Parameter): Promise<number[] | undefined> {
     const value = parameter.values[0];
-    if (typeof value !== 'string') return parameter.values.map(Number);
+    if (typeof value !== 'string') return Array.from(parameter.values, Number);
     const named = namedSpectrum(value); if (named) return named;
     if (!/\.(spd|txt)$/i.test(value)) return undefined;
     const path = resolvePath(value, this.scene.entry);
@@ -66,7 +67,7 @@ export class Textures {
       const y = .2126 * color[0] + .7152 * color[1] + .0722 * color[2];
       return { color: emission && y > 0 ? color.map(v => v / y) : color };
     }
-    const values = parameter.values.map(Number);
+    const values = Array.from(parameter.values, Number);
     return { color: values.length === 1 ? [values[0], values[0], values[0]] : values.slice(0, 3) };
   }
   private async named(name: string, owner: Entity, stack: Set<string>, kind: 'float' | 'spectrum'): Promise<TextureValue> {
@@ -164,6 +165,42 @@ export class Textures {
     if (wrap === 'black') map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
     if (p.mapping && first(p, 'mapping', 'uv') !== 'uv') this.warn(entity, 'Non-UV image mapping uses mesh UVs', 'texture');
     map.needsUpdate = true; return { color, map };
+  }
+  bumpMap(value: TextureValue): THREE.DataTexture | null {
+    const source = value.map;
+    if (!source) return null;
+    const scale = value.color[0];
+    let variants = this.bumpMaps.get(source);
+    if (!variants) { variants = new Map(); this.bumpMaps.set(source, variants); }
+    if (variants.has(scale)) return variants.get(scale)!;
+    const { width, height } = source.image;
+    const input = source.image.data!;
+    const data = new Float32Array(width * height * 4);
+    const wrap = (i: number, size: number, mode: THREE.Wrapping) => mode === THREE.RepeatWrapping
+      ? ((i % size) + size) % size : Math.min(size - 1, Math.max(0, i));
+    const sample = (x: number, y: number) => {
+      const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+      let value = 0;
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+        const offset = (wrap(iy + dy, height, source.wrapT) * width + wrap(ix + dx, width, source.wrapS)) * 4;
+        value += input[offset] * (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+      }
+      return value * scale;
+    };
+    // PBRT materials.h::BumpMap uses forward UV differences; .0005 is its
+    // fallback when ray differentials vanish. A static bake cannot reproduce
+    // per-hit footprints, dpdu/dpdv lengths, or displace*dndu/dndv curvature.
+    const du = .0005, dv = .0005;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const h = sample(x, y);
+      const dhdu = (sample(x + du * source.repeat.x * width, y) - h) / du;
+      const dhdv = (sample(x, y + dv * source.repeat.y * height * (source.flipY ? -1 : 1)) - h) / dv;
+      const length = Math.hypot(dhdu, dhdv, 1), offset = (y * width + x) * 4;
+      data.set([.5 - dhdu / (2 * length), .5 - dhdv / (2 * length), .5 + 1 / (2 * length), 1], offset);
+    }
+    const map = source.clone(); map.source = new THREE.Source({ width, height, data });
+    map.colorSpace = THREE.NoColorSpace; map.needsUpdate = true;
+    variants.set(scale, map); return map;
   }
   heightMap(source: THREE.DataTexture, owner: Entity): THREE.DataTexture {
     const { width, height } = source.image;

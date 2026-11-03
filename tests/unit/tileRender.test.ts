@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import schedule from '../fixtures/display-schedule.json';
 import {
   makeTileRender,
   makeTileRenderWithPredict
@@ -52,6 +53,117 @@ describe('WebGL tile rendering', () => {
 });
 
 describe('predictive tile rendering', () => {
+  it('keeps slow compute tiles at least one workgroup wide and covers every pixel once', () => {
+    const row = schedule.browserWebGpuTilePrediction;
+    const tiles = makeTileRenderWithPredict(row.minimumTileSize);
+    tiles.setSize(row.width, row.height); tiles.setDesiredMsPerTile(21);
+    for (let sample = 0; sample < 12; sample++) {
+      const first = tiles.nextTile();
+      expect(first.columns).toBeLessThanOrEqual(row.maximumColumns);
+      expect(first.rows).toBeLessThanOrEqual(row.maximumRows);
+      const visits = new Uint8Array(row.width * row.height);
+      for (let i = 0; i < first.columns * first.rows; i++) {
+        const tile = i === 0 ? first : tiles.nextTile();
+        for (let y = tile.yIndex; y < row.height; y += tile.rows) {
+          for (let x = tile.xIndex; x < row.width; x += tile.columns) visits[y * row.width + x]++;
+        }
+      }
+      expect(visits.every(count => count === 1)).toBe(true);
+      // Effective refinements keep reducing time, but the requested budget
+      // would need footprints smaller than the compute workgroup.
+      tiles.setLastTraceTime(32000 / (first.columns * first.rows));
+    }
+    expect(tiles.nextTile()).toMatchObject({
+      columns: row.maximumColumns, rows: row.maximumRows,
+      tileWidth: row.minimumTileSize, tileHeight: row.minimumTileSize
+    });
+    const tiny = makeTileRenderWithPredict(row.minimumTileSize);
+    tiny.setSize(3, 2); tiny.setDesiredMsPerTile(21); tiny.setLastTraceTime(200);
+    expect(tiny.nextTile()).toMatchObject({columns: 1, rows: 1});
+  });
+  it('rolls back ineffective refinements and retains the limit until invalidation', () => {
+    const row = schedule.browserWebGpuTilePrediction;
+    const tiles = makeTileRenderWithPredict(row.minimumTileSize);
+    tiles.setSize(row.width, row.height); tiles.setDesiredMsPerTile(row.targetMs);
+    const counts: number[] = [];
+    for (let sample = 0; sample < 24; sample++) {
+      const tile = completeSample(tiles); counts.push(tile.columns * tile.rows);
+      tiles.setLastTraceTime(80);
+    }
+    expect(Math.max(...counts)).toBe(4);
+    expect(counts.slice(2)).toEqual(Array(22).fill(1));
+    tiles.reset(); expect(completeSample(tiles).columns).toBe(1);
+    tiles.needsUpdatePredicting(); completeSample(tiles);
+    tiles.setLastTraceTime(80);
+    expect(completeSample(tiles).columns).toBe(2);
+  });
+
+  it.each([-0.1, 0.1])('enforces the schedule improvement threshold (offset %s ms)', offset => {
+    const row = schedule.browserWebGpuTilePrediction;
+    const tiles = makeTileRenderWithPredict(row.minimumTileSize);
+    tiles.setSize(row.width, row.height); tiles.setDesiredMsPerTile(row.targetMs);
+    completeSample(tiles); tiles.setLastTraceTime(80);
+    const refined = completeSample(tiles);
+    const threshold = 80 * (1 - (1 - 1 / (refined.columns * refined.rows)) * row.minimumProportionalImprovement);
+    tiles.setLastTraceTime(threshold + offset);
+    const next = completeSample(tiles);
+    expect(next.columns * next.rows === 1).toBe(offset > 0);
+  });
+
+  it('accepts a refinement that fits the schedule budget tolerance despite a high fixed cost', () => {
+    const row = schedule.browserWebGpuTilePrediction;
+    const tiles = makeTileRenderWithPredict(row.minimumTileSize);
+    tiles.setSize(4096, 4096); tiles.setDesiredMsPerTile(row.targetMs);
+    completeSample(tiles); tiles.setLastTraceTime(24);
+    const refined = completeSample(tiles);
+    expect(refined.columns).toBe(9);
+    tiles.setLastTraceTime(row.targetMs * row.budgetTolerance);
+    expect(completeSample(tiles).columns).toBe(9);
+  });
+
+  it.each([0, 5])('converges with fixed overhead %s plus an area-dependent cost', overhead => {
+    const tiles = makeTileRenderWithPredict(8);
+    tiles.setSize(1024, 1024); tiles.setDesiredMsPerTile(21);
+    // Analytic target: 16 tiles when overhead=0; 21 tiles when overhead=5.
+    const counts: number[] = [];
+    for (let sample = 0; sample < 40; sample++) {
+      const tile = completeSample(tiles), count = tile.columns * tile.rows;
+      counts.push(count); tiles.setLastTraceTime(overhead + 336 / count);
+    }
+    const count = counts.at(-1)!;
+    expect(overhead + 336 / count).toBeGreaterThanOrEqual(21 * .75);
+    expect(overhead + 336 / count).toBeLessThanOrEqual(21 * 1.25);
+    // Keep the existing grid quantization: the nearest coarse square grids
+    // bracket the analytic target rather than forcing a finer grid each time.
+    const optimum = 336 / (21 - overhead);
+    expect(Math.abs(count - optimum) / optimum).toBeLessThanOrEqual(.25);
+    expect(new Set(counts.slice(-8)).size).toBe(1);
+  });
+
+  it('keeps a stable coarse grid instead of alternating above and below the budget', () => {
+    const tiles = makeTileRenderWithPredict(8);
+    tiles.setSize(1024, 768); tiles.setDesiredMsPerTile(21);
+    const counts: number[] = [];
+    for (let sample = 0; sample < 24; sample++) {
+      const tile = completeSample(tiles), count = tile.columns * tile.rows;
+      counts.push(count); tiles.setLastTraceTime(26 / count);
+    }
+    expect(counts.slice(-16)).toEqual(Array(16).fill(1));
+  });
+
+  it('ignores delayed timestamps from a superseded grid', () => {
+    const tiles = makeTileRenderWithPredict(8);
+    tiles.setSize(1024, 1024); tiles.setDesiredMsPerTile(21);
+    const initial = completeSample(tiles);
+    tiles.setLastTraceTime(80, initial.columns, initial.rows);
+    const refined = completeSample(tiles);
+    expect(refined.columns).toBeGreaterThan(initial.columns);
+    tiles.setLastTraceTime(80, initial.columns, initial.rows);
+    expect(completeSample(tiles)).toEqual(refined);
+    tiles.setLastTraceTime(80, refined.columns, refined.rows);
+    expect(completeSample(tiles)).toEqual(initial);
+  });
+
   it('uses a representative 4K probe instead of a 64x64 cold start', () => {
     const tileRender = makeTileRenderWithPredict();
     tileRender.setSize(3840, 2160);
@@ -133,7 +245,7 @@ describe('predictive tile rendering', () => {
       const next = completeSample(tiles);
       expect([next.columns, next.rows]).toEqual([first.columns, first.rows]);
     }
-    tiles.setLastTraceTime(200);
+    tiles.setLastTraceTime(200 / (first.columns * first.rows));
     const measured = completeSample(tiles);
     expect(measured.columns * measured.rows).toBeGreaterThan(first.columns * first.rows);
   });

@@ -13,7 +13,7 @@ import {
 } from '../../src/renderer/openPbrEnergyLut';
 
 describe('OpenPBR opaque dielectric energy LUT', () => {
-  it('preserves every decoded float from the original row-normalized tables', () => {
+  it('preserves directional decoding with interpolation-normalized metal averages', () => {
     const compact = getOpenPbrEnergyLutData();
     const data = new Float32Array(1120 * 32);
     data.set(compact.subarray(0, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32));
@@ -27,7 +27,7 @@ describe('OpenPBR opaque dielectric energy LUT', () => {
     // Pre-delta reference in little-endian Float32, covering every sample and
     // the joins between dielectric, metal and average-energy rows.
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(
-      '3ecf8fc60aa1c16c521d7b4b53737ff2d4d5d95241f8fe984384bcc1456b55c2'
+      '2030bf2adefb6fa94edcaf4ecdbd7d3b3b3f1b2d5b7babe450c57b9c05f43ebe'
     );
   });
 
@@ -95,24 +95,22 @@ describe('ideal-metal multiple-scattering table contract', () => {
     expect(Math.abs(idealMetalEnergy(roughness!, cosine!) + metalLoss(roughness!, cosine!) - 1)).toBeLessThan(.0025);
   });
 
-  it('preserves tiny average losses and their cosine-weighted normalization', () => {
+  it('normalizes the actual interpolated directional loss, including tiny grazing losses', () => {
     const data = getOpenPbrEnergyLutData();
-    // These small u16 values would disappear if all 32 averages shared one
-    // normalized row. Exact u16 storage keeps the divisor finite.
-    for (const [r, value] of [[2, 7], [3, 30], [31, 40831]]) {
-      expect(data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + r!]!).toBeCloseTo(value! / 65535, 7);
-    }
-    for (const roughness of [.3, .6, .9]) {
+    for (const alpha of [.01, .05, .1, .25, .5, 1]) {
+      const roughness = Math.sqrt(alpha);
       let average = 0;
-      const n = 4096;
+      const n = 65536;
       for (let i = 0; i < n; i++) {
         const cosine = (i + .5) / n;
         average += 2 * cosine * metalLoss(roughness, cosine) / n;
       }
-      const index = roughness * 31, i0 = Math.floor(index);
+      const index = roughness * 31, i0 = Math.floor(index), i1 = Math.min(31, i0 + 1);
       const a = data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + i0]!;
-      const b = data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + i0 + 1]!;
-      expect(Math.abs(average - (a + (b - a) * (index - i0)))).toBeLessThan(.002);
+      const b = data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + i1]!;
+      const stored = a + (b - a) * (index - i0);
+      expect(stored).toBeGreaterThan(0);
+      expect(Math.abs(average / stored - 1)).toBeLessThan(1e-6);
     }
   });
 });
@@ -196,11 +194,11 @@ describe('ideal-dielectric multiple-scattering table contract', () => {
   });
 });
 
-describe('compact average storage Float32 contract', () => {
+describe('decoded average Float32 contract', () => {
   it.each([
-    [OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, 32, 'edb15276a4de01a89a4b9a881d8e5cfb8d13322f486f59c545bce7b000a1bbd9'],
+    [OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, 32, '1c8094d267ebba1d1cbb422825e944585538160ff805630d16889cae1416e6c7'],
     [OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, 1024, '26bb5452686e4a99d5c15c0bcf622a85bc6691d33b160bd340d4bb1124951cf3']
-  ] as const)('preserves every pre-compact average bit (row=%s)', (row, length, hash) => {
+  ] as const)('preserves the normalized metal and original dielectric averages (row=%s)', (row, length, hash) => {
     const values = getOpenPbrEnergyLutData().subarray(row * 32, row * 32 + length);
     const bytes = new Uint8Array(length * 4);
     const view = new DataView(bytes.buffer);

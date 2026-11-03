@@ -24,6 +24,19 @@ describe('PBRT image and texture parameter semantics', () => {
     const map = (await textures.value(owner.params,'reflectance',[0,0,0],owner)).map!;
     expect(Array.from(map.image.data).slice(0,3)).toEqual(expect.arrayContaining([expect.closeTo(.6),expect.closeTo(.2),0]));
   });
+  it('bakes scaled forward UV slopes with the PBRT (s, 1-t) orientation', async () => {
+    const { textures } = await setup('WorldBegin Shape "sphere"');
+    const data = new Float32Array(8*8*4);
+    for (let y=0;y<8;y++) for(let x=0;x<8;x++) data.set([x/8 + 2*y/8,0,0,1],(y*8+x)*4);
+    const source = new THREE.DataTexture(data,8,8,THREE.RGBAFormat,THREE.FloatType);
+    source.flipY = true; source.repeat.set(2,3); source.wrapS = source.wrapT = THREE.ClampToEdgeWrapping;
+    const map = textures.bumpMap({ color: [.25,.25,.25], map: source })!;
+    const offset = (3*8+3)*4, normal = Array.from(map.image.data.slice(offset,offset+3), v=>2*v-1);
+    const length = Math.hypot(.5,1.5,1);
+    [-.5/length,1.5/length,1/length].forEach((v,i)=>expect(normal[i]).toBeCloseTo(v,5));
+    expect(textures.bumpMap({ color: [.25,.25,.25], map: source })).toBe(map);
+    expect(map.flipY).toBe(true); expect(map.repeat.toArray()).toEqual([2,3]);
+  });
   it('prepares nonsquare height maps with a reusable supported layout', async () => {
     const { textures, owner } = await setup('WorldBegin Shape "sphere"');
     const data = new Float32Array(2*3*4).fill(.5), source = new THREE.DataTexture(data,2,3,THREE.RGBAFormat,THREE.FloatType);

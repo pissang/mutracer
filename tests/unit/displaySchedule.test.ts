@@ -1,3 +1,5 @@
+import schedule from '../fixtures/display-schedule.json';
+import {makeTileRenderWithPredict} from '../../src/renderer/TileRender';
 import {afterEach,expect,it,vi} from 'vitest';
 import {readFileSync} from 'node:fs';
 import Render from '../../src/Render';
@@ -37,4 +39,18 @@ it.each(table.cases)('browser schedule: $name',async(row:{events:string[];action
   }
  }
  expect(actions).toEqual(row.actions);engine.dispose();
+});
+
+it('browser prediction events roll back a flat-cost refinement until invalidated', () => {
+ const row = schedule.browserWebGpuTilePrediction;
+ const tiles = makeTileRenderWithPredict(row.minimumTileSize);
+ tiles.setSize(row.width, row.height); tiles.setDesiredMsPerTile(row.targetMs);
+ const sample = () => {const first=tiles.nextTile(); for(let i=1;i<first.columns*first.rows;i++)tiles.nextTile(); return first.columns*first.rows;};
+ expect(sample()).toBe(1);
+ for(const event of row.ineffectiveRefinementEvents){
+  if(event.startsWith('measure-'))tiles.setLastTraceTime(80);
+  else if(event==='reset')tiles.reset();
+  else if(event==='invalidate'){tiles.needsUpdatePredicting();expect(sample()).toBe(1);tiles.setLastTraceTime(80);}
+  else expect(sample()).toBe(event==='refine'?4:1);
+ }
 });

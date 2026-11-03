@@ -51,6 +51,11 @@ reach a finished image alone, in random sequences and during convergence. Unit t
 cover the same orderings with a fake GPU in `unit/editLiveness.test.ts`, which cannot
 catch driver behavior or check pixels.
 
+[`gpu/subsurfaceFurnace.html`](./gpu/subsurfaceFurnace.html) exposes
+`captureSubsurfaceFurnace('webgpu')` or `captureSubsurfaceFurnace('webgl')`.
+It checks conservative and gray SSS spheres and a closed cube against independent
+random-walk references.
+
 [`gpu/shaderSource.html`](./gpu/shaderSource.html) exposes
 `shaderSourceTests.capture(layout, postProcess)` for before/after comparisons.
 It uses four OpenPBR layer materials, four background configurations, Sobol

@@ -171,7 +171,9 @@ function getPredictResult(
   lastTraceTime: number,
   expectFrameTime: number,
   tilePixels: number[],
-  maxNumTiles: number
+  maxNumTiles: number,
+  minimumTileSize: number,
+  minimumPredictionSize: number[]
 ) {
   const maxTileSize = [width, height];
   const rawCount = lastTraceTime > 0 ? expectFrameTime / lastTraceTime : 1;
@@ -196,6 +198,14 @@ function getPredictResult(
     samplesPerFrame *= Math.floor(newTileHeight / maxTileSize[1]);
   }
   newTileHeight = Math.min(newTileHeight, maxTileSize[1]);
+
+  // A compute dispatch still occupies a whole workgroup when fewer lanes
+  // are active. Splitting below that footprint repeats the fixed kernel cost
+  // and can make timestamp feedback progressively slow down a tiny render.
+  newTileWidth = Math.max(newTileWidth,
+    Math.min(width, Math.max(minimumTileSize, minimumPredictionSize[0])));
+  newTileHeight = Math.max(newTileHeight,
+    Math.min(height, Math.max(minimumTileSize, minimumPredictionSize[1])));
 
   let newColumns = Math.round(width / newTileWidth);
   let newRows = Math.round(height / newTileHeight);
@@ -237,7 +247,7 @@ function getInitialProbeSize(width: number, height: number) {
   ];
 }
 
-export function makeTileRenderWithPredict() {
+export function makeTileRenderWithPredict(minimumTileSize = 1) {
   let numTiles = 1;
   let currentTile = -1;
   let lastTraceTime = -1;
@@ -260,6 +270,15 @@ export function makeTileRenderWithPredict() {
   let rows = 0;
 
   let maxNumTiles = Infinity;
+  // Validate a refinement against the grid that motivated it. A smaller
+  // dispatch can retain most of the longest path / fixed kernel cost.
+  let refinement: { grid: ReturnType<typeof getPredictResult>; time: number } | undefined;
+  let minimumPredictionSize = [0, 0];
+
+  function clearPredictionEvidence() {
+    refinement = undefined;
+    minimumPredictionSize = [0, 0];
+  }
 
   function nextTile() {
     currentTile++;
@@ -274,14 +293,35 @@ export function makeTileRenderWithPredict() {
 
     if (currentTile === 0 && timingRevision !== appliedTimingRevision) {
       appliedTimingRevision = timingRevision;
-      const result = getPredictResult(
+      const measured = lastFrameTraceTimeValidCount > 0;
+      let rollback: typeof refinement;
+      if (measured && refinement) {
+        const areaRatio = refinement.grid.numTiles / numTiles;
+        // Require at least half of the area-proportional improvement, unless
+        // the new tile already fits the budget (with 10% timing tolerance).
+        if (avgTileTime > expectFrameTime * 1.1 &&
+          avgTileTime > refinement.time * (1 - (1 - areaRatio) * 0.5)) {
+          rollback = refinement;
+          minimumPredictionSize = [rollback.grid.tileWidth, rollback.grid.tileHeight];
+        }
+        refinement = undefined;
+      }
+      const result = rollback?.grid ?? getPredictResult(
         width,
         height,
         avgTileTime,
         expectFrameTime,
         lastTraceTime >= 0 ? tilePixels : getInitialProbeSize(width, height),
-        maxNumTiles
+        maxNumTiles,
+        minimumTileSize,
+        minimumPredictionSize
       );
+      if (!rollback && measured && result.numTiles > numTiles) {
+        refinement = {
+          grid: {tileWidth, tileHeight, columns, rows, numTiles, samplesPerFrame},
+          time: avgTileTime
+        };
+      }
 
       lastFrameTotalTraceTime = 0;
       lastFrameTraceTimeValidCount = 0;
@@ -320,25 +360,41 @@ export function makeTileRenderWithPredict() {
       currentTile = -1;
     },
     setSize(w: number, h: number) {
-      if (width !== w || height !== h) timingRevision++;
+      if (width !== w || height !== h) {
+        timingRevision++;
+        clearPredictionEvidence();
+        lastTraceTime = -1;
+        lastFrameTotalTraceTime = 0;
+        lastFrameTraceTimeValidCount = 0;
+      }
       width = w;
       height = h;
     },
     setMaxTiles(maxTiles: number) {
-      if (maxNumTiles !== maxTiles) timingRevision++;
+      if (maxNumTiles !== maxTiles) {
+        timingRevision++;
+        clearPredictionEvidence();
+      }
       maxNumTiles = maxTiles;
     },
     setDesiredMsPerTile(time: number) {
-      if (expectFrameTime !== time) timingRevision++;
+      if (expectFrameTime !== time) {
+        timingRevision++;
+        clearPredictionEvidence();
+      }
       expectFrameTime = time;
     },
     needsUpdatePredicting() {
+      clearPredictionEvidence();
       timingRevision++;
       lastTraceTime = -1;
       lastFrameTotalTraceTime = 0;
       lastFrameTraceTimeValidCount = 0;
     },
-    setLastTraceTime(time: number) {
+    setLastTraceTime(time: number, timedColumns = columns, timedRows = rows) {
+      // A timestamp can arrive after the next sample changed the grid. Only
+      // compare measurements of the grid currently being evaluated.
+      if (timedColumns !== columns || timedRows !== rows || !Number.isFinite(time) || time <= 0) return;
       timingRevision++;
       lastTraceTime = time;
       lastFrameTraceTimeValidCount++;

@@ -878,7 +878,6 @@ class WGPURayTracePass {
       if (this._needsRefitTLAS) this._refitMeshInstances();
       if (this._dirtyColorMeshes.size) this._updateMeshColors();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
-      this._constants.RR_MAX = this._constants.HAS_VOLUMES || this._constants.HAS_MEDIUM ? 12 : 2;
       this._setCaustics(this._causticSettings);
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
@@ -2132,7 +2131,6 @@ class WGPURayTracePass {
     else delete this._constants.HAS_VOLUME_NOISE;
     if (packed.count) this._constants.HAS_VOLUMES = true;
     else delete this._constants.HAS_VOLUMES;
-    this._constants.RR_MAX = packed.count || this._constants.HAS_MEDIUM ? 12 : 2;
   }
 
   setBackground(background?: SceneBackground) {

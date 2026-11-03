@@ -8,7 +8,8 @@
  * This repository re-quantized the Adobe data to 8-bit row-normalized values.
  * Directional rows store Uint16 min/max followed by 32 Uint8 samples.
  * Metal and ideal-dielectric averages store exact little-endian Uint16 values.
- * They decode directly to Float32 without row quantization or repeated texels.
+ * Dielectric averages decode directly to Float32. Metal averages are normalized
+ * to the decoded piecewise-linear directional rows (see below).
  * Storage uses differences from the previous row: little-endian min/max
  * modulo 65536 and samples modulo 256. The first row is relative to zero;
  * differences continue across all concatenated energy tables.
@@ -977,6 +978,22 @@ export function getOpenPbrEnergyLutData(): Float32Array {
       ? OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + index
       : OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW * 32 + index - 32;
     data[offset] = value;
+  }
+  // Integrating before interpolation in roughness commutes with that linear
+  // interpolation. Use the exact integral of 2*mu times each linear segment,
+  // rather than the separately tabulated u16 average: low-roughness rows have
+  // narrow grazing features that the 32 cosine samples cannot resolve exactly.
+  // This makes the compensation lobe integrate to its directional loss for any
+  // roughness without changing the directional table or the Fresnel model.
+  for (let row = 0; row < OPENPBR_ENERGY_LUT_SIZE; row++) {
+    const offset = (OPENPBR_METAL_ENERGY_LUT_ROW + row) * OPENPBR_ENERGY_LUT_WIDTH;
+    const h = 1 / (OPENPBR_ENERGY_LUT_SIZE - 1);
+    let average = 0;
+    for (let i = 0; i < OPENPBR_ENERGY_LUT_SIZE - 1; i++) {
+      const a = data[offset + i]!, b = data[offset + i + 1]!;
+      average += h * (i * h * (a + b) + h * (a + 2 * b) / 3);
+    }
+    data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * OPENPBR_ENERGY_LUT_WIDTH + row] = average;
   }
   cachedData = data;
   return data;

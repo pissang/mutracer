@@ -17,7 +17,7 @@ Scenes have individual licenses listed in its README. Scene assets are downloade
 at runtime and are not included with MuTracer.
 
 Run `npm run pbrt:compare -- <local-scene.pbrt> --spp 64 --scale 0.25` with
-PBRT installed at `~/.codex/tools/pbrt-v4/build/pbrt`, or set `PBRT_BIN`.
+the PBRT executable selected by `PBRT_BIN`.
 `--webgl` selects WebGL 2; `--out <directory>` chooses the report destination.
 `--width N --height N` overrides the scaled Film dimensions. Comparisons use the
 whole frame; Film crop windows and pixel bounds are ignored in both renders.
@@ -49,40 +49,57 @@ copies to coexist in browser memory.
 | sphere / disk / cylinder | Tessellated geometry; sphere emitters retain visible emissive geometry. |
 | ObjectBegin / ObjectInstance | Shared instanced geometry, including mirrored instances. |
 | loopsubdiv / curve | Loop subdivision with area-weighted normals / skipped with a warning. |
-| perspective / orthographic | Film aspect ratio and short-edge field of view; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
-| diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. |
-| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients. |
+| perspective / orthographic | Film aspect ratio, ISO and camera shutter exposure, and short-edge field of view; Film exposuretime and whitebalance are warned and ignored; other cameras approximate perspective. Custom screenwindow is warned and ignored. |
+| diffuse / conductor / dielectric / thindielectric | OpenPBR base, metal, transmission and thin-wall mapping; named metal and glass spectra are supported. Outside-medium reversal reciprocates thick dielectric IOR; thin-wall IOR stays unchanged. Reciprocal dispersion retains an approximate Abbe mapping with a warning. |
+| coateddiffuse / coatedconductor / subsurface / diffusetransmission | Approximate OpenPBR layers, including separate conductor/interface roughness and named subsurface coefficients; reversed coats or coat IOR below 1 are unsupported and warned; diffuse transmission defaults to reflectance/transmittance 0.25 and uses mean transmittance for its thin-wall approximation. |
 | mix / hair / measured / interface | Dominant constant-weight branch / diffuse fallback / diffuse fallback / transmissive medium boundary. |
 | imagemap | PNG/JPEG, EXR, TGA and TIFF; encoding, invert, scale, UV scale/offset and repeat/clamp. Black wrap approximates clamp. |
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
-| point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments are reprojected. Portals are ignored with a warning. |
+| point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments use solid-angle supersampling with total-energy preservation. Portals are ignored with a warning. |
 | goniometric / projection | Skipped with a warning. |
-| homogeneous | Interior material medium, or a bounded exterior volume. Colored exterior extinction is averaged with a warning. |
+| homogeneous | Inside or outside material medium (outside reverses the boundary), or a bounded camera volume. Two non-camera media use inside only, with a warning. Colored camera extinction is averaged with a warning. |
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
-| normalmap / alpha | Normal map and material opacity variants. Bump and displacement maps use a warned height-field approximation. |
+| normalmap / alpha | Normal map and material opacity variants. Material bump is baked to UV-space normals; shape displacement keeps the height-field approximation. |
 
 Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
 region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
+PBRT camera media stay active in the viewer; enabling Volumes adds ground fog.
+Material bump changes shading only; its appearance on curved surfaces and at
+different texture scales is approximate, with a warning.
+When normalmap is also present, it takes precedence and bump is warned and ignored.
+Interface or empty-material boundaries with an interior medium are excluded
+from strict comparison: MuTracer shadow rays block point and area direct light
+at these boundaries. Import emits a warning. Scenes containing these boundaries
+are excluded as a whole because their shadows and indirect light can affect
+other surfaces; reports retain measurements with `not-comparable` status.
+Open or inconsistently oriented medium boundaries and detected camera/interface
+medium mismatches also produce warnings and exclude the whole scene from strict
+comparison.
 Ordinary surfaces are double-sided. One-sided emitters also hide their back faces
 from primary rays; this visibility limitation is reported as a warning.
 Subsurface mean free paths below 0.001 scene units are limited by the existing
 OpenPBR medium; this can change fine-scale skin scattering and is warned about.
+Thin-walled materials cannot retain interior absorption or scattering media;
+import warns and excludes these surfaces from strict comparison.
+Absorbing gemstones can still differ in color from PBRT, and rough colored
+metals can appear too bright.
 Optical constants accept named spectra or SPD files. Spatial optical-constant
 maps and coat roughness maps use warned mean-value approximations.
 
-The viewer asks before downloading 1 GB or more. It rejects unknown total sizes or
-an estimated working set above 8 GiB, using eight times the encoded input size.
+The viewer asks before downloading 1 GB or more, up to its 1 GiB encoded-input
+limit (about 1.074 GB). Larger inputs and unknown total sizes are rejected before
+binary downloads. The memory estimate is eight times input size, capped at 8 GiB.
 This is an estimate; available browser and GPU memory can impose a lower limit.
 Local folders with multiple scenes open the first entry containing `WorldBegin`
 in path order. Open an individual scene and its dependencies to choose another.
 Standalone code export is unavailable for PBRT scenes; use the viewer or the
 comparison tool to render them.
 
-With `--noise`, comparable regions whose HDR RMSE exceeds the two-run
-noise estimate are reported as mismatches (exit code 2); approximate regions do
-not fail this check. The statistical margin assumes independent pixel errors,
-so a mismatch needs diagnosis, particularly near geometry edges and indirect
-paths through approximate materials. Without `--noise`, the report leaves noise
-agreement unassessed.
+With `--noise`, the report separates whole-frame HDR RMSE from regional mean
+bias divided by its standard error. Regional tests exclude ID discontinuities
+expanded by one pixel and flag channels above six standard errors. Either test
+can report mismatch (exit code 2); approximate regions do not fail these checks.
+The estimates assume independent pixel errors, so mismatches still need diagnosis.
+Without `--noise`, noise agreement remains unassessed.

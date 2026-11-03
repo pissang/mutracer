@@ -2,7 +2,7 @@
  * This is an independent parser; no renderer or scene assets are bundled. */
 export interface Location { file: string; line: number; column: number }
 export interface Token extends Location { value: string; quoted: boolean }
-export interface Parameter { type: string; name: string; values: (string | number | boolean)[]; loc: Location }
+export interface Parameter { type: string; name: string; values: (string | number | boolean)[] | Float32Array | Uint32Array; loc: Location }
 export interface Statement extends Location { kind: string; args: (string | number)[]; params: Record<string, Parameter> }
 export class PbrtError extends Error {
   constructor(message: string, public loc: Location) { super(`${loc.file}:${loc.line}:${loc.column}: ${message}`); this.name = 'PbrtError'; }

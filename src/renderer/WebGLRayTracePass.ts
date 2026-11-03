@@ -432,7 +432,6 @@ class WebGLRayTracePass {
       }
       this._mainPass.setUniforms({volumeCount: packed.count, volumeWorldToLocal: matrices, volumeColorAnisotropy: colors, volumeParams: params});
     }
-    this._mainPass.setDefines({RR_MAX: hasVolumes || !!this._preparedMeshData?.materials.some(materialUsesMedium) ? 12 : 2});
   }
 
   setBackground(background?: SceneBackground) {
@@ -740,7 +739,7 @@ class WebGLRayTracePass {
         // Multiple-scattering SSS paths need enough collisions to return to
         // the boundary before roulette; terminating at depth five produces
         // dark materials and a handful of very large surviving samples.
-        RR_MAX: HAS_MEDIUM || this._hasVolumes ? 12 : 2,
+        RR_MAX: 12,
 
         ...materialData.defines
       });

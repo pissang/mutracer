@@ -7,6 +7,27 @@ import { Textures } from './textures';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { packMaterialParams } from '../../src/renderer/materialParams';
 export type Warn = (entity: Entity, handling: string, code?: string) => void;
+/** Inverse of OpenPBR 1.1.1's RMS-preserving GGX parameterization. */
+export function anisotropicRoughness(alphaU: number, alphaV: number) {
+  const maximum = Math.max(alphaU, alphaV), minimum = Math.min(alphaU, alphaV);
+  return {
+    roughness: Math.pow((alphaU * alphaU + alphaV * alphaV) / 2, .25),
+    anisotropy: maximum > 0 ? 1 - minimum / maximum : 0,
+    rotation: alphaV > alphaU ? Math.PI / 2 : 0
+  };
+}
+/** A material medium occupies the normal's negative half-space. Camera medium
+ * is already represented by SceneVolume; it is not another interior layer. */
+export function interiorMedium(shape: Shape, scene: Scene, warn?: Warn): { name: string; flip: boolean } {
+  for (const name of [shape.inside, shape.outside]) if (name && !scene.media[name]) throw new Error(`Undefined medium ${name}`);
+  const inside = shape.inside !== scene.cameraMedium ? shape.inside : '';
+  const outside = shape.outside !== scene.cameraMedium ? shape.outside : '';
+  if (inside && outside) {
+    warn?.(shape, 'Both sides have non-camera media; uses inside medium only', 'medium-interface');
+    return { name: inside, flip: false };
+  }
+  return outside ? { name: outside, flip: true } : { name: inside, flip: false };
+}
 // Invert the existing OpenPBR artist-color -> single-scattering-albedo mapping
 // through its own packer, rather than duplicating its fitted coefficients.
 function subsurfaceColor(albedo: number[], anisotropy: number): number[] {
@@ -48,7 +69,7 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   const comparable = ['diffuse', 'conductor', 'dielectric', 'thindielectric', 'interface', ''].includes(type);
   result.userData.pbrtComparable = comparable;
   if (!comparable) warn(entity, `${type} approximated with OpenPBR; excluded from strict HDR comparison`, 'material');
-  const color = await textures.value(p, 'reflectance', type === 'conductor' ? [.9, .9, .9] : [.5, .5, .5], entity);
+  const color = await textures.value(p, 'reflectance', type === 'conductor' ? [.9, .9, .9] : type === 'diffusetransmission' ? [.25,.25,.25] : [.5, .5, .5], entity);
   result.color.setRGB(...color.color as [number, number, number]); result.map = color.map ?? null;
   if (['dielectric', 'thindielectric', 'interface', ''].includes(type)) {
     result.color.setRGB(1, 1, 1); result.transmission = 1; result.ior = p.eta?.type === 'spectrum' ? 1.5 : scalar(p, 'eta', 1.5);
@@ -88,13 +109,10 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
   }
   const remap = first(p, 'remaproughness', true) !== false;
   const u = roughness(scalar(p, 'uroughness', scalar(p, 'roughness', 0)), remap), v = roughness(scalar(p, 'vroughness', scalar(p, 'roughness', 0)), remap);
-  result.roughness = Math.sqrt(u * v); open.specularRoughness = result.roughness;
-  if (u !== v) {
-    const max = Math.max(u * u, v * v), min = Math.min(u * u, v * v);
-    open.specularAnisotropy = Math.min(1, (1 - min / max) / .9);
-    if (min / max < .1) warn(entity, 'Extreme microfacet anisotropy limited by the OpenPBR aspect model', 'material');
-    open.specularAnisotropyRotation = v > u ? Math.PI / 2 : 0;
-  }
+  const specular = anisotropicRoughness(u * u, v * v);
+  result.roughness = specular.roughness; open.specularRoughness = specular.roughness;
+  open.specularAnisotropy = specular.anisotropy;
+  open.specularAnisotropyRotation = specular.rotation;
   if (p.roughness?.type === 'texture' && !p.uroughness && !p.vroughness) {
     const value = await textures.value(p, 'roughness', [.5, .5, .5], entity);
     if (value.map) {
@@ -114,10 +132,11 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     const cv = await textures.value(coat, coat.vroughness ? 'vroughness' : 'roughness', [0,0,0], entity);
     if (cu.map || cv.map) warn(entity, 'Coat roughness maps approximated by their means', 'material');
     const u = roughness(textures.average(cu)[0], remap), v = roughness(textures.average(cv)[0], remap);
-    result.clearcoat = 1; result.clearcoatRoughness = Math.sqrt(u*v); open.coatRoughness = result.clearcoatRoughness;
+    result.clearcoat = 1; result.clearcoatRoughness = anisotropicRoughness(u*u,v*v).roughness; open.coatRoughness = result.clearcoatRoughness;
     open.coatWeight = 1; open.coatDarkening = 1; open.coatIor = scalar(coat, 'eta', 1.5);
     if (coat.eta?.type === 'spectrum') { const eta = await textures.spectrum(coat.eta); if (eta) open.coatIor = glass(eta).ior; warn(entity, 'Coat dispersion approximated by its d-line IOR', 'spectrum'); }
-    if (u !== v) { open.coatAnisotropy = Math.min(1,(1-Math.min(u*u,v*v)/Math.max(u*u,v*v))/.9); open.coatAnisotropyRotation = v>u ? Math.PI/2 : 0; }
+    const mapped = anisotropicRoughness(u*u,v*v);
+    open.coatAnisotropy = mapped.anisotropy; open.coatAnisotropyRotation = mapped.rotation;
   }
   if (type === 'subsurface') {
     const preset = (presets as Record<string, { sigma_a: number[]; sigma_s: number[] }>)[String(first(p, 'name', ''))];
@@ -139,28 +158,69 @@ export async function material(shape: Shape, scene: Scene, textures: Textures, w
     if ((open.subsurfaceRadius as number) * Math.min(...open.subsurfaceRadiusScale as number[]) < .001) warn(entity, 'Subsurface mean free paths below 0.001 scene units are limited by the existing OpenPBR medium', 'material');
     if (p.name && !preset) warn(entity, 'Unknown subsurface preset uses default coefficients', 'material');
   }
-  if (type === 'diffusetransmission') { open.thinWalled = true; result.transmission = .5; }
+  if (type === 'diffusetransmission') {
+    const transmittance = await textures.value(p, 'transmittance', [.25,.25,.25], entity);
+    const color = textures.average(transmittance);
+    open.thinWalled = true; result.transmission = Math.min(1, Math.max(...color) * scalar(p, 'scale', 1));
+    open.transmissionColor = color.map(v => Math.max(...color) > 0 ? v / Math.max(...color) : 0);
+    if (transmittance.map) warn(entity, 'Diffuse transmittance map approximated by its mean', 'material');
+  }
   if (['hair', 'measured', 'mix'].includes(type)) result.color.setRGB(.5, .5, .5);
   if (p.normalmap) {
     const path = String(first(p, 'normalmap', ''));
     const image = await textures.image(path), map = new THREE.DataTexture(image.data, image.width, image.height, THREE.RGBAFormat, image.data instanceof Float32Array ? THREE.FloatType : THREE.UnsignedByteType);
     map.flipY = true; map.needsUpdate = true; result.normalMap = map;
   }
-  if (p.displacement || shape.params.displacement) {
-    const parameters = shape.params.displacement ? shape.params : p;
-    const value = await textures.value(parameters, 'displacement', [0, 0, 0], entity);
+  if (p.displacement) {
+    if (result.normalMap) {
+      warn(entity, 'Material bump ignored when normalmap is present; the pinned PBRT renderer gives normalmap precedence', 'bump');
+      result.userData.pbrtComparable = false;
+    } else {
+      const value = await textures.value(p, 'displacement', [0, 0, 0], entity);
+      result.normalMap = textures.bumpMap(value);
+      if (result.normalMap) {
+        warn(entity, 'Material bump baked in UV space with unit tangents; per-hit footprint and curved-surface derivatives approximated', 'bump');
+        result.userData.pbrtComparable = false;
+      }
+    }
+  }
+  if (shape.params.displacement) {
+    const value = await textures.value(shape.params, 'displacement', [0, 0, 0], shape);
     if (value.map) {
-      result.displacementMap = textures.heightMap(value.map, entity); result.displacementScale = value.color[0];
-      warn(entity, 'PBRT bump/displacement approximated by MuTracer height-field displacement', 'displacement');
+      result.displacementMap = textures.heightMap(value.map, shape); result.displacementScale = value.color[0];
+      warn(shape, 'Shape displacement approximated by MuTracer height-field displacement', 'displacement');
       result.userData.pbrtComparable = false;
     }
   }
   const alpha = await textures.value(shape.params, 'alpha', [1, 1, 1], entity);
   result.opacity = alpha.color[0]; result.alphaMap = alpha.map ?? null; result.transparent = result.opacity < 1 || !!alpha.map;
-  if (shape.inside) {
-    const medium = scene.media[shape.inside];
-    if (!medium) throw new Error(`Undefined medium ${shape.inside}`);
-    if (medium.type === 'homogeneous') {
+  const interior = interiorMedium(shape, scene, warn);
+  // PBRT DielectricBxDF exchanges eta on the back side of its final normal.
+  // ReverseOrientation and transform handedness already affect both PBRT and
+  // imported normals; only the extra medium-side reversal exchanges that ratio.
+  // ThinDielectricBxDF uses AbsCosTheta, so its eta is orientation-independent.
+  if (interior.flip && type === 'dielectric') {
+    result.ior = 1 / result.ior;
+    if (open.transmissionDispersionScale) {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Reversed dielectric uses reciprocal d-line IOR and retains Abbe number; reciprocal spectral dispersion is approximated by the existing Cauchy model', 'ior-dispersion');
+    }
+  }
+  if (type.startsWith('coated') && (interior.flip || Number(open.coatIor) < 1)) {
+    result.userData.pbrtComparable = false;
+    warn(shape, 'Coat IOR orientation cannot be represented: MuTracer clamps coat IOR to at least 1 and applies the coat only on the exterior side; excluded from strict comparison', 'ior-orientation');
+  }
+  if (shape.inside && shape.outside && shape.inside !== scene.cameraMedium && shape.outside !== scene.cameraMedium) result.userData.pbrtComparable = false;
+  if (interior.name) {
+    const medium = scene.media[interior.name];
+    if (type === 'interface' || type === '') {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Interface interior medium excluded from strict comparison: point and area direct lighting is blocked at the boundary by MuTracer shadow rays', 'medium-shadow');
+    }
+    if (open.thinWalled) {
+      result.userData.pbrtComparable = false;
+      warn(shape, 'Thin-walled materials cannot retain an interior medium; absorption and scattering are skipped', 'thin-medium');
+    } else if (medium.type === 'homogeneous') {
       const a = await textures.value(medium.params, 'sigma_a', [1, 1, 1], medium), s = await textures.value(medium.params, 'sigma_s', [1, 1, 1], medium), scale = scalar(medium.params, 'scale', 1);
       const extinction = a.color.map((v, i) => (v + s.color[i]) * scale);
       // The existing packer takes extinction transmittance and scattering

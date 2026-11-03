@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { FloatType } from 'three';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
+import { comparePixels } from './pbrt-metrics.mjs';
 import { launchChrome, delay } from './reference-runtime.mjs';
 const exec = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2), input = args.shift();
@@ -158,23 +159,11 @@ try {
     noiseB = new Float32Array(reference.length);
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) for (let c = 0; c < 4; c++) noiseB[(y * width + x) * 4 + c] = image.data[((height - y - 1) * width + x) * 4 + c] / (c < 3 ? sensorScale : 1);
   }
-  const excluded = new Set(browser.approximateMaterialIds), regions = [];
-  const measure = (name, x0, y0, x1, y1, approximate, materialId) => {
-    let count = 0, abs = 0, square = 0, signal = 0, noiseSquare = 0; const sumA = [0, 0, 0], sumB = [0, 0, 0], sumNA = [0, 0, 0], sumNB = [0, 0, 0];
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const offset = (y * width + x) * 4;
-      if (excluded.has(ids[offset + 2]) !== approximate || materialId !== undefined && ids[offset + 2] !== materialId) continue;
-      count++;
-      for (let c = 0; c < 3; c++) { const a = mu[offset + c], b = reference[offset + c], d = a - b; sumA[c] += a; sumB[c] += b; if (noiseA) { sumNA[c] += noiseA[offset + c]; sumNB[c] += noiseB[offset + c]; noiseSquare += ((a - noiseA[offset+c])**2 + (b - noiseB[offset+c])**2) / 2; } abs += Math.abs(d); square += d * d; signal += b * b; }
-    }
-    if (count) regions.push({ name, approximate, pixels: count, meanMu: sumA.map(v => v / count), meanReference: sumB.map(v => v / count), relativeMeanError: sumA.map((v, c) => (v - sumB[c]) / Math.max(1e-10, sumB[c])), relativeRMSE: Math.sqrt(square / Math.max(1e-20, signal)), noiseRelativeRMSE: noiseA ? Math.sqrt(noiseSquare / Math.max(1e-20, signal)) : undefined, noiseStandardError: noiseA ? sumA.map((v,c)=>Math.sqrt(((v-sumNA[c])**2+(sumB[c]-sumNB[c])**2)/2)/count) : undefined, meanBias: sumA.map((v,c)=>(v-sumB[c])/count), mae: abs / (count * 3) });
-  };
-  measure('comparable', 0, 0, width, height, false); measure('approximate', 0, 0, width, height, true);
-  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) measure(`tile-${x}-${y}`, Math.floor(x * width / 4), Math.floor(y * height / 4), Math.floor((x + 1) * width / 4), Math.floor((y + 1) * height / 4), false);
-  for (const id of new Set(Array.from(ids).filter((_, i) => i % 4 === 2))) measure(`material-${id}`, 0, 0, width, height, excluded.has(id), id);
-  const errors = regions.filter(region => !region.approximate && region.noiseRelativeRMSE !== undefined && region.relativeRMSE > region.noiseRelativeRMSE * (1 + 6 * Math.sqrt(2 / (region.pixels * 3)))).map(region => region.name);
+  const { regions, comparisonErrors: errors, frameStatus, regionStatus, excludedBoundaryPixels } = comparePixels({
+    mu, reference, ids, noiseA, noiseB, width, height, approximateMaterialIds: browser.approximateMaterialIds, sceneComparable: browser.sceneComparable
+  });
   const sourceRevision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
-  const report = { sourceRevision, referenceReused, primaryRendered: true, noiseFailure, noiseMethod: noiseA ? { referenceSeeds: [0, 1], mutracerSampleOffsets: [0, samples], note: 'Disjoint Sobol blocks share a scramble; diagnostic estimate, not independent Monte Carlo replicas.' } : undefined, comparisonStatus: noiseFailure ? 'noise-run-failed' : !noiseA ? 'unassessed-noise' : errors.length ? 'mismatch' : 'within-estimated-noise', comparisonErrors: errors, peakBrowserRSSBytes, memoryMeasurement: 'Sum of Chrome process-family RSS; includes shared pages', scene: sceneFile, spp: samples, width, height, referenceMs, browser, display: { comparison: 'linear HDR, top row first, no tone mapping', preview: 'v/(1+v), gamma 2.2', exposure: 1, referenceSensorScale: sensorScale, pixelFilter: 'box, radius 0.5 (PBRT override to match MuTracer)' }, regions, conclusion: 'Measurements only; two-run noise estimates require diagnosis and do not prove noise equivalence.' };
+  const report = { sourceRevision, referenceReused, primaryRendered: true, noiseFailure, noiseMethod: noiseA ? { referenceSeeds: [0, 1], mutracerSampleOffsets: [0, samples], note: 'Disjoint Sobol blocks share a scramble; diagnostic estimate, not independent Monte Carlo replicas.' } : undefined, sceneComparable: browser.sceneComparable, comparisonStatus: noiseFailure ? 'noise-run-failed' : browser.sceneComparable === false ? 'not-comparable' : !noiseA ? 'unassessed-noise' : errors.length ? 'mismatch' : 'within-estimated-noise', comparisonErrors: errors, frameStatus, regionStatus, excludedBoundaryPixels, peakBrowserRSSBytes, memoryMeasurement: 'Sum of Chrome process-family RSS; includes shared pages', scene: sceneFile, spp: samples, width, height, referenceMs, browser, display: { comparison: 'linear HDR, top row first, no tone mapping', preview: 'v/(1+v), gamma 2.2', exposure: 1, referenceSensorScale: sensorScale, pixelFilter: 'box, radius 0.5 (PBRT override to match MuTracer)' }, regions, conclusion: 'Measurements only; two-run noise estimates require diagnosis and do not prove noise equivalence.' };
   await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   await page.tab.evaluate(`(async () => {
     const width=${width},height=${height};

@@ -6,6 +6,7 @@ const sphere = (material = 'Material "diffuse" "rgb reflectance" [.6 .2 .1]') =>
 const light = 'LightSource "point" "point3 from" [-2 3 -3] "rgb I" [30 30 30]\n';
 const fixtures = {
   'back-face-surface': light + 'Material "diffuse" "rgb reflectance" [.6 .2 .1]\nShape "trianglemesh" "point3 P" [-1 -.75 0 1 -.75 0 0 1 0]\n',
+  'outside-medium': 'MakeNamedMedium \"m\" \"string type\" \"homogeneous\" \"rgb sigma_a\" [.1 .4 .9] \"rgb sigma_s\" [0 0 0]\n' + light + floor + sphere('MediumInterface \"\" \"m\" ReverseOrientation Material \"dielectric\" \"float eta\" 1.5'),
   'interior-homogeneous': 'MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [.1 .1 .1] "rgb sigma_s" [.5 .5 .5]\n' + light + floor + sphere('MediumInterface "fog" "" Material "interface"'),
   handedness: light + floor + sphere() + 'AttributeBegin Translate 1.4 0 0 Material "diffuse" "rgb reflectance" [.1 .6 .2] Shape "sphere" "float radius" .3 AttributeEnd\n',
   'short-edge-fov': light + floor + sphere(),
@@ -24,7 +25,7 @@ const fixtures = {
 for (const [name, text] of Object.entries(fixtures)) {
   let header = film;
   if (name === 'short-edge-fov') header = header.replace('xresolution" 128', 'xresolution" 64').replace('yresolution" 96', 'yresolution" 128');
-  if (name === 'interior-homogeneous') header = header.replace('Integrator "path"', 'Integrator "volpath"').replace('maxdepth" 5', 'maxdepth" 12');
+  if (['interior-homogeneous', 'outside-medium'].includes(name)) header = header.replace('Integrator "path"', 'Integrator "volpath"').replace('maxdepth" 5', 'maxdepth" 12');
   await writeFile(`tests/fixtures/pbrt/${name}.pbrt`, header + text);
 }
 // A small authored TGA makes the vertical orientation observable.
@@ -39,3 +40,23 @@ for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) pixels.set([x < 8 ? .8
 const exr = await new EXRExporter().parse(new DataTexture(pixels, 16, 16, RGBAFormat, FloatType), { type: FloatType });
 await writeFile('tests/fixtures/pbrt/equal-area.exr', exr);
 await writeFile('tests/fixtures/pbrt/equal-area-environment.pbrt', film + 'LightSource "infinite" "string filename" "equal-area.exr"\n' + floor + sphere());
+// Smooth, generated scalar height in top-down image rows (PBRT samples s,1-t).
+const bumpPixels = new Float32Array(64*64*4);
+for(let y=0;y<64;y++) for(let x=0;x<64;x++) {
+  const h = .5 + .2*Math.sin(2*Math.PI*(x+.5)/64) + .1*Math.sin(4*Math.PI*(y+.5)/64);
+  bumpPixels.set([h,h,h,1],(y*64+x)*4);
+}
+await writeFile('tests/fixtures/pbrt/bump.exr', await new EXRExporter().parse(new DataTexture(bumpPixels,64,64,RGBAFormat,FloatType), {type:FloatType}));
+await writeFile('tests/fixtures/pbrt/bump.pbrt', `Film "rgb" "integer xresolution" 128 "integer yresolution" 96
+Sampler "sobol" "integer pixelsamples" 64
+Integrator "path" "integer maxdepth" 5
+LookAt 0 0 2 0 0 0 0 1 0
+Camera "perspective" "float fov" 40
+WorldBegin
+Texture "height" "float" "imagemap" "string filename" "bump.exr" "float scale" .08
+Material "diffuse" "rgb reflectance" [.5 .5 .5] "texture displacement" "height"
+LightSource "point" "point3 from" [-1 2 2] "rgb I" [12 12 12]
+Shape "trianglemesh" "point3 P" [-.5 -.5 0 .5 -.5 0 .5 .5 0 -.5 .5 0] "point2 uv" [0 0 1 0 1 1 0 1] "integer indices" [0 1 2 0 2 3]
+`);
+
+await writeFile('tests/fixtures/pbrt/anisotropic.pbrt', film + light + floor + 'AttributeBegin Rotate 90 1 0 0 Material "conductor" "rgb reflectance" [.7 .7 .7] "float uroughness" .1 "float vroughness" .4 "bool remaproughness" false Shape "cylinder" "float radius" .6 "float zmin" -.75 "float zmax" .75 AttributeEnd\n');

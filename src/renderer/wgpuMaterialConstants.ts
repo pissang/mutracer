@@ -63,8 +63,8 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     BEVEL_SAMPLES: bevelSamples,
 
     USE_RR: true,
-    // Match WebGL: defer roulette for multiple-scattering SSS paths.
-    RR_MAX: HAS_MEDIUM ? 12 : 2,
+    // Upper threshold; each path selects it only after entering scattering media.
+    RR_MAX: 12,
 
     NUM_UNIFORM_LIGHTS: 64,
 

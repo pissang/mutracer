@@ -57,7 +57,7 @@ ${cameraRayGlsl}
 vec4 integrator(inout Ray ray, out vec4 background, out vec2 shadowCounts) {
   background = vec4(0.0);
   shadowCounts = vec2(0.0);
-  Path path;
+  Path path; path.scatteringMediumEntered = false;
   path.ray = ray;
   path.li = vec3(0);
   path.alpha = 1.0;
