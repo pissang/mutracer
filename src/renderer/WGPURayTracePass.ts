@@ -1,3 +1,4 @@
+import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
@@ -1307,12 +1308,25 @@ class WGPURayTracePass {
     return true;
   }
 
-  async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
+  async pickSurface(x: number, y: number, aspect?: number): Promise<SurfaceHit | null | undefined> {
+    const source = this._preparedMeshData, tlas = this._tlas;
+    if (!source || !tlas) return;
+    const values = await this._readDepthSamples({x, y, size: 0}, aspect, true);
+    if (!values || source !== this._preparedMeshData || tlas !== this._tlas) return;
+    return resolveSurfaceHit(source, tlas, values);
+  }
+
+  readDepthSamples(area: DepthSampleArea, aspect?: number) {
+    return this._readDepthSamples(area, aspect);
+  }
+
+  private async _readDepthSamples(area: DepthSampleArea, aspect?: number, picking = false): Promise<Float32Array | undefined> {
     const tracePipeline = this._rayTracePipeline;
     const groups = this._rayTraceBindGroups;
     const textures = this._bindless, textureRevision = textures?.revision;
     if (!tracePipeline || !groups || !this._depthCompute || this.isCompilingShader()) return;
     const packed = packDepthSampleArea(area, aspect ?? this._width / this._height);
+    if (picking) packed.set([-1, -1], 2);
     if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
       const outputLayout = this._shaderCache.createBindGroupLayout({
         label: 'Depth query output',
@@ -1361,7 +1375,8 @@ class WGPURayTracePass {
       encoder.copyBufferToBuffer(output, 0, readback, 0, bytes);
       device.queue.submit([encoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ);
-      return unpackDepthSamples(new Float32Array(readback.getMappedRange()));
+      const rgba = new Float32Array(readback.getMappedRange());
+      return picking ? rgba.slice(0, 4) : unpackDepthSamples(rgba);
     } finally {
       if (readback.mapState === 'mapped') readback.unmap();
       readback.destroy(); output.destroy(); params.destroy();

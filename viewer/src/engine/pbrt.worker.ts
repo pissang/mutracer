@@ -8,6 +8,7 @@ import type { ModelSource } from './loadModel';
 let source: ModelSource;
 const cached = new Map<string, File>();
 let resolver: Resolver;
+let mainBytes: ArrayBuffer | undefined;
 self.onmessage = async (event: MessageEvent) => {
   const { id, command } = event.data;
   try {
@@ -15,11 +16,13 @@ self.onmessage = async (event: MessageEvent) => {
     let sceneBuffers: ArrayBuffer[] = [];
     if (command === 'inspect') {
       source = event.data.source;
+      mainBytes = event.data.mainBytes;
       const sizes = event.data.sizes as Record<string, number>;
       for (const item of source.files) cached.set(item.path, item.file);
       const remote = urlResolver();
       resolver = {
         async read(path) {
+          if (path === source.mainPath && mainBytes) return mainBytes;
           const file = cached.get(path); if (file) return file.arrayBuffer();
           if (!source.base) throw new Error(`Include ${path} with the dropped folder`);
           const data = await remote.read(path); cached.set(path, new File([data], path.split('/').pop()!)); return data;

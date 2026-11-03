@@ -1,3 +1,4 @@
+import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
 import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport} from './researchTransport.js';
@@ -1160,15 +1161,29 @@ class WebGLRayTracePass {
     return true;
   }
 
-  async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
+  async pickSurface(x: number, y: number, aspect?: number): Promise<SurfaceHit | null | undefined> {
+    const source = this._preparedMeshData, tlas = this._tlas;
+    if (!source || !tlas) return;
+    const values = await this._readDepthSamples({x, y, size: 0}, aspect, true);
+    if (!values || source !== this._preparedMeshData || tlas !== this._tlas) return;
+    return resolveSurfaceHit(source, tlas, values);
+  }
+
+  readDepthSamples(area: DepthSampleArea, aspect?: number) {
+    return this._readDepthSamples(area, aspect);
+  }
+
+  private async _readDepthSamples(area: DepthSampleArea, aspect?: number, picking = false): Promise<Float32Array | undefined> {
     if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
       !this._renderer.isAllProgramCompiled()) return;
     this.prepare();
-    this._depthPass.setUniform('depthArea', packDepthSampleArea(area, aspect ?? this._depthAspect));
+    const packed = packDepthSampleArea(area, aspect ?? this._depthAspect);
+    if (picking) packed.set([-1, -1], 2);
+    this._depthPass.setUniform('depthArea', packed);
     this._depthPass.createPass({});
     const rgba = await readFloatPixelsAsync(this._renderer.gl,
       DEPTH_SAMPLE_GRID, DEPTH_SAMPLE_GRID, this._depthAbort.signal);
-    return unpackDepthSamples(rgba);
+    return picking ? rgba.slice(0, 4) : unpackDepthSamples(rgba);
   }
 
   dispose() {

@@ -61,27 +61,37 @@ async function fetchOnce(
     await response.body?.cancel();
     throw new DownloadError(response.status, url, response.statusText);
   }
-  const total = Number(response.headers.get('content-length')) || 0;
+  const length = Number(response.headers.get('content-length'));
+  const total = Number.isSafeInteger(length) && length > 0 ? length : 0;
   if (!response.body || !onProgress) return response.arrayBuffer();
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  // Content-Length describes compressed bytes when an encoding is present.
+  // Otherwise write directly into the final allocation, retaining no chunk list.
+  const encoded = response.headers.get('content-encoding');
+  let out = new Uint8Array(!encoded || encoded === 'identity' ? total : 0);
   let loaded = 0;
   try {
     for (;;) {
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
-      loaded += value.byteLength;
+      const required = loaded + value.byteLength;
+      if (required > out.byteLength) {
+        const capacity = Math.max(required, out.byteLength * 2, 65536);
+        // transfer can move the backing store; the fallback supports older browsers.
+        if (typeof out.buffer.transfer === 'function') out = new Uint8Array(out.buffer.transfer(capacity));
+        else {const next = new Uint8Array(capacity); next.set(out); out = next;}
+      }
+      out.set(value, loaded);
+      loaded = required;
       onProgress(loaded, total);
     }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    throw error;
   } finally {
     reader.releaseLock();
   }
-  const out = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out.buffer;
+  if (loaded === out.byteLength) return out.buffer;
+  return typeof out.buffer.transfer === 'function' ? out.buffer.transfer(loaded) : out.buffer.slice(0, loaded);
 }

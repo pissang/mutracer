@@ -1,3 +1,4 @@
+import type {SurfaceHit} from './surfaceHit.js';
 import type {PostProcess} from '../Display.js';
 import type Render from '../Render.js';
 import type {DenoiserHandle, OIDNWeb} from './denoiser.js';
@@ -209,6 +210,7 @@ export interface SceneResources {
   getDiagnostics(): RenderingDiagnostics;
   dispose(): void;
   readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
+  pickSurface?(x: number, y: number, aspect?: number): Promise<SurfaceHit | null | undefined>;
 }
 /** Explicit execution and composition for one accumulation. */
 export interface RenderPasses {

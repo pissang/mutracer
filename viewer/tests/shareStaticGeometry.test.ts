@@ -1,14 +1,12 @@
 import * as THREE from 'three';
 import {Engine, THREESync} from '@meimu/mutracer';
 import {expect, it} from 'vitest';
-import {shareStaticGeometry} from '../src/engine/shareStaticGeometry';
 
 function setup(source: THREE.Mesh) {
   const scene = new THREE.Scene(); scene.add(source);
   const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
-  const sync = new THREESync(engine, {scene, onMeshConverted(mesh, source, range) {
-    shareStaticGeometry(mesh.geometry, source, range);
-  }});
+  const sync = new THREESync(engine, {scene});
+  sync._shareStaticGeometry = true;
   sync.update();
   return {engine, sync, geometry: sync.scene!.meshes[0].geometry};
 }
@@ -40,7 +38,8 @@ it('preserves reversed winding/normals and deforming geometry ownership', () => 
     if (kind === 'morph') original.morphAttributes.position = [original.attributes.position.clone()];
     const source = new THREE.Mesh(original, material), {engine, sync, geometry} = setup(source);
     try {
-      expect(geometry.position.array).not.toBe(original.attributes.position.array);
+      if (kind === 'back') expect(geometry.position.array).toBe(original.attributes.position.array);
+      else expect(geometry.position.array).not.toBe(original.attributes.position.array);
       expect(geometry.normal.array).not.toBe(original.attributes.normal.array);
       if (kind === 'back') {
         expect([...geometry.indices.array.slice(0, 3)]).toEqual([original.index!.array[0], original.index!.array[2], original.index!.array[1]]);
@@ -74,5 +73,17 @@ it('keeps converted Uint32 indices for Uint16 input to avoid duplicate canonical
     expect(geometry.indices.array).toBeInstanceOf(Uint32Array);
     expect(geometry.indices.array).not.toBe(source.geometry.index!.array);
     expect([...geometry.indexArray]).toEqual([...source.geometry.index!.array]);
+  } finally {sync.dispose(); engine.dispose();}
+});
+
+it('keeps default library conversion storage independent', () => {
+  const scene = new THREE.Scene(), source = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+  scene.add(source);
+  const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+  const sync = new THREESync(engine, {scene});
+  try {
+    sync.update();
+    expect(sync.scene!.meshes[0].geometry.position.array).not.toBe(source.geometry.attributes.position.array);
+    expect(sync.scene!.meshes[0].geometry.normal.array).not.toBe(source.geometry.attributes.normal.array);
   } finally {sync.dispose(); engine.dispose();}
 });

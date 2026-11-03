@@ -124,4 +124,23 @@ describe('viewer downloads', () => {
     expect(new Uint8Array(await result)).toEqual(new Uint8Array([1, 2]));
     expect(progress.mock.calls).toEqual([[1, 0], [0, 0], [2, 0]]);
   });
+  it.each([
+    ['6', undefined], ['0', undefined], ['2', undefined], ['12', undefined], ['2', 'gzip']
+  ])('assembles multiple chunks with length %s and encoding %s', async (length, encoding) => {
+    const chunks = [new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5, 6])];
+    const body = new ReadableStream<Uint8Array>({start(c) {for (const chunk of chunks) c.enqueue(chunk); c.close();}});
+    const headers = new Headers({'content-length': length}); if (encoding) headers.set('content-encoding', encoding);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {headers})));
+    const progress = vi.fn();
+    expect([...new Uint8Array(await fetchWithProgress(sample, progress))]).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(progress).toHaveBeenLastCalledWith(6, Number(length));
+  });
+  it('cancels the body if a progress callback stops the download', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({start(c) {c.enqueue(new Uint8Array([1]));}, cancel});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {headers: {'content-length': '4'}})));
+    await expect(fetchWithProgress(sample, () => {throw Error('Stop');})).rejects.toThrow('Stop');
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
 });

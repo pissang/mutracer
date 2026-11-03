@@ -581,8 +581,12 @@ function convertMaterial(
 
 function copyFloatAttribute(
   attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
-  itemSize = attribute.itemSize
+  itemSize = attribute.itemSize,
+  share = false
 ) {
+  if (share && attribute.array instanceof Float32Array && !attribute.normalized &&
+    !(attribute as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute &&
+    attribute.itemSize === itemSize && attribute.array.length === attribute.count * itemSize) return attribute.array;
   const result = new Float32Array(attribute.count * itemSize);
   if (attribute.array instanceof Float32Array && !attribute.normalized) {
     const interleaved = attribute as THREE.InterleavedBufferAttribute;
@@ -624,7 +628,8 @@ function convertGeometry(
   threeGeometry: THREE.BufferGeometry,
   drawRange: { start: number; count: number },
   vertexColors: boolean,
-  backSide: boolean
+  backSide: boolean,
+  share = false
 ): Geometry | null {
   const positionAttrb = threeGeometry.getAttribute('position');
   const normalAttrb = threeGeometry.getAttribute('normal');
@@ -647,10 +652,11 @@ function convertGeometry(
   // dangling one or two elements cannot produce invalid BLAS input.
   indexCount -= indexCount % 3;
   if (indexCount === 0) return null;
-  const indices = new Uint32Array(indexCount);
-  if (indexAttrb) {
+  const sharedIndex = share && !backSide && start === 0 && indexCount === indexAttrb?.array.length && indexAttrb.array instanceof Uint32Array;
+  const indices = sharedIndex ? indexAttrb!.array as Uint32Array : new Uint32Array(indexCount);
+  if (indexAttrb && !sharedIndex) {
     indices.set(indexAttrb.array.subarray(start, start + indexCount));
-  } else {
+  } else if (!indexAttrb) {
     for (let index = 0; index < indexCount; index++) indices[index] = start + index;
   }
   if (backSide) {
@@ -662,22 +668,22 @@ function convertGeometry(
   }
   const geometry = new Geometry({
     position: new Attribute(
-      copyFloatAttribute(positionAttrb),
+      copyFloatAttribute(positionAttrb, positionAttrb.itemSize, share),
       positionAttrb.itemSize
     ),
     normal:
       normalAttrb &&
-      new Attribute(copyFloatAttribute(normalAttrb), normalAttrb.itemSize),
+      new Attribute(copyFloatAttribute(normalAttrb, normalAttrb.itemSize, share && !backSide), normalAttrb.itemSize),
     tangent: tangentAttrb && new Attribute(
-      copyFloatAttribute(tangentAttrb, Math.min(4, tangentAttrb.itemSize)),
+      copyFloatAttribute(tangentAttrb, Math.min(4, tangentAttrb.itemSize), share && !backSide),
       Math.min(4, tangentAttrb.itemSize)
     ),
-    uv: uvAttrb && new Attribute(copyFloatAttribute(uvAttrb), uvAttrb.itemSize),
+    uv: uvAttrb && new Attribute(copyFloatAttribute(uvAttrb, uvAttrb.itemSize, share), uvAttrb.itemSize),
     uv1:
       uv1Attrb &&
-      new Attribute(copyFloatAttribute(uv1Attrb), uv1Attrb.itemSize),
+      new Attribute(copyFloatAttribute(uv1Attrb, uv1Attrb.itemSize, share), uv1Attrb.itemSize),
     // MuTracer stores linear RGB only; omit Three.js's optional vertex alpha.
-    color: colorAttrb ? new Attribute(copyFloatAttribute(colorAttrb, 3), 3) : undefined,
+    color: colorAttrb ? new Attribute(copyFloatAttribute(colorAttrb, 3, share), 3) : undefined,
     indices: new Attribute(indices, 1)
   });
   // Generated normals already follow the reversed indices; authored normals do not.
@@ -826,7 +832,7 @@ export function fromTHREEScene(
   return convertScene(scene, options, createConversionStore());
 }
 
-function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store: ConversionStore): Scene {
+function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store: ConversionStore, shareStaticGeometry = false): Scene {
   const updateId = ++store.updateId;
   const meshes: Mesh[] = [];
   const lights: SceneLight[] = [];
@@ -1002,7 +1008,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           let geometry = geometryEntry.groups.get(geometryKey);
           const newGeometry = !geometry;
           if (!geometry) {
-            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors, backSide);
+            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors, backSide, shareStaticGeometry && !deformation);
             if (!converted) return;
             geometry = converted;
             geometryEntry.groups.set(geometryKey, geometry);
@@ -1296,6 +1302,8 @@ function orbitControlsState(camera: THREE.PerspectiveCamera | THREE.Orthographic
  * are removed after each update.
  */
 export class THREESync extends Sync {
+  /** @internal Viewer-owned static source storage; default library conversions remain independent. */
+  _shareStaticGeometry = false;
   /** Retained converted scene; absent when no scene source was supplied. */
   readonly scene: Scene | undefined;
   /** Retained converted camera; absent until the first camera update. */
@@ -1360,7 +1368,7 @@ export class THREESync extends Sync {
     }
     this._store.poseChanged = false;
     if (this._options.scene && this.scene) {
-      const next = convertScene(this._options.scene, this._options, this._store);
+      const next = convertScene(this._options.scene, this._options, this._store, this._shareStaticGeometry);
       if (!snapshotsEqual(this.scene.meshes, next.meshes)) this.scene.meshes = next.meshes;
       if (!snapshotsEqual(this.scene.lights, next.lights)) this.scene.lights = next.lights;
       this.scene.background = next.background;

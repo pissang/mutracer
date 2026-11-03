@@ -1,0 +1,8 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GPU surface picking</title>
+<pre id="result">Running</pre>
+<script type="module">
+import {capturePicking} from './picking.ts';
+capturePicking().then(result => document.querySelector('#result').textContent=JSON.stringify(result), error => document.querySelector('#result').textContent=String(error.stack||error));
+</script>

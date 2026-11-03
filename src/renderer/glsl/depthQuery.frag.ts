@@ -30,8 +30,10 @@ ${intersect.main}
 ${cameraProjection}
 
 void main() {
+  bool picking = depthArea.z < 0.0;
+  if (picking && any(greaterThan(gl_FragCoord.xy, vec2(1.0)))) {out_depth = vec4(0.0); return;}
   vec2 offset = floor(gl_FragCoord.xy) / ${DEPTH_SAMPLE_GRID - 1}.0 * 2.0 - 1.0;
-  vec2 uv = depthArea.xy + depthArea.zw * offset * vec2(1.0, -1.0);
+  vec2 uv = picking ? depthArea.xy : depthArea.xy + depthArea.zw * offset * vec2(1.0, -1.0);
   out_depth = vec4(0.0);
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return;
   Ray ray = initCameraRay(uv);
@@ -45,7 +47,11 @@ void main() {
     OpenPbrResolvedMaterial material;
     getMaterial(material, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
     if (material.materialType != SHADOW_CATCHER && material.alpha > 0.0) {
-      out_depth.r = max(dot(si.position - eye, forward), 0.0);
+      if (picking) {
+        uint instance = uint(si.instanceIndex) + 1u, materialIndex = uint(si.materialIndex) + 1u;
+        out_depth = vec4(float(instance & 65535u), float(instance >> 16u),
+          float(materialIndex & 65535u), float(materialIndex >> 16u));
+      } else out_depth.r = max(dot(si.position - eye, forward), 0.0);
       return;
     }
     ray.o = si.position + ray.d * (EPS * 0.02);

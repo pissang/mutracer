@@ -14,8 +14,16 @@ import {
   meshBlasSnapshotIsCurrent
 } from './prepareMeshBVH.js';
 
+export type StaticBvhCacheInput = ReturnType<typeof getMeshBlasInput>;
+/** Internal application cache. Failures never prevent scene preparation. */
+export interface StaticBvhCache {
+  load(input: StaticBvhCacheInput, config: BvhBuildConfig): Promise<FlattendBVH | undefined>;
+  store(input: StaticBvhCacheInput, config: BvhBuildConfig, bvh: FlattendBVH): Promise<void>;
+}
+
 export interface StaticBvhPreparationOptions {
   config?: BvhBuildConfig;
+  cache?: StaticBvhCache;
   builder: 'builtin' | 'tinybvh';
   layout: TinyBvhLayout;
   spatialSplits: boolean;
@@ -117,10 +125,14 @@ export async function prepareStaticBvhs(
       try {
         if (!meshBlasSnapshotIsCurrent(mesh, target, snapshot)) continue;
         const input = getMeshBlasInput(mesh);
-        const bvh = await buildWithFallback(input);
+        const config = options.config ?? options;
+        const cached = options.cache ? await options.cache.load(input, config).catch(() => undefined) : undefined;
+        if (options.isCancelled?.() || !meshBlasSnapshotIsCurrent(mesh, target, snapshot)) continue;
+        const bvh = cached ?? await buildWithFallback(input);
         if (!options.isCancelled?.() && meshBlasSnapshotIsCurrent(mesh, target, snapshot)) {
-          setGeometryBvh(target, bvh, options.config ?? options);
+          setGeometryBvh(target, bvh, config);
           result.geometryCount++;
+          if (!cached) await options.cache?.store(input, config, bvh).catch(() => {});
         }
       } catch (error) {
         if (!(error instanceof BvhWorkerDisposedError)) result.failedMeshes.push(mesh);

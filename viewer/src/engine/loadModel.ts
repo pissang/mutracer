@@ -54,14 +54,14 @@ export async function loadModelFromURL(url: string, onProgress: LoadProgress, si
   const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'model');
   const mainPath = new URL(url, location.href).href;
   const files: PathedFile[] = [{ path: mainPath, file: new File([buffer], name) }];
-  return loadModelFromSource({ files, mainPath, base }, onProgress, signal, backend);
+  return parseModelSource({ files, mainPath, base }, onProgress, signal, backend, buffer);
 }
 
 /** Fetch every external resource before entering the parse stage. Cached files
  * are reused, and optional environment failures become lighting warnings. */
 async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, onProgress: LoadProgress, signal?: AbortSignal) {
-  const failures = new Map<string, unknown>();
-  if (!source.base) return failures;
+  const failures = new Map<string, unknown>(), buffers = new Map<string, ArrayBuffer>();
+  if (!source.base) return {failures, buffers};
   const { files, mainPath } = source;
   // glTF/GLB resources can be external even when the main file is binary.
   let jsonBytes = new Uint8Array(buffer);
@@ -69,6 +69,8 @@ async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, 
     jsonBytes = new Uint8Array(buffer, 20, new DataView(buffer).getUint32(12, true));
   }
   const json = JSON.parse(new TextDecoder().decode(jsonBytes));
+  const bufferUrls = new Set<string>((json.buffers ?? []).flatMap((resource: {uri?: string}) =>
+    resource.uri && !resource.uri.startsWith('data:') ? [new URL(resource.uri, mainPath).href] : []));
   const urls = new Map<string, boolean>();
   const sizes = new Map<string, number>();
   const downloaded = new Map<string, number>();
@@ -96,6 +98,7 @@ async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, 
     try {
       const bytes = await fetchWithProgress(address, report, signal);
       report(bytes.byteLength, bytes.byteLength);
+      if (optional || bufferUrls.has(address)) buffers.set(address, bytes);
       files.push({ path: address, file: new File([bytes], new URL(address).pathname.split('/').pop() || 'resource') });
     } catch (error) {
       signal?.throwIfAborted();
@@ -103,7 +106,7 @@ async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, 
       failures.set(address, error);
     }
   }));
-  return failures;
+  return {failures, buffers};
 }
 
 /**
@@ -126,12 +129,17 @@ export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadPr
 
 /** Parses the same bytes for downloaded, dropped and restored models. */
 export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
-  if (/\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(source.mainPath)) return (await import('./pbrt')).loadPBRT(source, onProgress, signal, backend);
+  return parseModelSource(source, onProgress, signal, backend);
+}
+
+async function parseModelSource(source: ModelSource, onProgress: LoadProgress, signal: AbortSignal | undefined,
+  backend: ModelBackend, downloadedMain?: ArrayBuffer): Promise<LoadedModel> {
+  if (/\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(source.mainPath)) return (await import('./pbrt')).loadPBRT(source, onProgress, signal, backend, downloadedMain);
   const { files, mainPath, base } = source;
   const main = files.find((file) => file.path === mainPath);
   if (!main) throw new Error('Missing main model file');
-  const buffer = await main.file.arrayBuffer();
-  const failures = await downloadModelResources(source, buffer, onProgress, signal);
+  const buffer = downloadedMain ?? await main.file.arrayBuffer();
+  const {failures, buffers} = await downloadModelResources(source, buffer, onProgress, signal);
   signal?.throwIfAborted();
   const mainDir = main.path.includes('/') ? main.path.slice(0, main.path.lastIndexOf('/') + 1) : '';
   const blobs = new Map<string, string>();
@@ -155,10 +163,24 @@ export async function loadModelFromSource(source: ModelSource, onProgress: LoadP
   onProgress('parse');
   let gltf: Awaited<ReturnType<typeof parse>>;
   try {
-    gltf = await parse(createLoader(manager), buffer, base);
     const mainAddress = new URL(mainPath, 'https://model.local/');
+    const loader = createLoader(manager);
+    // Scope predownloaded buffers to this parser, including Meshopt's buffer
+    // dependencies. Keep Three's global cache and other concurrent loads independent.
+    loader.register(parser => {
+      const loadBuffer = parser.loadBuffer.bind(parser);
+      parser.loadBuffer = index => {
+        const uri = parser.json.buffers[index].uri;
+        const data = typeof uri === 'string' ? buffers.get(new URL(uri, mainAddress).href) : undefined;
+        return data ? Promise.resolve(data) : loadBuffer(index);
+      };
+      return {name: 'MUTRACER_download_buffers'};
+    });
+    gltf = await parse(loader, buffer, base);
     const lighting = await loadModelLighting(gltf.scene, gltf.userData, async (path) => {
       const address = new URL(path, mainAddress);
+      const downloaded = buffers.get(address.href);
+      if (downloaded) return downloaded;
       const cached = files.find((entry) => new URL(entry.path, 'https://model.local/').href === address.href);
       if (cached) return cached.file.arrayBuffer();
       if (failures.has(address.href)) throw failures.get(address.href);
@@ -176,7 +198,7 @@ export async function loadModelFromSource(source: ModelSource, onProgress: LoadP
   } catch (error) {
     created.forEach((url) => URL.revokeObjectURL(url));
     throw error;
-  }
+  } finally {buffers.clear();}
 }
 
 /** Default scene: one sphere per OpenPBR feature, readable without a download. */
