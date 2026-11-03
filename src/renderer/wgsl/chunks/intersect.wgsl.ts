@@ -61,9 +61,9 @@ let minMaxH = bitcast<i32>(r3.w);
 // Displacement currently uses the first material of the instance.
 let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
 let matData = materialsBuffer[materialIndex];
-let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
-let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
-let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+let n0 = normalize(vertexNormal(index.x));
+let n1 = normalize(vertexNormal(index.y));
+let n2 = normalize(vertexNormal(index.z));
 if (matData.displacementMapIndex >= 0.0 && matData.displacementBias != 0.0) {
   tri.p0 += n0 * matData.displacementBias;
   tri.p1 += n1 * matData.displacementBias;
@@ -76,9 +76,9 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   let displacementMapIndex = i32(matData.displacementMapIndex);
 
   // TODO duplicate reading of normal and uv
-  var uv0 = attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy;
-  var uv1 = attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy;
-  var uv2 = attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy;
+  var uv0 = vertexUv(index.x);
+  var uv1 = vertexUv(index.y);
+  var uv2 = vertexUv(index.z);
 
   ${getPDMDisplacmentCode(anyHit)}
 
@@ -228,9 +228,9 @@ function getBVHTraverseCode(
         let r3 = bvhBuffer[triangleIndex];
         let index = bitcast<vec3i>(r3.xyz) + vertexOffset;
         var tri = Triangle(
-          attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''},
-          attrBuffers[index.y * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''},
-          attrBuffers[index.z * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''}
+          vertexPosition(index.x),
+          vertexPosition(index.y),
+          vertexPosition(index.z)
         );
         var isHitCurrent = false;
 
@@ -648,9 +648,11 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
 
 export function createSceneIntersectionsWgsl({
   hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
+  compactVertices = false,
   closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel', closestHitHook = ''
 }: {
   hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
+  compactVertices?: boolean;
   blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
 }) {
   return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
@@ -818,7 +820,7 @@ if (isOccluded) {
       index,
       hitBarycentric,
       hitPosition,
-      hitNormal
+      hitNormal${compactVertices ? ', triangleIndex' : ''}
     )) {
       // Continue looking for an opaque hit, but never traverse beyond the light.
       tMax = shadowRayTMax;
@@ -843,6 +845,7 @@ if (isOccluded) {
 }
 
 export default function getIntersectCode({
+  compactVertices = false,
   hasDisplacement,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
@@ -854,6 +857,7 @@ export default function getIntersectCode({
   hasCoatNormals?: boolean;
   blasLayoutMask?: number;
   sceneIntersections?: string;
+  compactVertices?: boolean;
 }) {
   return /*wgsl*/ `
 
@@ -1120,8 +1124,9 @@ fn randomPickMaterial(m0: vec3i, m1: vec3i, m2: vec3i, bary: vec3f) -> i32 {
 fn resolveSurfaceMaterialIndex(
   fallbackMaterialIndex: i32,
   index: vec3i,
-  bary: vec3f
+  bary: vec3f${compactVertices ? ', record: i32' : ''}
 ) -> i32 {
+${compactVertices ? /* wgsl */ `return triangleMaterial(fallbackMaterialIndex, record);` : /* wgsl */ `
   let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
   let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
   let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
@@ -1129,6 +1134,7 @@ fn resolveSurfaceMaterialIndex(
     return randomPickMaterial(m0, m1, m2, bary);
   }
   return fallbackMaterialIndex;
+`}
 }
 
 
@@ -1177,9 +1183,9 @@ fn fetchAttributes(
   let i2 = index.z;
   (*si).vertexColor = vec3f(1.0);
   if (USE_VERTEX_COLOR) {
-    (*si).vertexColor = bary.x * attrBuffers[i0 * ATTR_STRIDE + COLOR_OFF].xyz
-      + bary.y * attrBuffers[i1 * ATTR_STRIDE + COLOR_OFF].xyz
-      + bary.z * attrBuffers[i2 * ATTR_STRIDE + COLOR_OFF].xyz;
+    (*si).vertexColor = bary.x * vertexColor(i0)
+      + bary.y * vertexColor(i1)
+      + bary.z * vertexColor(i2);
   }
   let isSphericalProj = uvProjection == ${uvProjectionConstants.spherical};
 
@@ -1191,9 +1197,9 @@ fn fetchAttributes(
   // Otherwise use the normal from the microtriangle
   // The exception is spherical projection, we need the original normal to project the uv. Or the case like earth has wrong normal.
   if (!isHitMicroTriangle || isSphericalProj) {
-    n0 = attrBuffers[i0 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
-    n1 = attrBuffers[i1 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
-    n2 = attrBuffers[i2 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    n0 = vertexNormal(i0);
+    n1 = vertexNormal(i1);
+    n2 = vertexNormal(i2);
     normalForSphericalProj = normalize(bary.x * n0 + bary.y * n1 + bary.z * n2);
     if (!isHitMicroTriangle) {
       normal = normalForSphericalProj;
@@ -1206,14 +1212,14 @@ fn fetchAttributes(
   var uv2: vec2f;
   var secondaryUv = vec2f(0.0);
   if (USE_UV) {
-    uv0 = attrBuffers[i0 * ATTR_STRIDE + UV_OFF].xy;
-    uv1 = attrBuffers[i1 * ATTR_STRIDE + UV_OFF].xy;
-    uv2 = attrBuffers[i2 * ATTR_STRIDE + UV_OFF].xy;
+    uv0 = vertexUv(i0);
+    uv1 = vertexUv(i1);
+    uv2 = vertexUv(i2);
     uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
     if (USE_UV1) {
-      let secondaryUv0 = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
-      let secondaryUv1 = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
-      let secondaryUv2 = attrBuffers[i2 * ATTR_STRIDE + UV1_OFF].xy;
+      let secondaryUv0 = vertexUv1(i0);
+      let secondaryUv1 = vertexUv1(i1);
+      let secondaryUv2 = vertexUv1(i2);
       secondaryUv = bary.x * secondaryUv0
         + bary.y * secondaryUv1
         + bary.z * secondaryUv2;
@@ -1221,9 +1227,9 @@ fn fetchAttributes(
   }
 
   if (USE_TANGENT) {
-    let t0 = attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
-    let t1 = attrBuffers[i1 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
-    let t2 = attrBuffers[i2 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    let t0 = vertexTangent(i0).xyz;
+    let t1 = vertexTangent(i1).xyz;
+    let t2 = vertexTangent(i2).xyz;
     (*si).tangent = normalize(bary.x * t0 + bary.y * t1 + bary.z * t2);
   }
 
@@ -1234,7 +1240,7 @@ fn fetchAttributes(
     (*si).materialIndex = resolveSurfaceMaterialIndex(
       (*si).materialIndex,
       index,
-      bary
+      bary${compactVertices ? ', (*si).triangleIndex' : ''}
     );
   }
 
@@ -1260,18 +1266,18 @@ ${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normal;` : ''}
     let dp2 = tri.p1 - tri.p2;
     var inputTangent = vec4f(0.0);
     if (USE_TANGENT) {
-      inputTangent = bary.x * attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF]
-        + bary.y * attrBuffers[i1 * ATTR_STRIDE + TANGENT_OFF]
-        + bary.z * attrBuffers[i2 * ATTR_STRIDE + TANGENT_OFF];
+      inputTangent = bary.x * vertexTangent(i0)
+        + bary.y * vertexTangent(i1)
+        + bary.z * vertexTangent(i2);
     }
     let geometryAxes = anisotropy_axes(normal, dp1, dp2, uv0-uv2, uv1-uv2, inputTangent);
     (*si).geometryTangent = geometryAxes[0];
     (*si).geometryBitangent = geometryAxes[1];
     var directionAxes = geometryAxes;
     if (USE_UV1 && directionMaterial.anisotropyMapIndex >= 0.0 && mapInfo[i32(directionMaterial.anisotropyMapIndex) + NUM_MAPS * 2].x > 0.5) {
-      let a = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
-      let b = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
-      let c = attrBuffers[i2 * ATTR_STRIDE + UV1_OFF].xy;
+      let a = vertexUv1(i0);
+      let b = vertexUv1(i1);
+      let c = vertexUv1(i2);
       directionAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c, select(inputTangent, vec4f(0.0), inputTangent.w == 0.0));
     }
     (*si).directionTangent = directionAxes[0];
@@ -1281,9 +1287,9 @@ ${hasCoatNormals ? /* wgsl */ `
       let coatIndex = i32(directionMaterial.coatNormalMapIndex);
       var coatAxes = geometryAxes;
       if (USE_UV1 && mapInfo[coatIndex + NUM_MAPS * 2].x > 0.5) {
-        let a = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
-        let b = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
-        let c = attrBuffers[i2 * ATTR_STRIDE + UV1_OFF].xy;
+        let a = vertexUv1(i0);
+        let b = vertexUv1(i1);
+        let c = vertexUv1(i2);
         coatAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c,
           select(inputTangent, vec4f(0.0), inputTangent.w == 0.0));
       }
@@ -1530,9 +1536,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 }
 
 
-${createIntersectionAlphaWgsl(hasAnisotropyDirections)}
+${createIntersectionAlphaWgsl(hasAnisotropyDirections, compactVertices)}
 
 
 
-${sceneIntersections || createSceneIntersectionsWgsl({hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
+${sceneIntersections || createSceneIntersectionsWgsl({compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

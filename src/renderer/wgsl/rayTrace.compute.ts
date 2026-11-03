@@ -41,6 +41,7 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  compactVertices?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -75,6 +76,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   const partitionDepth = research?.maxDepth ?? 20;
   const debugGroup = research?.debugGroup ?? options.debugGroup ?? -1;
   let {
+  compactVertices = false,
   hasDisplacement,workgroupSize=WORKGROUP_SIZE,
   lightTracing = false,photonMapping=false,photonMaxDepth=20,
   hasAnisotropyDirections = false,
@@ -147,7 +149,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ compactVertices, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
@@ -156,7 +158,7 @@ ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNorm
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
+${createIntersectionWgsl({ compactVertices, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}

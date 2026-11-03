@@ -1,3 +1,4 @@
+import {vertexAttributeReaders} from './vertexAttributes.wgsl.js';
 import { materialBufferWgsl } from '../../materialLayoutSchema.js';
 import {ALL_LIGHT_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../shaderCapabilities.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
@@ -9,12 +10,14 @@ import {
 } from '../../lightConstants.js';
 
 export default function rayTraceCore({
+  compactVertices = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
+  compactVertices?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
@@ -295,7 +298,8 @@ struct RayTraceUniform {
 // Buffers
 @group(0) @binding(0) var<storage, read> bvhBuffer: array<vec4f>;
 @group(0) @binding(1) var<storage, read> instancesBuffer: array<vec4f>;
-@group(0) @binding(2) var<storage, read> attrBuffers: array<${hasAnisotropyDirections ? /* wgsl */ `vec4f` : /* wgsl */ `vec3f`}>;
+@group(0) @binding(2) var<storage, read> attrBuffers: array<${compactVertices ? 'u32' : hasAnisotropyDirections ? 'vec4f' : 'vec3f'}>;
+${vertexAttributeReaders(compactVertices, hasAnisotropyDirections)}
 @group(0) @binding(3) var<storage, read> materialsBuffer: array<MaterialBuffer>;
 
 // Textures

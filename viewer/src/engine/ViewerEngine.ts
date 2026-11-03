@@ -1,3 +1,4 @@
+import {shareStaticGeometry} from './shareStaticGeometry';
 import {causticOptions} from '../caustics';
 import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
@@ -537,6 +538,7 @@ export class ViewerEngine {
       get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
       onMeshConverted: (mesh, source, group) => {
+        shareStaticGeometry(mesh.geometry, source, group);
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
         if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);

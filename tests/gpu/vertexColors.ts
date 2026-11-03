@@ -25,6 +25,9 @@ async function run() {
     const maxError = Math.max(...actual.map((value, i) => Math.abs(value - expected[i])));
     results.push({ name, maxError, tolerance, reference: [...expected.slice(0, 4)], actual: [...actual.slice(0, 4)] });
   };
+  // Compare the same decoded RGB: quantization changes physical material
+  // sampling as well as output values, so an output-only tolerance is insufficient.
+  const decoded = (...rgb: [number, number, number]) => rgb.map(value => engine.backend === 'webgpu' ? Math.round(value * 255) / 255 : value) as [number, number, number];
   const rgb = [.25, .5, .75];
   const color = new THREE.Float32BufferAttribute(Array.from({ length: 4 }, () => rgb).flat(), 3);
   try {
@@ -32,7 +35,7 @@ async function run() {
     for (const Material of [THREE.MeshBasicMaterial, THREE.MeshStandardMaterial, THREE.MeshPhysicalMaterial]) {
       const mat = new Material(); mesh.material = mat;
       if (mat instanceof THREE.MeshStandardMaterial) mat.emissive.setRGB(.1, .2, .3);
-      mat.color.setRGB(...rgb as [number, number, number]);
+      mat.color.setRGB(...decoded(...rgb as [number, number, number]));
       const reference = await capture();
       mat.color.setRGB(1, 1, 1); mat.vertexColors = true; geometry.setAttribute('color', color);
       compare(`${mat.type}: vertex RGB equals material RGB`, await capture(), reference);
@@ -40,7 +43,7 @@ async function run() {
     }
     mesh.material = material;
     material.map = new THREE.DataTexture(new Uint8Array([128, 192, 255, 255]), 1, 1);
-    material.map.needsUpdate = true; material.color.setRGB(.25, .5, .75);
+    material.map.needsUpdate = true; material.color.setRGB(...decoded(.25, .5, .75));
     const textured = await capture();
     material.color.setRGB(1, 1, 1); material.vertexColors = true; geometry.setAttribute('color', color);
     compare('vertex colors modulate base-color textures', await capture(), textured);
@@ -50,7 +53,7 @@ async function run() {
     color.setXYZ(0, .75, .25, .5); color.setXYZ(1, .75, .25, .5);
     color.setXYZ(2, .75, .25, .5); color.setXYZ(3, .75, .25, .5); color.needsUpdate = true;
     const edited = await capture();
-    material.vertexColors = false; material.color.setRGB(.75, .25, .5);
+    material.vertexColors = false; material.color.setRGB(...decoded(.75, .25, .5));
     compare('sync propagates color edits', edited, await capture());
 
     // Colored and uncolored geometry share the packed attribute buffer.
@@ -59,7 +62,7 @@ async function run() {
     const plain = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
     plain.position.x = 1; source.add(plain);
     const mixed = await capture();
-    material.vertexColors = false; material.color.setRGB(.75, .25, .5);
+    material.vertexColors = false; material.color.setRGB(...decoded(.75, .25, .5));
     compare('mixed colored and uncolored meshes', mixed, await capture());
 
     source.remove(mesh, plain);
@@ -67,7 +70,7 @@ async function run() {
     const instance = new THREE.InstancedMesh(geometry, instanceMaterial, 1);
     instance.setColorAt(0, new THREE.Color(.5, .25, 1)); source.add(instance);
     const instanced = await capture();
-    instanceMaterial.vertexColors = false; instanceMaterial.color.setRGB(.75, .25, .5);
+    instanceMaterial.vertexColors = false; instanceMaterial.color.setRGB(...decoded(.75, .25, .5));
     compare('vertex and instance colors multiply', instanced, await capture());
     source.remove(instance); source.add(mesh); mesh.scale.set(1, 1, 1); mesh.position.x = 0;
     material.color.setRGB(1, 1, 1); material.vertexColors = true;

@@ -9,16 +9,17 @@ import {
  * candidate filtering. The caller supplies local-space hit data so UV
  * projection and stochastic glTF BLEND semantics stay backend-independent.
  */
-export function createIntersectionAlphaWgsl(hasAnisotropyDirections = true) {
+export function createIntersectionAlphaWgsl(hasAnisotropyDirections = true, compactVertices = false) {
   return /* wgsl */ `
 fn intersectionAlphaPasses(
   initialMaterialIndex: i32,
   index: vec3i,
   hitBarycentric: vec3f,
   hitPosition: vec3f,
-  hitNormal: vec3f
+  hitNormal: vec3f${compactVertices ? ", record: i32" : ""}
 ) -> bool {
   var materialIndex = initialMaterialIndex;
+${compactVertices ? /* wgsl */ `materialIndex = triangleMaterial(initialMaterialIndex, record);` : /* wgsl */ `
   let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
   let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
   let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
@@ -27,6 +28,7 @@ fn intersectionAlphaPasses(
     materialIndex = randomPickMaterial(m0, m1, m2, hitBarycentric);
   }
 
+`}
   let ma = materialsBuffer[materialIndex];
   var alpha = ma.alpha;
   if (USE_DIFFUSE_MAPS &&
@@ -34,9 +36,9 @@ fn intersectionAlphaPasses(
     let diffuseMapIndex = i32(ma.diffuseMapIndex);
     if (diffuseMapIndex >= 0) {
       let uvProjection = i32(ma.uvProjection);
-      let uv0 = attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy;
-      let uv1 = attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy;
-      let uv2 = attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy;
+      let uv0 = vertexUv(index.x);
+      let uv1 = vertexUv(index.y);
+      let uv2 = vertexUv(index.z);
       var uv = hitBarycentric.x * uv0 +
         hitBarycentric.y * uv1 + hitBarycentric.z * uv2;
       if (uvProjection > 0) {
@@ -54,9 +56,9 @@ fn intersectionAlphaPasses(
     let alphaMapIndex = i32(ma.alphaMapIndex);
     if (alphaMapIndex >= 0) {
       let uvProjection = i32(ma.uvProjection);
-      let uv0 = attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy;
-      let uv1 = attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy;
-      let uv2 = attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy;
+      let uv0 = vertexUv(index.x);
+      let uv1 = vertexUv(index.y);
+      let uv2 = vertexUv(index.z);
       var uv = hitBarycentric.x * uv0 +
         hitBarycentric.y * uv1 + hitBarycentric.z * uv2;
       if (uvProjection > 0) {
