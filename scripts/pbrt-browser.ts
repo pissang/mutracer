@@ -25,7 +25,7 @@ async function run(sequenceOffset = 0, prefix = '') {
   const parsed = await buildScene(new URL('/asset/' + q.get('scene'), location.href).href, resolver);
   if (parsed.film) for (const [name, value] of [['xresolution', width], ['yresolution', height]] as const) parsed.film.params[name] = { type: 'integer', name, values: [value], loc: parsed.film.loc };
   await checkpoint('convert');
-  const model = await convert(parsed, resolver, decodeImage);
+  const model = await convert(parsed, resolver, decodeImage, undefined, undefined, q.has('webgl') ? 'webgl' : 'webgpu');
   await save(prefix + 'import.json', JSON.stringify({ settings: model.settings, warnings: parsed.warnings, downloadBytes, elapsedMs: performance.now() - started }));
   const scene = new THREE.Scene(); scene.add(model.root);
   if (model.environment) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {MAX_PATH_EVENTS_WGPU, MAX_PATH_EVENTS_WEBGL, normalizeBounces} from '../../src/renderer/pathLimits';
 import type { SceneVolume } from '../../src/scene/SceneVolume';
 import { geometry, type PLYDecoder } from './geometry';
 import { material, interiorMedium, type Warn } from './materials';
@@ -16,13 +17,19 @@ const mirror = new THREE.Matrix4().makeScale(1, 1, -1);
 
 /** Both geometry and camera receive the same world reflection. The camera's
  * local reflection changes PBRT's +Z viewing direction to Three's -Z. */
-export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeImage, onProgress?: (loaded: number, total: number) => void, decodePLY?: PLYDecoder): Promise<Converted> {
+export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeImage, onProgress?: (loaded: number, total: number) => void, decodePLY?: PLYDecoder, backend: 'webgpu' | 'webgl' = 'webgpu'): Promise<Converted> {
   const root = new THREE.Group(); root.name = scene.entry.split('/').pop() ?? 'PBRT';
   const warningKeys = new Set<string>();
   const warn: Warn = (entity, handling, code = 'approximation') => {
     const key = `${entity.loc.file}:${entity.loc.line}:${handling}`;
     if (!warningKeys.has(key)) { warningKeys.add(key); scene.warnings.push({ statement: entity.loc.kind, file: entity.loc.file, line: entity.loc.line, code, handling }); }
   };
+  const requestedDepth = scalar(scene.integrator?.params ?? {}, 'maxdepth', 5);
+  const limit = backend === 'webgpu' ? MAX_PATH_EVENTS_WGPU : MAX_PATH_EVENTS_WEBGL;
+  const bounces = normalizeBounces(requestedDepth, limit);
+  if (requestedDepth > limit && scene.integrator) {
+    warn(scene.integrator, `Requested maxdepth ${requestedDepth}; ${backend === 'webgpu' ? 'WebGPU' : 'WebGL'} uses depth ${bounces} with at most ${limit} path events; the scene is excluded from strict comparison`, 'path-depth');
+  }
   const allowed: Record<string, string[]> = {
     Shape: ['P', 'N', 'uv', 'st', 'indices', 'filename', 'alpha', 'displacement', 'radius', 'zmin', 'zmax', 'phimax', 'height', 'innerradius', 'levels', 'nlevels'],
     Camera: ['fov', 'screenwindow', 'lensradius', 'focaldistance', 'shutteropen', 'shutterclose'],
@@ -281,6 +288,6 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   }
   // A primary-surface mask cannot isolate shadows or indirect paths through
   // null or inconsistent medium boundaries. Preserve all measurements.
-  root.userData.pbrtComparable = !scene.warnings.some(w => ['medium-shadow', 'medium-topology', 'medium-orientation', 'medium-camera'].includes(w.code));
-  return { root, environment, volumes, settings: { width, height, bounces: scalar(scene.integrator?.params ?? {}, 'maxdepth', 5), samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
+  root.userData.pbrtComparable = !scene.warnings.some(w => ['medium-shadow', 'medium-topology', 'medium-orientation', 'medium-camera', 'path-depth'].includes(w.code));
+  return { root, environment, volumes, settings: { width, height, bounces, samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
 }

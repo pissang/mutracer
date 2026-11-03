@@ -280,3 +280,22 @@ describe('PBRT transformed surface orientation', () => {
     expect(new THREE.Box3().setFromObject(root).max.x).toBeCloseTo(1);
   });
 });
+
+describe('PBRT target backend path limits', () => {
+  it.each([['webgpu', 50], ['webgl', 20]] as const)('reports maxdepth truncation for %s', async (backend, limit) => {
+    const resolver = {read: async () => new TextEncoder().encode('Integrator "path" "integer maxdepth" [100]\nWorldBegin Shape "sphere"').buffer};
+    const scene = await buildScene('deep.pbrt', resolver);
+    const model = await convert(scene, resolver, undefined, undefined, undefined, backend);
+    expect(model.settings.bounces).toBe(limit);
+    expect(scene.warnings).toContainEqual(expect.objectContaining({code: 'path-depth', file: 'deep.pbrt', line: 1, statement: 'Integrator', handling: expect.stringContaining(`depth ${limit}`)}));
+    expect(model.root.userData.pbrtComparable).toBe(false);
+  });
+  it.each([['webgpu', 50], ['webgl', 20]] as const)('accepts the %s boundary without a truncation warning', async (backend, limit) => {
+    const resolver = {read: async () => new TextEncoder().encode(`Integrator "path" "integer maxdepth" [${limit}] WorldBegin Shape "sphere"`).buffer};
+    const scene = await buildScene('boundary.pbrt', resolver);
+    const model = await convert(scene, resolver, undefined, undefined, undefined, backend);
+    expect(model.settings.bounces).toBe(limit);
+    expect(scene.warnings.some(w => w.code === 'path-depth')).toBe(false);
+    expect(model.root.userData.pbrtComparable).toBe(true);
+  });
+});

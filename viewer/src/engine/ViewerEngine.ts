@@ -247,13 +247,13 @@ export class ViewerEngine {
     if (cached && (!presetId || cached.meta.presetId === presetId)) {
       const { meta } = cached;
       const loaded = await this.load(meta.name, (progress, signal) => cached.source
-        ? loadModelFromSource(cached.source, progress, signal)
+        ? loadModelFromSource(cached.source, progress, signal, this.modelBackend)
         : Promise.resolve(createMaterialSpheres()), meta, cached, false);
       if (loaded || token + 1 !== this.loadToken) return;
       await clearModelCache();
       if (token + 1 !== this.loadToken) return;
       if (!meta.presetId && meta.sourceUrl) {
-        return this.load(meta.name, (progress, signal) => loadModelFromURL(meta.sourceUrl!, progress, signal), meta, cached);
+        return this.load(meta.name, (progress, signal) => loadModelFromURL(meta.sourceUrl!, progress, signal, this.modelBackend), meta, cached);
       }
     }
     return this.loadPreset(presetId ?? 'spheres', true);
@@ -274,7 +274,7 @@ export class ViewerEngine {
     const meta = { presetId: preset.id, credit: preset.license !== 'CC0' ? `${preset.name} · ${preset.credit}` : null, sourceUrl: preset.sourceUrl };
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
     return this.load(preset.name, async (progress, signal) => {
-      const model = preset.url ? await loadModelFromURL(preset.url, progress, signal) : createMaterialSpheres();
+      const model = preset.url ? await loadModelFromURL(preset.url, progress, signal, this.modelBackend) : createMaterialSpheres();
       if (preset.category === 'research' && model.lighting) model.lighting.useByDefault = true;
       if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
       return model;
@@ -288,7 +288,7 @@ export class ViewerEngine {
 
   loadUrl(url: string) {
     if (isHDRFile(url.split('?')[0])) return this.loadEnvironmentFromURL(url);
-    return this.load(url.split('/').pop() || url, (progress, signal) => loadModelFromURL(url, progress, signal),
+    return this.load(url.split('/').pop() || url, (progress, signal) => loadModelFromURL(url, progress, signal, this.modelBackend),
       { presetId: null, credit: null, sourceUrl: url });
   }
 
@@ -299,7 +299,7 @@ export class ViewerEngine {
       return this.importMaterialX(material.id, files);
     }
     const pbrt = files.some(f => /\.pbrt(?:\.gz)?$/i.test(f.path));
-    if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal), { presetId: null, credit: null, sourceUrl: null });
+    if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend), { presetId: null, credit: null, sourceUrl: null });
     const hdr = files.find((f) => isHDRFile(f.path));
     const models = files.filter((f) => !isHDRFile(f.path));
     if (hdr) {
@@ -315,9 +315,11 @@ export class ViewerEngine {
       return;
     }
     const main = models.find((f) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(f.path))!;
-    return this.load(main.file.name, (progress, signal) => loadModelFromFiles(models, progress, signal),
+    return this.load(main.file.name, (progress, signal) => loadModelFromFiles(models, progress, signal, this.modelBackend),
       { presetId: null, credit: null, sourceUrl: null });
   }
+
+  private modelBackend = async () => this.engine.backend ?? (await this.engine.init()).backend;
 
   private async load(
     name: string,

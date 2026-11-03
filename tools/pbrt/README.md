@@ -61,6 +61,11 @@ copies to coexist in browser memory.
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
 | normalmap / alpha | Normal map and material opacity variants. Material bump is baked to UV-space normals; shape displacement keeps the height-field approximation. |
 
+`maxdepth` is clamped to 50 on WebGPU or 20 on WebGL, with a structured
+`path-depth` warning that reports the depth used. Scenes exceeding that limit
+are excluded from strict PBRT comparison. Transparent paths can reach the
+[path-event limit](../../docs/api.md#render) before the requested scattering depth.
+
 Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
 region; the primary-surface mask cannot separate those paths. The two-run noise

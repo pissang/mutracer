@@ -29,6 +29,8 @@ export interface ModelSource {
   base: string;
 }
 
+export type ModelBackend = 'webgpu' | 'webgl' | (() => Promise<'webgpu' | 'webgl'>);
+
 export type LoadProgress = (stage: 'download' | 'parse', loaded?: number, total?: number) => void;
 
 let draco: DRACOLoader | undefined;
@@ -46,13 +48,13 @@ function parse(loader: GLTFLoader, data: ArrayBuffer, path: string) {
     loader.parse(data, path, resolve, reject));
 }
 
-export async function loadModelFromURL(url: string, onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
+export async function loadModelFromURL(url: string, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
   const buffer = await fetchWithProgress(url, (loaded, total) => onProgress('download', loaded, total), signal);
   const base = new URL('.', new URL(url, location.href)).href;
   const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'model');
   const mainPath = new URL(url, location.href).href;
   const files: PathedFile[] = [{ path: mainPath, file: new File([buffer], name) }];
-  return loadModelFromSource({ files, mainPath, base }, onProgress, signal);
+  return loadModelFromSource({ files, mainPath, base }, onProgress, signal, backend);
 }
 
 /** Fetch every external resource before entering the parse stage. Cached files
@@ -108,23 +110,23 @@ async function downloadModelResources(source: ModelSource, buffer: ArrayBuffer, 
  * Loads a .glb, or a .gltf with its .bin and textures picked or dropped
  * together. Relative resource URIs are resolved against the dropped paths.
  */
-export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
+export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
   const main = files.find((f) => f.path.toLowerCase().endsWith('.glb')) ??
     files.find((f) => f.path.toLowerCase().endsWith('.gltf'));
   if (!main) {
     const candidates = files.filter(f => /\.pbrt(?:\.gz)?$/i.test(f.path)).sort((a, b) => a.path.localeCompare(b.path));
     for (const file of candidates) {
-      if (/WorldBegin/.test(await file.file.slice(0, 65536).text())) return loadModelFromSource({ files, mainPath: file.path, base: '' }, onProgress, signal);
+      if (/WorldBegin/.test(await file.file.slice(0, 65536).text())) return loadModelFromSource({ files, mainPath: file.path, base: '' }, onProgress, signal, backend);
     }
-    if (candidates.length) return loadModelFromSource({ files, mainPath: candidates[0].path, base: '' }, onProgress, signal);
+    if (candidates.length) return loadModelFromSource({ files, mainPath: candidates[0].path, base: '' }, onProgress, signal, backend);
   }
   if (!main) throw new Error('No .glb, .gltf or .pbrt scene found');
-  return loadModelFromSource({ files, mainPath: main.path, base: '' }, onProgress, signal);
+  return loadModelFromSource({ files, mainPath: main.path, base: '' }, onProgress, signal, backend);
 }
 
 /** Parses the same bytes for downloaded, dropped and restored models. */
-export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
-  if (/\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(source.mainPath)) return (await import('./pbrt')).loadPBRT(source, onProgress, signal);
+export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
+  if (/\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(source.mainPath)) return (await import('./pbrt')).loadPBRT(source, onProgress, signal, backend);
   const { files, mainPath, base } = source;
   const main = files.find((file) => file.path === mainPath);
   if (!main) throw new Error('Missing main model file');

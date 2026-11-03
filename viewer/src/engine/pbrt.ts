@@ -4,7 +4,7 @@ import { prefetchResources } from '../../../tools/pbrt/prefetch';
 import { decodeImage } from '../../../tools/pbrt/image-browser';
 import { SCENES_BASE, type Inspection, type Warning } from '../../../tools/pbrt/source';
 import type { Scene } from '../../../tools/pbrt/scene';
-import type { ModelSource, LoadedModel, LoadProgress } from './loadModel';
+import type { ModelSource, LoadedModel, LoadProgress, ModelBackend } from './loadModel';
 import { fetchWithProgress } from './fetchWithProgress';
 import { showToast, useViewer } from '../store';
 import catalog from './pbrt-catalog.json';
@@ -28,7 +28,7 @@ async function confirmDownload(bytes: number, signal?: AbortSignal) {
     signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
   });
 }
-export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
+export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu'): Promise<LoadedModel> {
   const worker = new Worker(new URL('./pbrt.worker.ts', import.meta.url), { type: 'module' });
   let nextId = 0;
   const pending = new Map<number, { resolve(value: unknown): void; reject(reason: Error): void }>();
@@ -70,7 +70,7 @@ export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, si
       const g = new THREE.BufferGeometry();
       for (const [name, attr] of Object.entries(result.attributes)) g.setAttribute(name, new THREE.BufferAttribute(attr.array, attr.itemSize));
       if (result.index) g.setIndex(new THREE.BufferAttribute(result.index, 1)); return g;
-    });
+    }, typeof backend === 'function' ? await backend() : backend);
     source.files = [...files.values()];
     const warnings = built.scene.warnings;
     return { name: source.files.find(item => item.path === source.mainPath)?.file.name ?? source.mainPath.split('/').pop()!, root: converted.root, animations: [], source,
