@@ -41,6 +41,8 @@ export interface RayTraceInputHooks {
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  /** Browser camera extension; false preserves the native uniform layout. */
+  cameraProjectionInverse?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -147,7 +149,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ cameraProjectionInverse: options.cameraProjectionInverse, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
@@ -512,14 +514,26 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
   *depth = *depth + 1;
 }
 
+${options.cameraProjectionInverse ? /* wgsl */ `
 fn initCameraRay(coord: vec2f) -> Ray {
+  // Unproject before applying world translation. A tiny near plane makes the
+  // combined world inverse lose ray-direction precision through cancellation.
+  let origin = cameraUniform.projectionInv * vec4f(coord * 2.0 - 1.0, -1.0, 1.0);
+  let center = cameraUniform.projectionInv * vec4f(coord * 2.0 - 1.0, 1.0, 1.0);
+  let direction = center.xyz * origin.w - origin.xyz * center.w;
+  var cam: Ray;
+  initRay(&cam, (cameraUniform.viewInv * vec4f(origin.xyz / origin.w, 1.0)).xyz,
+    normalize((cameraUniform.viewInv * vec4f(direction, 0.0)).xyz));
+  return cam;
+}
+` : /* wgsl */ `fn initCameraRay(coord: vec2f) -> Ray {
   let origin = cameraUniform.viewProjectionInv * vec4f(coord * 2.0 - 1.0, -1.0, 1.0);
   let center = cameraUniform.viewProjectionInv * vec4f(coord * 2.0 - 1.0, 1.0, 1.0);
   var cam: Ray;
   initRay(&cam, origin.xyz / origin.w, normalize(center.xyz * origin.w - origin.xyz * center.w));
 
   return cam;
-}
+}`}
 
 
 fn bevelCubicSample(radius: f32, xi: f32) -> vec2f {

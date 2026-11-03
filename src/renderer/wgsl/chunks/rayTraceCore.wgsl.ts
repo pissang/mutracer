@@ -12,12 +12,14 @@ export default function rayTraceCore({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
+  cameraProjectionInverse = false,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
+  cameraProjectionInverse?: boolean;
   caustics?: boolean;
   lightCapabilities?: number;
 }) {
@@ -250,7 +252,7 @@ struct CameraUniform {
   viewProjectionInv: mat4x4<f32>,
   viewInv: mat4x4<f32>,
   apertureRadius: f32,
-  focusDistance: f32,
+  focusDistance: f32,${cameraProjectionInverse ? '\n  projectionInv: mat4x4<f32>,' : ''}
 };
 
 struct RayTraceUniform {
