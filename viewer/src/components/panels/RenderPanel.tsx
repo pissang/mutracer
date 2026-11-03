@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Aperture, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
+import { MAX_PATH_EVENTS_WEBGL, MAX_PATH_EVENTS_WGPU } from '../../../../src/renderer/pathLimits';
 import type { OIDNModel } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { ResolutionSelect } from '../ResolutionSelect';
@@ -19,7 +20,7 @@ export function RenderPanel() {
     <>
       <Section title="Quality" icon={<Aperture size={14} />}>
         <Scrub label="Max samples" value={s.maxSamples} min={4} max={16384} log onChange={(v) => update({ maxSamples: v })} />
-        <Scrub label="Bounces" value={s.bounces} min={1} max={16} step={1} onChange={(v) => update({ bounces: v })} />
+        <Scrub label="Bounces" value={s.bounces} min={1} max={webgl ? MAX_PATH_EVENTS_WEBGL : MAX_PATH_EVENTS_WGPU} step={1} onChange={(v) => update({ bounces: v })} />
         <Field label="Resolution">
           <ResolutionSelect />
         </Field>
