@@ -6,7 +6,7 @@ import MaterialState from '../../src/scene/MaterialState.js';
 import {prepareSceneMeshes, updateMeshInstanceTransforms, dirtyPreparedInstanceIndices} from '../../src/renderer/scenePreparation.js';
 import {computeGeometryBounds} from '../../src/renderer/geometryBvhBounds.js';
 import {PackedMeshInstances} from '../../src/renderer/packedMeshInstances.js';
-import {buildBLAS, buildTLAS, copyTLASForRefit, refitTLAS, packLinearInstances, refitLinearInstances, refitBLAS} from '../../src/renderer/bvhAccel.js';
+import {buildBLAS, buildTLAS, buildWebTLAS, copyTLASForRefit, refitTLAS, packLinearInstances, refitLinearInstances, refitBLAS} from '../../src/renderer/bvhAccel.js';
 import {setGeometryBvh} from '../../src/renderer/geometryBvh.js';
 import {updatePreparedGeometries} from '../../src/renderer/geometryUpdates.js';
 import {quantizeDisplacementRange} from '../../src/renderer/displacementRange.js';
@@ -58,9 +58,9 @@ it('writes the same linear instance bytes from dirty spans as full packing',()=>
   expect(ranges).toEqual([{offset:160,size:160}]);expect(buffer).toEqual(packLinearInstances(next,[0],[0]));
   expect(new Uint8Array(buffer).subarray(0,160)).toEqual(previous.subarray(0,160));
 });
-it('refits a transactional TLAS using dirty slots and preserves its accepted buffers',()=>{
+it.each([buildTLAS, buildWebTLAS])('refits a transactional TLAS using dirty slots and preserves its accepted buffers (%s)',build=>{
   const {prepared,instances}=scene();
-  const accepted=buildTLAS(prepared.instances,prepared.blases), before=new Uint8Array(accepted.buffer).slice();
+  const accepted=build(prepared.instances,prepared.blases), before=new Uint8Array(accepted.buffer).slice();
   instances.transforms[16+12]=4;
   const next=updateMeshInstanceTransforms(prepared.instanceBindings,prepared.instances,new Set([1]));
   const candidate=copyTLASForRefit(accepted), full=copyTLASForRefit(accepted);

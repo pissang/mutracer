@@ -107,8 +107,7 @@ import {
 } from './envMapDistribution.js';
 import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
 import {
-  buildTLAS,
-  WEB_TLAS_BINS,
+  buildWebTLAS,
   concatBLASBuffers,
   type FlattendBVH,
   getTraversalStackSizes,
@@ -1072,6 +1071,7 @@ class WGPURayTracePass {
             hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
             blasLayoutMask,
             cameraProjectionInverse: true,
+            perInstanceBounds: true,
             dynamicEnvironment: true
           },
           bake
@@ -2343,7 +2343,7 @@ class WGPURayTracePass {
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     const isEmpty = meshes.length === 0 || res.instances.length === 0;
-    const tlas = buildTLAS(res.instances, res.blases, WEB_TLAS_BINS);
+    const tlas = buildWebTLAS(res.instances, res.blases);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
@@ -2527,7 +2527,7 @@ class WGPURayTracePass {
     this._preparedMeshData = res;
     if (pending) this._residentPreparedMeshData = res;
     this._pendingMembershipData = undefined;
-    const tlas = buildTLAS(instances, res.blases, WEB_TLAS_BINS);
+    const tlas = buildWebTLAS(instances, res.blases);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
@@ -2573,7 +2573,7 @@ class WGPURayTracePass {
       incremental ? dirtyIndices : undefined
     );
     if (!sameInstanceMembership(previousInstances, res.instances)) {
-      this._tlas = buildTLAS(res.instances, res.blases, WEB_TLAS_BINS);
+      this._tlas = buildWebTLAS(res.instances, res.blases);
       this._uploadBVH(this._tlas, res.blases);
       this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
       this._needsUpdateLightSamplingData = true;

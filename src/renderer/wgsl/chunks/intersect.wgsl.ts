@@ -213,7 +213,8 @@ function getBVHTraverseCode(
   anyHit: boolean,
   blasLayoutMask: number,
   hasAnisotropyDirections: boolean,
-  skipTriangleCode = ''
+  skipTriangleCode = '',
+  perInstanceBounds = false
 ) {
   const intersectTriangles = /* wgsl */ `
       let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
@@ -246,7 +247,7 @@ function getBVHTraverseCode(
 var d = ray.d;
 var o = ray.o;
 var tlasTop = -1;
-var invD = traversalInverse(d);
+${perInstanceBounds ? 'let worldInvD = traversalInverse(ray.d);\nvar invD = worldInvD;' : 'var invD = traversalInverse(d);'}
 var isHitMicroTriangle = false;
 var isHit = false;
 var hitPosition: vec3f;
@@ -305,7 +306,13 @@ while (tlasTop >= 0) {
     ) {
       let instanceRecord = bvhBuffer[tlasNode + 2 + instanceOffset];
       let insIdx = bitcast<i32>(instanceRecord.x);
-      let blasRoot = bitcast<i32>(instanceRecord.y);
+${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transforming the ray or entering its BLAS.
+      // Keep the reverse instance order above, including for any-hit alpha RNG.
+      let box = bitcast<i32>(instanceRecord.w);
+      if (intersectBox(ray.o, bvhBuffer[box].xyz, bvhBuffer[box + 1].xyz, worldInvD, tMax) <= 0.0) {
+        continue;
+      }
+` : ''}      let blasRoot = bitcast<i32>(instanceRecord.y);
       let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
       let w2l = mat4x4<f32>(
         instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 1],
@@ -647,10 +654,10 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
 }
 
 export function createSceneIntersectionsWgsl({
-  hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
+  perInstanceBounds = false, hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
   closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel', closestHitHook = ''
 }: {
-  hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
+  perInstanceBounds?: boolean; hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
   blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
 }) {
   return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
@@ -682,7 +689,7 @@ hitInsIdx = insIdx;
     hasDisplacement,
     false,
     blasLayoutMask,
-    hasAnisotropyDirections
+    hasAnisotropyDirections, '', perInstanceBounds
   )}
 
 ${closestHitHook}  if (isHit) {
@@ -735,7 +742,7 @@ hitInsIdx = insIdx;
         if (insIdx != instanceIndex) {
           continue;
         }
-    `
+    `, perInstanceBounds
   )}
 
   if (isHit) {
@@ -833,7 +840,7 @@ if (isOccluded) {
     hasDisplacement,
     true,
     blasLayoutMask,
-    hasAnisotropyDirections
+    hasAnisotropyDirections, '', perInstanceBounds
   )}
 
   return false;
@@ -843,12 +850,14 @@ if (isOccluded) {
 }
 
 export default function getIntersectCode({
+  perInstanceBounds = false,
   hasDisplacement,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   blasLayoutMask = 1,
   sceneIntersections = ''
 }: {
+  perInstanceBounds?: boolean;
   hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
@@ -1534,5 +1543,5 @@ ${createIntersectionAlphaWgsl(hasAnisotropyDirections)}
 
 
 
-${sceneIntersections || createSceneIntersectionsWgsl({hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
+${sceneIntersections || createSceneIntersectionsWgsl({perInstanceBounds, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

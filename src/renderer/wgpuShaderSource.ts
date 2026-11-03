@@ -6,6 +6,8 @@ import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 export interface WGPUShaderFeatures {
   /** Internal host budget. Default 20 preserves native shader generation. */
   maxPathEvents?: number;
+  /** Web TLAS leaf boxes. Default false retains the native layout. */
+  perInstanceBounds?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;

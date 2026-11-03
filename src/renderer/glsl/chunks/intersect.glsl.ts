@@ -293,7 +293,10 @@ function getBVHTraverseCode(
         if (insIdx < 0) {
           for (int k = 0; k < -pointerToRightOrNumPrims; k++) {
             vec4 r3 = fetchBVH(i + 2 + k);
-            stack[++top] = ivec2(floatBitsToInt(r3.y), floatBitsToInt(r3.x));
+            int box = floatBitsToInt(r3.w);
+            if (intersectBox(ray.o, ray.d, fetchBVH(box).xyz, fetchBVH(box + 1).xyz, tMax) > 0.0) {
+              stack[++top] = ivec2(floatBitsToInt(r3.y), floatBitsToInt(r3.x));
+            }
           }
         }
         else {

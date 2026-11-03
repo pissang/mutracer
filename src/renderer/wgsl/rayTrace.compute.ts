@@ -44,6 +44,8 @@ export interface RayTraceInputHooks {
 export interface RayTraceShaderOptions {
   /** Internal host budget. Default 20 preserves the native AOT contract. */
   maxPathEvents?: number;
+  /** Web TLAS leaf boxes. Default false retains the native layout. */
+  perInstanceBounds?: boolean;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -167,7 +169,7 @@ ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNorm
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
+${createIntersectionWgsl({ perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}

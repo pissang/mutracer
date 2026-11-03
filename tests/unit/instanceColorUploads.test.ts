@@ -5,12 +5,12 @@ import InstancedMesh from '../../src/scene/InstancedMesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {createCubeGeometry} from '../../src/util/commonGeometry';
 import {updateMeshInstances} from '../../src/renderer/prepareMeshBVH';
-import {buildTLAS} from '../../src/renderer/bvhAccel';
+import {buildWebTLAS} from '../../src/renderer/bvhAccel';
 import {MaterialChangeTracker} from '../../src/renderer/materialChanges';
 
 it.each(['webgpu','webgl'] as const)('%s queues color writes independently of transforms, geometry and lights', backend=>{
   const mesh=new InstancedMesh(createCubeGeometry(),new OpenPBRMaterial(),{count:2,colors:new Float32Array(6).fill(1)});
-  const meshes=[mesh], prepared=updateMeshInstances(meshes), tlas=buildTLAS(prepared.instances,prepared.blases);
+  const meshes=[mesh], prepared=updateMeshInstances(meshes), tlas=buildWebTLAS(prepared.instances,prepared.blases);
   const pass=Object.create((backend==='webgpu'?WGPURayTracePass:WebGLRayTracePass).prototype) as any;
   Object.assign(pass,{_meshes:meshes,_preparedMeshData:prepared,_tlas:tlas,_materialData:{},_materialChanges:new MaterialChangeTracker(),
     _dirtyTransformMeshes:new Set(),_dirtyColorMeshes:new Set(),_pendingGeometryUpdates:new Set(),_meshSnapshot:[],

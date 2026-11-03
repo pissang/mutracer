@@ -35,8 +35,7 @@ import { mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import {
   buildBLAS,
-  buildTLAS,
-  WEB_TLAS_BINS,
+  buildWebTLAS,
   concatBLASBuffers,
   refitBLAS,
   refitTLAS,
@@ -623,7 +622,7 @@ class WebGLRayTracePass {
     this._needsUpdateMeshMembership = false;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
-    this._tlas = buildTLAS(res.instances, res.blases, WEB_TLAS_BINS);
+    this._tlas = buildWebTLAS(res.instances, res.blases);
     this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
 
     const layout = this._vertexAttributeLayout = vertexAttributeLayout(mergedGeometry);
@@ -753,7 +752,7 @@ class WebGLRayTracePass {
   private _updateMeshMembership() {
     const res = this._pendingMembershipData!;
     this._preparedMeshData = res;
-    this._tlas = buildTLAS(res.instances, res.blases, WEB_TLAS_BINS);
+    this._tlas = buildWebTLAS(res.instances, res.blases);
     this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
     this._tracePasses.forEach(pass => pass.setUniform('isEmptyScene', +(res.instances.length === 0)));
     this._pendingMembershipData = undefined;

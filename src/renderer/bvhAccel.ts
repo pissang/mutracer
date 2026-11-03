@@ -384,7 +384,8 @@ export function refitLinearInstances(buffer: ArrayBuffer, instances: MeshInstanc
 export function buildTLAS(
   instances: MeshInstances,
   blases: BLASInstance[],
-  bins = 8
+  bins = 8,
+  perInstanceBounds = false
 ): FlattendBVH {
   if (!meshInstancesLength(instances)) return emptyBvh(true);
   const placement = getBlasPlacement(blases);
@@ -396,7 +397,9 @@ export function buildTLAS(
   const bvh = buildBinnedSahBvh(aabbs, meshInstancesLength(instances), bins);
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
-  const buffer = new ArrayBuffer(vec4Count * 16);
+  // Web TLAS leaves point at separate world boxes. Keep the shared/native
+  // instance stride and legacy leaf layout unchanged.
+  const buffer = new ArrayBuffer((vec4Count + (perInstanceBounds ? meshInstancesLength(instances) * 2 : 0)) * 16);
   const floats = new Float32Array(buffer);
   const ints = new Int32Array(buffer);
   const instancesBuffer = new ArrayBuffer(meshInstancesLength(instances) * INSTANCE_WORD_STRIDE * 4);
@@ -423,6 +426,12 @@ export function buildTLAS(
       // Keep the source instance index in the otherwise-unused z lane so
       // the TLAS can be refitted without rebuilding its topology.
       ints[e + 2] = source;
+      if (perInstanceBounds) {
+        const box = vec4Count + target * 2;
+        ints[e + 3] = box;
+        floats.set(aabbs.subarray(source * 6, source * 6 + 3), box * 4);
+        floats.set(aabbs.subarray(source * 6 + 3, source * 6 + 6), box * 4 + 4);
+      }
       writeInstanceRecord(instanceInts, instanceFloats, target, instance, placement);
       target++;
     }
@@ -436,6 +445,11 @@ export function buildTLAS(
     layout: 'bvh2',
     instancesBuffer
   };
+}
+
+// Web-only leaf boxes; shared and native callers retain their existing layout.
+export function buildWebTLAS(instances: MeshInstances, blases: BLASInstance[]): FlattendBVH {
+  return buildTLAS(instances, blases, WEB_TLAS_BINS, true);
 }
 
 /** Bounds transport for a platform BVH builder; same padding as buildTLAS. */
@@ -583,6 +597,16 @@ export function refitTLAS(
     write(bounds.max, 2, Math.max(read(bounds.max, 2), scratch[5]));
   }
 
+  const boxRanges: TLASRefitRange[] = [];
+  function writeLeafBox(primitiveOffset: number, instance: TLASInstance) {
+    const box = ints[primitiveOffset + 3];
+    if (!box) return;
+    instanceBounds(instance, scratch, 0);
+    floats.set(scratch.subarray(0, 3), box * 4);
+    floats.set(scratch.subarray(3, 6), box * 4 + 4);
+    boxRanges.push({ offset: box * 16, size: 32 });
+  }
+
   function writeNodeBounds(index: number, bounds: Box3) {
     const base = index * 4;
     floats[base] = read(bounds.min, 0);
@@ -622,6 +646,7 @@ export function refitTLAS(
         const instance = readMeshInstance(instances, sourceInstance);
         if (!instance) continue;
         addInstanceBounds(bounds, instance);
+        writeLeafBox(primitiveOffset, instance);
         writeInstance(targetInstance, sourceInstance);
       }
     }
@@ -658,9 +683,14 @@ export function refitTLAS(
   const dirtyNodes = new Set<number>();
   for (const leaf of dirtyLeaves) {
     const bounds = new Box3();
-    for (const { source } of metadata.instancesByLeaf.get(leaf) ?? []) {
+    const entries = metadata.instancesByLeaf.get(leaf) ?? [];
+    for (let i = 0; i < entries.length; i++) {
+      const { source } = entries[i];
       const instance = readMeshInstance(instances, source);
-      if (instance) addInstanceBounds(bounds, instance);
+      if (instance) {
+        addInstanceBounds(bounds, instance);
+        if (dirtySourceIndices.has(source)) writeLeafBox(leaf * 4 + 8 + i * 4, instance);
+      }
     }
     writeNodeBounds(leaf, bounds);
     dirtyNodes.add(leaf);
@@ -686,7 +716,7 @@ export function refitTLAS(
 
   return {
     tlasRanges: mergeRefitRanges(
-      [...dirtyNodes].map((index) => ({ offset: index * 16, size: 32 }))
+      [...boxRanges, ...[...dirtyNodes].map((index) => ({ offset: index * 16, size: 32 }))]
     ),
     instanceRanges: mergeRefitRanges(instanceRanges)
   };

@@ -3,8 +3,10 @@ import { mat4 } from '../../src/math';
 import {
   Box3,
   INSTANCE_WORD_STRIDE,
+  WEB_TLAS_BINS,
   buildBLAS,
   buildTLAS,
+  buildWebTLAS,
   meshInstanceBounds,
   packBuiltTLAS,
   getTraversalStackSizes,
@@ -227,5 +229,48 @@ describe('platform-built TLAS packing', () => {
     const actual = packBuiltTLAS([], [], {buffer: new ArrayBuffer(0), maxDepth: 0});
     expect(new Uint8Array(actual.buffer)).toEqual(new Uint8Array(buildTLAS([], []).buffer));
     expect(actual.instancesBuffer?.byteLength).toBe(0);
+  });
+});
+
+
+describe('web TLAS leaf boxes', () => {
+  it.each([false, true])('packs and refits displaced world boxes (partial=%s)', partial => {
+    const blases: BLASInstance[] = [{bvh: {buffer: new ArrayBuffer(48), maxDepth: 1}, trainglesCount: 1, verticesCount: 3}];
+    const instances: TLASInstance[] = Array.from({length: 8}, (_, i) => ({
+      blasIndex: 0, bounds: bounds(i * 3, i * 3 + 1),
+      transform: mat4.identity(new Float64Array(16)), materialsIndices: [i], displacementScale: .25
+    }));
+    const flat = buildWebTLAS(instances, blases);
+    const legacy = buildTLAS(instances, blases, WEB_TLAS_BINS);
+    expect(flat.instancesBuffer).toEqual(legacy.instancesBuffer);
+    expect(flat.buffer.byteLength - legacy.buffer.byteLength).toBe(instances.length * 32);
+    const words = new Int32Array(flat.buffer), floats = new Float32Array(flat.buffer);
+    const boxes = new Map<number, number>();
+    const visit = (node: number) => {
+      const child = words[node * 4 + 3];
+      if (child >= 0) { visit(node + 2); visit(child); return; }
+      for (let i = 0; i < -child; i++) {
+        const entry = (node + 2 + i) * 4;
+        const box = words[entry + 3];
+        expect(box * 16).toBeGreaterThanOrEqual(legacy.buffer.byteLength);
+        boxes.set(words[entry + 2], box);
+      }
+    };
+    visit(0);
+    const check = () => {
+      const expected = meshInstanceBounds(instances);
+      for (const [source, box] of boxes) {
+        expect(Array.from(floats.subarray(box * 4, box * 4 + 3))).toEqual(Array.from(expected.subarray(source * 6, source * 6 + 3)));
+        expect(Array.from(floats.subarray(box * 4 + 4, box * 4 + 7))).toEqual(Array.from(expected.subarray(source * 6 + 3, source * 6 + 6)));
+      }
+    };
+    check();
+    instances[3].bounds = bounds(30, 31);
+    mat4.scale(instances[3].transform, instances[3].transform, [2, 3, 4]);
+    const ranges = refitTLAS(flat, instances, blases, partial ? new Set([3]) : undefined);
+    check();
+    const boxByte = boxes.get(3)! * 16;
+    expect(ranges.tlasRanges.some(r => r.offset <= boxByte && r.offset + r.size >= boxByte + 32)).toBe(true);
+    expect(Array.from(boxes.values())).toHaveLength(instances.length);
   });
 });

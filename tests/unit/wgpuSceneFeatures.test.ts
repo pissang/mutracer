@@ -18,13 +18,13 @@ describe('WebGPU ray-trace uniforms', () => {
   });
 
   it.each(([20, 50] as const).flatMap(maxPathEvents =>
-    (['sobol', 'zsobol', 'random'] as SamplingPattern[]).map(pattern => ({maxPathEvents, pattern}))))(
-    'matches CPU uniforms for $pattern WGSL with a $maxPathEvents event budget', ({pattern, maxPathEvents}) => {
+    (['sobol', 'zsobol', 'random'] as SamplingPattern[]).flatMap(pattern => [false, true].map(perInstanceBounds => ({maxPathEvents, pattern, perInstanceBounds})))))(
+    'matches CPU uniforms for $pattern WGSL with $maxPathEvents events and leaf boxes=$perInstanceBounds', ({pattern, maxPathEvents, perInstanceBounds}) => {
     vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
     try {
       const definitions = makeShaderDataDefinitions(
         `override SAMPLING_PATTERN: u32 = ${samplingPatternCode(pattern)}u;\n` +
-        rayTraceCompute({ hasDisplacement: false, maxPathEvents, cameraProjectionInverse: true })
+        rayTraceCompute({ hasDisplacement: false, maxPathEvents, perInstanceBounds, cameraProjectionInverse: true })
       );
       const struct = definitions.structs.RayTraceUniform;
       const { buffer, views } = makeRayTraceUniform();
