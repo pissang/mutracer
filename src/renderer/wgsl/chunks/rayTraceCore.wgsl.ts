@@ -14,6 +14,7 @@ export default function rayTraceCore({
   hasVolumes = false,
   hasVolumeNoise = false,
   hasSceneAlpha = true,
+  cameraProjectionInverse = false,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
@@ -22,6 +23,7 @@ export default function rayTraceCore({
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
   hasSceneAlpha?: boolean;
+  cameraProjectionInverse?: boolean;
   caustics?: boolean;
   lightCapabilities?: number;
 }) {
@@ -258,7 +260,7 @@ struct CameraUniform {
   viewProjectionInv: mat4x4<f32>,
   viewInv: mat4x4<f32>,
   apertureRadius: f32,
-  focusDistance: f32,
+  focusDistance: f32,${cameraProjectionInverse ? '\n  projectionInv: mat4x4<f32>,' : ''}
 };
 
 ${hasVolumes ? /* wgsl */ `struct VolumeRecord {

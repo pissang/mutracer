@@ -5,6 +5,8 @@ import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 export interface WGPUShaderFeatures {
   hasDisplacement: boolean;
+  /** Browser camera extension; false preserves the native uniform layout. */
+  cameraProjectionInverse?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
