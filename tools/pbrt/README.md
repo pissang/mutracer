@@ -28,9 +28,12 @@ pixels are reported separately. Metrics alone do not establish noise equivalence
 `--noise` also renders PBRT seeds 0/1 and MuTracer sample blocks `[0,N)` and
 `[N,2N)` for noise estimates. MuTracer's blocks share a Sobol scramble; they are
 disjoint, not independent Monte Carlo replicas.
-The reference pixel filter is set to a box of radius 0.5. Film sensor exposure is
-removed from the reference HDR before comparison. Numerical reports never use the
-scene repository's preview images.
+The reference pixel filter is set to a box of radius 0.5. Before comparison,
+reference RGB is divided by `(iso / 100) * (shutterclose - shutteropen)`.
+MuTracer's raw HDR excludes display exposure; the viewer applies the imported
+exposure only to presentation. This normalization does not remove differences
+from an approximated sensor response. Numerical reports use rendered EXRs,
+not the scene repository's preview images.
 
 `--reuse-reference` reuses EXRs when input modification times, dimensions and spp
 match, saving CPU rendering time while testing importer changes. Use a fresh
@@ -63,7 +66,8 @@ copies to coexist in browser memory.
 
 `maxdepth` is clamped to 50 on WebGPU or 20 on WebGL, with a structured
 `path-depth` warning that reports the depth used. Scenes exceeding that limit
-are excluded from strict PBRT comparison. Transparent paths can reach the
+are excluded from strict PBRT comparison; raw metrics are still written.
+Transparent paths can reach the
 [path-event limit](../../docs/api.md#render) before the requested scattering depth.
 
 Approximations are excluded from strict material-region comparisons. Indirect
