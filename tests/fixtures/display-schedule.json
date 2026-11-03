@@ -1,4 +1,9 @@
 {
+  "browserWebGpuTilePrediction": {
+    "minimumTileSize": 8, "width": 32, "height": 32, "maximumColumns": 4, "maximumRows": 4,
+    "targetMs": 21, "minimumProportionalImprovement": 0.5, "budgetTolerance": 1.1,
+    "ineffectiveRefinementEvents": ["measure-full", "refine", "measure-flat", "rollback", "measure-flat", "retain", "reset", "retain", "invalidate", "refine"]
+  },
   "refillSampleTimesMs": [1, 40, 120],
   "refillRequiresQueuedSampling": true,
   "refillRequiresTileBudgetFit": true,

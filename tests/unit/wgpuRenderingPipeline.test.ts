@@ -1,4 +1,5 @@
 import Engine from '../../src/Engine';
+import schedule from '../fixtures/display-schedule.json';
 import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
@@ -51,7 +52,7 @@ const mocks = vi.hoisted(() => {
     setCamera() {}
     cameraChanged() { return false; }
     setJitter() {}
-    setSampleTiles() {}
+    setSampleTiles = vi.fn();
     getDiagnostics() { return {}; }
     getTargetMemoryBytes() { return 0; }
     releaseTarget() {}
@@ -388,11 +389,14 @@ describe('WebGPU realtime sampling', () => {
     pipeline.manager.dispose();
   });
 
-  it.each([false, true])('keeps single-sample stepping without a fast GPU measurement (timestamps=%s)', async timestamps => {
+  it.each([false, true])('keeps single-tile stepping without a fast GPU measurement (timestamps=%s)', async timestamps => {
     const pipeline = createPipeline(timestamps, 30_000_000n), camera = new Camera({projection: 'perspective'});
     await warmRealtime(pipeline, camera);
-    const before = pipeline.getTotalSamplesRendered(); pipeline.trace(camera, 128);
-    expect(pipeline.getTotalSamplesRendered()).toBe(before + 1);
+    const before = pipeline.getTotalSamplesRendered();
+    const submissions = mocks.TracePass.latest.createPass.mock.calls.length;
+    pipeline.trace(camera, 128);
+    expect(mocks.TracePass.latest.createPass.mock.calls.length - submissions).toBe(1);
+    expect(pipeline.getTotalSamplesRendered() - before).toBeLessThanOrEqual(1);
     await pipeline.flushDiagnostics(); pipeline.manager.dispose();
   });
 });
@@ -799,4 +803,31 @@ it('keeps internal WebGPU fixture methods out of Engine diagnostics', () => {
   Object.assign(engine, {_pipeline: target.manager, _info: {backend: 'webgpu'}, _gpuDevice: target.device});
   expectDataOnlyDiagnostics(engine.getDiagnostics());
   engine.dispose();
+});
+
+it('executes the schedule refinement rollback without changing sample or interleaved pixel order', async () => {
+  const row = schedule.browserWebGpuTilePrediction;
+  const pipeline = createPipeline(true, 80_000_000n), camera = new Camera({projection: 'perspective'});
+  pipeline.setSize(row.width, row.height);
+  pipeline.setOfflineRenderOptions({samplesPerBatch: 8, deferPostProcess: true, sampleSequenceOffset: 0});
+  const pass = mocks.TracePass.latest;
+  const grids: number[] = [];
+  const execution: {sample: number; grid: number[]}[] = [];
+  pass.createPass.mockImplementation(() => {
+    const grid = pass.setSampleTiles.mock.lastCall!;
+    grids.push(grid[0] * grid[1]);
+    execution.push({sample:pass.setSampleCount.mock.lastCall![0],grid});
+  });
+  for(let batch=0;batch<4;batch++){
+    pipeline.trace(camera, 32); await pipeline.flushDiagnostics();
+  }
+  expect(grids.slice(-8)).toEqual(Array(8).fill(1));
+  expect(grids).toContain(4);
+  for(let sample=0;sample<32;sample++){
+    const calls=execution.filter(call=>call.sample===sample);
+    const [columns,rows]=calls[0].grid;
+    expect(calls.map(call=>call.grid)).toEqual(Array.from({length:columns*rows},(_,index)=>[columns,rows,index%columns,Math.floor(index/columns)]));
+  }
+  expect(execution.map(call=>call.sample)).toEqual(execution.map(call=>call.sample).sort((a,b)=>a-b));
+  pipeline.manager.dispose();
 });

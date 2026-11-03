@@ -146,6 +146,8 @@ camera edits discard an unfinished sample and restart against the new inputs.
 `maxTiles` caps the sample's tile grid (rounded up to a rectangular grid), so a
 smaller value makes larger tiles. It does not cap work per frame or per call;
 use `timeBudgetMs` and the between-frame deadline to control queued work.
+With GPU timing available, WebGPU can keep tiles above `timeBudgetMs` when further
+subdivision brings little speedup, limiting the extra cost of offline rendering.
 
 ## Reading and exporting
 

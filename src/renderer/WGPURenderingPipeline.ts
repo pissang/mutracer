@@ -33,6 +33,7 @@ import {
 } from './wgsl/compose.frag.wgsl.js';
 import halton from './halton.js';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender.js';
+import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import type { ToneMappingParams } from './RenderingPipeline.js';
 import type { DisplayChannel } from './RenderingPipeline.js';
 import type { ColorRGB } from '../types.js';
@@ -310,7 +311,7 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
     }).query
     : undefined;
   const tileRender = makeTileRender();
-  const tileRenderWithPredict = timeQuery ? makeTileRenderWithPredict() : undefined;
+  const tileRenderWithPredict = timeQuery ? makeTileRenderWithPredict(WORKGROUP_SIZE) : undefined;
   tileRender.setDesiredMsPerTile(maxTimePerTile);
   tileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
 
@@ -592,7 +593,7 @@ output.color = color;
               estimatedFullFrameTimeMs: traceTime * submittedTileCount,
               tileCount: submittedTileCount
             };
-            submittedTileRenderWithPredict.setLastTraceTime(traceTime);
+            submittedTileRenderWithPredict.setLastTraceTime(traceTime, tiles[0], tiles[1]);
           }
           activeTimeQuery.resultBuffer.unmap();
 
