@@ -54,3 +54,17 @@ it('browser prediction events roll back a flat-cost refinement until invalidated
   else expect(sample()).toBe(event==='refine'?4:1);
  }
 });
+
+
+it('browser prediction events recognize an unattainable budget and retain the least grid', () => {
+ const row=schedule.browserWebGpuTilePrediction, model=row.unattainableBudget;
+ const tiles=makeTileRenderWithPredict(row.minimumTileSize);
+ tiles.setSize(model.width,model.height);tiles.setDesiredMsPerTile(row.targetMs);
+ for(const expected of model.sampleCounts){
+  const tile=tiles.nextTile(),count=tile.columns*tile.rows;
+  for(let i=1;i<count;i++)tiles.nextTile();
+  expect(count).toBe(expected);
+  tiles.setLastTraceTime(model.fixedMs+model.msPerPixel*model.width*model.height/count);
+ }
+ tiles.reset();expect(tiles.nextTile()).toMatchObject({columns:2,rows:2});
+});

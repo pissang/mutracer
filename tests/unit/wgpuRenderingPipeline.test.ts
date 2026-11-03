@@ -831,3 +831,38 @@ it('executes the schedule refinement rollback without changing sample or interle
   expect(execution.map(call=>call.sample)).toEqual(execution.map(call=>call.sample).sort((a,b)=>a-b));
   pipeline.manager.dispose();
 });
+
+
+it('executes the affine-budget schedule with complete coverage and unchanged pixel sample order', async () => {
+  const row=schedule.browserWebGpuTilePrediction, model=row.unattainableBudget;
+  let count=1;
+  const pipeline=createPipeline(true,()=>BigInt(Math.round((model.fixedMs+model.msPerPixel*model.width*model.height/count)*1e6)));
+  const camera=new Camera({projection:'perspective'});
+  pipeline.setSize(model.width,model.height);
+  pipeline.setOfflineRenderOptions({samplesPerBatch:8,deferPostProcess:true,sampleSequenceOffset:19});
+  const pass=mocks.TracePass.latest,execution:{sample:number;grid:number[]}[]=[];
+  pass.createPass.mockImplementation(()=>{
+    const grid=pass.setSampleTiles.mock.lastCall!;count=grid[0]*grid[1];
+    execution.push({sample:pass.setSampleCount.mock.lastCall![0],grid});
+  });
+  for(let batch=0;batch<model.sampleCounts.length;batch++){
+    pipeline.trace(camera,64);await pipeline.flushDiagnostics();
+  }
+  const perPixel=new Map<number,number[]>();
+  for(let sample=19;sample<83;sample++){
+    const calls=execution.filter(call=>call.sample===sample),[columns,rows]=calls[0].grid;
+    expect(columns*rows).toBe(model.sampleCounts[Math.floor((sample-19)/8)]);
+    const coverage=new Uint8Array(model.width*model.height);
+    for(const {grid:[,,tileX,tileY]} of calls){
+      for(let y=tileY;y<model.height;y+=rows)for(let x=tileX;x<model.width;x+=columns)coverage[y*model.width+x]++;
+      for(const pixel of [0,model.width*model.height-1,12345]){
+        if(pixel%model.width%columns===tileX&&Math.floor(pixel/model.width)%rows===tileY){
+          const order=perPixel.get(pixel)??[];order.push(sample);perPixel.set(pixel,order);
+        }
+      }
+    }
+    expect(coverage.every(n=>n===1)).toBe(true);
+  }
+  for(const order of perPixel.values())expect(order).toEqual(Array.from({length:64},(_,i)=>19+i));
+  pipeline.manager.dispose();
+});

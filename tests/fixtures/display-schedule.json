@@ -2,6 +2,7 @@
   "browserWebGpuTilePrediction": {
     "minimumTileSize": 8, "width": 32, "height": 32, "maximumColumns": 4, "maximumRows": 4,
     "targetMs": 21, "minimumProportionalImprovement": 0.5, "budgetTolerance": 1.1,
+    "unattainableBudget": {"width": 1024, "height": 768, "fixedMs": 50, "msPerPixel": 0.00134, "maximumFixedCostShare": 0.2, "maximumTileMs": 350, "detectionTolerance": 1.1, "minimumAreaChange": 0.2, "sampleCounts": [4, 16, 4, 4, 4, 4, 4, 4]},
     "ineffectiveRefinementEvents": ["measure-full", "refine", "measure-flat", "rollback", "measure-flat", "retain", "reset", "retain", "invalidate", "refine"]
   },
   "refillSampleTimesMs": [1, 40, 120],

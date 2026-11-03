@@ -247,6 +247,58 @@ function getInitialProbeSize(width: number, height: number) {
   ];
 }
 
+// Keep repeated kernel/longest-path cost below one fifth of the sample where
+// possible. If that conflicts with responsiveness, prioritize the tile ceiling.
+const maximumFixedCostShare = 0.2;
+// A throughput-oriented ceiling still leaves over 5x margin below a 2s TDR.
+// This is a prediction, not a guarantee for unusually expensive sample paths.
+const maximumUnattainableTileMs = 350;
+const unattainableBudgetTolerance = 1.1;
+// Nearby grids amplify timestamp noise when extrapolating to zero pixels.
+const minimumAffineAreaChange = 0.2;
+
+function getUnattainableBudgetGrid(
+  width: number, height: number, fixedMs: number, msPerPixel: number,
+  minimumTileSize: number, maxNumTiles: number, samplesPerFrame: number
+) {
+  const areaCost = msPerPixel * width * height;
+  const maxColumns = Math.max(1, Math.floor(width / minimumTileSize));
+  const maxRows = Math.max(1, Math.floor(height / minimumTileSize));
+  // If the fixed cost alone exceeds the ceiling, no subdivision can meet it.
+  // Avoid multiplying an unavoidable stall by an ever-growing tile count.
+  const required = fixedMs < maximumUnattainableTileMs
+    ? Math.ceil(areaCost / (maximumUnattainableTileMs - fixedMs)) : 1;
+  const minimumTiles = clamp(required, 1, maxColumns * maxRows);
+  let fewest: {columns: number; rows: number; count: number} | undefined;
+  let withinBoth: typeof fewest;
+  const better = (candidate: NonNullable<typeof fewest>, best: typeof fewest) =>
+    !best || candidate.count < best.count ||
+    (candidate.count === best.count &&
+      Math.abs(candidate.columns - candidate.rows) < Math.abs(best.columns - best.rows));
+  for (let columns = 1; columns <= Math.min(maxColumns, minimumTiles); columns++) {
+    const rows = Math.ceil(minimumTiles / columns);
+    if (rows > maxRows) continue;
+    const count = columns * rows, candidate = {columns, rows, count};
+    if (better(candidate, fewest)) fewest = candidate;
+    const tileMs = fixedMs + areaCost / count;
+    const fixedShare = count * fixedMs / (count * fixedMs + areaCost);
+    if (tileMs <= maximumUnattainableTileMs && fixedShare <= maximumFixedCostShare &&
+      better(candidate, withinBoth)) withinBoth = candidate;
+  }
+  // Fewer tiles also minimize fixed cost. If even the fewest grid that meets
+  // the ceiling exceeds the share limit, no grid can satisfy both constraints.
+  let {columns, rows, count: numTiles} = (withinBoth ?? fewest)!;
+  if (numTiles > maxNumTiles) {
+    // Preserve the existing rectangular rounding of the public maxTiles cap.
+    numTiles = maxNumTiles;
+    columns = Math.ceil(Math.sqrt(numTiles));
+    rows = Math.ceil(numTiles / columns);
+    numTiles = columns * rows;
+  }
+  return {columns, rows, numTiles, tileWidth: Math.ceil(width / columns),
+    tileHeight: Math.ceil(height / rows), samplesPerFrame};
+}
+
 export function makeTileRenderWithPredict(minimumTileSize = 1) {
   let numTiles = 1;
   let currentTile = -1;
@@ -274,10 +326,14 @@ export function makeTileRenderWithPredict(minimumTileSize = 1) {
   // dispatch can retain most of the longest path / fixed kernel cost.
   let refinement: { grid: ReturnType<typeof getPredictResult>; time: number } | undefined;
   let minimumPredictionSize = [0, 0];
+  let lastMeasurement: {area: number; time: number} | undefined;
+  let unattainableGrid: ReturnType<typeof getPredictResult> | undefined;
 
   function clearPredictionEvidence() {
     refinement = undefined;
     minimumPredictionSize = [0, 0];
+    lastMeasurement = undefined;
+    unattainableGrid = undefined;
   }
 
   function nextTile() {
@@ -306,7 +362,7 @@ export function makeTileRenderWithPredict(minimumTileSize = 1) {
         }
         refinement = undefined;
       }
-      const result = rollback?.grid ?? getPredictResult(
+      let result = rollback?.grid ?? getPredictResult(
         width,
         height,
         avgTileTime,
@@ -316,7 +372,30 @@ export function makeTileRenderWithPredict(minimumTileSize = 1) {
         minimumTileSize,
         minimumPredictionSize
       );
-      if (!rollback && measured && result.numTiles > numTiles) {
+      if (measured && columns > 0 && rows > 0 && !unattainableGrid) {
+        // Use nominal covered area, rather than ceil-rounded dispatch bounds:
+        // the interleaved grid covers every pixel exactly once per sample.
+        const point = {area: width * height / numTiles, time: avgTileTime};
+        if (lastMeasurement && Math.abs(point.area - lastMeasurement.area) >=
+          minimumAffineAreaChange * Math.max(point.area, lastMeasurement.area)) {
+          const slope = (point.time - lastMeasurement.time) / (point.area - lastMeasurement.area);
+          const fixed = point.time - slope * point.area;
+          if (Number.isFinite(slope) && slope > 0 && Number.isFinite(fixed) &&
+            fixed >= expectFrameTime * unattainableBudgetTolerance) {
+            unattainableGrid = getUnattainableBudgetGrid(width, height, fixed, slope,
+              minimumTileSize, maxNumTiles, result.samplesPerFrame);
+          }
+        }
+        lastMeasurement = point;
+      }
+      if (unattainableGrid) {
+        // Retain the decision until explicit invalidation. Re-fitting on its
+        // own probe/target grids can alternate counts as path costs fluctuate.
+        // Keep the original samplesPerFrame calculation independent of this policy.
+        result = {...unattainableGrid, samplesPerFrame: result.samplesPerFrame};
+        refinement = undefined;
+      }
+      if (!unattainableGrid && !rollback && measured && result.numTiles > numTiles) {
         refinement = {
           grid: {tileWidth, tileHeight, columns, rows, numTiles, samplesPerFrame},
           time: avgTileTime
