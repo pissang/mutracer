@@ -482,9 +482,9 @@ mod tests {
     }
     #[test]
     fn large_threaded_builds_keep_bounds_and_every_primitive() {
-        // Cross upstream's 50,000-primitive worker threshold for BLAS and TLAS.
+        // Cross the former 65,536-instance cap and upstream's worker threshold.
         // Serialized output must remain deterministic despite task scheduling.
-        let count = 65_536usize;
+        let count = 65_537usize;
         let mut positions = Vec::with_capacity(count * 9);
         let mut boxes = Vec::with_capacity(count * 6);
         for i in 0..count {

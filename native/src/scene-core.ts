@@ -281,7 +281,7 @@ type PreparedScene = ReturnType<typeof prepareSceneMeshes<MeshState>>;
 function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   const input = decodeScene(bytes, token), build = prepareSceneSources(input);
   for (const job of build.jobs) setGeometryBvh(job.geometry, buildBLAS(job.bvhGeometry, job.displacementScale, job.ranges));
-  const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!);
+  const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, undefined, true, false);
   return composeScene(input, prepared, buildTLAS(prepared.instances, prepared.blases), token);
 }
 function decodeScene(bytes: Uint8Array, token = 0) {
@@ -416,8 +416,8 @@ function packAtlas(table: MaterialData): Uint8Array {
 // plane is addressed by traversal record, independently of vertex regions.
 function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene) {
   const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
-  const vertexWords = prepared.geometry.vertexCount * layout.stride;
-  const records = hardware ? prepared.geometry.indexArray.length / 3 :
+  const vertexWords = prepared.geometries.reduce((n, g) => n + g.vertexCount, 0) * layout.stride;
+  const records = hardware ? prepared.geometries.reduce((n, g) => n + g.indexArray.length, 0) / 3 :
     (tlas.buffer.byteLength + prepared.blases.reduce((n, b) => n + b.bvh.buffer.byteLength, 0)) / 16;
   const attributes = new Uint32Array(vertexWords + (layout.constants.HAS_TRIANGLE_MATERIAL ? records : 0));
   layout.constants.MATERIALINDEX_OFF = vertexWords;
@@ -540,11 +540,12 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.
-  const sourceIndices = geometry.indexArray;
-  const sequential = new Uint32Array(sourceIndices.length);
+  const indexCount = prepared.geometries.reduce((n, g) => n + g.indexArray.length, 0);
+  const sequential = new Uint32Array(indexCount);
   if (hardware) {
-    for (const g of hardware.geometries) for (let i = g.indexOffset; i < g.indexOffset + g.indexCount; i++) {
-      sequential[i] = sourceIndices[i] - g.vertexOffset;
+    for (const source of prepared.geometries) {
+      const region = prepared.geometryRegions.get(source)!;
+      sequential.set(source.indexArray, region.indexOffset);
     }
   } else for (let i = 0; i < sequential.length; i++) sequential[i] = i;
   add(RESOURCE.INDICES, KIND.METADATA, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
@@ -581,7 +582,7 @@ function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBind
 }
 function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareScene {
   const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.instanceBindings, prepared.geometries.length);
-  const count = attributeLength(prepared.geometry.indexArray) / 3;
+  const count = prepared.geometries.reduce((n, g) => n + g.indexArray.length, 0) / 3;
   const records = new Uint32Array(build.jobs.some(j => !!j.ranges || j.displacementBias !== 0) ? count * 4 : 0), boxes: number[] = [], geometries: HardwareGeometry[] = [];
   for (const geometry of prepared.geometries) {
     const region = prepared.geometryRegions.get(geometry)!, indexCount = geometry.indexArray.length;
@@ -609,7 +610,7 @@ function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareSc
 export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Array {
   try {
     const input = decodeScene(bytes, token), build = prepareSceneSources(input);
-    const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, geometryKernelBounds, false);
+    const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, geometryKernelBounds, false, false);
     const hardware = hardwareScene(prepared, build);
     const primitiveOffsets = hardware.geometries.map(g => g.indexOffset / 3);
     const vertexOffsets = prepared.geometries.map(g => prepared.geometryRegions.get(g)!.vertexOffset);
@@ -663,7 +664,7 @@ function build_nativeSceneBlas(bytes: Uint8Array, token: number): Uint8Array {
   if (!state) throw new Error('Missing native scene construction');
   const bvhs = builtBvhs(bytes, state.build.jobs.length);
   for (let i = 0; i < bvhs.length; i++) setGeometryBvh(state.build.jobs[i].geometry, bvhs[i]);
-  const prepared = prepareSceneMeshes(state.input.meshes, mesh => state.build.sources.get(mesh)!);
+  const prepared = prepareSceneMeshes(state.input.meshes, mesh => state.build.sources.get(mesh)!, undefined, true, false);
   state.prepared = prepared; pendingBuilds.set(token, state);
   return instanceRequest(prepared);
 }
@@ -1125,73 +1126,62 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const prepared: PreparedScene = {...state.prepared, geometries, geometryRegions: regions, geometryStates, instanceBindings: bindings, emissiveBindings, blases};
   // An exact kernel record avoids scriptc's narrowing-copy semantics for the
   // richer preparation record. Explicitly transfer changed BLAS references back.
-  const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, geometries, geometryRegions: regions, geometryStates,
+  const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, mergedAttributes: false, geometries, geometryRegions: regions, geometryStates,
     instanceBindings: bindings, blases: blases.map(blas => ({bvh: blas.bvh}))};
-  const backups: {target: Float32Array; offset: number; data: Float32Array}[] = [];
+  const update = updatePreparedGeometries(kernel, new Set([geometry]), {softwareBvhs: !state.hardware, displacement});
+  for (let i = 0; i < blases.length; i++) blases[i].bvh = kernel.blases[i].bvh;
+  if (update.relocated || update.resized) throw new Error('Full commit required: changed software BLAS layout');
+  const dirty = dirtyPreparedInstanceIndices(state.bindings, changedMeshes, state.instances);
+  const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty); prepared.instances = instances;
+  if (!sameInstanceMembership(state.instances, instances)) throw new Error('Full commit required: changed geometry instance membership');
+  const writes = incrementalInstanceWrites({meshes, bindings, instances}, dirty, token, prepared);
+  const floatPatches: FloatGeometryPatch[] = [];
+  const uintPatches: UintGeometryPatch[] = [];
+  function add(id: number, data: Uint8Array, destination: number, kind: number) {
+    writes.records.push(resourceRecord(id, kind, data.byteLength, 0, 0, 0, 0)); writes.parts.push(data); writes.destinations.push(destination);
+  }
+  const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
   for (const index of affectedBlases) {
-    const region = regions.get(geometries[index])!;
-    for (const name of ['position', 'normal', 'tangent'] as const) {
-      const attribute = prepared.geometry[name]; if (!attribute) continue;
-      const offset = region.vertexOffset * attribute.itemSize;
-      backups.push({target: attribute.array, offset, data: attribute.array.slice(offset, offset + count * attribute.itemSize)});
+    const local = geometries[index], region = regions.get(local)!;
+    const data = new Uint32Array(local.vertexCount * layout.stride);
+    packCompactVertices(local, data, layout.stride, layout.offsets, 0, local.vertexCount, 0,
+      false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+    add(RESOURCE.ATTRIBUTES, new Uint8Array(data.buffer), region.vertexOffset * layout.stride * WORD_BYTES, KIND.BUFFER);
+  }
+  if (!state.hardware) for (const range of update.blases)
+    add(RESOURCE.BVH, new Uint8Array(range.blas.buffer), state.tlas.buffer.byteLength + range.offset, KIND.BUFFER);
+  if (!state.hardware && layout.constants.HAS_TRIANGLE_MATERIAL) {
+    let record = state.tlas.buffer.byteLength / 16;
+    for (let i = 0; i < blases.length; i++) {
+      if (affectedBlases.includes(i)) {
+        const source = geometries[i], region = regions.get(source)!;
+        const plane = new Uint32Array(blases[i].bvh.buffer.byteLength / 16);
+        packTriangleMaterials(source, region.materialIndices, blases[i].bvh.buffer, plane, 0);
+        add(RESOURCE.ATTRIBUTES, new Uint8Array(plane.buffer),
+          (Number(state.shader.constants.MATERIALINDEX_OFF) + record) * WORD_BYTES, KIND.BUFFER);
+      }
+      record += blases[i].bvh.buffer.byteLength / 16;
     }
   }
-  try {
-    const update = updatePreparedGeometries(kernel, new Set([geometry]), {softwareBvhs: !state.hardware, displacement});
-    for (let i = 0; i < blases.length; i++) blases[i].bvh = kernel.blases[i].bvh;
-    if (update.relocated || update.resized) throw new Error('Full commit required: changed software BLAS layout');
-    const dirty = dirtyPreparedInstanceIndices(state.bindings, changedMeshes, state.instances);
-    const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty); prepared.instances = instances;
-    if (!sameInstanceMembership(state.instances, instances)) throw new Error('Full commit required: changed geometry instance membership');
-    const writes = incrementalInstanceWrites({meshes, bindings, instances}, dirty, token, prepared);
-    const floatPatches: FloatGeometryPatch[] = backups.map(patch => ({target: patch.target, offset: patch.offset,
-      data: patch.target.slice(patch.offset, patch.offset + patch.data.length)}));
-    const uintPatches: UintGeometryPatch[] = [];
-    function add(id: number, data: Uint8Array, destination: number, kind: number) {
-      writes.records.push(resourceRecord(id, kind, data.byteLength, 0, 0, 0, 0)); writes.parts.push(data); writes.destinations.push(destination);
-    }
-    const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
-    for (const range of update.vertices) {
-      const data = new Uint32Array(range.count * layout.stride);
-      packCompactVertices(prepared.geometry, data, layout.stride, layout.offsets, range.first, range.count, 0,
-        false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
-      add(RESOURCE.ATTRIBUTES, new Uint8Array(data.buffer), range.first * layout.stride * WORD_BYTES, KIND.BUFFER);
-    }
-    if (!state.hardware) for (const range of update.blases)
-      add(RESOURCE.BVH, new Uint8Array(range.blas.buffer), state.tlas.buffer.byteLength + range.offset, KIND.BUFFER);
-    if (!state.hardware && layout.constants.HAS_TRIANGLE_MATERIAL) {
-      let record = state.tlas.buffer.byteLength / 16;
-      for (let i = 0; i < blases.length; i++) {
-        if (affectedBlases.includes(i)) {
-          const source = geometries[i], region = regions.get(source)!;
-          const plane = new Uint32Array(blases[i].bvh.buffer.byteLength / 16);
-          packTriangleMaterials(source, region.materialIndices, blases[i].bvh.buffer, plane, 0);
-          add(RESOURCE.ATTRIBUTES, new Uint8Array(plane.buffer),
-            (Number(state.shader.constants.MATERIALINDEX_OFF) + record) * WORD_BYTES, KIND.BUFFER);
-        }
-        record += blases[i].bvh.buffer.byteLength / 16;
+  if (state.hardware) {
+    for (const index of affectedBlases) {
+      const descriptor = state.hardware.geometries[index], local = geometries[index];
+      if (descriptor.procedural) {
+        const detail = displacement.get(local)!;
+        const bounds = displacementPrismAabbs(local, detail.scale), boundOffset = descriptor.boundsOffset * 6;
+        floatPatches.push({target: state.hardware.bounds, offset: boundOffset, data: bounds});
+        add(RESOURCE.DISPLACEMENT_BOUNDS, new Uint8Array(bounds.buffer), boundOffset * WORD_BYTES, KIND.METADATA);
+        const start = descriptor.indexOffset / 3 * 4, records = state.hardware.records.slice(start, start + descriptor.indexCount / 3 * 4);
+        for (let triangle = 0; triangle < descriptor.indexCount / 3; triangle++) records[triangle * 4 + 3] = quantizeDisplacementRange(detail.ranges[triangle * 2], detail.ranges[triangle * 2 + 1]);
+        uintPatches.push({target: state.hardware.records, offset: start, data: records}); add(RESOURCE.BVH, new Uint8Array(records.buffer), start * WORD_BYTES, KIND.BUFFER);
       }
     }
-    if (state.hardware) {
-      for (const index of affectedBlases) {
-        const descriptor = state.hardware.geometries[index], local = geometries[index];
-        if (descriptor.procedural) {
-          const detail = displacement.get(local)!;
-          const bounds = displacementPrismAabbs(local, detail.scale), boundOffset = descriptor.boundsOffset * 6;
-          floatPatches.push({target: state.hardware.bounds, offset: boundOffset, data: bounds});
-          add(RESOURCE.DISPLACEMENT_BOUNDS, new Uint8Array(bounds.buffer), boundOffset * WORD_BYTES, KIND.METADATA);
-          const start = descriptor.indexOffset / 3 * 4, records = state.hardware.records.slice(start, start + descriptor.indexCount / 3 * 4);
-          for (let triangle = 0; triangle < descriptor.indexCount / 3; triangle++) records[triangle * 4 + 3] = quantizeDisplacementRange(detail.ranges[triangle * 2], detail.ranges[triangle * 2 + 1]);
-          uintPatches.push({target: state.hardware.records, offset: start, data: records}); add(RESOURCE.BVH, new Uint8Array(records.buffer), start * WORD_BYTES, KIND.BUFFER);
-        }
-      }
-      add(RESOURCE.AS_CHANGED_BLASES, new Uint8Array(new Uint32Array(affectedBlases).buffer), 0, KIND.METADATA);
-    }
-    const sourceGeometries = state.geometries.slice(); sourceGeometries[words[1]] = geometry;
-    pendingGeometry.set(token, {meshes, bindings, blases, geometries: sourceGeometries, prepared, instances,
-      tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt, floatPatches, uintPatches});
-    return updatePacket(writes.records, writes.parts, writes.destinations);
-  } finally {for (const patch of backups) patch.target.set(patch.data, patch.offset);}
+    add(RESOURCE.AS_CHANGED_BLASES, new Uint8Array(new Uint32Array(affectedBlases).buffer), 0, KIND.METADATA);
+  }
+  const sourceGeometries = state.geometries.slice(); sourceGeometries[words[1]] = geometry;
+  pendingGeometry.set(token, {meshes, bindings, blases, geometries: sourceGeometries, prepared, instances,
+    tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt, floatPatches, uintPatches});
+  return updatePacket(writes.records, writes.parts, writes.destinations);
 }
 
 // Version1, source geometry index, vertex count, flags (1=normals,2=authored
@@ -1236,7 +1226,7 @@ function prepareLegacyGeometryUpdate(bytes: Uint8Array, token: number, native: b
     const binding = bindingsByMesh.get(mesh);
     return mesh.geometry === geometry ? {geometry, displacementScale: 0}
       : {geometry: binding!.geometry, displacementScale: binding!.displacementScale};
-  }, state.hardware ? computeGeometryBounds : undefined, !state.hardware);
+  }, state.hardware ? computeGeometryBounds : undefined, !state.hardware, false);
   if (prepared.materials.length !== state.ordered.length || prepared.materials.some((m, i) => m !== state.ordered[i])
     || (!state.hardware && !canUpdateGeometries(prepared, [geometry]))) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   geometry.position.array.set(f.subarray(4, 4 + count * 3));
@@ -1250,14 +1240,11 @@ function prepareLegacyGeometryUpdate(bytes: Uint8Array, token: number, native: b
   if (native && !state.hardware && !getGeometryBvh(geometry)!.buffer.byteLength) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   geometry.markVerticesUpdated();
   if (state.hardware) {
-    // Re-merge the changed CPU attributes and recompute only affected bounds.
-    prepared.geometry.position.array.set(geometry.position.array, prepared.geometryRegions.get(geometry)!.vertexOffset * 3);
-    prepared.geometry.normal.array.set(geometry.normal.array, prepared.geometryRegions.get(geometry)!.vertexOffset * 3);
-    if (geometry.tangent) prepared.geometry.tangent!.array.set(geometry.tangent.array, prepared.geometryRegions.get(geometry)!.vertexOffset * 4);
+    // Compact uploads read each source directly; only cached bounds need refresh.
     const bounds = computeGeometryBounds(geometry);
     for (const b of prepared.instanceBindings) if (b.geometry === geometry) b.bvhBounds = bounds;
   } else {
-    const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, geometries: prepared.geometries,
+    const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, mergedAttributes: false, geometries: prepared.geometries,
       geometryRegions: prepared.geometryRegions, geometryStates: prepared.geometryStates, instanceBindings: prepared.instanceBindings,
       blases: prepared.blases.map(blas => ({bvh: blas.bvh}))};
     updatePreparedGeometries(kernel, new Set([geometry]));
@@ -1399,7 +1386,7 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     if(state.hardware){
       if(cache.hardware!==state.hardware || !cache.hardwareIds){
         cache.hardware=state.hardware;
-        cache.hardwareIds=new Uint32Array(state.prepared.geometry.indexArray.length/3);
+        cache.hardwareIds=new Uint32Array(state.prepared.geometries.reduce((n,g)=>n+g.indexArray.length,0)/3);
         for(const geometry of state.hardware.geometries){
           for(let t=0;t<geometry.indexCount/3;t++)cache.hardwareIds[geometry.indexOffset/3+t]=t;
         }
