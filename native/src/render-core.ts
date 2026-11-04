@@ -138,3 +138,6 @@ export function bloomParameters(radius: number): Uint8Array { return prepareBloo
 
 import {viewerParameters as prepareViewer} from './viewer-core.js';
 export function viewerParameters(kind: number, bytes: Uint8Array): Uint8Array { return prepareViewer(kind, bytes); }
+
+import {preparationProfile as profilePreparation} from './preparation-profile.js';
+export function preparationProfile(on: number): Uint8Array { return profilePreparation(on); }

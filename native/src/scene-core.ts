@@ -1,3 +1,4 @@
+import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
 import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
 import {nativeCausticTarget} from './caustics.js';
@@ -285,6 +286,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   return composeScene(input, prepared, buildTLAS(prepared.instances, prepared.blases), token);
 }
 function decodeScene(bytes: Uint8Array, token = 0) {
+  preparationMark('decode.begin');
   const kernelHints = takeGeometryKernelHints(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
@@ -328,6 +330,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
     lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, iesProfiles));
   }
+  preparationMark('decode.end');
   return {width, height, environment, background, environmentSettings, grounded, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
     cameraUniform: sceneCameraParameters(bytes.subarray(u[H.CAMERA_OFFSET] * WORD_BYTES, u[H.CAMERA_OFFSET] * WORD_BYTES + C.WORDS * WORD_BYTES), width, height)};
@@ -448,7 +451,9 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const table = newMaterialData(prepared.materials, lights);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
+  preparationMark('compact.begin');
   const {layout: attributeLayout, attributes} = packNativeAttributes(prepared, tlas, hardware);
+  preparationMark('compact.end');
   const {stride, offsets} = attributeLayout;
   const stacks = getTraversalStackSizes(tlas, blases);
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
@@ -540,6 +545,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.
+  preparationMark('indices.begin');
   const indexCount = prepared.geometries.reduce((n, g) => n + g.indexArray.length, 0);
   const sequential = new Uint32Array(indexCount);
   if (hardware) {
@@ -549,6 +555,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     }
   } else for (let i = 0; i < sequential.length; i++) sequential[i] = i;
   add(RESOURCE.INDICES, KIND.METADATA, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
+  preparationMark('indices.end');
   const identity: number[] = [];
   let recordBase = tlas.buffer.byteLength / 16;
   for (let i = 0; i < blases.length; i++) {
@@ -566,7 +573,10 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
     textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE),
     shader: sceneShader});
-  return resourcePacket(records, parts, width, height);
+  preparationMark('packet.begin');
+  const packet = resourcePacket(records, parts, width, height);
+  preparationMark('packet.end');
+  return packet;
 }
 
 interface HardwareGeometry {opaque: boolean; indexOffset: number; indexCount: number; vertexOffset: number; vertexCount: number; procedural: boolean; dynamic: boolean; boundsOffset: number}
@@ -611,7 +621,9 @@ export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Arra
   try {
     const input = decodeScene(bytes, token), build = prepareSceneSources(input);
     const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, geometryKernelBounds, false, false);
+    preparationMark('mesh.end');
     const hardware = hardwareScene(prepared, build);
+    preparationMark('hardware.end');
     const primitiveOffsets = hardware.geometries.map(g => g.indexOffset / 3);
     const vertexOffsets = prepared.geometries.map(g => prepared.geometryRegions.get(g)!.vertexOffset);
     const tlas: FlattendBVH = {buffer: new ArrayBuffer(0), maxDepth: 0,

@@ -7,6 +7,7 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_preparation_profile(on: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_geometry_kernel_hints(
         input: *const u8,
         length: usize,
@@ -1746,11 +1747,18 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
         return Err("Invalid native scene construction result".into());
     }
+    let copy_started = crate::profiling::enabled().then(Instant::now);
     let packet = unsafe {
         let result = copy_core_result(pointer, size, size);
         mt_core_collect();
         result?
     };
+    if let Some(copy_started) = copy_started {
+        native_log!(
+            "{}",
+            json!({"nativeCoreCopyProfile":{"bytes":size,"copyCollectMs":copy_started.elapsed().as_secs_f64()*1000.,"epochMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()*1000.}})
+        );
+    }
     exception_packet(&packet)?;
     let w = Words(&packet);
     if w.u(0) != 1
@@ -1765,6 +1773,19 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
         .into());
     }
     Ok(packet)
+}
+fn preparation_profile(on: u32) -> Result<()> {
+    let mut pointer = std::ptr::null();
+    let mut size = 0;
+    unsafe {
+        mt_core_preparation_profile(on, &mut pointer, &mut size);
+        let bytes = copy_core_result(pointer, size, size)?;
+        mt_core_collect();
+        if on == 0 {
+            native_log!("{}", std::str::from_utf8(&bytes)?);
+        }
+    }
+    Ok(())
 }
 fn prepare_impl(
     bytes: &[u8],
@@ -1823,6 +1844,9 @@ fn prepare_impl_with_kernels_inner(
     let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
     if configured[..4] != 1u32.to_le_bytes() {
         return Err("Invalid render settings".into());
+    }
+    if profile {
+        preparation_profile(1)?;
     }
     let kernel_start = Instant::now();
     if let Some(hints) = native_kernels
@@ -1886,6 +1910,9 @@ fn prepare_impl_with_kernels_inner(
             mt_core_reset();
             mt_core_collect();
         }
+    }
+    if profile {
+        preparation_profile(0)?;
     }
     let packet = work?;
     let w = Words(&packet);
