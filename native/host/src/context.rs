@@ -917,19 +917,19 @@ fn commit_inner(
         Ok(())
     })?;
     let snapshot = snapshot.unwrap();
-    let resized;
-    let bytes = if snapshot.scene_only {
-        // Shared scenes have no frame resources; avoid image-sized zero buffers in AOT packing.
-        let mut copy = bytes.to_vec();
+    let descriptor = shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec()));
+    let prepared_descriptor = if snapshot.scene_only {
+        // Shared scenes omit frame allocations. Keep the original for sync.
+        let mut copy = descriptor.as_ref().clone();
         copy[layout::header::WIDTH * 4..layout::header::WIDTH * 4 + 4]
             .copy_from_slice(&1u32.to_le_bytes());
         copy[layout::header::HEIGHT * 4..layout::header::HEIGHT * 4 + 4]
             .copy_from_slice(&1u32.to_le_bytes());
-        resized = copy;
-        &resized[..]
+        Arc::new(copy)
     } else {
-        bytes
+        descriptor.clone()
     };
+    let bytes = prepared_descriptor.as_slice();
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<_> {
         let result = (|| -> Result<_> {
             let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
@@ -939,15 +939,16 @@ fn commit_inner(
             }
             snapshot.gpu.loss.check()?;
             let started = Instant::now();
-            let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
-                bytes,
-                snapshot.backend == 1
-                    && snapshot.gpu.hardware_ray_query
-                    && hardware::direct_input_enabled(),
-                snapshot.backend,
-                &settings,
-            )
-            .map_err(rejected)?;
+            let (mut scene, mut assets, mut retained) =
+                scene::prepare_retained_shared_with_settings(
+                    prepared_descriptor.clone(),
+                    snapshot.backend == 1
+                        && snapshot.gpu.hardware_ray_query
+                        && hardware::direct_input_enabled(),
+                    snapshot.backend,
+                    &settings,
+                )
+                .map_err(rejected)?;
             cancelled(&cancel)?;
             snapshot.gpu.loss.check()?;
             let prepared = Instant::now();
@@ -1132,7 +1133,7 @@ fn commit_inner(
             context.spare_buffers.extend(previous.buffers);
         }
         context.fallback_reason = fallback_reason;
-        context.descriptor = Some(shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec())));
+        context.descriptor = Some(descriptor);
         context.last_commit = COMMIT_FULL;
         context.job = None;
         context.failed = false;

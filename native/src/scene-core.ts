@@ -311,7 +311,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
     const hint = kernelHints && i < kernelHints.length ? kernelHints[i] : undefined;
-    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint));
+    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint, true));
   }
   const meshes: MeshState[] = [];
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
@@ -644,14 +644,14 @@ function build_nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {
   for (let i = 0; i < build.jobs.length; i++) {
     const job = build.jobs[i], geometry = job.bvhGeometry, sourceIndices = geometry.indexArray;
     const indices = sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices);
-    const positions = new Uint8Array(geometry.position.array.buffer);
-    const normals = job.ranges ? new Uint8Array(geometry.normal.array.buffer) : new Uint8Array(0);
+    const positions = new Uint8Array(geometry.position.array.buffer, geometry.position.array.byteOffset, geometry.position.array.byteLength);
+    const normals = job.ranges ? new Uint8Array(geometry.normal.array.buffer, geometry.normal.array.byteOffset, geometry.normal.array.byteLength) : new Uint8Array(0);
     const ranges = job.ranges ? new Uint8Array(job.ranges.buffer) : new Uint8Array(0);
     const data = new Uint8Array(16 + positions.length + normals.length + indices.byteLength + ranges.length);
     new Uint32Array(data.buffer).set([geometry.vertexCount, indices.length, Number(!!job.ranges), 0]);
     new Float32Array(data.buffer)[3] = job.displacementScale;
     let offset = 16;
-    for (const part of [positions, normals, new Uint8Array(indices.buffer), ranges]) {data.set(part, offset); offset += part.length;}
+    for (const part of [positions, normals, new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), ranges]) {data.set(part, offset); offset += part.length;}
     records.push(resourceRecord(i, KIND.BUFFER, data.byteLength, 0, 0, 0, 0)); parts.push(data);
   }
   return resourcePacket(records, parts, 0, 0);

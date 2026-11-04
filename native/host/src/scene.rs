@@ -1642,9 +1642,14 @@ pub(super) fn prepare_retained_with_settings(
     backend: u32,
     settings: &settings::RenderSettings,
 ) -> Result<(Scene, Assets, PreparedState)> {
-    let bytes = bytes.to_vec();
-    let hardware = hardware;
-    let backend = backend;
+    prepare_retained_shared_with_settings(Arc::new(bytes.to_vec()), hardware, backend, settings)
+}
+pub(super) fn prepare_retained_shared_with_settings(
+    bytes: Arc<Vec<u8>>,
+    hardware: bool,
+    backend: u32,
+    settings: &settings::RenderSettings,
+) -> Result<(Scene, Assets, PreparedState)> {
     let settings = *settings;
     runtime::call(move || {
         prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings)
@@ -1738,29 +1743,35 @@ pub(super) fn prepare_frame_inputs(
     prepare_impl(bytes, 0, false, false, settings, 17)
 }
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
-fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
+// The callback runs on the sole runtime owner, before any further AOT call.
+// Only Rust-owned results may leave it. Reset/collection also runs on errors.
+fn with_native_step<T>(
+    step: NativeStep,
+    bytes: &[u8],
+    token: u32,
+    read: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
+    struct Output;
+    impl Drop for Output {
+        fn drop(&mut self) {
+            unsafe {
+                mt_core_reset();
+                mt_core_collect();
+            }
+        }
+    }
     let mut pointer = std::ptr::null();
     let mut size = 0;
     unsafe {
         step(bytes.as_ptr(), bytes.len(), token, &mut pointer, &mut size);
     }
+    let _output = Output;
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
         return Err("Invalid native scene construction result".into());
     }
-    let copy_started = crate::profiling::enabled().then(Instant::now);
-    let packet = unsafe {
-        let result = copy_core_result(pointer, size, size);
-        mt_core_collect();
-        result?
-    };
-    if let Some(copy_started) = copy_started {
-        native_log!(
-            "{}",
-            json!({"nativeCoreCopyProfile":{"bytes":size,"copyCollectMs":copy_started.elapsed().as_secs_f64()*1000.,"epochMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()*1000.}})
-        );
-    }
-    exception_packet(&packet)?;
-    let w = Words(&packet);
+    let packet = unsafe { std::slice::from_raw_parts(pointer, size) };
+    exception_packet(packet)?;
+    let w = Words(packet);
     if w.u(0) != 1
         && w.u(0) != crate::layout::version::RESOURCE_WRITES
         && w.u(0) != crate::layout::version::TARGET_PACKET
@@ -1772,7 +1783,20 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
         }
         .into());
     }
-    Ok(packet)
+    let started = crate::profiling::enabled().then(Instant::now);
+    let result = read(packet);
+    if let Some(started) = started {
+        native_log!(
+            "{}",
+            json!({"nativeCoreReadProfile":{"bytes":size,
+            "readMs":started.elapsed().as_secs_f64()*1000.,
+            "epochMs":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()*1000.}})
+        );
+    }
+    result
+}
+fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
+    with_native_step(step, bytes, token, |packet| Ok(packet.to_vec()))
 }
 fn preparation_profile(on: u32) -> Result<()> {
     let mut pointer = std::ptr::null();
@@ -1838,8 +1862,8 @@ fn prepare_impl_with_kernels_inner(
     let started = Instant::now();
     validate(bytes)?;
     let validated = Instant::now();
-    // The ABI bytes are borrowed only during this call; the AOT decoder copies
-    // every retained array. Copy result bytes before reset or collection.
+    // The export wrapper owns its inbound bytes. Retained geometry views root
+    // that allocation; output resources are extracted before reset/collection.
     init_core();
     let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
     if configured[..4] != 1u32.to_le_bytes() {
@@ -1864,9 +1888,14 @@ fn prepare_impl_with_kernels_inner(
             json!({"nativeDataKernelProfile":{"completedWallMs":kernel_start.elapsed().as_secs_f64()*1000.}})
         );
     }
-    let work = (|| -> Result<Vec<u8>> {
+    let work = (|| -> Result<(Scene, Assets)> {
         if hardware {
-            let result = native_step(mt_core_native_hardware_scene, bytes, token)?;
+            let result = with_native_step(
+                mt_core_native_hardware_scene,
+                bytes,
+                token,
+                unpack_scene_packet,
+            )?;
             if profile {
                 native_log!(
                     "{}",
@@ -1886,7 +1915,12 @@ fn prepare_impl_with_kernels_inner(
         let packed = Instant::now();
         let tlas = tinybvh::jobs(&instances, true)?;
         let top = Instant::now();
-        let result = native_step(mt_core_native_scene_finish, &tlas, token)?;
+        let result = with_native_step(
+            mt_core_native_scene_finish,
+            &tlas,
+            token,
+            unpack_scene_packet,
+        )?;
         if profile {
             native_log!(
                 "{}",
@@ -1914,8 +1948,10 @@ fn prepare_impl_with_kernels_inner(
     if profile {
         preparation_profile(0)?;
     }
-    let packet = work?;
-    let w = Words(&packet);
+    work
+}
+fn unpack_scene_packet(packet: &[u8]) -> Result<(Scene, Assets)> {
+    let w = Words(packet);
     if w.u(ph::VERSION) == 2 {
         return Err("Native scene preparation rejected the scene".into());
     }
