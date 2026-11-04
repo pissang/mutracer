@@ -6,6 +6,8 @@ export const DEFAULT_MAX_TEXTURE_ARRAY_BYTES = 384 * 1024 * 1024;
 export interface MaterialTableOptions {
   /** Native binding arrays: retain separate images instead of packing atlas pages. Default false. */
   independentTextures?: boolean;
+  // Native descriptors can expose several logical samplers over one owned image.
+  textureSource?: (texture: TextureState) => object;
   maxTextureArrayBytes?: number;
   maxTextureArrayLayers?: number;
   maxTextureDimension2D?: number;
@@ -132,7 +134,7 @@ function packTextureAtlas(
 export function planTextureAtlas(textures: TextureState[], mapColorLinear: number[], options: MaterialTableOptions = {},
   floatStorage = mapColorLinear.some(value => !!value)) {
   const bytesPerPixel = floatStorage ? 8 : 4;
-  if (!textures.length) return { pages: [] as AtlasPage[], placements: [] as AtlasPlacement[],
+  if (!textures.length) return { independentTextures: !!options.independentTextures, pages: [] as AtlasPage[], placements: [] as AtlasPlacement[],
     width: 1, height: 1, floatStorage, bytesPerPixel, mapInfo: [] as number[],
     mapTransform: [] as number[], mapWrap: [] as number[], mapUvChannel: [] as number[], mapColorLinear,
     stats: {estimatedBytes: 0, height: 1, layers: 0, packTimeMs: 0, scale: 1,
@@ -140,10 +142,19 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
   if (options.independentTextures) {
     const budget = options.maxTextureArrayBytes ?? DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
     const dimension = options.maxTextureDimension2D ?? Infinity;
-    const extents = (scale: number) => textures.map((texture, index) => ({index, layer: index, x: 0, y: 0,
+    const sources = new Map<object, Map<boolean, number>>(), unique: number[] = [];
+    const layers = textures.map((texture, index) => {
+      const source = options.textureSource?.(texture) ?? texture.image;
+      let flips = sources.get(source);
+      if (!flips) { flips = new Map(); sources.set(source, flips); }
+      let layer = flips.get(texture.flipY);
+      if (layer === undefined) { layer = unique.length; flips.set(texture.flipY, layer); unique.push(index); }
+      return layer;
+    });
+    const extents = (scale: number) => textures.map((texture, index) => ({index, layer: layers[index], x: 0, y: 0,
       width: Math.max(1, Math.floor(texture.image.width * scale)), height: Math.max(1, Math.floor(texture.image.height * scale))}));
-    const bytes = (items: AtlasPlacement[]) => items.reduce((sum, item) => sum + item.width * item.height * bytesPerPixel, 0);
-    if (textures.length * bytesPerPixel > budget) throw new Error('Material textures cannot fit the budget even at 1×1.');
+    const bytes = (items: AtlasPlacement[]) => unique.reduce((sum, index) => sum + items[index].width * items[index].height * bytesPerPixel, 0);
+    if (unique.length * bytesPerPixel > budget) throw new Error('Material textures cannot fit the budget even at 1×1.');
     let scale = textures.reduce((s, t) => Math.min(s, dimension / Math.max(t.image.width, t.image.height)), 1);
     if (bytes(extents(scale)) > budget) {
       let low = 0, high = scale;
@@ -152,13 +163,13 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
     }
     const placements = extents(scale);
     const width = placements.reduce((n, p) => Math.max(n, p.width), 1), height = placements.reduce((n, p) => Math.max(n, p.height), 1);
-    return {pages: placements.map(p => ({nextY: p.height, placements: [p], shelves: [] as AtlasShelf[]})), placements,
-      width, height, floatStorage, bytesPerPixel, mapInfo: placements.flatMap(p => [p.width, p.height, p.index, 0]),
+    return {independentTextures: true, pages: unique.map(index => ({nextY: placements[index].height, placements: [placements[index]], shelves: [] as AtlasShelf[]})), placements,
+      width, height, floatStorage, bytesPerPixel, mapInfo: placements.flatMap(p => [p.width, p.height, p.layer, 0]),
       mapTransform: textures.flatMap(t => [...t.uvScale, ...t.uvOffset]),
       mapWrap: textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]),
       mapUvChannel: textures.map(t => t.uvChannel), mapColorLinear,
-      stats: {estimatedBytes: bytes(placements), width, height, layers: placements.length, packTimeMs: 0, scale,
-        sourcePixels: textures.reduce((n, t) => n + t.image.width * t.image.height, 0), textureCount: textures.length}};
+      stats: {estimatedBytes: bytes(placements), width, height, layers: unique.length, packTimeMs: 0, scale,
+        sourcePixels: unique.reduce((n, i) => n + textures[i].image.width * textures[i].image.height, 0), textureCount: textures.length}};
   }
   const maxTextureArrayLayers = options.maxTextureArrayLayers ?? Infinity;
   const maxTextureDimension2D = options.maxTextureDimension2D ?? Infinity;
@@ -244,7 +255,7 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
     ];
   });
 
-  return { pages: packed.pages, placements: packed.placements, width: atlasWidth, height: atlasHeight,
+  return { independentTextures: false, pages: packed.pages, placements: packed.placements, width: atlasWidth, height: atlasHeight,
     floatStorage, bytesPerPixel, mapInfo,
     mapTransform: textures.flatMap(texture => [texture.uvScale[0], texture.uvScale[1], texture.uvOffset[0], texture.uvOffset[1]]),
     mapWrap: textures.flatMap(texture => [textureWrapIndex(texture.wrapS), textureWrapIndex(texture.wrapT)]),

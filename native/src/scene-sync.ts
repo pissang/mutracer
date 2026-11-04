@@ -13,6 +13,7 @@ import {HEADER as H, TEXTURE as T, MATERIAL as MAT, GEOMETRY as G, MESH as M, BA
 import Geometry from '../../src/scene/Geometry.js';
 import MeshState from '../../src/scene/MeshState.js';
 import MaterialState from '../../src/scene/MaterialState.js';
+import type {TextureDataSource} from '../../src/scene/textureData.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
@@ -181,23 +182,20 @@ export class SyncedScene {
   private syncTextures(bytes: Uint8Array, u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean,
     unchanged: Uint8Array | undefined, hintOffset: number): Set<number> {
     const replaced = new Set<number>(), count = u[H.TEXTURE_COUNT];
+    const images = new Map<string, TextureDataSource>();
     for (let i = 0; i < count; i++) {
       if (unchanged && unchanged[hintOffset + i]) continue;
       const off = u[H.TEXTURE_OFFSET] + i * T.WORDS;
       const pixels = u[off + T.WIDTH] * u[off + T.HEIGHT] * (u[off + T.STORAGE] === 0 ? 1 : 4);
-      if (first || i >= old[H.TEXTURE_COUNT]) { this.textures[i] = decodeTexture(bytes, u, f, off); replaced.add(i); continue; }
+      if (first || i >= old[H.TEXTURE_COUNT]) { this.textures[i] = decodeTexture(bytes, u, f, off, images); replaced.add(i); continue; }
       const prior = old[H.TEXTURE_OFFSET] + i * T.WORDS;
-      if (sameRecord(old, prior, u, off, T.WORDS, [T.PIXELS], [pixels])) continue;
-      const texture = this.textures[i], fresh = decodeTexture(bytes, u, f, off);
+      if (old[prior + T.PIXELS] === u[off + T.PIXELS] && sameRecord(old, prior, u, off, T.WORDS, [T.PIXELS], [pixels])) continue;
+      const texture = this.textures[i], fresh = decodeTexture(bytes, u, f, off, images);
       const sameShape = old[prior + T.WIDTH] === u[off + T.WIDTH] && old[prior + T.HEIGHT] === u[off + T.HEIGHT] &&
         old[prior + T.STORAGE] === u[off + T.STORAGE];
-      if (!sameShape) { this.textures[i] = fresh; replaced.add(i); continue; }
-      if (!sameWords(old, old[prior + T.PIXELS], u, u[off + T.PIXELS], pixels)) {
-        const target = texture.pixels.data, source = fresh.pixels.data;
-        if (target instanceof Float32Array && source instanceof Float32Array) target.set(source);
-        else if (target instanceof Uint8Array && source instanceof Uint8Array) target.set(source);
-        else { this.textures[i] = fresh; replaced.add(i); continue; }
-        texture.markUpdated();
+      if (!sameShape || old[prior + T.PIXELS] !== u[off + T.PIXELS] ||
+        !sameWords(old, old[prior + T.PIXELS], u, u[off + T.PIXELS], pixels)) {
+        this.textures[i] = fresh; replaced.add(i); continue;
       }
       if (texture.wrapS !== fresh.wrapS) texture.wrapS = fresh.wrapS;
       if (texture.wrapT !== fresh.wrapT) texture.wrapT = fresh.wrapT;

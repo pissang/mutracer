@@ -542,7 +542,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             }
         }
     }
-    let mut pixels = 0;
+    let mut pixels = 0u64;
+    let mut image_spans = std::collections::HashSet::new();
     for i in 0..w.u(h::TEXTURE_COUNT) {
         let o = w.u(h::TEXTURE_OFFSET) + i * t::WORDS;
         let width = w.u(o + t::WIDTH);
@@ -559,8 +560,16 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         {
             return Err("Invalid raw texture descriptor".into());
         }
-        pixels += width * height;
-        if pixels as u64 > crate::texture_budget::texels() + 4_194_304 {
+        if image_spans.insert((
+            w.u(o + t::PIXELS),
+            width,
+            height,
+            w.u(o + t::STORAGE),
+            w.u(o + t::FLIP_Y),
+        )) {
+            pixels += width as u64 * height as u64;
+        }
+        if pixels > crate::texture_budget::texels() + 4_194_304 {
             return Err(
                 "Raw textures exceed the configured material plus environment input budget".into(),
             );

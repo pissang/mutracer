@@ -101,8 +101,8 @@ impl Model {
         &mut self,
         v: &Value,
         doc: &gltf::Document,
-        images: &[gltf::image::Data],
-        rgba: &[Vec<u8>],
+        images: &[super::decode::DecodedImage],
+        rgba: &[std::sync::Arc<[u8]>],
     ) -> Result<u32> {
         let (texture, uv, transform) = texture_info(v, doc)?;
         self.add_map(texture, uv, transform, images, rgba)
@@ -120,8 +120,8 @@ pub(super) fn apply(
     m: &mut Material,
     raw: &Value,
     doc: &gltf::Document,
-    images: &[gltf::image::Data],
-    rgba: &[Vec<u8>],
+    images: &[super::decode::DecodedImage],
+    rgba: &[std::sync::Arc<[u8]>],
 ) -> Result<Properties> {
     let mut properties = Properties::new();
     let extensions = &raw["extensions"];

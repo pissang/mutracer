@@ -133,6 +133,71 @@ fn independent_texture_packets_keep_pixels_and_validate_shaders() {
     }
 }
 
+#[test]
+fn shared_image_samplers_map_to_one_physical_texture() {
+    for float in [false, true] {
+        for variant in 0..3 {
+            let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&fixture([0, 2], float));
+            let off = words[h::TEXTURE_OFFSET] as usize;
+            words[off + t::WORDS + t::WIDTH] = if variant == 2 { 2 } else { 3 };
+            words[off + t::WORDS + t::HEIGHT] = if variant == 2 { 3 } else { 2 };
+            words[off + t::WORDS + t::PIXELS] = words[off + t::PIXELS];
+            words[off + t::WORDS + t::WRAP_S] = 1;
+            words[off + t::WORDS + t::UV_CHANNEL] = 1;
+            if variant == 1 {
+                words[off + t::WORDS + t::FLIP_Y] = 0;
+            }
+            let (scene, assets, _) = prepare(bytemuck::cast_slice(&words), [16384, 65536]);
+            let images: Vec<_> = scene
+                .textures
+                .iter()
+                .filter(|t| t.id >= r::MATERIAL_TEXTURE_BASE)
+                .collect();
+            assert_eq!(images.len(), if variant == 0 { 1 } else { 2 });
+            let total: usize = images
+                .iter()
+                .map(|t| assets[&AssetId::Packet(t.id)].len())
+                .sum();
+            assert_eq!(total, images.len() * 6 * if float { 8 } else { 4 });
+            let metadata: Vec<f32> =
+                bytemuck::pod_collect_to_vec(&assets[&AssetId::Packet(r::MAP_INFO)]);
+            assert_eq!(metadata[2], 0.);
+            assert_eq!(metadata[6], if variant == 0 { 0. } else { 1. });
+            let module =
+                naga::front::wgsl::parse_str(std::str::from_utf8(&assets[&scene.shader]).unwrap())
+                    .unwrap();
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn raw_texture_admission_charges_shared_spans_once() {
+    let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&fixture([0, 0], false));
+    let off = words.len();
+    let texels = 2048 * 2048;
+    let count = (crate::texture_budget::texels() / texels + 2) as usize;
+    words.resize(off + count * t::WORDS, 0);
+    let pixels = words.len();
+    words.resize(pixels + texels as usize, 0);
+    words[h::TEXTURE_OFFSET] = off as u32;
+    words[h::TEXTURE_COUNT] = count as u32;
+    for i in 0..count {
+        let o = off + i * t::WORDS;
+        words[o + t::WIDTH] = 2048;
+        words[o + t::HEIGHT] = 2048;
+        words[o + t::PIXELS] = pixels as u32;
+        words[o + t::UV_SCALE..o + t::UV_SCALE + 2].fill(1f32.to_bits());
+    }
+    words[h::LENGTH] = words.len() as u32;
+    scene::validate(bytemuck::cast_slice(&words)).unwrap();
+}
+
 fn large_fixture() -> Vec<u8> {
     let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&scene::small_fixture());
     let material = words[64..88].to_vec();

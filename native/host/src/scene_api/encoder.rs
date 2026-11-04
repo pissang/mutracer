@@ -19,6 +19,22 @@ pub struct Texture {
     pub offset: [f32; 2],
     pub wrap: [u32; 2],
 }
+// Allocation identity, never sampler identity or a full-image content hash.
+fn pixel_key(t: &Texture) -> (usize, usize, u32) {
+    if let Some(p) = &t.float_pixels {
+        (p.as_ptr() as usize, p.len(), 1)
+    } else {
+        (t.pixels.as_ptr() as usize, t.pixels.len(), 0)
+    }
+}
+pub(super) fn texture_texels(textures: &[Texture]) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    textures
+        .iter()
+        .filter(|t| seen.insert((pixel_key(t), t.width, t.height, t.flip_y)))
+        .map(|t| u64::from(t.width) * u64::from(t.height))
+        .sum()
+}
 /// Common OpenPBR values of [`super::OpenPbrMaterial`]; defaults match the browser
 /// `OpenPBRMaterial`.
 #[derive(Clone, PartialEq)]
@@ -120,7 +136,11 @@ impl SceneData<'_> {
         if self.meshes.iter().any(|m| m.instances.is_some()) {
             words += self.meshes.len() as u64 * crate::layout::batch::WORDS as u64;
         }
+        let mut pixels = std::collections::HashSet::new();
         for t in self.textures {
+            if !pixels.insert(pixel_key(t)) {
+                continue;
+            }
             words += t
                 .float_pixels
                 .as_ref()
@@ -224,17 +244,20 @@ impl SceneData<'_> {
             write_material(&mut w.0, o, &self.materials[i]);
             write_properties(&mut w.0, o, self.properties.get(i));
         }
+        let mut pixels = std::collections::HashMap::new();
         for (i, t) in self.textures.iter().enumerate() {
             let o = w.0[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
             w.0[o + tex::WIDTH] = t.width;
             w.0[o + tex::HEIGHT] = t.height;
             w.0[o + tex::STORAGE] = t.storage;
             w.0[o + tex::FLIP_Y] = u32::from(t.flip_y);
-            w.0[o + tex::PIXELS] = if let Some(p) = &t.float_pixels {
-                w.append_floats(p)
-            } else {
-                w.append_bytes(&t.pixels)
-            };
+            w.0[o + tex::PIXELS] = *pixels.entry(pixel_key(t)).or_insert_with(|| {
+                if let Some(p) = &t.float_pixels {
+                    w.append_floats(p)
+                } else {
+                    w.append_bytes(&t.pixels)
+                }
+            });
             write_texture_sampling(&mut w.0, o, t);
         }
         if environment.enabled {
@@ -538,8 +561,21 @@ impl SceneData<'_> {
                 }
             }
         }
+        let mut offsets = std::collections::HashMap::new();
+        let mut allocations = std::collections::HashMap::new();
         for (i, t) in self.textures.iter().enumerate() {
             let o = w[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
+            // A sampler copy may detach or join after a pixel edit. Re-encode
+            // before any write when the old and new alias partitions differ.
+            let offset = w[o + tex::PIXELS];
+            let key = pixel_key(t);
+            if offsets.insert(offset, key).is_some_and(|old| old != key)
+                || allocations
+                    .insert(key, offset)
+                    .is_some_and(|old| old != offset)
+            {
+                return false;
+            }
             if w[o + tex::WIDTH] != t.width
                 || w[o + tex::HEIGHT] != t.height
                 || w[o + tex::STORAGE] != t.storage
@@ -738,5 +774,84 @@ fn write_properties(
             });
         w[at + k * 4] = id;
         w[at + k * 4 + 1..at + k * 4 + 4].copy_from_slice(value);
+    }
+}
+
+#[cfg(test)]
+mod texture_reuse_tests {
+    use super::*;
+    fn texture() -> Texture {
+        Texture {
+            float_pixels: None,
+            storage: 0,
+            flip_y: false,
+            source: 0,
+            width: 2,
+            height: 1,
+            pixels: vec![13, 27, 41, 255, 60, 70, 80, 255].into(),
+            uv: 0,
+            scale: [1.; 2],
+            offset: [0.; 2],
+            wrap: [0; 2],
+        }
+    }
+    fn data(textures: &[Texture]) -> SceneData<'_> {
+        SceneData {
+            geometries: &[],
+            materials: &[],
+            properties: &[],
+            meshes: &[],
+            textures,
+            lights: vec![],
+            ies: vec![],
+        }
+    }
+    fn environment() -> Environment {
+        Environment {
+            enabled: false,
+            width: 0,
+            height: 0,
+            pixels: Arc::from([]),
+            background: false,
+            background_color: [0.; 3],
+            background_alpha: 1.,
+        }
+    }
+    #[test]
+    fn shared_payloads_encode_once_and_detach_before_patch_writes() {
+        for float in [false, true] {
+            let mut t = texture();
+            if float {
+                t.storage = 1;
+                t.float_pixels = Some(vec![0.5; 8].into());
+            }
+            let mut textures = [t.clone(), t.clone()];
+            textures[1].uv = 1;
+            textures[1].wrap = [1, 2];
+            let env = environment();
+            let camera = [0; 128];
+            let mut words = data(&textures).encode(&camera, [8, 8], &env);
+            let off = words[h::TEXTURE_OFFSET] as usize;
+            let a = words[off + tex::PIXELS];
+            assert_eq!(words[off + tex::WORDS + tex::PIXELS], a);
+            assert_eq!(words.len(), data(&textures).word_count(&env).unwrap());
+            assert_eq!(texture_texels(&textures), 2);
+            textures[1].offset = [0.25, 0.5];
+            assert!(data(&textures).patch(&mut words, &camera, [8, 8], &env));
+            let before = words.clone();
+            if float {
+                textures[1].float_pixels = Some(vec![0.75; 8].into());
+            } else {
+                textures[1].pixels = vec![100; 8].into();
+            }
+            assert!(!data(&textures).patch(&mut words, &camera, [8, 8], &env));
+            assert_eq!(words, before);
+            let mut detached = data(&textures).encode(&camera, [8, 8], &env);
+            assert_ne!(detached[off + tex::WORDS + tex::PIXELS], a);
+            textures[1] = textures[0].clone();
+            let before = detached.clone();
+            assert!(!data(&textures).patch(&mut detached, &camera, [8, 8], &env));
+            assert_eq!(detached, before);
+        }
     }
 }

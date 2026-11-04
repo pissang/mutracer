@@ -5,6 +5,14 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub(super) struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<[u8]>,
+}
 #[path = "meshopt.rs"]
 mod meshopt_decode;
 
@@ -12,7 +20,7 @@ mod meshopt_decode;
 type Import = (
     gltf::Document,
     Vec<gltf::buffer::Data>,
-    Vec<gltf::image::Data>,
+    Vec<DecodedImage>,
     bool,
     Vec<Value>,
 );
@@ -388,7 +396,7 @@ fn decode_image(
     buffers: &[gltf::buffer::Data],
     path: Option<&Path>,
     size: (u32, u32),
-) -> Result<(gltf::image::Data, bool)> {
+) -> Result<(DecodedImage, bool)> {
     use image::ImageDecoder;
     let data = source_bytes(source, json, buffers, path)?;
     let mut decoder = image::ImageReader::new(std::io::Cursor::new(data.as_ref()))
@@ -413,11 +421,10 @@ fn decode_image(
         image.into_rgba8()
     };
     Ok((
-        gltf::image::Data {
+        DecodedImage {
             width: rgba.width(),
             height: rgba.height(),
-            format: gltf::image::Format::R8G8B8A8,
-            pixels: rgba.into_raw(),
+            pixels: rgba.into_raw().into(),
         },
         resized,
     ))
@@ -430,8 +437,30 @@ fn decode_images(
     path: Option<&Path>,
     edge: u32,
     workers: usize,
-) -> Result<(Vec<gltf::image::Data>, bool)> {
+) -> Result<(Vec<DecodedImage>, bool)> {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    // Source identity is independent of glTF image/texture indices and sampler
+    // metadata. Equal embedded spans or URI strings decode and consume budget once.
+    let mut identities = std::collections::HashMap::new();
+    let mut unique = Vec::new();
+    let mut aliases = Vec::with_capacity(sources.len());
+    for source in sources {
+        let key = match source {
+            gltf::image::Source::View { view, .. } => format!(
+                "view:{}:{}:{}",
+                view.buffer().index(),
+                view.offset(),
+                view.length()
+            ),
+            gltf::image::Source::Uri { uri, .. } => format!("uri:{uri}"),
+        };
+        let index = *identities.entry(key).or_insert_with(|| {
+            unique.push(source.clone());
+            unique.len() - 1
+        });
+        aliases.push(index);
+    }
+    let sources = &unique;
     let dimensions = sources
         .iter()
         .map(|source| {
@@ -494,12 +523,55 @@ fn decode_images(
         images.push(image);
         resized |= reduced;
     }
-    Ok((images, resized))
+    Ok((
+        aliases.into_iter().map(|i| images[i].clone()).collect(),
+        resized,
+    ))
 }
 
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    #[test]
+    fn repeated_image_records_share_decoded_pixels_and_budget() {
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([21, 42, 63, 255]))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = encoded.into_inner();
+        let uri = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        );
+        // Different bufferView indices can describe the same source span.
+        let json = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":bytes.len()}],
+            "bufferViews":[{"buffer":0,"byteLength":bytes.len()},{"buffer":0,"byteLength":bytes.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png"},{"bufferView":1,"mimeType":"image/png"},
+                {"uri":uri},{"uri":uri}]});
+        let doc = gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
+        let sources: Vec<_> = doc.images().map(|i| i.source()).collect();
+        for workers in [1, 4] {
+            let (images, reduced) = decode_images(
+                &sources,
+                &json,
+                &[gltf::buffer::Data(bytes.clone())],
+                None,
+                8,
+                workers,
+            )
+            .unwrap();
+            assert!(!reduced);
+            assert_eq!(images.len(), 4);
+            assert!(Arc::ptr_eq(&images[0].pixels, &images[1].pixels));
+            assert!(Arc::ptr_eq(&images[2].pixels, &images[3].pixels));
+            assert!(!Arc::ptr_eq(&images[0].pixels, &images[2].pixels));
+            assert_eq!(images[0].pixels.as_ref(), images[2].pixels.as_ref());
+        }
+        assert_eq!(
+            image_sizes(&[(8, 4), (8, 4)], 64, 8).unwrap(),
+            [(8, 4), (8, 4)]
+        );
+    }
     #[test]
     fn parallel_images_preserve_pixels_order_and_resize_decisions() {
         let mut json =
@@ -567,7 +639,7 @@ pub(super) mod tests {
             assert_eq!(images.len(), expected.len());
             for (actual, expected) in images.iter().zip(&expected) {
                 assert_eq!((actual.width, actual.height), expected.dimensions());
-                assert_eq!(&actual.pixels, expected.as_raw());
+                assert_eq!(actual.pixels.as_ref(), expected.as_raw());
             }
             let (_, resized) =
                 decode_images(&sources[..1], &json, &buffers, None, 5, workers).unwrap();
@@ -711,7 +783,7 @@ pub(super) mod tests {
             &bytes,
         );
         let (_, _, images, _, _) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
-        assert_eq!(images[0].pixels, [255, 10, 0, 255]);
+        assert_eq!(images[0].pixels.as_ref(), [255, 10, 0, 255]);
         let model = crate::scene_api::gltf::Model::load(&path).unwrap();
         assert_eq!(
             model.geometries[0].positions,

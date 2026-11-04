@@ -1,3 +1,5 @@
+import {configureSceneParameters, retainedSceneParameters, releaseSceneParameters, sceneAtlasParameters} from '../../native/src/scene-core';
+import {SETTINGS as S, RESOURCE as R, PACKET_HEADER as PH, PACKET_ENTRY as PE} from '../../native/src/layout';
 import { describe, expect, it } from 'vitest';
 import { SyncedScene } from '../../native/src/scene-sync';
 import { HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B,
@@ -275,4 +277,51 @@ it('prepares tangents for a material-only edit even when geometry records are un
   expect(scene.geometries[0].tangent).toBeDefined();
   scene.accept();
   expect(scene.sync(new Uint8Array(u.buffer)).scene.meshes).toBe('none');
+});
+
+it('shares descriptor image storage and isolates a pixel edit to one sampler', () => {
+  const spec = base();
+  spec.textures.push({...spec.textures[0], wrap: [1, 2]});
+  spec.materials[1].map = 1;
+  const bytes = encode(spec), u = new Uint32Array(bytes.buffer), off = u[H.TEXTURE_OFFSET];
+  u[off + T.WORDS + T.PIXELS] = u[off + T.PIXELS];
+  const synced = new SyncedScene(); synced.sync(bytes); synced.accept();
+  expect(synced.textures[0].pixels).toBe(synced.textures[1].pixels);
+  expect(synced.textures[1].wrapS).toBe('clamp-to-edge');
+  spec.textures[1] = {...spec.textures[1], pixels: [...spec.textures[1].pixels]};
+  spec.textures[1].pixels[0] = 7;
+  const changes = synced.sync(encode(spec));
+  expect(synced.textures[0].pixels.data[0]).toBe(255);
+  expect(synced.textures[1].pixels.data[0]).toBe(7);
+  expect(synced.textures[0].pixels).not.toBe(synced.textures[1].pixels);
+  expect(changes.scene.materials).toContain(synced.materials[1]);
+});
+
+it('emits one bindless GPU image for logical samplers sharing pixels, and rebuilds on detach', () => {
+  const spec = base();
+  spec.textures.push({...spec.textures[0], wrap: [1, 2]}); spec.materials[1].map = 1;
+  const bytes = encode(spec), u = new Uint32Array(bytes.buffer), off = u[H.TEXTURE_OFFSET];
+  u[off + T.WORDS + T.PIXELS] = u[off + T.PIXELS];
+  const settings = new Uint8Array(S.WORDS * 4), su = new Uint32Array(settings.buffer);
+  su[S.STRUCT_SIZE] = settings.length; su[S.TEXTURE_BINDINGS] = 1;
+  const token = 94731;
+  try {
+    configureSceneParameters(settings, token);
+    const packet = retainedSceneParameters(bytes, token), words = new Uint32Array(packet.buffer);
+    expect(words[0]).toBe(VERSION.RESOURCE_PACKET);
+    const images: number[] = [];
+    for (let i = 0; i < words[PH.COUNT]; i++) {
+      const p = PH.WORDS + i * PE.WORDS;
+      if (words[p + PE.ID] >= R.MATERIAL_TEXTURE_BASE) images.push(p);
+    }
+    expect(images).toHaveLength(1);
+    expect(words[images[0] + PE.LENGTH]).toBe(16);
+    expect([words[images[0] + PE.WIDTH], words[images[0] + PE.HEIGHT]]).toEqual([2, 2]);
+    expect(new Uint32Array(sceneAtlasParameters(bytes, token).buffer)[0]).toBe(VERSION.RESOURCE_WRITES);
+    const samplerEdit = bytes.slice(), editWords = new Uint32Array(samplerEdit.buffer);
+    editWords[off + T.WORDS + T.WRAP_T] = 0;
+    expect(new Uint32Array(sceneAtlasParameters(samplerEdit, token).buffer)[0]).toBe(VERSION.RESOURCE_WRITES);
+    const detached = encode(spec); // Equal pixels with distinct ownership still detach.
+    expect([...new Uint32Array(sceneAtlasParameters(detached, token).buffer)]).toEqual([2, 2, 0, 0]);
+  } finally {releaseSceneParameters(token);}
 });

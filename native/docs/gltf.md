@@ -71,7 +71,9 @@ C a large error buffer.
   Each source image is limited to 64M pixels.
 - Material images keep their original dimensions when they fit the
   [scene texture limits](scene-format.md#limits), including the configured
-  material budget. Import warnings report any reduction.
+  material budget. Repeated references to the same embedded image span or image
+  URI share decoding and image memory, including across different samplers or UV
+  transforms. Import warnings report any reduction.
 - Node hierarchies up to 512 levels.
 - Large scenes usually need HWRT and substantial free memory. Auto selects HWRT
   when the device supports it; Software can reach its BVH budget earlier.

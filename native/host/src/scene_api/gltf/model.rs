@@ -210,7 +210,7 @@ impl Model {
                 "Unsupported optional extension is ignored: {extension}"
             ));
         }
-        let rgba: Vec<Vec<u8>> = images.iter().map(image_rgba).collect::<Result<_>>()?;
+        let rgba: Vec<Arc<[u8]>> = images.iter().map(|image| image.pixels.clone()).collect();
         for material in document.materials() {
             let raw = &raw_materials[material.index().unwrap()];
             let pbr = material.pbr_metallic_roughness();
@@ -473,11 +473,7 @@ impl Model {
             candidate.materials[material].maps[*slot] = u32::MAX;
         }
         candidate.compact_textures();
-        let used: u64 = candidate
-            .textures
-            .iter()
-            .map(|t| t.width as u64 * t.height as u64)
-            .sum();
+        let used = super::super::encoder::texture_texels(&candidate.textures);
         let count = images.iter().filter(|(_, image)| image.is_some()).count();
         // Material and environment images have separate allowances.
         let available = super::decode::material_texel_budget().saturating_sub(used);
@@ -653,8 +649,8 @@ impl Model {
         texture: gltf::Texture<'_>,
         uv: u32,
         transform: Option<([f32; 2], [f32; 2], f32, Option<u32>)>,
-        images: &[gltf::image::Data],
-        rgba: &[Vec<u8>],
+        images: &[super::decode::DecodedImage],
+        rgba: &[Arc<[u8]>],
     ) -> Result<u32> {
         self.add_map_with_budget(
             texture,
@@ -670,8 +666,8 @@ impl Model {
         texture: gltf::Texture<'_>,
         uv: u32,
         transform: Option<([f32; 2], [f32; 2], f32, Option<u32>)>,
-        images: &[gltf::image::Data],
-        rgba: &[Vec<u8>],
+        images: &[super::decode::DecodedImage],
+        rgba: &[Arc<[u8]>],
         budget: u64,
     ) -> Result<u32> {
         let (offset, scale, rotation, override_uv) =
@@ -689,7 +685,11 @@ impl Model {
             gltf::texture::WrappingMode::MirroredRepeat => 2,
         };
         let wrap = [mode(sampler.wrap_s()), mode(sampler.wrap_t())];
-        let source = texture.source().index();
+        let image_index = texture.source().index();
+        let source = rgba
+            .iter()
+            .position(|p| Arc::ptr_eq(p, &rgba[image_index]))
+            .unwrap();
         let image = &images[source];
         ensure!(
             image.width as u64 * image.height as u64 <= 67_108_864,
@@ -709,22 +709,26 @@ impl Model {
             "Material texture count exceeds 65535"
         );
         let id = self.textures.len() as u32;
-        // Decoding shares the budget among source images; copies of one image
-        // with different sampling can still exceed it.
-        let used: u64 = self
-            .textures
-            .iter()
-            .map(|t| t.width as u64 * t.height as u64)
-            .sum();
+        let shared = self.textures.iter().find(|t| t.source == source);
+        let used = super::super::encoder::texture_texels(&self.textures);
         let available = budget.saturating_sub(used);
         let texels = image.width as u64 * image.height as u64;
-        ensure!(available > 0, "Material texture budget is full");
-        let (width, height, pixels) = if texels > available {
+        ensure!(
+            shared.is_some() || available > 0,
+            "Material texture budget is full"
+        );
+        let (width, height, pixels) = if let Some(t) = shared {
+            (t.width, t.height, t.pixels.clone())
+        } else if texels > available {
             let factor = (available as f64 / texels as f64).sqrt();
             let width = (image.width as f64 * factor).floor().max(1.) as u32;
             let height = (image.height as f64 * factor).floor().max(1.) as u32;
-            let input = image::RgbaImage::from_raw(image.width, image.height, rgba[source].clone())
-                .context("Invalid decoded texture size")?;
+            let input = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                image.width,
+                image.height,
+                rgba[source].as_ref(),
+            )
+            .context("Invalid decoded texture size")?;
             if !self.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING) {
                 self.warnings.push(TEXTURE_BUDGET_WARNING.into());
             }
@@ -737,7 +741,8 @@ impl Model {
                     height,
                     image::imageops::FilterType::Triangle,
                 )
-                .into_raw(),
+                .into_raw()
+                .into(),
             )
         } else {
             (image.width, image.height, rgba[source].clone())
@@ -749,7 +754,7 @@ impl Model {
             source,
             width,
             height,
-            pixels: pixels.into(),
+            pixels,
             uv,
             scale,
             offset,
@@ -1140,44 +1145,6 @@ impl Model {
         Ok(())
     }
 }
-fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
-    use gltf::image::Format::*;
-    let (channels, bytes) = match image.format {
-        R8 => (1, 1),
-        R8G8 => (2, 1),
-        R8G8B8 => (3, 1),
-        R8G8B8A8 => (4, 1),
-        R16 => (1, 2),
-        R16G16 => (2, 2),
-        R16G16B16 => (3, 2),
-        R16G16B16A16 => (4, 2),
-        _ => bail!("Floating-point glTF material images are unsupported"),
-    };
-    let mut result = Vec::with_capacity(image.width as usize * image.height as usize * 4);
-    for pixel in image.pixels.chunks_exact(channels * bytes) {
-        let get = |i: usize| {
-            if bytes == 1 {
-                pixel[i]
-            } else {
-                (u16::from_ne_bytes([pixel[i * 2], pixel[i * 2 + 1]]) / 257) as u8
-            }
-        };
-        let rgb = if channels < 3 {
-            [get(0); 3]
-        } else {
-            [get(0), get(1), get(2)]
-        };
-        result.extend(rgb);
-        result.push(if channels == 2 {
-            get(1)
-        } else if channels == 4 {
-            get(3)
-        } else {
-            255
-        });
-    }
-    Ok(result)
-}
 
 impl Model {
     pub fn refresh_bounds(&mut self) {
@@ -1215,16 +1182,15 @@ mod tests {
     #[test]
     fn imported_maps_keep_independent_gltf_sampler_modes() {
         let document = gltf::Gltf::from_slice(br#"{"asset":{"version":"2.0"},"images":[{"uri":"unused.png"}],"samplers":[{"wrapS":33071,"wrapT":33648},{}],"textures":[{"source":0,"sampler":0},{"source":0,"sampler":1}]}"#).unwrap();
-        let image = gltf::image::Data {
-            pixels: vec![255; 4],
-            format: gltf::image::Format::R8G8B8A8,
+        let image = super::super::decode::DecodedImage {
+            pixels: vec![255; 4].into(),
             width: 1,
             height: 1,
         };
         let mut model =
             Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb"))
                 .unwrap();
-        let pixels = vec![vec![255; 4]];
+        let pixels = vec![image.pixels.clone()];
         for texture in document.textures() {
             model
                 .add_map(texture, 0, None, std::slice::from_ref(&image), &pixels)
@@ -1249,9 +1215,8 @@ mod tests {
             "samplers":samplers,"textures":textures});
         let document = gltf::Gltf::from_slice(&serde_json::to_vec(&json).unwrap()).unwrap();
         let (width, height) = (1500, 1500);
-        let image = gltf::image::Data {
-            pixels: vec![255; width * height * 4],
-            format: gltf::image::Format::R8G8B8A8,
+        let image = super::super::decode::DecodedImage {
+            pixels: vec![255; width * height * 4].into(),
             width: width as u32,
             height: height as u32,
         };
@@ -1260,30 +1225,27 @@ mod tests {
                 .unwrap();
         let pixels = vec![image.pixels.clone()];
         for texture in document.textures() {
-            if let Err(e) = model.add_map_with_budget(
-                texture,
-                0,
-                None,
-                std::slice::from_ref(&image),
-                &pixels,
-                12_582_912,
-            ) {
-                assert_eq!(e.to_string(), "Material texture budget is full");
-                break;
-            }
+            model
+                .add_map_with_budget(
+                    texture,
+                    0,
+                    None,
+                    std::slice::from_ref(&image),
+                    &pixels,
+                    2_250_000,
+                )
+                .unwrap();
         }
-        let used: u64 = model
-            .textures
-            .iter()
-            .map(|t| t.width as u64 * t.height as u64)
-            .sum();
-        assert!(used <= 12_582_912);
+        assert_eq!(model.textures.len(), 9);
         assert_eq!(
-            (model.textures[0].width, model.textures[0].height),
-            (1500, 1500)
+            super::super::super::encoder::texture_texels(&model.textures),
+            2_250_000
         );
-        assert!(model.textures.iter().any(|t| t.width < 1500));
-        assert!(model.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING));
+        for t in model.textures.iter() {
+            assert_eq!((t.width, t.height), (1500, 1500));
+            assert!(Arc::ptr_eq(&t.pixels, &pixels[0]));
+        }
+        assert!(!model.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING));
     }
 }
 

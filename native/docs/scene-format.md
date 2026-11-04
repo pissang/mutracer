@@ -140,8 +140,7 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
 - RGBA8 sRGB storage uses one packed word per pixel; RGBA32F uses four linear
   floats. Pixels are row-major.
 - Negative UV scales flip an axis; zero samples a constant coordinate.
-- The library packs all textures into an atlas and may scale large sources to
-  fit.
+- Textures may be scaled to fit the [GPU texture budget](#limits).
 
 ### Lights
 
@@ -190,3 +189,7 @@ changes only the camera is incremental.
   preserved when they fit the budget and the selected device's texture limits.
   Devices with enabled texture binding arrays use separate images; other devices
   use an atlas with at most 256 layers, whose packing can require more reduction.
+  With binding arrays, textures sharing pixel storage, dimensions, format and
+  vertical flip use one GPU image and count once toward the budget; UV transforms
+  and wrap modes remain independent. Editing one texture's pixels can create a
+  separate image and increase memory use.

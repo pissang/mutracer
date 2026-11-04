@@ -37,6 +37,7 @@ import {copyTLASForRefit, refitLinearInstances, refitTLAS, packLinearInstances} 
 import {attributeValue, attributeLength} from '../../src/scene/attributeData.js';
 import MeshState from '../../src/scene/MeshState.js';
 import MaterialState from '../../src/scene/MaterialState.js';
+import type {TextureDataSource} from '../../src/scene/textureData.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import { sceneCameraParameters } from './camera-core.js';
@@ -297,8 +298,9 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const width = u[H.WIDTH], height = u[H.HEIGHT];
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
+  const images = new Map<string, TextureDataSource>();
   for (let i = 0; i < u[H.TEXTURE_COUNT]; i++) {
-    const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
+    const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS, images);
     textures.push(texture); textureIds.set(texture, i);
   }
   const grounded = u[H.GROUNDED_BACKGROUND] ? f.slice(u[H.GROUNDED_BACKGROUND], u[H.GROUNDED_BACKGROUND] + 6) : new Float32Array(6);
@@ -394,9 +396,9 @@ function newMaterialData(materials: MaterialState[], lights: AnalyticLightState[
   const create = (independentTextures: boolean) => new MaterialData(materials, lights.map(light => light.type === 'RectLight' ? light.texture : undefined), texture => {
     if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
     return Number(texture.pixels.data instanceof Float32Array);
-  }, {independentTextures, maxTextureDimension2D: configuration.textureDimension, maxTextureArrayLayers: 256, maxTextureArrayBytes: configuration.textureBudgetBytes});
+  }, {independentTextures, textureSource: texture => (texture as PixelTexture).pixels, maxTextureDimension2D: configuration.textureDimension, maxTextureArrayLayers: 256, maxTextureArrayBytes: configuration.textureBudgetBytes});
   const table = create(configuration.textureBindings > 0);
-  return configuration.textureBindings > 0 && table.textures.length > configuration.textureBindings ? create(false) : table;
+  return configuration.textureBindings > 0 && table.atlas.pages.length > configuration.textureBindings ? create(false) : table;
 }
 function packMapInfo(table: MaterialData, mapCount: number): Float32Array {
   const mapInfo = new Float32Array(mapCount * 12);
@@ -497,7 +499,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(stacks.tlas, stacks.blas), ...attributeLayout.constants,
     ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
-  const independentTextures = configuration.textureBindings > 0 && table.textures.length <= configuration.textureBindings;
+  const independentTextures = table.atlas.independentTextures;
   const features = {independentTextures, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
@@ -543,8 +545,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const atlasFormat = atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM;
   if (independentTextures) {
     if (!table.textures.length) add(RESOURCE.MATERIAL_TEXTURE_BASE, KIND.TEXTURE, new Uint8Array([255, 255, 255, 255]), 1, 1, 1, FORMAT.RGBA8_UNORM);
-    for (const placement of atlas.placements) add(RESOURCE.MATERIAL_TEXTURE_BASE + placement.index, KIND.TEXTURE,
-      packIndependentTexture(table, placement.index), placement.width, placement.height, 1, atlasFormat);
+    for (const page of atlas.pages) {
+      const placement = page.placements[0];
+      add(RESOURCE.MATERIAL_TEXTURE_BASE + placement.layer, KIND.TEXTURE,
+        packIndependentTexture(table, placement.index), placement.width, placement.height, 1, atlasFormat);
+    }
   } else add(RESOURCE.ATLAS, KIND.TEXTURE, atlasBytes, atlas.width, atlas.height, atlasLayers, atlasFormat);
   add(RESOURCE.ENVIRONMENT, KIND.TEXTURE, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), environment?.width ?? 1, environment?.height ?? 1, 1, FORMAT.RGBA32_FLOAT);
   if (environmentDistribution) {
@@ -971,7 +976,11 @@ function samePixelTexture(a: PixelTexture, b: PixelTexture): boolean {
   if (a.pixels.width !== b.pixels.width || a.pixels.height !== b.pixels.height || a.flipY !== b.flipY || a.uvChannel !== b.uvChannel || a.wrapS !== b.wrapS || a.wrapT !== b.wrapT
     || !Object.is(a.uvScale[0], b.uvScale[0]) || !Object.is(a.uvScale[1], b.uvScale[1])
     || !Object.is(a.uvOffset[0], b.uvOffset[0]) || !Object.is(a.uvOffset[1], b.uvOffset[1])) return false;
-  const x = a.pixels.data, y = b.pixels.data;
+  return sameTexturePixels(a.pixels, b.pixels);
+}
+function sameTexturePixels(a: TextureDataSource, b: TextureDataSource): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.data.length !== b.data.length) return false;
+  const x = a.data, y = b.data;
   if (x instanceof Float32Array && y instanceof Float32Array) {
     for (let i = 0; i < x.length; i++) if (!Object.is(x[i], y[i])) return false;
     return true;
@@ -1025,9 +1034,24 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     if (previous.length !== u[H.TEXTURE_COUNT]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
     const swaps = new Map<TextureState, TextureState>(), restore = new Map<TextureState, TextureState>();
     const textureIds = new Map<TextureState, number>();
+    const images = new Map<string, TextureDataSource>();
+    const oldSources = new Map<object, number>(), newSources = new Map<object, number>();
     for (let i = 0; i < previous.length; i++) {
-      const old = previous[i], fresh = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
+      const old = previous[i];
+      let fresh = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS, images);
+      if (old instanceof PixelTexture) {
+        if (!oldSources.has(old.pixels)) oldSources.set(old.pixels, i);
+        if (!newSources.has(fresh.pixels)) newSources.set(fresh.pixels, i);
+        if (oldSources.get(old.pixels) !== newSources.get(fresh.pixels)) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+      }
       if (old instanceof PixelTexture && samePixelTexture(old, fresh)) { textureIds.set(old, i); continue; }
+      if (old instanceof PixelTexture && sameTexturePixels(old.pixels, fresh.pixels)) {
+        const shared = new PixelTexture(old.pixels);
+        shared.flipY = fresh.flipY; shared.uvChannel = fresh.uvChannel;
+        shared.uvScale = fresh.uvScale; shared.uvOffset = fresh.uvOffset;
+        shared.wrapS = fresh.wrapS; shared.wrapT = fresh.wrapT;
+        fresh = shared;
+      }
       textureIds.set(fresh, i); swaps.set(old, fresh); restore.set(fresh, old);
     }
     for (const m of state.ordered) {
@@ -1041,7 +1065,7 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     const table = newMaterialData(state.ordered, state.lights, sceneConfigurations.get(token) ?? defaultSceneConfiguration());
     const after = wgpuMaterialConstants(state.ordered, table, geometry, bevelSamples);
     const atlas = table.atlas, committed = state.table.atlas, layers = Math.max(1, atlas.pages.length);
-    if (!sameConstants(before, after) || (state.shader.features.independentTextures && atlas.placements.some((p, i) => p.width !== committed.placements[i]?.width || p.height !== committed.placements[i]?.height)) || atlas.width !== committed.width || atlas.height !== committed.height
+    if (atlas.independentTextures !== committed.independentTextures || !sameConstants(before, after) || (state.shader.features.independentTextures && atlas.placements.some((p, i) => p.layer !== committed.placements[i]?.layer || p.width !== committed.placements[i]?.width || p.height !== committed.placements[i]?.height)) || atlas.width !== committed.width || atlas.height !== committed.height
       || layers !== Math.max(1, committed.pages.length) || atlas.floatStorage !== committed.floatStorage) {
       swapSceneTextures(state, restore);
       return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
@@ -1062,7 +1086,10 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     const pixels = state.shader.features.independentTextures ? new Uint8Array(0) : packAtlas(table), layerBytes = atlas.width * atlas.height * atlas.bytesPerPixel;
     const format = atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM;
     if (state.shader.features.independentTextures) {
-      for (const p of atlas.placements) add(RESOURCE.MATERIAL_TEXTURE_BASE + p.index, KIND.TEXTURE, packIndependentTexture(table, p.index), p.width, p.height, format, 0);
+      for (const page of atlas.pages) {
+        const p = page.placements[0];
+        add(RESOURCE.MATERIAL_TEXTURE_BASE + p.layer, KIND.TEXTURE, packIndependentTexture(table, p.index), p.width, p.height, format, 0);
+      }
     } else for (let layer = 0; layer < layers; layer++)
       add(RESOURCE.ATLAS, KIND.TEXTURE, pixels.slice(layer * layerBytes, (layer + 1) * layerBytes), atlas.width, atlas.height, format, layer);
     add(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, FORMAT.RGBA32_FLOAT, 0);

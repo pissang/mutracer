@@ -7,6 +7,7 @@ import IESProfile, {parseIESProfile} from '../../src/scene/IESProfile.js';
 import {applyNativeMaterialProperties} from './material-properties.js';
 import Geometry, {Attribute} from '../../src/scene/Geometry.js';
 import MaterialState from '../../src/scene/MaterialState.js';
+import type {TextureDataSource} from '../../src/scene/textureData.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import {InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight} from '../../src/renderer/lightCore.js';
@@ -14,11 +15,17 @@ import type {AnalyticLightState} from '../../src/scene/lightState.js';
 
 const NONE = 0xffffffff;
 
-export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array, off: number): PixelTexture {
-  const data = u[off + T.STORAGE] === 0
-    ? new Uint8Array(bytes.buffer, bytes.byteOffset + u[off + T.PIXELS] * 4, u[off + T.WIDTH] * u[off + T.HEIGHT] * 4).slice()
-    : new Float32Array(f.slice(u[off + T.PIXELS], u[off + T.PIXELS] + u[off + T.WIDTH] * u[off + T.HEIGHT] * 4));
-  const texture = new PixelTexture({width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data});
+export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array, off: number, images?: Map<string, TextureDataSource>): PixelTexture {
+  const key = `${u[off + T.PIXELS]}:${u[off + T.WIDTH]}:${u[off + T.HEIGHT]}:${u[off + T.STORAGE]}`;
+  let image = images?.get(key);
+  if (!image) {
+    const data = u[off + T.STORAGE] === 0
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset + u[off + T.PIXELS] * 4, u[off + T.WIDTH] * u[off + T.HEIGHT] * 4).slice()
+      : f.slice(u[off + T.PIXELS], u[off + T.PIXELS] + u[off + T.WIDTH] * u[off + T.HEIGHT] * 4);
+    image = {width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data};
+    images?.set(key, image);
+  }
+  const texture = new PixelTexture(image);
   texture.flipY = !!u[off + T.FLIP_Y]; texture.uvChannel = u[off + T.UV_CHANNEL] === 1 ? 1 : 0;
   texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
   texture.wrapS = u[off + T.WRAP_S] === 1 ? 'clamp-to-edge' : u[off + T.WRAP_S] === 2 ? 'mirrored-repeat' : 'repeat';
