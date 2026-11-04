@@ -211,6 +211,14 @@
     {
       "export": "viewerParameters", "symbol": "mt_core_viewer_math", "params": ["u32", "bytes"],
       "returns": "bytes"
+    },
+    {
+      "export": "compactKernelParameters", "symbol": "mt_core_compact_kernel",
+      "params": ["bytes", "u32"], "returns": "bytes"
+    },
+    {
+      "export": "compactKernelReference", "symbol": "mt_core_compact_reference",
+      "params": ["bytes", "u32"], "returns": "bytes"
     }
   ]
 }

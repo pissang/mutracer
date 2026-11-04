@@ -1,3 +1,4 @@
+import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
 import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
 import {nativeTangentRequirements} from './scene-tangents.js';
 import {preparationMark} from './preparation-profile.js';
@@ -242,7 +243,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch (error) { retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error);}
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  releaseCompactKernel(token); aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -311,10 +312,14 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const tangentRequirements = nativeTangentRequirements(u, materials);
-  const geometries: Geometry[] = [];
+  const geometries: Geometry[] = [], compactSources: boolean[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
     const hint = kernelHints && i < kernelHints.length ? kernelHints[i] : undefined;
-    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint, true, tangentRequirements[i]));
+    const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS;
+    const geometry = decodeGeometry(u, f, off, hint, true, tangentRequirements[i]);
+    geometries.push(geometry);
+    // Generated attributes remain authoritative on the TS path.
+    compactSources.push(!!u[off + G.NORMAL] && (!geometry.tangent || !!u[off + G.TANGENT]));
   }
   const meshes: MeshState[] = [];
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
@@ -335,7 +340,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   }
   preparationMark('decode.end');
   return {width, height, environment, background, environmentSettings, grounded, qualityFlags, environmentDistribution,
-    materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
+    materials, geometries, compactSources, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
     cameraUniform: sceneCameraParameters(bytes.subarray(u[H.CAMERA_OFFSET] * WORD_BYTES, u[H.CAMERA_OFFSET] * WORD_BYTES + C.WORDS * WORD_BYTES), width, height)};
 }
 function prepareSceneSources(input: {meshes: MeshState[]; textureIds: Map<TextureState, number>}) {
@@ -428,14 +433,14 @@ function nativeAttributeLayout(prepared: PreparedScene, tlas: FlattendBVH, hardw
   layout.constants.MATERIALINDEX_OFF = vertexWords;
   return {layout, vertexWords, wordCount: vertexWords + (layout.constants.HAS_TRIANGLE_MATERIAL ? records : 0)};
 }
-function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene, output?: Uint32Array) {
+function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene, output?: Uint32Array, nativeGeometries?: Set<Geometry>) {
   const {layout, vertexWords, wordCount} = nativeAttributeLayout(prepared, tlas, hardware);
   const attributes = output ?? new Uint32Array(wordCount);
   if (attributes.length !== wordCount) throw new Error('Invalid native attribute span');
   let recordOffset = tlas.buffer.byteLength / 16;
   for (let i = 0; i < prepared.geometries.length; i++) {
     const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
-    packCompactVertices(geometry, attributes, layout.stride, layout.offsets, 0, geometry.vertexCount,
+    if (!nativeGeometries?.has(geometry)) packCompactVertices(geometry, attributes, layout.stride, layout.offsets, 0, geometry.vertexCount,
       region.vertexOffset, false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
     if (layout.constants.HAS_TRIANGLE_MATERIAL) {
       if (hardware) {
@@ -459,8 +464,26 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const table = newMaterialData(prepared.materials, lights);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
-  const {layout: attributeLayout, wordCount: attributeWords} = nativeAttributeLayout(prepared, tlas, hardware);
+  const {layout: attributeLayout, wordCount: attributeWords, vertexWords: attributeVertexWords} = nativeAttributeLayout(prepared, tlas, hardware);
   const {stride, offsets} = attributeLayout;
+  const nativeGeometries = new Set<Geometry>();
+  if (compactKernelEnabled(token)) {
+    // Header: version, stride, count, flags, UV/UV1/color/tangent offsets,
+    // vertex-region word count and three reserved words.
+    // Entries: descriptor geometry index, destination vertex, count, reserved.
+    const jobs = [1, stride, 0, Number(!!attributeLayout.constants.COLOR_FLOAT) | Number(!!attributeLayout.constants.NORMAL_FLOAT) * 2,
+      offsets[2], offsets[3], offsets[4], offsets[5], attributeVertexWords, 0, 0, 0];
+    const sources = new Map<Geometry, number>();
+    input.geometries.forEach((geometry, i) => sources.set(geometry, i));
+    for (const geometry of prepared.geometries) {
+      const source = sources.get(geometry);
+      if (source === undefined || !input.compactSources[source]) continue;
+      nativeGeometries.add(geometry);
+      jobs.push(source, prepared.geometryRegions.get(geometry)!.vertexOffset, geometry.vertexCount, 0);
+      jobs[2]++;
+    }
+    rememberCompactJobs(token, jobs);
+  }
   const stacks = getTraversalStackSizes(tlas, blases);
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(stacks.tlas, stacks.blas), ...attributeLayout.constants,
@@ -584,7 +607,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   preparationMark('packet.begin');
   const packet = resourcePacket(records, parts, width, height, output => {
     preparationMark('compact.begin');
-    packNativeAttributes(prepared, tlas, hardware, output.subarray(0, attributeWords));
+    packNativeAttributes(prepared, tlas, hardware, output.subarray(0, attributeWords), nativeGeometries);
     preparationMark('compact.end');
   });
   preparationMark('packet.end');

@@ -1,5 +1,6 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
+mod compact_kernel;
 mod geometry_kernels;
 use crate::layout::{
     WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
@@ -7,6 +8,13 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_compact_kernel(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_surface_hit(
         input: *const u8,
         length: usize,
@@ -1913,6 +1921,19 @@ fn prepare_impl_with_kernels_inner(
     } else {
         None
     };
+    let compact = native_kernels && std::env::var("MUTRACER_NATIVE_COMPACT").as_deref() != Ok("ts");
+    native_step(
+        mt_core_compact_kernel,
+        &u32::from(compact).to_le_bytes(),
+        token,
+    )?;
+    struct CompactCommand(u32);
+    impl Drop for CompactCommand {
+        fn drop(&mut self) {
+            let _ = native_step(mt_core_compact_kernel, &0u32.to_le_bytes(), self.0);
+        }
+    }
+    let _compact_command = CompactCommand(token);
     let kernel_start = Instant::now();
     if let Some(hints) = native_kernels
         .then(|| geometry_kernels::packet(bytes, hardware))
@@ -1977,6 +1998,13 @@ fn prepare_impl_with_kernels_inner(
         }
         Ok(result)
     })();
+    let work = work.and_then(|mut result| {
+        if compact {
+            let jobs = native_step(mt_core_compact_kernel, &2u32.to_le_bytes(), token)?;
+            compact_kernel::apply(bytes, &jobs, &mut result.1)?;
+        }
+        Ok(result)
+    });
     if work.is_err() {
         let mut pointer = std::ptr::null();
         let mut size = 0;

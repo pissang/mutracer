@@ -144,3 +144,8 @@ export function preparationProfile(on: number): Uint8Array { return profilePrepa
 
 import {sceneSurfaceHitParameters as surfaceHit} from './scene-core.js';
 export function sceneSurfaceHitParameters(bytes: Uint8Array, token: number): Uint8Array {return surfaceHit(bytes,token);}
+
+import {compactKernelParameters as compactCommand} from './compact-kernel.js';
+export function compactKernelParameters(bytes: Uint8Array, token: number): Uint8Array { return compactCommand(bytes, token); }
+import {compactKernelReference as compactReference} from './compact-kernel-reference.js';
+export function compactKernelReference(bytes: Uint8Array, normalFloat: number): Uint8Array { return compactReference(bytes, normalFloat); }

@@ -328,12 +328,21 @@ layout entries and pipeline keys.
   numeric-access report traces the production graph and rejects loop storage
   dispatch. Open unions, ordinary arrays and callbacks keep fallback
   implementations. Keep emitted compiler inputs separate from browser source.
-- Bounds and generated tangents are the two native O(N) kernels; all other scene
-  logic stays TS. Tangent normalization uses compiled TS `Math.hypot` to keep
-  rounding. With `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json`, host tests
-  compare kernel packets and production resources with compiled TS byte for
-  byte. Qualify a replacement kernel on complex scenes and the same concrete
-  specialization, not combined generic variants or procedural fixtures.
+- Bounds, generated tangents and compact vertex packing have Rust kernels.
+  TS owns layouts and the triangle-material plane; compact packing uses the
+  validated Rust descriptor and writes the final Rust attribute resource.
+  Geometries that need generated normals or tangents, and incremental writes, retain the
+  shared TS packer. Workers only access Rust-owned slices and join before
+  publication. Tangent normalization uses compiled TS `Math.hypot` to keep
+  rounding; compact encoding preserves f64 arithmetic and JS half-tie rounding.
+  `MUTRACER_NATIVE_COMPACT=ts|serial|parallel` selects the preparation diagnostic
+  path (default `parallel`, up to 12 available CPU threads for large inputs).
+  With `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json`, host tests compare
+  kernel packets and production resources with compiled TS byte for byte. The
+  `compact_large_scene_production_assets_match_ts` test accepts a local
+  GLB in `MUTRACER_COMPACT_MODEL` and reports a skip when unset. Qualify kernels
+  on complex scenes and the same concrete specialization, not only procedural
+  fixtures.
 - The optional MaterialTable whole-module probe has known compiler blockers;
   all 14 required modules must build and verify.
 
