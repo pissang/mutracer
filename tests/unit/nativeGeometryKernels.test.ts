@@ -80,3 +80,14 @@ it('accepts kernel hints for scenes beyond the old 4096 geometry ceiling', () =>
   expect(hints).toHaveLength(count);
   expect(hints[count - 1].bounds).toEqual(new Float32Array([0, 0, 0, 1, 1, 0]));
 });
+
+it('retains owned AOT tangent views after consuming their hint token', () => {
+  const values = new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+  let packet = encodeGeometryKernelHints([{vertexCount:3, bounds:undefined, tangents:values}], [3]);
+  expect(new Uint32Array(receiveGeometryKernelHints(packet, 74, true).buffer)[0]).toBe(1);
+  const hint = takeGeometryKernelHints(74)![0];
+  expect(hint.tangents!.buffer).toBe(packet.buffer);
+  packet = new Uint8Array(0);
+  expect(hint.tangents).toEqual(values);
+  expect(takeGeometryKernelHints(74)).toBeUndefined();
+});

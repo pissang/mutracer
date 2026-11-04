@@ -10,7 +10,7 @@ export interface GeometryKernelHint {
 const pending = new Map<number, GeometryKernelHint[]>();
 const boundsByPosition = new WeakMap<Float32Array, {version: number; bounds: Float32Array}>();
 
-export function receiveGeometryKernelHints(bytes: Uint8Array, token: number): Uint8Array {
+export function receiveGeometryKernelHints(bytes: Uint8Array, token: number, owned = false): Uint8Array {
   try {
     if (bytes.length < H.WORDS * 4 || bytes.length > 0xfffffffc || bytes.length % 4) throw new Error('Invalid kernel hints');
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
@@ -34,7 +34,7 @@ export function receiveGeometryKernelHints(bytes: Uint8Array, token: number): Ui
         next += count * 3;
       }
       hints.push({vertexCount: count, bounds: bounds ? f.slice(bounds, bounds + 6) : undefined,
-        tangents: tangent ? f.slice(tangent, tangent + count * 3) : undefined});
+        tangents: tangent ? (owned ? f.subarray(tangent, tangent + count * 3) : f.slice(tangent, tangent + count * 3)) : undefined});
     }
     if (next !== u.length) throw new Error('Unexpected kernel payload');
     pending.set(token, hints);

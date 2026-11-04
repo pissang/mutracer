@@ -5,8 +5,19 @@ use crate::layout::{geometry_kernel_entry as ke, geometry_kernel_header as kh};
 unsafe extern "C" {
     fn mt_core_geometry_kernel_hypot(x: f64, y: f64, z: f64) -> f64;
 }
-fn floats(w: &Words<'_>, offset: usize, count: usize) -> Vec<f32> {
-    (0..count).map(|i| w.f(offset + i)).collect()
+// Descriptors may arrive through an unaligned C byte slice. Borrow aligned
+// payloads and keep the same portable decoding fallback for other callers.
+fn floats<'a>(w: &Words<'a>, offset: usize, count: usize) -> Cow<'a, [f32]> {
+    let bytes = &w.0[offset * WORD_BYTES..(offset + count) * WORD_BYTES];
+    bytemuck::try_cast_slice(bytes)
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|_| Cow::Owned((0..count).map(|i| w.f(offset + i)).collect()))
+}
+fn indices<'a>(w: &Words<'a>, offset: usize, count: usize) -> Cow<'a, [u32]> {
+    let bytes = &w.0[offset * WORD_BYTES..(offset + count) * WORD_BYTES];
+    bytemuck::try_cast_slice(bytes)
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|_| Cow::Owned((0..count).map(|i| w.u(offset + i) as u32).collect()))
 }
 fn bounds(positions: &[f32]) -> [f32; 6] {
     let mut result = [
@@ -116,15 +127,40 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
     if !include_bounds && !any_tangents {
         return None;
     }
-    let mut result = vec![0u32; kh::WORDS + count * ke::WORDS];
-    result[kh::VERSION] = crate::layout::version::GEOMETRY_KERNELS as u32;
-    result[kh::COUNT] = count as u32;
+    let header = kh::WORDS + count * ke::WORDS;
+    let words = header
+        + (0..count)
+            .map(|i| {
+                let off = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
+                let needs = w.u(off + g::NORMAL) != 0
+                    && w.u(off + g::UV) != 0
+                    && w.u(off + g::TANGENT) == 0;
+                usize::from(include_bounds) * 6
+                    + if needs {
+                        w.u(off + g::VERTEX_COUNT) * 3
+                    } else {
+                        0
+                    }
+            })
+            .sum::<usize>();
+    // Write the wire buffer once; do not retain a second scene-sized u32 packet.
+    let mut result = Vec::<u8>::with_capacity(words * WORD_BYTES);
+    result.resize(header * WORD_BYTES, 0);
+    let write = |result: &mut Vec<u8>, at: usize, value: u32| {
+        result[at * WORD_BYTES..(at + 1) * WORD_BYTES].copy_from_slice(&value.to_le_bytes());
+    };
+    write(
+        &mut result,
+        kh::VERSION,
+        crate::layout::version::GEOMETRY_KERNELS as u32,
+    );
+    write(&mut result, kh::COUNT, count as u32);
     for i in 0..count {
         let off = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
         let vertices = w.u(off + g::VERTEX_COUNT);
         let entry = kh::WORDS + i * ke::WORDS;
-        result[entry + ke::SOURCE] = i as u32;
-        result[entry + ke::VERTEX_COUNT] = vertices as u32;
+        write(&mut result, entry + ke::SOURCE, i as u32);
+        write(&mut result, entry + ke::VERTEX_COUNT, vertices as u32);
         let need_tangents =
             w.u(off + g::NORMAL) != 0 && w.u(off + g::UV) != 0 && w.u(off + g::TANGENT) == 0;
         if !include_bounds && !need_tangents {
@@ -132,9 +168,10 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         }
         let positions = floats(&w, w.u(off + g::POSITION), vertices * 3);
         if include_bounds {
-            result[entry + ke::BOUNDS] = result.len() as u32;
+            let offset = (result.len() / WORD_BYTES) as u32;
+            write(&mut result, entry + ke::BOUNDS, offset);
             let start = profile.then(Instant::now);
-            result.extend(bounds(&positions).map(f32::to_bits));
+            result.extend_from_slice(bytemuck::cast_slice(&bounds(&positions)));
             if let Some(start) = start {
                 bounds_ms += start.elapsed().as_secs_f64() * 1000.;
             }
@@ -142,16 +179,13 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         if need_tangents {
             let normals = floats(&w, w.u(off + g::NORMAL), vertices * 3);
             let uvs = floats(&w, w.u(off + g::UV), vertices * 2);
-            let indices = (0..w.u(off + g::INDEX_COUNT))
-                .map(|j| w.u(w.u(off + g::INDICES) + j) as u32)
-                .collect::<Vec<_>>();
-            result[entry + ke::TANGENTS] = result.len() as u32;
+            let indices = indices(&w, w.u(off + g::INDICES), w.u(off + g::INDEX_COUNT));
+            let offset = (result.len() / WORD_BYTES) as u32;
+            write(&mut result, entry + ke::TANGENTS, offset);
             let start = profile.then(Instant::now);
-            result.extend(
-                tangents(&positions, &normals, &uvs, &indices)
-                    .into_iter()
-                    .map(f32::to_bits),
-            );
+            result.extend_from_slice(bytemuck::cast_slice(&tangents(
+                &positions, &normals, &uvs, &indices,
+            )));
             if let Some(start) = start {
                 tangents_ms += start.elapsed().as_secs_f64() * 1000.;
             }
@@ -164,8 +198,8 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
             json!({"nativeGeometryKernelProfile":{"boundsMs":bounds_ms,"tangentsMs":tangents_ms,"tangentCalls":tangent_calls}})
         );
     }
-    result[kh::LENGTH] = result.len() as u32;
-    Some(bytemuck::cast_slice(&result).to_vec())
+    write(&mut result, kh::LENGTH, words as u32);
+    Some(result)
 }
 
 #[cfg(test)]
@@ -260,6 +294,9 @@ mod tests {
         runtime::run(|| {
             init_core();
             let base = super::super::tests::input();
+            let mut unaligned = vec![0u8];
+            unaligned.extend_from_slice(&base);
+            compare(&unaligned[1..], true);
             let mut seed = 0x12345678u32;
             for case in 0..80 {
                 let count = 3 + case % 29;
