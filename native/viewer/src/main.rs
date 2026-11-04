@@ -831,12 +831,14 @@ impl Viewer {
         }
         let rotation_now = std::time::Instant::now();
         if self.auto_rotate && self.running && !ctx.input(|i| i.pointer.any_down()) {
-            self.camera.yaw -= rotation_now
-                .duration_since(self.rotation_clock)
-                .as_secs_f32()
-                .min(0.1)
-                * std::f32::consts::TAU
-                / 30.;
+            self.camera.orbit_yaw(
+                rotation_now
+                    .duration_since(self.rotation_clock)
+                    .as_secs_f32()
+                    .min(0.1)
+                    * std::f32::consts::TAU
+                    / 30.,
+            );
             self.camera_index = None;
             self.dirty(Change::Camera);
         }

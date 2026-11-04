@@ -346,9 +346,13 @@ impl Camera {
                 self.yaw.cos() * self.pitch.cos(),
             ) * self.distance
     }
+    pub fn orbit_yaw(&mut self, delta: f32) {
+        // A reflected camera reverses screen X; compensate the input as well.
+        self.yaw -= if self.mirrored { -delta } else { delta };
+    }
     pub fn orbit(&mut self, delta: [f32; 2]) {
         self.up = Vec3::Y;
-        self.yaw -= delta[0] * 0.008;
+        self.orbit_yaw(delta[0] * 0.008);
         self.pitch = (self.pitch + delta[1] * 0.008).clamp(-1.5, 1.5);
     }
     pub fn pan(&mut self, delta: [f32; 2]) {
@@ -516,6 +520,39 @@ mod tests {
         assert_eq!(camera.f_stop, 1.4);
         assert_eq!(camera.meters_per_unit, 0.01);
         assert_eq!(camera.focus_distance, camera.distance);
+    }
+    #[test]
+    fn orbit_drags_move_front_landmarks_in_the_pointer_direction() {
+        fn screen(camera: &Camera, point: Vec3) -> glam::Vec2 {
+            let bytes = camera.bytes([320, 240]);
+            let values: Vec<f32> = bytes[camera_wire::TRANSFORM * 4..]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            let local = Mat4::from_cols_slice(&values)
+                .inverse()
+                .transform_point3(point);
+            glam::Vec2::new(local.x, -local.y) / if camera.orthographic { 1. } else { -local.z }
+        }
+        for mirrored in [false, true] {
+            for orthographic in [false, true] {
+                for delta in [[10., 0.], [-10., 0.], [0., 10.], [0., -10.]] {
+                    let mut camera = Camera::fit(Vec3::ZERO, 2.);
+                    camera.set_view(Vec3::new(0., 0., 4.), Vec3::ZERO);
+                    camera.mirrored = mirrored;
+                    camera.orthographic = orthographic;
+                    let point = Vec3::Z;
+                    let before = screen(&camera, point);
+                    camera.orbit(delta);
+                    let movement = screen(&camera, point) - before;
+                    assert!(
+                        movement.dot(glam::Vec2::from_array(delta)) > 0.,
+                        "Drag reversed: mirrored={mirrored}, orthographic={orthographic}, delta={delta:?}, movement={movement:?}"
+                    );
+                    assert_eq!(camera.mirrored, mirrored);
+                }
+            }
+        }
     }
     #[test]
     fn camera_controls_preserve_the_affine_wire_contract() {
