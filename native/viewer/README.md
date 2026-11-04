@@ -198,8 +198,10 @@ platform differences for trying features or checking a new version.
 ### Lighting and background
 
 - **Environment**: intensity, tint and rotation. **Procedural sky** follows the
-  selected time of day (15:00 by default); drag the sun's path to change it or
-  double-click to reset. Choose the same sky and HDRI presets as the web viewer,
+  selected time of day (15:00 by default). Drag the sun's path in five-minute
+  steps or double-click to reset. With the dial focused, arrow keys move by
+  15 minutes, Shift + arrow by one hour, and Home/End select 5:30/18:30.
+  Choose the same sky and HDRI presets as the web viewer,
   or use **Upload .hdr** for a local Radiance equirectangular map. **Scene lighting**
   selects the model's environment when available. Imported scene lights remain
   active when changing environments or switching to Studio.

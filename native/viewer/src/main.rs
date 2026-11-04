@@ -36,6 +36,7 @@ mod shell;
 mod sky;
 mod studio;
 mod studio_smoke;
+mod sun_time;
 mod textures;
 mod theme;
 mod ui;

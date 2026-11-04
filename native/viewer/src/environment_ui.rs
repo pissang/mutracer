@@ -43,7 +43,7 @@ impl Viewer {
                             );
                         }
                     } else {
-                        sky_gradient(&painter, rect.shrink(1.), self.sky.time);
+                        crate::sun_time::swatch(&painter, rect.shrink(1.));
                     }
                     let caption = egui::Rect::from_min_max(
                         egui::pos2(rect.left() + 1., rect.bottom() - 22.),
@@ -131,7 +131,7 @@ impl Viewer {
             }
         }
         if self.environment.preset.as_deref() == Some("sky") {
-            sun_time(ui, &mut self.sky.time);
+            crate::sun_time::show(ui, &mut self.sky.time);
         }
         if let Some(active) = &self.environments.active {
             ui.add_space(6.);
@@ -190,170 +190,5 @@ impl Viewer {
             ui.small("Scene lights stay active with environment or studio lighting.");
         }
         changed
-    }
-}
-// The diagram uses the same equinox/40° latitude as skyParameters.ts. Keep
-// this UI-only calculation off the AOT scene queue during large model loads.
-fn sun_elevation(hours: f32) -> f32 {
-    (40_f32.to_radians().cos() * (15. * (hours - 12.)).to_radians().cos())
-        .asin()
-        .to_degrees()
-}
-fn sky_gradient(painter: &egui::Painter, rect: egui::Rect, hours: f32) {
-    let elevation = sun_elevation(hours);
-    let stops = [
-        (-6., [14, 22, 48], [52, 50, 82]),
-        (-1., [34, 52, 96], [196, 116, 98]),
-        (3., [52, 86, 148], [238, 160, 104]),
-        (10., [58, 104, 178], [236, 200, 160]),
-        (25., [56, 108, 194], [176, 204, 232]),
-        (90., [44, 98, 192], [168, 198, 232]),
-    ];
-    let i = (0..stops.len() - 2)
-        .find(|&i| elevation <= stops[i + 1].0)
-        .unwrap_or(stops.len() - 2);
-    let t = ((elevation - stops[i].0) / (stops[i + 1].0 - stops[i].0)).clamp(0., 1.);
-    let mix = |a: [u8; 3], b: [u8; 3], t: f32| {
-        egui::Color32::from_rgb(
-            (a[0] as f32 + (b[0] as f32 - a[0] as f32) * t).round() as u8,
-            (a[1] as f32 + (b[1] as f32 - a[1] as f32) * t).round() as u8,
-            (a[2] as f32 + (b[2] as f32 - a[2] as f32) * t).round() as u8,
-        )
-    };
-    let top = mix(stops[i].1, stops[i + 1].1, t);
-    let bottom = mix(stops[i].2, stops[i + 1].2, t);
-    let horizon = rect.top() + rect.height() * 0.73;
-    let mut mesh = egui::Mesh::default();
-    for (pos, color) in [
-        (rect.left_top(), top),
-        (rect.right_top(), top),
-        (egui::pos2(rect.left(), horizon), bottom),
-        (egui::pos2(rect.right(), horizon), bottom),
-    ] {
-        mesh.colored_vertex(pos, color);
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(1, 3, 2);
-    painter.add(egui::Shape::mesh(mesh));
-    painter.rect_filled(
-        egui::Rect::from_min_max(egui::pos2(rect.left(), horizon), rect.right_bottom()),
-        0.,
-        egui::Color32::from_rgb(0x35, 0x2f, 0x29),
-    );
-}
-fn sun_time(ui: &mut egui::Ui, hours: &mut f32) {
-    let (rect, mut response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 104.),
-        egui::Sense::click_and_drag(),
-    );
-    let before = *hours;
-    if response.clicked() || response.dragged() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            *hours = (5.5 + ((pos.x - rect.left()) / rect.width()).clamp(0., 1.) * 13.) * 12.;
-            *hours = hours.round() / 12.;
-        }
-        response.request_focus();
-    }
-    if response.double_clicked() {
-        *hours = 15.;
-    }
-    if response.has_focus() {
-        ui.input(|i| {
-            let step = if i.modifiers.shift { 1. } else { 0.25 };
-            if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowUp) {
-                *hours += step;
-            }
-            if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowDown) {
-                *hours -= step;
-            }
-            if i.key_pressed(egui::Key::Home) {
-                *hours = 5.5;
-            }
-            if i.key_pressed(egui::Key::End) {
-                *hours = 18.5;
-            }
-        });
-    }
-    *hours = hours.clamp(5.5, 18.5);
-    if *hours != before {
-        response.mark_changed();
-    }
-    response.on_hover_text("Drag to set the time of day; double-click to reset");
-    let painter = ui.painter_at(rect);
-    sky_gradient(&painter, rect, *hours);
-    let peak = sun_elevation(12.);
-    let horizon = rect.top() + 76.;
-    let point = |hours| {
-        egui::pos2(
-            rect.left() + (hours - 5.5) / 13. * rect.width(),
-            horizon - sun_elevation(hours) / peak * 62.,
-        )
-    };
-    static ELEVATIONS: std::sync::OnceLock<[f32; 65]> = std::sync::OnceLock::new();
-    let elevations = ELEVATIONS
-        .get_or_init(|| std::array::from_fn(|i| sun_elevation(5.5 + 13. * i as f32 / 64.)));
-    let path = elevations
-        .iter()
-        .enumerate()
-        .map(|(i, elevation)| {
-            egui::pos2(
-                rect.left() + i as f32 / 64. * rect.width(),
-                horizon - elevation / peak * 62.,
-            )
-        })
-        .collect();
-    painter
-        .with_clip_rect(egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2(rect.right(), horizon),
-        ))
-        .add(egui::Shape::line(
-            path,
-            egui::Stroke::new(1., egui::Color32::from_white_alpha(90)),
-        ));
-    let sun = point(*hours);
-    painter.circle_filled(
-        sun,
-        14.,
-        egui::Color32::from_rgba_unmultiplied(255, 210, 150, 35),
-    );
-    painter.circle_filled(sun, 6.5, egui::Color32::from_rgb(255, 241, 218));
-    for hour in [6., 12., 18.] {
-        painter.text(
-            egui::pos2(point(hour).x, rect.bottom() - 9.),
-            if hour == 6. {
-                egui::Align2::LEFT_CENTER
-            } else if hour == 18. {
-                egui::Align2::RIGHT_CENTER
-            } else {
-                egui::Align2::CENTER_CENTER
-            },
-            format!("{hour:.0}:00"),
-            egui::FontId::monospace(10.),
-            theme::MUTED,
-        );
-    }
-    let minutes = (*hours * 60.).round() as u32;
-    painter.text(
-        rect.right_top() + egui::vec2(-8., 8.),
-        egui::Align2::RIGHT_TOP,
-        format!("{}:{:02}", minutes / 60, minutes % 60),
-        egui::FontId::monospace(12.),
-        egui::Color32::WHITE,
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn diagram_elevation_matches_the_shared_sky() {
-        for hours in [5.5, 6., 9., 12., 15., 18., 18.5] {
-            let shared = mutracer_native_probe::viewer_math::sun_position(hours)[0];
-            assert!(
-                (sun_elevation(hours) - shared).abs() < 0.00002,
-                "Solar elevation at {hours}"
-            );
-        }
     }
 }

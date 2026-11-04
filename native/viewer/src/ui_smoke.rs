@@ -218,6 +218,75 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     }
     let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
     save(&gpu, &image, &out.join("environment.png"))?;
+    for (name, hours) in [
+        ("dawn", 5.5),
+        ("morning", 6.5),
+        ("noon", 12.),
+        ("afternoon", 15.),
+        ("sunset", 18.),
+        ("dusk", 18.5),
+    ] {
+        viewer.sky.time = hours;
+        let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        save(&gpu, &image, &out.join(format!("sky-{name}.png")))?;
+    }
+    let camera = viewer.camera.eye();
+    let dial = ctx.data(|d| {
+        d.get_temp::<egui::Rect>(egui::Id::new("sun-time-rect"))
+            .unwrap()
+    });
+    let pos = egui::pos2(dial.left() + dial.width() * 0.25, dial.center().y);
+    frame(
+        &mut viewer,
+        &ctx,
+        &gpu,
+        [1200, 800],
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    )?;
+    assert_eq!(
+        viewer.sky.time, 8.75,
+        "The inspector dial must react on pointer down"
+    );
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("sky-active.png"))?;
+    frame(
+        &mut viewer,
+        &ctx,
+        &gpu,
+        [1200, 800],
+        vec![
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+            egui::Event::Key {
+                key: egui::Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            },
+        ],
+    )?;
+    assert_eq!(viewer.sky.time, 9.);
+    assert_eq!(viewer.camera.eye(), camera, "Sky input moved the camera");
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    viewer.sky.time = 15.;
+    settle(&mut viewer, &ctx, &gpu)?;
     let image = frame(&mut viewer, &ctx, &gpu, [800, 600], vec![])?;
     save(&gpu, &image, &out.join("environment-narrow.png"))?;
     for stage in loading::Stage::ALL {
