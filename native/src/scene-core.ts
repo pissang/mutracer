@@ -559,10 +559,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.PRIMITIVE_IDS, KIND.METADATA, new Uint8Array(new Uint32Array(identity).buffer), 0, 0, 0, 0);
   if (hardware) {
     add(RESOURCE.DISPLACEMENT_BOUNDS, KIND.METADATA, new Uint8Array(hardware.bounds.buffer), 0, 0, 0, 0);
-    add(RESOURCE.AS_POSITIONS, KIND.METADATA, new Uint8Array(hardwarePositions(geometry).buffer), 0, 0, 0, 0);
-    const asIndices = new Uint32Array(sequential.length);
-    for (const g of hardware.geometries) for (let i = g.indexOffset; i < g.indexOffset + g.indexCount; i++) asIndices[i] = i - g.indexOffset;
-    add(RESOURCE.AS_INDICES, KIND.METADATA, new Uint8Array(asIndices.buffer), 0, 0, 0, 0);
+
   }
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
@@ -572,16 +569,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   return resourcePacket(records, parts, width, height);
 }
 
-// AS soup is generated in source primitive order, independently of any BVH.
-function hardwarePositions(geometry: Geometry): Float32Array {
-  const source = geometry.position.array, indices = geometry.indexArray;
-  const positions = new Float32Array(attributeLength(indices) * 3);
-  for (let i = 0; i < attributeLength(indices); i++) {
-    const vertex = attributeValue(indices, i) * 3;
-    positions[i * 3] = source[vertex]; positions[i * 3 + 1] = source[vertex + 1]; positions[i * 3 + 2] = source[vertex + 2];
-  }
-  return positions;
-}
 interface HardwareGeometry {opaque: boolean; indexOffset: number; indexCount: number; vertexOffset: number; vertexCount: number; procedural: boolean; dynamic: boolean; boundsOffset: number}
 interface HardwareScene {geometries: HardwareGeometry[]; records: Uint32Array; bounds: Float32Array}
 function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBinding[], hardware: HardwareScene): FlattendBVH {
@@ -701,6 +688,7 @@ function resourceRecord(id: number, kind: number, length: number, width: number,
 function resourcePacket(records: number[][], parts: Uint8Array[], width: number, height: number) {
   let size = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
   for (const part of parts) size += Math.ceil(part.length / WORD_BYTES) * WORD_BYTES;
+  if (size > 0xfffffffc) throw new Error(`Prepared resource packet requires ${size} bytes; 32-bit byte offsets allow at most 4294967292 bytes. Use HWRT or reduce scene size.`);
   const result = new Uint8Array(size), header = new Uint32Array(result.buffer);
   header[PH.VERSION] = VERSION.RESOURCE_PACKET; header[PH.COUNT] = records.length; header[PH.WIDTH] = width; header[PH.HEIGHT] = height;
   let offset = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
@@ -1182,7 +1170,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
           const start = descriptor.indexOffset / 3 * 4, records = state.hardware.records.slice(start, start + descriptor.indexCount / 3 * 4);
           for (let triangle = 0; triangle < descriptor.indexCount / 3; triangle++) records[triangle * 4 + 3] = quantizeDisplacementRange(detail.ranges[triangle * 2], detail.ranges[triangle * 2 + 1]);
           uintPatches.push({target: state.hardware.records, offset: start, data: records}); add(RESOURCE.BVH, new Uint8Array(records.buffer), start * WORD_BYTES, KIND.BUFFER);
-        } else add(RESOURCE.AS_POSITIONS, new Uint8Array(hardwarePositions(local).buffer), descriptor.indexOffset * 3 * WORD_BYTES, KIND.METADATA);
+        }
       }
       add(RESOURCE.AS_CHANGED_BLASES, new Uint8Array(new Uint32Array(affectedBlases).buffer), 0, KIND.METADATA);
     }
@@ -1279,7 +1267,6 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
   const packedInstances = new Uint8Array(Math.max(instanceBytes.length, WGPU_SCENE_BUFFER_MIN_BYTES)); packedInstances.set(instanceBytes);
-  const merged = prepared.geometry;
   const {attributes} = packNativeAttributes(prepared, tlas, state.hardware);
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, state.ordered);
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
@@ -1293,8 +1280,8 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
     [1,0,bvh.byteLength,0,0,0,0,0], [2,0,packedInstances.byteLength,0,0,0,0,0], [3,0,attributes.byteLength,0,0,0,0,0],
     [7,0,rt.buffer.byteLength,0,0,0,0,0], [8,0,lighting.lightUniform.byteLength,0,0,0,0,0],
     [24,1,lighting.lightData.byteLength,lighting.lightWidth,lighting.lightHeight,1,2,0],
-    [31,3,metadata.byteLength,0,0,0,0,0], [41,3,state.hardware ? hardwarePositions(merged).byteLength : 0,0,0,0,0,0]
-  ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata, state.hardware ? new Uint8Array(hardwarePositions(merged).buffer) : new Uint8Array(0)]);
+    [31,3,metadata.byteLength,0,0,0,0,0]
+  ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata]);
 }
 
 // Match the browser's environment intensity semantics; alpha is not radiance.

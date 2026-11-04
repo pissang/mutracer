@@ -328,7 +328,9 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         // Worst compact record: f32 position/normal/UVs/HDR RGB + tangent.
         // Include source indices and conservative software BVH/identity storage.
         let cost = v * 14 + n * 8;
-        geometry_words = geometry_words.checked_add(cost).ok_or("Prepared geometry size overflow")?;
+        geometry_words = geometry_words
+            .checked_add(cost)
+            .ok_or("Prepared geometry size overflow")?;
         geometry_costs.push(cost);
         if geometry_words > crate::memory_budget::bytes() / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
@@ -721,7 +723,6 @@ pub(super) struct PreparedData {
     light_count: std::sync::atomic::AtomicUsize,
     authoritative_shader: Vec<u8>,
     authoritative_indices: Vec<u8>,
-    authoritative_as_indices: Vec<u8>,
     authoritative_bounds: Vec<u8>,
     /// Whether the TS sync state mirrors the committed descriptor.
     synced: std::sync::atomic::AtomicBool,
@@ -754,7 +755,6 @@ pub(super) struct TargetPacket {
 pub(super) struct LightingUpdates {
     resources: Vec<(usize, u64, u32, u32, Vec<u8>)>,
     pub native_layout: Option<hardware::NativeLayout>,
-    pub hardware_positions: Option<Vec<u8>>,
     pub hardware_writes: Vec<(usize, u64, Vec<u8>)>,
     pub changed_blases: Option<Vec<usize>>,
 }
@@ -978,7 +978,7 @@ impl PreparedState {
             mt_core_native_geometry_begin,
             mt_core_native_geometry_finish,
             bytes,
-            &[1, 2, 3, 7, 8, 24, 31, 38, 41, 53],
+            &[1, 2, 3, 7, 8, 24, 31, 38, 53],
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
@@ -1011,10 +1011,6 @@ impl PreparedState {
             .collect();
         assets.insert(AssetId::Packet(33), self.authoritative_shader.clone());
         assets.insert(AssetId::Packet(35), self.authoritative_indices.clone());
-        assets.insert(AssetId::Packet(42), self.authoritative_as_indices.clone());
-        if let Some(positions) = &updates.hardware_positions {
-            assets.insert(AssetId::Packet(41), positions.clone());
-        }
         assets.insert(AssetId::Packet(38), self.authoritative_bounds.clone());
         let layout = updates
             .native_layout
@@ -1489,7 +1485,6 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
     }
     let mut updates = Vec::new();
     let mut native_layout = None;
-    let mut hardware_positions = None;
     let mut hardware_writes = Vec::new();
     let mut changed_blases = None;
     for i in 0..count {
@@ -1500,7 +1495,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             w.u(o + we::BYTE_OFFSET),
             w.u(o + we::DESTINATION),
         );
-        let metadata = matches!(id, 31 | 38 | 41 | 53);
+        let metadata = matches!(id, 31 | 38 | 53);
         // Texture destinations are array layers; the atlas is RGBA8 or RGBA16F.
         let texture = !metadata && id >= crate::layout::resource::ATLAS;
         let atlas = id == crate::layout::resource::ATLAS;
@@ -1542,16 +1537,13 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             );
             continue;
         }
-        if id == 38 || id == 41 {
+        if id == 38 {
             w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
             hardware_writes.push((
                 id,
                 destination as u64,
                 packet[offset..offset + length].to_vec(),
             ));
-            if id == 41 && destination == 0 {
-                hardware_positions = Some(packet[offset..offset + length].to_vec());
-            }
             continue;
         }
         if id == 31 {
@@ -1573,6 +1565,13 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             for at in (offset / WORD_BYTES..(offset + length) / WORD_BYTES).step_by(40) {
                 w.finite(at + 3, 37)?;
             }
+        }
+        if id == 3 {
+            hardware_writes.push((
+                id,
+                destination as u64,
+                packet[offset..offset + length].to_vec(),
+            ));
         }
         updates.push((
             id,
@@ -1614,7 +1613,6 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
     Ok(LightingUpdates {
         resources: updates,
         native_layout,
-        hardware_positions,
         hardware_writes,
         changed_blases,
     })
@@ -1666,7 +1664,6 @@ fn prepare_retained_with_settings_inner(
         indexed: hardware,
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
-        authoritative_as_indices: Vec::new(),
         authoritative_bounds: Vec::new(),
         synced: std::sync::atomic::AtomicBool::new(false),
         light_count: std::sync::atomic::AtomicUsize::new(if bytes.len() >= 32 {
@@ -1680,20 +1677,17 @@ fn prepare_retained_with_settings_inner(
             0
         },
     };
-    let (scene, assets) = prepare_impl(
+    let (scene, assets) = prepare_impl_with_kernels_inner(
         bytes,
         token,
         hardware,
         false,
         settings,
         if backend == 1 { 2 } else { 1 },
+        true,
     )?;
     state.authoritative_shader = assets
         .get(&AssetId::Packet(33))
-        .cloned()
-        .unwrap_or_default();
-    state.authoritative_as_indices = assets
-        .get(&AssetId::Packet(42))
         .cloned()
         .unwrap_or_default();
     state.authoritative_bounds = assets
