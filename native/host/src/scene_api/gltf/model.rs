@@ -32,6 +32,120 @@ pub struct Model {
     pub node_indices: Vec<usize>,
     pub mesh_names: Vec<String>,
 }
+// Collected on the import worker; no public Model state or global switch changes.
+struct ImportProfile {
+    bulk: bool,
+    defer_bounds: bool,
+    enabled: bool,
+    attributes_ms: f64,
+    local_bounds_ms: f64,
+    index_validation_ms: f64,
+    deformation_ms: f64,
+    bulk_attributes: usize,
+    bulk_bytes: usize,
+}
+impl ImportProfile {
+    fn start(&self) -> Option<std::time::Instant> {
+        self.enabled.then(std::time::Instant::now)
+    }
+}
+fn bulk_floats(
+    accessor: gltf::Accessor<'_>,
+    buffers: &[gltf::buffer::Data],
+    components: usize,
+) -> Option<Arc<[f32]>> {
+    // glTF components are little-endian. Other hosts/layouts keep gltf-rs reads.
+    if !cfg!(target_endian = "little")
+        || accessor.data_type() != gltf::accessor::DataType::F32
+        || accessor.normalized()
+        || accessor.sparse().is_some()
+        || accessor.count() == 0
+    {
+        return None;
+    }
+    let dimensions = match components {
+        2 => gltf::accessor::Dimensions::Vec2,
+        3 => gltf::accessor::Dimensions::Vec3,
+        4 => gltf::accessor::Dimensions::Vec4,
+        _ => return None,
+    };
+    if accessor.dimensions() != dimensions {
+        return None;
+    }
+    let view = accessor.view()?;
+    let element = components.checked_mul(4)?;
+    if view.stride().unwrap_or(element) != element {
+        return None;
+    }
+    let buffer = &buffers.get(view.buffer().index())?.0;
+    let view_bytes = buffer.get(view.offset()..view.offset().checked_add(view.length())?)?;
+    let length = accessor.count().checked_mul(element)?;
+    let bytes = view_bytes.get(accessor.offset()..accessor.offset().checked_add(length)?)?;
+    // One allocation/copy directly into the shared storage, without a Vec stage.
+    Some(Arc::from(bytemuck::try_cast_slice::<u8, f32>(bytes).ok()?))
+}
+fn float_attribute(
+    accessor: Option<gltf::Accessor<'_>>,
+    buffers: &[gltf::buffer::Data],
+    components: usize,
+    profile: &mut ImportProfile,
+    fallback: impl FnOnce() -> Option<Arc<[f32]>>,
+) -> Option<Arc<[f32]>> {
+    if profile.bulk {
+        if let Some(data) = accessor.and_then(|accessor| bulk_floats(accessor, buffers, components))
+        {
+            profile.bulk_attributes += 1;
+            profile.bulk_bytes += data.len() * 4;
+            return Some(data);
+        }
+    }
+    fallback()
+}
+fn local_bounds(positions: &[f32]) -> (Vec3, Vec3) {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for p in positions.chunks_exact(3) {
+        let p = Vec3::from_slice(p);
+        min = min.min(p);
+        max = max.max(p);
+    }
+    (min, max)
+}
+fn update_local_bounds(geometries: &mut [Geometry], workers: usize) {
+    if workers <= 1 || geometries.len() <= 1 {
+        for geometry in geometries {
+            (geometry.min, geometry.max) = local_bounds(&geometry.positions);
+        }
+        return;
+    }
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let next = AtomicUsize::new(0);
+    let results: Vec<_> = (0..geometries.len()).map(|_| OnceLock::new()).collect();
+    // Geometry input is immutable until every scoped worker has joined. Each
+    // vertex reduction retains its original order; only geometries run in parallel.
+    std::thread::scope(|scope| {
+        let geometries = &*geometries;
+        for _ in 0..workers.min(geometries.len()) {
+            let next = &next;
+            let results = &results;
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(geometry) = geometries.get(i) else {
+                        break;
+                    };
+                    let _ = results[i].set(local_bounds(&geometry.positions));
+                }
+            });
+        }
+    });
+    for (geometry, result) in geometries.iter_mut().zip(results) {
+        (geometry.min, geometry.max) = result.into_inner().expect("Missing import bounds result");
+    }
+}
 impl Model {
     // The viewer also uses this reader before inspecting its supported light extension.
     #[doc(hidden)]
@@ -45,6 +159,19 @@ impl Model {
         Self::load_bytes(&Self::read(path)?, Some(path))
     }
     pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Self> {
+        Self::load_bytes_with_options(
+            bytes,
+            path,
+            std::env::var("MUTRACER_NATIVE_GLTF_ATTRIBUTES").as_deref() != Ok("reader"),
+            std::env::var("MUTRACER_NATIVE_GLTF_BOUNDS").as_deref() != Ok("serial"),
+        )
+    }
+    fn load_bytes_with_options(
+        bytes: &[u8],
+        path: Option<&Path>,
+        bulk: bool,
+        parallel_bounds: bool,
+    ) -> Result<Self> {
         let started = crate::profiling::enabled().then(std::time::Instant::now);
         crate::memory_budget::check(bytes.len(), "Model file")?;
         let (document, buffers, images, resized, raw_materials) =
@@ -223,6 +350,17 @@ impl Model {
         for node in document.nodes().filter(|n| !children.contains(&n.index())) {
             world(node, Mat4::IDENTITY, &mut worlds, 0)?;
         }
+        let mut profile = ImportProfile {
+            bulk,
+            defer_bounds: parallel_bounds,
+            enabled: started.is_some(),
+            attributes_ms: 0.,
+            local_bounds_ms: 0.,
+            index_validation_ms: 0.,
+            deformation_ms: 0.,
+            bulk_attributes: 0,
+            bulk_bytes: 0,
+        };
         let mut cache = HashMap::new();
         for node in scene.nodes() {
             model.visit(
@@ -232,6 +370,7 @@ impl Model {
                 &mut cache,
                 &document,
                 &worlds,
+                &mut profile,
                 0,
             )?;
         }
@@ -239,6 +378,24 @@ impl Model {
             !model.meshes.is_empty(),
             "The selected scene has no triangle meshes"
         );
+        let vertices: usize = model.geometries.iter().map(|g| g.positions.len() / 3).sum();
+        let bounds_workers = if parallel_bounds && vertices >= 131_072 {
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get().min(12).min(model.geometries.len()).max(1))
+        } else {
+            1
+        };
+        if parallel_bounds {
+            let start = profile.start();
+            update_local_bounds(
+                Arc::make_mut(&mut model.geometries).as_mut_slice(),
+                bounds_workers,
+            );
+            if let Some(start) = start {
+                profile.local_bounds_ms += start.elapsed().as_secs_f64() * 1000.;
+            }
+        }
+        let world_bounds_started = profile.start();
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for mesh in &model.meshes {
@@ -248,6 +405,8 @@ impl Model {
                 max = max.max(p);
             }
         }
+        let world_bounds_ms =
+            world_bounds_started.map_or(0., |start| start.elapsed().as_secs_f64() * 1000.);
         model.center = (min + max) * 0.5;
         model.radius = (max - min).length() * 0.5;
         model.ground_y = min.y;
@@ -275,6 +434,9 @@ impl Model {
                 serde_json::json!({"nativeImportProfile": {
                 "decodeMs": decoded.duration_since(started).as_secs_f64()*1000.,
                 "modelMs": decoded.elapsed().as_secs_f64()*1000.,
+                "attributesMs": profile.attributes_ms, "localBoundsMs": profile.local_bounds_ms, "boundsWorkers": bounds_workers,
+                "worldBoundsMs": world_bounds_ms, "indexValidationMs": profile.index_validation_ms,
+                "deformationMs": profile.deformation_ms, "bulkAttributes": profile.bulk_attributes, "bulkBytes": profile.bulk_bytes,
                 "totalMs": started.elapsed().as_secs_f64()*1000.}})
             );
         }
@@ -585,6 +747,7 @@ impl Model {
         cache: &mut HashMap<(usize, usize, usize), usize>,
         document: &gltf::Document,
         worlds: &[Mat4],
+        profile: &mut ImportProfile,
         depth: usize,
     ) -> Result<()> {
         ensure!(
@@ -607,12 +770,20 @@ impl Model {
                 let index = if let Some(&index) = cache.get(&key) {
                     index
                 } else {
+                    let attributes_started = profile.start();
                     let reader = primitive.reader(|b| Some(&buffers[b.index()]));
-                    let positions: Vec<f32> = reader
-                        .read_positions()
-                        .context("Mesh is missing POSITION")?
-                        .flatten()
-                        .collect();
+                    let positions = float_attribute(
+                        primitive.get(&gltf::Semantic::Positions),
+                        buffers,
+                        3,
+                        profile,
+                        || {
+                            reader
+                                .read_positions()
+                                .map(|v| v.flatten().collect::<Vec<_>>().into())
+                        },
+                    )
+                    .context("Mesh is missing POSITION")?;
                     let input: Vec<u32> = reader
                         .read_indices()
                         .map(|i| i.into_u32().collect())
@@ -638,40 +809,77 @@ impl Model {
                             "Only triangle, triangle-strip and triangle-fan primitives are supported"
                         ),
                     }
-                    let colors: Vec<f32> = reader
-                        .read_colors(0)
-                        .map(|c| {
-                            let rgba: Vec<_> = c.into_rgba_f32().collect();
-                            if rgba.iter().any(|c| c[3] != 1.) {
-                                self.warnings.push(
-                                    "Vertex color alpha is ignored; RGB is preserved.".into(),
-                                );
-                            }
-                            rgba.into_iter().flat_map(|c| [c[0], c[1], c[2]]).collect()
-                        })
-                        .unwrap_or_default();
+                    let colors = float_attribute(
+                        primitive.get(&gltf::Semantic::Colors(0)),
+                        buffers,
+                        3,
+                        profile,
+                        || {
+                            reader.read_colors(0).map(|c| {
+                                let rgba: Vec<_> = c.into_rgba_f32().collect();
+                                if rgba.iter().any(|c| c[3] != 1.) {
+                                    self.warnings.push(
+                                        "Vertex color alpha is ignored; RGB is preserved.".into(),
+                                    );
+                                }
+                                rgba.into_iter()
+                                    .flat_map(|c| [c[0], c[1], c[2]])
+                                    .collect::<Vec<_>>()
+                                    .into()
+                            })
+                        },
+                    )
+                    .unwrap_or_default();
                     let mut geometry = Geometry {
                         material_indices: Arc::from([]),
                         min: Vec3::ZERO,
                         max: Vec3::ZERO,
-                        positions: positions.into(),
+                        positions,
                         indices: indices.into(),
-                        normals: reader
-                            .read_normals()
-                            .map(|v| v.flatten().collect::<Vec<_>>().into())
-                            .unwrap_or_default(),
+                        normals: float_attribute(
+                            primitive.get(&gltf::Semantic::Normals),
+                            buffers,
+                            3,
+                            profile,
+                            || {
+                                reader
+                                    .read_normals()
+                                    .map(|v| v.flatten().collect::<Vec<_>>().into())
+                            },
+                        )
+                        .unwrap_or_default(),
                         uv: [0, 1].map(|i| {
-                            reader
-                                .read_tex_coords(i)
-                                .map(|v| v.into_f32().flatten().collect::<Vec<_>>().into())
-                                .unwrap_or_default()
+                            float_attribute(
+                                primitive.get(&gltf::Semantic::TexCoords(i)),
+                                buffers,
+                                2,
+                                profile,
+                                || {
+                                    reader
+                                        .read_tex_coords(i)
+                                        .map(|v| v.into_f32().flatten().collect::<Vec<_>>().into())
+                                },
+                            )
+                            .unwrap_or_default()
                         }),
-                        colors: colors.into(),
-                        tangents: reader
-                            .read_tangents()
-                            .map(|v| v.flatten().collect::<Vec<_>>().into())
-                            .unwrap_or_default(),
+                        colors,
+                        tangents: float_attribute(
+                            primitive.get(&gltf::Semantic::Tangents),
+                            buffers,
+                            4,
+                            profile,
+                            || {
+                                reader
+                                    .read_tangents()
+                                    .map(|v| v.flatten().collect::<Vec<_>>().into())
+                            },
+                        )
+                        .unwrap_or_default(),
                     };
+                    if let Some(start) = attributes_started {
+                        profile.attributes_ms += start.elapsed().as_secs_f64() * 1000.;
+                    }
+                    let validation_started = profile.start();
                     ensure!(
                         geometry.indices.len() % 3 == 0
                             && geometry
@@ -680,6 +888,10 @@ impl Model {
                                 .all(|&i| (i as usize) < geometry.positions.len() / 3),
                         "Invalid triangle indices"
                     );
+                    if let Some(start) = validation_started {
+                        profile.index_validation_ms += start.elapsed().as_secs_f64() * 1000.;
+                    }
+                    let deformation_started = profile.start();
                     if let Some(animation) = &mut self.animation {
                         animation.bind_geometry(
                             &node,
@@ -774,12 +986,15 @@ impl Model {
                             }
                         }
                     }
-                    geometry.min = Vec3::splat(f32::INFINITY);
-                    geometry.max = Vec3::splat(f32::NEG_INFINITY);
-                    for p in geometry.positions.chunks_exact(3) {
-                        let v = Vec3::from_slice(p);
-                        geometry.min = geometry.min.min(v);
-                        geometry.max = geometry.max.max(v);
+                    if let Some(start) = deformation_started {
+                        profile.deformation_ms += start.elapsed().as_secs_f64() * 1000.;
+                    }
+                    if !profile.defer_bounds {
+                        let start = profile.start();
+                        (geometry.min, geometry.max) = local_bounds(&geometry.positions);
+                        if let Some(start) = start {
+                            profile.local_bounds_ms += start.elapsed().as_secs_f64() * 1000.;
+                        }
                     }
                     let index = self.geometries.len();
                     Arc::make_mut(&mut self.geometries).push(geometry);
@@ -900,6 +1115,7 @@ impl Model {
                 cache,
                 document,
                 worlds,
+                profile,
                 depth + 1,
             )?;
         }
@@ -1045,3 +1261,7 @@ mod tests {
         assert!(model.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING));
     }
 }
+
+#[cfg(test)]
+#[path = "attribute_tests.rs"]
+mod attribute_tests;

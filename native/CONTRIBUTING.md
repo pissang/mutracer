@@ -639,6 +639,22 @@ separate from formal timing:
 - `nativeGeometryKernelProfile` separates kernel bodies; its time is already
   part of preparation.
 
+### glTF import profiling
+
+`MUTRACER_NATIVE_PROFILE=1` reports attribute reads, local/world bounds, index
+validation and initial deformation separately, with bulk-copy byte counts and
+bounds worker counts. `MUTRACER_NATIVE_GLTF_ATTRIBUTES=reader` selects the gltf-rs
+reference reads; the default copies aligned contiguous F32 Vec2/3/4 accessors
+directly into Arc slices and retains Reader for other layouts. Local bounds run
+on up to 12 available CPU threads for large imports; each geometry retains its
+vertex reduction order. `MUTRACER_NATIVE_GLTF_BOUNDS=serial` selects the original
+in-visit scan. World bounds retain the tight per-vertex transform scan.
+
+Run `large_local_import_matches_reader_when_requested` with `cargo test --release`
+and `MUTRACER_GLTF_IMPORT_ORACLE=/absolute/model.glb` for a local-asset bit/bounds
+comparison; it reports a skip when unset. Keep large assets out of the debug
+suite, and run performance comparisons separately from builds and other checks.
+
 ## Metal HWRT sample miss
 
 A Metal HWRT sample can occasionally see an empty scene or fail to accumulate
