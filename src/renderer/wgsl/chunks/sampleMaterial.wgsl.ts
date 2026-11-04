@@ -123,15 +123,16 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     // support when exp(-tau_bar) underflows for a mostly empty dense volume.
     let targetTr = select(max(volumeTransmittance(lightRay, visibilityDistance), 1e-6), 1.0, (*shadowWork).volumeSuppressed);` : /* wgsl */ `let unweightedContribution = Li * f / lightPdf * (*path).beta${hasVolumes ? /* wgsl */ ` * select(1.0, volumeTransmittance(lightRay, visibilityDistance), !(*si).volumeSuppressed || (isSurface && !ma.thinWalled && (ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0) && dot((*si).faceNormal, lightDir) > 0.0))` : ''};`}
     (*shadowWork).risTarget = max(
-      dot(max(unweightedContribution * lightSelectionPmf${hasVolumeNoise ? ' * targetTr' : ''}, vec3f(0.0)), luminance),
+      dot(max(unweightedContribution * lightSelectionPmf${hasVolumeNoise ? ' * targetTr' : ''}, vec3f(0.0)), ${channelIndependentRis ? 'select(luminance, vec3f(1.0 / 3.0), SPECTRAL && rtUniform.dispersionWavelengths != 1)' : 'luminance'}),
       0.0
     );
     (*shadowWork).ray = lightRay;
     (*shadowWork).maxDistance = visibilityDistance;
     (*shadowWork).triangleIndex = (*si).triangleIndex;
     (*shadowWork).contribution = misWeight * unweightedContribution;${channelIndependentRis ? /* wgsl */ `
-    // Use the full RGB target for all three wavelengths. Filtering only the
-    // estimator preserves the common reservoir and its UCW normalization.
+    // Give each RGB component equal target weight for all three wavelengths.
+    // Single-wavelength preview keeps its original luminance target. Filtering
+    // only the estimator preserves the common reservoir and UCW normalization.
     if (SPECTRAL && rtUniform.dispersionWavelengths != 1) {
       (*shadowWork).contribution = sampling_spectral_rgb_filter((*shadowWork).contribution, (*si).spectralChannel);
     }` : ''}
