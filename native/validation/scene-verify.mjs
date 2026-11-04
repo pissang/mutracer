@@ -32,7 +32,7 @@ async function verifyScene(input, directory, variant, capture = true) {
         const first = packet.findIndex((v, i) => v !== expected[i]);
         throw new Error(`Native/JS packet ${variant} differs at byte ${first}; ${packet.length}/${expected.length}`);
     }
-    const { pass, device, camera, nativeShader } = await referenceScene(input, source);
+    const { pass, device, camera, nativeShader, nativeResources } = await referenceScene(input, source);
     const header = new Uint32Array(packet.buffer, packet.byteOffset, packet.byteLength / 4);
     const records = new Map();
     for (let i = 0; i < header[1]; i++) {
@@ -43,7 +43,7 @@ async function verifyScene(input, directory, variant, capture = true) {
     const resources = [];
     for (const [id, group, binding] of mappings) {
         const resource = pass._rayTraceBindGroups[group].descriptor.entries.find(e => e.binding === binding).resource;
-        let reference = resource.buffer ? resource.buffer.data : textureBytes(resource.texture);
+        let reference = nativeResources.get(id) ?? (resource.buffer ? resource.buffer.data : textureBytes(resource.texture));
         if (id === 6) {
             // Native preserves double intermediates until GPU packing; compare
             // against upstream gl-matrix rather than its own AOT implementation.
@@ -52,7 +52,9 @@ async function verifyScene(input, directory, variant, capture = true) {
             referenceMat4.invert(matrix, camera.getProjectionMatrix(header[2] / header[3]));
             referenceMat4.multiply(matrix, camera.transform, matrix);
             const cameraBlock = new Float32Array(Uint8Array.from(reference).buffer);
-            cameraBlock.set(matrix); reference = new Uint8Array(cameraBlock.buffer);
+            cameraBlock.set(matrix);
+            // Web appends projectionInverse; native keeps the documented 144-byte prefix.
+            reference = new Uint8Array(cameraBlock.buffer, 0, 144);
         }
         const native = records.get(id);
         if (!Buffer.from(reference).equals(native)) {
@@ -60,7 +62,7 @@ async function verifyScene(input, directory, variant, capture = true) {
             const first = native.findIndex((v, i) => v !== reference[i]);
             throw new Error(`Browser resource ${variant}/${id} differs at ${first}; ${native.length}/${reference.length}`);
         }
-        resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : 'browser' });
+        resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : nativeResources.has(id) ? 'browser geometry in native TLAS layout' : 'browser' });
     }
     const shader = device.resources.findLast(r => r.kind === 'pipeline').descriptor.compute.module.descriptor.code;
     if (!records.get(30).equals(Buffer.from(nativeShader))) {
