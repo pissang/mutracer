@@ -273,6 +273,8 @@ impl Drop for Renderer {
 pub struct Camera {
     pub target: Vec3,
     pub up: Vec3,
+    /// Reflection retained from the imported camera-to-world basis.
+    pub mirrored: bool,
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
@@ -288,6 +290,7 @@ impl Camera {
         Self {
             target: center,
             up: Vec3::Y,
+            mirrored: false,
             yaw: 0.6,
             pitch: 0.3,
             distance: radius * 3.6,
@@ -316,6 +319,7 @@ impl Camera {
         let forward = (self.target - eye).normalize();
         let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
+        let right = if self.mirrored { -right } else { right };
         let offset = (right * ((uv[0] * 2. - 1.) * aspect) + up * (1. - uv[1] * 2.))
             * (self.fov.to_radians() * 0.5).tan();
         if self.orthographic {
@@ -329,6 +333,7 @@ impl Camera {
         self.distance = delta.length().max(1e-5);
         self.target = target;
         self.up = Vec3::Y;
+        self.mirrored = false;
         self.yaw = delta.x.atan2(delta.z);
         self.pitch = (delta.y / self.distance).clamp(-1., 1.).asin();
         self.focus_distance = self.distance;
@@ -350,6 +355,7 @@ impl Camera {
         let forward = (self.target - self.eye()).normalize();
         let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
+        let right = if self.mirrored { -right } else { right };
         self.target += (-right * delta[0] + up * delta[1]) * self.distance * 0.002;
     }
     pub fn zoom(&mut self, delta: f32) {
@@ -373,7 +379,11 @@ impl Camera {
         f[camera_wire::METERS_PER_UNIT] = self.meters_per_unit;
         // A general Mat4 inverse can round the homogeneous 1 away from 1.0,
         // which violates the native ABI's exact affine-transform contract.
-        let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, self.up).inverse());
+        let mut world =
+            Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, self.up).inverse());
+        if self.mirrored {
+            world.x_axis = -world.x_axis;
+        }
         f[camera_wire::TRANSFORM..camera_wire::WORDS].copy_from_slice(&world.to_cols_array());
         f.into_iter().flat_map(f32::to_le_bytes).collect()
     }
