@@ -7,6 +7,7 @@ unsafe extern "C" {
         i: *const u32,
         ni: u32,
     ) -> *mut std::ffi::c_void;
+    fn mt_native_pick_bytes(p: *const std::ffi::c_void, kind: u32) -> u64;
     fn mt_native_pick_destroy(p: *mut std::ffi::c_void);
     fn mt_native_pick_hit(
         p: *const std::ffi::c_void,
@@ -57,6 +58,9 @@ impl PickBvh {
         .map(Self)
         .ok_or("Picking BVH build failed".into())
     }
+    pub(crate) fn allocated_bytes(&self) -> [u64; 5] {
+        std::array::from_fn(|i| unsafe { mt_native_pick_bytes(self.0.as_ptr(), i as u32) })
+    }
     pub(crate) fn intersect_hit(
         &self,
         origin: [f32; 3],
@@ -99,5 +103,32 @@ impl PickBvh {
 impl Drop for PickBvh {
     fn drop(&mut self) {
         unsafe { mt_native_pick_destroy(self.0.as_ptr()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn immutable_tree_owns_inputs_and_supports_queries_after_build() {
+        let tree = {
+            let positions = [0., 0., 0., 1., 0., 0., 0., 1., 0.];
+            std::sync::Arc::new(PickBvh::new(&positions, &[0, 1, 2]).unwrap())
+        };
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let tree = tree.clone();
+                scope.spawn(move || {
+                    for _ in 0..100 {
+                        let hit = tree
+                            .intersect_hit([0.25, 0.25, 1.], [0., 0., -1.], 10.)
+                            .unwrap();
+                        assert_eq!((hit.distance, hit.primitive), (1., 0));
+                        assert_eq!((hit.u, hit.v), (0.25, 0.25));
+                        assert!(tree.intersect([2., 2., 1.], [0., 0., -1.], 10.).is_none());
+                    }
+                });
+            }
+        });
     }
 }

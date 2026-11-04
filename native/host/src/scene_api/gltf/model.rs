@@ -46,10 +46,12 @@ impl Model {
         Self::load_bytes(&Self::read(path)?, Some(path))
     }
     pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Self> {
+        let started = crate::profiling::enabled().then(std::time::Instant::now);
         crate::memory_budget::check(bytes.len(), "Model file")?;
         let (document, buffers, images, resized, raw_materials) =
             super::decode::load_bytes(bytes, path)
                 .context("Loading GLTF/GLB and its buffers/images")?;
+        let decoded = started.map(|_| std::time::Instant::now());
         let path = path.unwrap_or(Path::new("memory.glb"));
         let mut model = Self {
             name: path
@@ -269,7 +271,28 @@ impl Model {
         }
         model.warnings.sort();
         model.warnings.dedup();
+        let picking_start = started.map(|_| std::time::Instant::now());
         model.rebuild_picking()?;
+        if let (Some(started), Some(decoded), Some(picking_start)) =
+            (started, decoded, picking_start)
+        {
+            let mut capacities = [0u64; 5];
+            for tree in model.picking.iter() {
+                for (sum, value) in capacities.iter_mut().zip(tree.allocated_bytes()) {
+                    *sum += value;
+                }
+            }
+            native_log!(
+                "{}",
+                serde_json::json!({"nativeImportProfile":{
+                "decodeMs":decoded.duration_since(started).as_secs_f64()*1000.,
+                "beforePickingMs":picking_start.duration_since(started).as_secs_f64()*1000.,
+                "pickingMs":picking_start.elapsed().as_secs_f64()*1000.,
+                "pickingVertexBytes":capacities[0],"pickingIndexBytes":capacities[1],
+                "pickingNodeBytes":capacities[2],"pickingPrimitiveBytes":capacities[3],
+                "retiredPickingScratchBytes":capacities[4]}})
+            );
+        }
         if model.apply_animation()? {
             model.refresh_bounds();
         }
