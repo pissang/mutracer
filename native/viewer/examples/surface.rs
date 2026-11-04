@@ -399,6 +399,11 @@ impl ApplicationHandler for App {
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        // exit() is deferred; a queued redraw/resize can still arrive after the
+        // terminal frame disposed its engine. Preserve the terminal result.
+        if self.done || self.failure.is_some() {
+            return;
+        }
         let Some(host) = &mut self.host else {
             return;
         };
