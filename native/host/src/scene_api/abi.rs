@@ -263,7 +263,9 @@ unsafe fn geometry(p: *const GeometryDesc) -> Result<Geometry> {
 unsafe fn texture(p: *const TextureDesc) -> Result<Texture> {
     let d = unsafe { record(p) }?;
     let pixel_count = u64::from(d.width) * u64::from(d.height);
-    if pixel_count > 16_777_216
+    if pixel_count > 67_108_864
+        || d.width > 16384
+        || d.height > 16384
         || d.storage > 1
         || d.flip_y > 1
         || d.uv_channel > 1

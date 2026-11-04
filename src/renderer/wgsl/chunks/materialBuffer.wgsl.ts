@@ -10,12 +10,14 @@ import {
 } from '../../materialConstants.js';
 
 export function createMaterialBufferWgsl({
+  independentTextures = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
   hasTransmission = true, caustics = false,
   hasMetalness = true
 }: {
+  independentTextures?: boolean;
   hasSceneAlpha?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
@@ -85,7 +87,8 @@ fn wrappedMapUv(idx: i32, uv: vec2f) -> vec2f {
 }
 
 fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
-  let repeatedUv = wrappedMapUv(idx, uv);
+${independentTextures ? `  let halfTexel = 0.5 / getMapSize(idx);
+  return clamp(wrappedMapUv(idx, uv), halfTexel, 1.0 - halfTexel);` : `  let repeatedUv = wrappedMapUv(idx, uv);
   let atlasTexel = 1.0 / vec2f(textureDimensions(map).xy);
   let firstTexelCenter = getMapOffset(idx);
   let sourceExtent = getMapSize(idx) + atlasTexel;
@@ -95,7 +98,7 @@ fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
     sourceOrigin + repeatedUv * sourceExtent,
     firstTexelCenter,
     lastTexelCenter
-  );
+  );`}
 }
 
 fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
@@ -103,7 +106,7 @@ fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
 }
 
 fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
-  let size = vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)));
+  let size = ${independentTextures ? 'vec2i(getMapSize(idx))' : 'vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)))'};
   let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);
   let modes = mapInfo[idx + NUM_MAPS * 2].zw;
   // Repeat filtering must cross the logical image boundary, never another
@@ -112,19 +115,19 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
       (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > f32(size.y - 1)))) {
     let base = vec2i(floor(texel));
     let weight = fract(texel);
-    let origin = vec2i(round(getMapOffset(idx) * vec2f(textureDimensions(map).xy) - vec2f(0.5)));
+    let origin = ${independentTextures ? 'vec2i(0)' : 'vec2i(round(getMapOffset(idx) * vec2f(textureDimensions(map).xy) - vec2f(0.5)))'};
     return mix(
       mix(loadMapTexel(idx, base, size, origin, modes), loadMapTexel(idx, base + vec2i(1, 0), size, origin, modes), weight.x),
       mix(loadMapTexel(idx, base + vec2i(0, 1), size, origin, modes), loadMapTexel(idx, base + vec2i(1, 1), size, origin, modes), weight.x), weight.y);
   }
-  return textureSampleLevel(map, mapSampler, getMapUV(idx, uv), getMapLayer(idx), 0.0);
+  return ${independentTextures ? 'textureSampleLevel(map[idx], mapSampler, getMapUV(idx, uv), 0.0)' : 'textureSampleLevel(map, mapSampler, getMapUV(idx, uv), getMapLayer(idx), 0.0)'};
 }
 
 fn loadMapTexel(idx: i32, coordinate: vec2i, size: vec2i, origin: vec2i, modes: vec2f) -> vec4f {
   var p = clamp(coordinate, vec2i(0), size - vec2i(1));
   if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
   if (modes.y < 0.5) { p.y = ((coordinate.y % size.y) + size.y) % size.y; }
-  return textureLoad(map, origin + p, getMapLayer(idx), 0);
+  return ${independentTextures ? 'textureLoad(map[idx], p, 0)' : 'textureLoad(map, origin + p, getMapLayer(idx), 0)'};
 }
 
 

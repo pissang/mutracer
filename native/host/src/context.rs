@@ -489,7 +489,13 @@ fn prepare_software_fallback(
     {
         let settings = retained.settings;
         let (software, software_assets, software_retained) =
-            scene::prepare_retained_with_settings(bytes, false, 0, &settings)?;
+            scene::prepare_retained_shared_with_settings(
+                Arc::new(bytes.to_vec()),
+                false,
+                0,
+                &settings,
+                retained.texture_limits,
+            )?;
         *assets = software_assets;
         *retained = software_retained;
         Ok(software)
@@ -947,6 +953,7 @@ fn commit_inner(
                         && hardware::direct_input_enabled(),
                     snapshot.backend,
                     &settings,
+                    snapshot.gpu.texture_limits(),
                 )
                 .map_err(rejected)?;
             cancelled(&cancel)?;

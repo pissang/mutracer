@@ -568,6 +568,17 @@ impl State {
         } else {
             None
         };
+        let independent: Vec<_> = (0..scene
+            .textures
+            .iter()
+            .filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE)
+            .count())
+            .map(|i| {
+                textures[&(layout::resource::MATERIAL_TEXTURE_BASE + i)]
+                    .create_view(&Default::default())
+            })
+            .collect();
+        let independent_refs: Vec<_> = independent.iter().collect();
         let views: Vec<_> = scene.bind_groups[layout::group::TEXTURES]
             .entries
             .iter()
@@ -578,7 +589,7 @@ impl State {
                     if b.binding == 8 {
                         lighting.create_view(&Default::default())
                     } else {
-                        textures[&b.id].create_view(&Default::default())
+                        scene_texture_view(scene, &textures[&b.id], b.id)
                     },
                 )
             })
@@ -596,6 +607,9 @@ impl State {
             .map(|b| wgpu::BindGroupEntry {
                 binding: b.binding,
                 resource: match b.kind {
+                    BindingKind::TextureArray(_) => {
+                        wgpu::BindingResource::TextureViewArray(&independent_refs)
+                    }
                     BindingKind::Buffer => buffers[&b.id].as_entire_binding(),
                     BindingKind::Sampler => wgpu::BindingResource::Sampler(&samplers[&b.id]),
                     _ => unreachable!(),

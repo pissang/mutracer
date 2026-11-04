@@ -3249,12 +3249,19 @@ fn main() -> Result<()> {
                     device_descriptor: std::sync::Arc::new(|adapter| wgpu::DeviceDescriptor {
                         label: Some("MuTracer and egui"),
                         required_limits: adapter.limits(),
-                        required_features: adapter.features()
-                            & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
-                                | wgpu::Features::TIMESTAMP_QUERY
-                                | wgpu::Features::SHADER_F16
-                                | wgpu::Features::SUBGROUP
-                                | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX),
+                        required_features: {
+                            let textures = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+                            (if adapter.features().contains(textures) {
+                                textures
+                            } else {
+                                wgpu::Features::empty()
+                            }) | adapter.features()
+                                & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                                    | wgpu::Features::TIMESTAMP_QUERY
+                                    | wgpu::Features::SHADER_F16
+                                    | wgpu::Features::SUBGROUP
+                                    | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX)
+                        },
                         experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
                         ..Default::default()
                     }),

@@ -35,20 +35,21 @@ export function causticLightCompute(
   sceneIntersections = '',
   fullEmissionRandom = true,
   perInstanceBounds = false,
-  compactVertices = false
+  compactVertices = false,
+  independentTextures = false
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
   return (
-    wgpuShaderPreamble(constants, true) +
+    (independentTextures ? 'enable wgpu_binding_array;\n' : '') + wgpuShaderPreamble(constants, true) +
     /* wgsl */ `
 ${Object.keys(WGPU_SCENE_FEATURE_BITS)
   .map((name) => `const ${name} = ${!!constants[name]};`)
   .join('\n')}
 ${common}
-${core({compactVertices, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
+${core({independentTextures, compactVertices, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${uv}
-${createMaterialBufferWgsl({hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
+${createMaterialBufferWgsl({independentTextures, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${intersect({
   perInstanceBounds,
   compactVertices,

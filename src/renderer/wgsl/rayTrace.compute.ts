@@ -51,6 +51,7 @@ export interface RayTraceShaderOptions {
   channelIndependentRis?: boolean;
   /** Reuse browser RGB paths until the first wavelength-dependent IOR. Default false. */
   shareSpectralPrefix?: boolean;
+  independentTextures?: boolean;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -180,11 +181,11 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, hasVolumes, hasVolumeNoise, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, hasVolumes, hasVolumeNoise, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
-${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
+${createMaterialBufferWgsl({ independentTextures: options.independentTextures, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
   caustics: enabled || lightTracing || photonMapping,
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}

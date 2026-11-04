@@ -43,6 +43,9 @@ impl Default for RenderSettings {
 impl RenderSettings {
     // The internal wire record keeps f64 counts and its own size; TS clamps them.
     pub(super) fn wire(&self, variants: u32) -> Result<Vec<u8>> {
+        self.wire_with_textures(variants, [16384, 0])
+    }
+    pub(super) fn wire_with_textures(&self, variants: u32, textures: [u32; 2]) -> Result<Vec<u8>> {
         if self.struct_size as usize != std::mem::size_of::<Self>() {
             return Err(fail(
                 Status::InvalidArgument,
@@ -63,6 +66,8 @@ impl RenderSettings {
             (wire::MAX_SAMPLES, self.max_samples),
             (wire::SEQUENCE_OFFSET, self.sample_sequence_offset),
             (wire::VARIANTS, variants),
+            (wire::TEXTURE_DIMENSION, textures[0]),
+            (wire::TEXTURE_BINDINGS, textures[1]),
             (wire::CAUSTIC_FLAGS, self.caustic_flags),
             (wire::LIGHT_PHOTONS, self.light_photons),
             (wire::PHOTON_MAP_PHOTONS, self.photon_map_photons),

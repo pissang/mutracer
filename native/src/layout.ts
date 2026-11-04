@@ -170,7 +170,9 @@ export const SETTINGS = {
   "LIGHT_PHOTONS": 17,
   "PHOTON_MAP_PHOTONS": 18,
   "PHOTON_MAP_RADIUS": 19,
-  "WORDS": 20
+  "TEXTURE_DIMENSION": 20,
+  "TEXTURE_BINDINGS": 21,
+  "WORDS": 22
 } as const;
 export const WRITE_ENTRY = {
   "ID": 0,
@@ -259,7 +261,8 @@ export const RESOURCE = {
   "PATH_PARAMETERS": 51,
   "QUERY_COUNTS": 52,
   "SOFTWARE_FRAME_SHADER": 54,
-  "HWRT_FRAME_SHADER": 55
+  "HWRT_FRAME_SHADER": 55,
+  "MATERIAL_TEXTURE_BASE": 1000
 } as const;
 export const SAMPLER = {
   "MATERIAL": 40

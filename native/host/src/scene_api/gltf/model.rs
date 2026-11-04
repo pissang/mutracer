@@ -14,7 +14,7 @@ pub(super) fn texture_property(id: u32) -> bool {
         .is_some_and(|p| p.0 == 5)
 }
 const TEXTURE_BUDGET_WARNING: &str =
-    "Material textures were reduced to share the 12M-pixel texture budget.";
+    "Material textures were reduced to share the 384 MiB texture budget.";
 #[derive(Clone)]
 pub struct Model {
     pub name: String,
@@ -479,7 +479,7 @@ impl Model {
             .map(|t| t.width as u64 * t.height as u64)
             .sum();
         let count = images.iter().filter(|(_, image)| image.is_some()).count();
-        // Reserve the maximum supported environment image (4M pixels).
+        // Material and environment images have separate allowances.
         let available = super::decode::MATERIAL_TEXEL_BUDGET.saturating_sub(used);
         ensure!(
             count == 0 || available >= count as u64,
@@ -491,12 +491,12 @@ impl Model {
             available / count as u64
         };
         let edge = if count == 0 {
-            4096
+            16384
         } else {
             ((available / count as u64) as f64)
                 .sqrt()
                 .floor()
-                .min(4096.) as u32
+                .min(16384.) as u32
         };
         for ((slot, image), reference) in images.into_iter().zip(references) {
             let Some(mut image) = image else { continue };
@@ -514,10 +514,10 @@ impl Model {
                     size,
                     image::imageops::FilterType::Triangle,
                 );
-            } else if image.width().max(image.height()) > 4096
+            } else if image.width().max(image.height()) > 16384
                 || image.width() as u64 * image.height() as u64 > per_image
             {
-                let factor = (4096. / image.width().max(image.height()) as f64).min(
+                let factor = (16384. / image.width().max(image.height()) as f64).min(
                     (per_image as f64 / (image.width() as f64 * image.height() as f64)).sqrt(),
                 );
                 image = image::imageops::resize(
@@ -674,8 +674,8 @@ impl Model {
         let source = texture.source().index();
         let image = &images[source];
         ensure!(
-            image.width as u64 * image.height as u64 <= 16_777_216,
-            "Source material texture exceeds 16M pixels"
+            image.width as u64 * image.height as u64 <= 67_108_864,
+            "Source material texture exceeds 64M pixels"
         );
         if let Some(id) = self.textures.iter().position(|t| {
             t.source == source
@@ -1230,7 +1230,7 @@ mod tests {
         let json = serde_json::json!({"asset":{"version":"2.0"},"images":[{"uri":"unused.png"}],
             "samplers":samplers,"textures":textures});
         let document = gltf::Gltf::from_slice(&serde_json::to_vec(&json).unwrap()).unwrap();
-        let (width, height) = (1500, 1500);
+        let (width, height) = (4000, 4000);
         let image = gltf::image::Data {
             pixels: vec![255; width * height * 4],
             format: gltf::image::Format::R8G8B8A8,
@@ -1255,9 +1255,9 @@ mod tests {
         assert!(used <= super::super::decode::MATERIAL_TEXEL_BUDGET);
         assert_eq!(
             (model.textures[0].width, model.textures[0].height),
-            (1500, 1500)
+            (4000, 4000)
         );
-        assert!(model.textures.iter().any(|t| t.width < 1500));
+        assert!(model.textures.iter().any(|t| t.width < 4000));
         assert!(model.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING));
     }
 }

@@ -299,6 +299,14 @@ mod platform {
         let adapter = unsafe { instance.create_adapter_from_hal::<Vulkan>(exposed) };
         let backend = backend_from(options.backend)?;
         let features = crate::oidn_webgpu::required_features()
+            | if adapter
+                .features()
+                .contains(crate::INDEPENDENT_TEXTURE_FEATURES)
+            {
+                crate::INDEPENDENT_TEXTURE_FEATURES
+            } else {
+                wgpu::Features::empty()
+            }
             | if backend == Backend::Hardware
                 && adapter
                     .features()

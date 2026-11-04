@@ -170,7 +170,9 @@ pub mod settings {
     pub const LIGHT_PHOTONS: usize = 17;
     pub const PHOTON_MAP_PHOTONS: usize = 18;
     pub const PHOTON_MAP_RADIUS: usize = 19;
-    pub const WORDS: usize = 20;
+    pub const TEXTURE_DIMENSION: usize = 20;
+    pub const TEXTURE_BINDINGS: usize = 21;
+    pub const WORDS: usize = 22;
 }
 pub mod write_entry {
     pub const ID: usize = 0;
@@ -260,6 +262,7 @@ pub mod resource {
     pub const QUERY_COUNTS: usize = 52;
     pub const SOFTWARE_FRAME_SHADER: usize = 54;
     pub const HWRT_FRAME_SHADER: usize = 55;
+    pub const MATERIAL_TEXTURE_BASE: usize = 1000;
 }
 pub mod sampler {
     pub const MATERIAL: usize = 40;

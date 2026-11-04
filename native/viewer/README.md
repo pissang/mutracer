@@ -311,8 +311,9 @@ platform differences for trying features or checking a new version.
 ## Limits
 
 - Models follow the SDK's [glTF import support and limits](../docs/gltf.md).
-- Uploaded and downloaded textures can be up to 4,096 pixels per side and
-  shrink to share a 12M-pixel material budget; slot sizes show what is used.
+- Uploaded and downloaded textures follow the SDK's
+  [material texture limits](../docs/scene-format.md#limits); slot sizes show the
+  imported dimensions.
   Displacement images are resized to a square power of two. HDR environments
   above 4M pixels are reduced while keeping their aspect ratio.
 - HWRT can occasionally drop a sample on macOS; choose Software when exact

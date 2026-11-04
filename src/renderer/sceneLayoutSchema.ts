@@ -38,7 +38,7 @@ export function sceneRecords() { return {
   EXTENSION: record([field('ID'), field('X'), field('Y'), field('Z')]),
   SETTINGS: record([field('STRUCT_SIZE'), field('SAMPLING_PATTERN'), field('SEED'), field('MAX_SAMPLES'),
     field('BOUNCES', 2), field('DIRECT_LIGHT_CANDIDATES', 2), field('BEVEL_SAMPLES', 2), field('CLAMPING', 2),
-    field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS'),field('CAUSTIC_FLAGS'),field('LIGHT_PHOTONS'),field('PHOTON_MAP_PHOTONS'),field('PHOTON_MAP_RADIUS')]),
+    field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS'),field('CAUSTIC_FLAGS'),field('LIGHT_PHOTONS'),field('PHOTON_MAP_PHOTONS'),field('PHOTON_MAP_RADIUS'), field('TEXTURE_DIMENSION'), field('TEXTURE_BINDINGS')]),
   WRITE_ENTRY: record([field('ID'), field('KIND'), field('LENGTH'), field('DESTINATION'), field('WIDTH'), field('HEIGHT'), field('FORMAT'), field('BYTE_OFFSET')]),
   GEOMETRY_KERNEL_HEADER: record([field('VERSION'), field('COUNT'), field('LENGTH'), field('RESERVED')]),
   GEOMETRY_KERNEL_ENTRY: record([field('SOURCE'), field('VERTEX_COUNT'), field('BOUNDS'), field('TANGENTS')]),
@@ -54,7 +54,7 @@ export const resourceIds = {
   HWRT_SHADER: 33, HIT_SHADER: 34, INDICES: 35, SOFTWARE_PATH_SHADER: 36, HWRT_PATH_SHADER: 37,
   DISPLACEMENT_BOUNDS: 38, SOFTWARE_HIT_SHADER: 39, PRIMITIVE_IDS: 40, AS_POSITIONS: 41, AS_INDICES: 42,
   PATH_EVENTS: 50, PATH_PARAMETERS: 51, QUERY_COUNTS: 52,
-  SOFTWARE_FRAME_SHADER: 54, HWRT_FRAME_SHADER: 55
+  SOFTWARE_FRAME_SHADER: 54, HWRT_FRAME_SHADER: 55, MATERIAL_TEXTURE_BASE: 1000
 };
 export const packetKinds = {BUFFER: 0, TEXTURE: 1, WGSL: 2, METADATA: 3};
 export const samplerIds = {MATERIAL: 40};

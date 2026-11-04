@@ -58,6 +58,8 @@ mod hardware;
 mod hdr;
 pub mod hit_diagnostics;
 mod image_limits;
+#[cfg(test)]
+mod material_texture_tests;
 mod memory_budget;
 mod oidn_webgpu;
 pub mod picking;
@@ -248,7 +250,27 @@ struct TextureWrite {
 enum BindingKind {
     Buffer,
     Texture,
+    TextureArray(usize),
     Sampler,
+}
+fn scene_texture_view(scene: &Scene, texture: &wgpu::Texture, id: usize) -> wgpu::TextureView {
+    // A one-layer atlas still needs a D2Array view. Captured scenes use their
+    // own resource IDs, so derive the dimension from the binding contract.
+    let dimension = scene.bind_groups.iter().find_map(|group| {
+        let binding = group
+            .entries
+            .iter()
+            .find(|b| b.id == id && matches!(b.kind, BindingKind::Texture))?;
+        let entry = group.layout.iter().find(|e| e.binding == binding.binding)?;
+        match entry.ty {
+            wgpu::BindingType::Texture { view_dimension, .. } => Some(view_dimension),
+            _ => None,
+        }
+    });
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension,
+        ..Default::default()
+    })
 }
 fn storage_layout(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -333,7 +355,30 @@ struct GpuDevice {
     pipeline_cache: Option<wgpu::PipelineCache>,
     compilation: Arc<compilation::Compilation>,
 }
+const INDEPENDENT_TEXTURE_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 impl GpuDevice {
+    fn texture_limits(&self) -> [u32; 2] {
+        let limits = self.device.limits();
+        let bindings = if self
+            .device
+            .features()
+            .contains(INDEPENDENT_TEXTURE_FEATURES)
+            && limits.max_storage_buffers_per_shader_stage
+                >= 9 + u32::from(
+                    self.device
+                        .features()
+                        .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+                ) {
+            // Binding-array elements have their own limit in wgpu 30.
+            limits
+                .max_binding_array_elements_per_shader_stage
+                .min(65536)
+        } else {
+            0
+        };
+        [limits.max_texture_dimension_2d.min(16384), bindings]
+    }
     fn wait(device: &wgpu::Device) -> Result<()> {
         device.poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -428,6 +473,11 @@ impl GpuDevice {
                 required_features: profile_features
                     | denoise_features
                     | cache_feature
+                    | if adapter.features().contains(INDEPENDENT_TEXTURE_FEATURES) {
+                        INDEPENDENT_TEXTURE_FEATURES
+                    } else {
+                        wgpu::Features::empty()
+                    }
                     | if use_hwrt {
                         wgpu::Features::EXPERIMENTAL_RAY_QUERY
                     } else {
@@ -803,7 +853,7 @@ impl GpuScene {
             }
             views.insert(
                 texture.id,
-                gpu_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                scene_texture_view(&scene, &gpu_texture, texture.id),
             );
             textures.insert(texture.id, gpu_texture);
         }
@@ -866,6 +916,13 @@ impl GpuScene {
                 "reusedBufferBytes": reused_bytes,"allocatedBufferBytes": allocated_bytes}})
             );
         }
+        let independent_views: Vec<_> = (0..scene
+            .textures
+            .iter()
+            .filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE)
+            .count())
+            .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)])
+            .collect();
         let groups: Vec<_> = scene
             .bind_groups
             .iter()
@@ -884,6 +941,9 @@ impl GpuScene {
                         binding: entry.binding,
                         resource: match entry.kind {
                             BindingKind::Buffer => buffers[&entry.id].as_entire_binding(),
+                            BindingKind::TextureArray(_) => {
+                                wgpu::BindingResource::TextureViewArray(&independent_views)
+                            }
                             BindingKind::Texture => {
                                 wgpu::BindingResource::TextureView(&views[&entry.id])
                             }
@@ -1569,11 +1629,23 @@ impl GpuScene {
         let views: HashMap<_, _> = self
             .textures
             .iter()
-            .map(|(id, texture)| (*id, texture.create_view(&Default::default())))
+            .map(|(id, texture)| (*id, scene_texture_view(&self.scene, texture, *id)))
+            .collect();
+        let independent_views: Vec<_> = (0..self
+            .scene
+            .textures
+            .iter()
+            .filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE)
+            .count())
+            .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)])
             .collect();
         for (index, group) in self.scene.bind_groups.iter().enumerate() {
-            let uses = |entry: &Binding| {
-                matches!(entry.kind, BindingKind::Texture) && replaced.contains(&entry.id)
+            let uses = |entry: &Binding| match entry.kind {
+                BindingKind::Texture => replaced.contains(&entry.id),
+                BindingKind::TextureArray(count) => replaced
+                    .iter()
+                    .any(|id| (entry.id..entry.id + count).contains(id)),
+                _ => false,
             };
             if !group.entries.iter().any(uses) {
                 continue;
@@ -1588,6 +1660,9 @@ impl GpuScene {
                     binding: entry.binding,
                     resource: match entry.kind {
                         BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
+                        BindingKind::TextureArray(_) => {
+                            wgpu::BindingResource::TextureViewArray(&independent_views)
+                        }
                         BindingKind::Texture => {
                             wgpu::BindingResource::TextureView(&views[&entry.id])
                         }

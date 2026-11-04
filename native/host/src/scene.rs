@@ -594,8 +594,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         let height = w.u(o + t::HEIGHT);
         if width == 0
             || height == 0
-            || width > 4096
-            || height > 4096
+            || width > 16384
+            || height > 16384
             || w.u(o + t::STORAGE) > 1
             || w.u(o + t::FLIP_Y) > 1
             || w.u(o + t::UV_CHANNEL) > 1
@@ -605,8 +605,10 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             return Err("Invalid raw texture descriptor".into());
         }
         pixels += width * height;
-        if pixels > 16_777_216 {
-            return Err("Raw textures exceed probe budget".into());
+        if pixels > 100_663_296 + 4_194_304 {
+            return Err(
+                "Raw textures exceed the 384 MiB material plus environment input budget".into(),
+            );
         }
         let count = width * height * if w.u(o + t::STORAGE) == 0 { 1 } else { 4 };
         w.span(w.u(o + t::PIXELS), count)?;
@@ -739,6 +741,8 @@ impl std::ops::Deref for PreparedState {
 pub(super) struct PreparedData {
     token: u32,
     pub(super) settings: settings::RenderSettings,
+    pub(super) texture_limits: [u32; 2],
+    independent_texture_count: usize,
     indexed: bool,
     material_count: usize,
     light_count: std::sync::atomic::AtomicUsize,
@@ -1238,7 +1242,13 @@ impl PreparedState {
                     &mut size,
                 );
             }
-            lighting_result(pointer, size, &[4, 5, 7, 8, 20, 24])
+            let mut ids = vec![4, 5, 7, 8, 20, 24];
+            let count = state.independent_texture_count;
+            ids.extend(
+                crate::layout::resource::MATERIAL_TEXTURE_BASE
+                    ..crate::layout::resource::MATERIAL_TEXTURE_BASE + count,
+            );
+            lighting_result(pointer, size, &ids)
         })
     }
     /// Records the committed analytic light count for single-light validation.
@@ -1543,7 +1553,8 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
         let metadata = matches!(id, 31 | 38 | 53);
         // Texture destinations are array layers; the atlas is RGBA8 or RGBA16F.
         let texture = !metadata && id >= crate::layout::resource::ATLAS;
-        let atlas = id == crate::layout::resource::ATLAS;
+        let atlas = id == crate::layout::resource::ATLAS
+            || id >= crate::layout::resource::MATERIAL_TEXTURE_BASE;
         let format = w.u(o + we::FORMAT);
         if !ids.contains(&id)
             || offset < header_length
@@ -1675,23 +1686,31 @@ pub(super) fn prepare_retained(
         &settings::RenderSettings::default(),
     )
 }
+#[cfg(test)]
 pub(super) fn prepare_retained_with_settings(
     bytes: &[u8],
     hardware: bool,
     backend: u32,
     settings: &settings::RenderSettings,
 ) -> Result<(Scene, Assets, PreparedState)> {
-    prepare_retained_shared_with_settings(Arc::new(bytes.to_vec()), hardware, backend, settings)
+    prepare_retained_shared_with_settings(
+        Arc::new(bytes.to_vec()),
+        hardware,
+        backend,
+        settings,
+        [16384, 0],
+    )
 }
 pub(super) fn prepare_retained_shared_with_settings(
     bytes: Arc<Vec<u8>>,
     hardware: bool,
     backend: u32,
     settings: &settings::RenderSettings,
+    texture_limits: [u32; 2],
 ) -> Result<(Scene, Assets, PreparedState)> {
     let settings = *settings;
     runtime::call(move || {
-        prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings)
+        prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings, texture_limits)
     })
 }
 fn prepare_retained_with_settings_inner(
@@ -1699,6 +1718,7 @@ fn prepare_retained_with_settings_inner(
     hardware: bool,
     backend: u32,
     settings: &settings::RenderSettings,
+    texture_limits: [u32; 2],
 ) -> Result<(Scene, Assets, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
@@ -1711,6 +1731,8 @@ fn prepare_retained_with_settings_inner(
     let mut state = PreparedData {
         token,
         settings: *settings,
+        texture_limits,
+        independent_texture_count: 0,
         indexed: hardware,
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
@@ -1735,7 +1757,13 @@ fn prepare_retained_with_settings_inner(
         settings,
         if backend == 1 { 2 } else { 1 },
         true,
+        texture_limits,
     )?;
+    state.independent_texture_count = scene
+        .textures
+        .iter()
+        .filter(|t| t.id >= res::MATERIAL_TEXTURE_BASE)
+        .count();
     state.authoritative_shader = assets
         .get(&AssetId::Packet(33))
         .cloned()
@@ -1885,6 +1913,7 @@ fn prepare_impl_with_kernels(
             &settings,
             variants,
             native_kernels,
+            [16384, 0],
         )
     })
 }
@@ -1896,6 +1925,7 @@ fn prepare_impl_with_kernels_inner(
     settings: &settings::RenderSettings,
     variants: u32,
     native_kernels: bool,
+    texture_limits: [u32; 2],
 ) -> Result<(Scene, Assets)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
@@ -1904,7 +1934,11 @@ fn prepare_impl_with_kernels_inner(
     // The export wrapper owns its inbound bytes. Retained geometry views root
     // that allocation; output resources are extracted before reset/collection.
     init_core();
-    let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
+    let configured = native_step(
+        mt_core_scene_configure,
+        &settings.wire_with_textures(variants, texture_limits)?,
+        token,
+    )?;
     if configured[..4] != 1u32.to_le_bytes() {
         return Err("Invalid render settings".into());
     }
@@ -2023,7 +2057,7 @@ fn unpack_scene_packet(packet: &[u8]) -> Result<(Scene, Assets)> {
     }
     let count = w.u(ph::COUNT);
     if w.u(ph::VERSION) != 1
-        || !(19..=27).contains(&count)
+        || !(19..=65563).contains(&count)
         || packet.len() < (ph::WORDS + count * pe::WORDS) * WORD_BYTES
     {
         return Err("Invalid native resource packet".into());
@@ -2137,7 +2171,30 @@ fn unpack_scene_packet(packet: &[u8]) -> Result<(Scene, Assets)> {
             resource: name,
         });
     }
-    let groups = crate::layout::bind_groups();
+    let mut groups = crate::layout::bind_groups();
+    let independent = textures
+        .iter()
+        .filter(|t| t.id >= res::MATERIAL_TEXTURE_BASE)
+        .count();
+    if independent > 0 {
+        let group = &mut groups[crate::layout::group::TEXTURES];
+        let map = group.layout.iter_mut().find(|e| e.binding == 1).unwrap();
+        map.ty = wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        };
+        map.count = std::num::NonZeroU32::new(independent as u32);
+        *group.layout.iter_mut().find(|e| e.binding == 3).unwrap() = crate::storage_layout(3, true);
+        let map = group.entries.iter_mut().find(|e| e.binding == 1).unwrap();
+        map.kind = BindingKind::TextureArray(independent);
+        map.id = res::MATERIAL_TEXTURE_BASE;
+        buffers
+            .iter_mut()
+            .find(|b| b.id == res::MAP_INFO)
+            .unwrap()
+            .usage = 140;
+    }
     Ok((
         Scene {
             width: w.u(ph::WIDTH) as u32,

@@ -23,7 +23,11 @@ export default class MaterialData {
     this.displacementMaps = maps.indices.displacementMap.map(index => maps.textures[index]).filter(texture => !!texture);
     this.textures = maps.textures.slice();
     for (const texture of lightTextures) {
-      if (texture) { this.lightTexturesIndices.push(this.textures.length); this.textures.push(texture); }
+      if (texture) {
+        const existing = options.independentTextures ? this.textures.indexOf(texture) : -1;
+        if (existing >= 0) this.lightTexturesIndices.push(existing);
+        else { this.lightTexturesIndices.push(this.textures.length); this.textures.push(texture); }
+      }
       else this.lightTexturesIndices.push(-1);
     }
     this.bufferData = createMaterialBufferData(materials);

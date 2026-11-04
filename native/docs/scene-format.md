@@ -172,10 +172,15 @@ changes only the camera is incremental.
   with `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` (positive integer MiB). This does not
   cap peak process memory. Descriptors must also fit 32-bit word offsets (under
   16 GiB). A scene's combined prepared resources must stay below 4 GiB.
-  At most 16,777,216 texture pixels in total.
+  At most 104,857,600 input texture pixels in total, with each edge at most
+  16,384 pixels.
 - At most 4,000,000 vertices and 12,000,000 indices per geometry. Multi-material
   and displacement scenes can need more preparation memory. The selected GPU
   must support each resident buffer; use HWRT when the software BVH exceeds its
   buffer or preparation budget.
-- The texture atlas is limited to 64 MiB, 4,096 pixels per side and 256 layers;
-  larger sources are scaled down.
+- Material GPU textures share a 384 MiB budget, matching the browser default.
+  RGBA8 uses four bytes per pixel; when any material texture needs floating-point
+  storage, all use RGBA16F at eight bytes per pixel. Original dimensions are
+  preserved when they fit the budget and the selected device's texture limits.
+  Devices with enabled texture binding arrays use separate images; other devices
+  use an atlas with at most 256 layers, whose packing can require more reduction.

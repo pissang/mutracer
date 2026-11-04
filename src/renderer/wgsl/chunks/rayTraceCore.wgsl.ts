@@ -10,6 +10,8 @@ import {
 } from '../../lightConstants.js';
 
 export default function rayTraceCore({
+  // Independent mapInfo starts with image width, height and binding-array index.
+  independentTextures = false,
   compactVertices = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
@@ -20,6 +22,7 @@ export default function rayTraceCore({
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
+  independentTextures?: boolean;
   compactVertices?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
@@ -324,10 +327,10 @@ ${vertexAttributeReaders(compactVertices, hasAnisotropyDirections)}
 
 // Textures
 @group(1) @binding(0) var mapSampler: sampler;
-@group(1) @binding(1) var map: texture_2d_array<f32>;
+@group(1) @binding(1) var map: ${independentTextures ? 'binding_array<texture_2d<f32>>' : 'texture_2d_array<f32>'};
 // The first NUM_MAPS entries contain atlas placement; the second half stores
 // per-texture UV scale/offset; the third block stores the UV channel in x.
-@group(1) @binding(3) var<uniform> mapInfo: array<vec4f, NUM_MAPS * 3>;
+@group(1) @binding(3) var<${independentTextures ? 'storage, read' : 'uniform'}> mapInfo: array<vec4f, NUM_MAPS * 3>;
 @group(1) @binding(4) var envMap: texture_2d<f32>;
 @group(1) @binding(5) var envMapDistribution: texture_2d<f32>;
 @group(1) @binding(6) var backgroundMap: texture_2d<f32>;

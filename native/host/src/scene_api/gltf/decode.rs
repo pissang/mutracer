@@ -16,11 +16,10 @@ type Import = (
     bool,
     Vec<Value>,
 );
-/// Texture pixels shared by all material textures: the descriptor allows 16M and
-/// 4M stay reserved for the largest supported environment image.
-pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 12_582_912;
+/// Matches the browser default: 384 MiB of RGBA8 material images.
+pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 384 * 1024 * 1024 / 4;
 /// Longest texture side the atlas stores without scaling.
-pub(super) const MAX_TEXTURE_EDGE: u32 = 4096;
+pub(super) const MAX_TEXTURE_EDGE: u32 = 16384;
 fn number(v: &Value, name: &str) -> Result<usize> {
     v[name]
         .as_u64()
@@ -286,16 +285,11 @@ fn load_bytes_mode(
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
     let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
     let validated = started.map(|_| std::time::Instant::now());
-    let image_count = document.images().len().max(1) as u64;
-    let edge = ((MATERIAL_TEXEL_BUDGET / image_count) as f64)
-        .sqrt()
-        .floor()
-        .min(MAX_TEXTURE_EDGE as f64) as u32;
     // Bound simultaneous full-resolution decoder scratch, independently of the
     // number of images. Completed images already share the reduced texel budget.
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(12));
     let sources: Vec<_> = document.images().map(|image| image.source()).collect();
-    let (images, resized) = decode_images(&sources, &j, &buffers, path, edge, workers)?;
+    let (images, resized) = decode_images(&sources, &j, &buffers, path, MAX_TEXTURE_EDGE, workers)?;
     if let (
         Some(start),
         Some(parsed),
@@ -335,20 +329,67 @@ fn load_bytes_mode(
     ))
 }
 
+fn source_bytes<'a>(
+    source: &gltf::image::Source<'_>,
+    json: &Value,
+    buffers: &'a [gltf::buffer::Data],
+    path: Option<&Path>,
+) -> Result<std::borrow::Cow<'a, [u8]>> {
+    Ok(match source {
+        gltf::image::Source::Uri { uri: name, .. } => std::borrow::Cow::Owned(uri(path, name)?),
+        gltf::image::Source::View { view: v, .. } => {
+            std::borrow::Cow::Borrowed(view(json, buffers, v.index())?)
+        }
+    })
+}
+fn image_sizes(dimensions: &[(u32, u32)], budget: u64, edge: u32) -> Result<Vec<(u32, u32)>> {
+    ensure!(
+        dimensions.len() as u64 <= budget,
+        "Material texture budget is full"
+    );
+    let sizes = |scale: f64| {
+        dimensions
+            .iter()
+            .map(|&(w, h)| {
+                (
+                    (w as f64 * scale).floor().max(1.) as u32,
+                    (h as f64 * scale).floor().max(1.) as u32,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let pixels = |sizes: &[(u32, u32)]| {
+        sizes
+            .iter()
+            .map(|&(w, h)| u64::from(w) * u64::from(h))
+            .sum::<u64>()
+    };
+    let mut scale = dimensions
+        .iter()
+        .fold(1f64, |s, &(w, h)| s.min(edge as f64 / w.max(h) as f64));
+    if pixels(&sizes(scale)) > budget {
+        let (mut low, mut high) = (0., scale);
+        for _ in 0..40 {
+            let mid = (low + high) / 2.;
+            if pixels(&sizes(mid)) <= budget {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        scale = low;
+    }
+    Ok(sizes(scale))
+}
 fn decode_image(
     source: &gltf::image::Source<'_>,
     json: &Value,
     buffers: &[gltf::buffer::Data],
     path: Option<&Path>,
-    edge: u32,
+    size: (u32, u32),
 ) -> Result<(gltf::image::Data, bool)> {
     use image::ImageDecoder;
-    let data = match source {
-        gltf::image::Source::Uri { uri: name, .. } => std::borrow::Cow::Owned(uri(path, name)?),
-        gltf::image::Source::View { view: v, .. } => {
-            std::borrow::Cow::Borrowed(view(json, buffers, v.index())?)
-        }
-    };
+    let data = source_bytes(source, json, buffers, path)?;
     let mut decoder = image::ImageReader::new(std::io::Cursor::new(data.as_ref()))
         .with_guessed_format()?
         .into_decoder()?;
@@ -362,10 +403,10 @@ fn decode_image(
     limits.reserve(decoder.total_bytes())?;
     decoder.set_limits(limits)?;
     let image = image::DynamicImage::from_decoder(decoder)?;
-    let resized = w.max(h) > edge;
+    let resized = (w, h) != size;
     let rgba = if resized {
         image
-            .resize(edge, edge, image::imageops::FilterType::Triangle)
+            .resize_exact(size.0, size.1, image::imageops::FilterType::Triangle)
             .into_rgba8()
     } else {
         image.into_rgba8()
@@ -390,6 +431,21 @@ fn decode_images(
     workers: usize,
 ) -> Result<(Vec<gltf::image::Data>, bool)> {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    let dimensions = sources
+        .iter()
+        .map(|source| {
+            let bytes = source_bytes(source, json, buffers, path)?;
+            let size = image::ImageReader::new(std::io::Cursor::new(bytes.as_ref()))
+                .with_guessed_format()?
+                .into_dimensions()?;
+            ensure!(
+                size.0 > 0 && size.1 > 0 && u64::from(size.0) * u64::from(size.1) <= 67_108_864,
+                "Source material image exceeds 64M pixels"
+            );
+            Ok(size)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let sizes = image_sizes(&dimensions, MATERIAL_TEXEL_BUDGET, edge)?;
     let next = AtomicUsize::new(0);
     let first_error = AtomicUsize::new(sources.len());
     let mut decoded = std::thread::scope(|scope| -> Result<Vec<_>> {
@@ -397,6 +453,7 @@ fn decode_images(
             .map(|_| {
                 let next = &next;
                 let first_error = &first_error;
+                let sizes = &sizes;
                 scope.spawn(move || {
                     let mut images = Vec::new();
                     loop {
@@ -407,7 +464,7 @@ fn decode_images(
                         let Some(source) = sources.get(index) else {
                             break;
                         };
-                        let result = decode_image(source, json, buffers, path, edge);
+                        let result = decode_image(source, json, buffers, path, sizes[index]);
                         if result.is_err() {
                             first_error.fetch_min(index, Ordering::Relaxed);
                         }
@@ -468,13 +525,15 @@ pub(super) mod tests {
                 .unwrap();
             let data = encoded.into_inner();
             let decoded = image::load_from_memory(&data).unwrap();
-            expected.push(if decoded.width().max(decoded.height()) > 5 {
+            expected.push(
                 decoded
-                    .resize(5, 5, image::imageops::FilterType::Triangle)
-                    .into_rgba8()
-            } else {
-                decoded.into_rgba8()
-            });
+                    .resize_exact(
+                        (decoded.width() as f64 * 0.2).floor().max(1.) as u32,
+                        (decoded.height() as f64 * 0.2).floor().max(1.) as u32,
+                        image::imageops::FilterType::Triangle,
+                    )
+                    .into_rgba8(),
+            );
             let mime = if index % 3 == 0 {
                 "image/webp"
             } else {
@@ -530,7 +589,7 @@ pub(super) mod tests {
         let document =
             gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
         let sources: Vec<_> = document.images().map(|image| image.source()).collect();
-        let expected = decode_image(&sources[0], &json, &[], None, 5)
+        let expected = decode_image(&sources[0], &json, &[], None, (3, 2))
             .err()
             .unwrap()
             .to_string();
@@ -695,13 +754,28 @@ pub(super) mod tests {
     #[test]
     fn images_keep_their_size_within_the_shared_budget() {
         assert_eq!(decoded(1024, 600, 1), (vec![(1024, 600)], false));
-        // 100 images share 12M pixels: at most 354 pixels per side each.
+        // Many rectangular images still fit the byte budget at full resolution.
         let (sizes, resized) = decoded(400, 200, 100);
-        assert!(resized);
+        assert!(!resized);
         assert!(
-            sizes.iter().all(|&(w, h)| w == 354 && h == 177),
+            sizes.iter().all(|&(w, h)| w == 400 && h == 200),
             "{sizes:?}"
         );
+    }
+    #[test]
+    fn image_budget_uses_total_area_and_uniform_scale() {
+        assert_eq!(
+            image_sizes(
+                &[(8192, 4096), (1024, 512)],
+                MATERIAL_TEXEL_BUDGET,
+                MAX_TEXTURE_EDGE
+            )
+            .unwrap(),
+            vec![(8192, 4096), (1024, 512)]
+        );
+        let sizes = image_sizes(&[(8, 4), (4, 8), (2, 1)], 24, 16384).unwrap();
+        assert_eq!(sizes, vec![(5, 2), (2, 5), (1, 1)]);
+        assert!(image_sizes(&[(1, 1); 3], 2, 16384).is_err());
     }
     #[test]
     fn skin_initial_pose_is_baked_per_node() {

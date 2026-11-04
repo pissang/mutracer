@@ -80,9 +80,9 @@ export async function referenceScene(bytes, sourceRoot) {
     camera.transform = f.slice(o + 16, o + 32);
     installWebGPUConstants();
     const device = new CaptureDevice();
-    device.limits.maxTextureDimension2D = 4096;
+    device.limits.maxTextureDimension2D = 16384;
     const pass = new Pass(device);
-    pass._maxTextureArrayBytes = 64 * 1024 * 1024;
+    pass._maxTextureArrayBytes = (await load('renderer/textureAtlas.js')).DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
     pass.setSize(u[2], u[3]);
     pass.setCamera(camera);
     pass.setMeshes(meshes);
@@ -130,6 +130,14 @@ export async function referenceScene(bytes, sourceRoot) {
     const trace = new Uint8Array(pass._rtUniform.buffer.slice(0, 320));
     new DataView(trace.buffer).setInt32(88, nativeTlas.buffer.byteLength / 16, true);
     const nativeResources = new Map([[1,bvh],[2,instances],[3,new Uint8Array(attributes.buffer)],[7,trace]]);
+    // Web keeps at least two physical array layers for its default view. Native
+    // requests a D2Array view explicitly and only allocates the logical pages.
+    // Compare all used bytes and verify that excluded browser padding is empty.
+    const atlas = pass._rayTraceBindGroups[1].descriptor.entries.find(e => e.binding === 1).resource.texture;
+    const atlasBytes = textureBytes(atlas), layers = Math.max(1, pass._materialData.textureAtlasStats.layers);
+    const logicalBytes = atlasBytes.length / atlas.depthOrArrayLayers * layers;
+    if (atlasBytes.subarray(logicalBytes).some(v => v !== 0)) throw new Error('Unused browser atlas layer contains data');
+    nativeResources.set(20, atlasBytes.subarray(0, logicalBytes));
     const stacks = getTraversalStackSizes(nativeTlas, prepared.blases);
     const constants = {...pass._constants, ...sceneTraversalConstants(stacks.tlas, stacks.blas), MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
         LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};

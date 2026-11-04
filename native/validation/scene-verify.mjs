@@ -62,7 +62,7 @@ async function verifyScene(input, directory, variant, capture = true) {
             const first = native.findIndex((v, i) => v !== reference[i]);
             throw new Error(`Browser resource ${variant}/${id} differs at ${first}; ${native.length}/${reference.length}`);
         }
-        resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : nativeResources.has(id) ? 'browser geometry in native TLAS layout' : 'browser' });
+        resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : id === 20 ? 'browser logical atlas pages' : nativeResources.has(id) ? 'browser geometry in native TLAS layout' : 'browser' });
     }
     const shader = device.resources.findLast(r => r.kind === 'pipeline').descriptor.compute.module.descriptor.code;
     if (!records.get(30).equals(Buffer.from(nativeShader))) {

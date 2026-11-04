@@ -4,6 +4,8 @@ import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 export interface WGPUShaderFeatures {
+  /** Native wgpu binding arrays. Default false. */
+  independentTextures?: boolean;
   /** Internal host budget. Default 20 preserves native shader generation. */
   maxPathEvents?: number;
   /** Web TLAS leaf boxes. Default false retains the native layout. */
@@ -51,7 +53,7 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
   if (!constants.HAS_VOLUMES) constants = researchTransport()?.constants(constants, features) ?? constants;
-  return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
+  return (features.independentTextures ? 'enable wgpu_binding_array;\n' : '') + wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     hasVolumes: Boolean(constants.HAS_VOLUMES),
     hasVolumeNoise: Boolean(constants.HAS_VOLUME_NOISE),
