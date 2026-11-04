@@ -56,7 +56,7 @@ pub struct ImportedScene {
 impl Scene {
     /// Imports a local glTF/GLB and its local or embedded resources. The default
     /// scene (otherwise the first scene) and initial paused animation pose are used.
-    /// Each file and the combined decoded buffers default to an 8192 MiB admission
+    /// Each file and the combined source/decoded buffers default to an 8192 MiB admission
     /// budget, configurable with MUTRACER_NATIVE_MEMORY_BUDGET_MIB (positive integer).
     /// Peak memory can be several times larger. GPU limits also apply at commit.
     /// Import failures return InvalidArgument with the complete cause chain.

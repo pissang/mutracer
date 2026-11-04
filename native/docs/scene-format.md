@@ -173,9 +173,9 @@ changes only the camera is incremental.
   cap peak process memory. Descriptors must also fit 32-bit word offsets (under
   16 GiB). A scene's combined prepared resources must stay below 4 GiB.
   At most 16,777,216 texture pixels in total.
-- At most 4,000,000 vertices and 12,000,000 indices per geometry. Preparation
-  includes compact vertex attributes, indices and software BVH storage, including
-  material-related expansion. The selected GPU must support each resident buffer;
-  use HWRT when the software BVH exceeds its buffer or preparation budget.
+- At most 4,000,000 vertices and 12,000,000 indices per geometry. Multi-material
+  and displacement scenes can need more preparation memory. The selected GPU
+  must support each resident buffer; use HWRT when the software BVH exceeds its
+  buffer or preparation budget.
 - The texture atlas is limited to 64 MiB, 4,096 pixels per side and 256 layers;
   larger sources are scaled down.

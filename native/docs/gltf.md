@@ -65,7 +65,7 @@ extensions and exceeded limits, return Rust `api::Status::InvalidArgument` or C
 `MT_ERROR_INVALID_ARGUMENT`. The message holds the complete cause chain, so give
 C a large error buffer.
 
-- Model files and combined decoded buffers each default to an 8 GiB budget.
+- Model files and combined source/decoded buffers each default to an 8 GiB budget.
   Set `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` to a positive integer to change it.
   This is an admission limit; peak process memory can be several times larger.
   Each source image is limited to 64M pixels.
