@@ -5,7 +5,7 @@ import {traceSampling} from '../../src/renderer/sceneAssembly.js';
 
 export function defaultSceneConfiguration() {
   return {bounces: 6, directLightCandidates: 2, bevelSamples: 8, clamping: 0, transmissiveAlphaMin: 1,
-    textureDimension: 16384, textureBindings: 0, textureBudgetBytes: 1024 * 1024 * 1024, causticFlags:0,lightPhotons:0,photonMapPhotons:0,photonMapRadius:0,sequenceOffset: 0, sampling: traceSampling('sobol', 64, 12345), variants: 15};
+    textureDimension: 16384, textureBindings: 0, textureBudgetBytes: 3 * 1024 * 1024 * 1024, causticFlags:0,lightPhotons:0,photonMapPhotons:0,photonMapRadius:0,sequenceOffset: 0, sampling: traceSampling('sobol', 64, 12345), variants: 15};
 }
 export function decodeSceneConfiguration(bytes: Uint8Array) {
   if (bytes.byteLength !== S.WORDS * WORD_BYTES) throw new Error('Invalid render settings size');

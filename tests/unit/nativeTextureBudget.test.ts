@@ -10,7 +10,7 @@ function textures(sizes: number[][]) {
 it('keeps large native image sets under the configurable native budget', () => {
   const images = textures(Array.from({length: 40}, () => [2048, 2048]));
   const budget = defaultSceneConfiguration().textureBudgetBytes;
-  expect(budget).toBe(1024 * 1024 * 1024);
+  expect(budget).toBe(3 * 1024 * 1024 * 1024);
   const native = planTextureAtlas(images, images.map(() => 0), {independentTextures: true, maxTextureArrayBytes: budget, maxTextureDimension2D: 16384});
   const web = planIndependentTextures(images, budget, 16384);
   expect(native.stats.scale).toBe(1);

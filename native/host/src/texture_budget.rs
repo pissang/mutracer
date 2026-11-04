@@ -1,6 +1,6 @@
 //! One process-wide material budget for decoded images and GPU storage.
 const MIB: usize = 1024 * 1024;
-const DEFAULT_MIB: usize = 1024;
+const DEFAULT_MIB: usize = 3072;
 fn parse(value: Option<&str>) -> usize {
     value
         .and_then(|v| v.parse::<usize>().ok())
@@ -22,7 +22,7 @@ pub(crate) fn texels() -> u64 {
 mod tests {
     #[test]
     fn budget_defaults_and_overrides_stay_within_resource_wire_offsets() {
-        assert_eq!(super::parse(None), 1024 * 1024 * 1024);
+        assert_eq!(super::parse(None), 3 * 1024 * 1024 * 1024);
         assert_eq!(super::parse(Some("2048")), 2 * 1024 * 1024 * 1024);
         assert_eq!(super::parse(Some("1")), 1024 * 1024);
         for value in ["0", "-1", "4096", "invalid", "18446744073709551615"] {

@@ -178,7 +178,7 @@ changes only the camera is incremental.
   and displacement scenes can need more preparation memory. The selected GPU
   must support each resident buffer; use HWRT when the software BVH exceeds its
   buffer or preparation budget.
-- Material textures default to a 1 GiB budget. Set
+- Material textures default to a 3 GiB budget. Set
   `MUTRACER_NATIVE_TEXTURE_BUDGET_MIB` to an integer from 1 through 4095 before
   starting the process to change it; missing or invalid values use the default.
   The budget applies to both material-image import and GPU storage. Restart the
