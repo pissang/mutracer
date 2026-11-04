@@ -118,6 +118,7 @@ impl Snapshot {
     fn apply(self, v: &mut Viewer, settings: bool, materials: bool) {
         if settings {
             let s = self.settings;
+            v.environments.cancel();
             v.environment = s.environment;
             if v.sky.time != s.sky_time {
                 v.sky.invalidate();

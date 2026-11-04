@@ -107,8 +107,10 @@ platform differences for trying features or checking a new version.
   and **glTF Research Scenes** as the web viewer. Choose a thumbnail to load it.
   Switching inspector tabs keeps the selected collection and loaded model.
 - Downloads include the model's external buffers, textures and available scene
-  environment. Completed downloads are cached for reuse. Loading and failed
-  downloads keep the previous model visible.
+  environment. Completed downloads are cached for reuse. The loading card shows
+  download, glTF parsing, BVH preparation and shader compilation until the new
+  scene first appears. Loading, cancellation and failure keep the previous model
+  visible; **Cancel** is available during download and parsing.
 - Collection models use their saved preview view. Research scenes use the first
   authored camera and original lighting when available. **Camera** selects other
   imported views, and **Scene lighting** restores an imported environment.
@@ -190,12 +192,15 @@ platform differences for trying features or checking a new version.
 ### Lighting and background
 
 - **Environment**: intensity, tint and rotation. **Procedural sky** follows the
-  selected time of day (15:00 by default). **Load HDR…** opens a local Radiance
-  equirectangular map; **Scene lighting** selects the model's environment when
-  available. Imported scene lights remain active when changing environments.
-- **Browse Poly Haven HDRIs** searches the CC0 environment catalog with
-  category filters and 1K, 2K or 4K downloads. Downloads are cached; cancellation
-  or failure keeps the previous environment.
+  selected time of day (15:00 by default); drag the sun's path to change it or
+  double-click to reset. Choose the same sky and HDRI presets as the web viewer,
+  or use **Upload .hdr** for a local Radiance equirectangular map. **Scene lighting**
+  selects the model's environment when available. Imported scene lights remain
+  active when changing environments or switching to Studio.
+- **Resolution** selects 1K, 2K or 4K HDRI downloads, with byte progress and
+  cancellation. **Browse Poly Haven** searches the full CC0 catalog by category.
+  Completed downloads are cached; cancellation or failure keeps the previous
+  environment. See [HDR image limits](#limits) for the native resolution cap.
 - **Studio**: eight softbox presets with intensity, rotation, size, ambient fill
   and ambient color. Lights follow the model's bounds; larger softboxes give
   softer shadows at about the same exposure. Changing the preset takes longer

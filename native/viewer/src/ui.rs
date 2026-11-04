@@ -1,5 +1,5 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
-use crate::{Change, Viewer, scene::Environment};
+use crate::{Change, Viewer};
 use crate::{api, controls, theme};
 use eframe::egui;
 
@@ -1109,6 +1109,9 @@ impl Viewer {
             &[(false, "Environment"), (true, "Studio")],
         );
         changed |= was_studio != self.environment.studio.enabled;
+        if was_studio != self.environment.studio.enabled {
+            self.environments.cancel();
+        }
         if self.environment.studio.enabled {
             controls::section(ui, "Studio", |ui| {
                 let studio = &mut self.environment.studio;
@@ -1152,50 +1155,7 @@ impl Viewer {
             });
         } else {
             controls::section(ui, "Environment", |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&self.environment.name).color(theme::MUTED),
-                    )
-                    .truncate(),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    if controls::button(ui, "Browse Poly Haven HDRIs").clicked() {
-                        self.environments.open = true;
-                    }
-                    if controls::button(ui, "Load HDR…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Radiance HDR", &["hdr"])
-                            .pick_file()
-                        {
-                            match self.environment.load(&path) {
-                                Ok(()) => {
-                                    self.environment.model_lighting = false;
-                                    changed = true;
-                                }
-                                Err(e) => self.error = format!("Could not load environment: {e:#}"),
-                            }
-                        }
-                    }
-                    if self.model.1.available && controls::button(ui, "Scene lighting").clicked() {
-                        self.environment = self.model.environment_for_load(&self.environment);
-                        changed = true;
-                    }
-                    if controls::button(ui, "Procedural sky").clicked() {
-                        self.environment.model_lighting = false;
-                        self.environment.image = None;
-                        self.environment.color = [1.; 3];
-                        self.environment.name = Environment::default().name;
-                        self.sky.invalidate();
-                        changed = true;
-                    }
-                });
-                if self.environment.name == "Procedural sky" {
-                    controls::parameter(
-                        ui,
-                        "Time of day",
-                        controls::Scrub::new(&mut self.sky.time, 5.5..=18.5).suffix(" h"),
-                    );
-                }
+                changed |= self.environment_choices(ui);
                 changed |= controls::parameter(
                     ui,
                     "Intensity",
@@ -1629,35 +1589,7 @@ impl Viewer {
                 } else {
                     self.debug_overlay(&ctx, ui.max_rect())
                 };
-                let loading_rect = if self.loading.is_some() {
-                    egui::Area::new(egui::Id::new("model-download"))
-                        .order(egui::Order::Foreground)
-                        .fixed_pos(egui::pos2(
-                            ui.max_rect().right() - 260.,
-                            ui.max_rect().top() + 10.,
-                        ))
-                        .show(&ctx, |ui| {
-                            theme::panel().inner_margin(10).show(ui, |ui| {
-                                ui.set_width(240.);
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(&self.loading_name);
-                                });
-                                ui.small(&self.examples.progress);
-                                if controls::button(ui, "Cancel").clicked() {
-                                    self.load_cancel
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                                    self.loading = None;
-                                    self.load_progress = None;
-                                    self.examples.progress.clear();
-                                }
-                            });
-                        })
-                        .response
-                        .rect
-                } else {
-                    egui::Rect::NOTHING
-                };
+                let loading_rect = self.loading_card(&ctx, ui.max_rect());
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
                 let width = available.x.min(available.y * aspect);
                 let size = egui::vec2(width, width / aspect);

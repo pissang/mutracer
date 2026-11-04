@@ -189,23 +189,6 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     viewer.debug_open = false;
     let image = settle(&mut viewer, &ctx, &gpu)?;
     save(&gpu, &image, &out.join("default.png"))?;
-    viewer.tab = 5;
-    viewer.inspector_open = true;
-    // Allow thumbnail responses to arrive while using the same panel code.
-    for _ in 0..60 {
-        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
-        std::thread::sleep(Duration::from_millis(15));
-    }
-    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
-    save(&gpu, &image, &out.join("models.png"))?;
-    viewer.examples.research = true;
-    for _ in 0..60 {
-        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
-        std::thread::sleep(Duration::from_millis(15));
-    }
-    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
-    save(&gpu, &image, &out.join("research.png"))?;
-    let camera = viewer.camera.eye();
     let click = |pos| {
         vec![
             egui::Event::PointerMoved(pos),
@@ -223,6 +206,106 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
             },
         ]
     };
+    assert!(
+        viewer.load_status.is_none(),
+        "Startup card survived the first image"
+    );
+    viewer.tab = 2;
+    viewer.inspector_open = true;
+    for _ in 0..160 {
+        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("environment.png"))?;
+    let image = frame(&mut viewer, &ctx, &gpu, [800, 600], vec![])?;
+    save(&gpu, &image, &out.join("environment-narrow.png"))?;
+    for stage in loading::Stage::ALL {
+        let mut progress = loading::Progress::new("Sample scene.glb".into(), stage);
+        progress.loaded = 3 * 1048576;
+        progress.total = 8 * 1048576;
+        viewer.load_status = Some(progress);
+        let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        save(&gpu, &image, &out.join(format!("loading-{stage:?}.png")))?;
+    }
+    // The model loader can finish before the GPU scene. Keep the old image
+    // and the card through actual descriptor assembly and preparation.
+    viewer.load_preset("spheres", &ctx);
+    assert!(viewer.load_status.is_some());
+    let started = std::time::Instant::now();
+    let mut prepared = false;
+    while viewer.load_status.is_some() {
+        ensure!(
+            started.elapsed() < Duration::from_secs(90),
+            "Load card did not close"
+        );
+        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        if viewer.loading.is_none() && viewer.load_status.is_some() {
+            prepared = true;
+            assert!(
+                viewer.texture.is_some() || viewer.gpu_texture.is_some(),
+                "Loading blanked the previous image"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(prepared, "Card did not survive parsing");
+    assert!(
+        viewer.pose_presented,
+        "Card closed before the new scene presented"
+    );
+    // A failed worker must clear the card and preserve the committed model.
+    let model = viewer.model.name.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    viewer.loading = Some(receive);
+    viewer.load_status = Some(loading::Progress::new(
+        "bad.glb".into(),
+        loading::Stage::Parse,
+    ));
+    send.send(Err(anyhow::anyhow!("Invalid glTF"))).unwrap();
+    viewer.receive_model(&ctx);
+    assert!(viewer.load_status.is_none());
+    assert_eq!(viewer.model.name, model);
+    assert!(viewer.error.contains("Invalid glTF"));
+    viewer.error.clear();
+    let camera = viewer.camera.eye();
+    let (send, receive) = std::sync::mpsc::channel();
+    viewer.loading = Some(receive);
+    viewer.load_cancel = Arc::new(AtomicBool::new(false));
+    viewer.load_status = Some(loading::Progress::new(
+        "cancel.glb".into(),
+        loading::Stage::Download,
+    ));
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    let cancel = ctx
+        .data(|d| {
+            d.get_temp::<egui::Rect>(egui::Id::new("load-cancel"))
+                .unwrap()
+        })
+        .center();
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], click(cancel))?;
+    assert!(viewer.loading.is_none() && viewer.load_status.is_none());
+    assert!(viewer.load_cancel.load(Ordering::Relaxed));
+    assert!(send.send(Err(anyhow::anyhow!("cancelled worker"))).is_err());
+    assert_eq!(viewer.model.name, model);
+    assert_eq!(viewer.camera.eye(), camera, "Cancel orbited the viewport");
+    viewer.tab = 5;
+    viewer.inspector_open = true;
+    // Allow thumbnail responses to arrive while using the same panel code.
+    for _ in 0..60 {
+        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("models.png"))?;
+    viewer.examples.research = true;
+    for _ in 0..60 {
+        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("research.png"))?;
+    let camera = viewer.camera.eye();
     let header_rect = |ctx: &egui::Context| {
         ctx.data(|data| {
             data.get_temp::<egui::Rect>(egui::Id::new("debug-header-rect"))

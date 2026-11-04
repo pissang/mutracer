@@ -87,7 +87,7 @@ pub fn fetch(
                 "Resource exceeds 512 MiB"
             );
             bytes.extend_from_slice(&block[..count]);
-            progress(bytes.len() as u64, total.max(bytes.len() as u64));
+            progress(bytes.len() as u64, total);
         }
         if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
             address = lfs_url(&address).context("Unresolved Git LFS pointer")?;
@@ -148,7 +148,7 @@ pub fn environment_paths(json: &Value) -> Vec<String> {
 pub fn download(
     preset: &Value,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(u64, u64),
 ) -> Result<PathBuf> {
     check_cancel(cancel)?;
     let address = text(preset, "url");
@@ -173,11 +173,10 @@ pub fn download(
         let mut completed = 0;
         let mut get = |url: &str| -> Result<Vec<u8>> {
             let bytes = fetch(url, cancel, |loaded, total| {
-                progress(format!(
-                    "Downloading · {:.1} / {:.1} MB",
-                    (completed + loaded) as f64 / 1e6,
-                    (completed + total) as f64 / 1e6
-                ))
+                progress(
+                    completed + loaded,
+                    if total > 0 { completed + total } else { 0 },
+                )
             })?;
             completed += bytes.len() as u64;
             ensure!(
@@ -463,7 +462,7 @@ mod live_tests {
                 if preset["url"].is_null() {
                     return crate::scene::Model::spheres();
                 }
-                let path = download(preset, &AtomicBool::new(false), |_| {})?;
+                let path = download(preset, &AtomicBool::new(false), |_, _| {})?;
                 let mut model = crate::scene::Model::load(&path)?;
                 model.1.preset = Some(preset.clone());
                 Ok(model)
@@ -512,7 +511,7 @@ mod render_tests {
                 crate::scene::Model::spheres().unwrap()
             } else {
                 crate::scene::Model::load(
-                    &download(preset, &AtomicBool::new(false), |_| {}).unwrap(),
+                    &download(preset, &AtomicBool::new(false), |_, _| {}).unwrap(),
                 )
                 .unwrap()
             };
@@ -545,5 +544,34 @@ mod render_tests {
                 .unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod download_progress_tests {
+    use super::*;
+    #[test]
+    fn unknown_content_length_does_not_report_a_false_total() -> Result<()> {
+        use std::io::Write;
+        let server = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = server.local_addr()?;
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            let mut request = [0u8; 4096];
+            stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello")
+                .unwrap();
+        });
+        let mut updates = Vec::new();
+        let bytes = fetch(
+            &format!("http://{address}/model"),
+            &AtomicBool::new(false),
+            |loaded, total| updates.push((loaded, total)),
+        )?;
+        worker.join().unwrap();
+        assert_eq!(bytes, b"hello");
+        assert_eq!(updates.last(), Some(&(5, 0)));
+        Ok(())
     }
 }

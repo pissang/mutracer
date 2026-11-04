@@ -4,6 +4,61 @@ use std::{
     collections::{HashMap, HashSet},
     sync::mpsc,
 };
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    pub poly_haven: bool,
+}
+pub fn presets() -> &'static [Preset] {
+    static PRESETS: std::sync::OnceLock<Vec<Preset>> = std::sync::OnceLock::new();
+    PRESETS.get_or_init(|| {
+        let data: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../viewer/src/engine/environment-presets.json"
+        ))
+        .expect("Shared environment presets");
+        data.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| Preset {
+                id: p["id"].as_str().unwrap().into(),
+                name: p["name"].as_str().unwrap().into(),
+                poly_haven: p["polyHaven"].as_bool().unwrap(),
+            })
+            .collect()
+    })
+}
+struct Loaded {
+    image: Arc<image::Rgb32FImage>,
+    name: String,
+    preset: Option<String>,
+    resolution: usize,
+}
+pub struct Download {
+    pub name: String,
+    pub preset: Option<String>,
+    pub loaded: u64,
+    pub total: u64,
+}
+impl Download {
+    pub fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            0.
+        } else {
+            (self.loaded as f64 / self.total as f64).clamp(0., 1.) as f32
+        }
+    }
+    pub fn label(&self) -> String {
+        if self.total == 0 {
+            format!("{:.1} MB", self.loaded as f64 / 1048576.)
+        } else {
+            format!(
+                "{:.1} / {:.1} MB",
+                self.loaded as f64 / 1048576.,
+                self.total as f64 / 1048576.
+            )
+        }
+    }
+}
 #[derive(Clone)]
 struct Asset {
     id: String,
@@ -20,9 +75,10 @@ pub struct Browser {
     catalog: Vec<Asset>,
     catalog_job: Option<mpsc::Receiver<Result<Vec<Asset>>>>,
     catalog_requested: bool,
-    download: Option<mpsc::Receiver<Result<(Arc<image::Rgb32FImage>, String)>>>,
+    download: Option<mpsc::Receiver<Result<Loaded>>>,
     cancel: Arc<AtomicBool>,
-    progress: Option<mpsc::Receiver<String>>,
+    progress: Option<mpsc::Receiver<(u64, u64)>>,
+    pub active: Option<Download>,
     pub status: String,
     thumbs: HashMap<String, egui::TextureHandle>,
     queued: HashSet<String>,
@@ -48,12 +104,22 @@ impl Browser {
         self.download = None;
         self.progress = None;
         self.status.clear();
+        self.active = None;
     }
     pub fn load(&mut self, address: String, name: String, ctx: &egui::Context) {
         self.cancel();
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
-        let resolution = ["1k", "2k", "4k"][self.resolution];
+        let resolution_index = self.resolution;
+        let resolution = ["1k", "2k", "4k"][resolution_index];
+        let preset = (!address.starts_with("http://") && !address.starts_with("https://"))
+            .then(|| address.clone());
+        self.active = Some(Download {
+            name: name.clone(),
+            preset: preset.clone(),
+            loaded: 0,
+            total: 0,
+        });
         let (send, receive) = mpsc::channel();
         let (progress, updates) = mpsc::channel();
         let ctx = ctx.clone();
@@ -64,6 +130,10 @@ impl Browser {
             let result = (|| -> Result<_> {
                 let url = if address.starts_with("http://") || address.starts_with("https://") {
                     address
+                } else if presets().iter().any(|p| p.id == address && p.poly_haven) {
+                    format!(
+                        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/{resolution}/{address}_{resolution}.hdr"
+                    )
                 } else {
                     let files = json(
                         &format!("https://api.polyhaven.com/files/{address}"),
@@ -79,11 +149,7 @@ impl Browser {
                 let path = folder.join(format!("{}.hdr", key(&url)));
                 if !path.is_file() {
                     let bytes = examples::fetch(&url, &cancel, |loaded, total| {
-                        let _ = progress.send(format!(
-                            "Downloading · {:.1} / {:.1} MB",
-                            loaded as f64 / 1e6,
-                            total as f64 / 1e6
-                        ));
+                        let _ = progress.send((loaded, total));
                         ctx.request_repaint();
                     })?;
                     examples::check_cancel(&cancel)?;
@@ -100,13 +166,22 @@ impl Browser {
                 let mut env = Environment::default();
                 env.load(&path)?;
                 examples::check_cancel(&cancel)?;
-                Ok((env.image.unwrap(), name))
+                Ok(Loaded {
+                    image: env.image.unwrap(),
+                    name,
+                    preset,
+                    resolution: resolution_index,
+                })
             })();
             let _ = send.send(result);
             ctx.request_repaint();
         });
     }
-    fn thumbnail(&mut self, id: &str, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    pub(super) fn thumbnail(
+        &mut self,
+        id: &str,
+        ctx: &egui::Context,
+    ) -> Option<egui::TextureHandle> {
         if self.thumb_send.is_none() {
             let (send, jobs) = mpsc::sync_channel::<String>(16);
             let (results, receive) = mpsc::channel();
@@ -159,8 +234,12 @@ impl Viewer {
     pub(super) fn environment_browser(&mut self, ctx: &egui::Context) {
         let browser = &mut self.environments;
         if let Some(updates) = &browser.progress {
-            for message in updates.try_iter() {
-                browser.status = message;
+            for (loaded, total) in updates.try_iter() {
+                if let Some(active) = &mut browser.active {
+                    active.loaded = loaded;
+                    active.total = total;
+                    browser.status = format!("Downloading {} · {}", active.name, active.label());
+                }
             }
         }
         let result = browser.download.as_ref().map(|receive| receive.try_recv());
@@ -171,10 +250,13 @@ impl Viewer {
                     self.environments.download = None;
                     self.environments.progress = None;
                     self.environments.status.clear();
+                    self.environments.active = None;
                     match result {
-                        Ok((image, name)) => {
-                            self.environment.image = Some(image);
-                            self.environment.name = name;
+                        Ok(loaded) => {
+                            self.environment.image = Some(loaded.image);
+                            self.environment.name = loaded.name;
+                            self.environment.preset = loaded.preset;
+                            self.environment.resolution = loaded.resolution;
                             self.environment.model_lighting = false;
                             self.environment.studio.enabled = false;
                             self.dirty(Change::Environment);
@@ -188,7 +270,7 @@ impl Viewer {
                     ctx.request_repaint_after(Duration::from_millis(50))
                 }
                 Err(_) => {
-                    self.environments.download = None;
+                    self.environments.cancel();
                     self.error = "Environment download stopped".into();
                 }
             }
@@ -372,12 +454,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(120))
             .unwrap()
             .unwrap();
-        assert_eq!(result.1, "Studio small 09");
-        assert!(result.0.width() > 0 && result.0.height() > 0);
-        assert!(u64::from(result.0.width()) * u64::from(result.0.height()) <= 4_194_304);
+        assert_eq!(result.name, "Studio small 09");
+        assert_eq!(result.preset.as_deref(), Some("studio_small_09"));
+        assert!(result.image.width() > 0 && result.image.height() > 0);
+        assert!(u64::from(result.image.width()) * u64::from(result.image.height()) <= 4_194_304);
         assert!(
             result
-                .0
+                .image
                 .pixels()
                 .all(|p| p.0.iter().all(|v| v.is_finite() && *v >= 0.))
         );
@@ -389,6 +472,31 @@ mod tests {
             .recv_timeout(Duration::from_secs(120))
             .unwrap()
             .unwrap();
-        assert_eq!(*cached.0, *result.0);
+        assert_eq!(*cached.image, *result.image);
+    }
+}
+
+#[cfg(test)]
+mod download_state_tests {
+    use super::*;
+    #[test]
+    fn cancelling_disconnects_old_results_and_clears_progress() {
+        let mut browser = Browser::default();
+        let (send, receive) = mpsc::channel();
+        browser.download = Some(receive);
+        browser.active = Some(Download {
+            name: "Old HDRI".into(),
+            preset: Some("studio_small_09".into()),
+            loaded: 42,
+            total: 100,
+        });
+        browser.status = "Downloading".into();
+        let cancel = browser.cancel.clone();
+        browser.cancel();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(browser.active.is_none());
+        assert!(browser.download.is_none());
+        assert!(browser.status.is_empty());
+        assert!(send.send(Err(anyhow::anyhow!("stale result"))).is_err());
     }
 }

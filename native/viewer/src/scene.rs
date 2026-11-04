@@ -227,6 +227,7 @@ impl Model {
                 Arc::new(image::Rgb32FImage::from_pixel(1, 1, image::Rgb([0.; 3])))
             }));
             environment.name = "Scene lighting".into();
+            environment.preset = Some("model".into());
             environment.intensity = 1.;
             environment.rotation = 0.;
             environment.ground_shadow = false;
@@ -416,6 +417,8 @@ impl KeyLight {
 
 #[derive(Clone)]
 pub struct Environment {
+    pub preset: Option<String>,
+    pub resolution: usize,
     pub model_lighting: bool,
     pub intensity: f32,
     pub color: [f32; 3],
@@ -434,7 +437,9 @@ pub struct Environment {
 }
 impl PartialEq for Environment {
     fn eq(&self, other: &Self) -> bool {
-        self.model_lighting == other.model_lighting
+        self.preset == other.preset
+            && self.resolution == other.resolution
+            && self.model_lighting == other.model_lighting
             && self.intensity == other.intensity
             && self.color == other.color
             && self.rotation == other.rotation
@@ -457,6 +462,8 @@ impl PartialEq for Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
+            preset: Some("sky".into()),
+            resolution: 0,
             model_lighting: false,
             intensity: 1.,
             color: [1.; 3],
@@ -518,6 +525,7 @@ impl Environment {
                 .all(|p| p.0.iter().all(|v| v.is_finite() && *v >= 0.)),
             "Environment must be finite and nonnegative"
         );
+        self.preset = None;
         self.image = Some(Arc::new(img));
         self.name = path
             .file_name()

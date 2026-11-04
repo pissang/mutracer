@@ -1,3 +1,4 @@
+import environmentPresets from './environment-presets.json';
 import type { SceneVolume } from '@meimu/mutracer';
 import type { EnvResolution } from '../store';
 import type { ModelCamera } from './modelCamera';
@@ -46,11 +47,6 @@ export interface EnvironmentPreset {
   thumbnail: string | null;
 }
 
-const polyHaven = (id: string, name: string): EnvironmentPreset => ({
-  id, name, polyHaven: true,
-  thumbnail: `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=256`
-});
-
 /** Poly Haven serves every HDRI at several widths; 1K is about 1.5 MB, 4K about 25 MB. */
 export const ENV_RESOLUTIONS: { value: EnvResolution; label: string; size: string }[] = [
   { value: '1k', label: '1K', size: '~1.5 MB' },
@@ -65,14 +61,7 @@ export function environmentUrl(preset: EnvironmentPreset, resolution: EnvResolut
 }
 
 /** Poly Haven HDRIs are CC0. */
-export const ENVIRONMENT_PRESETS: EnvironmentPreset[] = [
-  { id: 'sky', name: 'Procedural sky', polyHaven: false, thumbnail: null },
-  polyHaven('studio_small_09', 'Studio'),
-  polyHaven('empty_warehouse_01', 'Warehouse'),
-  polyHaven('venice_sunset', 'Venice Sunset'),
-  polyHaven('spruit_sunrise', 'Spruit Sunrise'),
-  polyHaven('nature_reserve_forest', 'Forest'),
-  polyHaven('lebombo', 'Lebombo'),
-  polyHaven('snowy_field', 'Snowy Field'),
-  polyHaven('moonless_golf', 'Night')
-];
+export const ENVIRONMENT_PRESETS: EnvironmentPreset[] = environmentPresets.map((preset) => ({
+  ...preset,
+  thumbnail: preset.polyHaven ? `https://cdn.polyhaven.com/asset_img/thumbs/${preset.id}.png?width=256` : null
+}));

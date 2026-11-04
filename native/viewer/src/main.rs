@@ -7,6 +7,7 @@ mod dlss;
 mod dock;
 mod edit_bench;
 mod environment_browser;
+mod environment_ui;
 mod examples;
 mod focus;
 mod focus_smoke;
@@ -19,6 +20,7 @@ mod input;
 mod large_scene_smoke;
 mod live_denoise_smoke;
 mod load_profile;
+mod loading;
 mod material_presets;
 mod metrics;
 mod model_files;
@@ -356,7 +358,8 @@ struct Viewer {
     loading: Option<std::sync::mpsc::Receiver<Result<Model>>>,
     loading_name: String,
     load_cancel: Arc<AtomicBool>,
-    load_progress: Option<std::sync::mpsc::Receiver<String>>,
+    load_progress: Option<std::sync::mpsc::Receiver<loading::Update>>,
+    load_status: Option<loading::Progress>,
     examples: examples::Browser,
     environments: environment_browser::Browser,
     camera_index: Option<usize>,
@@ -475,6 +478,10 @@ impl Viewer {
             rotation_clock: std::time::Instant::now(),
             hide_ui: false,
             last_loop_frame: std::time::Instant::now(),
+            load_status: Some(loading::Progress::new(
+                model.name.clone(),
+                loading::Stage::Bvh,
+            )),
             model,
             descriptor: None,
             animation_clock: std::time::Instant::now(),
@@ -665,6 +672,12 @@ impl Viewer {
                     .to_string_lossy()
                     .into_owned()
             });
+        let stage = if path.is_some() || preset.as_ref().is_some_and(|p| p["url"].is_null()) {
+            loading::Stage::Parse
+        } else {
+            loading::Stage::Download
+        };
+        self.load_status = Some(loading::Progress::new(self.loading_name.clone(), stage));
         self.examples.progress = format!("Loading {}…", self.loading_name);
         self.error.clear();
         let (send, receive) = std::sync::mpsc::channel();
@@ -676,13 +689,17 @@ impl Viewer {
                     let path = match path {
                         Some(path) => path,
                         None if preset.as_ref().unwrap()["url"].is_null() => default_model(),
-                        None => examples::download(preset.as_ref().unwrap(), &cancel, |message| {
-                            let _ = progress.send(message);
-                            ctx.request_repaint();
-                        })?,
+                        None => examples::download(
+                            preset.as_ref().unwrap(),
+                            &cancel,
+                            |loaded, total| {
+                                let _ = progress.send(loading::Update::Download { loaded, total });
+                                ctx.request_repaint();
+                            },
+                        )?,
                     };
                     examples::check_cancel(&cancel)?;
-                    let _ = progress.send("Preparing model…".into());
+                    let _ = progress.send(loading::Update::Stage(loading::Stage::Parse));
                     ctx.request_repaint();
                     let mut model = if preset.as_ref().is_some_and(|p| p["url"].is_null()) {
                         Model::spheres()?
@@ -706,17 +723,28 @@ impl Viewer {
     fn receive_model(&mut self, _ctx: &egui::Context) {
         if let Some(updates) = &self.load_progress {
             for message in updates.try_iter() {
-                self.examples.progress = message;
+                if let Some(status) = &mut self.load_status {
+                    status.update(message);
+                    self.examples.progress = status.stage.label().into();
+                }
             }
         }
-        let Some(result) = self.loading.as_ref().and_then(|r| r.try_recv().ok()) else {
-            return;
+        let Some(receive) = &self.loading else { return };
+        let result = match receive.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(anyhow::anyhow!("Model loader stopped"))
+            }
         };
         self.loading = None;
         self.examples.progress.clear();
         self.load_progress = None;
         match result {
             Ok(model) => {
+                if let Some(status) = &mut self.load_status {
+                    status.update(loading::Update::Stage(loading::Stage::Bvh));
+                }
                 if self.auto_units && self.camera.meters_per_unit != self.model.guessed_units() {
                     self.auto_units = false;
                 }
@@ -730,7 +758,10 @@ impl Viewer {
                 self.running = true;
                 self.dirty(Change::Scene);
             }
-            Err(error) => self.error = format!("Could not open {}: {error:#}", self.loading_name),
+            Err(error) => {
+                self.load_status = None;
+                self.error = format!("Could not open {}: {error:#}", self.loading_name);
+            }
         }
     }
     /// Hands the model's descriptor and the render settings to the editing target.
@@ -1283,6 +1314,28 @@ impl Viewer {
                         .is_some_and(|r| self.display_samples(r) > 0);
             }
         }
+        if self.loading.is_none()
+            && self.candidate.is_none()
+            && self.pending_model.is_none()
+            && self.scene_build.is_none()
+            && self.change == Change::None
+        {
+            let compiling = self.final_render().status() == api::RenderStatus::Compiling
+                || self
+                    .target
+                    .render_loop
+                    .preview()
+                    .is_some_and(|r| r.status() == api::RenderStatus::Compiling);
+            let ready = self.pose_presented && !self.preparing();
+            if let Some(progress) = &mut self.load_status {
+                if compiling {
+                    progress.update(loading::Update::Stage(loading::Stage::Shaders));
+                }
+                if ready {
+                    self.load_status = None;
+                }
+            }
+        }
         self.samples = self.display_samples(self.final_render());
         if !self.target.preparing() {
             self.last_commit_full =
@@ -1542,6 +1595,7 @@ impl eframe::App for Viewer {
             if renderer::NativeError::is_busy(&e) {
                 ctx.request_repaint_after(Duration::from_millis(16));
             } else {
+                self.load_status = None;
                 self.error = format!("Render stopped: {e:#}");
                 self.running = false;
                 self.backend = self.target.backend;

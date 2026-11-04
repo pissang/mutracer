@@ -1,0 +1,47 @@
+[
+  {
+    "id": "sky",
+    "name": "Procedural sky",
+    "polyHaven": false
+  },
+  {
+    "id": "studio_small_09",
+    "name": "Studio",
+    "polyHaven": true
+  },
+  {
+    "id": "empty_warehouse_01",
+    "name": "Warehouse",
+    "polyHaven": true
+  },
+  {
+    "id": "venice_sunset",
+    "name": "Venice Sunset",
+    "polyHaven": true
+  },
+  {
+    "id": "spruit_sunrise",
+    "name": "Spruit Sunrise",
+    "polyHaven": true
+  },
+  {
+    "id": "nature_reserve_forest",
+    "name": "Forest",
+    "polyHaven": true
+  },
+  {
+    "id": "lebombo",
+    "name": "Lebombo",
+    "polyHaven": true
+  },
+  {
+    "id": "snowy_field",
+    "name": "Snowy Field",
+    "polyHaven": true
+  },
+  {
+    "id": "moonless_golf",
+    "name": "Night",
+    "polyHaven": true
+  }
+]
