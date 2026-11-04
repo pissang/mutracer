@@ -31,16 +31,22 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path)?;
+        let bytes = mutracer_native_probe::scene_api::viewer_support::Model::read(path)?;
         let mut json = crate::examples::model_json(&bytes)?;
         // The viewer handles punctual lights, including their required extension.
+        let mut patched = false;
         if let Some(required) = json
             .get_mut("extensionsRequired")
             .and_then(serde_json::Value::as_array_mut)
         {
+            patched = required.iter().any(|e| e == "KHR_lights_punctual");
             required.retain(|e| e != "KHR_lights_punctual");
         }
-        let bytes = crate::examples::with_json(&bytes, &json)?;
+        let bytes = if patched {
+            crate::examples::with_json(&bytes, &json)?
+        } else {
+            bytes
+        };
         let mut model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
             &bytes,
             Some(path),

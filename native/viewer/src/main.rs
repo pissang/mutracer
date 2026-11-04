@@ -15,6 +15,7 @@ mod history;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 mod hot_reload;
 mod input;
+mod large_scene_smoke;
 mod live_denoise_smoke;
 mod material_presets;
 mod metrics;
@@ -2853,6 +2854,7 @@ fn main() -> Result<()> {
     let mut dlss_smoke = None;
     let mut model = None;
     let mut smoke_out = None;
+    let mut large_scene_out = None;
     let mut interaction_out = None;
     let mut inspect = false;
     let mut preview_out = None;
@@ -2965,6 +2967,11 @@ fn main() -> Result<()> {
                         .context("--interaction-smoke needs a directory")?,
                 ))
             }
+            "--large-scene-out" => {
+                large_scene_out = Some(PathBuf::from(
+                    args.next().context("--large-scene-out needs a directory")?,
+                ));
+            }
             "--smoke-out" => {
                 smoke_out = Some(PathBuf::from(
                     args.next().context("--smoke-out needs a directory")?,
@@ -3063,6 +3070,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = interaction_out {
         return interaction_smoke(&model, &out);
+    }
+    if let Some(out) = large_scene_out {
+        return large_scene_smoke::run(&model, &out);
     }
     if let Some(out) = smoke_out {
         return smoke(&model, &out);
