@@ -929,12 +929,12 @@ impl Viewer {
         if let Some(reply) = self.picker.poll(self.generation) {
             if self.metrics.is_none() {
                 match reply {
-                    Ok(picking::Reply::Focus(Some(depth))) => {
+                    Ok(picking::Reply::Focus(Some(depth))) if self.picking_focus => {
                         self.camera.focus_distance = depth.max(1e-5);
                         self.picking_focus = false;
                         self.dirty(Change::Camera);
                     }
-                    Ok(picking::Reply::Focus(None)) => {}
+                    Ok(picking::Reply::Focus(_)) => {}
                     Ok(picking::Reply::Selection(api::SurfacePick::Hit(hit))) => {
                         let id = hit.object as usize;
                         if id < self.model.meshes.len()
