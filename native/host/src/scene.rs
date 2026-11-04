@@ -221,6 +221,11 @@ impl Words<'_> {
         Ok(())
     }
 }
+// HWRT custom instance IDs have 24 bits. Every instance also needs a 160-byte
+// traversal record, independent of the adapter's (checked later) TLAS limit.
+pub(crate) fn instance_limit() -> usize {
+    (crate::memory_budget::bytes() / 160).min(1 << 24)
+}
 pub(super) fn validate(bytes: &[u8]) -> Result<()> {
     validate_changed(bytes, &[])
 }
@@ -242,13 +247,13 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     if w.u(h::GEOMETRY_COUNT) == 0
         || w.u(h::GEOMETRY_COUNT) > 65536
         || w.u(h::MESH_COUNT) == 0
-        || w.u(h::MESH_COUNT) > 65536
+        || w.u(h::MESH_COUNT) > instance_limit()
         || w.u(h::MATERIAL_COUNT) == 0
         || w.u(h::MATERIAL_COUNT) > 65536
         || w.u(h::LIGHT_COUNT) > 64
-        || w.u(h::TEXTURE_COUNT) > 256
+        || w.u(h::TEXTURE_COUNT) > 65536
     {
-        return Err("Scene count exceeds probe limits; empty scenes are pending".into());
+        return Err(format!("Scene counts exceed limits: geometries {}, meshes {}, materials {}, lights {}, textures {}; require 1..65536 geometry/material, meshes within memory/24-bit instance budget, 0..64 lights, 0..65536 textures", w.u(h::GEOMETRY_COUNT), w.u(h::MESH_COUNT), w.u(h::MATERIAL_COUNT), w.u(h::LIGHT_COUNT), w.u(h::TEXTURE_COUNT)).into());
     }
     for (count, offset, stride) in [
         (h::GEOMETRY_COUNT, h::GEOMETRY_OFFSET, g::WORDS),
@@ -408,7 +413,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
                 w.reserved(io + b::TRANSFORMS, 2)?;
             } else {
                 instance_count = w.u(io + b::COUNT);
-                if instance_count > 65536 {
+                if instance_count > instance_limit() {
                     return Err("Too many batch instances".into());
                 }
                 if instance_count == 0 {
@@ -426,8 +431,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             }
         }
         expanded_instances += instance_count;
-        if expanded_instances > 65536 {
-            return Err("Expanded instance count exceeds probe limit".into());
+        if expanded_instances > instance_limit() {
+            return Err(format!("Expanded scene requires {expanded_instances} instances; memory/24-bit instance limit is {}", instance_limit()).into());
         }
         w.affine(o + m::TRANSFORM)?;
     }
@@ -2211,6 +2216,37 @@ pub(crate) mod tests {
                 retained.accept_transform().unwrap();
             }
         }
+    }
+    #[test]
+    fn compact_hardware_inputs_preserve_source_vertices_and_indices() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let bytes = input();
+        let (scene, assets, _) = prepare_retained(&bytes, true).unwrap();
+        let layout = scene.native_layout.as_ref().unwrap();
+        assert_eq!(layout.attribute_stride_bytes, 16);
+        assert_eq!(layout.position_offset_bytes, 0);
+        assert!(!assets.contains_key(&AssetId::Packet(41)));
+        assert!(!assets.contains_key(&AssetId::Packet(42)));
+        let packed = &assets[&AssetId::Packet(3)];
+        let source = Words(&bytes);
+        let geometry = source.u(h::GEOMETRY_OFFSET);
+        for i in 0..3 {
+            for axis in 0..3 {
+                let at = i * layout.attribute_stride_bytes + axis * 4;
+                assert_eq!(
+                    u32::from_le_bytes(packed[at..at + 4].try_into().unwrap()) as usize,
+                    source.u(source.u(geometry + g::POSITION) + i * 3 + axis)
+                );
+            }
+        }
+        assert_eq!(
+            assets[&AssetId::Packet(35)],
+            [0u32, 1, 2]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
     }
     #[test]
     fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {

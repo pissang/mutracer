@@ -12,11 +12,11 @@ const boundsByPosition = new WeakMap<Float32Array, {version: number; bounds: Flo
 
 export function receiveGeometryKernelHints(bytes: Uint8Array, token: number): Uint8Array {
   try {
-    if (bytes.length < H.WORDS * 4 || bytes.length > 256 * 1024 * 1024 || bytes.length % 4) throw new Error('Invalid kernel hints');
+    if (bytes.length < H.WORDS * 4 || bytes.length > 0xfffffffc || bytes.length % 4) throw new Error('Invalid kernel hints');
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
     const f = new Float32Array(u.buffer, u.byteOffset, u.length);
     const header = H.WORDS + u[H.COUNT] * E.WORDS;
-    if (u[H.VERSION] !== VERSION.GEOMETRY_KERNELS || u[H.LENGTH] !== u.length || u[H.RESERVED] || u[H.COUNT] > 4096 || header > u.length) throw new Error('Invalid kernel header');
+    if (u[H.VERSION] !== VERSION.GEOMETRY_KERNELS || u[H.LENGTH] !== u.length || u[H.RESERVED] || u[H.COUNT] > 65536 || header > u.length) throw new Error('Invalid kernel header');
     const hints: GeometryKernelHint[] = [];
     let next = header;
     for (let i = 0; i < u[H.COUNT]; i++) {

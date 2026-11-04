@@ -48,11 +48,12 @@ fn finish(pointer: *mut c_void, primitive_count: usize) -> Result<Built> {
     let depth = unsafe { tinybvh_result_max_depth(handle.0) };
     if unsafe { tinybvh_result_layout(handle.0) } != 0
         || size % 16 != 0
-        || size > 1024 * 1024 * 1024
+        || size > crate::memory_budget::RESOURCE_WIRE_BYTES
         || (size > 0 && address == 0)
     {
         return Err("Invalid native TinyBVH output".into());
     }
+    crate::memory_budget::check(size, "Software BVH; select HWRT if this exceeds the budget")?;
     if size == 0 {
         return Ok(Built {
             bytes: vec![],
@@ -285,9 +286,19 @@ pub(super) fn jobs_with_ids(packet: &[u8], instances: bool, capture_ids: bool) -
         let bvh = slot
             .into_inner()
             .ok_or("Missing native TinyBVH job result")??;
-        total += bvh.bytes.len() + bvh.triangle_ids.len() * 4;
-        if total > 1024 * 1024 * 1024 || bvh.depth > 64 {
-            return Err("Native TinyBVH result exceeds byte/stack budget".into());
+        total = total
+            .checked_add(bvh.bytes.len())
+            .and_then(|n| n.checked_add(bvh.triangle_ids.len() * 4))
+            .ok_or("Software BVH size overflow; use HWRT")?;
+        crate::memory_budget::check(
+            total,
+            "Software BVH; select HWRT if this exceeds the budget",
+        )?;
+        if total > crate::memory_budget::RESOURCE_WIRE_BYTES {
+            return Err(format!("Software BVH requires {total} bytes; 32-bit resource offsets allow {} bytes. Use HWRT.", crate::memory_budget::RESOURCE_WIRE_BYTES).into());
+        }
+        if bvh.depth > 64 {
+            return Err("Software BVH exceeds traversal stack budget; use HWRT".into());
         }
         built.push(bvh);
     }

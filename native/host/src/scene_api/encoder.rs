@@ -78,12 +78,80 @@ pub struct SceneData<'a> {
     pub ies: Vec<Arc<[u8]>>,
 }
 impl SceneData<'_> {
+    // Count before allocating or narrowing any wire offsets. Reserve once for
+    // large geometry payloads rather than repeatedly growing the descriptor.
+    pub(super) fn word_count(&self, environment: &Environment) -> anyhow::Result<usize> {
+        let mut words = h::WORDS as u64 + 32;
+        words += (self.geometries.len() * g::WORDS
+            + self.meshes.len() * wire_mesh::WORDS
+            + self.materials.len() * mat::WORDS
+            + self.lights.len() * light_wire::WORDS
+            + (self.textures.len() + usize::from(environment.enabled)) * tex::WORDS)
+            as u64;
+        for g in self.geometries {
+            words += [
+                g.positions.len(),
+                g.indices.len(),
+                g.normals.len(),
+                g.uv[0].len(),
+                g.uv[1].len(),
+                g.colors.len(),
+                g.tangents.len(),
+                g.material_indices.len(),
+            ]
+            .into_iter()
+            .map(|n| n as u64)
+            .sum::<u64>();
+        }
+        for i in 0..self.materials.len() {
+            words += ((MATERIAL_EXTENSIONS
+                + self.properties.get(i).map_or(0, |p| {
+                    p.keys().filter(|id| !extension_ids().contains(id)).count()
+                }))
+                * 4) as u64;
+        }
+        for m in self.meshes {
+            words += m.materials.len() as u64;
+            if let Some(instances) = &m.instances {
+                words += instances.transforms.len() as u64 * 16
+                    + instances.colors.as_ref().map_or(0, |c| c.len()) as u64;
+            }
+        }
+        if self.meshes.iter().any(|m| m.instances.is_some()) {
+            words += self.meshes.len() as u64 * crate::layout::batch::WORDS as u64;
+        }
+        for t in self.textures {
+            words += t
+                .float_pixels
+                .as_ref()
+                .map_or(t.pixels.len().div_ceil(4), |p| p.len()) as u64;
+        }
+        if environment.enabled {
+            words += environment.pixels.len() as u64;
+        }
+        words += self
+            .ies
+            .iter()
+            .map(|b| b.len().div_ceil(4) as u64)
+            .sum::<u64>();
+        anyhow::ensure!(
+            words <= u32::MAX as u64,
+            "Scene descriptor requires {words} words; maximum is {}",
+            u32::MAX
+        );
+        crate::memory_budget::check(words as usize * 4, "Scene descriptor")?;
+        Ok(words as usize)
+    }
     pub fn encode(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u32> {
         self.words(camera, size, environment)
     }
     fn words(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u32> {
         let lights = &self.lights;
-        let mut w = Wire(vec![0; h::WORDS]);
+        let mut w = Wire(Vec::with_capacity(
+            self.word_count(environment)
+                .expect("Scene descriptor budget"),
+        ));
+        w.0.resize(h::WORDS, 0);
         w.0[h::VERSION] = crate::layout::version::SCENE as u32;
         w.0[h::WIDTH] = size[0];
         w.0[h::HEIGHT] = size[1];

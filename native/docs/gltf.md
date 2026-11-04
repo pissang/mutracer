@@ -73,4 +73,6 @@ C a large error buffer.
   their longest side; larger or more numerous images are reduced to fit, with a
   warning.
 - Node hierarchies up to 512 levels.
+- Large scenes usually need HWRT and substantial free memory. Auto selects HWRT
+  when the device supports it; Software can reach its BVH budget earlier.
 - The [scene limits](scene-format.md#limits) also apply.

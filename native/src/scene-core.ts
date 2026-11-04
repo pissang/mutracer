@@ -1159,6 +1159,19 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
     }
     if (!state.hardware) for (const range of update.blases)
       add(RESOURCE.BVH, new Uint8Array(range.blas.buffer), state.tlas.buffer.byteLength + range.offset, KIND.BUFFER);
+    if (!state.hardware && layout.constants.HAS_TRIANGLE_MATERIAL) {
+      let record = state.tlas.buffer.byteLength / 16;
+      for (let i = 0; i < blases.length; i++) {
+        if (affectedBlases.includes(i)) {
+          const source = geometries[i], region = regions.get(source)!;
+          const plane = new Uint32Array(blases[i].bvh.buffer.byteLength / 16);
+          packTriangleMaterials(source, region.materialIndices, blases[i].bvh.buffer, plane, 0);
+          add(RESOURCE.ATTRIBUTES, new Uint8Array(plane.buffer),
+            (Number(state.shader.constants.MATERIALINDEX_OFF) + record) * WORD_BYTES, KIND.BUFFER);
+        }
+        record += blases[i].bvh.buffer.byteLength / 16;
+      }
+    }
     if (state.hardware) {
       for (const index of affectedBlases) {
         const descriptor = state.hardware.geometries[index], local = geometries[index];

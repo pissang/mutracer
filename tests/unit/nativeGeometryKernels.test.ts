@@ -69,3 +69,14 @@ it('uses edited Uint16 indices in public normal/tangent helpers before renderer 
   expect(geometry.tangent!.array[1]).toBeGreaterThan(.7);
   expect(geometry.topologyVersion).toBe(0);
 });
+
+
+it('accepts kernel hints for scenes beyond the old 4096 geometry ceiling', () => {
+  const count = 7626;
+  const packet = encodeGeometryKernelHints(Array.from({length: count}, () => ({vertexCount: 3,
+    bounds: new Float32Array([0, 0, 0, 1, 1, 0]), tangents: undefined})), new Array(count).fill(3));
+  expect(new Uint32Array(receiveGeometryKernelHints(packet, 73).buffer)[0]).toBe(1);
+  const hints = takeGeometryKernelHints(73)!;
+  expect(hints).toHaveLength(count);
+  expect(hints[count - 1].bounds).toEqual(new Float32Array([0, 0, 0, 1, 1, 0]));
+});

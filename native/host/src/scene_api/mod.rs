@@ -826,6 +826,21 @@ impl Scene {
             lights: r.lights.clone(),
             ies: r.ies.clone(),
         };
+        let count = data
+            .word_count(&env)
+            .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
+        // Camera/environment settings and stable identity tables are appended below.
+        let total = count
+            .checked_add(r.meshes.len() + r.materials.len() + 22)
+            .filter(|n| *n <= u32::MAX as usize)
+            .ok_or_else(|| {
+                api::error(
+                    Status::InvalidArgument,
+                    "Scene descriptor word offsets overflow",
+                )
+            })?;
+        crate::memory_budget::check(total * 4, "Scene descriptor")
+            .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
         if !data.patch_selected(words, &camera, [1, 1], &env, previous) {
             *words = data.encode(&camera, [1, 1], &env);
         }

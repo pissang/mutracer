@@ -34,9 +34,16 @@ pub struct Model {
     pub mesh_names: Vec<String>,
 }
 impl Model {
-    pub fn load(path: &Path) -> Result<Self> {
+    // The viewer also uses this reader before inspecting its supported light extension.
+    #[doc(hidden)]
+    pub fn read(path: &Path) -> Result<Vec<u8>> {
         crate::memory_budget::check(usize::try_from(path.metadata()?.len())?, "Model file")?;
-        Self::load_bytes(&std::fs::read(path)?, Some(path))
+        let bytes = std::fs::read(path)?;
+        crate::memory_budget::check(bytes.len(), "Model file")?;
+        Ok(bytes)
+    }
+    pub fn load(path: &Path) -> Result<Self> {
+        Self::load_bytes(&Self::read(path)?, Some(path))
     }
     pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Self> {
         crate::memory_budget::check(bytes.len(), "Model file")?;
@@ -350,7 +357,7 @@ impl Model {
                     image::imageops::FilterType::Triangle,
                 );
             }
-            ensure!(candidate.textures.len() < 255, "Texture limit reached");
+            ensure!(candidate.textures.len() < 65535, "Texture limit reached");
             let uv = reference.as_ref().map_or(0, |t| t.uv);
             let uv = if candidate
                 .meshes
@@ -455,7 +462,7 @@ impl Model {
         let target = if shared {
             // Sampling belongs to this material slot; share immutable pixels with the new record.
             ensure!(
-                self.textures.len() < 255,
+                self.textures.len() < 65535,
                 "Texture limit reached; cannot separate this shared map"
             );
             let texture = texture.clone();
@@ -510,8 +517,8 @@ impl Model {
             return Ok(id as u32);
         }
         ensure!(
-            self.textures.len() < 255,
-            "Material texture count exceeds 255"
+            self.textures.len() < 65535,
+            "Material texture count exceeds 65535"
         );
         let id = self.textures.len() as u32;
         // Decoding shares the budget among source images; copies of one image
@@ -814,7 +821,7 @@ impl Model {
                         .or_else(|| rotation.as_ref().map(Vec::len))
                         .context("Instance transforms missing")?;
                     ensure!(
-                        count <= 65536
+                        count <= crate::scene::instance_limit()
                             && translation.as_ref().is_none_or(|v| v.len() == count)
                             && scale.as_ref().is_none_or(|v| v.len() == count)
                             && rotation.as_ref().is_none_or(|v| v.len() == count),
