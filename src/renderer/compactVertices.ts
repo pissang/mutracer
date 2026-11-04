@@ -68,25 +68,29 @@ export function packCompactVertices(geometry: Geometry, output: Uint32Array, str
   const floats = new Float32Array(output.buffer, output.byteOffset, output.length);
   const p = geometry.position.array, n = geometry.normal.array, tangent = geometry.tangent;
   const uv = geometry.uv, uv1 = geometry.uv1 ?? uv, color = geometry.color;
+  const tangentArray = tangent?.array, tangentSize = tangent?.itemSize ?? 0;
+  const tangentSign = tangentSize === 4 ? 0 : hasGeneratedVertexTangents(geometry) ? 0 : 2;
+  const uvArray = uv?.array, uv1Array = uv1?.array, colorArray = color?.array;
+  const uvOffset = offsets[2], uv1Offset = offsets[3], colorOffset = offsets[4], tangentOffset = offsets[5];
   for (let i = first, end = first + count, d = outputFirst * stride; i < end; i++, d += stride) {
     floats[d] = p[i * 3]; floats[d + 1] = p[i * 3 + 1]; floats[d + 2] = p[i * 3 + 2];
     if (normalFloat) {
       floats[d + 3] = n[i * 3]; floats[d + 4] = n[i * 3 + 1]; floats[d + 5] = n[i * 3 + 2];
     } else output[d + 3] = encodeNormal(n[i * 3], n[i * 3 + 1], n[i * 3 + 2]);
-    if (offsets[5] < stride) {
-      const t = i * (tangent?.itemSize ?? 0);
-      output[d + offsets[5]] = tangent ? encodeTangent(tangent.array[t], tangent.array[t + 1], tangent.array[t + 2],
-        tangent.itemSize === 4 ? tangent.array[t + 3] : hasGeneratedVertexTangents(geometry) ? 0 : 2) : encodeTangent(0, 0, 0, 0);
+    if (tangentOffset < stride) {
+      const t = i * tangentSize;
+      output[d + tangentOffset] = tangentArray ? encodeTangent(tangentArray[t], tangentArray[t + 1], tangentArray[t + 2],
+        tangentSize === 4 ? tangentArray[t + 3] : tangentSign) : encodeTangent(0, 0, 0, 0);
     }
     if (deformationOnly) continue;
-    if (offsets[2] < offsets[4]) {
-      floats[d + offsets[2]] = uv?.array[i * 2] ?? 0; floats[d + offsets[2] + 1] = uv?.array[i * 2 + 1] ?? 0;
-      floats[d + offsets[3]] = uv1?.array[i * 2] ?? 0; floats[d + offsets[3] + 1] = uv1?.array[i * 2 + 1] ?? 0;
+    if (uvOffset < colorOffset) {
+      floats[d + uvOffset] = uvArray?.[i * 2] ?? 0; floats[d + uvOffset + 1] = uvArray?.[i * 2 + 1] ?? 0;
+      floats[d + uv1Offset] = uv1Array?.[i * 2] ?? 0; floats[d + uv1Offset + 1] = uv1Array?.[i * 2 + 1] ?? 0;
     }
-    if (offsets[4] < offsets[5]) {
-      const r = color?.array[i * 3] ?? 1, g = color?.array[i * 3 + 1] ?? 1, b = color?.array[i * 3 + 2] ?? 1;
-      if (colorFloat) {floats[d + offsets[4]] = r; floats[d + offsets[4] + 1] = g; floats[d + offsets[4] + 2] = b;}
-      else output[d + offsets[4]] = (Math.round(r * 255) | Math.round(g * 255) << 8 | Math.round(b * 255) << 16 | 0xff000000) >>> 0;
+    if (colorOffset < tangentOffset) {
+      const r = colorArray?.[i * 3] ?? 1, g = colorArray?.[i * 3 + 1] ?? 1, b = colorArray?.[i * 3 + 2] ?? 1;
+      if (colorFloat) {floats[d + colorOffset] = r; floats[d + colorOffset + 1] = g; floats[d + colorOffset + 2] = b;}
+      else output[d + colorOffset] = (Math.round(r * 255) | Math.round(g * 255) << 8 | Math.round(b * 255) << 16 | 0xff000000) >>> 0;
     }
   }
 }
