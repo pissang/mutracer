@@ -1166,7 +1166,15 @@ fn incremental_candidate(
     if retained.settings != *settings {
         return None;
     }
-    Some((retained, context.descriptor.clone()?))
+    let previous = context.descriptor.as_ref()?;
+    // A different mesh count always changes the retained object list, requiring
+    // full preparation. Reject it before synchronous TS sync constructs and then
+    // discards a complete replacement scene on the caller (often the UI thread).
+    let count = layout::header::MESH_COUNT * 4;
+    if previous.get(count..count + 4)? != bytes.get(count..count + 4)? {
+        return None;
+    }
+    Some((retained, previous.clone()))
 }
 /// Applies planned retained updates. Ok(false) leaves the scene for full preparation.
 fn apply_incremental(

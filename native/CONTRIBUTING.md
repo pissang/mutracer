@@ -639,6 +639,16 @@ separate from formal timing:
 - `nativeGeometryKernelProfile` separates kernel bodies; its time is already
   part of preparation.
 
+Run the viewer with `MODEL_OR_FOLDER --load-profile-out /absolute/evidence/load`
+to measure a real async drop over an already rendered scene, then replacement
+with the bundled model. `MUTRACER_SCENE_BACKEND=0|1` selects Software or HWRT
+(default 1). At 96×64 and 8 samples, the headless probe writes receive/tick
+durations, loading states, first-image time, replacement/destruction time and
+HDR/normal/albedo captures.
+It measures the viewer's loading path; window event delivery and presentation
+need a separate real-window check. `MUTRACER_NATIVE_PROFILE=1` also splits viewer
+scene assembly from descriptor encoding.
+
 ### glTF import profiling
 
 `MUTRACER_NATIVE_PROFILE=1` reports attribute reads, local/world bounds, index

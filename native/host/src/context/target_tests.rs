@@ -120,6 +120,76 @@ impl Drop for Fixture {
         }
     }
 }
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
+    let _test = ABI_TEST_LOCK.lock().unwrap();
+    let f = Fixture::new();
+    let input = scene::tests::input();
+    let mut next = input.clone();
+    use layout::{header as h, mesh as m};
+    let word = |field: usize| {
+        u32::from_le_bytes(input[field * 4..field * 4 + 4].try_into().unwrap()) as usize
+    };
+    let (offset, count) = (word(h::MESH_OFFSET), word(h::MESH_COUNT));
+    let mut meshes = input[offset * 4..(offset + count * m::WORDS) * 4].to_vec();
+    meshes.extend_from_slice(&input[offset * 4..(offset + m::WORDS) * 4]);
+    let offset = next.len() / 4;
+    next.extend(meshes);
+    for (field, value) in [
+        (h::MESH_OFFSET, offset),
+        (h::MESH_COUNT, count + 1),
+        (h::MESH_AOV_IDS, 0),
+        (h::BATCH_OFFSET, 0),
+        (h::LENGTH, next.len() / 4),
+    ] {
+        next[field * 4..field * 4 + 4].copy_from_slice(&(value as u32).to_le_bytes());
+    }
+    scene::validate(&next).unwrap();
+    let next = Arc::new(next);
+    // With AOT deliberately occupied, an incompatible incremental probe must
+    // return immediately, leaving the committed scene available to render.
+    let (started, entered) = mpsc::sync_channel(1);
+    let (resume, resumed) = mpsc::sync_channel(1);
+    runtime::enqueue(move || {
+        started.send(()).unwrap();
+        resumed.recv_timeout(Duration::from_secs(15)).unwrap();
+    });
+    entered.recv().unwrap();
+    let (send, receive) = mpsc::sync_channel(1);
+    let bytes = next.clone();
+    let owner = f.owner;
+    let probe = std::thread::spawn(move || {
+        send.send(
+            commit_path(
+                owner,
+                &bytes,
+                &settings::RenderSettings::default(),
+                CommitPath::IncrementalOnly,
+            )
+            .map_err(|error| error.to_string()),
+        )
+        .unwrap();
+    });
+    let result = receive.recv_timeout(Duration::from_secs(2));
+    resume.send(()).unwrap();
+    probe.join().unwrap();
+    assert_eq!(result.unwrap().unwrap(), CommitOutcome::NeedsFull);
+    render(f.other);
+    assert_eq!(
+        commit_path(
+            f.owner,
+            &next,
+            &settings::RenderSettings::default(),
+            CommitPath::FullOnly
+        )
+        .unwrap(),
+        CommitOutcome::Done
+    );
+    let mut error = [0; 512];
+    ok(f.set(f.other, [8, 8], &mut error), &error);
+    render(f.other);
+}
 fn render(handle: u64) {
     let mut error = [0; 512];
     let mut job = 0;

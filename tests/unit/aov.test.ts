@@ -59,6 +59,17 @@ describe('AOV contract', () => {
     committed.capture(scene, changes); detector.commit();
     expect(first.meshes[0].aovId).toBe(101); expect(first.meshes[0].materials[0].aovId).toBe(202);
   });
+  it('validates mesh ID assignments without changing the last accepted identity', () => {
+    const mesh = new Mesh(createPlaneGeometry(), new OpenPBRMaterial());
+    for (const id of [0, 0x800001ff, 0xfffffffe]) {
+      mesh.aovId = id;
+      expect(mesh.aovId).toBe(id);
+      for (const invalid of [-1, 1.5, NaN, Infinity, 0xffffffff, 0x100000000]) {
+        expect(() => { mesh.aovId = invalid; }).toThrow(RangeError);
+        expect(mesh.aovId).toBe(id);
+      }
+    }
+  });
   it('owns history snapshots and matches rigid motion by stable identity', () => {
     const history = new AovHistory();
     const frame: AovFrameSnapshot = {width: 32, height: 16, projection: 'p', viewProjection: new Float32Array(16),
