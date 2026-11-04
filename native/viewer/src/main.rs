@@ -1,5 +1,7 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod animation;
+#[cfg(test)]
+mod camera_tests;
 mod controls;
 mod denoiser;
 #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
@@ -814,6 +816,9 @@ impl Viewer {
             })?;
         target.engine.display().set_size(size[0], size[1])?;
         target.engine.set_scene_shared(bytes)?;
+        // A descriptor carries the latest camera, including combined edits and
+        // newly loaded scenes. Retire the preceding camera-only override.
+        target.engine.set_camera(None)?;
         target.pushed = true;
         self.pose_presented = false;
         self.error.clear();
@@ -1134,6 +1139,16 @@ impl Viewer {
                     } else {
                         self.final_render().restart()?
                     }
+                }
+                Change::Camera => {
+                    // Retain the shared scene: large models have multi-gigabyte
+                    // descriptors, while a camera record is only 128 bytes.
+                    self.editing().engine.set_camera(Some(
+                        api::Camera::from_bytes(&self.camera.bytes(self.size))
+                            .context("Invalid viewer camera")?,
+                    ))?;
+                    self.pose_presented = false;
+                    self.error.clear();
                 }
                 _ => self.push(held)?,
             }
