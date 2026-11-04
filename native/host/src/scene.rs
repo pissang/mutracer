@@ -2,6 +2,7 @@
 use super::*;
 mod compact_kernel;
 mod geometry_kernels;
+mod geometry_validation;
 use crate::layout::{
     WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
     light as l, material as mat, mesh as m, packet_entry as pe, packet_header as ph,
@@ -337,53 +338,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     }
 
     w.finite(h::BACKGROUND_COLOR, 4)?;
-    let mut geometry_words = 0usize;
-    let mut geometry_costs = Vec::new();
-    for i in 0..w.u(h::GEOMETRY_COUNT) {
-        let o = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
-        let v = w.u(o + g::VERTEX_COUNT);
-        let n = w.u(o + g::INDEX_COUNT);
-        if v == 0 || n == 0 || n % 3 != 0 || v > 4_000_000 || n > 12_000_000 {
-            return Err("Invalid geometry counts".into());
-        }
-        // Worst compact record: f32 position/normal/UVs/HDR RGB + tangent.
-        // Include source indices and conservative software BVH/identity storage.
-        let cost = v * 14 + n * 8;
-        geometry_words = geometry_words
-            .checked_add(cost)
-            .ok_or("Prepared geometry size overflow")?;
-        geometry_costs.push(cost);
-        if geometry_words > crate::memory_budget::bytes() / 4 {
-            return Err("Prepared geometry exceeds probe budget".into());
-        }
-        let scan = unchanged.get(i) != Some(&1);
-        w.span(w.u(o + g::POSITION), v * 3)?;
-        if scan {
-            w.finite(w.u(o + g::POSITION), v * 3)?;
-        }
-        w.span(w.u(o + g::INDICES), n)?;
-        if scan && (0..n).any(|k| w.u(w.u(o + g::INDICES) + k) >= v) {
-            return Err("Geometry index is out of range".into());
-        }
-        for (field, stride) in [
-            (g::NORMAL, 3),
-            (g::UV, 2),
-            (g::UV1, 2),
-            (g::COLOR, 3),
-            (g::TANGENT, 4),
-        ] {
-            if w.u(o + field) != 0 {
-                w.span(w.u(o + field), v * stride)?;
-                if scan {
-                    w.finite(w.u(o + field), v * stride)?;
-                }
-            }
-        }
-        if w.u(o + g::MATERIAL_INDEX) != 0 {
-            w.span(w.u(o + g::MATERIAL_INDEX), v)?;
-        }
-        w.reserved(o + g::RESERVED, 2)?;
-    }
+    let (mut geometry_words, geometry_costs) = geometry_validation::validate(&w, unchanged)?;
     let mut expanded_instances = 0usize;
     for i in 0..w.u(h::MESH_COUNT) {
         let o = w.u(h::MESH_OFFSET) + i * m::WORDS;

@@ -639,6 +639,13 @@ separate from formal timing:
 - `nativeGeometryKernelProfile` separates kernel bodies; its time is already
   part of preparation.
 
+Full scene preparation uses up to 12 CPU threads for independent geometry checks
+and bounds scans. Validation switches at 131,072 vertices plus indices to scan;
+bounds switches at 131,072 vertices. Single-geometry inputs remain serial.
+Validation reports the first error in descriptor order, and each bounds reduction
+retains its vertex order. `MUTRACER_NATIVE_GEOMETRY_SCANS=serial` selects the serial
+path for same-binary performance comparisons.
+
 Run the viewer with `MODEL_OR_FOLDER --load-profile-out /absolute/evidence/load`
 to measure a real async drop over an already rendered scene, then replacement
 with the bundled model. `MUTRACER_SCENE_BACKEND=0|1` selects Software or HWRT

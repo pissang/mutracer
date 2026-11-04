@@ -47,6 +47,46 @@ fn bounds(positions: &[f32]) -> [f32; 6] {
     }
     result
 }
+// Preserve the scalar reduction (including signed zero) within each geometry.
+// Workers borrow only descriptor bytes and never enter the AOT runtime.
+fn geometry_bounds(w: &Words<'_>, workers: usize) -> Vec<[f32; 6]> {
+    let count = w.u(h::GEOMETRY_COUNT);
+    let calculate = |i| {
+        let off = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
+        bounds(&floats(
+            w,
+            w.u(off + g::POSITION),
+            w.u(off + g::VERTEX_COUNT) * 3,
+        ))
+    };
+    if workers <= 1 {
+        return (0..count).map(calculate).collect();
+    }
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let next = AtomicUsize::new(0);
+    let results: Vec<_> = (0..count).map(|_| OnceLock::new()).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers.min(count) {
+            let (next, results, calculate) = (&next, &results, &calculate);
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= count {
+                        break;
+                    }
+                    let _ = results[i].set(calculate(i));
+                }
+            });
+        }
+    });
+    results
+        .into_iter()
+        .map(|r| r.into_inner().expect("Missing geometry bounds result"))
+        .collect()
+}
 fn tangents(positions: &[f32], normals: &[f32], uvs: &[f32], indices: &[u32]) -> Vec<f32> {
     let mut accumulated = vec![0f32; positions.len()];
     for triangle in indices.chunks_exact(3) {
@@ -166,6 +206,23 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
     if !include_bounds && !any_tangents {
         return None;
     }
+    let vertices = (0..count)
+        .map(|i| w.u(w.u(h::GEOMETRY_OFFSET) + i * g::WORDS + g::VERTEX_COUNT))
+        .sum();
+    let bounds_workers = if include_bounds {
+        geometry_validation::scan_workers(count, vertices)
+    } else {
+        0
+    };
+    let bounds_start = profile.then(Instant::now);
+    let geometry_bounds = if include_bounds {
+        geometry_bounds(&w, bounds_workers)
+    } else {
+        Vec::new()
+    };
+    if let Some(start) = bounds_start {
+        bounds_ms = start.elapsed().as_secs_f64() * 1000.;
+    }
     let header = kh::WORDS + count * ke::WORDS;
     let words = header
         + (0..count)
@@ -202,17 +259,13 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         if !include_bounds && !need_tangents {
             continue;
         }
-        let positions = floats(&w, w.u(off + g::POSITION), vertices * 3);
         if include_bounds {
             let offset = (result.len() / WORD_BYTES) as u32;
             write(&mut result, entry + ke::BOUNDS, offset);
-            let start = profile.then(Instant::now);
-            result.extend_from_slice(bytemuck::cast_slice(&bounds(&positions)));
-            if let Some(start) = start {
-                bounds_ms += start.elapsed().as_secs_f64() * 1000.;
-            }
+            result.extend_from_slice(bytemuck::cast_slice(&geometry_bounds[i]));
         }
         if need_tangents {
+            let positions = floats(&w, w.u(off + g::POSITION), vertices * 3);
             let normals = floats(&w, w.u(off + g::NORMAL), vertices * 3);
             let uvs = floats(&w, w.u(off + g::UV), vertices * 2);
             let indices = indices(&w, w.u(off + g::INDICES), w.u(off + g::INDEX_COUNT));
@@ -231,7 +284,7 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
     if profile {
         native_log!(
             "{}",
-            json!({"nativeGeometryKernelProfile":{"boundsMs":bounds_ms,"tangentsMs":tangents_ms,"tangentCalls":tangent_calls}})
+            json!({"nativeGeometryKernelProfile":{"boundsMs":bounds_ms,"boundsWorkers":bounds_workers,"tangentsMs":tangents_ms,"tangentCalls":tangent_calls}})
         );
     }
     write(&mut result, kh::LENGTH, words as u32);
@@ -241,6 +294,60 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parallel_bounds_preserve_order_signed_zero_and_unaligned_inputs() {
+        let mut bytes = geometry_validation::tests::fixture(13, 131);
+        let w = Words(&bytes);
+        let positions: Vec<_> = (0..w.u(h::GEOMETRY_COUNT))
+            .map(|i| w.u(w.u(h::GEOMETRY_OFFSET) + i * g::WORDS + g::POSITION))
+            .collect();
+        for (i, &at) in positions.iter().enumerate() {
+            for vertex in 0..131 {
+                for axis in 0..3 {
+                    let value = if i == 0 {
+                        if vertex % 2 == 0 { -0f32 } else { 0f32 }
+                    } else if i == 1 {
+                        f32::NAN
+                    } else {
+                        (vertex as f32 - i as f32) * (axis + 1) as f32
+                    };
+                    let word = at + vertex * 3 + axis;
+                    bytes[word * 4..word * 4 + 4].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        let expected = geometry_bounds(&Words(&bytes), 1)
+            .into_iter()
+            .map(|b| b.map(f32::to_bits))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            expected[0],
+            [-0f32, -0f32, -0f32, 0f32, 0f32, 0f32].map(f32::to_bits)
+        );
+        assert_eq!(
+            expected[1],
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY
+            ]
+            .map(f32::to_bits)
+        );
+        let mut unaligned = vec![0xff];
+        unaligned.extend_from_slice(&bytes);
+        for workers in [2, 4, 12] {
+            for source in [&bytes[..], &unaligned[1..]] {
+                let actual = geometry_bounds(&Words(source), workers)
+                    .into_iter()
+                    .map(|b| b.map(f32::to_bits))
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "workers={workers}");
+            }
+        }
+    }
     unsafe extern "C" {
         fn mt_core_geometry_kernel_reference(
             input: *const u8,
