@@ -85,6 +85,17 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     );
     let model = serde_json::json!({"meshes":viewer.model.meshes.len(),
         "geometries":viewer.model.geometries.len(),"textures":viewer.model.textures.len()});
+    let environment = serde_json::json!({
+        "name":viewer.environment.name,"sceneLighting":viewer.environment.model_lighting,
+        "selectedSize":viewer.environment.image.as_ref().map(|i| [i.width(),i.height()]),
+        "selectedPeak":viewer.environment.image.as_ref().map(|i| i.as_raw().iter().copied().fold(0f32,f32::max)),
+        "sceneSize":viewer.model.1.environment.as_ref().map(|i| [i.width(),i.height()]),
+        "selectedSceneImage":match (&viewer.environment.image,&viewer.model.1.environment) {
+            (Some(a),Some(b))=>std::sync::Arc::ptr_eq(a,b),_=>false,
+        },
+        "companionSize":viewer.model.1.dropped_environment.as_ref().map(|(i,_)| [i.width(),i.height()]),
+        "warnings":viewer.model.warnings,
+    });
     std::fs::write(
         out.join("loaded.json"),
         serde_json::to_vec_pretty(&dropped)?,
@@ -113,7 +124,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     let started = Instant::now();
     drop(viewer);
     let report = serde_json::json!({"path":path,"backend":backend,"activeBackend":active_backend,
-        "model":model,"startup":startup,
+        "model":model,"environment":environment,"startup":startup,
         "dropped":dropped,"replaced":replaced,"destroySeconds":started.elapsed().as_secs_f64()});
     std::fs::write(out.join("result.json"), serde_json::to_vec_pretty(&report)?)?;
     println!("Loading profile: {}", out.display());

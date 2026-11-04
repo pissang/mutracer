@@ -247,12 +247,21 @@ impl Scene {
                     let loaded: Result<image::Rgb32FImage> = (|| {
                         if let Some(source) = entry["source"].as_str() {
                             let original = format!("../source/{source}");
-                            let local = directory.join(
-                                resources
-                                    .get(&original)
-                                    .map(String::as_str)
-                                    .unwrap_or(&original),
-                            );
+                            // Match the browser's URL resolution before filesystem access.
+                            // `source/../bistro` must work even if `source` does not exist.
+                            let base = url::Url::from_file_path(std::path::absolute(path)?)
+                                .ok()
+                                .context("Invalid model file path")?;
+                            let local = base
+                                .join(
+                                    resources
+                                        .get(&original)
+                                        .map(String::as_str)
+                                        .unwrap_or(&original),
+                                )?
+                                .to_file_path()
+                                .ok()
+                                .context("Scene environment must be a local file")?;
                             let image = if source.to_lowercase().ends_with(".pfm") {
                                 parse_pfm(&std::fs::read(local)?)?
                             } else {
@@ -446,6 +455,66 @@ pub fn reproject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn scene_with_environment_source(
+        folder: &crate::model_files::tests::Folder,
+        source: &str,
+    ) -> (Scene, Vec<String>) {
+        let path = folder.model("bistro/bistro.glb");
+        let mut model =
+            mutracer_native_probe::scene_api::viewer_support::Model::load(&path).unwrap();
+        let mut json = crate::examples::model_json(&std::fs::read(&path).unwrap()).unwrap();
+        json["extras"] = serde_json::json!({"pbrt":{"light_sources":[{
+            "gltf":"metadata_only","pbrt":"infinite","source":source,
+            "pbrt_transform":[-1,0,0,0,0,0,-1,0,0,1,0,0,0,0,0,1]
+        }]}});
+        let scene = Scene::load(&json, &path, &mut model).unwrap();
+        (scene, model.warnings)
+    }
+    #[test]
+    fn environment_source_normalizes_parent_segments_before_reading_like_web() {
+        let folder = crate::model_files::tests::Folder::new();
+        folder.hdr("bistro/environment.hdr", [128, 80, 32, 130]);
+        assert!(!folder.0.join("source").exists());
+        let (scene, warnings) = scene_with_environment_source(&folder, "../bistro/environment.hdr");
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("Scene environment:")),
+            "{warnings:?}"
+        );
+        let image = scene
+            .environment
+            .expect("Bistro's companion HDR must load without an intermediate source directory");
+        assert_eq!(image.dimensions(), (4, 2));
+        assert!(scene.available && scene.authored);
+        for pixel in image.pixels() {
+            for (actual, expected) in pixel.0.into_iter().zip([2., 1.25, 0.5]) {
+                assert!((actual - expected).abs() < 1e-6);
+            }
+        }
+    }
+    #[test]
+    fn cached_environment_paths_keep_mapping_and_url_decoding() {
+        let folder = crate::model_files::tests::Folder::new();
+        folder.hdr("bistro/cache/environment light.HDR", [32, 64, 128, 130]);
+        let source = "original.hdr";
+        let mapping =
+            serde_json::json!({"../source/original.hdr":"cache/absent/../environment%20light.HDR"});
+        std::fs::write(
+            folder.0.join("bistro/resources.json"),
+            serde_json::to_vec(&mapping).unwrap(),
+        )
+        .unwrap();
+        let (scene, warnings) = scene_with_environment_source(&folder, source);
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("Scene environment:")),
+            "{warnings:?}"
+        );
+        let image = scene.environment.unwrap();
+        assert_eq!(image.dimensions(), (4, 2));
+        assert!((image.get_pixel(0, 0).0[2] - 2.).abs() < 1e-6);
+        let (missing, warnings) = scene_with_environment_source(&folder, "actually-missing.hdr");
+        assert!(missing.environment.is_none());
+        assert!(warnings.iter().any(|w| w.starts_with("Scene environment:")));
+    }
     #[test]
     fn pfm_rows_endianness_and_scale() {
         for little in [true, false] {
