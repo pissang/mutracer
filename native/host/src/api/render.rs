@@ -155,6 +155,7 @@ impl RefineOptions {
 }
 /// Browser `adaptiveResolution`: after each observed batch the scale moves
 /// toward `target_frame_ms`; it grows only after four fast batches, by at most 25%.
+/// Frame timing includes completion of the enabled denoiser.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdaptiveResolution {
     /// Positive frame time to aim for, in milliseconds.
@@ -609,6 +610,12 @@ struct Flight {
     /// Resolution scale the batch was traced at.
     scale: f64,
 }
+/// Timing of one batch through completion of its enabled denoiser.
+struct AdaptiveFrame {
+    started: Instant,
+    elapsed_ms: f64,
+    scale: f64,
+}
 /// Browser adaptive-resolution state of one render.
 struct Adaptive {
     /// Current scale; the image uses min(scale, the configured scale).
@@ -616,8 +623,8 @@ struct Adaptive {
     /// The configured scale it was reset to.
     configured: f64,
     fast_frames: u32,
-    /// Time and scale of the last observed batch, not yet evaluated.
-    frame: Option<(f64, f64)>,
+    /// Last observed batch, extended through inference completion before use.
+    frame: Option<AdaptiveFrame>,
 }
 impl Adaptive {
     fn new(settings: &RenderSettings) -> Self {
@@ -815,15 +822,15 @@ impl RenderState {
         else {
             return;
         };
-        if self.busy || self.samples == 0 {
+        if self.busy || self.samples == 0 || self.denoise.worker.is_some() {
             return;
         }
-        let Some((elapsed, scale)) = self.adaptive.frame.take() else {
+        let Some(frame) = self.adaptive.frame.take() else {
             return;
         };
         let next = next_preview_scale(
-            scale,
-            elapsed,
+            frame.scale,
+            frame.elapsed_ms,
             adaptive.target_frame_ms,
             max_scale,
             self.adaptive.scale,
@@ -1373,8 +1380,8 @@ fn commit_step(
 enum Poll {
     Idle,
     Running,
-    /// Total retained samples, elapsed batch time and resolution scale.
-    Completed(u32, f64, f64),
+    /// Total retained samples, batch start and resolution scale.
+    Completed(u32, Instant, f64),
 }
 /// Observes the in-flight batch without waiting for the GPU.
 fn poll_job(render: &mut RenderState) -> Result<Poll> {
@@ -1411,11 +1418,7 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
             if samples <= render.samples {
                 return Ok(Poll::Idle);
             }
-            Ok(Poll::Completed(
-                samples,
-                flight.started.elapsed().as_secs_f64() * 1e3,
-                flight.scale,
-            ))
+            Ok(Poll::Completed(samples, flight.started, flight.scale))
         }
         4 => {
             render.job = None;
@@ -1494,9 +1497,14 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
 /// Polls the batch and accounts completed samples.
 fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     match poll_job(render)? {
-        Poll::Completed(samples, elapsed, scale) => {
+        Poll::Completed(samples, started, scale) => {
+            let elapsed = started.elapsed().as_secs_f64() * 1e3;
             let count = samples - render.samples;
-            render.adaptive.frame = Some((elapsed, scale));
+            render.adaptive.frame = Some(AdaptiveFrame {
+                started,
+                elapsed_ms: elapsed,
+                scale,
+            });
             render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
             render.gpu_sample_ms =
@@ -1668,6 +1676,14 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             if *settings != state.display.settings.composition())
         {
             return Ok(());
+        }
+        // Match the browser's sample-start-to-filter-ready measurement. The
+        // queue callback, not submission time, marks oidn-webgpu completion.
+        // Freeze it here so later idle time is not charged to this preview.
+        if let Some(frame) = &mut render.adaptive.frame {
+            frame.elapsed_ms = frame
+                .elapsed_ms
+                .max(frame.started.elapsed().as_secs_f64() * 1e3);
         }
         render.denoise.report = Some(DenoiseReport {
             samples,
@@ -3324,6 +3340,10 @@ fn refine_one(state: &mut State, id: u64) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "adaptive_tests.rs"]
+mod adaptive_tests;
 
 #[cfg(test)]
 mod cancellation_tests {

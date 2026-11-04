@@ -351,6 +351,7 @@ typedef struct mt_render_options {
   /* Adapt the scale of a scale-based render to frame timing (the browser's
    * adaptiveResolution): between adaptive_min_scale (positive, at most
    * resolution_scale) and resolution_scale, aiming at adaptive_target_frame_ms.
+   * Frame timing includes completion of the enabled denoiser.
    * Both 0 turn it off. Default 0. */
   double adaptive_target_frame_ms;
   double adaptive_min_scale;
