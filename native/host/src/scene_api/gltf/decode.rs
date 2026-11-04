@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::path::Path;
+#[path = "meshopt.rs"]
+mod meshopt_decode;
 
 /// Decoded document, buffers, RGBA8 images and whether any image was reduced.
 type Import = (
@@ -63,75 +65,9 @@ fn view<'a>(j: &Value, buffers: &'a [gltf::buffer::Data], index: usize) -> Resul
         number(v, "byteLength")?,
     )
 }
+#[cfg(test)]
 fn decode(ext: &Value, source: &[u8]) -> Result<Vec<u8>> {
-    let count = number(ext, "count")?;
-    let stride = number(ext, "byteStride")?;
-    let len = count
-        .checked_mul(stride)
-        .context("Meshopt decoded size overflow")?;
-    ensure!(count > 0, "Empty meshopt buffer");
-    crate::memory_budget::check(len, "Meshopt decoded buffer")?;
-    let mode = ext["mode"].as_str().context("Missing Meshopt mode")?;
-    let filter = ext["filter"].as_str().unwrap_or("NONE");
-    match mode {
-        "ATTRIBUTES" => ensure!(
-            (4..=256).contains(&stride) && stride % 4 == 0,
-            "Invalid Meshopt attribute stride"
-        ),
-        "TRIANGLES" | "INDICES" => ensure!(
-            [2, 4].contains(&stride) && filter == "NONE" && (mode != "TRIANGLES" || count % 3 == 0),
-            "Invalid Meshopt index layout"
-        ),
-        _ => bail!("Unsupported Meshopt mode {mode}"),
-    }
-    ensure!(
-        match filter {
-            "NONE" => true,
-            "OCTAHEDRAL" => [4, 8].contains(&stride),
-            "QUATERNION" => stride == 8,
-            "EXPONENTIAL" => stride % 4 == 0,
-            _ => false,
-        },
-        "Invalid Meshopt filter {filter}"
-    );
-    // u64 storage guarantees alignment for decoder/filter native writes.
-    let mut aligned = vec![0u64; len.div_ceil(8)];
-    let ptr = aligned.as_mut_ptr().cast();
-    let status = unsafe {
-        match mode {
-            "ATTRIBUTES" => meshopt::ffi::meshopt_decodeVertexBuffer(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-            "TRIANGLES" => meshopt::ffi::meshopt_decodeIndexBuffer(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-            _ => meshopt::ffi::meshopt_decodeIndexSequence(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-        }
-    };
-    ensure!(status == 0, "Meshopt decoding failed ({status})");
-    unsafe {
-        match filter {
-            "OCTAHEDRAL" => meshopt::ffi::meshopt_decodeFilterOct(ptr, count, stride),
-            "QUATERNION" => meshopt::ffi::meshopt_decodeFilterQuat(ptr, count, stride),
-            "EXPONENTIAL" => meshopt::ffi::meshopt_decodeFilterExp(ptr, count, stride),
-            _ => (),
-        }
-        Ok(std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec())
-    }
+    meshopt_decode::Decoder::new(ext)?.reference(source)
 }
 fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     let v = match kind {
@@ -158,6 +94,14 @@ fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     Ok(v)
 }
 pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
+    load_bytes_mode(bytes, path, meshopt_decode::Mode::from_env())
+}
+fn load_bytes_mode(
+    bytes: &[u8],
+    path: Option<&Path>,
+    meshopt_mode: meshopt_decode::Mode,
+) -> Result<Import> {
+    let started = crate::profiling::enabled().then(std::time::Instant::now);
     let (mut j, blob): (Value, Option<std::borrow::Cow<'_, [u8]>>) = if bytes.starts_with(b"glTF") {
         let glb = gltf::Glb::from_slice(&bytes)?;
         (serde_json::from_slice(&glb.json)?, glb.bin)
@@ -170,6 +114,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             "Required glTF extension is unsupported: {e}"
         );
     }
+    let parsed = started.map(|_| std::time::Instant::now());
     let mut buffers = Vec::new();
     let mut total = 0usize;
     for (i, b) in j["buffers"]
@@ -200,35 +145,9 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
         crate::memory_budget::check(total, "Model buffers")?;
         buffers.push(gltf::buffer::Data(data));
     }
-    for v in j["bufferViews"].as_array().into_iter().flatten() {
-        if let Some(ext) = v["extensions"].get("EXT_meshopt_compression") {
-            let source = span(
-                &buffers
-                    .get(number(ext, "buffer")?)
-                    .context("Invalid Meshopt source")?
-                    .0,
-                ext["byteOffset"].as_u64().unwrap_or(0) as usize,
-                number(ext, "byteLength")?,
-            )?;
-            let decoded = decode(ext, source)?;
-            ensure!(
-                decoded.len() == number(v, "byteLength")?,
-                "Meshopt decoded length mismatch"
-            );
-            let target = buffers
-                .get_mut(number(v, "buffer")?)
-                .context("Invalid Meshopt target")?;
-            let offset = v["byteOffset"].as_u64().unwrap_or(0) as usize;
-            let end = offset
-                .checked_add(decoded.len())
-                .context("Meshopt target overflow")?;
-            target
-                .0
-                .get_mut(offset..end)
-                .context("Meshopt target exceeds buffer")?
-                .copy_from_slice(&decoded);
-        }
-    }
+    let loaded = started.map(|_| std::time::Instant::now());
+    let meshopt = meshopt_decode::apply(&j, &mut buffers, meshopt_mode)?;
+    let decompressed = started.map(|_| std::time::Instant::now());
     // Decoded views and images no longer read source-only compression buffers.
     let live: std::collections::BTreeSet<_> = j["bufferViews"]
         .as_array()
@@ -242,6 +161,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             buffer.0 = Vec::new();
         }
     }
+    let retired = started.map(|_| std::time::Instant::now());
     // Expand geometry float attributes and normalized instance quaternions;
     // joints and index semantics stay integer.
     let mut attributes = std::collections::BTreeSet::new();
@@ -334,6 +254,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
         a["min"] = json!(min);
         a["max"] = json!(max);
     }
+    let expanded = started.map(|_| std::time::Instant::now());
     for t in j
         .get_mut("textures")
         .and_then(Value::as_array_mut)
@@ -364,6 +285,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     }
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
     let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
+    let validated = started.map(|_| std::time::Instant::now());
     let image_count = document.images().len().max(1) as u64;
     let edge = ((MATERIAL_TEXEL_BUDGET / image_count) as f64)
         .sqrt()
@@ -374,6 +296,36 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(12));
     let sources: Vec<_> = document.images().map(|image| image.source()).collect();
     let (images, resized) = decode_images(&sources, &j, &buffers, path, edge, workers)?;
+    if let (
+        Some(start),
+        Some(parsed),
+        Some(loaded),
+        Some(decompressed),
+        Some(retired),
+        Some(expanded),
+        Some(validated),
+    ) = (
+        started,
+        parsed,
+        loaded,
+        decompressed,
+        retired,
+        expanded,
+        validated,
+    ) {
+        native_log!(
+            "{}",
+            serde_json::json!({"nativeDecodeProfile":{
+            "parseMs":parsed.duration_since(start).as_secs_f64()*1000.,
+            "buffersMs":loaded.duration_since(parsed).as_secs_f64()*1000.,
+            "meshoptMs":decompressed.duration_since(loaded).as_secs_f64()*1000.,
+            "retireMs":retired.duration_since(decompressed).as_secs_f64()*1000.,
+            "quantizationMs":expanded.duration_since(retired).as_secs_f64()*1000.,
+            "documentMs":validated.duration_since(expanded).as_secs_f64()*1000.,
+            "imagesMs":validated.elapsed().as_secs_f64()*1000.,
+            "meshoptViews":meshopt.views,"directViews":meshopt.direct_views,"meshoptBytes":meshopt.bytes,"meshoptWorkers":meshopt.workers}})
+        );
+    }
     Ok((
         document,
         buffers,

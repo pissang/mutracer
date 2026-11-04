@@ -650,6 +650,18 @@ on up to 12 available CPU threads for large imports; each geometry retains its
 vertex reduction order. `MUTRACER_NATIVE_GLTF_BOUNDS=serial` selects the original
 in-visit scan. World bounds retain the tight per-vertex transform scan.
 
+`nativeDecodeProfile` separates buffer loading, meshopt, source-buffer retirement,
+quantized attribute expansion, document validation and image decoding. Meshopt
+writes independent, aligned views directly into their final buffers and uses up
+to 12 available CPU threads above 1 MiB decoded data. Layouts with overlapping
+targets, source/target dependencies or unaligned destinations retain the scratch
+reference path. `MUTRACER_NATIVE_MESHOPT=legacy` selects that reference;
+`serial` selects direct writes on one thread; the default enables parallelism.
+Run `optional_large_asset_decoded_buffer_oracle` with `cargo test --release` and
+`MUTRACER_MESHOPT_ORACLE=/absolute/model.glb` to compare complete decoded buffers
+against the reference; unset means skip. Compare these modes in the same binary
+and measure CPU-only import peaks separately from GPU upload/setup peaks.
+
 Run `large_local_import_matches_reader_when_requested` with `cargo test --release`
 and `MUTRACER_GLTF_IMPORT_ORACLE=/absolute/model.glb` for a local-asset bit/bounds
 comparison; it reports a skip when unset. Keep large assets out of the debug
