@@ -364,40 +364,16 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     }
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
     let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
-    let mut images = Vec::new();
-    let mut resized = false;
     let image_count = document.images().len().max(1) as u64;
     let edge = ((MATERIAL_TEXEL_BUDGET / image_count) as f64)
         .sqrt()
         .floor()
         .min(MAX_TEXTURE_EDGE as f64) as u32;
-    for image in document.images() {
-        let data = match image.source() {
-            gltf::image::Source::Uri { uri: name, .. } => uri(path, name)?,
-            gltf::image::Source::View { view: v, .. } => view(&j, &buffers, v.index())?.to_vec(),
-        };
-        let reader = image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format()?;
-        let (w, h) = reader.into_dimensions()?;
-        ensure!(
-            u64::from(w) * u64::from(h) <= 67_108_864,
-            "Source material image exceeds 64M pixels"
-        );
-        let image = image::load_from_memory(&data)?;
-        let rgba = if w.max(h) > edge {
-            resized = true;
-            image
-                .resize(edge, edge, image::imageops::FilterType::Triangle)
-                .into_rgba8()
-        } else {
-            image.into_rgba8()
-        };
-        images.push(gltf::image::Data {
-            width: rgba.width(),
-            height: rgba.height(),
-            format: gltf::image::Format::R8G8B8A8,
-            pixels: rgba.into_raw(),
-        });
-    }
+    // Bound simultaneous full-resolution decoder scratch, independently of the
+    // number of images. Completed images already share the reduced texel budget.
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(12));
+    let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+    let (images, resized) = decode_images(&sources, &j, &buffers, path, edge, workers)?;
     Ok((
         document,
         buffers,
@@ -407,9 +383,214 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     ))
 }
 
+fn decode_image(
+    source: &gltf::image::Source<'_>,
+    json: &Value,
+    buffers: &[gltf::buffer::Data],
+    path: Option<&Path>,
+    edge: u32,
+) -> Result<(gltf::image::Data, bool)> {
+    use image::ImageDecoder;
+    let data = match source {
+        gltf::image::Source::Uri { uri: name, .. } => std::borrow::Cow::Owned(uri(path, name)?),
+        gltf::image::Source::View { view: v, .. } => {
+            std::borrow::Cow::Borrowed(view(json, buffers, v.index())?)
+        }
+    };
+    let mut decoder = image::ImageReader::new(std::io::Cursor::new(data.as_ref()))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let (w, h) = decoder.dimensions();
+    ensure!(
+        u64::from(w) * u64::from(h) <= 67_108_864,
+        "Source material image exceeds 64M pixels"
+    );
+    // Preserve ImageReader::decode's allocation and decoder-scratch limits.
+    let mut limits = image::Limits::default();
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    let image = image::DynamicImage::from_decoder(decoder)?;
+    let resized = w.max(h) > edge;
+    let rgba = if resized {
+        image
+            .resize(edge, edge, image::imageops::FilterType::Triangle)
+            .into_rgba8()
+    } else {
+        image.into_rgba8()
+    };
+    Ok((
+        gltf::image::Data {
+            width: rgba.width(),
+            height: rgba.height(),
+            format: gltf::image::Format::R8G8B8A8,
+            pixels: rgba.into_raw(),
+        },
+        resized,
+    ))
+}
+
+fn decode_images(
+    sources: &[gltf::image::Source<'_>],
+    json: &Value,
+    buffers: &[gltf::buffer::Data],
+    path: Option<&Path>,
+    edge: u32,
+    workers: usize,
+) -> Result<(Vec<gltf::image::Data>, bool)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let first_error = AtomicUsize::new(sources.len());
+    let mut decoded = std::thread::scope(|scope| -> Result<Vec<_>> {
+        let jobs: Vec<_> = (0..workers.min(sources.len()))
+            .map(|_| {
+                let next = &next;
+                let first_error = &first_error;
+                scope.spawn(move || {
+                    let mut images = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= first_error.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let Some(source) = sources.get(index) else {
+                            break;
+                        };
+                        let result = decode_image(source, json, buffers, path, edge);
+                        if result.is_err() {
+                            first_error.fetch_min(index, Ordering::Relaxed);
+                        }
+                        images.push((index, result));
+                    }
+                    images
+                })
+            })
+            .collect();
+        let mut images = Vec::with_capacity(sources.len());
+        for job in jobs {
+            images.extend(
+                job.join()
+                    .map_err(|_| anyhow::anyhow!("Image decoding worker panicked"))?,
+            );
+        }
+        Ok(images)
+    })?;
+    // Completion order must not change texture IDs or which invalid image is
+    // reported first. Join every worker before returning an error to the caller.
+    decoded.sort_unstable_by_key(|(index, _)| *index);
+    let mut images = Vec::with_capacity(decoded.len());
+    let mut resized = false;
+    for (_, result) in decoded {
+        let (image, reduced) = result?;
+        images.push(image);
+        resized |= reduced;
+    }
+    Ok((images, resized))
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    #[test]
+    fn parallel_images_preserve_pixels_order_and_resize_decisions() {
+        let mut json =
+            json!({"asset":{"version":"2.0"}, "buffers":[], "bufferViews":[], "images":[]});
+        let mut bytes = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..12 {
+            let input = image::RgbaImage::from_fn(3 + index * 2, 2 + index, |x, y| {
+                image::Rgba([
+                    (x * 7) as u8,
+                    (y * 11) as u8,
+                    index as u8,
+                    (x * 13 + y) as u8,
+                ])
+            });
+            let format = if index % 3 == 0 {
+                image::ImageFormat::WebP
+            } else {
+                image::ImageFormat::Png
+            };
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(input)
+                .write_to(&mut encoded, format)
+                .unwrap();
+            let data = encoded.into_inner();
+            let decoded = image::load_from_memory(&data).unwrap();
+            expected.push(if decoded.width().max(decoded.height()) > 5 {
+                decoded
+                    .resize(5, 5, image::imageops::FilterType::Triangle)
+                    .into_rgba8()
+            } else {
+                decoded.into_rgba8()
+            });
+            let mime = if index % 3 == 0 {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+            if index % 2 == 0 {
+                json["images"].as_array_mut().unwrap().push(json!({"uri":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(&data))}));
+            } else {
+                let view = json["bufferViews"].as_array().unwrap().len();
+                json["bufferViews"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"buffer":0,"byteOffset":bytes.len(),"byteLength":data.len()}));
+                json["images"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"bufferView":view,"mimeType":mime}));
+                bytes.extend(data);
+            }
+        }
+        json["buffers"] = json!([{"byteLength":bytes.len()}]);
+        let document =
+            gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
+        let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+        let buffers = [gltf::buffer::Data(bytes)];
+        for workers in [1, 4, 16] {
+            let (images, resized) =
+                decode_images(&sources, &json, &buffers, None, 5, workers).unwrap();
+            assert!(resized);
+            assert_eq!(images.len(), expected.len());
+            for (actual, expected) in images.iter().zip(&expected) {
+                assert_eq!((actual.width, actual.height), expected.dimensions());
+                assert_eq!(&actual.pixels, expected.as_raw());
+            }
+            let (_, resized) =
+                decode_images(&sources[..1], &json, &buffers, None, 5, workers).unwrap();
+            assert!(!resized);
+        }
+        assert!(
+            decode_images(&[], &json, &[], None, 5, 4)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parallel_images_report_the_first_invalid_source_in_document_order() {
+        let json = json!({"asset":{"version":"2.0"}, "images":[
+            {"uri":"data:image/png;base64,AQIDBA=="},
+            {"uri":"data:image/png;base64,invalid!!!"}
+        ]});
+        let document =
+            gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
+        let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+        let expected = decode_image(&sources[0], &json, &[], None, 5)
+            .err()
+            .unwrap()
+            .to_string();
+        for workers in [1, 4] {
+            let actual = decode_images(&sources, &json, &[], None, 5, workers)
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(actual, expected);
+        }
+    }
+
     pub(crate) fn model_file(mut root: Value, bytes: &[u8]) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         root["asset"] = json!({"version":"2.0"});
