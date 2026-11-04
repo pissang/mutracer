@@ -355,9 +355,26 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> &'a [u8] {
-        self.scene_object(environment, light)
+        let started = std::env::var_os("MUTRACER_NATIVE_PROFILE")
+            .is_some_and(|v| v == "1")
+            .then(std::time::Instant::now);
+        let scene = self.scene_object(environment, light);
+        let assembled = started.map(|s| s.elapsed());
+        let bytes = scene
             .update_descriptor(cached, camera, size)
-            .expect("Encoding imported scene")
+            .expect("Encoding imported scene");
+        if let Some(started) = started {
+            eprintln!(
+                "{}",
+                serde_json::json!({"nativeViewerAssemblyProfile": {
+                    "sceneMs": assembled.unwrap().as_secs_f64() * 1000.,
+                    "encodeMs": started.elapsed().as_secs_f64() * 1000.
+                        - assembled.unwrap().as_secs_f64() * 1000.,
+                    "descriptorBytes": bytes.len(), "meshes": self.meshes.len()
+                }})
+            );
+        }
+        bytes
     }
 }
 

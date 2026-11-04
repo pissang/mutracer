@@ -51,22 +51,22 @@ struct Slot<T> {
 }
 struct Arena<T> {
     slots: Vec<Slot<T>>,
+    // Preserve lowest-slot reuse and iteration order without rescanning every
+    // occupied slot on each insertion during a large import.
+    free: BTreeSet<usize>,
     owner: u64,
 }
 impl<T> Arena<T> {
     fn new(owner: u64) -> Self {
         Self {
             slots: Vec::new(),
+            free: BTreeSet::new(),
             owner,
         }
     }
     fn add(&mut self, value: T) -> Key {
-        if let Some((i, s)) = self
-            .slots
-            .iter_mut()
-            .enumerate()
-            .find(|(_, s)| s.value.is_none() && s.generation < u32::MAX)
-        {
+        if let Some(i) = self.free.pop_first() {
+            let s = &mut self.slots[i];
             s.value = Some(value);
             s.aov = next_aov();
             return Key {
@@ -108,6 +108,9 @@ impl<T> Arena<T> {
         let s = &mut self.slots[k.index as usize];
         let v = s.value.take().unwrap();
         s.generation = s.generation.saturating_add(1);
+        if s.generation < u32::MAX {
+            self.free.insert(k.index as usize);
+        }
         Ok(v)
     }
     fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
@@ -979,6 +982,41 @@ fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn arena_reuses_lowest_hole_without_reviving_handles_or_exhausted_slots() {
+        let mut arena = Arena::new(17);
+        let first = arena.add(10);
+        let second = arena.add(20);
+        let third = arena.add(30);
+        arena.remove(second).unwrap();
+        arena.remove(first).unwrap();
+        assert!(arena.remove(first).is_err());
+        let replacement = arena.add(40);
+        assert_eq!(replacement.index, first.index);
+        assert_ne!(replacement.aov, first.aov);
+        assert!(arena.get(first).is_err());
+        assert!(arena.get(second).is_err());
+        assert!(
+            arena
+                .get(Key {
+                    owner: 18,
+                    ..replacement
+                })
+                .is_err()
+        );
+        let exhausted = Key {
+            generation: u32::MAX - 1,
+            ..third
+        };
+        arena.slots[third.index as usize].generation = exhausted.generation;
+        arena.remove(exhausted).unwrap();
+        assert_eq!(arena.add(50).index, second.index);
+        assert_eq!(arena.add(60).index, 3);
+        assert_eq!(
+            arena.iter().map(|(_, v)| *v).collect::<Vec<_>>(),
+            [40, 50, 60]
+        );
+    }
     fn triangle() -> (Scene, MeshId) {
         let mut s = Scene::new();
         let g = s

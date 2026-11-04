@@ -18,6 +18,7 @@ mod import_smoke;
 mod input;
 mod large_scene_smoke;
 mod live_denoise_smoke;
+mod load_profile;
 mod material_presets;
 mod metrics;
 mod model_files;
@@ -2916,6 +2917,7 @@ fn main() -> Result<()> {
     let mut studio_out = None;
     let mut focus_out = None;
     let mut startup_out = None;
+    let mut load_profile_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -3015,6 +3017,12 @@ fn main() -> Result<()> {
             "--import-smoke" => {
                 import_out = Some(PathBuf::from(
                     args.next().context("--import-smoke needs a directory")?,
+                ));
+            }
+            "--load-profile-out" => {
+                load_profile_out = Some(PathBuf::from(
+                    args.next()
+                        .context("--load-profile-out needs a directory")?,
                 ));
             }
             "--large-scene-out" => {
@@ -3123,6 +3131,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = import_out {
         return import_smoke::run(&model, &out);
+    }
+    if let Some(out) = load_profile_out {
+        return load_profile::run(&model, &out);
     }
     if let Some(out) = large_scene_out {
         return large_scene_smoke::run(&model, &out);

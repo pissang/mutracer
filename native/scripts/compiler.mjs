@@ -3,6 +3,7 @@ import {auditNumericAccess} from './numeric-access-audit.mjs';
 import {specializeStorageLoops} from './storage-lowering.mjs';
 import {specializeVectorCalls} from './vector-lowering.mjs';
 import {lowerConcreteAccess} from './attribute-lowering.mjs';
+import {lowerMeshAovId} from './aov-id-lowering.mjs';
 import {spawnSync} from 'node:child_process';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {basename, dirname, relative, resolve} from 'node:path';
@@ -77,6 +78,8 @@ function compilerSource() {
       (!/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path))});
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), process.platform==='win32'?'junction':'dir');
+  const mesh = resolve(staged, 'src/scene/MeshState.ts');
+  writeFileSync(mesh, lowerMeshAovId(readFileSync(mesh, 'utf8')));
   for (const [file, types] of [['src/math/access.ts', ['Float32Array', 'Float64Array', 'Array']],
     ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array', 'Int32Array']]]) {
     writeFileSync(resolve(staged, file), narrowAccess(readFileSync(resolve(root, file), 'utf8'), types));
