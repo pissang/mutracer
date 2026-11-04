@@ -1,3 +1,4 @@
+import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
 import type {SceneVolume} from '../scene/SceneVolume.js';
@@ -751,7 +752,7 @@ class WebGLRayTracePass {
 
         STACK_SIZE,
         USE_VERTEX_COLOR: mergedGeometry.color != null,
-        USE_TANGENT: mergedGeometry.tangent != null,
+        USE_TANGENT: mergedGeometry.tangent != null && materials.some(materialNeedsVertexTangents),
         ...vertexAttributeDefines(vertexAttributeLayout(mergedGeometry)),
         USE_COAT_NORMAL_FRAMES: materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap)),
         HAS_TRANSMISSION: this._hasTransmission,

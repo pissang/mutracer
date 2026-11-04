@@ -131,7 +131,7 @@ an alternate serialization format.
 | --- | --- | --- |
 | `map` | RGB (sRGB), A | Multiplies `baseColor`; alpha use set by `mapAlphaUsage` |
 | `alphaMap` | G | Opacity, as in Three.js |
-| `normalMap`, `normalScale` | RGB | Tangent space; tangents are generated when missing |
+| `normalMap`, `normalScale` | RGB | Tangent space; uses triangle UV derivatives |
 | `metallicRoughnessMap` | G = roughness, B = metalness | glTF convention |
 | `roughnessMap` | G | |
 | `metalnessMap` | B | |
@@ -290,6 +290,6 @@ Set `specularAnisotropyRotation` or provide `anisotropyMap` to orient the base s
 
 `coatAnisotropyRotation` defaults to zero and uses the geometry tangent independently of the base map. Base and coat use their respective directions and [normals](#coat-normals). Zero anisotropy strength ignores the direction.
 
-Provided tangent XYZ and optional W handedness are preserved. For XYZ tangents the sign comes from triangle UV derivatives. Missing or degenerate tangents use UV derivatives and then a stable orthonormal fallback; missing tangents produce one diagnostic per geometry. The direction texture's selected UV set is used for derivative fallback, including UV1. A provided XYZW tangent remains authoritative. Directions are reorthogonalized against the final shading normal, including normal maps and back faces, and instance transforms preserve mirrored handedness. UV scale, offset and flipY affect texel lookup; they do not rotate the encoded direction.
+Provided tangent XYZ and optional W handedness are preserved. Missing tangents are generated from primary UVs only when a material using the geometry needs anisotropy or an active coat normal map; adding such a material prepares them automatically. For XYZ tangents the sign comes from triangle UV derivatives. Missing UVs or degenerate tangents use UV derivatives where available and then a stable orthonormal fallback; missing tangents produce one diagnostic per geometry. The direction texture's selected UV set is used for derivative fallback, including UV1. A provided XYZW tangent remains authoritative. Directions are reorthogonalized against the final shading normal, including normal maps and back faces, and instance transforms preserve mirrored handedness. UV scale, offset and flipY affect texel lookup; they do not rotate the encoded direction.
 
 The direction and strength inputs use native OpenPBR semantics by default. For imported glTF/Three.js strength, select `specularAnisotropyModel: 'gltf'`; the same roughness and strength properties then retain source values. Source scalar inputs are clamped to [0, 1] before texture factors; non-finite source roughness/strength fall back to 0.3/0. Native scalar handling is unchanged. Zero source strength preserves the original roughness path. The conversion matches the GGX alpha axes before existing minimum-alpha clamping; Fresnel, masking, multiple scattering and OpenPBR coating remain the library's model. See [the conversion rules](./threejs.md#anisotropy-source-conversion).

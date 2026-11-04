@@ -115,15 +115,54 @@ fn tangents(positions: &[f32], normals: &[f32], uvs: &[f32], indices: &[u32]) ->
     }
     result
 }
+// Wire-side selection mirrors materialNeedsVertexTangents. The TS/Rust kernel
+// contract tests compare complete prepared assets with and without these hints.
+fn tangent_requirements(w: &Words<'_>) -> Vec<bool> {
+    let materials: Vec<bool> = (0..w.u(h::MATERIAL_COUNT))
+        .map(|i| {
+            let off = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
+            let (mut base, mut coat, mut weight, mut coat_normal) =
+                (0., 0., w.f(off + mat::COAT_WEIGHT), false);
+            for j in 0..w.u(off + mat::EXTENSION_COUNT) {
+                let property = w.u(off + mat::EXTENSION_OFFSET) + j * ext::WORDS;
+                match w.u(property + ext::ID) {
+                    9 => base = w.f(property + ext::X),
+                    28 => coat = w.f(property + ext::X),
+                    25 => weight = w.f(property + ext::X),
+                    74 => coat_normal = w.u(property + ext::X) != u32::MAX as usize,
+                    _ => (),
+                }
+            }
+            base > 0. || coat > 0. || weight > 0. && coat_normal
+        })
+        .collect();
+    let mut required = vec![false; w.u(h::GEOMETRY_COUNT)];
+    for i in 0..w.u(h::MESH_COUNT) {
+        let off = w.u(h::MESH_OFFSET) + i * m::WORDS;
+        let count = w.u(off + m::MATERIAL_COUNT);
+        let needs = if count == 0 {
+            materials[w.u(off + m::MATERIAL)]
+        } else {
+            (0..count).any(|j| materials[w.u(w.u(off + m::MATERIAL_TABLE) + j)])
+        };
+        required[w.u(off + m::GEOMETRY)] |= needs;
+    }
+    required
+}
 pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let (mut bounds_ms, mut tangents_ms, mut tangent_calls) = (0f64, 0f64, 0u32);
     let w = Words(bytes);
     let count = w.u(h::GEOMETRY_COUNT);
-    let any_tangents = (0..count).any(|i| {
+    let required = tangent_requirements(&w);
+    let need_tangents = |i: usize| {
         let off = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
-        w.u(off + g::NORMAL) != 0 && w.u(off + g::UV) != 0 && w.u(off + g::TANGENT) == 0
-    });
+        required[i]
+            && w.u(off + g::NORMAL) != 0
+            && w.u(off + g::UV) != 0
+            && w.u(off + g::TANGENT) == 0
+    };
+    let any_tangents = (0..count).any(need_tangents);
     if !include_bounds && !any_tangents {
         return None;
     }
@@ -132,9 +171,7 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         + (0..count)
             .map(|i| {
                 let off = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
-                let needs = w.u(off + g::NORMAL) != 0
-                    && w.u(off + g::UV) != 0
-                    && w.u(off + g::TANGENT) == 0;
+                let needs = need_tangents(i);
                 usize::from(include_bounds) * 6
                     + if needs {
                         w.u(off + g::VERTEX_COUNT) * 3
@@ -161,8 +198,7 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         let entry = kh::WORDS + i * ke::WORDS;
         write(&mut result, entry + ke::SOURCE, i as u32);
         write(&mut result, entry + ke::VERTEX_COUNT, vertices as u32);
-        let need_tangents =
-            w.u(off + g::NORMAL) != 0 && w.u(off + g::UV) != 0 && w.u(off + g::TANGENT) == 0;
+        let need_tangents = need_tangents(i);
         if !include_bounds && !need_tangents {
             continue;
         }
@@ -232,7 +268,20 @@ mod tests {
             mt_core_reset();
             mt_core_collect();
         }
-        let actual = packet(input, include_bounds).unwrap();
+        let Some(actual) = packet(input, include_bounds) else {
+            let w = Words(input);
+            let hints = Words(&expected);
+            assert!(!include_bounds);
+            assert_eq!(
+                expected.len(),
+                (kh::WORDS + w.u(h::GEOMETRY_COUNT) * ke::WORDS) * WORD_BYTES
+            );
+            for i in 0..w.u(h::GEOMETRY_COUNT) {
+                assert_eq!(hints.u(kh::WORDS + i * ke::WORDS + ke::BOUNDS), 0);
+                assert_eq!(hints.u(kh::WORDS + i * ke::WORDS + ke::TANGENTS), 0);
+            }
+            return;
+        };
         assert_eq!(
             actual, expected,
             "Rust kernel data must equal the compiled shared TS reference"
@@ -333,6 +382,14 @@ mod tests {
                 words[geometry + g::INDEX_COUNT] = (count * 6) as u32;
                 for i in 0..count * 6 {
                     words.push(((i * 7 + i / 3) % count) as u32);
+                }
+                // Keep exercising the tangent kernel as well as the new no-work
+                // path: both base and coat anisotropy consume generated tangents.
+                if case % 4 != 0 {
+                    let material = words[h::MATERIAL_OFFSET] as usize;
+                    words[material + mat::EXTENSION_OFFSET] = words.len() as u32;
+                    words[material + mat::EXTENSION_COUNT] = 1;
+                    words.extend([if case % 2 == 0 { 28 } else { 9 }, 0.7f32.to_bits(), 0, 0]);
                 }
                 words[h::LENGTH] = words.len() as u32;
                 let input = words

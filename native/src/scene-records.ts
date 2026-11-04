@@ -40,7 +40,7 @@ export function decodeMaterial(u: Uint32Array, f: Float32Array, off: number, tex
   return m;
 }
 
-export function decodeGeometry(u: Uint32Array, f: Float32Array, off: number, hint: GeometryKernelHint | undefined, borrow = false): Geometry {
+export function decodeGeometry(u: Uint32Array, f: Float32Array, off: number, hint: GeometryKernelHint | undefined, borrow = false, needsTangents = true): Geometry {
   // Full preparation receives an AOT-owned descriptor. Views keep that allocation
   // alive through retained geometry. Sync keeps separate mutable arrays so edits
   // cannot overwrite its previous descriptor or rollback snapshot.
@@ -64,7 +64,7 @@ export function decodeGeometry(u: Uint32Array, f: Float32Array, off: number, hin
     if(hint.bounds) rememberKernelBounds(geometry, hint.bounds);
     if (!geometry.tangent && hint.tangents) installGeneratedVertexTangents(geometry,hint.tangents);
   }
-  if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+  if (needsTangents && !geometry.tangent && geometry.uv) generateVertexTangents(geometry);
   return geometry;
 }
 

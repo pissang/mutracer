@@ -1,3 +1,4 @@
+import {nativeTangentRequirements} from './scene-tangents.js';
 import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
 import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
@@ -308,10 +309,11 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
   for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
+  const tangentRequirements = nativeTangentRequirements(u, materials);
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
     const hint = kernelHints && i < kernelHints.length ? kernelHints[i] : undefined;
-    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint, true));
+    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint, true, tangentRequirements[i]));
   }
   const meshes: MeshState[] = [];
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
@@ -1386,7 +1388,7 @@ export function geometryKernelReference(bytes: Uint8Array, withBounds: number): 
   for(let i=0;i<input.geometries.length;i++) {
     const geometry=input.geometries[i],off=u[H.GEOMETRY_OFFSET]+i*G.WORDS,bounds=computeGeometryBounds(geometry),packed=new Float32Array(6);
     packed.set(bounds[0]);packed.set(bounds[1],3);counts.push(geometry.vertexCount);
-    const generated=!!u[off+G.UV]&&!!u[off+G.NORMAL]&&!u[off+G.TANGENT];
+    const generated=!!u[off+G.UV]&&!!u[off+G.NORMAL]&&!u[off+G.TANGENT]&&!!geometry.tangent;
     hints.push({vertexCount:geometry.vertexCount,bounds:withBounds?packed:undefined,tangents:generated?geometry.tangent!.array:undefined});
   }
   return encodeGeometryKernelHints(hints,counts);

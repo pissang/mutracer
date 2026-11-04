@@ -1,3 +1,6 @@
+import {nativeTangentRequirements} from './scene-tangents.js';
+import {generateVertexTangents, hasGeneratedVertexTangents} from '../../src/util/geometry.js';
+import {materialNeedsVertexTangents} from '../../src/renderer/tangentRequirements.js';
 // Incremental scene sync: each commit's descriptor is compared record by record
 // with the previous one, and changed records update retained scene objects the
 // way a Web application edits its scene. The shared SceneChangeTracker then
@@ -156,6 +159,13 @@ export class SyncedScene {
     this.syncMaterials(u, f, old, first, replaced);
     this.syncGeometries(u, f, old, first, hints);
     this.syncMeshes(u, f, old, first);
+    // Material-only edits can add the first tangent consumer. Capture the new
+    // attribute identity before change detection, forcing a full preparation.
+    for (const mesh of this.meshes) {
+      if (!mesh.geometry.tangent && mesh.geometry.uv && mesh.materials.some(materialNeedsVertexTangents)) {
+        generateVertexTangents(mesh.geometry);
+      }
+    }
     this.syncLights(bytes, u, f, old, first, replaced);
     this.syncBackground(u, f);
     const camera = first || !sameWords(old, old[H.CAMERA_OFFSET], u, u[H.CAMERA_OFFSET], C.WORDS);
@@ -215,16 +225,16 @@ export class SyncedScene {
   }
 
   private syncGeometries(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, unchanged: Uint8Array | undefined) {
-    const count = u[H.GEOMETRY_COUNT];
+    const count = u[H.GEOMETRY_COUNT], required = nativeTangentRequirements(u, this.materials);
     for (let i = 0; i < count; i++) {
       if (unchanged && unchanged[i]) continue;
       const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, vertices = u[off + G.VERTEX_COUNT];
-      if (first || i >= old[H.GEOMETRY_COUNT]) { this.geometries[i] = decodeGeometry(u, f, off, undefined); continue; }
+      if (first || i >= old[H.GEOMETRY_COUNT]) { this.geometries[i] = decodeGeometry(u, f, off, undefined, false, required[i]); continue; }
       const prior = old[H.GEOMETRY_OFFSET] + i * G.WORDS;
       const spans = [G.POSITION, G.INDICES, G.NORMAL, G.UV, G.UV1, G.COLOR, G.TANGENT, G.MATERIAL_INDEX];
       const sizes = [vertices * 3, u[off + G.INDEX_COUNT], vertices * 3, vertices * 2, vertices * 2, vertices * 3, vertices * 4, vertices];
       if (sameRecord(old, prior, u, off, G.WORDS, spans, sizes)) continue;
-      const geometry = this.geometries[i], fresh = decodeGeometry(u, f, off, undefined);
+      const geometry = this.geometries[i], fresh = decodeGeometry(u, f, off, undefined, false, required[i] || hasGeneratedVertexTangents(geometry));
       const samePresence = old[prior + G.VERTEX_COUNT] === vertices && old[prior + G.INDEX_COUNT] === u[off + G.INDEX_COUNT] &&
         (old[prior + G.NORMAL] === 0) === (u[off + G.NORMAL] === 0) && (old[prior + G.UV] === 0) === (u[off + G.UV] === 0) &&
         (old[prior + G.UV1] === 0) === (u[off + G.UV1] === 0) && (old[prior + G.COLOR] === 0) === (u[off + G.COLOR] === 0) &&
