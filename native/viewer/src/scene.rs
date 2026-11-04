@@ -31,6 +31,8 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
+        let entry = crate::model_files::resolve(path)?;
+        let path = entry.as_path();
         let bytes = mutracer_native_probe::scene_api::viewer_support::Model::read(path)?;
         let mut json = crate::examples::model_json(&bytes)?;
         // The viewer handles punctual lights, including their required extension.

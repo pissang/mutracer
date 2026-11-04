@@ -74,9 +74,11 @@ platform differences for trying features or checking a new version.
 ### Files and window
 
 - The app opens with the material spheres example. Use **Open** (**⌘O** / **Ctrl+O**)
-  or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
-  files and images beside their `.gltf`. While loading, the previous model stays
-  visible; a failed load shows an error and keeps it.
+  or drop a `.gltf`, `.glb` or model folder anywhere in the window. Keep external
+  `.bin` files and images at the relative paths referenced by the `.gltf`.
+  Folders are searched recursively: `.glb` takes priority, then `.gltf`, with
+  relative path order selecting among files of the same type. While loading,
+  the previous model stays visible; a failed load shows an error and keeps it.
 - **Open** opens a folder, a model/environment URL or a local HDR.
   A URL model loads external resources relative to that URL.
 - **Export** opens a preview. **Save viewport PNG** saves the current displayed

@@ -296,23 +296,7 @@ impl Viewer {
                             if ui.button("Open folder…").clicked() {
                                 ui.close();
                                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                    let path = std::fs::read_dir(folder)
-                                        .ok()
-                                        .into_iter()
-                                        .flatten()
-                                        .filter_map(|e| e.ok().map(|e| e.path()))
-                                        .find(|p| {
-                                            p.extension().is_some_and(|e| {
-                                                e.eq_ignore_ascii_case("gltf")
-                                                    || e.eq_ignore_ascii_case("glb")
-                                            })
-                                        });
-                                    if let Some(path) = path {
-                                        self.load(path, &ctx);
-                                    } else {
-                                        self.error =
-                                            "No glTF or GLB file in the selected folder".into();
-                                    }
+                                    self.load(folder, &ctx);
                                 }
                             }
                             if ui.button("Open from URL…").clicked() {

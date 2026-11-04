@@ -20,6 +20,7 @@ mod large_scene_smoke;
 mod live_denoise_smoke;
 mod material_presets;
 mod metrics;
+mod model_files;
 mod model_scene;
 mod package_smoke;
 mod parity_smoke;
@@ -1450,13 +1451,13 @@ impl Viewer {
                 return;
             }
         }
-        if let Some(path) = paths.iter().find(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"))
-        }) {
+        if let Some(path) = paths
+            .iter()
+            .find(|p| p.is_dir() || model_files::is_model(p))
+        {
             self.load(path.clone(), ctx);
         } else {
-            self.error="Drop a .gltf or .glb file. Keep external buffers and textures beside the .gltf file.".into();
+            self.error="Drop a .gltf or .glb file, or a folder containing one. Keep external resources at the paths referenced by the model.".into();
         }
     }
 }
@@ -1528,7 +1529,7 @@ impl eframe::App for Viewer {
                 }) {
                     "Drop an image on a texture slot"
                 } else {
-                    "Drop a GLTF or GLB to open"
+                    "Drop a GLTF, GLB or model folder to open"
                 },
                 egui::FontId::proportional(26.),
                 egui::Color32::WHITE,
