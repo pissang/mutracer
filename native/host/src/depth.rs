@@ -13,6 +13,7 @@ pub(crate) struct Query {
     groups: [wgpu::BindGroup; 2],
     frame: [wgpu::Buffer; 2],
     pipeline: Arc<OnceLock<Pipeline>>,
+    retained: Option<scene::PreparedState>,
 }
 impl Query {
     pub(super) fn snapshot(scene: &GpuScene) -> Self {
@@ -33,6 +34,7 @@ impl Query {
                 scene.buffers[&layout::resource::LIGHT_UNIFORM].clone(),
             ],
             pipeline: scene.depth_pipeline.clone(),
+            retained: scene.retained.clone(),
         }
     }
     pub(crate) fn read(
@@ -40,6 +42,26 @@ impl Query {
         camera: &[u8],
         area: [f32; 4],
     ) -> Result<[f32; api::DEPTH_SAMPLE_COUNT]> {
+        let mapped = self.read_raw(camera, area)?;
+        let result = std::array::from_fn(|i| {
+            f32::from_le_bytes(mapped[i * 16..i * 16 + 4].try_into().unwrap())
+        });
+        if result.iter().any(|v| !v.is_finite() || *v < 0.) {
+            return Err("Invalid depth samples".into());
+        }
+        Ok(result)
+    }
+    pub(crate) fn pick(self, camera: &[u8], mut area: [f32; 4]) -> Result<Option<[u32; 3]>> {
+        let retained = self.retained.clone().ok_or("Missing surface query scene")?;
+        area[2] = -1.;
+        area[3] = -1.;
+        let mapped = self.read_raw(camera, area)?;
+        let result = std::array::from_fn(|i| {
+            f32::from_le_bytes(mapped[i * 4..i * 4 + 4].try_into().unwrap())
+        });
+        retained.surface_hit(result)
+    }
+    fn read_raw(self, camera: &[u8], area: [f32; 4]) -> Result<Vec<u8>> {
         let gpu = &self.gpu;
         gpu.loss.check()?;
         let device = &gpu.device;
@@ -149,12 +171,6 @@ impl Query {
                 }
             })?;
         gpu.loss.check()?;
-        let result = std::array::from_fn(|i| {
-            f32::from_le_bytes(mapped[i * 16..i * 16 + 4].try_into().unwrap())
-        });
-        if result.iter().any(|v| !v.is_finite() || *v < 0.) {
-            return Err("Invalid depth samples".into());
-        }
-        Ok(result)
+        Ok(mapped)
     }
 }

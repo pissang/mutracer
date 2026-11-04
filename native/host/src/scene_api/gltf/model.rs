@@ -22,7 +22,6 @@ pub struct Model {
     pub properties: Vec<BTreeMap<u32, [u32; 3]>>,
     pub textures: Arc<Vec<Texture>>,
     pub geometries: Arc<Vec<Geometry>>,
-    pub picking: Arc<Vec<Arc<crate::picking::PickBvh>>>,
     pub animation: Option<super::animation::Animation>,
     pub meshes: Vec<Mesh>,
     pub center: Vec3,
@@ -63,7 +62,6 @@ impl Model {
             properties: vec![],
             textures: Arc::new(vec![]),
             geometries: Arc::new(vec![]),
-            picking: Arc::new(vec![]),
             animation: super::animation::Animation::load(&document, &buffers)?,
             meshes: vec![],
             center: Vec3::ZERO,
@@ -271,26 +269,13 @@ impl Model {
         }
         model.warnings.sort();
         model.warnings.dedup();
-        let picking_start = started.map(|_| std::time::Instant::now());
-        model.rebuild_picking()?;
-        if let (Some(started), Some(decoded), Some(picking_start)) =
-            (started, decoded, picking_start)
-        {
-            let mut capacities = [0u64; 5];
-            for tree in model.picking.iter() {
-                for (sum, value) in capacities.iter_mut().zip(tree.allocated_bytes()) {
-                    *sum += value;
-                }
-            }
+        if let (Some(started), Some(decoded)) = (started, decoded) {
             native_log!(
                 "{}",
-                serde_json::json!({"nativeImportProfile":{
-                "decodeMs":decoded.duration_since(started).as_secs_f64()*1000.,
-                "beforePickingMs":picking_start.duration_since(started).as_secs_f64()*1000.,
-                "pickingMs":picking_start.elapsed().as_secs_f64()*1000.,
-                "pickingVertexBytes":capacities[0],"pickingIndexBytes":capacities[1],
-                "pickingNodeBytes":capacities[2],"pickingPrimitiveBytes":capacities[3],
-                "retiredPickingScratchBytes":capacities[4]}})
+                serde_json::json!({"nativeImportProfile": {
+                "decodeMs": decoded.duration_since(started).as_secs_f64()*1000.,
+                "modelMs": decoded.elapsed().as_secs_f64()*1000.,
+                "totalMs": started.elapsed().as_secs_f64()*1000.}})
             );
         }
         if model.apply_animation()? {
@@ -961,19 +946,6 @@ fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
 }
 
 impl Model {
-    pub fn rebuild_picking(&mut self) -> anyhow::Result<()> {
-        self.picking = std::sync::Arc::new(
-            self.geometries
-                .iter()
-                .map(|g| {
-                    crate::picking::PickBvh::new(&g.positions, &g.indices)
-                        .map(std::sync::Arc::new)
-                        .map_err(anyhow::Error::msg)
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        );
-        Ok(())
-    }
     pub fn refresh_bounds(&mut self) {
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);

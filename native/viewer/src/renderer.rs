@@ -309,7 +309,8 @@ impl Camera {
     pub fn half_height(&self) -> f32 {
         self.distance * (self.fov.to_radians() * 0.5).tan()
     }
-    /// Pinhole ray used for selection and focus, independent of the aperture.
+    /// CPU pinhole reference for camera contract tests.
+    #[cfg(test)]
     pub fn ray(&self, uv: [f32; 2], aspect: f32) -> (Vec3, Vec3) {
         let eye = self.eye();
         let forward = (self.target - eye).normalize();

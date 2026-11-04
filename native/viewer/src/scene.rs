@@ -166,7 +166,6 @@ impl Model {
             .map(|mesh| mesh.name.clone())
             .collect();
         model.0.node_names = model.1.nodes.iter().map(|node| node.name.clone()).collect();
-        model.rebuild_picking()?;
         Ok(model)
     }
     pub fn guessed_units(&self) -> f32 {

@@ -227,13 +227,11 @@ mod tests {
         );
         assert!(!model.0.animation.as_ref().unwrap().playing);
         assert!(!model.apply_animation().unwrap());
-        let picking = model.0.picking.clone();
         seek(&mut model, 0.5);
         close(
             model.0.meshes[1].transform.w_axis.truncate(),
             Vec3::new(5., 3., 0.),
         );
-        assert!(Arc::ptr_eq(&picking, &model.0.picking));
     }
 
     #[test]
@@ -304,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn morph_is_applied_before_skin_and_picking_snapshots_keep_their_pose() {
+    fn morph_is_applied_before_skin_and_geometry_snapshots_keep_their_pose() {
         let mut model = skinned_morph_fixture().load();
         let snapshot = model.clone();
         seek(&mut model, 0.5);
@@ -313,16 +311,10 @@ mod tests {
             .transform
             .transform_point3(Vec3::from_slice(&geometry.positions[..3]));
         close(point, Vec3::new(1.5, 0.5, 0.));
-        assert!(!Arc::ptr_eq(&model.0.picking[0], &snapshot.picking[0]));
         assert_ne!(
             model.0.geometries[0].positions,
             snapshot.geometries[0].positions
         );
-        let mut camera = Camera::fit(Vec3::new(2., 1., 0.), 2.);
-        camera.yaw = 0.;
-        camera.pitch = 0.;
-        assert!(model.pick_hit(&camera, [0.5, 0.5], 1.).is_some());
-        assert!(snapshot.pick_hit(&camera, [0.5, 0.5], 1.).is_none());
         seek(&mut model, 0.);
         assert_eq!(
             model.0.geometries[0].positions,
@@ -392,7 +384,6 @@ mod tests {
         assert!(model.apply_animation().is_err());
         assert_eq!(model.0.meshes[0].transform, before.meshes[0].transform);
         assert!(Arc::ptr_eq(&model.0.geometries, &before.geometries));
-        assert!(Arc::ptr_eq(&model.0.picking, &before.picking));
         assert!(!model.0.animation.as_ref().unwrap().playing);
     }
 

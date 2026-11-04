@@ -602,11 +602,9 @@ impl Animation {
                 geometry.min = geometry.min.min(p);
                 geometry.max = geometry.max.max(p);
             }
-            let picking = crate::picking::PickBvh::new(&geometry.positions, &geometry.indices)
-                .map_err(anyhow::Error::msg)?;
-            updates.push((deformation.geometry, geometry, Arc::new(picking)));
+            updates.push((deformation.geometry, geometry));
         }
-        // Commit only after the whole pose and its picking geometry are valid.
+        // Publish only after the whole pose is valid.
         let changed = !updates.is_empty()
             || model
                 .meshes
@@ -615,10 +613,8 @@ impl Animation {
                 .any(|(m, t)| m.transform != *t);
         if !updates.is_empty() {
             let geometries = Arc::make_mut(&mut model.geometries);
-            let picking = Arc::make_mut(&mut model.picking);
-            for (id, geometry, bvh) in updates {
+            for (id, geometry) in updates {
                 geometries[id] = geometry;
-                picking[id] = bvh;
             }
         }
         for (mesh, transform) in model.meshes.iter_mut().zip(transforms) {

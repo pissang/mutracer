@@ -69,38 +69,23 @@ extern "C" void mt_native_tiny_parallel_for(uint32_t count,
 // Picking is immutable: traversal needs nodes/indices/vertices, never the
 // primitive bounds used only during construction. Rebuilding creates a new BVH.
 struct PickTree : tinybvh::BVH {
-  size_t releaseBuildScratch() {
-    const size_t bytes = size_t(allocatedNodes / 2) * sizeof(Fragment);
+  void releaseBuildScratch() {
     AlignedFree(fragment); fragment = nullptr;
-    return bytes;
   }
 };
 struct NativePickBvh {
   std::vector<tinybvh::bvhvec4> vertices;
   std::vector<uint32_t> indices;
   PickTree bvh;
-  size_t retiredScratch = 0;
   NativePickBvh(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni)
     : vertices(nv),indices(i,i+ni) {
     for(uint32_t k=0;k<nv;k++)vertices[k]=tinybvh::bvhvec4(p[k*3],p[k*3+1],p[k*3+2],0);
     bvh.Build(vertices.data(),indices.data(),ni/3);
-    retiredScratch = bvh.releaseBuildScratch();
+    bvh.releaseBuildScratch();
   }
 };
 extern "C" void* mt_native_pick_create(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni) noexcept {
   try { return new NativePickBvh(p,nv,i,ni); } catch(...) {return nullptr;}
-}
-// Internal diagnostics: owned capacities, including the retired build scratch.
-extern "C" uint64_t mt_native_pick_bytes(const void* p, uint32_t kind) noexcept {
-  const auto& pick = *static_cast<const NativePickBvh*>(p);
-  switch(kind) {
-    case 0: return pick.vertices.capacity() * sizeof(tinybvh::bvhvec4);
-    case 1: return pick.indices.capacity() * sizeof(uint32_t);
-    case 2: return size_t(pick.bvh.allocatedNodes) * sizeof(tinybvh::BVH::BVHNode);
-    case 3: return size_t(pick.bvh.allocatedNodes / 2) * sizeof(uint32_t);
-    case 4: return pick.retiredScratch;
-    default: return 0;
-  }
 }
 extern "C" void mt_native_pick_destroy(void* p) noexcept {delete static_cast<NativePickBvh*>(p);}
 extern "C" float mt_native_pick_query(const void* p,const float* o,const float* d,float nearest) noexcept {

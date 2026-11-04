@@ -7,7 +7,6 @@ unsafe extern "C" {
         i: *const u32,
         ni: u32,
     ) -> *mut std::ffi::c_void;
-    fn mt_native_pick_bytes(p: *const std::ffi::c_void, kind: u32) -> u64;
     fn mt_native_pick_destroy(p: *mut std::ffi::c_void);
     fn mt_native_pick_hit(
         p: *const std::ffi::c_void,
@@ -57,9 +56,6 @@ impl PickBvh {
         })
         .map(Self)
         .ok_or("Picking BVH build failed".into())
-    }
-    pub(crate) fn allocated_bytes(&self) -> [u64; 5] {
-        std::array::from_fn(|i| unsafe { mt_native_pick_bytes(self.0.as_ptr(), i as u32) })
     }
     pub(crate) fn intersect_hit(
         &self,

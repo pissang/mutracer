@@ -7,6 +7,13 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_scene_surface_hit(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_preparation_profile(on: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_geometry_kernel_hints(
         input: *const u8,
@@ -1230,6 +1237,30 @@ impl PreparedState {
     pub(super) fn set_light_count(&self, count: usize) {
         self.light_count
             .store(count, std::sync::atomic::Ordering::Release);
+    }
+    /// Resolve a GPU hit against this retained preparation's source identities.
+    pub(crate) fn surface_hit(&self, samples: [f32; 4]) -> Result<Option<[u32; 3]>> {
+        let state = self.clone();
+        let packet = runtime::call(move || {
+            native_step(
+                mt_core_scene_surface_hit,
+                bytemuck::cast_slice(&samples),
+                state.token,
+            )
+        })?;
+        if packet.len() != 32 {
+            return Err("Invalid surface identity result".into());
+        }
+        let words = Words(&packet);
+        match words.u(1) {
+            0 => Ok(None),
+            1 => Ok(Some([
+                words.u(2) as u32,
+                words.u(3) as u32,
+                words.u(4) as u32,
+            ])),
+            _ => Err("Invalid surface identity result".into()),
+        }
     }
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.

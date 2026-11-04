@@ -201,6 +201,10 @@
       "returns": "bytes"
     },
     {
+      "export": "sceneSurfaceHitParameters", "symbol": "mt_core_scene_surface_hit", "params": ["bytes", "u32"],
+      "returns": "bytes"
+    },
+    {
       "export": "preparationProfile", "symbol": "mt_core_preparation_profile", "params": ["u32"],
       "returns": "bytes"
     },

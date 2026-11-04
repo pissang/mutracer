@@ -1,14 +1,20 @@
-//! Area autofocus over the existing immutable picking BVHs. Queries own a model
-//! snapshot, and only the current request may start a lens pull.
-use crate::{renderer::Camera, scene::Model};
+//! Area autofocus through committed GPU depth queries. Only the current request
+//! may start a lens pull.
+use crate::renderer::Camera;
 use eframe::egui;
+use mutracer_native_probe::api;
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
 
 const AREA: f32 = 0.07;
-const GRID: usize = 7;
+const GRID: usize = api::DEPTH_SAMPLE_GRID;
+pub enum DepthReply {
+    Ready(Option<f32>),
+    Unavailable,
+    Failed(String),
+}
 const SETTLE: Duration = Duration::from_millis(160);
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Status {
@@ -28,10 +34,11 @@ pub struct AutoFocus {
     pub show_frame: bool,
     pub area: [f32; 2],
     pub status: Status,
+    pub error: Option<String>,
     revision: u64,
     pending: bool,
     changed_at: Instant,
-    query: Option<(u64, mpsc::Receiver<Option<f32>>)>,
+    query: Option<(u64, mpsc::Receiver<DepthReply>)>,
     pull: Option<Pull>,
     drag: Option<egui::Vec2>,
 }
@@ -42,6 +49,7 @@ impl Default for AutoFocus {
             show_frame: true,
             area: [0.5, 0.5],
             status: Status::Waiting,
+            error: None,
             revision: 0,
             pending: true,
             changed_at: Instant::now(),
@@ -78,9 +86,8 @@ impl AutoFocus {
     }
     pub fn update(
         &mut self,
-        model: &Model,
+        start: impl FnOnce([f32; 2]) -> mpsc::Receiver<DepthReply>,
         camera: &mut Camera,
-        aspect: f32,
         ready: bool,
         held: bool,
         now: Instant,
@@ -92,11 +99,26 @@ impl AutoFocus {
         }
         if let Some((revision, query)) = &self.query {
             match query.try_recv() {
-                Ok(depth) => {
+                Ok(reply) => {
                     let current = *revision == self.revision && ready && !held;
                     self.query = None;
                     if current {
                         ctx.request_repaint();
+                        let depth = match reply {
+                            DepthReply::Ready(depth) => depth,
+                            DepthReply::Unavailable => {
+                                self.pending = true;
+                                self.changed_at = now;
+                                self.status = Status::Waiting;
+                                return false;
+                            }
+                            DepthReply::Failed(error) => {
+                                self.pending = false;
+                                self.status = Status::Missed;
+                                self.error = Some(error);
+                                return false;
+                            }
+                        };
                         self.pending = false;
                         if let Some(to) = depth {
                             if (to / camera.focus_distance).ln().abs() < 0.004 {
@@ -135,17 +157,7 @@ impl AutoFocus {
             && self.query.is_none()
             && now.saturating_duration_since(self.changed_at) >= SETTLE
         {
-            let model = model.clone();
-            let camera = camera.clone();
-            let area = self.area;
-            let ctx = ctx.clone();
-            let (send, receive) = mpsc::channel();
-            std::thread::spawn(move || {
-                let result = measure(&model, &camera, area, aspect);
-                let _ = send.send(result);
-                ctx.request_repaint();
-            });
-            self.query = Some((self.revision, receive));
+            self.query = Some((self.revision, start(self.area)));
             self.status = Status::Measuring;
         }
         if let Some(pull) = &self.pull {
@@ -276,27 +288,38 @@ impl AutoFocus {
         consumed
     }
 }
-pub fn measure(model: &Model, camera: &Camera, area: [f32; 2], aspect: f32) -> Option<f32> {
-    let forward = (camera.target - camera.eye()).normalize();
-    let mut depths = Vec::with_capacity(GRID * GRID);
-    for y in 0..GRID {
-        for x in 0..GRID {
-            let uv = [
-                area[0] + (x as f32 / (GRID - 1) as f32 * 2. - 1.) * AREA / aspect,
-                area[1] + (y as f32 / (GRID - 1) as f32 * 2. - 1.) * AREA,
-            ];
-            if uv.iter().any(|v| *v < 0. || *v > 1.) {
-                continue;
-            }
-            if let Some((_, point)) = model.pick_hit(camera, uv, aspect) {
-                let depth = (point - camera.eye()).dot(forward);
-                if depth.is_finite() && depth > 0. {
-                    depths.push(depth);
-                }
-            }
-        }
-    }
-    pick_depth(&mut depths, GRID * GRID)
+pub fn request_depth(
+    engine: api::Engine,
+    area: [f32; 2],
+    ctx: egui::Context,
+) -> mpsc::Receiver<DepthReply> {
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(match measure(&engine, area) {
+            Ok(Some(depth)) => DepthReply::Ready(depth),
+            Ok(None) => DepthReply::Unavailable,
+            Err(error) => DepthReply::Failed(error.to_string()),
+        });
+        ctx.request_repaint();
+    });
+    receive
+}
+pub fn measure(engine: &api::Engine, area: [f32; 2]) -> api::Result<Option<Option<f32>>> {
+    engine
+        .read_depth_samples(api::DepthSampleArea {
+            x: area[0],
+            y: area[1],
+            size: AREA,
+        })
+        .map(|samples| {
+            samples.map(|samples| {
+                let mut depths: Vec<_> = samples
+                    .into_iter()
+                    .filter(|d| d.is_finite() && *d > 0.)
+                    .collect();
+                pick_depth(&mut depths, GRID * GRID)
+            })
+        })
 }
 /// Nearest sufficiently supported depth cluster, matching Web areaFocus.ts.
 pub fn pick_depth(depths: &mut [f32], rays: usize) -> Option<f32> {
@@ -337,13 +360,14 @@ pub fn focus_pull(from: f32, to: f32, elapsed: f64) -> (f32, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::Model;
     fn model() -> Model {
         Model::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"))
             .unwrap()
     }
     fn reply(focus: &mut AutoFocus, revision: u64, depth: Option<f32>) {
         let (send, receive) = mpsc::channel();
-        send.send(depth).unwrap();
+        send.send(DepthReply::Ready(depth)).unwrap();
         focus.query = Some((revision, receive));
     }
     #[test]
@@ -356,12 +380,18 @@ mod tests {
         let initial = camera.focus_distance;
         let mut focus = AutoFocus::default();
         reply(&mut focus, 0, Some(initial * 0.7));
-        focus.update(&model, &mut camera, 1.5, true, false, now, &ctx);
+        focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            false,
+            now,
+            &ctx,
+        );
         assert_eq!(focus.status, Status::Pulling);
         assert!(focus.update(
-            &model,
+            |_| panic!("unexpected query"),
             &mut camera,
-            1.5,
             true,
             false,
             now + Duration::from_secs(1),
@@ -371,9 +401,8 @@ mod tests {
         assert_eq!(focus.status, Status::Locked);
         assert!(!focus.working(&camera));
         assert!(!focus.update(
-            &model,
+            |_| panic!("unexpected query"),
             &mut camera,
-            1.5,
             true,
             false,
             now + Duration::from_secs(2),
@@ -382,14 +411,28 @@ mod tests {
         focus.request();
         let revision = focus.revision;
         reply(&mut focus, revision, None);
-        focus.update(&model, &mut camera, 1.5, true, false, Instant::now(), &ctx);
+        focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            false,
+            Instant::now(),
+            &ctx,
+        );
         assert_eq!(focus.status, Status::Missed);
         assert_eq!(camera.focus_distance, initial * 0.7);
         focus.request();
         let stale = focus.revision;
         focus.place([0.8, 0.7]);
         reply(&mut focus, stale, Some(initial * 0.1));
-        focus.update(&model, &mut camera, 1.5, true, false, Instant::now(), &ctx);
+        focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            false,
+            Instant::now(),
+            &ctx,
+        );
         assert_eq!(camera.focus_distance, initial * 0.7);
         assert!(focus.pending);
         assert!(focus.pull.is_none());
@@ -397,9 +440,8 @@ mod tests {
         reply(&mut focus, current, Some(initial * 0.1));
         focus.manual();
         focus.update(
-            &model,
+            |_| panic!("unexpected query"),
             &mut camera,
-            1.5,
             true,
             false,
             now + Duration::from_secs(3),
@@ -415,16 +457,44 @@ mod tests {
         let ctx = egui::Context::default();
         let mut focus = AutoFocus::default();
         let now = Instant::now() + Duration::from_secs(1);
-        assert!(!focus.update(&model, &mut camera, 1.5, true, false, now, &ctx));
+        assert!(!focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            false,
+            now,
+            &ctx
+        ));
         assert!(focus.query.is_none());
         camera.f_stop = 2.8;
         camera.orthographic = true;
-        assert!(!focus.update(&model, &mut camera, 1.5, true, false, now, &ctx));
+        assert!(!focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            false,
+            now,
+            &ctx
+        ));
         assert!(focus.query.is_none());
         camera.orthographic = false;
-        assert!(!focus.update(&model, &mut camera, 1.5, true, true, now, &ctx));
+        assert!(!focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            true,
+            true,
+            now,
+            &ctx
+        ));
         assert!(focus.query.is_none());
-        assert!(!focus.update(&model, &mut camera, 1.5, false, false, now, &ctx));
+        assert!(!focus.update(
+            |_| panic!("unexpected query"),
+            &mut camera,
+            false,
+            false,
+            now,
+            &ctx
+        ));
         assert!(focus.query.is_none());
     }
     #[test]

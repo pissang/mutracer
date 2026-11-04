@@ -314,6 +314,7 @@ struct Viewer {
     resolution: resolution::Resolution,
     settings: RenderSettings,
     picking_focus: bool,
+    picker: picking::Picker,
     focus: focus::AutoFocus,
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
@@ -483,6 +484,7 @@ impl Viewer {
             }),
             settings,
             picking_focus: false,
+            picker: picking::Picker::default(),
             focus: focus::AutoFocus::default(),
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings {
@@ -924,15 +926,45 @@ impl Viewer {
                 }
             }
         }
-        let focus_ready = self.loading.is_none()
+        if let Some(reply) = self.picker.poll(self.generation) {
+            if self.metrics.is_none() {
+                match reply {
+                    Ok(picking::Reply::Focus(Some(depth))) => {
+                        self.camera.focus_distance = depth.max(1e-5);
+                        self.picking_focus = false;
+                        self.dirty(Change::Camera);
+                    }
+                    Ok(picking::Reply::Focus(None)) => {}
+                    Ok(picking::Reply::Selection(api::SurfacePick::Hit(hit))) => {
+                        let id = hit.object as usize;
+                        if id < self.model.meshes.len()
+                            && !self.model.1.hidden.contains(&id)
+                            && (hit.material as usize) < self.model.materials.len()
+                        {
+                            self.selected_mesh = Some(id);
+                            self.selected = hit.material as usize;
+                            self.tab = 1;
+                            self.inspector_open = true;
+                        }
+                    }
+                    Ok(picking::Reply::Selection(api::SurfacePick::Background)) => {
+                        self.selected_mesh = None
+                    }
+                    Ok(picking::Reply::Selection(api::SurfacePick::Unavailable)) => {}
+                    Err(error) => self.error = format!("Surface query failed: {error}"),
+                }
+            }
+        }
+        let focus_ready = self.replacement.is_none()
+            && self.loading.is_none()
             && self.candidate.is_none()
             && self.pending_model.is_none()
             && self.scene_build.is_none()
-            && self.change != Change::Scene;
+            && self.change == Change::None
+            && !self.preparing();
         if self.focus.update(
-            &self.model,
+            |area| focus::request_depth(self.target.engine.clone(), area, ctx.clone()),
             &mut self.camera,
-            self.size[0] as f32 / self.size[1] as f32,
             focus_ready,
             held,
             std::time::Instant::now(),
@@ -941,6 +973,9 @@ impl Viewer {
             // Lens pulls change the rendered camera, but must not request another measurement.
             self.change = self.change.max(Change::Camera);
             self.generation += 1;
+        }
+        if let Some(error) = self.focus.error.take() {
+            self.error = format!("Focus query failed: {error}");
         }
         if self.focus.working(&self.camera) {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -1050,6 +1085,14 @@ impl Viewer {
             }
             self.change = Change::None;
         }
+        // Dispatch only after the requested view has reached the engine. A click
+        // during preparation waits; subsequent input invalidates its generation.
+        self.picker.dispatch(
+            &self.target.engine,
+            self.generation,
+            self.change == Change::None && !self.preparing(),
+            ctx,
+        );
         // Keep denoising active during interaction for both OIDN and RR.
         // Temporal guides require pinhole rays. Depth of field uses OIDN and
         // returns to RR automatically when the lens is disabled.
@@ -1449,7 +1492,10 @@ impl eframe::App for Viewer {
                 self.dirty(Change::Camera);
             }
             let started = std::time::Instant::now();
-            let _ = self.model.pick(&self.camera, [0.5, 0.5], 1280. / 720.);
+            // This counter measures enqueue cost; the query itself stays off the UI thread.
+            if !self.picker.pending() {
+                self.picker.request(self.generation, [0.5, 0.5], false);
+            }
             pick_ms = started.elapsed().as_secs_f64() * 1000.;
         }
         self.receive_model(&ctx);

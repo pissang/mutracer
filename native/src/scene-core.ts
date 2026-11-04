@@ -1,3 +1,4 @@
+import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
 import {nativeTangentRequirements} from './scene-tangents.js';
 import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
@@ -1450,4 +1451,17 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     const result=new Uint32Array(4+words.length);result.set([1,words.length,0,0]);result.set(words,4);
     return new Uint8Array(result.buffer);
   }catch(error){return sceneErrorPacket(ERROR_CODE.CONFIGURE,error);}
+}
+
+// Viewer-only query result: version, found, source object/material/local instance, reserved.
+export function sceneSurfaceHitParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try {
+    const state = retainedScenes.get(token);
+    if (!state || bytes.byteLength !== 16) throw new Error('Invalid surface query');
+    const hit = resolveSurfaceHit({...state.prepared, instances:state.instances}, state.tlas,
+      new Float32Array(bytes.buffer, bytes.byteOffset, 4));
+    if (hit === undefined) throw new Error('Invalid surface identity');
+    return new Uint8Array(new Uint32Array([1, Number(hit !== null), hit?.object ?? 0,
+      hit?.material ?? 0, hit?.instance ?? 0, 0, 0, 0]).buffer);
+  } catch(error) { return sceneErrorPacket(ERROR_CODE.CONFIGURE, error); }
 }

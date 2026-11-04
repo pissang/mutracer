@@ -85,7 +85,8 @@ Create a CPU snapshot with `Scene::picker()` / `mt_scene_picker_create`, then
 query a world-space ray with `raycast` / `mt_scene_picker_raycast`. Results
 identify the mesh, local instance, material and original triangle, with world
 position, distance, geometric normal and barycentric coordinates. No engine or
-GPU is needed.
+GPU is needed. Importing a model does not create this snapshot; its CPU and
+memory costs are paid only when you request a picker.
 
 ```rust
 let picker = scene.picker()?;

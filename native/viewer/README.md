@@ -136,8 +136,9 @@ platform differences for trying features or checking a new version.
 - Expand groups, search and select objects in the left **Scene** tree, or click a surface in
   the viewport to open its material. **Frame selection** fits the camera to the
   object.
-- Picking and autofocus can hit transparent or cutout surfaces in front of other
-  objects.
+- Picking and autofocus use rendered geometry, skip alpha-cutout holes and
+  invisible shadow catchers, and treat glass as a visible surface. Results from
+  an older view are discarded; the first query can take longer.
 
 ### Materials
 

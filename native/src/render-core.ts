@@ -141,3 +141,6 @@ export function viewerParameters(kind: number, bytes: Uint8Array): Uint8Array { 
 
 import {preparationProfile as profilePreparation} from './preparation-profile.js';
 export function preparationProfile(on: number): Uint8Array { return profilePreparation(on); }
+
+import {sceneSurfaceHitParameters as surfaceHit} from './scene-core.js';
+export function sceneSurfaceHitParameters(bytes: Uint8Array, token: number): Uint8Array {return surfaceHit(bytes,token);}

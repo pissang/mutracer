@@ -34,6 +34,26 @@ impl DepthSampleArea {
         Ok([self.x, 1. - self.y, self.size / aspect, self.size])
     }
 }
+/// Source identities returned by a GPU viewport query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceHit {
+    /// Source mesh AOV ID.
+    pub object: u32,
+    /// Source material AOV ID.
+    pub material: u32,
+    /// Local instance index; zero for an ordinary mesh.
+    pub instance: u32,
+}
+/// Result of an internal viewer surface query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfacePick {
+    /// No committed scene, preparation pending, or inputs changed during readback.
+    Unavailable,
+    /// The pinhole ray missed all visible surfaces.
+    Background,
+    /// The nearest visible surface and its source identities.
+    Hit(SurfaceHit),
+}
 impl Engine {
     /// Queries 7×7 pinhole depths using the committed engine camera and display
     /// aspect, independently of render sizes and converge camera overrides.
@@ -46,10 +66,40 @@ impl Engine {
         &self,
         area: DepthSampleArea,
     ) -> Result<Option<[f32; DEPTH_SAMPLE_COUNT]>> {
+        self.query_surface(area, false, |query, camera, packed| {
+            query.read(camera, packed)
+        })
+    }
+    /// Internal viewer picking at normalized top-left viewport coordinates.
+    /// Rejects non-finite/out-of-range coordinates. Blocks for lazy GPU compilation
+    /// and a small readback; skips alpha holes and invisible catchers like depth queries.
+    /// Returns Unavailable when the scene/camera/viewport changes during the query.
+    #[doc(hidden)]
+    pub fn pick_surface(&self, x: f32, y: f32) -> Result<SurfacePick> {
+        match self.query_surface(
+            DepthSampleArea { x, y, size: 0. },
+            true,
+            |query, camera, packed| query.pick(camera, packed),
+        )? {
+            None => Ok(SurfacePick::Unavailable),
+            Some(None) => Ok(SurfacePick::Background),
+            Some(Some([object, material, instance])) => Ok(SurfacePick::Hit(SurfaceHit {
+                object,
+                material,
+                instance,
+            })),
+        }
+    }
+    fn query_surface<T>(
+        &self,
+        area: DepthSampleArea,
+        reject_stale: bool,
+        read: impl FnOnce(crate::depth::Query, &[u8], [f32; 4]) -> crate::Result<T>,
+    ) -> Result<Option<T>> {
         area.pack(1.)?;
         self.poll_device();
         let result = crate::runtime::with_loss(&self.inner.gpu, || {
-            let (context, camera, size) = {
+            let (context, camera, size, revisions) = {
                 let mut state = self.live()?;
                 let Some(scene) = state.scene.clone() else {
                     return Ok(None);
@@ -76,7 +126,12 @@ impl Engine {
                         scene[offset..offset + 128].try_into().unwrap()
                     }
                 };
-                (state.shared.context().unwrap(), camera, state.display.size)
+                (
+                    state.shared.context().unwrap(),
+                    camera,
+                    state.display.size,
+                    (state.scene_revision, state.camera_revision),
+                )
             };
             // Neither the engine state nor process registry is held during AOT
             // packing, lazy compilation or the GPU readback wait.
@@ -96,7 +151,7 @@ impl Engine {
                 return Ok(None);
             };
             let samples = crate::platform_scope(|| {
-                query.read(&camera, area.pack(size[0] as f32 / size[1] as f32)?)
+                read(query, &camera, area.pack(size[0] as f32 / size[1] as f32)?)
             })
             .map_err(|e| {
                 error(
@@ -105,6 +160,13 @@ impl Engine {
                 )
             })?;
             self.check_device()?;
+            let state = self.live()?;
+            if reject_stale
+                && ((state.scene_revision, state.camera_revision) != revisions
+                    || state.display.size != size)
+            {
+                return Ok(None);
+            }
             Ok(Some(samples))
         });
         self.flush();
