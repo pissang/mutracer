@@ -1,5 +1,6 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
+mod compact_kernel;
 mod geometry_kernels;
 use crate::layout::{
     WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
@@ -7,6 +8,21 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_compact_kernel(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_surface_hit(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_preparation_profile(on: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_geometry_kernel_hints(
         input: *const u8,
         length: usize,
@@ -163,8 +179,8 @@ unsafe extern "C" {
         size: *mut usize,
     );
 }
-pub(crate) const MAX_BYTES: usize = 512 * 1024 * 1024;
-const MAX_PREPARED_BYTES: usize = 1024 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = crate::memory_budget::SCENE_WIRE_BYTES;
+const MAX_PREPARED_BYTES: usize = crate::memory_budget::RESOURCE_WIRE_BYTES;
 
 // Invertibility is independent of scene units. A fixed determinant threshold
 // rejects valid millimetre/small-unit glTFs such as Khronos ToyCar.
@@ -221,6 +237,11 @@ impl Words<'_> {
         Ok(())
     }
 }
+// HWRT custom instance IDs have 24 bits. Every instance also needs a 160-byte
+// traversal record, independent of the adapter's (checked later) TLAS limit.
+pub(crate) fn instance_limit() -> usize {
+    (crate::memory_budget::bytes() / 160).min(1 << 24)
+}
 pub(super) fn validate(bytes: &[u8]) -> Result<()> {
     validate_changed(bytes, &[])
 }
@@ -231,6 +252,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     if bytes.len() < h::WORDS * WORD_BYTES || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
         return Err("Invalid scene byte length".into());
     }
+    crate::memory_budget::check(bytes.len(), "Scene descriptor")?;
     let w = Words(bytes);
     if w.u(h::VERSION) != layout::version::SCENE || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
@@ -239,15 +261,15 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         return Err("Scene image dimensions exceed probe limits".into());
     }
     if w.u(h::GEOMETRY_COUNT) == 0
-        || w.u(h::GEOMETRY_COUNT) > 4096
+        || w.u(h::GEOMETRY_COUNT) > 65536
         || w.u(h::MESH_COUNT) == 0
-        || w.u(h::MESH_COUNT) > 65536
+        || w.u(h::MESH_COUNT) > instance_limit()
         || w.u(h::MATERIAL_COUNT) == 0
         || w.u(h::MATERIAL_COUNT) > 65536
         || w.u(h::LIGHT_COUNT) > 64
-        || w.u(h::TEXTURE_COUNT) > 256
+        || w.u(h::TEXTURE_COUNT) > 65536
     {
-        return Err("Scene count exceeds probe limits; empty scenes are pending".into());
+        return Err(format!("Scene counts exceed limits: geometries {}, meshes {}, materials {}, lights {}, textures {}; require 1..65536 geometry/material, meshes within memory/24-bit instance budget, 0..64 lights, 0..65536 textures", w.u(h::GEOMETRY_COUNT), w.u(h::MESH_COUNT), w.u(h::MATERIAL_COUNT), w.u(h::LIGHT_COUNT), w.u(h::TEXTURE_COUNT)).into());
     }
     for (count, offset, stride) in [
         (h::GEOMETRY_COUNT, h::GEOMETRY_OFFSET, g::WORDS),
@@ -324,9 +346,14 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         if v == 0 || n == 0 || n % 3 != 0 || v > 4_000_000 || n > 12_000_000 {
             return Err("Invalid geometry counts".into());
         }
-        geometry_words += v * 32 + n * 24;
-        geometry_costs.push(v * 32 + n * 24);
-        if geometry_words > MAX_PREPARED_BYTES / 4 {
+        // Worst compact record: f32 position/normal/UVs/HDR RGB + tangent.
+        // Include source indices and conservative software BVH/identity storage.
+        let cost = v * 14 + n * 8;
+        geometry_words = geometry_words
+            .checked_add(cost)
+            .ok_or("Prepared geometry size overflow")?;
+        geometry_costs.push(cost);
+        if geometry_words > crate::memory_budget::bytes() / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
         let scan = unchanged.get(i) != Some(&1);
@@ -390,7 +417,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
                 return Err("Vertex material index is out of range".into());
             }
             geometry_words += geometry_costs[w.u(o + m::GEOMETRY)];
-            if geometry_words > MAX_PREPARED_BYTES / 4 {
+            if geometry_words > crate::memory_budget::bytes() / 4 {
                 return Err("Multi-material geometry expansion exceeds probe budget".into());
             }
         }
@@ -402,7 +429,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
                 w.reserved(io + b::TRANSFORMS, 2)?;
             } else {
                 instance_count = w.u(io + b::COUNT);
-                if instance_count > 65536 {
+                if instance_count > instance_limit() {
                     return Err("Too many batch instances".into());
                 }
                 if instance_count == 0 {
@@ -420,8 +447,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             }
         }
         expanded_instances += instance_count;
-        if expanded_instances > 65536 {
-            return Err("Expanded instance count exceeds probe limit".into());
+        if expanded_instances > instance_limit() {
+            return Err(format!("Expanded scene requires {expanded_instances} instances; memory/24-bit instance limit is {}", instance_limit()).into());
         }
         w.affine(o + m::TRANSFORM)?;
     }
@@ -555,7 +582,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         }
         if projection != 0 {
             geometry_words += geometry_costs[w.u(mesh + m::GEOMETRY)];
-            if geometry_words > MAX_PREPARED_BYTES / 4 {
+            if geometry_words > crate::memory_budget::bytes() / 4 {
                 return Err("Displaced geometry expansion exceeds probe budget".into());
             }
         }
@@ -717,7 +744,6 @@ pub(super) struct PreparedData {
     light_count: std::sync::atomic::AtomicUsize,
     authoritative_shader: Vec<u8>,
     authoritative_indices: Vec<u8>,
-    authoritative_as_indices: Vec<u8>,
     authoritative_bounds: Vec<u8>,
     /// Whether the TS sync state mirrors the committed descriptor.
     synced: std::sync::atomic::AtomicBool,
@@ -750,7 +776,6 @@ pub(super) struct TargetPacket {
 pub(super) struct LightingUpdates {
     resources: Vec<(usize, u64, u32, u32, Vec<u8>)>,
     pub native_layout: Option<hardware::NativeLayout>,
-    pub hardware_positions: Option<Vec<u8>>,
     pub hardware_writes: Vec<(usize, u64, Vec<u8>)>,
     pub changed_blases: Option<Vec<usize>>,
 }
@@ -974,7 +999,7 @@ impl PreparedState {
             mt_core_native_geometry_begin,
             mt_core_native_geometry_finish,
             bytes,
-            &[1, 2, 3, 7, 8, 24, 31, 38, 41, 53],
+            &[1, 2, 3, 7, 8, 24, 31, 38, 53],
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
@@ -1007,10 +1032,6 @@ impl PreparedState {
             .collect();
         assets.insert(AssetId::Packet(33), self.authoritative_shader.clone());
         assets.insert(AssetId::Packet(35), self.authoritative_indices.clone());
-        assets.insert(AssetId::Packet(42), self.authoritative_as_indices.clone());
-        if let Some(positions) = &updates.hardware_positions {
-            assets.insert(AssetId::Packet(41), positions.clone());
-        }
         assets.insert(AssetId::Packet(38), self.authoritative_bounds.clone());
         let layout = updates
             .native_layout
@@ -1224,6 +1245,30 @@ impl PreparedState {
     pub(super) fn set_light_count(&self, count: usize) {
         self.light_count
             .store(count, std::sync::atomic::Ordering::Release);
+    }
+    /// Resolve a GPU hit against this retained preparation's source identities.
+    pub(crate) fn surface_hit(&self, samples: [f32; 4]) -> Result<Option<[u32; 3]>> {
+        let state = self.clone();
+        let packet = runtime::call(move || {
+            native_step(
+                mt_core_scene_surface_hit,
+                bytemuck::cast_slice(&samples),
+                state.token,
+            )
+        })?;
+        if packet.len() != 32 {
+            return Err("Invalid surface identity result".into());
+        }
+        let words = Words(&packet);
+        match words.u(1) {
+            0 => Ok(None),
+            1 => Ok(Some([
+                words.u(2) as u32,
+                words.u(3) as u32,
+                words.u(4) as u32,
+            ])),
+            _ => Err("Invalid surface identity result".into()),
+        }
     }
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.
@@ -1485,7 +1530,6 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
     }
     let mut updates = Vec::new();
     let mut native_layout = None;
-    let mut hardware_positions = None;
     let mut hardware_writes = Vec::new();
     let mut changed_blases = None;
     for i in 0..count {
@@ -1496,7 +1540,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             w.u(o + we::BYTE_OFFSET),
             w.u(o + we::DESTINATION),
         );
-        let metadata = matches!(id, 31 | 38 | 41 | 53);
+        let metadata = matches!(id, 31 | 38 | 53);
         // Texture destinations are array layers; the atlas is RGBA8 or RGBA16F.
         let texture = !metadata && id >= crate::layout::resource::ATLAS;
         let atlas = id == crate::layout::resource::ATLAS;
@@ -1538,16 +1582,13 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             );
             continue;
         }
-        if id == 38 || id == 41 {
+        if id == 38 {
             w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
             hardware_writes.push((
                 id,
                 destination as u64,
                 packet[offset..offset + length].to_vec(),
             ));
-            if id == 41 && destination == 0 {
-                hardware_positions = Some(packet[offset..offset + length].to_vec());
-            }
             continue;
         }
         if id == 31 {
@@ -1559,7 +1600,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             )?);
             continue;
         }
-        if (id >= 7 || id == 3) && !atlas {
+        if id >= 7 && !atlas {
             w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
         }
         if id == 2 {
@@ -1569,6 +1610,13 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             for at in (offset / WORD_BYTES..(offset + length) / WORD_BYTES).step_by(40) {
                 w.finite(at + 3, 37)?;
             }
+        }
+        if id == 3 {
+            hardware_writes.push((
+                id,
+                destination as u64,
+                packet[offset..offset + length].to_vec(),
+            ));
         }
         updates.push((
             id,
@@ -1610,7 +1658,6 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
     Ok(LightingUpdates {
         resources: updates,
         native_layout,
-        hardware_positions,
         hardware_writes,
         changed_blases,
     })
@@ -1634,9 +1681,14 @@ pub(super) fn prepare_retained_with_settings(
     backend: u32,
     settings: &settings::RenderSettings,
 ) -> Result<(Scene, Assets, PreparedState)> {
-    let bytes = bytes.to_vec();
-    let hardware = hardware;
-    let backend = backend;
+    prepare_retained_shared_with_settings(Arc::new(bytes.to_vec()), hardware, backend, settings)
+}
+pub(super) fn prepare_retained_shared_with_settings(
+    bytes: Arc<Vec<u8>>,
+    hardware: bool,
+    backend: u32,
+    settings: &settings::RenderSettings,
+) -> Result<(Scene, Assets, PreparedState)> {
     let settings = *settings;
     runtime::call(move || {
         prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings)
@@ -1662,7 +1714,6 @@ fn prepare_retained_with_settings_inner(
         indexed: hardware,
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
-        authoritative_as_indices: Vec::new(),
         authoritative_bounds: Vec::new(),
         synced: std::sync::atomic::AtomicBool::new(false),
         light_count: std::sync::atomic::AtomicUsize::new(if bytes.len() >= 32 {
@@ -1676,20 +1727,17 @@ fn prepare_retained_with_settings_inner(
             0
         },
     };
-    let (scene, assets) = prepare_impl(
+    let (scene, assets) = prepare_impl_with_kernels_inner(
         bytes,
         token,
         hardware,
         false,
         settings,
         if backend == 1 { 2 } else { 1 },
+        true,
     )?;
     state.authoritative_shader = assets
         .get(&AssetId::Packet(33))
-        .cloned()
-        .unwrap_or_default();
-    state.authoritative_as_indices = assets
-        .get(&AssetId::Packet(42))
         .cloned()
         .unwrap_or_default();
     state.authoritative_bounds = assets
@@ -1734,22 +1782,35 @@ pub(super) fn prepare_frame_inputs(
     prepare_impl(bytes, 0, false, false, settings, 17)
 }
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
-fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
+// The callback runs on the sole runtime owner, before any further AOT call.
+// Only Rust-owned results may leave it. Reset/collection also runs on errors.
+fn with_native_step<T>(
+    step: NativeStep,
+    bytes: &[u8],
+    token: u32,
+    read: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
+    struct Output;
+    impl Drop for Output {
+        fn drop(&mut self) {
+            unsafe {
+                mt_core_reset();
+                mt_core_collect();
+            }
+        }
+    }
     let mut pointer = std::ptr::null();
     let mut size = 0;
     unsafe {
         step(bytes.as_ptr(), bytes.len(), token, &mut pointer, &mut size);
     }
+    let _output = Output;
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
         return Err("Invalid native scene construction result".into());
     }
-    let packet = unsafe {
-        let result = copy_core_result(pointer, size, size);
-        mt_core_collect();
-        result?
-    };
-    exception_packet(&packet)?;
-    let w = Words(&packet);
+    let packet = unsafe { std::slice::from_raw_parts(pointer, size) };
+    exception_packet(packet)?;
+    let w = Words(packet);
     if w.u(0) != 1
         && w.u(0) != crate::layout::version::RESOURCE_WRITES
         && w.u(0) != crate::layout::version::TARGET_PACKET
@@ -1761,7 +1822,33 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
         }
         .into());
     }
-    Ok(packet)
+    let started = crate::profiling::enabled().then(Instant::now);
+    let result = read(packet);
+    if let Some(started) = started {
+        native_log!(
+            "{}",
+            json!({"nativeCoreReadProfile":{"bytes":size,
+            "readMs":started.elapsed().as_secs_f64()*1000.,
+            "epochMs":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()*1000.}})
+        );
+    }
+    result
+}
+fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
+    with_native_step(step, bytes, token, |packet| Ok(packet.to_vec()))
+}
+fn preparation_profile(on: u32) -> Result<()> {
+    let mut pointer = std::ptr::null();
+    let mut size = 0;
+    unsafe {
+        mt_core_preparation_profile(on, &mut pointer, &mut size);
+        let bytes = copy_core_result(pointer, size, size)?;
+        mt_core_collect();
+        if on == 0 {
+            native_log!("{}", std::str::from_utf8(&bytes)?);
+        }
+    }
+    Ok(())
 }
 fn prepare_impl(
     bytes: &[u8],
@@ -1814,13 +1901,39 @@ fn prepare_impl_with_kernels_inner(
     let started = Instant::now();
     validate(bytes)?;
     let validated = Instant::now();
-    // The ABI bytes are borrowed only during this call; the AOT decoder copies
-    // every retained array. Copy result bytes before reset or collection.
+    // The export wrapper owns its inbound bytes. Retained geometry views root
+    // that allocation; output resources are extracted before reset/collection.
     init_core();
     let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
     if configured[..4] != 1u32.to_le_bytes() {
         return Err("Invalid render settings".into());
     }
+    struct PreparationProfile;
+    impl Drop for PreparationProfile {
+        fn drop(&mut self) {
+            // Clear diagnostic state on early hint rejection as well as success.
+            let _ = preparation_profile(0);
+        }
+    }
+    let _profile = if profile {
+        preparation_profile(1)?;
+        Some(PreparationProfile)
+    } else {
+        None
+    };
+    let compact = native_kernels && std::env::var("MUTRACER_NATIVE_COMPACT").as_deref() != Ok("ts");
+    native_step(
+        mt_core_compact_kernel,
+        &u32::from(compact).to_le_bytes(),
+        token,
+    )?;
+    struct CompactCommand(u32);
+    impl Drop for CompactCommand {
+        fn drop(&mut self) {
+            let _ = native_step(mt_core_compact_kernel, &0u32.to_le_bytes(), self.0);
+        }
+    }
+    let _compact_command = CompactCommand(token);
     let kernel_start = Instant::now();
     if let Some(hints) = native_kernels
         .then(|| geometry_kernels::packet(bytes, hardware))
@@ -1837,9 +1950,14 @@ fn prepare_impl_with_kernels_inner(
             json!({"nativeDataKernelProfile":{"completedWallMs":kernel_start.elapsed().as_secs_f64()*1000.}})
         );
     }
-    let work = (|| -> Result<Vec<u8>> {
+    let work = (|| -> Result<(Scene, Assets)> {
         if hardware {
-            let result = native_step(mt_core_native_hardware_scene, bytes, token)?;
+            let result = with_native_step(
+                mt_core_native_hardware_scene,
+                bytes,
+                token,
+                unpack_scene_packet,
+            )?;
             if profile {
                 native_log!(
                     "{}",
@@ -1859,7 +1977,12 @@ fn prepare_impl_with_kernels_inner(
         let packed = Instant::now();
         let tlas = tinybvh::jobs(&instances, true)?;
         let top = Instant::now();
-        let result = native_step(mt_core_native_scene_finish, &tlas, token)?;
+        let result = with_native_step(
+            mt_core_native_scene_finish,
+            &tlas,
+            token,
+            unpack_scene_packet,
+        )?;
         if profile {
             native_log!(
                 "{}",
@@ -1875,6 +1998,13 @@ fn prepare_impl_with_kernels_inner(
         }
         Ok(result)
     })();
+    let work = work.and_then(|mut result| {
+        if compact {
+            let jobs = native_step(mt_core_compact_kernel, &2u32.to_le_bytes(), token)?;
+            compact_kernel::apply(bytes, &jobs, &mut result.1)?;
+        }
+        Ok(result)
+    });
     if work.is_err() {
         let mut pointer = std::ptr::null();
         let mut size = 0;
@@ -1884,8 +2014,10 @@ fn prepare_impl_with_kernels_inner(
             mt_core_collect();
         }
     }
-    let packet = work?;
-    let w = Words(&packet);
+    work
+}
+fn unpack_scene_packet(packet: &[u8]) -> Result<(Scene, Assets)> {
+    let w = Words(packet);
     if w.u(ph::VERSION) == 2 {
         return Err("Native scene preparation rejected the scene".into());
     }
@@ -2213,6 +2345,37 @@ pub(crate) mod tests {
                 retained.accept_transform().unwrap();
             }
         }
+    }
+    #[test]
+    fn compact_hardware_inputs_preserve_source_vertices_and_indices() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let bytes = input();
+        let (scene, assets, _) = prepare_retained(&bytes, true).unwrap();
+        let layout = scene.native_layout.as_ref().unwrap();
+        assert_eq!(layout.attribute_stride_bytes, 16);
+        assert_eq!(layout.position_offset_bytes, 0);
+        assert!(!assets.contains_key(&AssetId::Packet(41)));
+        assert!(!assets.contains_key(&AssetId::Packet(42)));
+        let packed = &assets[&AssetId::Packet(3)];
+        let source = Words(&bytes);
+        let geometry = source.u(h::GEOMETRY_OFFSET);
+        for i in 0..3 {
+            for axis in 0..3 {
+                let at = i * layout.attribute_stride_bytes + axis * 4;
+                assert_eq!(
+                    u32::from_le_bytes(packed[at..at + 4].try_into().unwrap()) as usize,
+                    source.u(source.u(geometry + g::POSITION) + i * 3 + axis)
+                );
+            }
+        }
+        assert_eq!(
+            assets[&AssetId::Packet(35)],
+            [0u32, 1, 2]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
     }
     #[test]
     fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {

@@ -40,26 +40,31 @@ export function decodeMaterial(u: Uint32Array, f: Float32Array, off: number, tex
   return m;
 }
 
-export function decodeGeometry(u: Uint32Array, f: Float32Array, off: number, hint: GeometryKernelHint | undefined): Geometry {
+export function decodeGeometry(u: Uint32Array, f: Float32Array, off: number, hint: GeometryKernelHint | undefined, borrow = false, needsTangents = true): Geometry {
+  // Full preparation receives an AOT-owned descriptor. Views keep that allocation
+  // alive through retained geometry. Sync keeps separate mutable arrays so edits
+  // cannot overwrite its previous descriptor or rollback snapshot.
+  const floats = (offset: number, count: number) => borrow ? f.subarray(offset, offset + count) : f.slice(offset, offset + count);
+  const words = (offset: number, count: number) => borrow ? u.subarray(offset, offset + count) : u.slice(offset, offset + count);
   const count = u[off + G.VERTEX_COUNT], indexCount = u[off + G.INDEX_COUNT];
   // Let the shared constructor generate normals only when the input omits
   // them. Assigning authored normals afterwards needlessly traversed all faces.
-  const geometry = new Geometry({position: new Attribute(f.slice(u[off + G.POSITION], u[off + G.POSITION] + count * 3), 3),
-    indices: new Attribute(u.slice(u[off + G.INDICES], u[off + G.INDICES] + indexCount), 1),
-    normal: u[off + G.NORMAL] ? new Attribute(f.slice(u[off + G.NORMAL], u[off + G.NORMAL] + count * 3), 3) : undefined});
-  if (u[off + G.UV]) geometry.uv = new Attribute(f.slice(u[off + G.UV], u[off + G.UV] + count * 2), 2);
-  if (u[off + G.UV1]) geometry.uv1 = new Attribute(f.slice(u[off + G.UV1], u[off + G.UV1] + count * 2), 2);
+  const geometry = new Geometry({position: new Attribute(floats(u[off + G.POSITION], count * 3), 3),
+    indices: new Attribute(words(u[off + G.INDICES], indexCount), 1),
+    normal: u[off + G.NORMAL] ? new Attribute(floats(u[off + G.NORMAL], count * 3), 3) : undefined});
+  if (u[off + G.UV]) geometry.uv = new Attribute(floats(u[off + G.UV], count * 2), 2);
+  if (u[off + G.UV1]) geometry.uv1 = new Attribute(floats(u[off + G.UV1], count * 2), 2);
 
-  if (u[off + G.COLOR]) geometry.color = new Attribute(f.slice(u[off + G.COLOR], u[off + G.COLOR] + count * 3), 3);
-  if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
-  if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
+  if (u[off + G.COLOR]) geometry.color = new Attribute(floats(u[off + G.COLOR], count * 3), 3);
+  if (u[off + G.TANGENT]) geometry.tangent = new Attribute(floats(u[off + G.TANGENT], count * 4), 4);
+  if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(words(u[off + G.MATERIAL_INDEX], count)), 1);
 
   if (hint) {
     if (hint.vertexCount !== count) throw new Error('Kernel vertex count mismatch');
     if(hint.bounds) rememberKernelBounds(geometry, hint.bounds);
     if (!geometry.tangent && hint.tangents) installGeneratedVertexTangents(geometry,hint.tangents);
   }
-  if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+  if (needsTangents && !geometry.tangent && geometry.uv) generateVertexTangents(geometry);
   return geometry;
 }
 

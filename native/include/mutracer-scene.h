@@ -9,7 +9,10 @@
  * consumes the descriptor. Every record is a run of little-endian 32-bit words:
  * uint32_t fields, float fields as IEEE binary32. Offsets are word offsets from
  * the start of the descriptor, and offset 0 omits an optional array. Reserved
- * fields must be zero. The structs below have no padding and match the MT_*
+ * fields must be zero. The descriptor defaults to an 8192 MiB admission budget
+ * (MUTRACER_NATIVE_MEMORY_BUDGET_MIB, positive integer MiB) and must fit uint32_t
+ * word offsets. Prepared resources must also fit the selected GPU's buffers.
+ * The structs below have no padding and match the MT_*
  * word offsets in mutracer-layout.h; copy them into the descriptor with memcpy
  * (mutracer-scene-builder.h does this) rather than casting the word buffer.
  */

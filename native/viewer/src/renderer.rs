@@ -273,6 +273,8 @@ impl Drop for Renderer {
 pub struct Camera {
     pub target: Vec3,
     pub up: Vec3,
+    /// Reflection retained from the imported camera-to-world basis.
+    pub mirrored: bool,
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
@@ -288,6 +290,7 @@ impl Camera {
         Self {
             target: center,
             up: Vec3::Y,
+            mirrored: false,
             yaw: 0.6,
             pitch: 0.3,
             distance: radius * 3.6,
@@ -309,12 +312,14 @@ impl Camera {
     pub fn half_height(&self) -> f32 {
         self.distance * (self.fov.to_radians() * 0.5).tan()
     }
-    /// Pinhole ray used for selection and focus, independent of the aperture.
+    /// CPU pinhole reference for camera contract tests.
+    #[cfg(test)]
     pub fn ray(&self, uv: [f32; 2], aspect: f32) -> (Vec3, Vec3) {
         let eye = self.eye();
         let forward = (self.target - eye).normalize();
         let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
+        let right = if self.mirrored { -right } else { right };
         let offset = (right * ((uv[0] * 2. - 1.) * aspect) + up * (1. - uv[1] * 2.))
             * (self.fov.to_radians() * 0.5).tan();
         if self.orthographic {
@@ -328,6 +333,7 @@ impl Camera {
         self.distance = delta.length().max(1e-5);
         self.target = target;
         self.up = Vec3::Y;
+        self.mirrored = false;
         self.yaw = delta.x.atan2(delta.z);
         self.pitch = (delta.y / self.distance).clamp(-1., 1.).asin();
         self.focus_distance = self.distance;
@@ -340,15 +346,20 @@ impl Camera {
                 self.yaw.cos() * self.pitch.cos(),
             ) * self.distance
     }
+    pub fn orbit_yaw(&mut self, delta: f32) {
+        // A reflected camera reverses screen X; compensate the input as well.
+        self.yaw -= if self.mirrored { -delta } else { delta };
+    }
     pub fn orbit(&mut self, delta: [f32; 2]) {
         self.up = Vec3::Y;
-        self.yaw -= delta[0] * 0.008;
+        self.orbit_yaw(delta[0] * 0.008);
         self.pitch = (self.pitch + delta[1] * 0.008).clamp(-1.5, 1.5);
     }
     pub fn pan(&mut self, delta: [f32; 2]) {
         let forward = (self.target - self.eye()).normalize();
         let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
+        let right = if self.mirrored { -right } else { right };
         self.target += (-right * delta[0] + up * delta[1]) * self.distance * 0.002;
     }
     pub fn zoom(&mut self, delta: f32) {
@@ -372,7 +383,11 @@ impl Camera {
         f[camera_wire::METERS_PER_UNIT] = self.meters_per_unit;
         // A general Mat4 inverse can round the homogeneous 1 away from 1.0,
         // which violates the native ABI's exact affine-transform contract.
-        let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, self.up).inverse());
+        let mut world =
+            Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, self.up).inverse());
+        if self.mirrored {
+            world.x_axis = -world.x_axis;
+        }
         f[camera_wire::TRANSFORM..camera_wire::WORDS].copy_from_slice(&world.to_cols_array());
         f.into_iter().flat_map(f32::to_le_bytes).collect()
     }
@@ -505,6 +520,39 @@ mod tests {
         assert_eq!(camera.f_stop, 1.4);
         assert_eq!(camera.meters_per_unit, 0.01);
         assert_eq!(camera.focus_distance, camera.distance);
+    }
+    #[test]
+    fn orbit_drags_move_front_landmarks_in_the_pointer_direction() {
+        fn screen(camera: &Camera, point: Vec3) -> glam::Vec2 {
+            let bytes = camera.bytes([320, 240]);
+            let values: Vec<f32> = bytes[camera_wire::TRANSFORM * 4..]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            let local = Mat4::from_cols_slice(&values)
+                .inverse()
+                .transform_point3(point);
+            glam::Vec2::new(local.x, -local.y) / if camera.orthographic { 1. } else { -local.z }
+        }
+        for mirrored in [false, true] {
+            for orthographic in [false, true] {
+                for delta in [[10., 0.], [-10., 0.], [0., 10.], [0., -10.]] {
+                    let mut camera = Camera::fit(Vec3::ZERO, 2.);
+                    camera.set_view(Vec3::new(0., 0., 4.), Vec3::ZERO);
+                    camera.mirrored = mirrored;
+                    camera.orthographic = orthographic;
+                    let point = Vec3::Z;
+                    let before = screen(&camera, point);
+                    camera.orbit(delta);
+                    let movement = screen(&camera, point) - before;
+                    assert!(
+                        movement.dot(glam::Vec2::from_array(delta)) > 0.,
+                        "Drag reversed: mirrored={mirrored}, orthographic={orthographic}, delta={delta:?}, movement={movement:?}"
+                    );
+                    assert_eq!(camera.mirrored, mirrored);
+                }
+            }
+        }
     }
     #[test]
     fn camera_controls_preserve_the_affine_wire_contract() {

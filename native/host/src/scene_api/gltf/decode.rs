@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::path::Path;
+#[path = "meshopt.rs"]
+mod meshopt_decode;
 
 /// Decoded document, buffers, RGBA8 images and whether any image was reduced.
 type Import = (
@@ -14,7 +16,6 @@ type Import = (
     bool,
     Vec<Value>,
 );
-const MAX_BUFFER: usize = 512 * 1024 * 1024;
 /// Texture pixels shared by all material textures: the descriptor allows 16M and
 /// 4M stay reserved for the largest supported environment image.
 pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 12_582_912;
@@ -45,10 +46,7 @@ fn uri(path: Option<&Path>, name: &str) -> Result<Vec<u8>> {
             .parent()
             .unwrap_or(Path::new("."))
             .join(decoded.as_ref());
-        ensure!(
-            p.metadata()?.len() <= MAX_BUFFER as u64,
-            "External resource exceeds 512 MiB"
-        );
+        crate::memory_budget::check(usize::try_from(p.metadata()?.len())?, "External resource")?;
         Ok(std::fs::read(p)?)
     }
 }
@@ -67,77 +65,9 @@ fn view<'a>(j: &Value, buffers: &'a [gltf::buffer::Data], index: usize) -> Resul
         number(v, "byteLength")?,
     )
 }
+#[cfg(test)]
 fn decode(ext: &Value, source: &[u8]) -> Result<Vec<u8>> {
-    let count = number(ext, "count")?;
-    let stride = number(ext, "byteStride")?;
-    let len = count
-        .checked_mul(stride)
-        .context("Meshopt decoded size overflow")?;
-    ensure!(
-        count > 0 && len <= MAX_BUFFER,
-        "Meshopt decoded buffer exceeds 512 MiB"
-    );
-    let mode = ext["mode"].as_str().context("Missing Meshopt mode")?;
-    let filter = ext["filter"].as_str().unwrap_or("NONE");
-    match mode {
-        "ATTRIBUTES" => ensure!(
-            (4..=256).contains(&stride) && stride % 4 == 0,
-            "Invalid Meshopt attribute stride"
-        ),
-        "TRIANGLES" | "INDICES" => ensure!(
-            [2, 4].contains(&stride) && filter == "NONE" && (mode != "TRIANGLES" || count % 3 == 0),
-            "Invalid Meshopt index layout"
-        ),
-        _ => bail!("Unsupported Meshopt mode {mode}"),
-    }
-    ensure!(
-        match filter {
-            "NONE" => true,
-            "OCTAHEDRAL" => [4, 8].contains(&stride),
-            "QUATERNION" => stride == 8,
-            "EXPONENTIAL" => stride % 4 == 0,
-            _ => false,
-        },
-        "Invalid Meshopt filter {filter}"
-    );
-    // u64 storage guarantees alignment for decoder/filter native writes.
-    let mut aligned = vec![0u64; len.div_ceil(8)];
-    let ptr = aligned.as_mut_ptr().cast();
-    let status = unsafe {
-        match mode {
-            "ATTRIBUTES" => meshopt::ffi::meshopt_decodeVertexBuffer(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-            "TRIANGLES" => meshopt::ffi::meshopt_decodeIndexBuffer(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-            _ => meshopt::ffi::meshopt_decodeIndexSequence(
-                ptr,
-                count,
-                stride,
-                source.as_ptr(),
-                source.len(),
-            ),
-        }
-    };
-    ensure!(status == 0, "Meshopt decoding failed ({status})");
-    unsafe {
-        match filter {
-            "OCTAHEDRAL" => meshopt::ffi::meshopt_decodeFilterOct(ptr, count, stride),
-            "QUATERNION" => meshopt::ffi::meshopt_decodeFilterQuat(ptr, count, stride),
-            "EXPONENTIAL" => meshopt::ffi::meshopt_decodeFilterExp(ptr, count, stride),
-            _ => (),
-        }
-        Ok(std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec())
-    }
+    meshopt_decode::Decoder::new(ext)?.reference(source)
 }
 fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     let v = match kind {
@@ -164,12 +94,17 @@ fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     Ok(v)
 }
 pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
-    let (mut j, blob): (Value, Option<Vec<u8>>) = if bytes.starts_with(b"glTF") {
+    load_bytes_mode(bytes, path, meshopt_decode::Mode::from_env())
+}
+fn load_bytes_mode(
+    bytes: &[u8],
+    path: Option<&Path>,
+    meshopt_mode: meshopt_decode::Mode,
+) -> Result<Import> {
+    let started = crate::profiling::enabled().then(std::time::Instant::now);
+    let (mut j, blob): (Value, Option<std::borrow::Cow<'_, [u8]>>) = if bytes.starts_with(b"glTF") {
         let glb = gltf::Glb::from_slice(&bytes)?;
-        (
-            serde_json::from_slice(&glb.json)?,
-            glb.bin.map(|b| b.into_owned()),
-        )
+        (serde_json::from_slice(&glb.json)?, glb.bin)
     } else {
         (serde_json::from_slice(&bytes)?, None)
     };
@@ -179,6 +114,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             "Required glTF extension is unsupported: {e}"
         );
     }
+    let parsed = started.map(|_| std::time::Instant::now());
     let mut buffers = Vec::new();
     let mut total = 0usize;
     for (i, b) in j["buffers"]
@@ -189,48 +125,43 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     {
         let len = number(b, "byteLength")?;
         total = total.checked_add(len).context("Buffer budget overflow")?;
-        ensure!(total <= MAX_BUFFER, "Model buffers exceed 512 MiB");
+        crate::memory_budget::check(total, "Model buffers")?;
         let data = if let Some(name) = b["uri"].as_str() {
             uri(path, name)?
         } else if i == 0 {
-            blob.as_ref().context("Missing GLB buffer")?.clone()
+            blob.as_ref().context("Missing GLB buffer")?.to_vec()
         } else if b["extensions"]["EXT_meshopt_compression"]["fallback"] == true {
             vec![0; len]
         } else {
             bail!("Missing buffer {i}")
         };
         ensure!(data.len() >= len, "Buffer {i} is shorter than declared");
+        // External buffers and GLB padding can exceed byteLength; charge actual
+        // owned storage, also making source-buffer retirement subtraction exact.
+        total = total
+            .checked_sub(len)
+            .and_then(|n| n.checked_add(data.len()))
+            .context("Buffer budget overflow")?;
+        crate::memory_budget::check(total, "Model buffers")?;
         buffers.push(gltf::buffer::Data(data));
     }
-    for v in j["bufferViews"].as_array().into_iter().flatten() {
-        if let Some(ext) = v["extensions"].get("EXT_meshopt_compression") {
-            let source = span(
-                &buffers
-                    .get(number(ext, "buffer")?)
-                    .context("Invalid Meshopt source")?
-                    .0,
-                ext["byteOffset"].as_u64().unwrap_or(0) as usize,
-                number(ext, "byteLength")?,
-            )?;
-            let decoded = decode(ext, source)?;
-            ensure!(
-                decoded.len() == number(v, "byteLength")?,
-                "Meshopt decoded length mismatch"
-            );
-            let target = buffers
-                .get_mut(number(v, "buffer")?)
-                .context("Invalid Meshopt target")?;
-            let offset = v["byteOffset"].as_u64().unwrap_or(0) as usize;
-            let end = offset
-                .checked_add(decoded.len())
-                .context("Meshopt target overflow")?;
-            target
-                .0
-                .get_mut(offset..end)
-                .context("Meshopt target exceeds buffer")?
-                .copy_from_slice(&decoded);
+    let loaded = started.map(|_| std::time::Instant::now());
+    let meshopt = meshopt_decode::apply(&j, &mut buffers, meshopt_mode)?;
+    let decompressed = started.map(|_| std::time::Instant::now());
+    // Decoded views and images no longer read source-only compression buffers.
+    let live: std::collections::BTreeSet<_> = j["bufferViews"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|v| number(v, "buffer"))
+        .collect::<Result<_>>()?;
+    for (i, buffer) in buffers.iter_mut().enumerate() {
+        if !live.contains(&i) {
+            total -= buffer.len();
+            buffer.0 = Vec::new();
         }
     }
+    let retired = started.map(|_| std::time::Instant::now());
     // Expand geometry float attributes and normalized instance quaternions;
     // joints and index semantics stay integer.
     let mut attributes = std::collections::BTreeSet::new();
@@ -300,8 +231,10 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
                 max[k] = max[k].max(v);
             }
         }
-        total += floats.len();
-        ensure!(total <= MAX_BUFFER, "Expanded model buffers exceed 512 MiB");
+        total = total
+            .checked_add(floats.len())
+            .context("Expanded buffer budget overflow")?;
+        crate::memory_budget::check(total, "Expanded model buffers")?;
         let buffer = buffers.len();
         let buffer_view = j["bufferViews"].as_array().unwrap().len();
         j["buffers"]
@@ -321,6 +254,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
         a["min"] = json!(min);
         a["max"] = json!(max);
     }
+    let expanded = started.map(|_| std::time::Instant::now());
     for t in j
         .get_mut("textures")
         .and_then(Value::as_array_mut)
@@ -351,39 +285,46 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     }
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
     let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
-    let mut images = Vec::new();
-    let mut resized = false;
+    let validated = started.map(|_| std::time::Instant::now());
     let image_count = document.images().len().max(1) as u64;
     let edge = ((MATERIAL_TEXEL_BUDGET / image_count) as f64)
         .sqrt()
         .floor()
         .min(MAX_TEXTURE_EDGE as f64) as u32;
-    for image in document.images() {
-        let data = match image.source() {
-            gltf::image::Source::Uri { uri: name, .. } => uri(path, name)?,
-            gltf::image::Source::View { view: v, .. } => view(&j, &buffers, v.index())?.to_vec(),
-        };
-        let reader = image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format()?;
-        let (w, h) = reader.into_dimensions()?;
-        ensure!(
-            u64::from(w) * u64::from(h) <= 67_108_864,
-            "Source material image exceeds 64M pixels"
+    // Bound simultaneous full-resolution decoder scratch, independently of the
+    // number of images. Completed images already share the reduced texel budget.
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(12));
+    let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+    let (images, resized) = decode_images(&sources, &j, &buffers, path, edge, workers)?;
+    if let (
+        Some(start),
+        Some(parsed),
+        Some(loaded),
+        Some(decompressed),
+        Some(retired),
+        Some(expanded),
+        Some(validated),
+    ) = (
+        started,
+        parsed,
+        loaded,
+        decompressed,
+        retired,
+        expanded,
+        validated,
+    ) {
+        native_log!(
+            "{}",
+            serde_json::json!({"nativeDecodeProfile":{
+            "parseMs":parsed.duration_since(start).as_secs_f64()*1000.,
+            "buffersMs":loaded.duration_since(parsed).as_secs_f64()*1000.,
+            "meshoptMs":decompressed.duration_since(loaded).as_secs_f64()*1000.,
+            "retireMs":retired.duration_since(decompressed).as_secs_f64()*1000.,
+            "quantizationMs":expanded.duration_since(retired).as_secs_f64()*1000.,
+            "documentMs":validated.duration_since(expanded).as_secs_f64()*1000.,
+            "imagesMs":validated.elapsed().as_secs_f64()*1000.,
+            "meshoptViews":meshopt.views,"directViews":meshopt.direct_views,"meshoptBytes":meshopt.bytes,"meshoptWorkers":meshopt.workers}})
         );
-        let image = image::load_from_memory(&data)?;
-        let rgba = if w.max(h) > edge {
-            resized = true;
-            image
-                .resize(edge, edge, image::imageops::FilterType::Triangle)
-                .into_rgba8()
-        } else {
-            image.into_rgba8()
-        };
-        images.push(gltf::image::Data {
-            width: rgba.width(),
-            height: rgba.height(),
-            format: gltf::image::Format::R8G8B8A8,
-            pixels: rgba.into_raw(),
-        });
     }
     Ok((
         document,
@@ -394,9 +335,214 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     ))
 }
 
+fn decode_image(
+    source: &gltf::image::Source<'_>,
+    json: &Value,
+    buffers: &[gltf::buffer::Data],
+    path: Option<&Path>,
+    edge: u32,
+) -> Result<(gltf::image::Data, bool)> {
+    use image::ImageDecoder;
+    let data = match source {
+        gltf::image::Source::Uri { uri: name, .. } => std::borrow::Cow::Owned(uri(path, name)?),
+        gltf::image::Source::View { view: v, .. } => {
+            std::borrow::Cow::Borrowed(view(json, buffers, v.index())?)
+        }
+    };
+    let mut decoder = image::ImageReader::new(std::io::Cursor::new(data.as_ref()))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let (w, h) = decoder.dimensions();
+    ensure!(
+        u64::from(w) * u64::from(h) <= 67_108_864,
+        "Source material image exceeds 64M pixels"
+    );
+    // Preserve ImageReader::decode's allocation and decoder-scratch limits.
+    let mut limits = image::Limits::default();
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    let image = image::DynamicImage::from_decoder(decoder)?;
+    let resized = w.max(h) > edge;
+    let rgba = if resized {
+        image
+            .resize(edge, edge, image::imageops::FilterType::Triangle)
+            .into_rgba8()
+    } else {
+        image.into_rgba8()
+    };
+    Ok((
+        gltf::image::Data {
+            width: rgba.width(),
+            height: rgba.height(),
+            format: gltf::image::Format::R8G8B8A8,
+            pixels: rgba.into_raw(),
+        },
+        resized,
+    ))
+}
+
+fn decode_images(
+    sources: &[gltf::image::Source<'_>],
+    json: &Value,
+    buffers: &[gltf::buffer::Data],
+    path: Option<&Path>,
+    edge: u32,
+    workers: usize,
+) -> Result<(Vec<gltf::image::Data>, bool)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let first_error = AtomicUsize::new(sources.len());
+    let mut decoded = std::thread::scope(|scope| -> Result<Vec<_>> {
+        let jobs: Vec<_> = (0..workers.min(sources.len()))
+            .map(|_| {
+                let next = &next;
+                let first_error = &first_error;
+                scope.spawn(move || {
+                    let mut images = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= first_error.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let Some(source) = sources.get(index) else {
+                            break;
+                        };
+                        let result = decode_image(source, json, buffers, path, edge);
+                        if result.is_err() {
+                            first_error.fetch_min(index, Ordering::Relaxed);
+                        }
+                        images.push((index, result));
+                    }
+                    images
+                })
+            })
+            .collect();
+        let mut images = Vec::with_capacity(sources.len());
+        for job in jobs {
+            images.extend(
+                job.join()
+                    .map_err(|_| anyhow::anyhow!("Image decoding worker panicked"))?,
+            );
+        }
+        Ok(images)
+    })?;
+    // Completion order must not change texture IDs or which invalid image is
+    // reported first. Join every worker before returning an error to the caller.
+    decoded.sort_unstable_by_key(|(index, _)| *index);
+    let mut images = Vec::with_capacity(decoded.len());
+    let mut resized = false;
+    for (_, result) in decoded {
+        let (image, reduced) = result?;
+        images.push(image);
+        resized |= reduced;
+    }
+    Ok((images, resized))
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    #[test]
+    fn parallel_images_preserve_pixels_order_and_resize_decisions() {
+        let mut json =
+            json!({"asset":{"version":"2.0"}, "buffers":[], "bufferViews":[], "images":[]});
+        let mut bytes = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..12 {
+            let input = image::RgbaImage::from_fn(3 + index * 2, 2 + index, |x, y| {
+                image::Rgba([
+                    (x * 7) as u8,
+                    (y * 11) as u8,
+                    index as u8,
+                    (x * 13 + y) as u8,
+                ])
+            });
+            let format = if index % 3 == 0 {
+                image::ImageFormat::WebP
+            } else {
+                image::ImageFormat::Png
+            };
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(input)
+                .write_to(&mut encoded, format)
+                .unwrap();
+            let data = encoded.into_inner();
+            let decoded = image::load_from_memory(&data).unwrap();
+            expected.push(if decoded.width().max(decoded.height()) > 5 {
+                decoded
+                    .resize(5, 5, image::imageops::FilterType::Triangle)
+                    .into_rgba8()
+            } else {
+                decoded.into_rgba8()
+            });
+            let mime = if index % 3 == 0 {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+            if index % 2 == 0 {
+                json["images"].as_array_mut().unwrap().push(json!({"uri":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(&data))}));
+            } else {
+                let view = json["bufferViews"].as_array().unwrap().len();
+                json["bufferViews"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"buffer":0,"byteOffset":bytes.len(),"byteLength":data.len()}));
+                json["images"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"bufferView":view,"mimeType":mime}));
+                bytes.extend(data);
+            }
+        }
+        json["buffers"] = json!([{"byteLength":bytes.len()}]);
+        let document =
+            gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
+        let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+        let buffers = [gltf::buffer::Data(bytes)];
+        for workers in [1, 4, 16] {
+            let (images, resized) =
+                decode_images(&sources, &json, &buffers, None, 5, workers).unwrap();
+            assert!(resized);
+            assert_eq!(images.len(), expected.len());
+            for (actual, expected) in images.iter().zip(&expected) {
+                assert_eq!((actual.width, actual.height), expected.dimensions());
+                assert_eq!(&actual.pixels, expected.as_raw());
+            }
+            let (_, resized) =
+                decode_images(&sources[..1], &json, &buffers, None, 5, workers).unwrap();
+            assert!(!resized);
+        }
+        assert!(
+            decode_images(&[], &json, &[], None, 5, 4)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parallel_images_report_the_first_invalid_source_in_document_order() {
+        let json = json!({"asset":{"version":"2.0"}, "images":[
+            {"uri":"data:image/png;base64,AQIDBA=="},
+            {"uri":"data:image/png;base64,invalid!!!"}
+        ]});
+        let document =
+            gltf::Document::from_json(serde_json::from_value(json.clone()).unwrap()).unwrap();
+        let sources: Vec<_> = document.images().map(|image| image.source()).collect();
+        let expected = decode_image(&sources[0], &json, &[], None, 5)
+            .err()
+            .unwrap()
+            .to_string();
+        for workers in [1, 4] {
+            let actual = decode_images(&sources, &json, &[], None, 5, workers)
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(actual, expected);
+        }
+    }
+
     pub(crate) fn model_file(mut root: Value, bytes: &[u8]) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         root["asset"] = json!({"version":"2.0"});
@@ -408,6 +554,13 @@ pub(super) mod tests {
         ));
         std::fs::write(&path, serde_json::to_vec(&root).unwrap()).unwrap();
         path
+    }
+    #[test]
+    fn unused_buffer_retirement_charges_actual_padded_bytes() {
+        let root = json!({"asset":{"version":"2.0"}, "buffers":[{"byteLength":1,
+            "uri":"data:application/octet-stream;base64,AQIDBA=="}], "bufferViews":[]});
+        let (_, buffers, _, _, _) = load_bytes(&serde_json::to_vec(&root).unwrap(), None).unwrap();
+        assert!(buffers[0].is_empty());
     }
     #[test]
     fn meshopt_modes_roundtrip_and_reject_malformed_layouts() {

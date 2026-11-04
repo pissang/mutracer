@@ -983,9 +983,7 @@ pub unsafe extern "C" fn mt_scene_import_gltf_bytes(
         }
         #[cfg(feature = "gltf")]
         {
-            if len > 128 * 1024 * 1024 {
-                return Err(invalid("Model exceeds 128 MiB"));
-            }
+            crate::memory_budget::check(len, "Model file").map_err(|e| invalid(&e.to_string()))?;
             let bytes = unsafe { input(bytes.cast::<u8>(), len) }?;
             let base = if base.is_null() {
                 None

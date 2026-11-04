@@ -101,3 +101,30 @@ impl Drop for PickBvh {
         unsafe { mt_native_pick_destroy(self.0.as_ptr()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn immutable_tree_owns_inputs_and_supports_queries_after_build() {
+        let tree = {
+            let positions = [0., 0., 0., 1., 0., 0., 0., 1., 0.];
+            std::sync::Arc::new(PickBvh::new(&positions, &[0, 1, 2]).unwrap())
+        };
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let tree = tree.clone();
+                scope.spawn(move || {
+                    for _ in 0..100 {
+                        let hit = tree
+                            .intersect_hit([0.25, 0.25, 1.], [0., 0., -1.], 10.)
+                            .unwrap();
+                        assert_eq!((hit.distance, hit.primitive), (1., 0));
+                        assert_eq!((hit.u, hit.v), (0.25, 0.25));
+                        assert!(tree.intersect([2., 2., 1.], [0., 0., -1.], 10.).is_none());
+                    }
+                });
+            }
+        });
+    }
+}

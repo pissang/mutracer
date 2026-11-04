@@ -328,12 +328,21 @@ layout entries and pipeline keys.
   numeric-access report traces the production graph and rejects loop storage
   dispatch. Open unions, ordinary arrays and callbacks keep fallback
   implementations. Keep emitted compiler inputs separate from browser source.
-- Bounds and generated tangents are the two native O(N) kernels; all other scene
-  logic stays TS. Tangent normalization uses compiled TS `Math.hypot` to keep
-  rounding. With `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json`, host tests
-  compare kernel packets and production resources with compiled TS byte for
-  byte. Qualify a replacement kernel on complex scenes and the same concrete
-  specialization, not combined generic variants or procedural fixtures.
+- Bounds, generated tangents and compact vertex packing have Rust kernels.
+  TS owns layouts and the triangle-material plane; compact packing uses the
+  validated Rust descriptor and writes the final Rust attribute resource.
+  Geometries that need generated normals or tangents, and incremental writes, retain the
+  shared TS packer. Workers only access Rust-owned slices and join before
+  publication. Tangent normalization uses compiled TS `Math.hypot` to keep
+  rounding; compact encoding preserves f64 arithmetic and JS half-tie rounding.
+  `MUTRACER_NATIVE_COMPACT=ts|serial|parallel` selects the preparation diagnostic
+  path (default `parallel`, up to 12 available CPU threads for large inputs).
+  With `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json`, host tests compare
+  kernel packets and production resources with compiled TS byte for byte. The
+  `compact_large_scene_production_assets_match_ts` test accepts a local
+  GLB in `MUTRACER_COMPACT_MODEL` and reports a skip when unset. Qualify kernels
+  on complex scenes and the same concrete specialization, not only procedural
+  fixtures.
 - The optional MaterialTable whole-module probe has known compiler blockers;
   all 14 required modules must build and verify.
 
@@ -629,6 +638,34 @@ separate from formal timing:
 - Native peak RSS and the browser JS heap are different metrics.
 - `nativeGeometryKernelProfile` separates kernel bodies; its time is already
   part of preparation.
+
+### glTF import profiling
+
+`MUTRACER_NATIVE_PROFILE=1` reports attribute reads, local/world bounds, index
+validation and initial deformation separately, with bulk-copy byte counts and
+bounds worker counts. `MUTRACER_NATIVE_GLTF_ATTRIBUTES=reader` selects the gltf-rs
+reference reads; the default copies aligned contiguous F32 Vec2/3/4 accessors
+directly into Arc slices and retains Reader for other layouts. Local bounds run
+on up to 12 available CPU threads for large imports; each geometry retains its
+vertex reduction order. `MUTRACER_NATIVE_GLTF_BOUNDS=serial` selects the original
+in-visit scan. World bounds retain the tight per-vertex transform scan.
+
+`nativeDecodeProfile` separates buffer loading, meshopt, source-buffer retirement,
+quantized attribute expansion, document validation and image decoding. Meshopt
+writes independent, aligned views directly into their final buffers and uses up
+to 12 available CPU threads above 1 MiB decoded data. Layouts with overlapping
+targets, source/target dependencies or unaligned destinations retain the scratch
+reference path. `MUTRACER_NATIVE_MESHOPT=legacy` selects that reference;
+`serial` selects direct writes on one thread; the default enables parallelism.
+Run `optional_large_asset_decoded_buffer_oracle` with `cargo test --release` and
+`MUTRACER_MESHOPT_ORACLE=/absolute/model.glb` to compare complete decoded buffers
+against the reference; unset means skip. Compare these modes in the same binary
+and measure CPU-only import peaks separately from GPU upload/setup peaks.
+
+Run `large_local_import_matches_reader_when_requested` with `cargo test --release`
+and `MUTRACER_GLTF_IMPORT_ORACLE=/absolute/model.glb` for a local-asset bit/bounds
+comparison; it reports a skip when unset. Keep large assets out of the debug
+suite, and run performance comparisons separately from builds and other checks.
 
 ## Metal HWRT sample miss
 

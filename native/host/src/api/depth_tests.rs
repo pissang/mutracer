@@ -306,3 +306,86 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
         );
     }
 }
+
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn surface_picking_uses_source_ids_alpha_and_discards_stale_camera_queries() {
+    let _lock = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for backend in [Backend::Software, Backend::Hardware] {
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        assert_eq!(
+            engine.pick_surface(0.5, 0.5).unwrap(),
+            SurfacePick::Unavailable
+        );
+        assert_eq!(
+            engine.pick_surface(-0.1, 0.5).unwrap_err().status,
+            Status::InvalidArgument
+        );
+        engine.display().set_size(64, 32).unwrap();
+        let mut scene = super::tests::lit_scene();
+        use crate::layout::header as h;
+        let count = scene.len() / 4;
+        scene.extend(
+            [101u32, 202, 303, 404]
+                .into_iter()
+                .flat_map(u32::to_le_bytes),
+        );
+        set(&mut scene, h::LENGTH, (count + 4) as u32);
+        set(&mut scene, h::MESH_AOV_IDS, count as u32);
+        set(&mut scene, h::MATERIAL_AOV_IDS, (count + 2) as u32);
+        let mut camera = Camera::default();
+        camera.world_matrix[12] = 0.5;
+        camera.world_matrix[13] = 0.4;
+        camera.world_matrix[14] = 4.;
+        engine.set_scene(&scene).unwrap();
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        let pick = |x, y| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let result = engine.pick_surface(x, y).unwrap();
+                if result != SurfacePick::Unavailable {
+                    return result;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        assert_eq!(
+            pick(0.5, 0.5),
+            SurfacePick::Hit(SurfaceHit {
+                object: 202,
+                material: 404,
+                instance: 0
+            })
+        );
+        assert_eq!(pick(0., 0.), SurfacePick::Background);
+        let mut transparent = scene.clone();
+        set(&mut transparent, 108 + 13, 0f32.to_bits());
+        engine.set_scene(&transparent).unwrap();
+        engine.update().unwrap();
+        assert_eq!(
+            pick(0.5, 0.5),
+            SurfacePick::Hit(SurfaceHit {
+                object: 101,
+                material: 303,
+                instance: 0
+            })
+        );
+        // The camera and scene are not locked while AOT/GPU work waits.
+        let (entered, entry) = std::sync::mpsc::sync_channel(1);
+        let (resume, resumed) = std::sync::mpsc::channel();
+        *crate::runtime::CALL_GATE.lock().unwrap() = Some((entered, resumed));
+        let reader = engine.clone();
+        let worker = std::thread::spawn(move || reader.pick_surface(0.5, 0.5));
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        camera.world_matrix[12] = 100.;
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        resume.send(()).unwrap();
+        assert_eq!(worker.join().unwrap().unwrap(), SurfacePick::Unavailable);
+        assert_eq!(pick(0.5, 0.5), SurfacePick::Background);
+    }
+}

@@ -95,7 +95,7 @@ export function shaderCacheParameters(): Uint8Array {
 
 import {receiveGeometryKernelHints as receiveKernelHints} from './geometry-kernel-hints.js';
 import {geometryKernelReference as referenceKernels} from './scene-core.js';
-export function receiveGeometryKernelHints(bytes:Uint8Array,token:number):Uint8Array {return receiveKernelHints(bytes,token);}
+export function receiveGeometryKernelHints(bytes:Uint8Array,token:number):Uint8Array {return receiveKernelHints(bytes,token,true);}
 export function geometryKernelReference(bytes:Uint8Array,withBounds:number):Uint8Array {return referenceKernels(bytes,withBounds);}
 export function geometryKernelHypot(x: number,y: number,z: number): number {return Math.hypot(x,y,z);}
 
@@ -138,3 +138,14 @@ export function bloomParameters(radius: number): Uint8Array { return prepareBloo
 
 import {viewerParameters as prepareViewer} from './viewer-core.js';
 export function viewerParameters(kind: number, bytes: Uint8Array): Uint8Array { return prepareViewer(kind, bytes); }
+
+import {preparationProfile as profilePreparation} from './preparation-profile.js';
+export function preparationProfile(on: number): Uint8Array { return profilePreparation(on); }
+
+import {sceneSurfaceHitParameters as surfaceHit} from './scene-core.js';
+export function sceneSurfaceHitParameters(bytes: Uint8Array, token: number): Uint8Array {return surfaceHit(bytes,token);}
+
+import {compactKernelParameters as compactCommand} from './compact-kernel.js';
+export function compactKernelParameters(bytes: Uint8Array, token: number): Uint8Array { return compactCommand(bytes, token); }
+import {compactKernelReference as compactReference} from './compact-kernel-reference.js';
+export function compactKernelReference(bytes: Uint8Array, normalFloat: number): Uint8Array { return compactReference(bytes, normalFloat); }

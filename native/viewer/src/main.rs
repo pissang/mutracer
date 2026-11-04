@@ -14,10 +14,13 @@ mod geometry_smoke;
 mod history;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 mod hot_reload;
+mod import_smoke;
 mod input;
+mod large_scene_smoke;
 mod live_denoise_smoke;
 mod material_presets;
 mod metrics;
+mod model_files;
 mod model_scene;
 mod package_smoke;
 mod parity_smoke;
@@ -313,6 +316,7 @@ struct Viewer {
     resolution: resolution::Resolution,
     settings: RenderSettings,
     picking_focus: bool,
+    picker: picking::Picker,
     focus: focus::AutoFocus,
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
@@ -404,6 +408,11 @@ impl Viewer {
             );
             model.1.preset = Some(preset);
         }
+        let camera_index = model.camera_index_for_load();
+        if camera_index.is_some() {
+            camera = model.camera_for_load(&camera);
+        }
+        let environment = model.environment_for_load(&Environment::default());
         let mut examples = examples::Browser::default();
         examples.current = model
             .1
@@ -471,7 +480,7 @@ impl Viewer {
             pose_presented: false,
             camera,
             drag: input::ViewportDrag::default(),
-            environment: Environment::default(),
+            environment,
             light: KeyLight::default(),
             sky: sky::Sky::new(gpu.as_ref()),
             size,
@@ -482,6 +491,7 @@ impl Viewer {
             }),
             settings,
             picking_focus: false,
+            picker: picking::Picker::default(),
             focus: focus::AutoFocus::default(),
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings {
@@ -513,7 +523,7 @@ impl Viewer {
             load_progress: None,
             examples,
             environments: Default::default(),
-            camera_index: None,
+            camera_index,
             pending_environment: None,
             running: true,
             change: Change::Scene,
@@ -821,12 +831,14 @@ impl Viewer {
         }
         let rotation_now = std::time::Instant::now();
         if self.auto_rotate && self.running && !ctx.input(|i| i.pointer.any_down()) {
-            self.camera.yaw -= rotation_now
-                .duration_since(self.rotation_clock)
-                .as_secs_f32()
-                .min(0.1)
-                * std::f32::consts::TAU
-                / 30.;
+            self.camera.orbit_yaw(
+                rotation_now
+                    .duration_since(self.rotation_clock)
+                    .as_secs_f32()
+                    .min(0.1)
+                    * std::f32::consts::TAU
+                    / 30.,
+            );
             self.camera_index = None;
             self.dirty(Change::Camera);
         }
@@ -923,15 +935,45 @@ impl Viewer {
                 }
             }
         }
-        let focus_ready = self.loading.is_none()
+        if let Some(reply) = self.picker.poll(self.generation) {
+            if self.metrics.is_none() {
+                match reply {
+                    Ok(picking::Reply::Focus(Some(depth))) if self.picking_focus => {
+                        self.camera.focus_distance = depth.max(1e-5);
+                        self.picking_focus = false;
+                        self.dirty(Change::Camera);
+                    }
+                    Ok(picking::Reply::Focus(_)) => {}
+                    Ok(picking::Reply::Selection(api::SurfacePick::Hit(hit))) => {
+                        let id = hit.object as usize;
+                        if id < self.model.meshes.len()
+                            && !self.model.1.hidden.contains(&id)
+                            && (hit.material as usize) < self.model.materials.len()
+                        {
+                            self.selected_mesh = Some(id);
+                            self.selected = hit.material as usize;
+                            self.tab = 1;
+                            self.inspector_open = true;
+                        }
+                    }
+                    Ok(picking::Reply::Selection(api::SurfacePick::Background)) => {
+                        self.selected_mesh = None
+                    }
+                    Ok(picking::Reply::Selection(api::SurfacePick::Unavailable)) => {}
+                    Err(error) => self.error = format!("Surface query failed: {error}"),
+                }
+            }
+        }
+        let focus_ready = self.replacement.is_none()
+            && self.loading.is_none()
             && self.candidate.is_none()
             && self.pending_model.is_none()
             && self.scene_build.is_none()
-            && self.change != Change::Scene;
+            && self.change == Change::None
+            && !self.preparing();
         if self.focus.update(
-            &self.model,
+            |area| focus::request_depth(self.target.engine.clone(), area, ctx.clone()),
             &mut self.camera,
-            self.size[0] as f32 / self.size[1] as f32,
             focus_ready,
             held,
             std::time::Instant::now(),
@@ -940,6 +982,9 @@ impl Viewer {
             // Lens pulls change the rendered camera, but must not request another measurement.
             self.change = self.change.max(Change::Camera);
             self.generation += 1;
+        }
+        if let Some(error) = self.focus.error.take() {
+            self.error = format!("Focus query failed: {error}");
         }
         if self.focus.working(&self.camera) {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -1049,6 +1094,14 @@ impl Viewer {
             }
             self.change = Change::None;
         }
+        // Dispatch only after the requested view has reached the engine. A click
+        // during preparation waits; subsequent input invalidates its generation.
+        self.picker.dispatch(
+            &self.target.engine,
+            self.generation,
+            self.change == Change::None && !self.preparing(),
+            ctx,
+        );
         // Keep denoising active during interaction for both OIDN and RR.
         // Temporal guides require pinhole rays. Depth of field uses OIDN and
         // returns to RR automatically when the lens is disabled.
@@ -1202,18 +1255,7 @@ impl Viewer {
                 .preset
                 .as_ref()
                 .map(|p| examples::text(p, "id").to_owned());
-            self.camera_index = if self
-                .model
-                .1
-                .preset
-                .as_ref()
-                .is_some_and(|p| p["category"] == "research")
-                && !self.model.1.cameras.is_empty()
-            {
-                Some(0)
-            } else {
-                None
-            };
+            self.camera_index = self.model.camera_index_for_load();
             self.selected = self.model.0.meshes[0].material;
             self.selected_mesh = None;
             self.picking_focus = false;
@@ -1411,13 +1453,13 @@ impl Viewer {
                 return;
             }
         }
-        if let Some(path) = paths.iter().find(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"))
-        }) {
+        if let Some(path) = paths
+            .iter()
+            .find(|p| p.is_dir() || model_files::is_model(p))
+        {
             self.load(path.clone(), ctx);
         } else {
-            self.error="Drop a .gltf or .glb file. Keep external buffers and textures beside the .gltf file.".into();
+            self.error="Drop a .gltf or .glb file, or a folder containing one. Keep external resources at the paths referenced by the model.".into();
         }
     }
 }
@@ -1448,7 +1490,10 @@ impl eframe::App for Viewer {
                 self.dirty(Change::Camera);
             }
             let started = std::time::Instant::now();
-            let _ = self.model.pick(&self.camera, [0.5, 0.5], 1280. / 720.);
+            // This counter measures enqueue cost; the query itself stays off the UI thread.
+            if !self.picker.pending() {
+                self.picker.request(self.generation, [0.5, 0.5], false);
+            }
             pick_ms = started.elapsed().as_secs_f64() * 1000.;
         }
         self.receive_model(&ctx);
@@ -1486,7 +1531,7 @@ impl eframe::App for Viewer {
                 }) {
                     "Drop an image on a texture slot"
                 } else {
-                    "Drop a GLTF or GLB to open"
+                    "Drop a GLTF, GLB or model folder to open"
                 },
                 egui::FontId::proportional(26.),
                 egui::Color32::WHITE,
@@ -2853,6 +2898,8 @@ fn main() -> Result<()> {
     let mut dlss_smoke = None;
     let mut model = None;
     let mut smoke_out = None;
+    let mut large_scene_out = None;
+    let mut import_out = None;
     let mut interaction_out = None;
     let mut inspect = false;
     let mut preview_out = None;
@@ -2965,6 +3012,16 @@ fn main() -> Result<()> {
                         .context("--interaction-smoke needs a directory")?,
                 ))
             }
+            "--import-smoke" => {
+                import_out = Some(PathBuf::from(
+                    args.next().context("--import-smoke needs a directory")?,
+                ));
+            }
+            "--large-scene-out" => {
+                large_scene_out = Some(PathBuf::from(
+                    args.next().context("--large-scene-out needs a directory")?,
+                ));
+            }
             "--smoke-out" => {
                 smoke_out = Some(PathBuf::from(
                     args.next().context("--smoke-out needs a directory")?,
@@ -3063,6 +3120,12 @@ fn main() -> Result<()> {
     }
     if let Some(out) = interaction_out {
         return interaction_smoke(&model, &out);
+    }
+    if let Some(out) = import_out {
+        return import_smoke::run(&model, &out);
+    }
+    if let Some(out) = large_scene_out {
+        return large_scene_smoke::run(&model, &out);
     }
     if let Some(out) = smoke_out {
         return smoke(&model, &out);

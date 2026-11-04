@@ -253,3 +253,26 @@ it('detects environment controls without treating them as topology changes', () 
   scene.accept();
   expect(scene.sync(original).scene.background).toBe(true);
 });
+
+it('prepares tangents for a material-only edit even when geometry records are unchanged', () => {
+  const raw = encode(base()), count = raw.byteLength / 4;
+  const u = new Uint32Array(count + 12), f = new Float32Array(u.buffer);
+  u.set(new Uint32Array(raw.buffer));
+  u[H.LENGTH] = u.length;
+  u[u[H.GEOMETRY_OFFSET] + G.UV] = count;
+  f.set([0,0, 1,0, 0,1, 1,1], count);
+  const material = u[H.MATERIAL_OFFSET];
+  u[material + MAT.EXTENSION_OFFSET] = count + 8;
+  u[material + MAT.EXTENSION_COUNT] = 1;
+  u[count + 8] = 9;
+  const scene = new SyncedScene();
+  const first = new Uint8Array(u.buffer.slice(0));
+  scene.sync(first); scene.accept();
+  expect(scene.geometries[0].tangent).toBeUndefined();
+  f[count + 9] = .5;
+  const unchanged = new Uint8Array(u[H.GEOMETRY_COUNT] + u[H.TEXTURE_COUNT]).fill(1);
+  expect(scene.sync(new Uint8Array(u.buffer), false, unchanged).scene.meshes).toBe('full');
+  expect(scene.geometries[0].tangent).toBeDefined();
+  scene.accept();
+  expect(scene.sync(new Uint8Array(u.buffer)).scene.meshes).toBe('none');
+});

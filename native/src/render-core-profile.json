@@ -201,8 +201,24 @@
       "returns": "bytes"
     },
     {
+      "export": "sceneSurfaceHitParameters", "symbol": "mt_core_scene_surface_hit", "params": ["bytes", "u32"],
+      "returns": "bytes"
+    },
+    {
+      "export": "preparationProfile", "symbol": "mt_core_preparation_profile", "params": ["u32"],
+      "returns": "bytes"
+    },
+    {
       "export": "viewerParameters", "symbol": "mt_core_viewer_math", "params": ["u32", "bytes"],
       "returns": "bytes"
+    },
+    {
+      "export": "compactKernelParameters", "symbol": "mt_core_compact_kernel",
+      "params": ["bytes", "u32"], "returns": "bytes"
+    },
+    {
+      "export": "compactKernelReference", "symbol": "mt_core_compact_reference",
+      "params": ["bytes", "u32"], "returns": "bytes"
     }
   ]
 }

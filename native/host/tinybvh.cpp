@@ -66,14 +66,22 @@ extern "C" void mt_native_tiny_parallel_for(uint32_t count,
 
 // Picking owns all indexed inputs: TinyBVH keeps pointers into these arrays.
 // Queries only mutate their local Ray, so immutable instances can be shared.
+// Picking is immutable: traversal needs nodes/indices/vertices, never the
+// primitive bounds used only during construction. Rebuilding creates a new BVH.
+struct PickTree : tinybvh::BVH {
+  void releaseBuildScratch() {
+    AlignedFree(fragment); fragment = nullptr;
+  }
+};
 struct NativePickBvh {
   std::vector<tinybvh::bvhvec4> vertices;
   std::vector<uint32_t> indices;
-  tinybvh::BVH bvh;
+  PickTree bvh;
   NativePickBvh(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni)
     : vertices(nv),indices(i,i+ni) {
     for(uint32_t k=0;k<nv;k++)vertices[k]=tinybvh::bvhvec4(p[k*3],p[k*3+1],p[k*3+2],0);
     bvh.Build(vertices.data(),indices.data(),ni/3);
+    bvh.releaseBuildScratch();
   }
 };
 extern "C" void* mt_native_pick_create(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni) noexcept {

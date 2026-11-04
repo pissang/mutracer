@@ -15,6 +15,31 @@ use std::{
     time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
+// Bound each staging allocation like the Web uploader. A large resident buffer
+// remains one binding; splitting a binding would require a different shader ABI.
+fn write_scene_buffer(queue: &GpuQueue, buffer: &wgpu::Buffer, data: &[u8]) {
+    const CHUNK: usize = 64 * 1024 * 1024;
+    for (i, chunk) in data.chunks(CHUNK).enumerate() {
+        queue.write_buffer(buffer, (i * CHUNK) as u64, chunk);
+    }
+}
+fn create_scene_buffer(
+    device: &wgpu::Device,
+    queue: &GpuQueue,
+    label: &str,
+    data: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (data.len() as u64).max(4),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    write_scene_buffer(queue, &buffer, data);
+    buffer
+}
+
 #[macro_use]
 pub mod logging;
 mod aov;
@@ -33,6 +58,7 @@ mod hardware;
 mod hdr;
 pub mod hit_diagnostics;
 mod image_limits;
+mod memory_budget;
 mod oidn_webgpu;
 pub mod picking;
 #[cfg(test)]
@@ -686,7 +712,8 @@ impl GpuScene {
                 || buffer.usage & wgpu::BufferUsages::STORAGE.bits() != 0
                     && buffer.size > u64::from(device.limits().max_storage_buffer_binding_size)
             {
-                return Err("Scene buffer exceeds the selected GPU's buffer limits".into());
+                return Err(format!("Scene buffer {} requires {} bytes; selected GPU limits: buffer {}, storage binding {}. {}", buffer.id, buffer.size, device.limits().max_buffer_size, device.limits().max_storage_buffer_binding_size,
+                    if !use_hwrt && buffer.id == 1 { "Use HWRT for a scene whose software BVH exceeds this limit." } else { "Reduce scene size or select a device with larger limits." }).into());
             }
         }
         for texture in &scene.textures {
@@ -728,16 +755,18 @@ impl GpuScene {
                 .and_then(|buffers| buffers.get(&buffer.id))
                 .filter(|b| b.size() == buffer.size && b.usage() == usage);
             let gpu_buffer = if let Some(existing) = existing {
-                queue.write_buffer(existing, 0, &data);
+                write_scene_buffer(queue, existing, &data);
                 reused_bytes += buffer.size;
                 existing.clone()
             } else {
                 allocated_bytes += buffer.size;
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("MuTracer {:?}", buffer.resource)),
-                    contents: &data,
+                create_scene_buffer(
+                    device,
+                    queue,
+                    &format!("MuTracer {:?}", buffer.resource),
+                    &data,
                     usage,
-                })
+                )
             };
             buffers.insert(buffer.id, gpu_buffer);
         }

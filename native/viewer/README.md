@@ -74,9 +74,11 @@ platform differences for trying features or checking a new version.
 ### Files and window
 
 - The app opens with the material spheres example. Use **Open** (**⌘O** / **Ctrl+O**)
-  or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
-  files and images beside their `.gltf`. While loading, the previous model stays
-  visible; a failed load shows an error and keeps it.
+  or drop a `.gltf`, `.glb` or model folder anywhere in the window. Keep external
+  `.bin` files and images at the relative paths referenced by the `.gltf`.
+  Folders are searched recursively: `.glb` takes priority, then `.gltf`, with
+  relative path order selecting among files of the same type. While loading,
+  the previous model stays visible; a failed load shows an error and keeps it.
 - **Open** opens a folder, a model/environment URL or a local HDR.
   A URL model loads external resources relative to that URL.
 - **Export** opens a preview. **Save viewport PNG** saves the current displayed
@@ -128,16 +130,18 @@ platform differences for trying features or checking a new version.
 - **Auto rotate** orbits the model while rendering runs.
 - **Scene unit → Auto** guesses metres, centimetres or millimetres from the
   model size. Choose a unit explicitly when the guess does not match the model.
-- Projection and field of view persist across local files; examples apply their
-  saved views. F-number and explicit scene-unit choices persist across models.
+- Files with imported cameras open on the first view; files without one retain
+  the projection and field of view. Examples use their saved view when provided.
+  F-number and explicit scene-unit choices persist across models.
 
 ### Objects
 
 - Expand groups, search and select objects in the left **Scene** tree, or click a surface in
   the viewport to open its material. **Frame selection** fits the camera to the
   object.
-- Picking and autofocus can hit transparent or cutout surfaces in front of other
-  objects.
+- Picking and autofocus use rendered geometry, skip alpha-cutout holes and
+  invisible shadow catchers, and treat glass as a visible surface. Results from
+  an older view are discarded; the first query can take longer.
 
 ### Materials
 

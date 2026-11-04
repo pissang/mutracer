@@ -118,7 +118,7 @@ pub struct Resources {
     pub(super) used_metal_refit: bool,
 }
 
-// Source-order indexed soup builds AS inputs without a software BVH. The
+// Source-order indexed compact vertices build AS inputs without a software BVH. The
 // opt-out retains leaf-order inputs for explicit regression diagnostics.
 pub(super) fn direct_input_enabled() -> bool {
     std::env::var_os("MUTRACER_NATIVE_DIRECT_AS").is_none_or(|v| v != "0")
@@ -129,16 +129,16 @@ pub fn prepare(
     queue: &crate::GpuQueue,
     capture: &Capture,
     assets: &Assets,
-    _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
+    buffers: Option<&HashMap<usize, wgpu::Buffer>>,
 ) -> Result<Resources> {
-    prepare_reusing(device, queue, capture, assets, _buffers, None)
+    prepare_reusing(device, queue, capture, assets, buffers, None)
 }
 pub fn prepare_reusing(
     device: &wgpu::Device,
     queue: &crate::GpuQueue,
     capture: &Capture,
     assets: &Assets,
-    _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
+    buffers: Option<&HashMap<usize, wgpu::Buffer>>,
     reusable: Option<&HashMap<HardwareBufferId, wgpu::Buffer>>,
 ) -> Result<Resources> {
     let read = |name: &AssetId| -> Result<Cow<'_, [u8]>> {
@@ -167,30 +167,28 @@ pub fn prepare_reusing(
     let mut reused_bytes = 0u64;
     let mut payload_bytes = 0u64;
     let mut vertex_payload_bytes = 0u64;
-    let mut upload =
-        |name: HardwareBufferId, data: &[u8], usage: wgpu::BufferUsages, vertex: bool| {
-            let usage = usage | wgpu::BufferUsages::COPY_DST;
-            let previous = reusable
-                .and_then(|b| b.get(&name))
-                .filter(|b| b.size() == data.len() as u64 && b.usage() == usage);
-            let buffer = if let Some(previous) = previous {
-                queue.write_buffer(previous, 0, data);
-                reused_bytes += previous.size();
-                previous.clone()
-            } else {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("MuTracer {name:?}")),
-                    contents: data,
-                    usage,
-                })
-            };
-            payload_bytes += data.len() as u64;
-            if vertex {
-                vertex_payload_bytes += data.len() as u64;
-            }
-            inputs.insert(name, buffer.clone());
-            buffer
+    let mut upload = |name: HardwareBufferId,
+                      data: &[u8],
+                      usage: wgpu::BufferUsages,
+                      vertex: bool| {
+        let usage = usage | wgpu::BufferUsages::COPY_DST;
+        let previous = reusable
+            .and_then(|b| b.get(&name))
+            .filter(|b| b.size() == data.len() as u64 && b.usage() == usage);
+        let buffer = if let Some(previous) = previous {
+            crate::write_scene_buffer(queue, previous, data);
+            reused_bytes += previous.size();
+            previous.clone()
+        } else {
+            crate::create_scene_buffer(device, queue, &format!("MuTracer {name:?}"), data, usage)
         };
+        payload_bytes += data.len() as u64;
+        if vertex {
+            vertex_payload_bytes += data.len() as u64;
+        }
+        inputs.insert(name, buffer.clone());
+        buffer
+    };
     let direct_indices = if capture.indexed {
         Some(upload(
             HardwareBufferId::Packet(35),
@@ -198,16 +196,6 @@ pub fn prepare_reusing(
             wgpu::BufferUsages::BLAS_INPUT
                 | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST,
-            false,
-        ))
-    } else {
-        None
-    };
-    let direct_blas_indices = if capture.indexed {
-        Some(upload(
-            HardwareBufferId::Packet(42),
-            &read(&AssetId::Packet(42))?,
-            wgpu::BufferUsages::BLAS_INPUT,
             false,
         ))
     } else {
@@ -224,12 +212,12 @@ pub fn prepare_reusing(
         None
     };
     let direct_positions = if capture.indexed && capture.geometries.iter().any(|g| !g.procedural) {
-        Some(upload(
-            HardwareBufferId::Packet(41),
-            &read(&AssetId::Packet(41))?,
-            wgpu::BufferUsages::BLAS_INPUT,
-            true,
-        ))
+        Some(
+            buffers
+                .and_then(|b| b.get(&3))
+                .ok_or("Missing resident compact attributes")?
+                .clone(),
+        )
     } else {
         None
     };
@@ -277,7 +265,7 @@ pub fn prepare_reusing(
             if geometry.procedural {
                 None
             } else {
-                direct_blas_indices.clone()
+                direct_indices.clone()
             }
         } else {
             geometry
@@ -541,6 +529,20 @@ impl Resources {
                 .geometries
                 .get(index)
                 .ok_or("Changed BLAS out of bounds")?;
+            if geometry.procedural {
+                // Procedural AS builds consume AABBs, while shading still
+                // uploads the changed compact vertices through resource 3.
+                let offset = geometry.first_vertex as u64 * geometry.vertex_stride;
+                let length = geometry.vertex_count as usize * geometry.vertex_stride as usize;
+                let attribute_write = writes
+                    .hardware_writes
+                    .iter()
+                    .position(|(id, destination, data)| {
+                        *id == 3 && *destination == offset && data.len() == length
+                    })
+                    .ok_or("Missing exact changed procedural vertex span")?;
+                used_writes.insert(attribute_write);
+            }
             let (id, offset, length) = if geometry.procedural {
                 (
                     38,
@@ -549,9 +551,9 @@ impl Resources {
                 )
             } else {
                 (
-                    41,
-                    geometry.first_vertex as u64 * 12,
-                    geometry.vertex_count as usize * 12,
+                    3,
+                    geometry.first_vertex as u64 * geometry.vertex_stride,
+                    geometry.vertex_count as usize * geometry.vertex_stride as usize,
                 )
             };
             let (write_index, (_, _, data)) = writes
@@ -663,7 +665,7 @@ impl Resources {
                             size: &descriptors[0],
                             vertex_buffer: &vertices[*index],
                             first_vertex: 0,
-                            vertex_stride: 12,
+                            vertex_stride: geometry.vertex_stride,
                             index_buffer: indices[*index].as_ref(),
                             first_index: Some(geometry.index_offset),
                             transform_buffer: None,
@@ -1049,7 +1051,7 @@ pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Res
     })
 }
 
-// TS supplies merged geometry regions and local displacement AABBs. Rust only
+// TS supplies compact geometry regions and local displacement AABBs. Rust only
 // binds buffers and converts instance matrices for the wgpu API.
 fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
     if layout.position_offset_bytes != 0 || layout.attribute_stride_bytes < 12 {
@@ -1065,13 +1067,13 @@ fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
         .hardware_geometries
         .iter()
         .map(|g| Geometry {
-            positions: AssetId::Packet(if g.procedural { 38 } else { 41 }),
-            indices: (!g.procedural).then(|| AssetId::Packet(42)),
-            vertex_count: g.index_count,
-            first_vertex: g.index_offset,
+            positions: AssetId::Packet(if g.procedural { 38 } else { 3 }),
+            indices: (!g.procedural).then(|| AssetId::Packet(35)),
+            vertex_count: g.vertex_count,
+            first_vertex: g.vertex_offset,
             index_count: Some(g.index_count),
             index_offset: g.index_offset,
-            vertex_stride: 12,
+            vertex_stride: layout.attribute_stride_bytes as u64,
             bounds_offset: g.bounds_offset,
             dynamic: g.dynamic,
             procedural: g.procedural,

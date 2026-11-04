@@ -56,6 +56,9 @@ pub struct ImportedScene {
 impl Scene {
     /// Imports a local glTF/GLB and its local or embedded resources. The default
     /// scene (otherwise the first scene) and initial paused animation pose are used.
+    /// Each file and the combined source/decoded buffers default to an 8192 MiB admission
+    /// budget, configurable with MUTRACER_NATIVE_MEMORY_BUDGET_MIB (positive integer).
+    /// Peak memory can be several times larger. GPU limits also apply at commit.
     /// Import failures return InvalidArgument with the complete cause chain.
     pub fn import_gltf(path: impl AsRef<Path>) -> api::Result<ImportedScene> {
         Model::load(path.as_ref())
@@ -262,7 +265,7 @@ mod error_tests {
         for (name, bytes, cause) in [
             ("broken.glb", b"glTF\x02\0\0\0".as_slice(), "Loading GLTF/GLB and its buffers/images: "),
             ("required.gltf", br#"{"asset":{"version":"2.0"},"extensionsRequired":["KHR_draco_mesh_compression"]}"#.as_slice(), "Required glTF extension is unsupported"),
-            ("limit.gltf", br#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":536870913}]}"#.as_slice(), "Model buffers exceed 512 MiB"),
+            ("limit.gltf", br#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":1099511627776}]}"#.as_slice(), "Model buffers requires"),
         ] {
             let file = root.join(name);
             std::fs::write(&file, bytes).unwrap();

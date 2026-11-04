@@ -36,6 +36,8 @@ impl View {
         };
         camera.set_view(eye, eye + forward * distance);
         camera.up = self.matrix.y_axis.truncate().normalize();
+        // Forward/up alone cannot represent a reflected glTF camera basis.
+        camera.mirrored = self.matrix.determinant() < 0.;
         camera.fov = self.fov;
         camera.orthographic = self.half_height.is_some();
         if let Some(height) = self.half_height {
@@ -490,6 +492,196 @@ mod tests {
                     .zip([3., 2., 1.])
                     .all(|(a, b)| (*a - b).abs() < 1e-5)
             }));
+        }
+    }
+    #[test]
+    fn authored_camera_preserves_right_axis_and_navigation_handedness() {
+        use crate::renderer::Camera;
+        use mutracer_native_probe::layout::camera as c;
+        fn world(camera: &Camera) -> Mat4 {
+            let bytes = camera.bytes([120, 80]);
+            let values: Vec<f32> = bytes[c::TRANSFORM * 4..]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            Mat4::from_cols_slice(&values)
+        }
+        for reflected in [false, true] {
+            for orthographic in [false, true] {
+                let matrix = Mat4::from_scale_rotation_translation(
+                    Vec3::new(if reflected { -1. } else { 1. }, 1., 1.),
+                    Quat::from_euler(glam::EulerRot::YXZ, 0.6, 0.2, 0.3),
+                    Vec3::new(2., 3., 5.),
+                );
+                let view = View {
+                    name: "Imported".into(),
+                    matrix,
+                    fov: 45.,
+                    half_height: orthographic.then_some(2.),
+                };
+                let mut camera = Camera::fit(Vec3::ZERO, 2.);
+                view.apply(&mut camera, Vec3::ZERO);
+                let packed = world(&camera);
+                for (actual, expected) in [
+                    (packed.x_axis, matrix.x_axis),
+                    (packed.y_axis, matrix.y_axis),
+                    (packed.z_axis, matrix.z_axis),
+                ] {
+                    assert!(
+                        actual
+                            .truncate()
+                            .normalize()
+                            .distance(expected.truncate().normalize())
+                            < 1e-5,
+                        "Imported camera axis changed: reflected={reflected}, orthographic={orthographic}"
+                    );
+                }
+                let (_, right_ray) = camera.ray([0.75, 0.5], 1.5);
+                let (_, center_ray) = camera.ray([0.5, 0.5], 1.5);
+                if !orthographic {
+                    assert!((right_ray - center_ray).dot(matrix.x_axis.truncate()) > 0.);
+                }
+                let (center_origin, center_direction) = camera.ray([0.5, 0.5], 1.5);
+                let (upper_origin, upper_direction) = camera.ray([0.5, 0.25], 1.5);
+                let upper_offset = if orthographic {
+                    upper_origin - center_origin
+                } else {
+                    upper_direction - center_direction
+                };
+                assert!(upper_offset.dot(matrix.y_axis.truncate()) > 0.);
+                camera.orbit([2., 1.]);
+                assert_eq!(world(&camera).determinant().is_sign_negative(), reflected);
+                let right = world(&camera).x_axis.truncate();
+                let target = camera.target;
+                camera.pan([2., 0.]);
+                assert!((camera.target - target).dot(right) < 0.);
+            }
+        }
+    }
+    #[test]
+    #[ignore = "requires a real GPU"]
+    fn gpu_reflected_camera_image_picking_and_depth_match_source_basis() {
+        use crate::renderer::Camera;
+        use mutracer_native_probe::{
+            api,
+            layout::camera as c,
+            scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene as RenderScene},
+        };
+        let mut scene = RenderScene::new();
+        for (x, color, z) in [(-1., [1., 0., 0.], 0.5), (1., [0., 0., 1.], 0.)] {
+            let geometry = scene
+                .add_geometry(Geometry::new(
+                    vec![
+                        x - 0.8,
+                        -1.,
+                        z,
+                        x + 0.8,
+                        -1.,
+                        z,
+                        x + 0.8,
+                        1.,
+                        z,
+                        x - 0.8,
+                        1.,
+                        z,
+                    ],
+                    vec![0, 1, 2, 0, 2, 3],
+                ))
+                .unwrap();
+            let mut material = OpenPbrMaterial::default();
+            material.values.color = color;
+            material.values.unlit = true;
+            material.values.emission = color;
+            material.values.emission_strength = 1.;
+            let material = scene.add_material(material).unwrap();
+            scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        }
+        scene.set_indexed_aov_ids(&[0, 1]).unwrap();
+        let descriptor = scene.descriptor().unwrap();
+        let matrix = Mat4::from_scale_rotation_translation(
+            Vec3::new(-1., 1., 1.),
+            Quat::IDENTITY,
+            Vec3::new(0., 0., 3.),
+        );
+        for backend in [api::Backend::Software, api::Backend::Hardware] {
+            let engine = api::Engine::new(api::EngineOptions { backend }).unwrap();
+            engine.display().set_size(48, 32).unwrap();
+            engine.set_scene(&descriptor).unwrap();
+            let render = api::Render::new(
+                &engine,
+                api::RenderSettings {
+                    max_samples: 8,
+                    size: api::RenderSize::Fixed {
+                        width: 48,
+                        height: 32,
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for orthographic in [false, true] {
+                let view = View {
+                    name: "Reflected".into(),
+                    matrix,
+                    fov: 60.,
+                    half_height: orthographic.then_some(1.7),
+                };
+                let mut camera = Camera::fit(Vec3::ZERO, 2.);
+                view.apply(&mut camera, Vec3::ZERO);
+                let bytes = camera.bytes([48, 32]);
+                let f: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                let actual = api::Camera {
+                    projection: u32::from(orthographic),
+                    fov: camera.fov,
+                    left: f[c::LEFT],
+                    right: f[c::RIGHT],
+                    bottom: f[c::BOTTOM],
+                    top: f[c::TOP],
+                    world_matrix: f[c::TRANSFORM..].try_into().unwrap(),
+                    ..Default::default()
+                };
+                let expected = api::Camera {
+                    world_matrix: matrix.to_cols_array(),
+                    ..actual
+                };
+                engine.set_camera(Some(actual)).unwrap();
+                engine.update().unwrap();
+                render.converge(api::ConvergeOptions::new(8)).unwrap();
+                let image = render.read_pixels(api::PixelKind::Hdr).unwrap();
+                for (x, object) in [(0.25, 1), (0.75, 0)] {
+                    assert!(
+                        matches!(engine.pick_surface(x,0.5).unwrap(),api::SurfacePick::Hit(hit) if hit.object==object)
+                    );
+                    let depths = engine
+                        .read_depth_samples(api::DepthSampleArea {
+                            x,
+                            y: 0.5,
+                            size: 0.,
+                        })
+                        .unwrap()
+                        .unwrap();
+                    let expected_depth = if object == 1 { 3. } else { 2.5 };
+                    assert!(depths.iter().all(|d| (*d - expected_depth).abs() < 1e-5));
+                }
+                engine.set_camera(Some(expected)).unwrap();
+                engine.update().unwrap();
+                render.converge(api::ConvergeOptions::new(8)).unwrap();
+                assert_eq!(
+                    image,
+                    render.read_pixels(api::PixelKind::Hdr).unwrap(),
+                    "Reflected view differs from original matrix"
+                );
+                let left = (16 * 48 + 12) * 4;
+                let right = (16 * 48 + 36) * 4;
+                assert!(
+                    image.data[left + 2] > image.data[left]
+                        && image.data[right] > image.data[right + 2],
+                    "Asymmetric scene was mirrored"
+                );
+            }
         }
     }
 }

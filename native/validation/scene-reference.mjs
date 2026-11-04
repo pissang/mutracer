@@ -105,13 +105,39 @@ export async function referenceScene(bytes, sourceRoot) {
     // keeps its own lean pipeline and dynamic environment implementation.
     const {wgpuShaderSource} = await load('renderer/wgpuShaderSource.js');
     const {ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities} = await load('renderer/shaderCapabilities.js');
-    const constants = {...pass._constants, MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
+    // Web-only per-instance TLAS boxes and bin counts are intentionally not
+    // native wire data. Repack the independent public-scene preparation into
+    // the native layout for byte contracts; leave the actual Web capture intact.
+    const {buildTLAS, concatBLASBuffers, getTraversalStackSizes} = await load('renderer/bvhAccel.js');
+    const {sceneTraversalConstants} = await load('renderer/sceneAssembly.js');
+    const {packTriangleMaterials} = await load('renderer/compactVertices.js');
+    const prepared = pass._preparedMeshData;
+    const nativeTlas = buildTLAS(prepared.instances, prepared.blases);
+    const blas = new Uint8Array(concatBLASBuffers(prepared.blases));
+    const bvh = new Uint8Array(Math.max(200, nativeTlas.buffer.byteLength + blas.byteLength));
+    bvh.set(new Uint8Array(nativeTlas.buffer)); bvh.set(blas, nativeTlas.buffer.byteLength);
+    const instances = new Uint8Array(Math.max(200, nativeTlas.instancesBuffer.byteLength));
+    instances.set(new Uint8Array(nativeTlas.instancesBuffer));
+    const vertexWords = Number(pass._constants.MATERIALINDEX_OFF);
+    const hasPlane = pass._constants.HAS_TRIANGLE_MATERIAL;
+    const attributes = new Uint32Array(Math.max(50, vertexWords + (hasPlane ? (nativeTlas.buffer.byteLength + blas.byteLength) / 16 : 0)));
+    attributes.set(pass._attributeData.subarray(0, vertexWords));
+    let record = nativeTlas.buffer.byteLength / 16;
+    if (hasPlane) prepared.geometries.forEach((g, i) => {
+        packTriangleMaterials(g, prepared.geometryRegions.get(g).materialIndices, prepared.blases[i].bvh.buffer, attributes, vertexWords + record);
+        record += prepared.blases[i].bvh.buffer.byteLength / 16;
+    });
+    const trace = new Uint8Array(pass._rtUniform.buffer.slice(0, 320));
+    new DataView(trace.buffer).setInt32(88, nativeTlas.buffer.byteLength / 16, true);
+    const nativeResources = new Map([[1,bvh],[2,instances],[3,new Uint8Array(attributes.buffer)],[7,trace]]);
+    const stacks = getTraversalStackSizes(nativeTlas, prepared.blases);
+    const constants = {...pass._constants, ...sceneTraversalConstants(stacks.tlas, stacks.blas), MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
         LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};
     updateSceneShaderCapabilities(constants);
-    const nativeShader = wgpuShaderSource(constants, {hasDisplacement:pass._hasDisplacement, hasAlpha:false,
+    const nativeShader = wgpuShaderSource(constants, {compactVertices:true, hasDisplacement:pass._hasDisplacement, hasAlpha:false,
         hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
         hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:1}, true);
-    return { device, pass, camera, nativeShader };
+    return { device, pass, camera, nativeShader, nativeResources };
 }
 export function textureBytes(texture) {
     const bpp = { rgba8unorm: 4, rgba16float: 8, rgba32float: 16, r32float: 4, rg32float: 8 }[texture.format];

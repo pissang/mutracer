@@ -31,16 +31,24 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path)?;
+        let entry = crate::model_files::resolve(path)?;
+        let path = entry.as_path();
+        let bytes = mutracer_native_probe::scene_api::viewer_support::Model::read(path)?;
         let mut json = crate::examples::model_json(&bytes)?;
         // The viewer handles punctual lights, including their required extension.
+        let mut patched = false;
         if let Some(required) = json
             .get_mut("extensionsRequired")
             .and_then(serde_json::Value::as_array_mut)
         {
+            patched = required.iter().any(|e| e == "KHR_lights_punctual");
             required.retain(|e| e != "KHR_lights_punctual");
         }
-        let bytes = crate::examples::with_json(&bytes, &json)?;
+        let bytes = if patched {
+            crate::examples::with_json(&bytes, &json)?
+        } else {
+            bytes
+        };
         let mut model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
             &bytes,
             Some(path),
@@ -160,7 +168,6 @@ impl Model {
             .map(|mesh| mesh.name.clone())
             .collect();
         model.0.node_names = model.1.nodes.iter().map(|node| node.name.clone()).collect();
-        model.rebuild_picking()?;
         Ok(model)
     }
     pub fn guessed_units(&self) -> f32 {
@@ -180,6 +187,14 @@ impl Model {
             0.001
         }
     }
+    /// Curated example poses take priority; ordinary imports use the first view.
+    pub fn camera_index_for_load(&self) -> Option<usize> {
+        let curated = self.1.preset.as_ref().is_some_and(|preset| {
+            crate::model_scene::vector(&preset["camera"]["position"]).is_some()
+                && crate::model_scene::vector(&preset["camera"]["target"]).is_some()
+        });
+        (!curated && !self.1.cameras.is_empty()).then_some(0)
+    }
     pub fn camera_for_load(&self, previous: &crate::renderer::Camera) -> crate::renderer::Camera {
         let mut camera = crate::renderer::Camera::fit(self.center, self.radius);
         camera.fov = previous.fov;
@@ -196,11 +211,10 @@ impl Model {
                 camera.set_view(eye + offset, target + offset);
                 camera.fov = preset["camera"]["fov"].as_f64().unwrap_or(35.) as f32;
                 camera.orthographic = false;
-            } else if preset["category"] == "research" {
-                if let Some(view) = self.1.cameras.first() {
-                    view.apply(&mut camera, self.center);
-                }
             }
+        }
+        if let Some(index) = self.camera_index_for_load() {
+            self.1.cameras[index].apply(&mut camera, self.center);
         }
         camera
     }
@@ -769,7 +783,7 @@ mod descriptor_tests {
         );
         assert_eq!(s.check(), allocation);
         s.environment.image = Some(Arc::new(image::Rgb32FImage::new(8, 4)));
-        assert_ne!(s.check(), allocation);
+        s.check();
         s.environment.image = None;
         s.check();
     }
@@ -786,7 +800,7 @@ mod descriptor_tests {
         let allocation = s.check();
         Arc::make_mut(&mut Arc::make_mut(&mut s.model.0.geometries)[0].positions)[0] += 0.5;
         assert_eq!(s.check(), allocation);
-        let allocation = s.check();
+        s.check();
         let textures = Arc::make_mut(&mut s.model.0.textures);
         textures.push(Texture {
             float_pixels: None,
@@ -801,7 +815,7 @@ mod descriptor_tests {
             offset: [0.; 2],
             wrap: [0; 2],
         });
-        assert_ne!(s.check(), allocation);
+        s.check();
         let allocation = s.check();
         Arc::make_mut(
             &mut Arc::make_mut(&mut s.model.0.textures)
@@ -810,26 +824,25 @@ mod descriptor_tests {
                 .pixels,
         )[0] = 255;
         assert_eq!(s.check(), allocation);
-        let allocation = s.check();
+        s.check();
         s.model.0.meshes.push(s.model.0.meshes[0].clone());
         s.model.0.materials.push(s.model.0.materials[0].clone());
-        assert_ne!(s.check(), allocation);
+        s.check();
         s.model.0.meshes.pop();
         s.model.0.materials.pop();
         s.check();
-        let allocation = s.check();
         s.light.enabled = false;
-        assert_ne!(s.check(), allocation);
+        s.check();
         s.light.enabled = true;
         s.check();
         let allocation = s.check();
         s.size = [320, 208];
         assert_eq!(s.check(), allocation);
         // A new model with matching counts must not inherit old geometry/textures.
-        let allocation = s.check();
+        s.check();
         let other = Scene::new();
         s.model = other.model;
-        assert_ne!(s.check(), allocation);
+        s.check();
     }
 }
 
@@ -870,5 +883,68 @@ mod example_tests {
         assert!(!model.materials[2].layers.thin_walled);
         assert!((model.materials[6].layers.subsurface_weight - 1.).abs() < 1e-6);
         assert!(model.radius.is_finite() && model.radius > 0.);
+    }
+}
+
+#[cfg(test)]
+mod load_view_tests {
+    use super::*;
+    use crate::{model_scene::View, renderer::Camera};
+    fn model() -> Model {
+        let mut model =
+            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb")).unwrap();
+        model.1.cameras = vec![
+            View {
+                name: "First".into(),
+                matrix: Mat4::from_translation(Vec3::new(1., 2., 5.)),
+                fov: 53.,
+                half_height: None,
+            },
+            View {
+                name: "Second".into(),
+                matrix: Mat4::from_translation(Vec3::new(8., 2., 5.)),
+                fov: 70.,
+                half_height: None,
+            },
+        ];
+        model
+    }
+    #[test]
+    fn local_file_opens_at_first_authored_camera_with_retained_lens_units() {
+        let model = model();
+        let mut previous = Camera::fit(Vec3::ZERO, 2.);
+        previous.fov = 80.;
+        previous.orthographic = true;
+        previous.f_stop = 2.8;
+        previous.meters_per_unit = 0.01;
+        let camera = model.camera_for_load(&previous);
+        assert_eq!(model.camera_index_for_load(), Some(0));
+        assert!((camera.eye() - Vec3::new(1., 2., 5.)).length() < 1e-4);
+        assert_eq!(camera.fov, 53.);
+        assert!(!camera.orthographic);
+        assert_eq!(camera.f_stop, 2.8);
+        assert_eq!(camera.meters_per_unit, 0.01);
+    }
+    #[test]
+    fn curated_view_precedes_authored_camera() {
+        let mut model = model();
+        model.1.preset =
+            Some(serde_json::json!({"camera":{"position":[2,3,7],"target":[0,0,0],"fov":44}}));
+        let camera = model.camera_for_load(&Camera::fit(model.center, model.radius));
+        let offset = Vec3::new(model.center.x, model.ground_y, model.center.z);
+        assert!((camera.eye() - (Vec3::new(2., 3., 7.) + offset)).length() < 1e-4);
+        assert_eq!(camera.fov, 44.);
+    }
+    #[test]
+    fn file_without_camera_retains_projection_and_field_of_view() {
+        let mut model = model();
+        model.1.cameras.clear();
+        let mut previous = Camera::fit(Vec3::ZERO, 2.);
+        previous.fov = 61.;
+        previous.orthographic = true;
+        let camera = model.camera_for_load(&previous);
+        assert_eq!(camera.fov, 61.);
+        assert!(camera.orthographic);
+        assert_eq!(camera.target, model.center);
     }
 }

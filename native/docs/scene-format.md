@@ -116,7 +116,7 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
   be 0.
 - Otherwise `count` local matrices and optional RGB multipliers. The mesh world
   matrix is applied outside each local matrix.
-- At most 65,536 instances in total across all meshes.
+- Expanded instances share the [scene instance budget](#limits).
 
 ### Materials
 
@@ -162,13 +162,20 @@ changes only the camera is incremental.
 
 ## Limits
 
-- At least one geometry, mesh and material; at most 4,096 geometries, 65,536
-  meshes and materials, 64 analytic lights and 256 textures.
+- At least one geometry, mesh and material; at most 65,536 geometries, materials
+  and textures, and 64 analytic lights. Meshes and expanded instances are limited
+  to 16,777,216 and the memory budget (160 bytes per instance); HWRT also checks
+  the selected GPU's TLAS instance limit.
 - Output edges 1–8,192 with at most 16,777,216 pixels; actual output is also
   limited by the selected GPU's storage-buffer, texture and dispatch limits.
-- At most 512 MiB of input and 16,777,216 texture pixels in total.
-- At most 4,000,000 vertices and 12,000,000 indices per geometry. Preparation
-  has a conservative 1 GiB budget estimated from vertex and index counts,
-  including material-related expansion.
+- Input and prepared geometry each default to an 8 GiB admission budget, changed
+  with `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` (positive integer MiB). This does not
+  cap peak process memory. Descriptors must also fit 32-bit word offsets (under
+  16 GiB). A scene's combined prepared resources must stay below 4 GiB.
+  At most 16,777,216 texture pixels in total.
+- At most 4,000,000 vertices and 12,000,000 indices per geometry. Multi-material
+  and displacement scenes can need more preparation memory. The selected GPU
+  must support each resident buffer; use HWRT when the software BVH exceeds its
+  buffer or preparation budget.
 - The texture atlas is limited to 64 MiB, 4,096 pixels per side and 256 layers;
   larger sources are scaled down.

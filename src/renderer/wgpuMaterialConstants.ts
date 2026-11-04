@@ -1,3 +1,4 @@
+import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import type MaterialState from '../scene/MaterialState.js';
 import { resolveMaterialAlphaMode } from '../scene/MaterialState.js';
 import type Geometry from '../scene/Geometry.js';
@@ -36,7 +37,7 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     // Isotropic OpenPBR constructs its own basis. Normal mapping uses
     // triangle UV differentials rather than this vertex tangent.
     USE_TANGENT: mergedGeometry.tangent != null &&
-      materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
+      materials.some(materialNeedsVertexTangents),
 
     USE_COAT_NORMAL_FRAMES,
     USE_ANISOTROPY_DIRECTIONS: USE_COAT_NORMAL_FRAMES || materials.some(m =>

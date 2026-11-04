@@ -27,8 +27,14 @@ export class CaptureDevice {
     return object;
   }
   createBuffer(descriptor) {
-    return this.add('buffer', descriptor, { size: descriptor.size, data: new Uint8Array(descriptor.size),
-      destroy() {} });
+    const data = new Uint8Array(descriptor.size);
+    let mapped = !!descriptor.mappedAtCreation;
+    return this.add('buffer', descriptor, { size: descriptor.size, data,
+      getMappedRange(offset = 0, size = descriptor.size) {
+        if (!mapped || offset !== 0 || size !== descriptor.size) throw new Error('Recorder requires a whole mapped buffer');
+        return data.buffer;
+      },
+      unmap() { mapped = false; }, destroy() {} });
   }
   createTexture(descriptor) {
     const size = descriptor.size;

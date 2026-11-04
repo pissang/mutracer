@@ -164,7 +164,10 @@ int32_t mt_scene_encode(mt_scene scene, void *output, size_t output_bytes, size_
 int32_t mt_scene_pending_commit_kind(mt_scene scene, uint32_t *kind, char *error, size_t capacity);
 /* Imports create a new scene. Byte import resolves external URIs under
  * base_directory; NULL requires embedded resources. Missing gltf feature returns
- * UNAVAILABLE. Limits/extension behavior: native/docs/gltf.md. */
+ * UNAVAILABLE. File/buffer admission budget defaults to 8192 MiB;
+ * MUTRACER_NATIVE_MEMORY_BUDGET_MIB accepts a positive integer override.
+ * Peak memory can be several times larger. GPU limits also apply at commit.
+ * Limits/extension behavior: native/docs/gltf.md. */
 int32_t mt_scene_import_gltf(const char *path, mt_scene *out, char *error, size_t capacity);
 int32_t mt_scene_import_gltf_bytes(const void *bytes, size_t byte_count, const char *base_directory, mt_scene *out, char *error, size_t capacity);
 /* Duplicate names use zero-based occurrence in traversal order. Object kind:

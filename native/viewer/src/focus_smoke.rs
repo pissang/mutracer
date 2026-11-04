@@ -48,13 +48,9 @@ fn measuring(viewer: &mut Viewer, ctx: &eframe::egui::Context) -> Result<()> {
 }
 fn compare(viewer: &Viewer) -> Result<()> {
     if viewer.focus.active(&viewer.camera) && viewer.focus.status == Status::Locked {
-        let expected = focus::measure(
-            &viewer.model,
-            &viewer.camera,
-            viewer.focus.area,
-            viewer.size[0] as f32 / viewer.size[1] as f32,
-        )
-        .unwrap();
+        let expected = focus::measure(&viewer.target.engine, viewer.focus.area)?
+            .flatten()
+            .unwrap();
         ensure!(
             (viewer.camera.focus_distance - expected).abs() < expected * 1e-5,
             "Locked to an obsolete depth"
@@ -77,6 +73,36 @@ fn compare(viewer: &Viewer) -> Result<()> {
         "Focused viewer differs from full commit"
     );
     Ok(())
+}
+fn measure_model(
+    model: &Model,
+    camera: &Camera,
+    area: [f32; 2],
+    size: [u32; 2],
+) -> Result<Option<f32>> {
+    use mutracer_native_probe::api;
+    let engine = api::Engine::new(api::EngineOptions {
+        backend: api::Backend::Software,
+    })?;
+    engine.display().set_size(size[0], size[1])?;
+    engine.set_scene(&model.descriptor_with_light(
+        &camera.bytes(size),
+        size,
+        &crate::scene::Environment::default(),
+        &crate::scene::KeyLight::default(),
+    ))?;
+    engine.update()?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(depth) = focus::measure(&engine, area)? {
+            return Ok(depth);
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "GPU focus query did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 pub fn run(path: &Path, out: &Path) -> Result<()> {
     let data: serde_json::Value =
@@ -138,13 +164,12 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             });
         }
         model.0.geometries = geometries.into();
-        model.rebuild_picking()?;
         let mut camera = Camera::fit(glam::Vec3::ZERO, 2.);
         camera.yaw = 0.;
         camera.pitch = 0.;
         camera.distance = 5.;
         let area = std::array::from_fn(|i| case["area"][i].as_f64().unwrap() as f32);
-        let actual = focus::measure(&model, &camera, area, 1.5);
+        let actual = measure_model(&model, &camera, area, [96, 64])?;
         let expected = case["depth"].as_f64().map(|v| v as f32);
         ensure!(
             match (actual, expected) {
@@ -173,8 +198,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             viewer.render_backend()? == backend && viewer.focus.status == Status::Locked,
             "Autofocus did not lock on requested backend"
         );
-        let expected =
-            focus::measure(&viewer.model, &viewer.camera, viewer.focus.area, 128. / 84.).unwrap();
+        let expected = focus::measure(&viewer.target.engine, viewer.focus.area)?
+            .flatten()
+            .unwrap();
         ensure!(
             (viewer.camera.focus_distance - expected).abs() < 1e-5,
             "Autofocus depth mismatch"
@@ -232,7 +258,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         let generation = viewer.generation;
         viewer.focus.place([0.02, 0.02]);
         ensure!(
-            focus::measure(&viewer.model, &viewer.camera, viewer.focus.area, 128. / 84.).is_none(),
+            focus::measure(&viewer.target.engine, viewer.focus.area)?
+                .flatten()
+                .is_none(),
             "Expected empty focus area"
         );
         settle(&mut viewer, &ctx)?;

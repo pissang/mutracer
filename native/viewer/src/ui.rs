@@ -1750,22 +1750,7 @@ impl Viewer {
                         (pos.x - rect.min.x) / rect.width(),
                         (pos.y - rect.min.y) / rect.height(),
                     ];
-                    if self.picking_focus {
-                        if let Some((_, point)) = self.model.pick_hit(&self.camera, uv, aspect) {
-                            let forward = (self.camera.target - self.camera.eye()).normalize();
-                            self.camera.focus_distance =
-                                (point - self.camera.eye()).dot(forward).max(1e-5);
-                            self.picking_focus = false;
-                            self.dirty(Change::Camera);
-                        }
-                    } else {
-                        self.selected_mesh = self.model.pick(&self.camera, uv, aspect);
-                        if let Some(id) = self.selected_mesh {
-                            self.selected = self.model.0.meshes[id].material;
-                            self.tab = 1;
-                            self.inspector_open = true;
-                        }
-                    }
+                    self.picker.request(self.generation, uv, self.picking_focus);
                 }
                 if let Some(preset) = &self.model.1.preset {
                     let text = format!(

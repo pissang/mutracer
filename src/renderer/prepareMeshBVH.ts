@@ -1,3 +1,4 @@
+import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import { prepareSceneMeshes, computeGeometryNormals, type PreparedMeshInstanceBinding as SharedInstanceBinding } from './scenePreparation.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -193,14 +194,14 @@ export function ensureMeshGeometryAttributes(meshes: readonly Mesh[]) {
     }
     if (!geometry.position?.array.length) continue;
     if (!geometry.normal) computeGeometryNormals(geometry);
-    if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+    if (!geometry.tangent && geometry.uv && materials.some(materialNeedsVertexTangents)) generateVertexTangents(geometry);
   }
 }
 
 function getMeshBlasGeometry(mesh: Mesh, displacement = true) {
   const geometry = displacement ? getPreparedMeshGeometry(mesh) : mesh.geometry;
   if (!geometry.normal) computeGeometryNormals(geometry);
-  if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+  if (!geometry.tangent && geometry.uv && mesh.materials.some(materialNeedsVertexTangents)) generateVertexTangents(geometry);
   return geometry;
 }
 

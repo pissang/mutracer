@@ -290,6 +290,83 @@ fn software_displacement_map_edits_match_prediction() {
 
 #[test]
 #[ignore = "requires a real GPU; run separately"]
+fn hardware_displaced_geometry_updates_match_full_commit() {
+    let mut scene = Scene::new();
+    let geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
+    scene.geometry_mut(geometry).unwrap().uv[0] = vec![0., 0., 1., 0., 0.5, 1.].into();
+    let height = scene
+        .add_texture(Texture::rgba8(1, 1, vec![128; 4]))
+        .unwrap();
+    let mut material = OpenPbrMaterial::default();
+    material.textures[8] = Some(height);
+    material.values.layers.displacement_scale = 0.1;
+    let material = scene.add_material(material).unwrap();
+    scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+    scene
+        .add_light(Light::Directional {
+            color: [1.; 3],
+            intensity: 2.,
+            transform: Mat4::IDENTITY,
+        })
+        .unwrap();
+    let mut camera = Camera::default();
+    camera.world_matrix[14] = 3.;
+    scene.set_default_camera(Some(camera));
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Hardware,
+    })
+    .unwrap();
+    let settings = RenderSettings {
+        max_samples: 4,
+        size: RenderSize::Fixed {
+            width: 16,
+            height: 12,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    Arc::make_mut(&mut scene.geometry_mut(geometry).unwrap().positions)[0] -= 0.2;
+    assert_eq!(
+        scene.pending_commit_kind().unwrap(),
+        CommitKind::Incremental
+    );
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+    let fresh = Engine::new(EngineOptions {
+        backend: Backend::Hardware,
+    })
+    .unwrap();
+    let reference = Render::new(&fresh, settings).unwrap();
+    fresh.set_scene_object(&scene).unwrap();
+    fresh.update().unwrap();
+    reference.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo] {
+        let actual = render.read_pixels(kind).unwrap();
+        let expected = reference.read_pixels(kind).unwrap();
+        assert_eq!(
+            actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected
+                .data
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
 fn selected_adapter_renders_4k_and_environment_controls() {
     let adapters = Engine::adapters();
     let adapter = adapters

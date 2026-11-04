@@ -48,11 +48,12 @@ fn finish(pointer: *mut c_void, primitive_count: usize) -> Result<Built> {
     let depth = unsafe { tinybvh_result_max_depth(handle.0) };
     if unsafe { tinybvh_result_layout(handle.0) } != 0
         || size % 16 != 0
-        || size > 1024 * 1024 * 1024
+        || size > crate::memory_budget::RESOURCE_WIRE_BYTES
         || (size > 0 && address == 0)
     {
         return Err("Invalid native TinyBVH output".into());
     }
+    crate::memory_budget::check(size, "Software BVH; select HWRT if this exceeds the budget")?;
     if size == 0 {
         return Ok(Built {
             bytes: vec![],
@@ -146,7 +147,7 @@ pub(super) fn blas(
 }
 pub(super) fn aabbs(boxes: &[f32]) -> Result<Built> {
     if boxes.len() % 6 != 0
-        || boxes.len() / 6 > 65_536
+        || boxes.len() / 6 > crate::scene::instance_limit()
         || boxes.iter().any(|v| !v.is_finite())
         || boxes
             .chunks_exact(6)
@@ -285,9 +286,19 @@ pub(super) fn jobs_with_ids(packet: &[u8], instances: bool, capture_ids: bool) -
         let bvh = slot
             .into_inner()
             .ok_or("Missing native TinyBVH job result")??;
-        total += bvh.bytes.len() + bvh.triangle_ids.len() * 4;
-        if total > 1024 * 1024 * 1024 || bvh.depth > 64 {
-            return Err("Native TinyBVH result exceeds byte/stack budget".into());
+        total = total
+            .checked_add(bvh.bytes.len())
+            .and_then(|n| n.checked_add(bvh.triangle_ids.len() * 4))
+            .ok_or("Software BVH size overflow; use HWRT")?;
+        crate::memory_budget::check(
+            total,
+            "Software BVH; select HWRT if this exceeds the budget",
+        )?;
+        if total > crate::memory_budget::RESOURCE_WIRE_BYTES {
+            return Err(format!("Software BVH requires {total} bytes; 32-bit resource offsets allow {} bytes. Use HWRT.", crate::memory_budget::RESOURCE_WIRE_BYTES).into());
+        }
+        if bvh.depth > 64 {
+            return Err("Software BVH exceeds traversal stack budget; use HWRT".into());
         }
         built.push(bvh);
     }
@@ -471,9 +482,9 @@ mod tests {
     }
     #[test]
     fn large_threaded_builds_keep_bounds_and_every_primitive() {
-        // Cross upstream's 50,000-primitive worker threshold for BLAS and TLAS.
+        // Cross the former 65,536-instance cap and upstream's worker threshold.
         // Serialized output must remain deterministic despite task scheduling.
-        let count = 65_536usize;
+        let count = 65_537usize;
         let mut positions = Vec::with_capacity(count * 9);
         let mut boxes = Vec::with_capacity(count * 6);
         for i in 0..count {

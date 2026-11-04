@@ -3,6 +3,15 @@ import { CaptureDevice } from '../../native/validation/resource-recorder.mjs';
 import { frameParameters } from '../../native/src/render-core.js';
 
 describe('native capture buffer boundaries', () => {
+  it('captures mapped-at-creation writes before later queue updates', () => {
+    const device = new CaptureDevice();
+    const buffer = device.createBuffer({size: 8, mappedAtCreation: true});
+    new Uint32Array(buffer.getMappedRange()).set([17, 93]);
+    buffer.unmap();
+    expect(() => buffer.getMappedRange()).toThrow();
+    device.queue.writeBuffer(buffer, 4, new Uint32Array([42]));
+    expect([...new Uint32Array(buffer.data.buffer)]).toEqual([17, 42]);
+  });
   it('copies TypedArray subranges using element offsets and source byteOffset', () => {
     const device = new CaptureDevice();
     const buffer = device.createBuffer({ size: 16 });

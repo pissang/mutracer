@@ -40,7 +40,7 @@ mod surface;
 pub use crate::device_loss::DeviceLossNotifier;
 pub use crate::display::jnlm::Options as JnlmOptions;
 pub use crate::status::{Status, StatusError as Error};
-pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea};
+pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea, SurfaceHit, SurfacePick};
 pub use display::{
     AovDisplayOptions, AovIdComponent, Channel, Display, DisplaySettings, Presented, ToneMapping,
 };
