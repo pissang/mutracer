@@ -191,6 +191,13 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             bail!("Missing buffer {i}")
         };
         ensure!(data.len() >= len, "Buffer {i} is shorter than declared");
+        // External buffers and GLB padding can exceed byteLength; charge actual
+        // owned storage, also making source-buffer retirement subtraction exact.
+        total = total
+            .checked_sub(len)
+            .and_then(|n| n.checked_add(data.len()))
+            .context("Buffer budget overflow")?;
+        crate::memory_budget::check(total, "Model buffers")?;
         buffers.push(gltf::buffer::Data(data));
     }
     for v in j["bufferViews"].as_array().into_iter().flatten() {
@@ -414,6 +421,13 @@ pub(super) mod tests {
         ));
         std::fs::write(&path, serde_json::to_vec(&root).unwrap()).unwrap();
         path
+    }
+    #[test]
+    fn unused_buffer_retirement_charges_actual_padded_bytes() {
+        let root = json!({"asset":{"version":"2.0"}, "buffers":[{"byteLength":1,
+            "uri":"data:application/octet-stream;base64,AQIDBA=="}], "bufferViews":[]});
+        let (_, buffers, _, _, _) = load_bytes(&serde_json::to_vec(&root).unwrap(), None).unwrap();
+        assert!(buffers[0].is_empty());
     }
     #[test]
     fn meshopt_modes_roundtrip_and_reject_malformed_layouts() {

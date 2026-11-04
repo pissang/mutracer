@@ -559,7 +559,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.PRIMITIVE_IDS, KIND.METADATA, new Uint8Array(new Uint32Array(identity).buffer), 0, 0, 0, 0);
   if (hardware) {
     add(RESOURCE.DISPLACEMENT_BOUNDS, KIND.METADATA, new Uint8Array(hardware.bounds.buffer), 0, 0, 0, 0);
-
   }
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
@@ -711,6 +710,7 @@ function prepareNativeLightSampling(lights: AnalyticLightState[], table: Materia
 function updatePacket(records: number[][], parts: Uint8Array[], destinations: number[] = []): Uint8Array {
   let size = (PH.WORDS + records.length * WE.WORDS) * WORD_BYTES;
   for (const part of parts) size += Math.ceil(part.byteLength / WORD_BYTES) * WORD_BYTES;
+  if (size > 0xfffffffc) throw new Error(`Scene update requires ${size} bytes; 32-bit resource offsets allow at most 4294967292 bytes.`);
   const result = new Uint8Array(size), words = new Uint32Array(result.buffer);
   words.set([VERSION.RESOURCE_WRITES, records.length, 0, 0]);
   let offset = (PH.WORDS + records.length * WE.WORDS) * WORD_BYTES;

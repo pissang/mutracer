@@ -116,7 +116,7 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
   be 0.
 - Otherwise `count` local matrices and optional RGB multipliers. The mesh world
   matrix is applied outside each local matrix.
-- At most 65,536 instances in total across all meshes.
+- Expanded instances share the [scene instance budget](#limits).
 
 ### Materials
 
