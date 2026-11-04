@@ -14,6 +14,7 @@ mod geometry_smoke;
 mod history;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 mod hot_reload;
+mod import_smoke;
 mod input;
 mod large_scene_smoke;
 mod live_denoise_smoke;
@@ -406,6 +407,11 @@ impl Viewer {
             );
             model.1.preset = Some(preset);
         }
+        let camera_index = model.camera_index_for_load();
+        if camera_index.is_some() {
+            camera = model.camera_for_load(&camera);
+        }
+        let environment = model.environment_for_load(&Environment::default());
         let mut examples = examples::Browser::default();
         examples.current = model
             .1
@@ -473,7 +479,7 @@ impl Viewer {
             pose_presented: false,
             camera,
             drag: input::ViewportDrag::default(),
-            environment: Environment::default(),
+            environment,
             light: KeyLight::default(),
             sky: sky::Sky::new(gpu.as_ref()),
             size,
@@ -516,7 +522,7 @@ impl Viewer {
             load_progress: None,
             examples,
             environments: Default::default(),
-            camera_index: None,
+            camera_index,
             pending_environment: None,
             running: true,
             change: Change::Scene,
@@ -1246,18 +1252,7 @@ impl Viewer {
                 .preset
                 .as_ref()
                 .map(|p| examples::text(p, "id").to_owned());
-            self.camera_index = if self
-                .model
-                .1
-                .preset
-                .as_ref()
-                .is_some_and(|p| p["category"] == "research")
-                && !self.model.1.cameras.is_empty()
-            {
-                Some(0)
-            } else {
-                None
-            };
+            self.camera_index = self.model.camera_index_for_load();
             self.selected = self.model.0.meshes[0].material;
             self.selected_mesh = None;
             self.picking_focus = false;
@@ -2901,6 +2896,7 @@ fn main() -> Result<()> {
     let mut model = None;
     let mut smoke_out = None;
     let mut large_scene_out = None;
+    let mut import_out = None;
     let mut interaction_out = None;
     let mut inspect = false;
     let mut preview_out = None;
@@ -3013,6 +3009,11 @@ fn main() -> Result<()> {
                         .context("--interaction-smoke needs a directory")?,
                 ))
             }
+            "--import-smoke" => {
+                import_out = Some(PathBuf::from(
+                    args.next().context("--import-smoke needs a directory")?,
+                ));
+            }
             "--large-scene-out" => {
                 large_scene_out = Some(PathBuf::from(
                     args.next().context("--large-scene-out needs a directory")?,
@@ -3116,6 +3117,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = interaction_out {
         return interaction_smoke(&model, &out);
+    }
+    if let Some(out) = import_out {
+        return import_smoke::run(&model, &out);
     }
     if let Some(out) = large_scene_out {
         return large_scene_smoke::run(&model, &out);

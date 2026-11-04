@@ -128,8 +128,9 @@ platform differences for trying features or checking a new version.
 - **Auto rotate** orbits the model while rendering runs.
 - **Scene unit → Auto** guesses metres, centimetres or millimetres from the
   model size. Choose a unit explicitly when the guess does not match the model.
-- Projection and field of view persist across local files; examples apply their
-  saved views. F-number and explicit scene-unit choices persist across models.
+- Files with imported cameras open on the first view; files without one retain
+  the projection and field of view. Examples use their saved view when provided.
+  F-number and explicit scene-unit choices persist across models.
 
 ### Objects
 

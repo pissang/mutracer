@@ -283,7 +283,7 @@ impl Viewer {
             .model
             .camera_for_load(&crate::Camera::fit(self.model.center, self.model.radius));
         self.camera.meters_per_unit = self.model.guessed_units();
-        self.camera_index = None;
+        self.camera_index = self.model.camera_index_for_load();
         self.focus = Default::default();
         self.dirty(Change::Scene);
         let after = Snapshot::capture(self);
