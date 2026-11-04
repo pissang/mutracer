@@ -244,6 +244,20 @@ impl Scene {
             lights: r.lights,
             ies: r.ies,
         };
+        let words = data
+            .word_count(&env)
+            .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
+        let total = words
+            .checked_add(data.meshes.len() + data.materials.len() + 22)
+            .filter(|n| *n <= u32::MAX as usize)
+            .ok_or_else(|| {
+                api::error(
+                    Status::InvalidArgument,
+                    "Scene descriptor word offsets overflow",
+                )
+            })?;
+        crate::memory_budget::check(total * 4, "Scene descriptor")
+            .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
         Descriptor::update(cached, &data, camera, size, &env);
         let d = cached.as_mut().unwrap();
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
