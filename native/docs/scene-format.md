@@ -162,13 +162,17 @@ changes only the camera is incremental.
 
 ## Limits
 
-- At least one geometry, mesh and material; at most 4,096 geometries, 65,536
+- At least one geometry, mesh and material; at most 65,536 geometries, 65,536
   meshes and materials, 64 analytic lights and 256 textures.
 - Output edges 1–8,192 with at most 16,777,216 pixels; actual output is also
   limited by the selected GPU's storage-buffer, texture and dispatch limits.
-- At most 512 MiB of input and 16,777,216 texture pixels in total.
+- Input and prepared geometry each default to an 8 GiB admission budget, changed
+  with `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` (positive integer MiB). This does not
+  cap peak process memory. Descriptors must also fit 32-bit word offsets (under
+  16 GiB); individual prepared resource packets must fit 32-bit byte offsets
+  (under 4 GiB). At most 16,777,216 texture pixels in total.
 - At most 4,000,000 vertices and 12,000,000 indices per geometry. Preparation
-  has a conservative 1 GiB budget estimated from vertex and index counts,
+  has a budget estimated from vertex and index counts,
   including material-related expansion.
 - The texture atlas is limited to 64 MiB, 4,096 pixels per side and 256 layers;
   larger sources are scaled down.

@@ -14,7 +14,6 @@ type Import = (
     bool,
     Vec<Value>,
 );
-const MAX_BUFFER: usize = 512 * 1024 * 1024;
 /// Texture pixels shared by all material textures: the descriptor allows 16M and
 /// 4M stay reserved for the largest supported environment image.
 pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 12_582_912;
@@ -45,10 +44,7 @@ fn uri(path: Option<&Path>, name: &str) -> Result<Vec<u8>> {
             .parent()
             .unwrap_or(Path::new("."))
             .join(decoded.as_ref());
-        ensure!(
-            p.metadata()?.len() <= MAX_BUFFER as u64,
-            "External resource exceeds 512 MiB"
-        );
+        crate::memory_budget::check(usize::try_from(p.metadata()?.len())?, "External resource")?;
         Ok(std::fs::read(p)?)
     }
 }
@@ -73,10 +69,8 @@ fn decode(ext: &Value, source: &[u8]) -> Result<Vec<u8>> {
     let len = count
         .checked_mul(stride)
         .context("Meshopt decoded size overflow")?;
-    ensure!(
-        count > 0 && len <= MAX_BUFFER,
-        "Meshopt decoded buffer exceeds 512 MiB"
-    );
+    ensure!(count > 0, "Empty meshopt buffer");
+    crate::memory_budget::check(len, "Meshopt decoded buffer")?;
     let mode = ext["mode"].as_str().context("Missing Meshopt mode")?;
     let filter = ext["filter"].as_str().unwrap_or("NONE");
     match mode {
@@ -164,12 +158,9 @@ fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     Ok(v)
 }
 pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
-    let (mut j, blob): (Value, Option<Vec<u8>>) = if bytes.starts_with(b"glTF") {
+    let (mut j, blob): (Value, Option<std::borrow::Cow<'_, [u8]>>) = if bytes.starts_with(b"glTF") {
         let glb = gltf::Glb::from_slice(&bytes)?;
-        (
-            serde_json::from_slice(&glb.json)?,
-            glb.bin.map(|b| b.into_owned()),
-        )
+        (serde_json::from_slice(&glb.json)?, glb.bin)
     } else {
         (serde_json::from_slice(&bytes)?, None)
     };
@@ -189,11 +180,11 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     {
         let len = number(b, "byteLength")?;
         total = total.checked_add(len).context("Buffer budget overflow")?;
-        ensure!(total <= MAX_BUFFER, "Model buffers exceed 512 MiB");
+        crate::memory_budget::check(total, "Model buffers")?;
         let data = if let Some(name) = b["uri"].as_str() {
             uri(path, name)?
         } else if i == 0 {
-            blob.as_ref().context("Missing GLB buffer")?.clone()
+            blob.as_ref().context("Missing GLB buffer")?.to_vec()
         } else if b["extensions"]["EXT_meshopt_compression"]["fallback"] == true {
             vec![0; len]
         } else {
@@ -229,6 +220,19 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
                 .get_mut(offset..end)
                 .context("Meshopt target exceeds buffer")?
                 .copy_from_slice(&decoded);
+        }
+    }
+    // Decoded views and images no longer read source-only compression buffers.
+    let live: std::collections::BTreeSet<_> = j["bufferViews"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|v| number(v, "buffer"))
+        .collect::<Result<_>>()?;
+    for (i, buffer) in buffers.iter_mut().enumerate() {
+        if !live.contains(&i) {
+            total -= buffer.len();
+            buffer.0 = Vec::new();
         }
     }
     // Expand geometry float attributes and normalized instance quaternions;
@@ -300,8 +304,10 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
                 max[k] = max[k].max(v);
             }
         }
-        total += floats.len();
-        ensure!(total <= MAX_BUFFER, "Expanded model buffers exceed 512 MiB");
+        total = total
+            .checked_add(floats.len())
+            .context("Expanded buffer budget overflow")?;
+        crate::memory_budget::check(total, "Expanded model buffers")?;
         let buffer = buffers.len();
         let buffer_view = j["bufferViews"].as_array().unwrap().len();
         j["buffers"]

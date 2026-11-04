@@ -163,8 +163,8 @@ unsafe extern "C" {
         size: *mut usize,
     );
 }
-pub(crate) const MAX_BYTES: usize = 512 * 1024 * 1024;
-const MAX_PREPARED_BYTES: usize = 1024 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = crate::memory_budget::SCENE_WIRE_BYTES;
+const MAX_PREPARED_BYTES: usize = crate::memory_budget::RESOURCE_WIRE_BYTES;
 
 // Invertibility is independent of scene units. A fixed determinant threshold
 // rejects valid millimetre/small-unit glTFs such as Khronos ToyCar.
@@ -231,6 +231,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     if bytes.len() < h::WORDS * WORD_BYTES || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
         return Err("Invalid scene byte length".into());
     }
+    crate::memory_budget::check(bytes.len(), "Scene descriptor")?;
     let w = Words(bytes);
     if w.u(h::VERSION) != layout::version::SCENE || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
@@ -239,7 +240,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         return Err("Scene image dimensions exceed probe limits".into());
     }
     if w.u(h::GEOMETRY_COUNT) == 0
-        || w.u(h::GEOMETRY_COUNT) > 4096
+        || w.u(h::GEOMETRY_COUNT) > 65536
         || w.u(h::MESH_COUNT) == 0
         || w.u(h::MESH_COUNT) > 65536
         || w.u(h::MATERIAL_COUNT) == 0
@@ -326,7 +327,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         }
         geometry_words += v * 32 + n * 24;
         geometry_costs.push(v * 32 + n * 24);
-        if geometry_words > MAX_PREPARED_BYTES / 4 {
+        if geometry_words > crate::memory_budget::bytes() / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
         let scan = unchanged.get(i) != Some(&1);
@@ -390,7 +391,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
                 return Err("Vertex material index is out of range".into());
             }
             geometry_words += geometry_costs[w.u(o + m::GEOMETRY)];
-            if geometry_words > MAX_PREPARED_BYTES / 4 {
+            if geometry_words > crate::memory_budget::bytes() / 4 {
                 return Err("Multi-material geometry expansion exceeds probe budget".into());
             }
         }
@@ -555,7 +556,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         }
         if projection != 0 {
             geometry_words += geometry_costs[w.u(mesh + m::GEOMETRY)];
-            if geometry_words > MAX_PREPARED_BYTES / 4 {
+            if geometry_words > crate::memory_budget::bytes() / 4 {
                 return Err("Displaced geometry expansion exceeds probe budget".into());
             }
         }

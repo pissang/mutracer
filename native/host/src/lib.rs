@@ -33,6 +33,7 @@ mod hardware;
 mod hdr;
 pub mod hit_diagnostics;
 mod image_limits;
+mod memory_budget;
 mod oidn_webgpu;
 pub mod picking;
 #[cfg(test)]

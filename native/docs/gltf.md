@@ -65,8 +65,10 @@ extensions and exceeded limits, return Rust `api::Status::InvalidArgument` or C
 `MT_ERROR_INVALID_ARGUMENT`. The message holds the complete cause chain, so give
 C a large error buffer.
 
-- Model files up to 128 MiB, combined buffers up to 512 MiB, and each source
-  image up to 64M pixels.
+- Model files and combined decoded buffers each default to an 8 GiB budget.
+  Set `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` to a positive integer to change it.
+  This is an admission limit; peak process memory can be several times larger.
+  Each source image is limited to 64M pixels.
 - Material textures share a 12M-pixel budget and keep at most 4,096 pixels on
   their longest side; larger or more numerous images are reduced to fit, with a
   warning.

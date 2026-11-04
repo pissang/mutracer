@@ -35,25 +35,15 @@ pub struct Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
-        ensure!(
-            path.metadata()?.len() <= 128 * 1024 * 1024,
-            "Model file exceeds 128 MiB"
-        );
+        crate::memory_budget::check(usize::try_from(path.metadata()?.len())?, "Model file")?;
         Self::load_bytes(&std::fs::read(path)?, Some(path))
     }
     pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Self> {
-        ensure!(
-            bytes.len() <= 128 * 1024 * 1024,
-            "Model file exceeds 128 MiB"
-        );
+        crate::memory_budget::check(bytes.len(), "Model file")?;
         let (document, buffers, images, resized, raw_materials) =
             super::decode::load_bytes(bytes, path)
                 .context("Loading GLTF/GLB and its buffers/images")?;
         let path = path.unwrap_or(Path::new("memory.glb"));
-        ensure!(
-            buffers.iter().map(|b| b.len()).sum::<usize>() <= 512 * 1024 * 1024,
-            "Model buffers exceed 512 MiB"
-        );
         let mut model = Self {
             name: path
                 .file_name()
