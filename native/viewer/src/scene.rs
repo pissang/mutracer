@@ -31,8 +31,11 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_with_hdr(path, None)
+    }
+    pub fn load_with_hdr(path: &Path, hdr: Option<&Path>) -> Result<Self> {
         let entry = crate::model_files::resolve(path)?;
-        let path = entry.as_path();
+        let path = entry.model.as_path();
         let bytes = mutracer_native_probe::scene_api::viewer_support::Model::read(path)?;
         let mut json = crate::examples::model_json(&bytes)?;
         // The viewer handles punctual lights, including their required extension.
@@ -56,7 +59,18 @@ impl Model {
         model
             .warnings
             .retain(|w| !w.ends_with("KHR_lights_punctual"));
-        let scene = crate::model_scene::Scene::load(&json, path, &mut model)?;
+        let mut scene = crate::model_scene::Scene::load(&json, path, &mut model)?;
+        if let Some(path) = hdr.or(entry.hdr.as_deref()) {
+            let mut environment = Environment::default();
+            match environment.load(path) {
+                Ok(()) => {
+                    scene.dropped_environment = Some((environment.image.unwrap(), environment.name))
+                }
+                Err(error) => model
+                    .warnings
+                    .push(format!("Dropped HDR {}: {error:#}", path.display())),
+            }
+        }
         Ok(Self(model, scene))
     }
 
@@ -220,6 +234,13 @@ impl Model {
     }
     pub fn environment_for_load(&self, previous: &Environment) -> Environment {
         let mut environment = previous.clone();
+        if let Some((image, name)) = &self.1.dropped_environment {
+            environment.image = Some(image.clone());
+            environment.name = name.clone();
+            environment.preset = None;
+            environment.model_lighting = false;
+            environment.studio.enabled = false;
+        }
         if self.1.available && self.1.authored {
             environment.studio.enabled = false;
             environment.model_lighting = true;
@@ -971,5 +992,71 @@ mod load_view_tests {
         assert_eq!(camera.fov, 61.);
         assert!(camera.orthographic);
         assert_eq!(camera.target, model.center);
+    }
+}
+
+#[cfg(test)]
+mod dropped_hdr_tests {
+    use super::*;
+    use crate::model_files::tests::Folder;
+
+    #[test]
+    fn folder_hdr_and_explicit_hdr_are_loaded_without_changing_scene_metadata() {
+        let folder = Folder::new();
+        let file = folder.model("package/model/scene.glb");
+        folder.hdr("package/env/light.HDR", [128, 80, 32, 130]);
+        let alternate = folder.hdr("alternate.hdr", [32, 64, 128, 130]);
+        let model = Model::load(&folder.0.join("package")).unwrap();
+        let mut previous = Environment::default();
+        previous.intensity = 0.4;
+        previous.rotation = 90.;
+        previous.model_lighting = true;
+        previous.studio.enabled = true;
+        let env = model.environment_for_load(&previous);
+        assert_eq!(env.name, "light.HDR");
+        assert_eq!(env.image.unwrap().get_pixel(0, 0).0, [2., 1.25, 0.5]);
+        assert_eq!(env.intensity, 0.4);
+        assert_eq!(env.rotation, 90.);
+        assert!(!env.model_lighting && !env.studio.enabled);
+        assert!(env.preset.is_none());
+        assert!(!model.1.available && !model.1.authored);
+        assert!(Model::load(&file).unwrap().1.dropped_environment.is_none());
+        let model = Model::load_with_hdr(&folder.0.join("package"), Some(&alternate)).unwrap();
+        let env = model.environment_for_load(&Environment::default());
+        assert_eq!(env.name, "alternate.hdr");
+        assert_eq!(env.image.unwrap().get_pixel(0, 0).0, [0.5, 1., 2.]);
+    }
+    #[test]
+    fn invalid_hdr_preserves_the_model_and_reports_a_warning() {
+        let folder = Folder::new();
+        folder.model("model.glb");
+        folder.file("invalid.hdr");
+        let model = Model::load(&folder.0).unwrap();
+        assert!(model.1.dropped_environment.is_none());
+        assert!(
+            model
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("Dropped HDR ") && w.contains("invalid.hdr"))
+        );
+        assert!(!model.meshes.is_empty());
+    }
+    #[test]
+    fn authored_scene_lighting_takes_precedence_as_in_web() {
+        let folder = Folder::new();
+        let file = folder.model("model.glb");
+        let hdr = folder.hdr("light.hdr", [128, 80, 32, 130]);
+        let mut model = Model::load_with_hdr(&file, Some(&hdr)).unwrap();
+        model.1.available = true;
+        model.1.authored = true;
+        model.1.environment = Some(Arc::new(image::Rgb32FImage::from_pixel(
+            1,
+            1,
+            image::Rgb([0.25; 3]),
+        )));
+        let env = model.environment_for_load(&Environment::default());
+        assert!(env.model_lighting);
+        assert_eq!(env.name, "Scene lighting");
+        assert_eq!(env.image.unwrap().get_pixel(0, 0).0, [0.25; 3]);
     }
 }

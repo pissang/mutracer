@@ -106,6 +106,30 @@ impl Browser {
         self.status.clear();
         self.active = None;
     }
+    pub fn load_local(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.cancel();
+        self.cancel = Arc::new(AtomicBool::new(false));
+        let cancel = self.cancel.clone();
+        let (send, receive) = mpsc::channel();
+        self.download = Some(receive);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                examples::check_cancel(&cancel)?;
+                let mut environment = Environment::default();
+                environment.load(&path)?;
+                examples::check_cancel(&cancel)?;
+                Ok(Loaded {
+                    image: environment.image.unwrap(),
+                    name: environment.name,
+                    preset: None,
+                    resolution: 0,
+                })
+            })();
+            let _ = send.send(result);
+            ctx.request_repaint();
+        });
+    }
     pub fn load(&mut self, address: String, name: String, ctx: &egui::Context) {
         self.cancel();
         self.cancel = Arc::new(AtomicBool::new(false));

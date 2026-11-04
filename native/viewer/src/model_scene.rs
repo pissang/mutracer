@@ -13,6 +13,8 @@ pub struct Scene {
     pub nodes: Arc<Vec<crate::scene_tree::Node>>,
     pub lights: Vec<[u32; wire::WORDS]>,
     pub environment: Option<Arc<image::Rgb32FImage>>,
+    /// An independent HDR selected with the model, separate from authored lighting.
+    pub dropped_environment: Option<(Arc<image::Rgb32FImage>, String)>,
     pub available: bool,
     pub authored: bool,
     pub preset: Option<Value>,

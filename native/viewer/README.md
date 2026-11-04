@@ -79,6 +79,12 @@ platform differences for trying features or checking a new version.
   Folders are searched recursively: `.glb` takes priority, then `.gltf`, with
   relative path order selecting among files of the same type. While loading,
   the previous model stays visible; a failed load shows an error and keeps it.
+- Drop an `.hdr` alone to change the environment, or drop it together with a
+  model to load both. Model folders also load their first `.hdr` in relative
+  path order. Dropping only a model file does not scan its surrounding folder.
+  An unreadable companion HDR leaves the model usable and adds a warning under
+  **Object → Scene info**. Authored scene lighting takes precedence on model
+  load; to override it, drop the HDR after the model has loaded.
 - **Open** opens a folder, a model/environment URL or a local HDR.
   A URL model loads external resources relative to that URL.
 - **Export** opens a preview. **Save viewport PNG** saves the current displayed
