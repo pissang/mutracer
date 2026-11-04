@@ -417,13 +417,18 @@ function packAtlas(table: MaterialData): Uint8Array {
 }
 // Keep layout decisions and encoding identical to the Web backend. The material
 // plane is addressed by traversal record, independently of vertex regions.
-function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene) {
+function nativeAttributeLayout(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene) {
   const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
   const vertexWords = prepared.geometries.reduce((n, g) => n + g.vertexCount, 0) * layout.stride;
   const records = hardware ? prepared.geometries.reduce((n, g) => n + g.indexArray.length, 0) / 3 :
     (tlas.buffer.byteLength + prepared.blases.reduce((n, b) => n + b.bvh.buffer.byteLength, 0)) / 16;
-  const attributes = new Uint32Array(vertexWords + (layout.constants.HAS_TRIANGLE_MATERIAL ? records : 0));
   layout.constants.MATERIALINDEX_OFF = vertexWords;
+  return {layout, vertexWords, wordCount: vertexWords + (layout.constants.HAS_TRIANGLE_MATERIAL ? records : 0)};
+}
+function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene, output?: Uint32Array) {
+  const {layout, vertexWords, wordCount} = nativeAttributeLayout(prepared, tlas, hardware);
+  const attributes = output ?? new Uint32Array(wordCount);
+  if (attributes.length !== wordCount) throw new Error('Invalid native attribute span');
   let recordOffset = tlas.buffer.byteLength / 16;
   for (let i = 0; i < prepared.geometries.length; i++) {
     const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
@@ -451,9 +456,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const table = newMaterialData(prepared.materials, lights);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
-  preparationMark('compact.begin');
-  const {layout: attributeLayout, attributes} = packNativeAttributes(prepared, tlas, hardware);
-  preparationMark('compact.end');
+  const {layout: attributeLayout, wordCount: attributeWords} = nativeAttributeLayout(prepared, tlas, hardware);
   const {stride, offsets} = attributeLayout;
   const stacks = getTraversalStackSizes(tlas, blases);
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
@@ -496,7 +499,9 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     records.push(resourceRecord(id, kind, data.length, w, h, layers, format)); parts.push(data);
   }
   add(RESOURCE.BVH, KIND.BUFFER, bvh, 0, 0, 0, 0); add(RESOURCE.INSTANCES, KIND.BUFFER, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
-  add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(attributes.buffer), 0, 0, 0, 0); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
+  // Reserve the final packet span instead of allocating/copying another scene-sized array.
+  add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(0), 0, 0, 0, 0);
+  records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
   add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(RESOURCE.CAMERA, KIND.BUFFER, cameraUniform, 0, 0, 0, 0);
   add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
   add(RESOURCE.ATLAS, KIND.TEXTURE, atlasBytes, atlas.width, atlas.height, atlasLayers, atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM);
@@ -574,7 +579,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE),
     shader: sceneShader});
   preparationMark('packet.begin');
-  const packet = resourcePacket(records, parts, width, height);
+  const packet = resourcePacket(records, parts, width, height, output => {
+    preparationMark('compact.begin');
+    packNativeAttributes(prepared, tlas, hardware, output.subarray(0, attributeWords));
+    preparationMark('compact.end');
+  });
   preparationMark('packet.end');
   return packet;
 }
@@ -697,16 +706,19 @@ function resourceRecord(id: number, kind: number, length: number, width: number,
   return record;
 }
 
-function resourcePacket(records: number[][], parts: Uint8Array[], width: number, height: number) {
+function resourcePacket(records: number[][], parts: Uint8Array[], width: number, height: number, writeAttributes?: (output: Uint32Array) => void) {
   let size = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
-  for (const part of parts) size += Math.ceil(part.length / WORD_BYTES) * WORD_BYTES;
+  for (const record of records) size += Math.ceil(record[PE.LENGTH] / WORD_BYTES) * WORD_BYTES;
   if (size > 0xfffffffc) throw new Error(`Prepared resource packet requires ${size} bytes; 32-bit byte offsets allow at most 4294967292 bytes. Use HWRT or reduce scene size.`);
   const result = new Uint8Array(size), header = new Uint32Array(result.buffer);
   header[PH.VERSION] = VERSION.RESOURCE_PACKET; header[PH.COUNT] = records.length; header[PH.WIDTH] = width; header[PH.HEIGHT] = height;
   let offset = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
   for (let i = 0; i < records.length; i++) {
     records[i][PE.BYTE_OFFSET] = offset; header.set(records[i], PH.WORDS + i * PE.WORDS);
-    result.set(parts[i], offset); offset += Math.ceil(parts[i].length / WORD_BYTES) * WORD_BYTES;
+    if (writeAttributes && records[i][PE.ID] === RESOURCE.ATTRIBUTES) {
+      writeAttributes(new Uint32Array(result.buffer, offset, records[i][PE.LENGTH] / WORD_BYTES));
+    } else result.set(parts[i], offset);
+    offset += Math.ceil(records[i][PE.LENGTH] / WORD_BYTES) * WORD_BYTES;
   }
   return result;
 }
