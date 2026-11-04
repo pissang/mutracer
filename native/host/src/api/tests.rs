@@ -1161,6 +1161,104 @@ fn next_preview_scale_matches_the_browser_rule() {
 }
 
 #[test]
+fn adaptive_preview_uses_collected_frame_before_the_next_camera_commit() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for backend in [Backend::Software, Backend::Hardware] {
+        adaptive_moving_preview(backend);
+    }
+}
+
+fn adaptive_moving_preview(backend: Backend) {
+    let Some(engine) = software_engine(backend) else {
+        return;
+    };
+    engine.display().set_size(64, 48).unwrap();
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            size: RenderSize::Scale(0.5),
+            adaptive_resolution: Some(AdaptiveResolution {
+                target_frame_ms: 1e-6,
+                min_scale: 0.125,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    // Viewer holds each pose until collect/present completes, then commits the
+    // next camera before calling refine again. No idle refine consumes timing.
+    let frame = || {
+        while render.samples() == 0 {
+            render.refine().unwrap();
+            while !render.collect().unwrap() {
+                assert!(Instant::now() < deadline, "preview collection timed out");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        assert_eq!(render.samples(), 1);
+    };
+    frame();
+    assert_eq!((render.width(), render.height()), (32, 24));
+    camera.world_matrix[12] += 0.01;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    frame();
+    assert_eq!(
+        (render.width(), render.height()),
+        (8, 6),
+        "collected preview timing was lost on camera movement"
+    );
+    assert_bytes(
+        &images(&render),
+        &oracle(
+            backend.code(),
+            &expected_descriptor(&scene, [8, 6], 0, Some(&camera)),
+            &RenderSettings::default().l0(1, 0),
+            1,
+        ),
+        "adapted moving preview",
+    );
+
+    let mut settings = render.settings().unwrap();
+    settings
+        .adaptive_resolution
+        .as_mut()
+        .unwrap()
+        .target_frame_ms = 1e9;
+    render.set_settings(settings).unwrap();
+    let mut widths = vec![8];
+    for _ in 0..24 {
+        camera.world_matrix[12] += 0.01;
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        frame();
+        widths.push(render.width());
+    }
+    assert!(
+        widths.iter().any(|&w| w > 8),
+        "fast moving previews never recovered: {widths:?}"
+    );
+    assert!(
+        widths.iter().all(|&w| w <= 32),
+        "exceeded preview cap: {widths:?}"
+    );
+    assert!(
+        widths
+            .windows(2)
+            .all(|w| w[1] as f64 <= w[0] as f64 * 1.25 + 1.),
+        "recovery jumped too far: {widths:?}"
+    );
+}
+
+#[test]
 fn adaptive_resolution_follows_frame_time_without_preparation() {
     let _test = crate::ABI_TEST_LOCK
         .lock()

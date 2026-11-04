@@ -273,7 +273,10 @@ platform differences for trying features or checking a new version.
   controls, and keeps the Final image's accumulated samples and completed denoising.
   ID and Motion need one center-ray sample; other auxiliary channels use up to 16.
 - **Interactive preview** enables the moving preview; **Max preview scale** is
-  relative to the viewport. Turning it off renders edits at the final resolution.
+  relative to the viewport. With **Output: Final**, moving and editing previews
+  adjust toward an 80 ms render time, down to 1/8 of the viewport and capped by
+  the selected render resolution. When input stops, rendering returns to the
+  selected resolution. Turning preview off renders edits at the final resolution.
 
 ### Animation
 

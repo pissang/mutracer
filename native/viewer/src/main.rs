@@ -794,7 +794,7 @@ impl Viewer {
         let mut settings = render_settings(&self.settings, size, held);
         settings.aovs = self.output_mask();
         let aovs = self.output_mask();
-        let preview_scale = self.preview_resolution_scale(size);
+        let (preview_scale, adaptive_resolution) = self.preview_resolution_settings(size);
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
         target
@@ -805,6 +805,7 @@ impl Viewer {
                 aovs,
                 aov_samples: 1,
                 size: api::RenderSize::Scale(preview_scale),
+                adaptive_resolution: Some(adaptive_resolution),
                 sampling_pattern: target.final_render().settings()?.sampling_pattern,
                 seed: self.settings.seed,
                 clamping: self.settings.clamping,
@@ -818,15 +819,16 @@ impl Viewer {
         self.error.clear();
         Ok(())
     }
-    fn preview_resolution_scale(&self, size: [u32; 2]) -> f64 {
-        let full = self.resolution.full;
-        if full == [0; 2] {
-            self.preview_scale as f64
-        } else {
-            (full[0] as f64 * self.preview_scale as f64 / size[0] as f64)
-                .min(full[1] as f64 * self.preview_scale as f64 / size[1] as f64)
-                .clamp(0.01, 1.)
-        }
+    fn preview_resolution_settings(&self, size: [u32; 2]) -> (f64, api::AdaptiveResolution) {
+        let [min_scale, scale] =
+            resolution::preview_scales(self.resolution.full, size, self.preview_scale);
+        (
+            scale,
+            api::AdaptiveResolution {
+                target_frame_ms: 80.,
+                min_scale,
+            },
+        )
     }
     fn output_target_samples(&self) -> u32 {
         let mask = self.output_mask();
@@ -941,8 +943,9 @@ impl Viewer {
                 let mut preview_settings = preview.settings()?;
                 preview_settings.aovs = aovs;
                 preview_settings.aov_samples = 1;
-                preview_settings.size =
-                    api::RenderSize::Scale(self.preview_resolution_scale(self.size));
+                let (scale, adaptive) = self.preview_resolution_settings(self.size);
+                preview_settings.size = api::RenderSize::Scale(scale);
+                preview_settings.adaptive_resolution = Some(adaptive);
                 preview.set_settings(preview_settings)?;
             }
             target.final_render().set_settings(settings)?;

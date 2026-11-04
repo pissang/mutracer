@@ -1039,9 +1039,14 @@ pub(super) fn clear_scene(state: &mut State) -> Result<()> {
 
 /// Called by `Engine::update` for every render.
 pub(super) fn synchronize(state: &mut State, id: u64, inputs_changed: bool) {
-    if inputs_changed {
-        if let Some(render) = state.renders.get_mut(&id) {
+    if let Some(render) = state.renders.get_mut(&id) {
+        if inputs_changed {
             cancel_denoise(render);
+        }
+        // Hosts can collect the previous pose without refining it again.
+        // Use its timing before publishing the next camera clears it.
+        if render.denoise.worker.is_none() {
+            render.adapt_resolution();
         }
     }
     let Some(key) = state.renders.get(&id).and_then(|r| desired(state, r)) else {
