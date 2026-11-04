@@ -1869,9 +1869,19 @@ fn prepare_impl_with_kernels_inner(
     if configured[..4] != 1u32.to_le_bytes() {
         return Err("Invalid render settings".into());
     }
-    if profile {
-        preparation_profile(1)?;
+    struct PreparationProfile;
+    impl Drop for PreparationProfile {
+        fn drop(&mut self) {
+            // Clear diagnostic state on early hint rejection as well as success.
+            let _ = preparation_profile(0);
+        }
     }
+    let _profile = if profile {
+        preparation_profile(1)?;
+        Some(PreparationProfile)
+    } else {
+        None
+    };
     let kernel_start = Instant::now();
     if let Some(hints) = native_kernels
         .then(|| geometry_kernels::packet(bytes, hardware))
@@ -1944,9 +1954,6 @@ fn prepare_impl_with_kernels_inner(
             mt_core_reset();
             mt_core_collect();
         }
-    }
-    if profile {
-        preparation_profile(0)?;
     }
     work
 }
