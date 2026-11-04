@@ -1,3 +1,4 @@
+import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
 import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
 import {nativeCausticTarget} from './caustics.js';
 import {packAovScene} from '../../src/renderer/aovScene.js';
@@ -9,7 +10,7 @@ import {decodeCamera} from './camera-core.js';
 import {sceneErrorPacket} from './scene-errors.js';
 import {takeGeometryKernelHints, releaseGeometryKernelHints, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
 import {matrixStorage} from '../../src/math/storage.js';
-import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
+import {initialSceneConstants, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
 import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
 import {nativeShaderVariant} from './shader-variants.js';
 import {displacementBaseGeometry, displacementPrismAabbs} from '../../src/renderer/displacementPreparation.js';
@@ -46,7 +47,7 @@ import type { BLASInstance, FlattendBVH } from '../../src/renderer/bvhAccel.js';
 import { buildBLAS, buildTLAS, concatBLASBuffers, getTraversalStackSizes, meshInstanceBounds, packBuiltTLAS } from '../../src/renderer/bvhAccel.js';
 import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../../src/util/geometry.js';
-import { packVertexAttributes, canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
+import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
 import { materialUsesMedium } from '../../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../../src/renderer/textureAtlasPixels.js';
@@ -411,6 +412,32 @@ function packAtlas(table: MaterialData): Uint8Array {
   }
   return atlasBytes;
 }
+// Keep layout decisions and encoding identical to the Web backend. The material
+// plane is addressed by traversal record, independently of vertex regions.
+function packNativeAttributes(prepared: PreparedScene, tlas: FlattendBVH, hardware?: HardwareScene) {
+  const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
+  const vertexWords = prepared.geometry.vertexCount * layout.stride;
+  const records = hardware ? prepared.geometry.indexArray.length / 3 :
+    (tlas.buffer.byteLength + prepared.blases.reduce((n, b) => n + b.bvh.buffer.byteLength, 0)) / 16;
+  const attributes = new Uint32Array(vertexWords + (layout.constants.HAS_TRIANGLE_MATERIAL ? records : 0));
+  layout.constants.MATERIALINDEX_OFF = vertexWords;
+  let recordOffset = tlas.buffer.byteLength / 16;
+  for (let i = 0; i < prepared.geometries.length; i++) {
+    const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
+    packCompactVertices(geometry, attributes, layout.stride, layout.offsets, 0, geometry.vertexCount,
+      region.vertexOffset, false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+    if (layout.constants.HAS_TRIANGLE_MATERIAL) {
+      if (hardware) {
+        // Source primitive identity is retained by ray queries.
+        const indices = geometry.indexArray, triangles = new Uint32Array(indices.length / 3 * 4);
+        for (let t = 0; t < indices.length / 3; t++) triangles[t * 4] = attributeValue(indices, t * 3);
+        packTriangleMaterials(geometry, region.materialIndices, triangles.buffer, attributes, vertexWords + region.indexOffset / 3);
+      } else packTriangleMaterials(geometry, region.materialIndices, prepared.blases[i].bvh.buffer, attributes, vertexWords + recordOffset);
+    }
+    if (!hardware) recordOffset += prepared.blases[i].bvh.buffer.byteLength / 16;
+  }
+  return {layout, attributes};
+}
 function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: FlattendBVH, token: number, hardware?: HardwareScene): Uint8Array {
   const {width, height, environment, background, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings, grounded} = input;
@@ -421,15 +448,13 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const table = newMaterialData(prepared.materials, lights);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
-  const attributeLayout = sceneAttributeLayout(geometry);
+  const {layout: attributeLayout, attributes} = packNativeAttributes(prepared, tlas, hardware);
   const {stride, offsets} = attributeLayout;
-  const attributes = new Float32Array(geometry.vertexCount * stride);
-  packVertexAttributes(geometry, attributes, stride, offsets, 0, geometry.vertexCount);
   const stacks = getTraversalStackSizes(tlas, blases);
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(stacks.tlas, stacks.blas), ...attributeLayout.constants,
     ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
-  const features = {hasDisplacement: table.displacementMaps.length > 0,
+  const features = {compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
@@ -1137,10 +1162,11 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
     function add(id: number, data: Uint8Array, destination: number, kind: number) {
       writes.records.push(resourceRecord(id, kind, data.byteLength, 0, 0, 0, 0)); writes.parts.push(data); writes.destinations.push(destination);
     }
-    const layout = sceneAttributeLayout(prepared.geometry);
+    const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
     for (const range of update.vertices) {
-      const data = new Float32Array(range.count * layout.stride);
-      packVertexAttributes(prepared.geometry, data, layout.stride, layout.offsets, range.first, range.count, true, false, 0);
+      const data = new Uint32Array(range.count * layout.stride);
+      packCompactVertices(prepared.geometry, data, layout.stride, layout.offsets, range.first, range.count, 0,
+        false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
       add(RESOURCE.ATTRIBUTES, new Uint8Array(data.buffer), range.first * layout.stride * WORD_BYTES, KIND.BUFFER);
     }
     if (!state.hardware) for (const range of update.blases)
@@ -1253,12 +1279,8 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
   const packedInstances = new Uint8Array(Math.max(instanceBytes.length, WGPU_SCENE_BUFFER_MIN_BYTES)); packedInstances.set(instanceBytes);
-  const merged = prepared.geometry, offsets: number[] = []; let stride = 0;
-  for (const name of ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const) {
-    offsets.push(stride); if (merged[name]) stride += 4;
-  }
-  const attributes = new Float32Array(merged.vertexCount * stride);
-  packVertexAttributes(merged, attributes, stride, offsets, 0, merged.vertexCount);
+  const merged = prepared.geometry;
+  const {attributes} = packNativeAttributes(prepared, tlas, state.hardware);
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, state.ordered);
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));

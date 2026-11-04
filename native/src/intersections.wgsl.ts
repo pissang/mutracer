@@ -11,7 +11,6 @@ fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32,
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool { return false; }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) { (*si).hit = false; }
 `;
-  const vector = features.hasAnisotropyDirections || features.hasCoatNormals ? '.xyz' : '';
   return /* wgsl */ `
 ${diagnostic ? `var<private> mtWantedInstance: i32;
 var<private> mtWantedRecord: i32;
@@ -32,9 +31,9 @@ fn mtIndices(instance: i32, record: i32) -> vec3i {
   return ${indexed ? 'vec3i(i32(mtTriangleRecords[record * 3]), i32(mtTriangleRecords[record * 3 + 1]), i32(mtTriangleRecords[record * 3 + 2])) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y))' : 'bitcast<vec3i>(bvhBuffer[record].xyz) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y))'};
 }
 fn mtTriangle(index: vec3i) -> Triangle {
-  return Triangle(attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF].xyz,
-    attrBuffers[index.y * ATTR_STRIDE + POSITION_OFF].xyz,
-    attrBuffers[index.z * ATTR_STRIDE + POSITION_OFF].xyz);
+  return Triangle(vertexPosition(index.x),
+    vertexPosition(index.y),
+    vertexPosition(index.z));
 }
 fn mtWorldToLocal(instance: i32) -> mat4x4f {
   return mat4x4f(instancesBuffer[instance * 10 + 1], instancesBuffer[instance * 10 + 2],
@@ -73,9 +72,9 @@ ${diagnostic ? `    mtCandidateCount++;
     if (candidate.kind == RAY_QUERY_INTERSECTION_AABB) {
 ${features.hasDisplacement ? /* wgsl */ `
       let matData = materialsBuffer[materialIndex];
-      let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${vector});
-      let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${vector});
-      let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${vector});
+      let n0 = normalize(vertexNormal(index.x));
+      let n1 = normalize(vertexNormal(index.y));
+      let n2 = normalize(vertexNormal(index.z));
       tri.p0 += n0 * matData.displacementBias;
       tri.p1 += n1 * matData.displacementBias;
       tri.p2 += n2 * matData.displacementBias;
@@ -85,9 +84,9 @@ ${features.hasDisplacement ? /* wgsl */ `
         let map = i32(matData.displacementMapIndex);
         let hit = intersectDisplacement(o, d, generated.t, tri.p0, tri.p1, tri.p2,
           n0, n1, n2,
-          attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy,
-          attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy,
-          attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy,
+          vertexUv(index.x),
+          vertexUv(index.y),
+          vertexUv(index.z),
           map, getMapSize(map), f32(minMaxH >> 8) / 255.0, f32(minMaxH & 255) / 255.0,
           insData.w, matData.displacementBias, matData.displacementStepSize, i32(matData.displacementUvProjection),
           vec2f(matData.displacementUvProjectionScale), shadow, isRefractionRay);
@@ -107,7 +106,7 @@ ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord
         && dot(normal, d) > 0.0) { continue; }
     // Primary/path alpha remains in the shared integrator, exactly as software:
     // filtering it here as well would square stochastic BLEND coverage.
-    if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal)) { continue; }
+    if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal${features.compactVertices ? ", record" : ""})) { continue; }
 ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedConfirmed++; }` : ''}
     // naga 30 requires the generated-distance expression to dominate the call.
     let generatedDistance = t;

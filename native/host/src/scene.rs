@@ -325,8 +325,11 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         if v == 0 || n == 0 || n % 3 != 0 || v > 4_000_000 || n > 12_000_000 {
             return Err("Invalid geometry counts".into());
         }
-        geometry_words += v * 32 + n * 24;
-        geometry_costs.push(v * 32 + n * 24);
+        // Worst compact record: f32 position/normal/UVs/HDR RGB + tangent.
+        // Include source indices and conservative software BVH/identity storage.
+        let cost = v * 14 + n * 8;
+        geometry_words = geometry_words.checked_add(cost).ok_or("Prepared geometry size overflow")?;
+        geometry_costs.push(cost);
         if geometry_words > crate::memory_budget::bytes() / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
@@ -1560,7 +1563,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             )?);
             continue;
         }
-        if (id >= 7 || id == 3) && !atlas {
+        if id >= 7 && !atlas {
             w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
         }
         if id == 2 {
