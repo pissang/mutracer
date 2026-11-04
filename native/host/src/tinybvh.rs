@@ -147,7 +147,7 @@ pub(super) fn blas(
 }
 pub(super) fn aabbs(boxes: &[f32]) -> Result<Built> {
     if boxes.len() % 6 != 0
-        || boxes.len() / 6 > 65_536
+        || boxes.len() / 6 > crate::scene::instance_limit()
         || boxes.iter().any(|v| !v.is_finite())
         || boxes
             .chunks_exact(6)
