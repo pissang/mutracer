@@ -172,7 +172,8 @@ pub mod settings {
     pub const PHOTON_MAP_RADIUS: usize = 19;
     pub const TEXTURE_DIMENSION: usize = 20;
     pub const TEXTURE_BINDINGS: usize = 21;
-    pub const WORDS: usize = 22;
+    pub const TEXTURE_BUDGET_BYTES: usize = 22;
+    pub const WORDS: usize = 24;
 }
 pub mod write_entry {
     pub const ID: usize = 0;

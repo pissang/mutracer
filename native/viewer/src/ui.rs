@@ -685,7 +685,17 @@ impl Viewer {
                             "Shader cache  {} variants · {} hits",
                             diagnostics.cached_pipelines, diagnostics.pipeline_cache_hits
                         ));
-                        ui.small(format!("Textures  {}", self.model.textures.len()));
+                        let mode = match diagnostics.material_textures_bindless {
+                            Some(true) => " · Bindless", Some(false) => " · Atlas", None => "",
+                        };
+                        let budget_mib = diagnostics.material_texture_budget_bytes / (1024 * 1024);
+                        let budget = if budget_mib % 1024 == 0 { format!("{} GiB", budget_mib / 1024) } else { format!("{budget_mib} MiB") };
+                        ui.small(format!("Textures  {}{} · {}", self.model.textures.len(), mode, budget))
+                            .on_hover_text(if diagnostics.bindless_texture_capacity > 0 {
+                                format!("Bindless enabled on this device (up to {} images).\nThe label shows the active scene path.\nSet MUTRACER_NATIVE_TEXTURE_BUDGET_MIB before starting the app to change the budget.", diagnostics.bindless_texture_capacity)
+                            } else {
+                                "Bindless disabled on this device; material textures use an atlas.\nSet MUTRACER_NATIVE_TEXTURE_BUDGET_MIB before starting the app to change the budget.".to_owned()
+                            });
                         if self.denoise && self.live_denoise {
                             ui.weak("Live denoise also runs while interacting.");
                         }

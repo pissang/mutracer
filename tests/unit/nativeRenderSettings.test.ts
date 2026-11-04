@@ -21,3 +21,13 @@ it('rejects malformed or nonfinite radiometric settings before scene preparation
   u[S.SAMPLING_PATTERN] = 3; expect(() => decodeSceneConfiguration(bytes)).toThrow();
   u[S.SAMPLING_PATTERN] = 0; f[S.CLAMPING / 2] = NaN; expect(() => decodeSceneConfiguration(bytes)).toThrow();
 });
+
+it('accepts an explicit native texture budget and rejects invalid limits', () => {
+  const {bytes, f} = settings();
+  f[S.TEXTURE_BUDGET_BYTES / 2] = 2 * 1024 ** 3;
+  expect(decodeSceneConfiguration(bytes).textureBudgetBytes).toBe(2 * 1024 ** 3);
+  for (const value of [-1, NaN, Infinity, 2 ** 32]) {
+    f[S.TEXTURE_BUDGET_BYTES / 2] = value;
+    expect(() => decodeSceneConfiguration(bytes)).toThrow('texture budget');
+  }
+});

@@ -172,13 +172,19 @@ changes only the camera is incremental.
   with `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` (positive integer MiB). This does not
   cap peak process memory. Descriptors must also fit 32-bit word offsets (under
   16 GiB). A scene's combined prepared resources must stay below 4 GiB.
-  At most 104,857,600 input texture pixels in total, with each edge at most
-  16,384 pixels.
+  Input texture pixels are limited to the configured material budget divided by
+  four, plus 4,194,304 pixels for environment/background images; each edge is at
+  most 16,384 pixels.
 - At most 4,000,000 vertices and 12,000,000 indices per geometry. Multi-material
   and displacement scenes can need more preparation memory. The selected GPU
   must support each resident buffer; use HWRT when the software BVH exceeds its
   buffer or preparation budget.
-- Material GPU textures share a 384 MiB budget, matching the browser default.
+- Material textures default to a 1 GiB budget. Set
+  `MUTRACER_NATIVE_TEXTURE_BUDGET_MIB` to an integer from 1 through 4095 before
+  starting the process to change it; missing or invalid values use the default.
+  The budget applies to both material-image import and GPU storage. Restart the
+  viewer after changing it. A larger budget permits more GPU and decoded CPU
+  memory use.
   RGBA8 uses four bytes per pixel; when any material texture needs floating-point
   storage, all use RGBA16F at eight bytes per pixel. Original dimensions are
   preserved when they fit the budget and the selected device's texture limits.

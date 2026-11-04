@@ -69,10 +69,9 @@ C a large error buffer.
   Set `MUTRACER_NATIVE_MEMORY_BUDGET_MIB` to a positive integer to change it.
   This is an admission limit; peak process memory can be several times larger.
   Each source image is limited to 64M pixels.
-- Imported material images share 384 MiB of RGBA8 pixels and keep at most
-  16,384 pixels on their longest side. Images within both limits keep their
-  original dimensions; larger images or sets are reduced, with a warning.
-  GPU texture storage follows the [scene texture limits](scene-format.md#limits).
+- Material images keep their original dimensions when they fit the
+  [scene texture limits](scene-format.md#limits), including the configured
+  material budget. Import warnings report any reduction.
 - Node hierarchies up to 512 levels.
 - Large scenes usually need HWRT and substantial free memory. Auto selects HWRT
   when the device supports it; Software can reach its BVH budget earlier.

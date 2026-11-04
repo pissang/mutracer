@@ -38,7 +38,7 @@ export function sceneRecords() { return {
   EXTENSION: record([field('ID'), field('X'), field('Y'), field('Z')]),
   SETTINGS: record([field('STRUCT_SIZE'), field('SAMPLING_PATTERN'), field('SEED'), field('MAX_SAMPLES'),
     field('BOUNCES', 2), field('DIRECT_LIGHT_CANDIDATES', 2), field('BEVEL_SAMPLES', 2), field('CLAMPING', 2),
-    field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS'),field('CAUSTIC_FLAGS'),field('LIGHT_PHOTONS'),field('PHOTON_MAP_PHOTONS'),field('PHOTON_MAP_RADIUS'), field('TEXTURE_DIMENSION'), field('TEXTURE_BINDINGS')]),
+    field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS'),field('CAUSTIC_FLAGS'),field('LIGHT_PHOTONS'),field('PHOTON_MAP_PHOTONS'),field('PHOTON_MAP_RADIUS'), field('TEXTURE_DIMENSION'), field('TEXTURE_BINDINGS'), field('TEXTURE_BUDGET_BYTES', 2)]),
   WRITE_ENTRY: record([field('ID'), field('KIND'), field('LENGTH'), field('DESTINATION'), field('WIDTH'), field('HEIGHT'), field('FORMAT'), field('BYTE_OFFSET')]),
   GEOMETRY_KERNEL_HEADER: record([field('VERSION'), field('COUNT'), field('LENGTH'), field('RESERVED')]),
   GEOMETRY_KERNEL_ENTRY: record([field('SOURCE'), field('VERTEX_COUNT'), field('BOUNDS'), field('TANGENTS')]),

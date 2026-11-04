@@ -605,9 +605,9 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             return Err("Invalid raw texture descriptor".into());
         }
         pixels += width * height;
-        if pixels > 100_663_296 + 4_194_304 {
+        if pixels as u64 > crate::texture_budget::texels() + 4_194_304 {
             return Err(
-                "Raw textures exceed the 384 MiB material plus environment input budget".into(),
+                "Raw textures exceed the configured material plus environment input budget".into(),
             );
         }
         let count = width * height * if w.u(o + t::STORAGE) == 0 { 1 } else { 4 };

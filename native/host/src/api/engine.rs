@@ -46,6 +46,13 @@ pub struct EngineInfo {
 #[derive(Clone, Debug)]
 pub struct Diagnostics {
     pub info: EngineInfo,
+    /// Enabled device capacity for independent material images; zero means disabled.
+    pub bindless_texture_capacity: u32,
+    /// Configured material texture budget in bytes, shared by import and GPU storage.
+    pub material_texture_budget_bytes: u64,
+    /// Active committed scene uses bindless images (true) or an atlas (false).
+    /// None when no committed scene snapshot is currently available.
+    pub material_textures_bindless: Option<bool>,
     pub scene_revision: u64,
     pub has_scene: bool,
     pub preparing: bool,
@@ -621,6 +628,13 @@ impl Engine {
         let c = &self.inner.gpu.compilation;
         Diagnostics {
             info: self.info(),
+            bindless_texture_capacity: self.inner.gpu.texture_limits()[1],
+            material_texture_budget_bytes: crate::texture_budget::bytes() as u64,
+            material_textures_bindless: state.shared.context().and_then(|context| {
+                crate::context::material_textures_bindless(context)
+                    .ok()
+                    .flatten()
+            }),
             scene_revision: state.scene_revision,
             has_scene: state.scene.is_some(),
             preparing: state.shared.is_pending(),

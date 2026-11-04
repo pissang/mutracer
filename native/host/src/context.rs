@@ -1620,6 +1620,17 @@ fn update_light_list_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
     ) as usize);
     context.finish_update()
 }
+pub(crate) fn material_textures_bindless(handle: u64) -> Result<Option<bool>> {
+    with_registry(|registry| {
+        let state = context(registry, handle)?;
+        Ok(state.scene.as_ref().map(|scene| {
+            scene.scene.bind_groups[layout::group::TEXTURES]
+                .entries
+                .iter()
+                .any(|b| matches!(b.kind, BindingKind::TextureArray(_)))
+        }))
+    })
+}
 pub(crate) fn info(handle: u64) -> Result<ContextInfo> {
     with_registry(|registry| {
         let context = context(registry, handle)?;

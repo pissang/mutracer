@@ -311,6 +311,10 @@ platform differences for trying features or checking a new version.
 ## Limits
 
 - Models follow the SDK's [glTF import support and limits](../docs/gltf.md).
+- Expand the performance overlay at the top left to see the current material
+  texture budget and `Bindless` or `Atlas` scene path. Hover over that row for
+  the device's enabled bindless capacity. The [material texture budget](../docs/scene-format.md#limits)
+  can be changed before starting the app.
 - Uploaded and downloaded textures follow the SDK's
   [material texture limits](../docs/scene-format.md#limits); slot sizes show the
   imported dimensions.

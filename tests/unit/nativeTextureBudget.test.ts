@@ -1,15 +1,18 @@
 import {expect, it} from 'vitest';
 import Texture from '../../src/scene/Texture.js';
-import {planTextureAtlas, DEFAULT_MAX_TEXTURE_ARRAY_BYTES} from '../../src/renderer/textureAtlas.js';
+import {planTextureAtlas} from '../../src/renderer/textureAtlas.js';
+import {defaultSceneConfiguration} from '../../native/src/scene-configuration.js';
 import {planIndependentTextures} from '../../src/renderer/WGPUBindlessTextures.js';
 
 function textures(sizes: number[][]) {
   return sizes.map(([width, height]) => new Texture({width, height} as HTMLImageElement));
 }
-it('keeps original native images under the same default budget as web', () => {
-  const images = textures(Array.from({length: 20}, () => [2048, 2048]));
-  const native = planTextureAtlas(images, images.map(() => 0), {independentTextures: true, maxTextureDimension2D: 16384});
-  const web = planIndependentTextures(images, DEFAULT_MAX_TEXTURE_ARRAY_BYTES, 16384);
+it('keeps large native image sets under the configurable native budget', () => {
+  const images = textures(Array.from({length: 40}, () => [2048, 2048]));
+  const budget = defaultSceneConfiguration().textureBudgetBytes;
+  expect(budget).toBe(1024 * 1024 * 1024);
+  const native = planTextureAtlas(images, images.map(() => 0), {independentTextures: true, maxTextureArrayBytes: budget, maxTextureDimension2D: 16384});
+  const web = planIndependentTextures(images, budget, 16384);
   expect(native.stats.scale).toBe(1);
   expect(native.stats.estimatedBytes).toBe(web.estimatedBytes);
   expect(native.placements.map(({width, height}) => ({width, height}))).toEqual(web.sizes);

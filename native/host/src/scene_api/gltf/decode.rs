@@ -16,8 +16,9 @@ type Import = (
     bool,
     Vec<Value>,
 );
-/// Matches the browser default: 384 MiB of RGBA8 material images.
-pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 384 * 1024 * 1024 / 4;
+pub(super) fn material_texel_budget() -> u64 {
+    crate::texture_budget::texels()
+}
 /// Longest texture side the atlas stores without scaling.
 pub(super) const MAX_TEXTURE_EDGE: u32 = 16384;
 fn number(v: &Value, name: &str) -> Result<usize> {
@@ -445,7 +446,7 @@ fn decode_images(
             Ok(size)
         })
         .collect::<Result<Vec<_>>>()?;
-    let sizes = image_sizes(&dimensions, MATERIAL_TEXEL_BUDGET, edge)?;
+    let sizes = image_sizes(&dimensions, material_texel_budget(), edge)?;
     let next = AtomicUsize::new(0);
     let first_error = AtomicUsize::new(sources.len());
     let mut decoded = std::thread::scope(|scope| -> Result<Vec<_>> {
@@ -767,7 +768,7 @@ pub(super) mod tests {
         assert_eq!(
             image_sizes(
                 &[(8192, 4096), (1024, 512)],
-                MATERIAL_TEXEL_BUDGET,
+                material_texel_budget(),
                 MAX_TEXTURE_EDGE
             )
             .unwrap(),

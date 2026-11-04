@@ -67,6 +67,7 @@ pub mod picking;
 mod sample_audit;
 #[cfg(test)]
 mod test_support;
+mod texture_budget;
 #[rustfmt::skip]
 pub mod layout;
 mod material_properties;

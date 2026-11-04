@@ -172,7 +172,8 @@ export const SETTINGS = {
   "PHOTON_MAP_RADIUS": 19,
   "TEXTURE_DIMENSION": 20,
   "TEXTURE_BINDINGS": 21,
-  "WORDS": 22
+  "TEXTURE_BUDGET_BYTES": 22,
+  "WORDS": 24
 } as const;
 export const WRITE_ENTRY = {
   "ID": 0,

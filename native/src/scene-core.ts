@@ -54,7 +54,6 @@ import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangen
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
 import { materialUsesMedium } from '../../src/renderer/materialParams.js';
-import {DEFAULT_MAX_TEXTURE_ARRAY_BYTES} from '../../src/renderer/textureAtlas.js';
 import { writeRawAtlasPlacement } from '../../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../../src/renderer/wgpuMaterialConstants.js';
 import { ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities } from '../../src/renderer/shaderCapabilities.js';
@@ -395,7 +394,7 @@ function newMaterialData(materials: MaterialState[], lights: AnalyticLightState[
   const create = (independentTextures: boolean) => new MaterialData(materials, lights.map(light => light.type === 'RectLight' ? light.texture : undefined), texture => {
     if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
     return Number(texture.pixels.data instanceof Float32Array);
-  }, {independentTextures, maxTextureDimension2D: configuration.textureDimension, maxTextureArrayLayers: 256, maxTextureArrayBytes: DEFAULT_MAX_TEXTURE_ARRAY_BYTES});
+  }, {independentTextures, maxTextureDimension2D: configuration.textureDimension, maxTextureArrayLayers: 256, maxTextureArrayBytes: configuration.textureBudgetBytes});
   const table = create(configuration.textureBindings > 0);
   return configuration.textureBindings > 0 && table.textures.length > configuration.textureBindings ? create(false) : table;
 }

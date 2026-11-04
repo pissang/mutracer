@@ -77,6 +77,10 @@ impl RenderSettings {
                 .copy_from_slice(&value.to_le_bytes());
         }
         for (field, value) in [
+            (
+                wire::TEXTURE_BUDGET_BYTES,
+                crate::texture_budget::bytes() as f64,
+            ),
             (wire::BOUNCES, f64::from(self.bounces)),
             (
                 wire::DIRECT_LIGHT_CANDIDATES,

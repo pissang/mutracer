@@ -101,3 +101,43 @@ fn clear_scene_diagnostics_and_cache_reuse() {
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(1)).unwrap();
 }
+
+#[test]
+#[ignore = "requires a real GPU; device and scene diagnostics only"]
+fn material_texture_diagnostics_report_enabled_device_and_committed_scene() {
+    let _lock = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let before = engine.diagnostics();
+    assert_eq!(before.material_textures_bindless, None);
+    assert_eq!(
+        before.material_texture_budget_bytes,
+        crate::texture_budget::bytes() as u64
+    );
+    engine.set_scene(&crate::scene::small_fixture()).unwrap();
+    engine.update().unwrap();
+    {
+        let mut state = engine.lock();
+        let mut events = Vec::new();
+        while !matches!(
+            super::render::scene_step(&mut state, true, &mut events).unwrap(),
+            super::render::SceneStep::Published
+        ) {}
+    }
+    let current = engine.diagnostics();
+    assert_eq!(
+        current.material_textures_bindless,
+        Some(current.bindless_texture_capacity > 0)
+    );
+    eprintln!(
+        "{}",
+        serde_json::json!({"adapter": current.info.adapter_name, "bindlessEnabled": current.bindless_texture_capacity > 0, "capacity": current.bindless_texture_capacity, "sceneBindless": current.material_textures_bindless, "textureBudgetMiB": current.material_texture_budget_bytes / (1024 * 1024)})
+    );
+    engine.clear_scene().unwrap();
+    engine.update().unwrap();
+    assert_eq!(engine.diagnostics().material_textures_bindless, None);
+}

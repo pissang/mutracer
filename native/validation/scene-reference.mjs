@@ -82,7 +82,7 @@ export async function referenceScene(bytes, sourceRoot) {
     const device = new CaptureDevice();
     device.limits.maxTextureDimension2D = 16384;
     const pass = new Pass(device);
-    pass._maxTextureArrayBytes = (await load('renderer/textureAtlas.js')).DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
+    pass._maxTextureArrayBytes = 1024 * 1024 * 1024;
     pass.setSize(u[2], u[3]);
     pass.setCamera(camera);
     pass.setMeshes(meshes);
