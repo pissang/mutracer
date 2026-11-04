@@ -529,6 +529,20 @@ impl Resources {
                 .geometries
                 .get(index)
                 .ok_or("Changed BLAS out of bounds")?;
+            if geometry.procedural {
+                // Procedural AS builds consume AABBs, while shading still
+                // uploads the changed compact vertices through resource 3.
+                let offset = geometry.first_vertex as u64 * geometry.vertex_stride;
+                let length = geometry.vertex_count as usize * geometry.vertex_stride as usize;
+                let attribute_write = writes
+                    .hardware_writes
+                    .iter()
+                    .position(|(id, destination, data)| {
+                        *id == 3 && *destination == offset && data.len() == length
+                    })
+                    .ok_or("Missing exact changed procedural vertex span")?;
+                used_writes.insert(attribute_write);
+            }
             let (id, offset, length) = if geometry.procedural {
                 (
                     38,
@@ -1037,7 +1051,7 @@ pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Res
     })
 }
 
-// TS supplies merged geometry regions and local displacement AABBs. Rust only
+// TS supplies compact geometry regions and local displacement AABBs. Rust only
 // binds buffers and converts instance matrices for the wgpu API.
 fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
     if layout.position_offset_bytes != 0 || layout.attribute_stride_bytes < 12 {
