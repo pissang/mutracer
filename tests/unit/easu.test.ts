@@ -54,11 +54,11 @@ it('downsamples albedo again only when the borrowed AOV contents change',async()
 it('declares the bindings the pass supplies in every EASU shader', async()=>{
  vi.stubGlobal('GPUShaderStage',{VERTEX:1,FRAGMENT:2,COMPUTE:4});
  const {makeShaderDataDefinitions}=await import('webgpu-utils');
- const {easuShader}=await import('../../src/renderer/wgsl/easu.wgsl');
+ const {easuShader,areaDownsampleShader}=await import('../../src/renderer/wgsl/easu.wgsl');
  const {easuDetailShader,albedoDownsampleShader,toneLutShader,guidedCoefficientShader}=await import('../../src/renderer/wgsl/easuDetail.wgsl');
  const bindings=(code:string)=>{const parsed=makeShaderDataDefinitions(code);
   return [...Object.values(parsed.uniforms),...Object.values(parsed.textures)].map(value=>(value as {binding:number}).binding).sort((a,b)=>a-b);};
- expect(bindings(easuShader)).toEqual([0,1]);
+ expect(bindings(easuShader)).toEqual([0,1]);expect(bindings(areaDownsampleShader)).toEqual([0,1]);
  for(const separate of [false,true]) {
   expect(bindings(easuDetailShader(separate))).toEqual([0,1,2,3,4,5,6,7,8,9,11,12]);
   expect(bindings(easuDetailShader(separate,true))).toEqual([0,1,2,3,4,5,6,7,8,9,10,11,12]);
@@ -76,4 +76,14 @@ it('copies an input that already has the output size without creating pipelines'
  createEasuPass({albedoDetail:true})({device,encoder:{copyTextureToTexture:copy} as unknown as GPUCommandEncoder,input,output,width:16,height:8,render:{} as never});
  expect(copy).toHaveBeenCalledWith({texture:input},{texture:output},[16,8]);
  expect(device.createRenderPipeline).not.toHaveBeenCalled();expect(device.createTexture).not.toHaveBeenCalled();
+});
+it('area-averages a larger input instead of running EASU or reading AOVs',()=>{
+ vi.stubGlobal('GPUBufferUsage',{UNIFORM:1});
+ const labels:string[]=[],getAovTexture=vi.fn();
+ const device={createShaderModule:vi.fn(()=>({})),createRenderPipeline:vi.fn(()=>({getBindGroupLayout:()=>({})})),createTexture:vi.fn(),
+  createBuffer:()=>({getMappedRange:()=>new ArrayBuffer(16),unmap(){},destroy:vi.fn()}),createBindGroup:()=>({}),queue:{onSubmittedWorkDone:async()=>{}}} as unknown as GPUDevice;
+ const encoder={beginRenderPass:({label}:{label:string})=>{labels.push(label);return {setPipeline(){},setBindGroup(){},draw(){},end(){}};}} as unknown as GPUCommandEncoder;
+ const image=(width:number,height:number)=>({width,height,format:'rgba8unorm',createView:()=>({})}) as unknown as GPUTexture;
+ createEasuPass({albedoDetail:true})({device,encoder,input:image(3808,2160),output:image(3144,1788),width:3808,height:2160,render:{getAovTexture} as never});
+ expect(labels).toEqual(['Area downsample']);expect(getAovTexture).not.toHaveBeenCalled();expect(device.createTexture).not.toHaveBeenCalled();
 });

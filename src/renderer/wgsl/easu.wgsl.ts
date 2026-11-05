@@ -54,3 +54,27 @@ fn easuWeight(offset: vec2f, direction: vec2f, length: vec2f, lobe: f32) -> f32 
   return clamp(result/total,lower,upper);
 }
 `;
+
+// Not part of FSR: exact area average for inputs larger than the output,
+// alpha-weighted so transparent texels do not darken coverage edges.
+export const areaDownsampleShader = /* wgsl */ `
+@group(0) @binding(0) var colorImage: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> outputSize: vec4f;
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+  return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let scale = vec2f(textureDimensions(colorImage))/outputSize.xy;
+  let start = floor(position.xy)*scale; let end = start+scale;
+  var sum = vec4f(0);
+  for (var y = i32(floor(start.y)); y < i32(ceil(end.y)); y++) {
+    for (var x = i32(floor(start.x)); x < i32(ceil(end.x)); x++) {
+      let overlap = max(vec2f(0), min(vec2f(vec2i(x+1,y+1)), end)-max(vec2f(vec2i(x,y)), start));
+      let color = textureLoad(colorImage, vec2i(x,y), 0);
+      sum += vec4f(color.rgb*color.a, color.a)*overlap.x*overlap.y;
+    }
+  }
+  return vec4f(sum.rgb/max(sum.a, 1e-8), sum.a/(scale.x*scale.y));
+}
+`;

@@ -1,5 +1,5 @@
 import type {PostProcess} from '../Display.js';
-import {easuShader} from './wgsl/easu.wgsl.js';
+import {areaDownsampleShader, easuShader} from './wgsl/easu.wgsl.js';
 import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, TONE_LUT_SIZE} from './wgsl/easuDetail.wgsl.js';
 import {borrowedAovRevision} from './WGPUAov.js';
 import {TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
@@ -15,7 +15,7 @@ export interface EasuOptions {
 }
 /** A display pass with optional scratch images. Dispose after unregistering; it may be used again. */
 export type EasuPass = PostProcess & {dispose(): void};
-/** Creates an edge-adaptive display-space upscale pass (AMD FSR 1 EASU), without sharpening. Register with outputSize: (_, display) => display. WebGPU only; supports rgba8unorm and extended-range rgba16float, including alpha. Copies inputs that already have the output size. Default EASU alone. */
+/** Creates an edge-adaptive display-space upscale pass (AMD FSR 1 EASU), without sharpening. Register with outputSize: (_, display) => display. WebGPU only; supports rgba8unorm and extended-range rgba16float, including alpha. Copies inputs that already have the output size and area-averages larger ones. Default EASU alone. */
 export function createEasuPass(options: EasuOptions = {}): EasuPass { return createEasuPassImpl(options); }
 
 /** @internal Plain albedo ratios (guided false), the separate-lobe approximation and depth-guided silhouettes are retained for comparisons; not package exports. */
@@ -55,6 +55,14 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false, 
       const value = device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
       new Float32Array(value.getMappedRange()).set(values);value.unmap();retire(device,[value]);return value;
     };
+    if (input.width >= output.width && input.height >= output.height) {
+      // EASU is an enlargement filter; larger renders are area averaged instead.
+      const down = pipeline(`Area downsample ${output.format}`,areaDownsampleShader,[output.format]);
+      const group = device.createBindGroup({layout:down.getBindGroupLayout(0),entries:[{binding:0,resource:input.createView()},{binding:1,resource:{buffer:buffer([output.width,output.height,0,0])}}]});
+      const draw = encoder.beginRenderPass({label:'Area downsample',colorAttachments:[{view:output.createView(),loadOp:'clear',storeOp:'store'}]});
+      draw.setPipeline(down);draw.setBindGroup(0,group);draw.draw(3);draw.end();
+      return;
+    }
     const aovs = detailEnabled ? (['diffuseAlbedo','specularAlbedo','depth'] as const).map(kind => render.getAovTexture(kind)) : [];
     const detail = aovs.length === 3 && aovs.every(image => image && image.width === output.width && image.height === output.height);
     const entries: GPUBindGroupEntry[] = [{binding:0,resource:input.createView()}, {binding:1,resource:{buffer:buffer([output.width,output.height,min,max])}}];

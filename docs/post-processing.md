@@ -47,8 +47,9 @@ const removeUpscale = engine.display.addPostProcess(pass, {
 ```
 
 Register the upscale before overlays that should stay at canvas resolution. An
-input that already has the output size is copied unchanged, so one registration can
-serve a full-resolution final render and a reduced-resolution preview.
+input that already has the output size is copied unchanged and a larger one is
+area-averaged, so one registration can serve a full-resolution or supersampled
+final render and a reduced-resolution preview.
 
 To recover texture detail, enable `diffuseAlbedo`, `specularAlbedo` and `depth`
 on a scale-based render with `aovResolution: 'display'`, and create the pass with
