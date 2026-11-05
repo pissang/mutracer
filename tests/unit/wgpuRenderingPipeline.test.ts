@@ -751,6 +751,25 @@ it('keeps borrowed scratch alive when custom denoise disposes synchronously', as
   await new Promise(resolve => setTimeout(resolve, 0)); expect(released).toBe(true);
 });
 
+it('keeps a canvas configured for a new pipeline while the disposed one waits for GPU work', async () => {
+  let configured = false;
+  const context = {configure() {configured = true;}, unconfigure() {configured = false;}, getCurrentTexture() {
+    if (!configured) throw new Error('context is not configured'); return {};
+  }};
+  const canvas = {getContext: () => context} as unknown as HTMLCanvasElement;
+  const first = createPipeline(false);
+  let finishWork!: () => void;
+  vi.spyOn(first.device.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => {finishWork = () => resolve(undefined);}));
+  const firstManager = makeWGPURenderTargets(canvas, first.device);
+  firstManager.dispose();
+  const secondManager = makeWGPURenderTargets(canvas, createPipeline(false).device);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  finishWork(); await new Promise(resolve => setTimeout(resolve, 0));
+  expect(context.getCurrentTexture).not.toThrow();
+  secondManager.dispose(); await new Promise(resolve => setTimeout(resolve, 0));
+  expect(configured).toBe(false);
+});
+
 it('keeps flat background and catcher composition on the ordinary display path for custom HDR', async () => {
   const pipeline = createPipeline(false);
   vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);

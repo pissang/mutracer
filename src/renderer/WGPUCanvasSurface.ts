@@ -1,6 +1,11 @@
 import {createCanvas} from '../util/canvas.js';
 type HDRConfiguration = GPUCanvasConfiguration & {toneMapping: {mode: 'extended'}};
 type InspectableContext = GPUCanvasContext & {getConfiguration?: () => GPUCanvasConfiguration & {toneMapping?: {mode?: string}}};
+// A canvas returns the same context to every engine, and engine disposal defers
+// releasing its surface until submitted GPU work finishes. Only the surface that
+// configured the context last may unconfigure it, so a later engine on the same
+// canvas keeps presenting.
+const owners = new WeakMap<GPUCanvasContext, WGPUCanvasSurface>();
 /** One canvas surface; composing or exporting an image never reconfigures it. */
 export class WGPUCanvasSurface {
   readonly context: InspectableContext;
@@ -9,6 +14,7 @@ export class WGPUCanvasSurface {
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, private readonly device: GPUDevice, private readonly standardFormat: GPUTextureFormat) {
     this.context = canvas.getContext('webgpu')! as InspectableContext;
     this.context.configure({device, format: standardFormat, alphaMode: 'premultiplied'});
+    owners.set(this.context, this);
   }
   get format() {return this.hdr ? 'rgba16float' as const : this.standardFormat;}
   get supportsHDR() {
@@ -33,5 +39,9 @@ export class WGPUCanvasSurface {
       ? {device: this.device, format: 'rgba16float', alphaMode: 'premultiplied', colorSpace: 'srgb', toneMapping: {mode: 'extended'}} as HDRConfiguration
       : {device: this.device, format: this.standardFormat, alphaMode: 'premultiplied'});
   }
-  dispose() {this.context.unconfigure?.();}
+  dispose() {
+    if (owners.get(this.context) !== this) return;
+    owners.delete(this.context);
+    this.context.unconfigure?.();
+  }
 }
