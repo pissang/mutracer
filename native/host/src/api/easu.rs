@@ -4,6 +4,7 @@ use super::post_process::{PostProcessContext, PostProcessOptions, PostProcessSub
 use super::render::PixelKind;
 use super::{Display, Result, Status, error};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
 /// Albedo detail compensation of [`EasuPass`]. Defaults match the browser's
@@ -66,6 +67,8 @@ impl EasuOptions {
 pub struct EasuPass {
     options: EasuOptions,
     pipelines: HashMap<String, wgpu::RenderPipeline>,
+    /// Pipelines compiled on a worker after the first registration or run.
+    compiled: Option<Arc<Mutex<HashMap<String, wgpu::RenderPipeline>>>>,
     /// Low-resolution diffuse and specular albedo at the input size.
     guides: Option<[wgpu::Texture; 2]>,
     guide_key: Option<(Vec<wgpu::Texture>, [u64; 3])>,
@@ -81,6 +84,7 @@ impl EasuPass {
         Ok(Self {
             options,
             pipelines: HashMap::new(),
+            compiled: None,
             guides: None,
             guide_key: None,
             tone: None,
@@ -91,6 +95,7 @@ impl EasuPass {
     /// Records the pass. Call from a display pass registered with an output
     /// size; the output size selects copy, area average or EASU.
     pub fn run(&mut self, ctx: PostProcessContext<'_>) -> Result<()> {
+        self.prepare(ctx.device);
         use Resource::Buffer as B;
         let sources =
             crate::postprocess::sources().map_err(|e| error(Status::Error, e.to_string()))?;
@@ -148,10 +153,14 @@ impl EasuPass {
                 }
             }
         }
+        // Detail waits for its worker-compiled pipelines; until then use EASU alone.
         let detailed = aovs.len() == 3
             && aovs
                 .iter()
-                .all(|(image, _)| [image.width(), image.height()] == [ow, oh]);
+                .all(|(image, _)| [image.width(), image.height()] == [ow, oh])
+            && detail_pipelines(&sources.easu)
+                .iter()
+                .all(|(name, _, formats)| self.ready(name, formats));
         let mut entries = vec![
             (0, view(input)),
             (1, uniform([ow as f32, oh as f32, min, max])),
@@ -319,6 +328,56 @@ impl EasuPass {
         draw(ctx.encoder, "FSR 1 EASU", &pipeline, &group, &[output]);
         Ok(())
     }
+    /// Starts compiling the pass's pipelines on a worker thread, so the first
+    /// presents do not wait for shader compilation on the calling thread.
+    fn prepare(&mut self, device: &wgpu::Device) {
+        if self.compiled.is_some() {
+            return;
+        }
+        let compiled = Arc::new(Mutex::new(HashMap::new()));
+        self.compiled = Some(compiled.clone());
+        let (device, detail) = (device.clone(), self.options.albedo_detail);
+        let _ = std::thread::Builder::new()
+            .name("MuTracer EASU pipelines".into())
+            .spawn(move || {
+                let Ok(sources) = crate::postprocess::sources() else {
+                    return;
+                };
+                let format = wgpu::TextureFormat::Rgba8Unorm;
+                let mut list = vec![
+                    ("color", sources.easu[0].clone(), vec![format]),
+                    ("area", sources.easu[1].clone(), vec![format]),
+                ];
+                if detail {
+                    list.extend(detail_pipelines(&sources.easu));
+                }
+                for (name, source, formats) in list {
+                    // Error scopes belong to this thread; a failure leaves the
+                    // pipeline to the synchronous path, which reports it.
+                    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                    let pipeline = create_pipeline(&device, name, &source, &formats);
+                    if pollster::block_on(scope.pop()).is_none() {
+                        compiled
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(pipeline_key(name, &formats), pipeline);
+                    }
+                }
+            });
+    }
+    fn ready(&mut self, name: &str, formats: &[wgpu::TextureFormat]) -> bool {
+        let key = pipeline_key(name, formats);
+        if self.pipelines.contains_key(&key) {
+            return true;
+        }
+        let compiled = self.compiled.as_ref().and_then(|c| {
+            c.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&key)
+                .cloned()
+        });
+        compiled.is_some_and(|pipeline| self.pipelines.insert(key, pipeline).is_none())
+    }
     fn pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -326,39 +385,60 @@ impl EasuPass {
         source: &str,
         formats: &[wgpu::TextureFormat],
     ) -> wgpu::RenderPipeline {
-        let key = format!("{name} {formats:?}");
-        self.pipelines
-            .entry(key)
-            .or_insert_with(|| {
-                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-                let targets: Vec<_> = formats.iter().map(|f| Some((*f).into())).collect();
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(name),
-                    layout: None,
-                    vertex: wgpu::VertexState {
-                        module: &module,
-                        entry_point: Some("vertex"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
-                    },
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &module,
-                        entry_point: Some("fragment"),
-                        compilation_options: Default::default(),
-                        targets: &targets,
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            })
-            .clone()
+        if !self.ready(name, formats) {
+            self.pipelines.insert(
+                pipeline_key(name, formats),
+                create_pipeline(device, name, source, formats),
+            );
+        }
+        self.pipelines[&pipeline_key(name, formats)].clone()
     }
+}
+/// Albedo guides, tone table, albedo fit and the detail EASU, as compiled for SDR.
+fn detail_pipelines(easu: &[String; 6]) -> Vec<(&'static str, String, Vec<wgpu::TextureFormat>)> {
+    use wgpu::TextureFormat::{Rgba8Unorm, Rgba16Float, Rgba32Float};
+    vec![
+        ("albedo", easu[3].clone(), vec![Rgba16Float; 2]),
+        ("tone", easu[4].clone(), vec![Rgba32Float]),
+        ("fit", easu[5].clone(), vec![Rgba16Float; 2]),
+        ("detail", easu[2].clone(), vec![Rgba8Unorm]),
+    ]
+}
+fn pipeline_key(name: &str, formats: &[wgpu::TextureFormat]) -> String {
+    format!("{name} {formats:?}")
+}
+fn create_pipeline(
+    device: &wgpu::Device,
+    name: &str,
+    source: &str,
+    formats: &[wgpu::TextureFormat],
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(name),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let targets: Vec<_> = formats.iter().map(|f| Some((*f).into())).collect();
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(name),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vertex"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fragment"),
+            compilation_options: Default::default(),
+            targets: &targets,
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 impl Display {
@@ -368,6 +448,7 @@ impl Display {
     /// 32 KiB tone table, are released with the registration.
     pub fn add_upscale(&self, options: EasuOptions) -> Result<PostProcessSubscription> {
         let mut pass = EasuPass::new(options)?;
+        pass.prepare(&self.engine.inner.gpu.device);
         self.add_post_process_with(PostProcessOptions::display_size(), move |ctx| pass.run(ctx))
     }
 }
