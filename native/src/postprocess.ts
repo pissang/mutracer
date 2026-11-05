@@ -180,6 +180,10 @@ ${createCompositeDenoiseDisplayMain('srgb')}
 `;
 
 import frameResolve from './frame-resolve.wgsl.js';
+import {areaDownsampleShader, easuShader} from '../../src/renderer/wgsl/easu.wgsl.js';
+import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, EASU_DETAIL, TONE_LUT_SIZE} from '../../src/renderer/wgsl/easuDetail.wgsl.js';
+import aovTraceWGSL from '../../src/renderer/wgsl/aovTrace.wgsl.js';
+import aovTraceDisplayWGSL from '../../src/renderer/wgsl/aovTraceDisplay.wgsl.js';
 
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
@@ -187,7 +191,14 @@ export function postprocessParameters(): Uint8Array {
     normalize: nativeOidnNormalizeShader, frame_resolve: frameResolve,
     oidn_composition: [nativeDisplayEffectsShader(false, 'linear'), nativeDisplayEffectsShader(false, 'albedo')],
     oidn_display: nativeOidnDisplayShader,
-    bloom_levels: BLOOM_LEVELS, bloom_plan: BLOOM_PLAN
+    bloom_levels: BLOOM_LEVELS, bloom_plan: BLOOM_PLAN,
+    // The Web EASU pass: color, area downsample, guided detail, albedo guides, tone table, albedo fit.
+    easu: [easuShader, areaDownsampleShader, easuDetailShader(), albedoDownsampleShader(), toneLutShader, guidedCoefficientShader],
+    easu_detail: [...EASU_DETAIL.ratioRange, EASU_DETAIL.depthThreshold, EASU_DETAIL.coverageThreshold,
+      EASU_DETAIL.minimumAlbedo, EASU_DETAIL.depthTolerance, EASU_DETAIL.guidedEpsilon],
+    tone_lut_size: TONE_LUT_SIZE,
+    // The display AOV trace replaces the default suffix of the path tracer source.
+    aov_trace: [aovTraceWGSL, aovTraceDisplayWGSL]
   }));
 }
 export function bloomParameters(radius: number): Uint8Array {

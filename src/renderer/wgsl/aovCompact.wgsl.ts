@@ -18,3 +18,10 @@ fn loadAov(source: u32) -> ${type} {
     bitcast<vec4f>(vec4u(accumulation[o+12u],accumulation[o+13u],accumulation[o+14u],accumulation[o+15u])));
 }`).split(`let pixel=accumulation[source];`).join(`let pixel=loadAov(source);`).replace(`let pixel = accumulation[index];`, `let pixel = loadAov(index);`);
 }
+
+/** Reads compact or default accumulation in an AOV resolve or display shader, selected by the AOV_COMPACT override. */
+export function compactAovResolveCode(code: string): string {
+  return code.includes(`struct DisplayAovAccum`)
+    ? compactAovReadShader(code, `@group(0) @binding(0) var<storage, read> accumulation: array<DisplayAovAccum>;`, `DisplayAovAccum`)
+    : compactAovReadShader(code, `@group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;`, `AovResolvedAccumulation`);
+}

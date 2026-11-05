@@ -691,8 +691,8 @@ mod platform {
                     let args = PassContext {
                         struct_size: std::mem::size_of::<PassContext>() as u32,
                         format,
-                        width: context.width,
-                        height: context.height,
+                        width: context.output.width(),
+                        height: context.output.height(),
                         device,
                         commands: encoder.raw_handle(),
                         input,

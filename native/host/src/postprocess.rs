@@ -12,6 +12,14 @@ pub(crate) struct Sources {
     pub oidn_display: String,
     pub bloom_levels: usize,
     pub bloom_plan: Vec<(usize, usize, usize, usize, f32, f32)>,
+    /// EASU color, area downsample, guided detail, albedo guides, tone table and albedo fit.
+    pub easu: [String; 6],
+    /// Ratio range, depth and coverage thresholds, minimum albedo, depth
+    /// tolerance and guided-fit regularization.
+    pub easu_detail: [f32; 7],
+    pub tone_lut_size: u32,
+    /// Default and display-resolution AOV entry points of the path tracer.
+    pub aov_trace: [String; 2],
 }
 unsafe extern "C" {
     fn mt_core_postprocess(output: *mut *const u8, size: *mut usize);
@@ -57,6 +65,12 @@ fn shared_postprocess_sources_validate_and_match_js() {
         &sources.oidn_display,
         &sources.oidn_composition[0],
         &sources.oidn_composition[1],
+        &sources.easu[0],
+        &sources.easu[1],
+        &sources.easu[2],
+        &sources.easu[3],
+        &sources.easu[4],
+        &sources.easu[5],
     ] {
         let module = naga::front::wgsl::parse_str(source).unwrap();
         naga::valid::Validator::new(
@@ -66,6 +80,17 @@ fn shared_postprocess_sources_validate_and_match_js() {
         .validate(&module)
         .unwrap();
     }
+    let defaults = crate::api::EasuOptions::default();
+    assert_eq!(
+        sources.easu_detail[..4],
+        [
+            defaults.ratio_range[0],
+            defaults.ratio_range[1],
+            defaults.depth_threshold,
+            defaults.coverage_threshold
+        ]
+    );
+    assert!(sources.aov_trace.iter().all(|s| !s.is_empty()));
     if let Ok(path) = std::env::var("MUTRACER_POSTPROCESS_SOURCES") {
         let reference: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();

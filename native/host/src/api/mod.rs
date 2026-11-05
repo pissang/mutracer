@@ -31,6 +31,7 @@ pub use custom_gpu::{
 };
 mod depth;
 mod display;
+mod easu;
 mod engine;
 mod post_process;
 mod render;
@@ -44,16 +45,20 @@ pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea, SurfaceH
 pub use display::{
     AovDisplayOptions, AovIdComponent, Channel, Display, DisplaySettings, Presented, ToneMapping,
 };
+pub use easu::{EasuOptions, EasuPass};
 pub use engine::{
     Backend, Camera, Diagnostics, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage,
     RenderDiagnostics, Subscription,
 };
-pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
+pub use post_process::{
+    OutputKind, PostProcessContext, PostProcessOptions, PostProcessSubscription,
+};
 pub use render::{
-    AdaptiveResolution, AlphaBlendStrategy, CancelToken, CausticSettings, CommitKind,
-    ConvergeOptions, ConvergeProgress, ConvergeResult, ConvergeStage, DENOISE_OIDN_WEBGPU,
-    DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind,
-    RefineOptions, Render, RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
+    AdaptiveResolution, AlphaBlendStrategy, AovResolution, CancelToken, CausticSettings,
+    CommitKind, ConvergeOptions, ConvergeProgress, ConvergeResult, ConvergeStage,
+    DENOISE_OIDN_WEBGPU, DISPLAY_AOV_SAMPLE_CAP, DenoiseReport, DenoiseSchedule, DenoiserOptions,
+    Image, OIDN_WEBGPU_AVAILABLE, PixelKind, RefineOptions, Render, RenderSettings, RenderSize,
+    RenderStatus, SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,
@@ -126,3 +131,6 @@ mod aov_display_tests;
 
 #[cfg(test)]
 mod caustics_tests;
+
+#[cfg(test)]
+mod upscale_tests;

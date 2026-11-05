@@ -1,6 +1,6 @@
 import {textureBytes} from './gpuMemory.js';
-import {compactAovReadShader} from './wgsl/aovCompact.wgsl.js';
-import {aovResolveCommon} from './wgsl/aovResolve.wgsl.js';
+import {compactAovResolveCode} from './wgsl/aovCompact.wgsl.js';
+import {aovBorrowDepthShader, aovBorrowReflectanceShader} from './wgsl/aovResolve.wgsl.js';
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
@@ -26,10 +26,7 @@ export class WGPUAov {
   private readonly snapshotBuffers = new Set<GPUBuffer>();
   constructor(readonly device: GPUDevice) {}
   private resolveCode(code: string) {
-    if (!this.compact) return code;
-    return code.includes('struct DisplayAovAccum')
-      ? compactAovReadShader(code, '@group(0) @binding(0) var<storage, read> accumulation: array<DisplayAovAccum>;', 'DisplayAovAccum')
-      : compactAovReadShader(code, '@group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;', 'AovResolvedAccumulation');
+    return this.compact ? compactAovResolveCode(code) : code;
   }
   reset() {
     this.revision++;
@@ -156,27 +153,10 @@ export class WGPUAov {
       const constants = this.compact ? {constants: {AOV_COMPACT: 1}} : {};
       let pipeline: GPUComputePipeline | GPURenderPipeline;
       if (depth) {
-        const code = aovResolveCommon + `
-@group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
-@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  if(any(id.xy>=parameters.xy)){return;}
-  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
-  let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
-  textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
-}`;
         pipeline = device.createComputePipeline({label: `Borrow ${kind}`, layout: 'auto', compute: {
-          module: device.createShaderModule({code:this.resolveCode(code)}), entryPoint: 'main', ...constants}});
+          module: device.createShaderModule({code:this.resolveCode(aovBorrowDepthShader)}), entryPoint: 'main', ...constants}});
       } else {
-        const code = aovResolveCommon + `
-@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
-  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
-}
-@fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
-  let id=vec2u(position.xy);
-  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
-  return clamp(bitcast<vec4f>(aovResolvedValue(source,parameters.w)),vec4f(0),vec4f(1));
-}`;
-        const module = device.createShaderModule({code:this.resolveCode(code)});
+        const module = device.createShaderModule({code:this.resolveCode(aovBorrowReflectanceShader)});
         pipeline = device.createRenderPipeline({label: `Borrow ${kind}`, layout: 'auto', vertex: {module, entryPoint: 'vertex', ...constants},
           fragment: {module, entryPoint: 'fragment', targets: [{format}], ...constants}});
       }

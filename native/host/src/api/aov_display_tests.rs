@@ -1,5 +1,5 @@
 use super::*;
-fn plane() -> Vec<u8> {
+pub(super) fn plane() -> Vec<u8> {
     let mut w: Vec<_> = tests::lit_scene()
         .chunks_exact(4)
         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))

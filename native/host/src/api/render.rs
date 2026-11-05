@@ -89,6 +89,8 @@ pub struct RenderSettings {
     pub aovs: u32,
     /// Independent AOV sample cap, positive integer. Default 16.
     pub aov_samples: u32,
+    /// AOV dimensions. Default [`AovResolution::Render`].
+    pub aov_resolution: AovResolution,
     /// Maximum complete samples, 1–16384. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
@@ -128,6 +130,25 @@ pub struct RenderSettings {
     /// `min_scale` and that scale. Default `None`.
     pub adaptive_resolution: Option<AdaptiveResolution>,
 }
+/// Dimensions of a render's AOVs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AovResolution {
+    /// The render's own size.
+    #[default]
+    Render,
+    /// The display size, at most [`DISPLAY_AOV_SAMPLE_CAP`] samples, for
+    /// display-resolution guides such as [`super::EasuPass`] detail
+    /// compensation. Beauty and denoiser guides keep the render size. Requires a
+    /// [`RenderSize::Scale`] render without custom denoiser AOV inputs; follows
+    /// display resizes. Requesting only depth and diffuse/specular reflectance
+    /// uses 24 bytes per display pixel instead of 96 and has no ID or motion
+    /// history. Display reflectance is the resolved texture albedo of standard
+    /// opaque, nontransmissive surfaces in half precision; other surfaces are invalid.
+    Display,
+}
+/// Sample cap of [`AovResolution::Display`]: display AOVs only guide texture
+/// detail, and 4 jittered samples match 16 within measurement noise.
+pub const DISPLAY_AOV_SAMPLE_CAP: u32 = 4;
 /// Overrides for one [`Render::refine_with_options`] call. Defaults use the render settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RefineOptions {
@@ -169,6 +190,7 @@ impl Default for RenderSettings {
             caustics: CausticSettings::default(),
             aovs: 0,
             aov_samples: 16,
+            aov_resolution: AovResolution::Render,
             max_samples: 2048,
             bounces: 3,
             clamping: 0.,
@@ -198,6 +220,11 @@ impl RenderSettings {
         }
         if self.aovs & !127 != 0 || self.aov_samples == 0 {
             return invalid("Invalid AOV mask or sample cap");
+        }
+        if self.aov_resolution == AovResolution::Display
+            && !matches!(self.size, RenderSize::Scale(_))
+        {
+            return invalid("aov_resolution Display requires a scale-based render");
         }
         if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
             return invalid("max_samples must be 1..16384");
@@ -279,6 +306,13 @@ impl RenderSettings {
             } else {
                 0
             })
+    }
+    /// Effective AOV sample cap.
+    pub(super) fn aov_cap(&self) -> u32 {
+        match self.aov_resolution {
+            AovResolution::Render => self.aov_samples,
+            AovResolution::Display => self.aov_samples.min(DISPLAY_AOV_SAMPLE_CAP),
+        }
     }
     pub(super) fn resolve_size(&self, display: [u32; 2]) -> [u32; 2] {
         match self.size {
@@ -713,6 +747,8 @@ pub(super) struct RenderState {
     aov: Option<crate::aov::Output>,
     temporal: Option<super::temporal::State>,
     aov_camera: [u8; 128],
+    /// Display size at the latest commit, for display-resolution AOVs.
+    aov_display: [u32; 2],
     published: Option<TargetKey>,
     /// `SharedScene::generation` of the published target.
     generation: u64,
@@ -1077,6 +1113,10 @@ enum Step {
 /// `false` with `error` set means the commit failed and was reported.
 /// Non-blocking callers retry later; blocking callers wait for preparation.
 fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<bool> {
+    let display = state.display.size;
+    if let Some(render) = state.renders.get_mut(&id) {
+        render.aov_display = display;
+    }
     loop {
         state
             .gpu
@@ -1465,26 +1505,71 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
     if render.samples == 0 {
         return Ok(());
     }
-    render_aovs(
-        render,
-        mask,
-        render.samples.min(render.settings.aov_samples),
-    )
+    let mut target = render.samples;
+    if render.settings.aov_resolution == AovResolution::Display
+        && render.samples < render.settings.max_samples
+    {
+        // Display AOVs only add detail: keep the first beauty image's latency and
+        // spread their full-display samples over batches. The batch that reaches
+        // max_samples completes the rest.
+        let current = render
+            .aov
+            .as_ref()
+            .filter(|a| {
+                a.generation == render.input_generation
+                    && a.mask == mask
+                    && a.layout == aov_layout(render, mask)
+            })
+            .map_or(0, |a| a.samples);
+        target = (render.samples - 1).min(current + 1);
+    }
+    if target == 0 {
+        return Ok(());
+    }
+    render_aovs(render, mask, target.min(render.settings.aov_cap()))
+}
+/// AOV size and storage for the current settings and display.
+fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
+    let display =
+        render.settings.aov_resolution == AovResolution::Display && render.aov_display != [0; 2];
+    crate::aov::Layout {
+        size: if display {
+            render.aov_display
+        } else {
+            render.published_size()
+        },
+        display,
+        compact: display && mask & !crate::aov::COMPACT_MASK == 0,
+    }
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
     let query =
         context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
-    if render
-        .aov
-        .as_ref()
-        .is_none_or(|a| a.generation != render.input_generation || a.mask != mask)
-    {
-        let words = query
-            .metadata(&render.aov_camera)
-            .map_err(|e| error(Status::Error, e.to_string()))?;
+    let mut layout = aov_layout(render, mask);
+    if !layout.display {
+        layout.size = query.size();
+    }
+    if render.aov.as_ref().is_none_or(|a| {
+        a.generation != render.input_generation || a.mask != mask || a.layout != layout
+    }) {
+        // Only the center pass reads identities and history; compact display
+        // AOVs skip it and the metadata, whose primitive IDs walk every BVH leaf.
+        let words = if layout.compact {
+            vec![0; 64]
+        } else {
+            query
+                .metadata(&render.aov_camera, layout.size)
+                .map_err(|e| error(Status::Error, e.to_string()))?
+        };
         render.aov = Some(
-            crate::aov::Output::new(&query, render.input_generation, &words, render.aov.as_ref())
-                .map_err(|e| error(Status::Error, e.to_string()))?,
+            crate::aov::Output::new(
+                &query,
+                render.input_generation,
+                &words,
+                render.aov.as_ref(),
+                layout,
+            )
+            .map_err(|e| error(Status::Error, e.to_string()))?,
         );
     }
     render
@@ -2121,6 +2206,7 @@ impl Render {
                 aov: None,
                 temporal: None,
                 aov_camera: [0; 128],
+                aov_display: [0; 2],
                 published: None,
                 generation: 0,
                 input_generation: 0,
@@ -2200,7 +2286,7 @@ impl Render {
                 ) >= if kind.aov_mask() & 31 == 0 {
                     1
                 } else {
-                    r.settings.aov_samples
+                    r.settings.aov_cap()
                 }
             } else {
                 r.current(state.scene_revision, state.camera_revision)
@@ -2245,12 +2331,16 @@ impl Render {
             let target = if mask & 31 == 0 {
                 1
             } else {
-                r.settings.aov_samples
+                r.settings.aov_cap()
             };
             let count = r
                 .aov
                 .as_ref()
-                .filter(|a| a.generation == r.input_generation && a.mask == mask)
+                .filter(|a| {
+                    a.generation == r.input_generation
+                        && a.mask == mask
+                        && a.layout == aov_layout(r, mask)
+                })
                 .map_or(0, |a| a.samples);
             if count < target {
                 render_aovs(r, mask, (count + 1).min(target))?;
@@ -2324,7 +2414,16 @@ impl Render {
                 render.adaptive.frame = None;
                 render.adaptive.fast_frames = 0;
             }
-            if settings.aov_samples < render.settings.aov_samples {
+            if settings.aov_resolution == AovResolution::Display && render.denoise.custom_aovs != 0
+            {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Custom denoiser AOV inputs require aov_resolution Render",
+                ));
+            }
+            if settings.aov_samples < render.settings.aov_samples
+                || settings.aov_resolution != render.settings.aov_resolution
+            {
                 render.aov = None;
             }
             render.settings = settings;
@@ -2489,6 +2588,12 @@ impl Render {
         }
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
+            if requested_aovs != 0 && render.settings.aov_resolution == AovResolution::Display {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Custom denoiser AOV inputs require aov_resolution Render",
+                ));
+            }
             cancel_denoise(render);
             render.denoiser_revision += 1;
             if render.denoise.custom_aovs != requested_aovs {
@@ -3107,6 +3212,45 @@ impl Render {
             )
         })
         .unwrap_or(0)
+    }
+    /// Borrows a raw linear AOV texture at the AOV resolution, top row first:
+    /// [`PixelKind::Depth`] as Rg32Float (depth, hit coverage),
+    /// [`PixelKind::DiffuseAlbedo`] and [`PixelKind::SpecularAlbedo`] as
+    /// Rgba8UnormSrgb (sampling returns linear [0,1] reflectance, alpha is valid
+    /// coverage). `None` until the enabled kind has a sample of the current
+    /// inputs. Other kinds are InvalidArgument. Each borrowed kind keeps its own
+    /// texture: 8 bytes per AOV pixel for depth, 4 for reflectance. Borrowing
+    /// follows [`Render::get_output_texture`]'s lifetime rules.
+    pub fn get_aov_texture(&self, kind: PixelKind) -> Result<Option<wgpu::Texture>> {
+        Ok(self.aov_texture(kind)?.map(|(texture, _)| texture))
+    }
+    /// [`Render::get_aov_texture`] with a revision that changes whenever its
+    /// contents are resolved again.
+    pub(crate) fn aov_texture(&self, kind: PixelKind) -> Result<Option<(wgpu::Texture, u64)>> {
+        let index = match kind {
+            PixelKind::Depth => 0,
+            PixelKind::DiffuseAlbedo => 3,
+            PixelKind::SpecularAlbedo => 4,
+            _ => {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Only depth and reflectance AOV textures can be borrowed",
+                ));
+            }
+        };
+        self.with(|state, id| {
+            let (scene, camera) = (state.scene_revision, state.camera_revision);
+            let r = state.renders.get_mut(&id).unwrap();
+            if aov_samples(r, kind.aov_mask(), scene, camera) == 0 {
+                return Ok(None);
+            }
+            r.aov
+                .as_mut()
+                .unwrap()
+                .texture(index)
+                .map(Some)
+                .map_err(|e| error(Status::Error, e.to_string()))
+        })
     }
     /// Complete beauty samples of the current inputs; 0 while preparing or stale.
     pub fn samples(&self) -> u32 {

@@ -11,7 +11,8 @@ pub enum OutputKind {
     /// Resolved linear ray color and coverage before denoising/display composition.
     /// RGBA32Float, top row first; RGB uses hit normalization as on WebGPU.
     Hdr,
-    /// Latest composition including display passes, at the actual render size.
+    /// Latest composition including display passes, at the final pass size
+    /// (default the actual render size).
     /// RGBA8Unorm, sRGB-encoded straight alpha, top row first.
     Display,
 }
@@ -32,7 +33,8 @@ pub struct PostProcessContext<'a> {
     /// Straight-alpha RGBA8Unorm for SDR registrations; linear RGBA16Float
     /// for add_hdr_post_process. Check input.format() when sharing pass code.
     pub input: &'a wgpu::Texture,
-    /// Fully write this image. Same format/size as input; storage, render and copy writes supported.
+    /// Fully write this image. Same format as input; its size is the registration's
+    /// output size (default the input size). Storage, render and copy writes supported.
     pub output: &'a wgpu::Texture,
     /// Actual selected render width, before display scaling.
     pub width: u32,
@@ -42,7 +44,35 @@ pub struct PostProcessContext<'a> {
     pub render: &'a Render,
 }
 type Pass = Arc<Mutex<Box<dyn FnMut(PostProcessContext<'_>) -> Result<()> + Send>>>;
-pub(super) type Entry = (u64, Pass);
+type OutputSize = Arc<dyn Fn([u32; 2], [u32; 2]) -> [u32; 2] + Send + Sync>;
+pub(super) type Entry = (u64, Pass, Option<OutputSize>);
+
+/// Registration options for [`Display::add_post_process_with`].
+#[derive(Clone, Default)]
+pub struct PostProcessOptions {
+    /// Output `[width, height]` from the previous pass's output size and the
+    /// current display size (also during export). Default `None` keeps the input
+    /// size. Called on every composition; return positive dimensions within
+    /// `max_texture_dimension_2d`, or the whole chain is discarded as when a
+    /// pass fails. Use [`PostProcessOptions::display_size`] to output at display
+    /// resolution.
+    pub output_size: Option<OutputSize>,
+}
+impl PostProcessOptions {
+    /// Outputs at the current display size, for upscalers.
+    pub fn display_size() -> Self {
+        Self {
+            output_size: Some(Arc::new(|_, display| display)),
+        }
+    }
+}
+impl std::fmt::Debug for PostProcessOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostProcessOptions")
+            .field("output_size", &self.output_size.is_some())
+            .finish()
+    }
+}
 
 /// Removes a display pass when dropped. Removal is idempotent and takes effect
 /// on the next composition; the current chain uses its registration snapshot.
@@ -59,8 +89,8 @@ impl PostProcessSubscription {
             let mut state = engine.lock();
             let display = &mut state.display;
             let count = display.passes.len() + display.hdr_passes.len();
-            display.passes.retain(|(id, _)| *id != self.id);
-            display.hdr_passes.retain(|(id, _)| *id != self.id);
+            display.passes.retain(|(id, ..)| *id != self.id);
+            display.hdr_passes.retain(|(id, ..)| *id != self.id);
             if display.passes.len() + display.hdr_passes.len() != count {
                 display.pass_revision += 1;
             }
@@ -76,9 +106,12 @@ impl Drop for PostProcessSubscription {
 pub(super) struct OutputState {
     pub(super) epoch: u64,
     pub(super) latest: Option<(DisplaySettings, Option<wgpu::Texture>)>,
-    targets: Option<[wgpu::Texture; 2]>,
-    hdr_targets: Option<[wgpu::Texture; 2]>,
+    // Per output size, the second image exists only when consecutive passes
+    // of that size need to ping-pong.
+    targets: Targets,
+    hdr_targets: Targets,
 }
+type Targets = std::collections::HashMap<[u32; 2], [Option<wgpu::Texture>; 2]>;
 impl OutputState {
     pub(super) fn invalidate(&mut self) {
         self.epoch += 1;
@@ -106,17 +139,30 @@ impl Display {
     /// original image and emits an engine error. Nested composition is rejected; render inspection
     /// and pass registration/removal are allowed. Changing the image during a pass
     /// rejects that composition. Keep the returned subscription until removal.
+    /// Equivalent to [`Display::add_post_process_with`] with default options.
     pub fn add_post_process(
         &self,
+        pass: impl FnMut(PostProcessContext<'_>) -> Result<()> + Send + 'static,
+    ) -> Result<PostProcessSubscription> {
+        self.add_post_process_with(PostProcessOptions::default(), pass)
+    }
+    /// [`Display::add_post_process`] with an output size. The presented image,
+    /// [`Display::read_rgba8`], PNG export and the borrowed display output use the
+    /// final chain size, which can differ from the render size.
+    pub fn add_post_process_with(
+        &self,
+        options: PostProcessOptions,
         pass: impl FnMut(PostProcessContext<'_>) -> Result<()> + Send + 'static,
     ) -> Result<PostProcessSubscription> {
         let mut state = self.engine.live()?;
         let display = &mut state.display;
         let id = display.next_pass;
         display.next_pass += 1;
-        display
-            .passes
-            .push((id, Arc::new(Mutex::new(Box::new(pass)))));
+        display.passes.push((
+            id,
+            Arc::new(Mutex::new(Box::new(pass))),
+            options.output_size,
+        ));
         display.pass_revision += 1;
         Ok(PostProcessSubscription {
             inner: Arc::downgrade(&self.engine.inner),
@@ -132,13 +178,24 @@ impl Display {
         &self,
         pass: impl FnMut(PostProcessContext<'_>) -> Result<()> + Send + 'static,
     ) -> Result<PostProcessSubscription> {
+        self.add_hdr_post_process_with(PostProcessOptions::default(), pass)
+    }
+    /// [`Display::add_hdr_post_process`] with an output size, as in
+    /// [`Display::add_post_process_with`].
+    pub fn add_hdr_post_process_with(
+        &self,
+        options: PostProcessOptions,
+        pass: impl FnMut(PostProcessContext<'_>) -> Result<()> + Send + 'static,
+    ) -> Result<PostProcessSubscription> {
         let mut state = self.engine.live()?;
         let display = &mut state.display;
         let id = display.next_pass;
         display.next_pass += 1;
-        display
-            .hdr_passes
-            .push((id, Arc::new(Mutex::new(Box::new(pass)))));
+        display.hdr_passes.push((
+            id,
+            Arc::new(Mutex::new(Box::new(pass))),
+            options.output_size,
+        ));
         display.pass_revision += 1;
         Ok(PostProcessSubscription {
             inner: Arc::downgrade(&self.engine.inner),
@@ -230,37 +287,78 @@ impl Display {
         } else {
             wgpu::TextureFormat::Rgba8Unorm
         };
-        let target_cache = if hdr {
-            &mut r.output.hdr_targets
-        } else {
-            &mut r.output.targets
-        };
-        let targets = if passes.is_empty() {
-            None
-        } else {
-            if target_cache
-                .as_ref()
-                .is_none_or(|t| [t[0].width(), t[0].height()] != size)
-            {
-                *target_cache = Some(std::array::from_fn(|_| {
-                    crate::display::image(&self.engine.inner.gpu.device, size, format)
-                }));
-            }
-            target_cache.clone()
-        };
         let epoch = r.output.epoch;
+        let display_size = state.display.size;
+        let limit = self
+            .engine
+            .inner
+            .gpu
+            .device
+            .limits()
+            .max_texture_dimension_2d;
         state.display.processing = true;
         drop(state);
         let _processing = Processing(self.engine.clone());
         let gpu = &self.engine.inner.gpu;
         let mut image = original.clone();
         let mut failure = None;
-        if let Some(targets) = targets {
+        if !passes.is_empty() {
+            // Evaluate the whole size chain before recording any pass.
+            let mut current = size;
+            let mut sizes = Vec::with_capacity(passes.len());
+            for (_, _, output_size) in &passes {
+                if let Some(output_size) = output_size {
+                    let input = current;
+                    current = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        output_size(input, display_size)
+                    })) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            failure = Some("Display pass output size panicked".to_string());
+                            break;
+                        }
+                    };
+                    if current.iter().any(|v| *v == 0 || *v > limit) {
+                        failure = Some(
+                            "Post-process output dimensions must be positive and within max_texture_dimension_2d"
+                                .to_string(),
+                        );
+                        break;
+                    }
+                }
+                sizes.push(current);
+            }
+            let targets = if failure.is_none() {
+                let mut state = self.engine.live()?;
+                let r = state
+                    .renders
+                    .get_mut(&selected)
+                    .ok_or_else(|| error(Status::InvalidHandle, "Render is disposed"))?;
+                let cache = if hdr {
+                    &mut r.output.hdr_targets
+                } else {
+                    &mut r.output.targets
+                };
+                cache.retain(|key, _| sizes.contains(key));
+                let mut previous = original.clone();
+                let mut outputs = Vec::with_capacity(sizes.len());
+                for size in &sizes {
+                    let pair = cache.entry(*size).or_default();
+                    let index = usize::from(pair[0].as_ref() == Some(&previous));
+                    let output = pair[index]
+                        .get_or_insert_with(|| crate::display::image(&gpu.device, *size, format))
+                        .clone();
+                    previous = output.clone();
+                    outputs.push(output);
+                }
+                outputs
+            } else {
+                Vec::new()
+            };
             let view = Render::view(&self.engine, selected);
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             let mut commands = Vec::new();
-            for (index, (_, pass)) in passes.iter().enumerate() {
-                let output = &targets[index % 2];
+            for ((_, pass, _), output) in passes.iter().zip(&targets) {
                 let mut pass = pass.lock().unwrap_or_else(|e| e.into_inner());
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     pass(PostProcessContext {

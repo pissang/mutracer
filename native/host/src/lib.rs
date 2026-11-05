@@ -606,7 +606,7 @@ fn compile_pipeline(
         cache: gpu.pipeline_cache.as_ref(),
     });
     let compiled = CachedPipeline {
-        aov_pipelines: Default::default(),
+        aov_pipelines: aov::pipeline_cache(&key.source),
         _shader: shader,
         layouts,
         pipeline,

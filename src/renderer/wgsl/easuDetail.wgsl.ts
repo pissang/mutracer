@@ -4,6 +4,14 @@ import {composeDefine} from './compose.frag.wgsl.js';
 /** Scene-linear log2 range covered by the tone lookup table. */
 export const TONE_LUT_LOG2 = [-24, 24] as const;
 export const TONE_LUT_SIZE = 1024;
+/** Detail compensation defaults and fixed regularizers shared by the Web and native passes. */
+export const EASU_DETAIL = {
+  ratioRange: [0.7, 1.43] as const, depthThreshold: 0.02, coverageThreshold: 0.95,
+  // Albedo below this is treated as black; relative depth tolerance floor.
+  minimumAlbedo: 1e-3, depthTolerance: 1e-4,
+  // Regularizes the local albedo variance of the albedo-radiance fit, in squared albedo units.
+  guidedEpsilon: 1e-4,
+};
 
 // Tone table lookups and display encoding shared by the detail passes; tone.x is the maximum display value.
 const toneCodingDefine = /* wgsl */ `

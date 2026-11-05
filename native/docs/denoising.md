@@ -112,6 +112,15 @@ kind. Disabled AOVs allocate nothing. Enabling any kind adds about 128 GPU bytes
 per pixel plus scene identity/history data; readback adds temporary GPU and CPU
 copies. Reflectance quadrature costs considerably more than geometric guides.
 
+`aov_resolution` / `mt_render_options.aov_resolution` traces AOVs at the display
+size instead, at most 4 samples, as guides for the
+[display upscale](display.md#display-upscale). It requires a scale-based render
+and no custom denoiser AOV inputs, follows display resizes, and restarts AOV
+accumulation when changed. Readback and visualization use the AOV size. A mask
+of only depth and diffuse/specular reflectance costs 24 bytes per display pixel,
+keeps no ID or motion history and reports the texture albedo of standard
+opaque, nontransmissive surfaces in half precision.
+
 Stable object/material IDs come from Scene handles, or the descriptor's optional
 ID tables. Preserve these identities across publications when reprojecting;
 reusing an ID for another object can associate the wrong history.
