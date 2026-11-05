@@ -1,14 +1,27 @@
 /** Optional primary-surface outputs, separate from beauty and OIDN guides. */
-export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion';
-export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
+export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion' | 'diffuseColor' | 'specularColor';
+export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion', 'diffuseColor', 'specularColor'];
 export const AOV_BACKGROUND_ID = 0xffffffff;
 /** Display-resolution AOVs only guide texture detail; 4 jittered samples match 16 within measurement noise. */
 export const DISPLAY_AOV_SAMPLE_CAP = 4;
+/** Mask bits of directional reflectance quadrature (diffuseAlbedo, specularAlbedo). */
+export const AOV_REFLECTANCE_MASK = 24;
+/** Mask bits of resolved texture colors (diffuseColor, specularColor). */
+export const AOV_COLOR_MASK = 384;
+/** Mask bits of kinds accumulated over jittered samples. */
+export const AOV_ACCUMULATED_MASK = 31 | AOV_COLOR_MASK;
+/** Kinds that fit the compact display-resolution storage. */
+export const COMPACT_AOV_KINDS: readonly AovKind[] = ['depth', 'diffuseColor', 'specularColor'];
 // Four vec4 lanes for accumulated geometry/reflectance; two for center ID/motion.
-// Depth and roughness share a lane; coverage is position.w.
+// Depth and roughness share a lane; coverage is position.w. A lobe's albedo and
+// color share its reflectance lane, so a render requests at most one of them.
 export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32,
   depthRoughness: 0, position: 4, diffuseAlbedo: 8, specularAlbedo: 12,
   id: 0, motion: 4} as const;
+/** Kind index read by resolve and display shaders; colors resolve like the albedo sharing their lane. */
+export function aovLaneKind(kind: AovKind): number {
+  return kind === 'diffuseColor' ? 3 : kind === 'specularColor' ? 4 : AOV_KINDS.indexOf(kind);
+}
 let nextId = 0;
 export function allocateAovId(): number {
   if (nextId >= AOV_BACKGROUND_ID) throw new RangeError('AOV ID space exhausted');
@@ -25,6 +38,8 @@ export function aovMask(kinds: readonly AovKind[]): number {
     if (index < 0) throw new RangeError(`Unknown AOV: ${kind}`);
     mask |= 1 << index;
   }
+  if ((mask & 8) && (mask & 128)) throw new RangeError('diffuseAlbedo and diffuseColor cannot be requested together');
+  if ((mask & 16) && (mask & 256)) throw new RangeError('specularAlbedo and specularColor cannot be requested together');
   return mask;
 }
 export interface AovInstanceSnapshot {

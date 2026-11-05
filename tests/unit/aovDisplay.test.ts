@@ -5,13 +5,14 @@ import { renderFixture } from '../helpers/renderPipeline.js';
 import { AOV_KINDS } from '../../src/renderer/aov.js';
 import { DEFAULT_AOV_DISPLAY, packAovDisplay, validateAovDisplay } from '../../src/renderer/aovDisplay.js';
 describe('AOV display channels', () => {
-  it('selects declared outputs without restarting sampling or invalidating denoising', () => {
+  // A lobe's albedo and color share storage, so each render requests one of them.
+  it.each([[AOV_KINDS.filter(kind => !kind.endsWith('Color'))], [AOV_KINDS.filter(kind => !kind.endsWith('Albedo'))]])('selects declared outputs without restarting sampling or invalidating denoising (%#)', kinds => {
     const { engine, targets } = renderFixture();
-    const render = new Render(engine, { aovs: AOV_KINDS });
+    const render = new Render(engine, { aovs: kinds });
     render.refine();
     engine.display.present(render);
     const changed = vi.spyOn(render, '_displayChanged');
-    for (const channel of AOV_KINDS) {
+    for (const channel of kinds) {
       engine.display.channel = channel;
       engine.display.present(render);
       expect(targets[0].setOutput).toHaveBeenLastCalledWith(channel);
@@ -22,7 +23,7 @@ describe('AOV display channels', () => {
     expect(changed).not.toHaveBeenCalled();
     expect(targets[0].restartSamples).toHaveBeenCalledTimes(1);
     expect(render.samples).toBe(1);
-    expect(render.aovs).toEqual(AOV_KINDS);
+    expect(render.aovs).toEqual(kinds);
     engine.dispose();
   });
   it('requires explicit outputs on the selected render and leaves its image untouched on error', () => {

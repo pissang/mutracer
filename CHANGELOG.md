@@ -9,10 +9,11 @@ Display upscaling with texture detail recovery, faster tiled rendering and faste
 
 ### Added
 
-- `createEasuPass()` is an edge-adaptive display upscale pass. With `albedoDetail: true` it restores surface texture detail from display-resolution AOVs, so beauty can render at a reduced `resolutionScale`. See [post-processing](docs/post-processing.md).
+- `createEasuPass()` is an edge-adaptive display upscale pass. With `albedoDetail: true` it restores surface texture detail from display-resolution color and depth AOVs, so beauty can render at a reduced `resolutionScale`. See [post-processing](docs/post-processing.md).
 - `display.addPostProcess(pass, {outputSize})` lets a pass output a different size than its input, for example the canvas size. `PostProcessOptions` is exported.
 - The `aovResolution: 'display'` render option traces AOVs at canvas size on WebGPU, capped at 4 samples, while beauty keeps the render resolution. WebGL 2 falls back to render resolution and warns once. See [surface outputs](docs/api.md#surface-outputs).
-- `render.getAovTexture('diffuseAlbedo' | 'specularAlbedo' | 'depth')` borrows raw AOV textures on WebGPU.
+- `diffuseColor` and `specularColor` AOVs output resolved material colors without BSDF integration, on both backends.
+- `render.getAovTexture('diffuseColor' | 'specularColor' | 'depth')` borrows raw AOV textures on WebGPU.
 
 ### Changed
 

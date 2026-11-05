@@ -28,6 +28,6 @@ it('borrows only enabled, current AOVs and invalidates them on restart and dispo
   const {engine,targets}=renderFixture();const render=new Render(engine,{aovs:['depth'],aovResolution:'display'});
   expect(render.getAovTexture('depth')).toBeUndefined();render.refine();
   const texture={width:800,height:600} as GPUTexture;targets[0].getAovTexture=vi.fn(()=>texture);
-  expect(render.getAovTexture('depth')).toBe(texture);expect(render.getAovTexture('diffuseAlbedo')).toBeUndefined();
+  expect(render.getAovTexture('depth')).toBe(texture);expect(render.getAovTexture('diffuseColor')).toBeUndefined();
   render.restart();expect(render.getAovTexture('depth')).toBeUndefined();render.dispose();expect(render.getAovTexture('depth')).toBeUndefined();engine.dispose();
 });

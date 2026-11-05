@@ -7,7 +7,7 @@ import { Field, Hint, Scrub, Select, Switch } from './ui/controls';
 
 const AOV_LABELS: Record<(typeof VIEWER_AOVS)[number], string> = {
   depth: 'Depth', position: 'Position', roughness: 'Roughness', diffuseAlbedo: 'Diffuse reflectance',
-  specularAlbedo: 'Specular reflectance', id: 'ID', motion: 'Motion'
+  specularAlbedo: 'Specular reflectance', diffuseColor: 'Diffuse color', specularColor: 'Specular color', id: 'ID', motion: 'Motion'
 };
 
 /** Viewport debug card. Collapsed, it shows only the sample time graph. */

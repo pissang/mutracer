@@ -1,6 +1,6 @@
 import displayShader from './glsl/aovDisplay.frag.js';
 import {WebGLFullQuadPass} from './WebGLFullQuadPass.js';
-import {AOV_KINDS} from './aov.js';
+import {aovLaneKind} from './aov.js';
 import {AOV_ID_COMPONENTS, validateAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {AovHistory, type AovKind, type AovFrameSnapshot} from './aov.js';
 import {Texture2D, FrameBuffer, type WebGLDevice} from './webgl.js';
@@ -33,14 +33,14 @@ export class WebGLAov {
     if(!this.samples || !this.center)throw new Error('AOV output is not ready');
     validateAovDisplay(options);
     this.displayPass??=new WebGLFullQuadPass('AOV display',this.renderer,{shader:displayShader,outputs:['color']});
-    const pass=this.displayPass;pass.setSize(this.width,this.height);pass.setUniforms({kind:AOV_KINDS.indexOf(kind),samples:this.samples,mapping:[...options.depthRange,options.positionScale,options.motionScale],idComponent:AOV_ID_COMPONENTS.indexOf(options.idComponent)});
+    const pass=this.displayPass;pass.setSize(this.width,this.height);pass.setUniforms({kind:aovLaneKind(kind),samples:this.samples,mapping:[...options.depthRange,options.positionScale,options.motionScale],idComponent:AOV_ID_COMPONENTS.indexOf(options.idComponent)});
     pass.createPass({...this.accumulation[(this.samples-1)%2],identity:this.center.id,motion:this.center.motion});return pass.getOutput('color');
   }
   async read(kind:AovKind){
     const gl=this.renderer.gl, framebuffer=new FrameBuffer(), width=this.width,height=this.height;
     try{
       const accumulated=this.accumulation[(this.samples-1)%2];
-      const name=kind==='depth'||kind==='roughness'?'geometry':kind==='diffuseAlbedo'?'diffuse':kind==='specularAlbedo'?'specular':'position';
+      const name=kind==='depth'||kind==='roughness'?'geometry':aovLaneKind(kind)===3?'diffuse':aovLaneKind(kind)===4?'specular':'position';
       framebuffer.bind(this.renderer,[kind==='id'?this.center!.id:kind==='motion'?this.center!.motion:accumulated[name]]);
       if(kind==='id'){
         const source=new Uint32Array(width*height*4),data=new Uint32Array(source.length);

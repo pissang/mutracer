@@ -106,9 +106,19 @@ void main() {
 #endif
     OpenPbrPreparedBsdf prepared=openpbr_prepare(tangent,material,-ray.d,normal);
     vec3 diffuse,specular;aovReflectance(prepared,(aovMask&8)!=0,(aovMask&16)!=0,diffuse,specular);
-    out_diffuse+=vec4(diffuse,1.0);out_specular+=vec4(specular,1.0);
+    if((aovMask&8)!=0)out_diffuse+=vec4(diffuse,1.0);
+    if((aovMask&16)!=0)out_specular+=vec4(specular,1.0);
   }
   #endif
+  // Resolved texture colors (diffuseColor/specularColor), matching WGSL.
+  if((aovMask&384)!=0 && material.materialType==STANDARD && material.alpha>=1.0 && material.transmissionWeight<=0.0 && dot(material.mediumScattering,material.mediumScattering)<=0.0){
+    float metal=clamp(material.baseMetalness,0.0,1.0);
+    vec3 base=material.baseWeight*material.baseColor;
+    vec3 layer=mix(vec3(1.0),material.coatColor,clamp(material.coatWeight,0.0,1.0));
+    float f=(material.specularIor-1.0)/(material.specularIor+1.0);
+    if((aovMask&128)!=0)out_diffuse+=vec4(layer*base*(1.0-metal),1.0);
+    if((aovMask&256)!=0)out_specular+=vec4(layer*(metal*base+(1.0-metal)*material.specularWeight*material.specularColor*f*f),1.0);
+  }
   out_position+=vec4(si.position,1.0);
   `}
 }

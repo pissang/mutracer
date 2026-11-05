@@ -446,7 +446,7 @@ describe('display upscale policy',()=>{
    settings:{...DEFAULT_SETTINGS},upscalePass:Object.assign(vi.fn(),{dispose})
   });
   viewer.configureUpscale();
-  expect(viewer.final.aovs).toEqual(backend==='webgpu'?['depth','diffuseAlbedo','specularAlbedo']:[]);
+  expect(viewer.final.aovs).toEqual(backend==='webgpu'?['depth','diffuseColor','specularColor']:[]);
   expect(add).toHaveBeenCalledTimes(backend==='webgpu'?1:0);
   viewer.settings.displayUpscale=false;viewer.configureUpscale();
   expect(viewer.final.aovs).toEqual([]);expect(dispose).toHaveBeenCalled();

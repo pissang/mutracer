@@ -1,4 +1,4 @@
-import {AOV_KINDS, type AovKind} from '../aov.js';
+import {aovLaneKind, type AovKind} from '../aov.js';
 import {aovResolveCommon} from './aovResolve.wgsl.js';
 
 // Two input storage buffers leave six output slots on the baseline WebGPU
@@ -17,7 +17,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   if(id.x>=width||id.y>=height){return;}
   let index=id.x+id.y*width;
   let source=id.x+(height-1u-id.y)*width;
-  ${kinds.map((kind, i) => `output${i}[index]=aovResolvedValue(source,${AOV_KINDS.indexOf(kind)}u);`).join('\n  ')}
+  ${kinds.map((kind, i) => `output${i}[index]=aovResolvedValue(source,${aovLaneKind(kind)}u);`).join('\n  ')}
 }
 `;
 }

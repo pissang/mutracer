@@ -1,4 +1,4 @@
-import {DISPLAY_AOV_SAMPLE_CAP, type AovKind} from './renderer/aov.js';
+import {AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP, type AovKind} from './renderer/aov.js';
 import {aovMask} from './renderer/aov.js';
 import {displayAovKind} from './renderer/aovDisplay.js';
 import type {DisplayChannel} from './renderer/RenderingPipeline.js';
@@ -108,8 +108,8 @@ export interface CausticSettings {
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
-  /** AOV dimensions. Default render; display uses the canvas size and at most 4 samples on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. */ aovResolution?: 'render' | 'display';
-  /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
+  /** AOV dimensions. Default render; display traces AOVs at the canvas size with at most 4 samples (aovSamples above 4 have no effect) on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. Output definitions do not depend on this setting. */ aovResolution?: 'render' | 'display';
+  /** Independent AOV sample cap, positive integer. Default 16; display-resolution AOVs stop at 4. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
@@ -233,9 +233,9 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
   /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
-  /** AOV dimensions. Default render; display uses canvas dimensions and at most 4 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. */ aovResolution: 'render' | 'display' = 'render';
+  /** AOV dimensions. Default render; display traces AOVs at the canvas size with at most 4 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. Output definitions do not depend on this setting. */ aovResolution: 'render' | 'display' = 'render';
   private _warnedAovResolution = false;
-  /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
+  /** Independent AOV sample cap. Default 16; display-resolution AOVs stop at 4. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
@@ -783,7 +783,7 @@ export default class Render {
   async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind = 'hdr'): Promise<{width: number; height: number; data: Float32Array | Uint32Array}> {
     if (this._disposed) throw new Error('Render is disposed.');
     const target = this._target;
-    if (['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'].includes(kind)) {
+    if ((AOV_KINDS as readonly string[]).includes(kind)) {
       const aov = kind as AovKind;
       aovMask(this.aovs);
       if (!this.aovs.includes(aov)) throw new Error(`AOV ${aov} is not enabled`);
@@ -797,8 +797,8 @@ export default class Render {
     }
     target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
   }
-  /** Borrows a raw linear primary-surface texture at the AOV resolution, top row first; default undefined until an enabled AOV has samples. WebGPU only. Diffuse/specular use rgba8unorm-srgb (loads as linear [0,1]) with validity coverage in alpha; depth uses rg32float (depth, hit coverage). Borrowing follows getOutputTexture's lifetime rules; restart invalidates it. */
-  getAovTexture(kind: 'diffuseAlbedo' | 'specularAlbedo' | 'depth'): GPUTexture | undefined {
+  /** Borrows a raw linear primary-surface texture at the AOV resolution, top row first; default undefined until an enabled AOV has samples. WebGPU only. Colors use rgba8unorm-srgb (loads as linear [0,1]) with validity coverage in alpha; depth uses rg32float (depth, hit coverage). The texture is resolved from the accumulation when its samples change; the first call per kind also creates its pipeline. Borrowing follows getOutputTexture's lifetime rules; restart invalidates it. */
+  getAovTexture(kind: 'diffuseColor' | 'specularColor' | 'depth'): GPUTexture | undefined {
     if (this._engine.backend !== 'webgpu' || !this._current || !this.aovs.includes(kind) || !this.aovSamplesRendered) return;
     return this._target?.getAovTexture?.(kind);
   }

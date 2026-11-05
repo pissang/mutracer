@@ -3,7 +3,7 @@ import {hdrResolveWGSL, TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
 import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
-import {aovMask, DISPLAY_AOV_SAMPLE_CAP} from './aov.js';
+import {aovMask, COMPACT_AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP} from './aov.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -846,7 +846,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   const aovResolution = () => execution?.aovResolution === 'display' ? {width: canvas.width, height: canvas.height} : undefined;
-  const compactAov = () => !!aovResolution() && !!execution?.aovs?.every(kind => ['depth','diffuseAlbedo','specularAlbedo'].includes(kind));
+  const compactAov = () => !!aovResolution() && !!execution?.aovs?.every(kind => COMPACT_AOV_KINDS.includes(kind));
   function trace(camera: Camera, maxSamples: number) {
     applyTraceQuality();
     // A call to draw means accumulation has been invalidated. Cancel OIDN
@@ -865,7 +865,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // Waiting for a shader is not an input change: this render's samples and
     // complete image stay valid, and only Render's restart discards them.
     if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return true;
-    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs, compactAov(), !!aovResolution())) return true;
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs, compactAov())) return true;
 
     const resetAccumulation = isFirstFrame;
     if (resetAccumulation) aov.reset();

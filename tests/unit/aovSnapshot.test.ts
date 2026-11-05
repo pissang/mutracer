@@ -48,7 +48,7 @@ describe('GPU AOV snapshots', () => {
     state.reset();expect(state.texture('depth')).toBeUndefined();
     state.samples=4;expect(state.texture('depth')).toBe(first);expect(dispatch).toHaveBeenCalledTimes(calls+1);
     state.resize(10,8,true);state.samples=1;
-    expect(state.texture('diffuseAlbedo')).toMatchObject({width:10,height:8,format:'rgba8unorm-srgb'});
+    expect(state.texture('diffuseColor')).toMatchObject({width:10,height:8,format:'rgba8unorm-srgb'});
     await vi.waitFor(()=>expect(first.destroy).toHaveBeenCalledOnce());
     state.dispose();expect(state.texture('depth')).toBeUndefined();
   });
@@ -56,11 +56,12 @@ describe('GPU AOV snapshots', () => {
     const {state, device} = fixture();
     Object.assign(device.limits,{maxBufferSize:1e9,maxStorageBufferBindingSize:1e9});
     state.resize(3000,2000,true);state.samples=1;
-    state.texture('depth');state.texture('diffuseAlbedo');state.texture('specularAlbedo');
+    state.texture('depth');state.texture('diffuseColor');state.texture('specularColor');
     expect(state.bytes).toBe(3000*2000*40+64);
   });
   it('supports every requested subset within baseline device binding limits', () => {
-    for (let mask = 1; mask < 128; mask++) {
+    for (let mask = 1; mask < 1 << AOV_KINDS.length; mask++) {
+      if ((mask & 8 && mask & 128) || (mask & 16 && mask & 256)) continue;
       const kinds = AOV_KINDS.filter((_, i) => mask & (1 << i));
       for (let i = 0; i < kinds.length; i += AOV_SNAPSHOT_BATCH_SIZE) {
         const batch = kinds.slice(i, i + AOV_SNAPSHOT_BATCH_SIZE);
@@ -89,7 +90,8 @@ describe('GPU AOV snapshots', () => {
   it('releases partial output allocations when a later batch fails', () => {
     const {state, buffers, bind, submit} = fixture();
     bind.mockImplementationOnce(() => ({})).mockImplementationOnce(() => {throw new Error('binding failure');});
-    expect(() => state.snapshot(AOV_KINDS)).toThrow('binding failure');
+    // Seven kinds span two batches; a lobe's albedo and color are exclusive.
+    expect(() => state.snapshot(AOV_KINDS.slice(0, 7))).toThrow('binding failure');
     expect(submit).not.toHaveBeenCalled();
     // Target storage belongs to the render; parameters and unfinished snapshots
     // belong to this failed operation and must not leak.

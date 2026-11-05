@@ -91,7 +91,7 @@ describe('viewer code snippet', () => {
   it('omits preview AOV passes for beauty and includes final display detail inputs', () => {
     const beauty = generateCode(snapshot({output: 'final'}));
     expect(syntaxErrors(beauty)).toEqual([]);
-    expect(beauty).toContain("aovs: ['depth', 'diffuseAlbedo', 'specularAlbedo'], aovResolution: 'display'");
+    expect(beauty).toContain("aovs: ['depth', 'diffuseColor', 'specularColor'], aovResolution: 'display'");
     expect(beauty).not.toContain('preview: { aovs:');
     expect(beauty).toContain('createEasuPass({albedoDetail: true})');
     expect(generateCode(snapshot({displayUpscale:false}))).not.toContain('createEasuPass');

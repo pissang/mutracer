@@ -4,21 +4,27 @@ import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneL
 import {borrowedAovRevision} from './WGPUAov.js';
 import {TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
 
-/** Display-space albedo compensation controls. */
+/** createEasuPass options. */
 export interface EasuOptions {
-  /** Recover texture detail using enabled display-resolution diffuseAlbedo, specularAlbedo and depth AOVs. Default false. Missing or mismatched AOVs use EASU alone; unsupported surfaces and silhouettes receive no compensation. */ albedoDetail?: boolean;
-  /** Per-channel linear compensation bounds, positive finite min <= max. Wider bounds recover more texture contrast but can alter silhouettes and highlights. Default [0.7, 1.43]. */ ratioRange?: readonly [number, number];
-  /** Relative departure of neighboring inverse depth from a plane that marks a silhouette and rejects compensation there, positive finite; sloped planes are not silhouettes. Default 0.02. */ depthThreshold?: number;
+  /** Recover surface texture detail from the displayed render's diffuseColor, specularColor and depth AOVs, traced with aovResolution 'display'. Default false. Warns once when the displayed render lacks that configuration; frames whose AOVs are not ready or do not match the output size use EASU alone. Unsupported surfaces and silhouettes receive no compensation. */ albedoDetail?: boolean;
+}
+/** @internal Detail tuning kept for comparisons; not package options. */
+export interface EasuTuning extends EasuOptions {
+  /** Per-channel linear compensation bounds, positive finite min <= max. Default [0.7, 1.43]. */ ratioRange?: readonly [number, number];
+  /** Relative departure of neighboring inverse depth from a plane that marks a silhouette, positive finite. Default 0.02. */ depthThreshold?: number;
   /** Minimum valid AOV coverage in (0,1]. Default 0.95. */ coverageThreshold?: number;
 }
 /** A display pass with optional scratch images. Dispose after unregistering; it may be used again. */
 export type EasuPass = PostProcess & {dispose(): void};
 /** Creates an edge-adaptive display-space upscale pass (AMD FSR 1 EASU), without sharpening. Register with outputSize: (_, display) => display. WebGPU only; supports rgba8unorm and extended-range rgba16float, including alpha. Copies inputs that already have the output size and area-averages larger ones. Default EASU alone. */
-export function createEasuPass(options: EasuOptions = {}): EasuPass { return createEasuPassImpl(options); }
+export function createEasuPass(options: EasuOptions = {}): EasuPass { return createEasuPassImpl({albedoDetail: options.albedoDetail}); }
+
+const DETAIL_AOVS = ['diffuseColor', 'specularColor', 'depth'] as const;
 
 /** @internal Plain albedo ratios (guided false), the separate-lobe approximation and depth-guided silhouettes are retained for comparisons; not package exports. */
-export function createEasuPassImpl(options: EasuOptions = {}, separate = false, silhouettes = false, guided = true): EasuPass {
+export function createEasuPassImpl(options: EasuTuning = {}, separate = false, silhouettes = false, guided = true): EasuPass {
   const detailEnabled = options.albedoDetail ?? false;
+  let warnedConfiguration = false;
   const [min, max] = options.ratioRange ?? EASU_DETAIL.ratioRange;
   const depth = options.depthThreshold ?? EASU_DETAIL.depthThreshold, coverage = options.coverageThreshold ?? EASU_DETAIL.coverageThreshold;
   if (![min,max,depth,coverage].every(Number.isFinite) || min <= 0 || max < min || depth <= 0 || coverage <= 0 || coverage > 1) throw new RangeError('Invalid EASU detail compensation options.');
@@ -61,7 +67,11 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false, 
       draw.setPipeline(down);draw.setBindGroup(0,group);draw.draw(3);draw.end();
       return;
     }
-    const aovs = detailEnabled ? (['diffuseAlbedo','specularAlbedo','depth'] as const).map(kind => render.getAovTexture(kind)) : [];
+    if (detailEnabled && !warnedConfiguration && (render.aovResolution !== 'display' || !DETAIL_AOVS.every(kind => render.aovs.includes(kind)))) {
+      warnedConfiguration = true;
+      console.warn("EASU albedoDetail needs the displayed render to enable diffuseColor, specularColor and depth AOVs with aovResolution 'display'; upscaling without detail.");
+    }
+    const aovs = detailEnabled ? DETAIL_AOVS.map(kind => render.getAovTexture(kind)) : [];
     const detail = aovs.length === 3 && aovs.every(image => image && image.width === output.width && image.height === output.height);
     const entries: GPUBindGroupEntry[] = [{binding:0,resource:input.createView()}, {binding:1,resource:{buffer:buffer([output.width,output.height,min,max])}}];
     if (detail) {

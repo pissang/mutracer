@@ -891,7 +891,7 @@ it('spreads display-resolution AOV samples after the first beauty sample and com
   pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4,
     dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 6,
     transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false,
-    aovs: ['diffuseAlbedo', 'specularAlbedo', 'depth'], aovResolution: 'display'});
+    aovs: ['diffuseColor', 'specularColor', 'depth'], aovResolution: 'display'});
   const pass = mocks.TracePass.latest, requests: [number, number][] = [];
   const render = (state: WGPUAov, _camera: Camera, samples: number, cap: number) => {
     requests.push([pipeline.getTotalSamplesRendered(), samples]); state.samples = Math.max(state.samples, Math.min(samples, cap)); return true;

@@ -40,8 +40,8 @@ export interface PostProcessContext {
   /** Record commands here; the library finishes and submits it. */ encoder: GPUCommandEncoder;
   /** Read-only composed display image, top row first; no additional color conversion. */ input: GPUTexture;
   /** Fully write this image. Same format as input; dimensions follow outputSize; supports render, storage and copy writes. */ output: GPUTexture;
-  /** Actual render width. */ width: number;
-  /** Actual render height. */ height: number;
+  /** Actual render width; pass dimensions are input.width and output.width. */ width: number;
+  /** Actual render height; pass dimensions are input.height and output.height. */ height: number;
   /** Selected complete render, including a selected fallback. */ render: Render;
 }
 /** Optional dimensions for a display pass. */

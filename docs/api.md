@@ -127,7 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
-| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 4 samples; requires a scale-based render. WebGL falls back with one warning |
+| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 4 samples regardless of `aovSamples`; requires a scale-based render. WebGL falls back with one warning |
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
@@ -364,10 +364,7 @@ beauty and denoiser guides keep the render dimensions. Both modes stop at
 and rejects fixed-size renders. During tracing, display mode starts after the first
 beauty sample and adds one AOV sample per frame; the frame that reaches
 `maxSamples` completes the rest. WebGL falls back to render dimensions and warns
-once per render. In display mode `diffuseAlbedo` and `specularAlbedo` are
-texture albedo estimates (base and specular color, metalness, coat tint and
-dielectric F0) rather than directional-hemispherical reflectance; they cover
-coat, fuzz and anisotropic surfaces and exclude transmission, cutouts and media.
+once per render. Each kind has the same meaning in both modes.
 Custom denoiser AOV inputs require `'render'` resolution.
 
 | Kind | RGBA contents |
@@ -377,12 +374,14 @@ Custom denoiser AOV inputs require `'render'` resolution.
 | `roughness` | Specular roughness, metalness, unsupported-reflectance fraction, coverage |
 | `diffuseAlbedo` | Directional-hemispherical diffuse reflectance RGB, valid coverage |
 | `specularAlbedo` | Directional-hemispherical specular reflectance RGB, valid coverage |
+| `diffuseColor` | Diffuse texture color: base weight × base color × (1 − metalness), tinted by coat color; valid coverage |
+| `specularColor` | Specular texture color: metal base color plus dielectric specular color × F0, tinted by coat color; valid coverage |
 | `id` | Object, local instance (0 for ordinary meshes), material, source triangle index; background is `0xFFFFFFFF` in all channels |
 | `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
 
-Depth, position, roughness and reflectance average independent jittered primary
+Depth, position, roughness, reflectance and color average independent jittered primary
 rays, including depth of field. RGB values use hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
-uses only supported hits for both normalization and valid coverage. A blank pixel
+and color use only supported hits for both normalization and valid coverage. A blank pixel
 is zero. These passes preserve beauty samples but do not sample the same paths.
 Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
 with at most 32 layers.
@@ -407,16 +406,21 @@ Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
 dispersion, partial alpha and nonstandard materials are unsupported by this
 reflectance estimate. Such hits contribute to `roughness.b` and have zero
-reflectance validity. Display mode also marks transmissive surfaces invalid.
-Reflectance tracing can be expensive; request it only when needed.
+reflectance validity. Reflectance tracing can be expensive; request it only when needed.
+
+`diffuseColor` and `specularColor` read resolved material inputs without
+integrating the BSDF, so they are cheap. They support coat, fuzz and anisotropic
+surfaces; transmission, partial alpha, media and nonstandard materials have zero
+color validity. A render can request `diffuseAlbedo` or `diffuseColor`, not both;
+the same applies to `specularAlbedo` and `specularColor`.
 
 Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
 are no AOV allocations or passes. Enabling any kind normally costs about 128 GPU bytes
 per AOV pixel on WebGPU or 192 on WebGL, plus scene identity/history data.
-WebGPU display mode requesting only depth and/or diffuse/specular albedo costs
+WebGPU display mode requesting only `depth`, `diffuseColor` and/or `specularColor` costs
 24 bytes per pixel plus small scene metadata; borrowing all three GPU textures
-adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its reflectance
+adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its color
 accumulation has half precision. Other AOV selections use the full allocation;
 each custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
 reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
@@ -440,7 +444,7 @@ const png = await engine.display.toBlob(render);
 | `depth` | Black at the near depth, white at the far depth, clamped outside the range |
 | `position` | World xyz mapped to RGB; origin is 0.5 and ±position scale maps to 0/1 |
 | `roughness` | RGB = roughness, metalness, unsupported-reflectance fraction |
-| `diffuseAlbedo`, `specularAlbedo` | Linear reflectance RGB clamped to [0, 1], then sRGB encoded |
+| `diffuseAlbedo`, `specularAlbedo`, `diffuseColor`, `specularColor` | Linear RGB clamped to [0, 1], then sRGB encoded |
 | `id` | Stable pseudocolor for the selected uint32 ID component; colors can collide |
 | `motion` | Direction as hue (+x is red, +y is yellow-green), displacement/scale as brightness |
 
@@ -617,7 +621,7 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## GPU output and display passes
 
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
-`render.getAovTexture('diffuseAlbedo' | 'specularAlbedo' | 'depth')` borrows raw
+`render.getAovTexture('diffuseColor' | 'specularColor' | 'depth')` borrows raw
 linear AOV textures at their own resolution after sampling; WebGL returns undefined.
 `display.addPostProcess(pass, options?)` returns unregister and runs on every present/export.
 Both are WebGPU-only. `options.outputSize` defaults to preserving input dimensions;

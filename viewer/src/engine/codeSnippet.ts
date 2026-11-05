@@ -296,7 +296,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     if (s[key] !== fallback) final[key] = s[key];
   }
   if (s.caustics) final.caustics = causticOptions(s);
-  if (upscale) {final.aovs = ['depth','diffuseAlbedo','specularAlbedo'];final.aovResolution = 'display';}
+  if (upscale) {final.aovs = ['depth','diffuseColor','specularColor'];final.aovResolution = 'display';}
   else if (aovs.length) final.aovs = aovs;
   final.denoiser = denoiser(s, snapshot.webgpu, false);
   let preview: Record<string, unknown> | false = false;

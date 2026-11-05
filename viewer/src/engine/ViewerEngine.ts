@@ -780,7 +780,7 @@ export class ViewerEngine {
     // it copies images that already match the canvas. Detail AOVs are traced only for a reduced final.
     const enabled = !this.exporting && this.engine.backend === 'webgpu' && s.displayUpscale && s.output === 'final';
     const detail = enabled && r.resolutionScale < 1;
-    r.aovs = detail ? ['depth','diffuseAlbedo','specularAlbedo'] : VIEWER_AOVS.filter(kind => kind === s.output);
+    r.aovs = detail ? ['depth','diffuseColor','specularColor'] : VIEWER_AOVS.filter(kind => kind === s.output);
     r.aovResolution = detail ? 'display' : 'render';
     this.removeUpscale?.();this.removeUpscale = undefined;
     if (enabled) {

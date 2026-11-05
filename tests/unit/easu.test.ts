@@ -1,10 +1,28 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {createEasuPass} from '../../src/renderer/easu';
+import {createEasuPass, createEasuPassImpl} from '../../src/renderer/easu';
 import type {PostProcessContext} from '../../src/Display';
 
 afterEach(()=>{vi.unstubAllGlobals();});
 it.each([{ratioRange:[0,1]},{ratioRange:[2,1]},{coverageThreshold:0},{depthThreshold:NaN}])('rejects invalid detail controls %o',options=>{
- expect(()=>createEasuPass(options as never)).toThrow(RangeError);
+ expect(()=>createEasuPassImpl(options as never)).toThrow(RangeError);
+});
+it('accepts only albedoDetail publicly and warns once when the displayed render lacks detail AOVs',()=>{
+ vi.stubGlobal('GPUBufferUsage',{UNIFORM:1});
+ const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+ expect(()=>createEasuPass({albedoDetail:true,ratioRange:[0,1]} as never)).not.toThrow();
+ const image=(width:number,height:number)=>({width,height,format:'rgba8unorm',createView:()=>({})}) as unknown as GPUTexture;
+ const device={createShaderModule:()=>({}),createRenderPipeline:()=>({getBindGroupLayout:()=>({})}),
+  createBuffer:()=>({getMappedRange:()=>new ArrayBuffer(16),unmap(){},destroy(){}}),createBindGroup:()=>({}),queue:{onSubmittedWorkDone:async()=>{}}} as unknown as GPUDevice;
+ const encoder={beginRenderPass:()=>({setPipeline(){},setBindGroup(){},draw(){},end(){}}),copyTextureToTexture(){}} as unknown as GPUCommandEncoder;
+ const render={aovs:['depth','diffuseAlbedo','specularAlbedo'],aovResolution:'display',getAovTexture:()=>undefined};
+ const context={device,encoder,input:image(7,5),output:image(14,10),width:7,height:5,render} as unknown as PostProcessContext;
+ const pass=createEasuPass({albedoDetail:true});
+ pass({...context,input:image(14,10)});expect(warn).not.toHaveBeenCalled();
+ pass(context);pass(context);expect(warn).toHaveBeenCalledOnce();
+ warn.mockClear();render.aovs=['depth','diffuseColor','specularColor'];
+ const configured=createEasuPass({albedoDetail:true});configured(context);
+ render.aovResolution='render';createEasuPass()(context);expect(warn).not.toHaveBeenCalled();
+ warn.mockRestore();
 });
 it('reuses scratch at the input size and retires it after resize, device replacement and disposal',async()=>{
  vi.stubGlobal('GPUBufferUsage',{UNIFORM:1});vi.stubGlobal('GPUTextureUsage',{TEXTURE_BINDING:1,RENDER_ATTACHMENT:2});
@@ -20,7 +38,7 @@ it('reuses scratch at the input size and retires it after resize, device replace
  const first=devices(),second=devices();
  const encoder={beginRenderPass:()=>({setPipeline(){},setBindGroup(){},draw(){},end(){}})} as unknown as GPUCommandEncoder;
  const context={device:first.device,encoder,input:image(7,5),output:image(14,10),width:7,height:5,
-  render:{getAovTexture:()=>image(14,10),_engine:{display:{toneMapping:'agx',toneMappingExposure:1,contrast:1,saturation:1,temperature:0,tint:0}}}} as unknown as PostProcessContext;
+  render:{aovs:['depth','diffuseColor','specularColor'],aovResolution:'display',getAovTexture:()=>image(14,10),_engine:{display:{toneMapping:'agx',toneMappingExposure:1,contrast:1,saturation:1,temperature:0,tint:0}}}} as unknown as PostProcessContext;
  // Two low-resolution albedo guides, a tone table and two albedo-fit images per device;
  // only the tone table survives input resizes.
  const pass=createEasuPass({albedoDetail:true});pass(context);pass(context);expect(first.textures).toHaveLength(5);
@@ -40,13 +58,13 @@ it('downsamples albedo again only when the borrowed AOV contents change',async()
   createBuffer:()=>({getMappedRange:()=>new ArrayBuffer(16),unmap(){},destroy:vi.fn()}),createBindGroup:()=>({}),
   createTexture:({size}:{size:number[]})=>image(size[0],size[1]),createCommandEncoder:()=>({...encoder,finish:()=>({})}),
   queue:{submit:vi.fn(),onSubmittedWorkDone:vi.fn(async()=>{})}} as unknown as GPUDevice;
- const aovs={diffuseAlbedo:image(14,10),specularAlbedo:image(14,10),depth:image(14,10)};
+ const aovs={diffuseColor:image(14,10),specularColor:image(14,10),depth:image(14,10)};
  const context={device,encoder,input:image(7,5),output:image(14,10),width:7,height:5,
-  render:{getAovTexture:(kind:keyof typeof aovs)=>aovs[kind],_engine:{display:{toneMapping:'agx',toneMappingExposure:1,contrast:1,saturation:1,temperature:0,tint:0}}}} as unknown as PostProcessContext;
+  render:{aovs:Object.keys(aovs),aovResolution:'display',getAovTexture:(kind:keyof typeof aovs)=>aovs[kind],_engine:{display:{toneMapping:'agx',toneMappingExposure:1,contrast:1,saturation:1,temperature:0,tint:0}}}} as unknown as PostProcessContext;
  const downsamples=()=>labels.filter(label=>label==='Albedo area downsample').length;
  const pass=createEasuPass({albedoDetail:true});
  pass(context);pass(context);expect(downsamples()).toBe(1);expect(labels.filter(label=>label==='EASU tone table')).toHaveLength(1);expect(labels.filter(label=>label==='FSR 1 EASU')).toHaveLength(2);
- borrowedAovRevision.set(aovs.specularAlbedo,(borrowedAovRevision.get(aovs.specularAlbedo)??0)+1);
+ borrowedAovRevision.set(aovs.specularColor,(borrowedAovRevision.get(aovs.specularColor)??0)+1);
  pass(context);expect(downsamples()).toBe(2);
  pass({...context,input:image(8,6)});expect(downsamples()).toBe(3);
  pass.dispose();

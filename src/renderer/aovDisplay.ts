@@ -1,4 +1,4 @@
-import { AOV_KINDS, type AovKind } from './aov.js';
+import { AOV_KINDS, aovLaneKind, type AovKind } from './aov.js';
 /** ID lane to visualize. Default object. */
 export type AovIdComponent = 'object' | 'instance' | 'material' | 'primitive';
 export interface AovDisplayOptions {
@@ -31,7 +31,7 @@ export function validateAovDisplay(options: AovDisplayOptions) {
 export function packAovDisplay(width: number, height: number, samples: number, kind: AovKind, options: AovDisplayOptions, linear: boolean) {
   validateAovDisplay(options);
   const words = new Uint32Array(12), floats = new Float32Array(words.buffer);
-  words.set([width, height, samples, AOV_KINDS.indexOf(kind)]);
+  words.set([width, height, samples, aovLaneKind(kind)]);
   floats.set([...options.depthRange, options.positionScale, options.motionScale], 4);
   words[8] = AOV_ID_COMPONENTS.indexOf(options.idComponent);
   words[9] = +linear;

@@ -51,7 +51,7 @@ input that already has the output size is copied unchanged and a larger one is
 area-averaged, so one registration can serve a full-resolution or supersampled
 final render and a reduced-resolution preview.
 
-To recover texture detail, enable `diffuseAlbedo`, `specularAlbedo` and `depth`
+To recover texture detail, enable `diffuseColor`, `specularColor` and `depth`
 on a scale-based render with `aovResolution: 'display'`, and create the pass with
 `createEasuPass({albedoDetail: true})`. Keep beauty at the desired reduced
 `resolutionScale`. Unregister the pass, then call `pass.dispose()` when finished
@@ -103,21 +103,20 @@ by primary-hit coverage for partially hit pixels, restoring the per-sample
 average. Thus that CPU readback can differ from the borrowed native HDR texture.
 See [custom denoiser image semantics](./denoising.md#custom-denoisers).
 
-`createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
-missing AOVs or AOV dimensions different from the output use EASU alone. Detail
-options are `ratioRange` (default `[0.7, 1.43]`, positive finite linear bounds),
-`depthThreshold` (default `0.02`, positive relative departure of neighboring
-inverse depth from a plane, so sloped surfaces are not treated as silhouettes) and
-`coverageThreshold` (default `0.95`, in `(0, 1]`). Wider ranges recover more
-texture contrast but can alter highlights and silhouettes. The optional
-AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs).
+`createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`.
+When the displayed render lacks those AOVs or display resolution, the pass warns
+once and upscales without detail; frames whose AOVs are not ready yet or differ
+from the output size also use EASU alone. The optional AOVs add tracing and
+memory cost; see [surface outputs](./api.md#surface-outputs).
 
-`render.getAovTexture(kind)` borrows enabled `diffuseAlbedo`, `specularAlbedo` or
-`depth` outputs after an AOV sample completes, only on WebGPU. Reflectance uses
+`render.getAovTexture(kind)` borrows enabled `diffuseColor`, `specularColor` or
+`depth` outputs after an AOV sample completes, only on WebGPU. Colors use
 `rgba8unorm-srgb`, which loads as linear values in [0, 1], with valid coverage in
 alpha; depth uses `rg32float`, with
 camera-forward depth in red and hit coverage in green. These raw textures follow
 the same borrowing lifetime as `getOutputTexture()` and have the AOV dimensions.
+Each is resolved from the accumulation when its samples change, and the first
+call for a kind also creates its pipeline.
 
 ## Caveats
 

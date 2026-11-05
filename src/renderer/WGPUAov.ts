@@ -4,7 +4,7 @@ import {aovBorrowDepthShader, aovBorrowReflectanceShader} from './wgsl/aovResolv
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
-import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
+import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovLaneKind, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
 /** @internal Content revision of each borrowed AOV texture; changes whenever it is re-resolved. */
 export const borrowedAovRevision = new WeakMap<GPUTexture, number>();
 /** One target's optional AOV allocations and accepted frame history. */
@@ -142,7 +142,7 @@ export class WGPUAov {
     const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.displayPipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();
     return this.displayTexture;
   }
-  texture(kind: 'depth' | 'diffuseAlbedo' | 'specularAlbedo'): GPUTexture | undefined {
+  texture(kind: 'depth' | 'diffuseColor' | 'specularColor'): GPUTexture | undefined {
     if (!this.samples || !this.accumulation || !this.center) return;
     const device = this.device;
     let entry = this.borrowed.get(kind);
@@ -166,7 +166,7 @@ export class WGPUAov {
     }
     if (entry.samples !== this.samples || entry.revision !== this.revision) {
       const parameters = device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
-      new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)]); parameters.unmap();
+      new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,aovLaneKind(kind)]); parameters.unmap();
       const encoder = device.createCommandEncoder();
       const entries: GPUBindGroupEntry[] = [{binding:0,resource:{buffer:this.accumulation}},{binding:1,resource:{buffer:this.center}},{binding:3,resource:{buffer:parameters}}];
       if (kind === 'depth') {
@@ -217,7 +217,7 @@ export class WGPUAov {
           if (kind === 'depth') data.set([f[o]*inv, 0, 0, coverage], target);
           else if (kind === 'position') data.set([f[o+4]*inv, f[o+5]*inv, f[o+6]*inv, coverage], target);
           else if (kind === 'roughness') data.set([f[o+1]*inv, f[o+2]*inv, f[o+3]*inv, coverage], target);
-          else { const offset = kind === 'diffuseAlbedo' ? o+8 : o+12, valid = f[offset+3];
+          else { const offset = aovLaneKind(kind) === 3 ? o+8 : o+12, valid = f[offset+3];
             const scale = valid > 0 ? 1/valid : 0;
             data.set([f[offset]*scale, f[offset+1]*scale, f[offset+2]*scale, valid / Math.max(1,this.samples)], target); }
         }

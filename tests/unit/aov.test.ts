@@ -11,7 +11,11 @@ import {HEADER} from '../../native/src/layout.js';
 
 describe('AOV contract', () => {
   it('uses disjoint flags, bounded packed records and descriptor extension words', () => {
-    expect(aovMask(AOV_KINDS)).toBe(127);
+    expect(aovMask(AOV_KINDS.slice(0, 7))).toBe(127);
+    expect(aovMask(['diffuseColor', 'specularColor'])).toBe(384);
+    expect(aovMask(['diffuseAlbedo', 'specularColor'])).toBe(264);
+    expect(() => aovMask(['diffuseAlbedo', 'diffuseColor'])).toThrow(RangeError);
+    expect(() => aovMask(['specularAlbedo', 'specularColor'])).toThrow(RangeError);
     expect(aovMask(['id', 'id', 'motion'])).toBe(96);
     expect(AOV_LAYOUT.accumulatedBytes).toBe(16 * Float32Array.BYTES_PER_ELEMENT);
     expect(AOV_LAYOUT.centerBytes).toBe(8 * Uint32Array.BYTES_PER_ELEMENT);
