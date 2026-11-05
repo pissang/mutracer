@@ -3,6 +3,41 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.1 - 2026-11-05
+
+Display upscaling with texture detail recovery, faster tiled rendering and faster dispersion.
+
+### Added
+
+- `createEasuPass()` is an edge-adaptive display upscale pass. With `albedoDetail: true` it restores surface texture detail from display-resolution AOVs, so beauty can render at a reduced `resolutionScale`. See [post-processing](docs/post-processing.md).
+- `display.addPostProcess(pass, {outputSize})` lets a pass output a different size than its input, for example the canvas size. `PostProcessOptions` is exported.
+- The `aovResolution: 'display'` render option traces AOVs at canvas size on WebGPU, capped at 4 samples, while beauty keeps the render resolution. WebGL 2 falls back to render resolution and warns once. See [surface outputs](docs/api.md#surface-outputs).
+- `render.getAovTexture('diffuseAlbedo' | 'specularAlbedo' | 'depth')` borrows raw AOV textures on WebGPU.
+
+### Changed
+
+- Missing tangents are generated only for materials that use anisotropy or a coat normal map. Base normal maps use triangle UV derivatives.
+- WebGPU stores vertex normals and tangents in compact form, and vertex colors in [0, 1] with at most 1/510 error per channel. Positions, UVs, HDR or negative vertex colors and displaced normals keep full precision. See [performance](docs/performance.md).
+- Exports of fixed-size renders are cropped to the requested size before post-process passes run.
+
+### Performance
+
+- Large scenes load faster and use less GPU memory on WebGPU with compact vertices.
+- Dispersion traces the shared camera path once before the first wavelength-dependent interaction, and direct-light resampling balances its candidates across RGB channels.
+- TLAS builds cull leaf instances by world bounds and use more SAH bins on the web.
+- Tiled rendering stops subdividing when the time budget cannot be reached or smaller tiles bring little speedup.
+- Russian roulette is deferred only for paths inside scattering media, so absorbing materials no longer lengthen every path in the scene.
+
+### Fixed
+
+- Multiple-scattering compensation for low-roughness metals no longer adds too much energy; they can look slightly darker under broad lighting.
+- Paths inside a subsurface medium intersect its boundary correctly; materials with short scattering radii can look darker.
+- Dispersive scenes no longer overcount emissive meshes, and WebGL 2 spectral direct lighting follows the same random streams as WebGPU.
+- Camera rays stay stable with very small near planes or extreme clip ranges.
+- An engine created on a canvas right after another engine on it was disposed no longer fails with "context is not configured".
+- WebGL 2 scenes that combine vertex colors, tangents, texture maps, emissive meshes and an environment no longer exceed 16 texture units and fail to link.
+- WebGL 2 scenes mixing analytic lights and emissive meshes compile again, and sphere and spot lights seen through transmissive surfaces keep their own radiance instead of the background.
+
 ## 0.3.0 - 2026-11-02
 
 Experimental WebGPU caustics, continuous-wavelength dispersion and more responsive progressive rendering.
