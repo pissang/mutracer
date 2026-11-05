@@ -5,7 +5,7 @@ import {albedoDownsampleShader, easuDetailShader} from './wgsl/easuDetail.wgsl.j
 /** Display-space albedo compensation controls. */
 export interface EasuOptions {
   /** Recover texture detail using enabled display-resolution diffuseAlbedo, specularAlbedo and depth AOVs. Default false. Missing or mismatched AOVs use EASU alone; unsupported surfaces and silhouettes receive no compensation. */ albedoDetail?: boolean;
-  /** Per-channel compensation bounds, positive finite min <= max. Default [0.25, 4]. */ ratioRange?: readonly [number, number];
+  /** Per-channel linear compensation bounds, positive finite min <= max. Wider bounds recover more texture contrast but alter highlights and silhouettes. Default [0.9, 1.1]. */ ratioRange?: readonly [number, number];
   /** Relative depth jump rejecting compensation across silhouettes, positive finite; absolute tolerance is at least 1e-4 scene units. Default 0.02. */ depthThreshold?: number;
   /** Minimum valid AOV coverage in (0,1]. Default 0.95. */ coverageThreshold?: number;
 }
@@ -17,7 +17,7 @@ export function createEasuPass(options: EasuOptions = {}): EasuPass { return cre
 /** @internal Separate-lobe approximation is retained for comparisons; not a package export. */
 export function createEasuPassImpl(options: EasuOptions = {}, separate = false): EasuPass {
   const detailEnabled = options.albedoDetail ?? false;
-  const [min, max] = options.ratioRange ?? [0.25, 4];
+  const [min, max] = options.ratioRange ?? [0.9, 1.1];
   const depth = options.depthThreshold ?? .02, coverage = options.coverageThreshold ?? .95;
   if (![min,max,depth,coverage].every(Number.isFinite) || min <= 0 || max < min || depth <= 0 || coverage <= 0 || coverage > 1) throw new RangeError('Invalid EASU detail compensation options.');
   const devices = new Map<GPUDevice, {pipelines: Map<string, GPURenderPipeline>; scratch?: GPUTexture[]}>();

@@ -86,7 +86,7 @@ describe('viewer code snippet', () => {
     expect(syntaxErrors(beauty)).toEqual([]);
     expect(beauty).toContain("aovs: ['depth', 'diffuseAlbedo', 'specularAlbedo'], aovResolution: 'display'");
     expect(beauty).not.toContain('preview: { aovs:');
-    expect(beauty).toContain('createEasuPass({albedoDetail: true, ratioRange: [0.9, 1.1]})');
+    expect(beauty).toContain('createEasuPass({albedoDetail: true})');
     expect(generateCode(snapshot({displayUpscale:false}))).not.toContain('createEasuPass');
     expect(generateCode(snapshot({}, {webgpu:false}))).not.toContain('createEasuPass');
     for (const output of ['diffuseAlbedo', 'specularAlbedo'] as const) {

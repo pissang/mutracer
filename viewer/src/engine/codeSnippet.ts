@@ -321,7 +321,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     ...loopOptions.map((option, i) => `  ${option}${i < loopOptions.length - 1 ? ',' : ''}`),
     '});',
     '',
-    ...(upscale ? ['engine.display.addPostProcess(createEasuPass({albedoDetail: true, ratioRange: [0.9, 1.1]}), {outputSize: (_, display) => display});', ''] : []),
+    ...(upscale ? ['engine.display.addPostProcess(createEasuPass({albedoDetail: true}), {outputSize: (_, display) => display});', ''] : []),
     'new ResizeObserver(() => {',
     '  const scale = Math.min(devicePixelRatio, 2);',
     '  engine.display.setSize(Math.round(canvas.clientWidth * scale), Math.round(canvas.clientHeight * scale));',

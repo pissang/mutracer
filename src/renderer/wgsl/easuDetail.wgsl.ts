@@ -11,6 +11,14 @@ export function easuDetailShader(separate = false) {
 fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
   return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
 }
+fn detailDecode(c: vec3f) -> vec3f {
+  let a=max(c,vec3f(0));
+  return select(pow((a+0.055)/1.055,vec3f(2.4)),a/12.92,a<=vec3f(0.04045));
+}
+fn detailEncode(c: vec3f) -> vec3f {
+  let a=max(c,vec3f(0));
+  return select(1.055*pow(a,vec3f(1.0/2.4))-0.055,a*12.92,a<=vec3f(0.0031308));
+}
 @vertex fn vertex`).replace('  return clamp(result/total,lower,upper);', /* wgsl */ `
   let color=clamp(result/total,lower,upper);
   var diffuse=vec4f(0);var specular=vec4f(0);
@@ -43,7 +51,8 @@ fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
   let rs=clamp(s.rgb/max(specular.rgb,vec3f(detail.x)),vec3f(outputSize.z),vec3f(outputSize.w));
   ratio=share*rd+(vec3f(1)-share)*rs;` : ''}
   ratio=select(vec3f(1),ratio,low>vec3f(detail.x));
-  return vec4f(color.rgb*ratio,color.a);`);
+  // Albedo ratios are linear; the composed image is sRGB encoded (extended above 1).
+  return vec4f(detailEncode(detailDecode(color.rgb)*ratio),color.a);`);
 }
 
 // Exact box overlap integrates noninteger footprints instead of point sampling.

@@ -137,7 +137,7 @@ export class ViewerEngine {
   private manualFocus: { x: number; y: number } | null = null;
   private disposed = false;
   private removeUpscale?: () => void;
-  private readonly upscalePass = createEasuPass({albedoDetail: true, ratioRange: [.9,1.1]});
+  private readonly upscalePass = createEasuPass({albedoDetail: true});
   private readonly unsubscribe: () => void;
   private readonly resizeObserver: ResizeObserver;
 

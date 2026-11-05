@@ -58,9 +58,8 @@ EASU works on display-encoded RGB after tone mapping, including extended-range
 output, and preserves alpha. EASU alone cannot recover missing texture detail.
 Albedo compensation recovers supported surface texture detail but cannot recover
 reflection, refraction or geometric detail. It is a display-space approximation:
-bright and clipped highlights can change incorrectly. Coat and other unsupported
-reflectance surfaces, transmission, background, low coverage and depth boundaries
-receive EASU alone.
+bright and clipped highlights can change incorrectly. Transmission, cutouts,
+background, low coverage and depth boundaries receive EASU alone.
 
 ## Options and image semantics
 
@@ -100,11 +99,11 @@ See [custom denoiser image semantics](./denoising.md#custom-denoisers).
 
 `createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
 missing AOVs or AOV dimensions different from the output use EASU alone. Detail
-options are `ratioRange` (default `[0.25, 4]`, positive finite bounds),
+options are `ratioRange` (default `[0.9, 1.1]`, positive finite linear bounds),
 `depthThreshold` (default `0.02`, positive relative depth jump, with a `1e-4`
 scene-unit tolerance floor) and
-`coverageThreshold` (default `0.95`, in `(0, 1]`). Keep compensation ranges narrow
-when the material or lighting produces halos or color changes. The optional
+`coverageThreshold` (default `0.95`, in `(0, 1]`). Wider ranges recover more
+texture contrast but can alter highlights and silhouettes. The optional
 AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs).
 
 `render.getAovTexture(kind)` borrows enabled `diffuseAlbedo`, `specularAlbedo` or

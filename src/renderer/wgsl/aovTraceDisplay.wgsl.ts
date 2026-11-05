@@ -32,4 +32,21 @@ fn aovMatrix(`)
   .replace('if (!aovSurface(ray, &si, &material)) { return; }', 'if (!aovSurface(ray, &si, &material)) { aovStore(index,pixel); return; }')
   .replace(/aovAccum\[index\]\./g, 'pixel.')
   .replace('pixel.position += vec4f(si.position, 1.0);', 'pixel.position += vec4f(si.position, 1.0); aovStore(index,pixel);')
-  .replace('(material.transmissionDispersionScale > 0.0);', '(material.transmissionDispersionScale > 0.0) | (AOV_DISPLAY && material.transmissionWeight > 0.0);');
+  .replace('(material.transmissionDispersionScale > 0.0);', '(material.transmissionDispersionScale > 0.0) | (AOV_DISPLAY && material.transmissionWeight > 0.0);')
+  // Display-resolution reflectance only guides texture detail, so it uses the
+  // resolved texture albedo instead of directional-hemispherical quadrature.
+  // Uniform layer factors cancel in detail ratios, so coat, fuzz, sheen-like
+  // and anisotropic surfaces stay valid; transmission and cutouts do not.
+  .replace('if (AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {', /* wgsl */ `if (AOV_DISPLAY && (aovParameters.w & 24u) != 0u) {
+    let blocked = (material.materialType != STANDARD) | (material.alpha < 1.0) | (material.transmissionWeight > 0.0) |
+      (dot(material.mediumScattering, material.mediumScattering) > 0.0);
+    if (!blocked) {
+      let metal = clamp(material.baseMetalness, 0.0, 1.0);
+      let base = material.baseWeight * material.baseColor;
+      let layer = mix(vec3f(1.0), material.coatColor, clamp(material.coatWeight, 0.0, 1.0));
+      let f = (material.specularIor - 1.0) / (material.specularIor + 1.0);
+      pixel.diffuse += vec4f(layer * base * (1.0 - metal), 1.0);
+      pixel.specular += vec4f(layer * (metal * base + (1.0 - metal) * material.specularWeight * material.specularColor * f * f), 1.0);
+    }
+  }
+  if (!AOV_DISPLAY && AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {`);
