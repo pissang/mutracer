@@ -1,3 +1,6 @@
+/** Mode indices understood by applyToneMapping. */
+export const TONE_MAPPING_MODES: Readonly<Record<string, number>> = {agx: 0, aces: 1, cineon: 2, reinhard: 3, linear: 4};
+
 export const linearToSrgbDefine = /* wgsl */ `
 fn linearToSrgb(color: vec3f) -> vec3f {
   let linear = max(color, vec3f(0.0));

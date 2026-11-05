@@ -1,4 +1,9 @@
 import {easuShader} from './easu.wgsl.js';
+import {composeDefine} from './compose.frag.wgsl.js';
+
+/** Scene-linear log2 range covered by the tone lookup table. */
+export const TONE_LUT_LOG2 = [-24, 24] as const;
+export const TONE_LUT_SIZE = 1024;
 
 export function easuDetailShader(separate = false) {
   return easuShader.replace('@vertex fn vertex', /* wgsl */ `
@@ -10,6 +15,28 @@ export function easuDetailShader(separate = false) {
 @group(0) @binding(7) var<uniform> detail: vec4f;
 fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
   return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
+}
+// Row 0: display value of a gray scene-linear input at TONE_LUT_LOG2 stops, per channel.
+// Row 1: log2 scene-linear input per channel for display values (sqrt-spaced up to tone.x).
+@group(0) @binding(8) var toneLut: texture_2d<f32>;
+@group(0) @binding(9) var<uniform> tone: vec4f;
+fn toneLutRow(row: i32, u: vec3f) -> vec3f {
+  let last=f32(textureDimensions(toneLut).x-1u);let p=clamp(u,vec3f(0),vec3f(1))*last;
+  let i=vec3i(floor(p));let j=min(i+1,vec3i(i32(last)));let f=p-floor(p);
+  var result=vec3f(0);
+  for(var c=0;c<3;c++){result[c]=mix(textureLoad(toneLut,vec2i(i[c],row),0)[c],textureLoad(toneLut,vec2i(j[c],row),0)[c],f[c]);}
+  return result;
+}
+fn toneForward(log2x: vec3f) -> vec3f {return toneLutRow(0,(log2x-(${TONE_LUT_LOG2[0]}.0))/${TONE_LUT_LOG2[1]-TONE_LUT_LOG2[0]}.0);}
+fn toneInverse(d: vec3f) -> vec3f {return toneLutRow(1,sqrt(max(d,vec3f(0))/tone.x));}
+// Applies a scene-linear albedo ratio before the display transform: displayed
+// RGB is mapped back to scene-linear per channel, scaled and mapped forward, so
+// curve shoulders and toes respond as the tone mapper would. Only the change is
+// added to the displayed value, which keeps it exact where the ratio is 1.
+fn toneAware(d: vec3f, ratio: vec3f) -> vec3f {
+  let x=toneInverse(d);
+  let changed=max(d+toneForward(x+log2(max(ratio,vec3f(1e-6))))-toneForward(x),vec3f(0));
+  return select(changed,d,abs(ratio-vec3f(1))<vec3f(1e-4));
 }
 fn detailDecode(c: vec3f) -> vec3f {
   let a=max(c,vec3f(0));
@@ -51,8 +78,8 @@ fn detailEncode(c: vec3f) -> vec3f {
   let rs=clamp(s.rgb/max(specular.rgb,vec3f(detail.x)),vec3f(outputSize.z),vec3f(outputSize.w));
   ratio=share*rd+(vec3f(1)-share)*rs;` : ''}
   ratio=select(vec3f(1),ratio,low>vec3f(detail.x));
-  // Albedo ratios are linear; the composed image is sRGB encoded (extended above 1).
-  return vec4f(detailEncode(detailDecode(color.rgb)*ratio),color.a);`);
+  // Albedo ratios are scene-linear; the composed image is tone mapped and sRGB encoded.
+  return vec4f(detailEncode(toneAware(detailDecode(color.rgb),ratio)),color.a);`);
 }
 
 // Exact box overlap integrates noninteger footprints instead of point sampling.
@@ -78,5 +105,32 @@ struct Result {@location(0) diffuse: vec4f, @location(1) specular: vec4f,}
   var result: Result;
   result.diffuse=vec4f(d.rgb/max(d.a,1e-8),d.a/(scale.x*scale.y));
   result.specular=vec4f(s.rgb/max(s.a,1e-8),s.a/(scale.x*scale.y));return result;
+}
+`;
+
+// Builds the tone lookup rows for the current grading and tone mapping.
+// toneMappingParams: x mode, y maximum display value, z exposure, w 1 for extended output.
+export const toneLutShader = /* wgsl */ `
+@group(0) @binding(0) var<uniform> toneMappingParams: vec4f;
+@group(0) @binding(1) var<uniform> colorGradingParams: vec4f;
+${composeDefine}
+fn toneGray(x: f32) -> vec3f {
+  var v=gradeColor(vec3f(x)*toneMappingParams.z);
+  if(toneMappingParams.w<0.5){v=applyToneMapping(v);}
+  return v;
+}
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
+}
+@fragment fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
+  let u=floor(p.x)/${TONE_LUT_SIZE - 1}.0;
+  if(p.y<1.0){return vec4f(toneGray(exp2(mix(${TONE_LUT_LOG2[0]}.0,${TONE_LUT_LOG2[1]}.0,u))),1);}
+  let d=u*u*toneMappingParams.y;var result=vec3f(0);
+  for(var c=0;c<3;c++){
+    var lo=${TONE_LUT_LOG2[0]}.0;var hi=${TONE_LUT_LOG2[1]}.0;
+    for(var i=0;i<28;i++){let mid=0.5*(lo+hi);if(toneGray(exp2(mid))[c]<d){lo=mid;}else{hi=mid;}}
+    result[c]=0.5*(lo+hi);
+  }
+  return vec4f(result,1);
 }
 `;

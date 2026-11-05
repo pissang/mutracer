@@ -1,5 +1,5 @@
 import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
-import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
+import {hdrResolveWGSL, TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
 import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
@@ -1086,13 +1086,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
   function setToneMappingParams(params: ToneMappingParams) {
     const newExposure = params.exposure ?? 1;
-    const newToneMappingMode = {
-      agx: 0,
-      aces: 1,
-      cineon: 2,
-      reinhard: 3,
-      linear: 4
-    }[params.toneMapping ?? 'agx'] ?? 0;
+    const newToneMappingMode = TONE_MAPPING_MODES[params.toneMapping ?? 'agx'] ?? 0;
     const newContrast = params.contrast ?? 1;
     const newSaturation = params.saturation ?? 1;
     const newTemperature = params.temperature ?? 0;
