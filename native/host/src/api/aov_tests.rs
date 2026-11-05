@@ -1463,9 +1463,17 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
         let image = {
             let query = crate::context::aov_query(handle).unwrap();
             let words = query
-                .metadata(&descriptor[camera_offset..camera_offset + 128])
+                .metadata(
+                    &descriptor[camera_offset..camera_offset + 128],
+                    query.size(),
+                )
                 .unwrap();
-            let mut output = crate::aov::Output::new(&query, 1, &words, None).unwrap();
+            let layout = crate::aov::Layout {
+                size: query.size(),
+                display: false,
+                compact: false,
+            };
+            let mut output = crate::aov::Output::new(&query, 1, &words, None, layout).unwrap();
             output.render(&query, 4, 1).unwrap();
             output.read(4).unwrap().data
         };

@@ -10,8 +10,10 @@ render's image with display settings, presents it, and exports RGBA8 or PNG
 
 Display settings never restart accumulation or change HDR readback. The final
 channel composes denoised or raw color with tone mapping,
-grading and effects (vignette, bloom, shadow catchers), then runs
-[custom passes](#custom-display-passes-rust), then scales to the display size.
+grading and effects (vignette, bloom, shadow catchers), then runs display
+passes, such as the [upscale](#display-upscale) and
+[custom passes](#custom-display-passes-rust), then scales linearly to the
+display size.
 
 - Normal and albedo channels bypass display effects and denoising.
 - An opaque solid background keeps its color regardless of exposure, grading
@@ -63,6 +65,67 @@ Visualization retains 4 GPU bytes per render pixel for SDR and another 8 when
 HDR is used, until the AOV resources are resized or disposed. HDR windows show
 the same mapped colors in linear light, within SDR white.
 
+## Display upscale
+
+To present a reduced-resolution render sharply at display resolution, add the
+edge-adaptive upscale shared with the browser library (AMD FidelityFX FSR 1
+EASU, without sharpening):
+
+```rust
+let upscale = engine.display().add_upscale(EasuOptions::default())?;
+// Drop it or call upscale.remove() to stop upscaling.
+```
+
+In C, initialize `mt_upscale_options` with `mt_upscale_options_default` and call
+`mt_display_add_upscale`; `mt_upscale_destroy` removes it. The pass outputs at
+the display size, so presentation, `read_rgba8` / `mt_display_read_pixels` and
+PNG export use the display size. Images that already have the display size are
+copied, and larger ones are area averaged, so one registration serves a reduced
+final render, a full-resolution one and a reduced preview. Register it before
+passes that should run at display resolution. Rust hosts can also run
+`EasuPass` from their own pass registered with
+`PostProcessOptions::display_size()`.
+
+To recover texture detail, set `albedo_detail` and enable depth, diffuse and
+specular reflectance AOVs on a scale-based render with
+`AovResolution::Display` / `MT_AOV_RESOLUTION_DISPLAY`:
+
+```rust
+let render = Render::new(&engine, RenderSettings {
+    size: RenderSize::Scale(0.5),
+    aovs: PixelKind::Depth.aov_mask()
+        | PixelKind::DiffuseAlbedo.aov_mask()
+        | PixelKind::SpecularAlbedo.aov_mask(),
+    aov_resolution: AovResolution::Display,
+    ..Default::default()
+})?;
+let upscale = engine.display().add_upscale(EasuOptions {
+    albedo_detail: true,
+    ..Default::default()
+})?;
+```
+
+Display AOVs are traced at the display size with at most 4 samples. While the
+render accumulates, they start after the first beauty sample and add one sample
+per batch; the batch that reaches `max_samples` completes the rest. Beauty,
+denoising and denoiser guides keep the render size.
+
+- EASU works on the composed, display-encoded image and preserves alpha. Alone,
+  it cannot recover missing texture detail.
+- Detail compensation recovers the texture of supported surfaces, not
+  reflected, refracted or geometric detail. It maps the image back through the
+  tone mapping and grading, and changes only the radiance that locally follows
+  albedo, so specular highlights mostly keep their brightness. Clipped
+  highlights cannot be recovered. Transmission, cutouts, background, low
+  coverage and depth boundaries get EASU alone, as do missing or differently
+  sized AOVs and HDR-window passes.
+- Memory: compact display AOVs (only depth and reflectance) cost 24 bytes per
+  display pixel and borrowing their textures another 16; other masks use the
+  full AOV allocation at display size. The pass keeps about 32 bytes per render
+  pixel of guides and a 32 KiB table.
+- With detail, each present adds a render-size fit pass, and each batch traces
+  one display-size AOV sample until the cap.
+
 ## GPU images (Rust)
 
 `Render::get_output_texture` borrows a render's HDR or display image on the
@@ -90,9 +153,19 @@ display.present(&render)?;
 
 Passes run in registration order on every presentation and export. A failing
 pass discards the whole chain for that composition and reports an engine error.
-`PostProcessContext` documents the borrowed images and encoder. Passes add two
-4-byte images per render pixel while they run. C hosts can borrow images and
-record native passes through [Vulkan interop](vulkan.md).
+`PostProcessContext` documents the borrowed images and encoder.
+
+`add_post_process_with` takes `PostProcessOptions::output_size`, which receives
+the previous pass's size and the display size, also during export, and returns
+the pass's output size; `PostProcessOptions::display_size()` outputs at display
+resolution. A chain can change size more than once. Invalid dimensions discard
+the chain like a failing pass. Presentation, `read_rgba8`, PNG export and the
+borrowed display output use the final chain size; `ctx.width` and `ctx.height`
+stay the render size.
+
+Passes keep one 4-byte image per output size, and a second when consecutive
+passes share that size. C hosts can borrow images and record native passes
+through [Vulkan interop](vulkan.md).
 
 ## Window presentation
 

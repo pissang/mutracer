@@ -279,6 +279,40 @@ int32_t mt_display_set_size(mt_display display, uint32_t width, uint32_t height,
 int32_t mt_display_set_settings(mt_display display, const mt_display_settings *settings, char *error, size_t capacity);
 int32_t mt_display_get_settings(mt_display display, mt_display_settings *output, char *error, size_t capacity);
 
+/* Edge-adaptive display upscale (AMD FidelityFX FSR 1 EASU) without
+ * sharpening, shared with the browser library. Initialize with
+ * mt_upscale_options_default. */
+typedef struct mt_upscale_options {
+  uint32_t struct_size;
+  /* 0 or 1; default 0. Recover texture detail from the presented render's
+   * display-resolution depth and diffuse/specular reflectance AOVs
+   * (MT_AOV_RESOLUTION_DISPLAY). Missing or differently sized AOVs use EASU
+   * alone; unsupported surfaces and silhouettes receive no compensation. */
+  uint32_t albedo_detail;
+  /* Per-channel linear compensation bounds, positive finite min <= max.
+   * Wider bounds recover more texture contrast but can alter silhouettes and
+   * highlights. Default {0.7, 1.43}. */
+  float ratio_range[2];
+  /* Relative departure of neighboring inverse depth from a plane that marks a
+   * silhouette and rejects compensation there, positive finite. Default 0.02. */
+  float depth_threshold;
+  float coverage_threshold; /* Minimum valid AOV coverage in (0,1]. Default 0.95. */
+} mt_upscale_options;
+MT_ENGINE_LAYOUT(mt_upscale_options, 24);
+typedef uint64_t mt_upscale;
+/* Initializes the full record, including struct_size. Null output is invalid. */
+int32_t mt_upscale_options_default(mt_upscale_options *output);
+/* Appends an SDR display pass that upscales the composed image to the display
+ * size; present, mt_display_read_pixels and PNG export then use the display
+ * size. Images that already have the display size are copied, larger ones area
+ * averaged. Invalid options report MT_ERROR_INVALID_ARGUMENT. The pass stays
+ * until mt_upscale_destroy or engine destruction. Costs and limits are in
+ * docs/display.md. */
+int32_t mt_display_add_upscale(mt_display display, const mt_upscale_options *options, mt_upscale *output,
+  char *error, size_t capacity);
+/* Removes the pass from the next composition and releases its images. */
+int32_t mt_upscale_destroy(mt_upscale upscale, char *error, size_t capacity);
+
 typedef struct mt_presented {
   uint32_t struct_size;
   uint32_t fallback; /* 1 when the render's fallback was shown. */
@@ -325,6 +359,17 @@ typedef enum mt_alpha_blend_strategy {
   MT_ALPHA_BLEND_STOCHASTIC = 0,
   MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER = 1
 } mt_alpha_blend_strategy;
+/* AOV dimensions. DISPLAY traces AOVs at the display size with at most 4
+ * samples, as guides for display-resolution passes such as
+ * mt_display_add_upscale; beauty and denoiser guides keep the render size. It
+ * requires a scale-based render and no custom denoiser AOV inputs. A mask of
+ * only depth and diffuse/specular reflectance costs 24 bytes per display pixel
+ * and has no ID or motion history; display reflectance is the texture albedo of
+ * standard opaque, nontransmissive surfaces. See docs/display.md. */
+typedef enum mt_aov_resolution {
+  MT_AOV_RESOLUTION_RENDER = 0,
+  MT_AOV_RESOLUTION_DISPLAY = 1
+} mt_aov_resolution;
 typedef struct mt_render_options {
   uint32_t struct_size;
   uint32_t max_samples; /* 1..16384. Default 2048. */
@@ -359,7 +404,9 @@ typedef struct mt_render_options {
    * Deterministic source-over blends front/back branches every sample at extra
    * GPU cost; secondary coverage remains stochastic. */
   uint32_t alpha_blend_strategy; /* mt_alpha_blend_strategy. */
-  uint32_t reserved_tail; /* Must be 0. */
+  /* mt_aov_resolution. Default MT_AOV_RESOLUTION_RENDER. DISPLAY requires
+   * width and height 0. */
+  uint32_t aov_resolution;
   uint32_t caustic_flags; /* MT_CAUSTIC_* mask. Default 0 (all disabled). */
   uint32_t light_photons; /* 0 selects pixel count / 4. Default 0. */
   /* 0 selects pixel count / 4, at most 262144. Default 0. 28 bytes per photon plus up to 13 MiB

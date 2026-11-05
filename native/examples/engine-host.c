@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
   REQUIRE(engine_options.struct_size == sizeof engine_options && display_settings.struct_size == sizeof display_settings
     && options.struct_size == sizeof options && denoiser.struct_size == sizeof denoiser
     && converge.struct_size == sizeof converge && loop_options.struct_size == sizeof loop_options, "record sizes");
-  REQUIRE(options.alpha_blend_strategy == MT_ALPHA_BLEND_STOCHASTIC && options.reserved_tail == 0, "alpha defaults");
+  REQUIRE(options.alpha_blend_strategy == MT_ALPHA_BLEND_STOCHASTIC && options.aov_resolution == MT_AOV_RESOLUTION_RENDER, "alpha defaults");
   REQUIRE(engine_options.backend == MT_BACKEND_HWRT && options.max_samples == 2048 && options.bounces == 3
     && options.direct_light_candidates == 4 && options.bevel == 1 && options.dispersion_wavelengths == 3
     && options.resolution_scale == 1.0 && options.time_budget_ms == 21.0 && options.seed == 12345
@@ -316,6 +316,25 @@ int main(int argc, char **argv) {
   REQUIRE(written > 8 && memcmp(png + 1, "PNG", 3) == 0, "png signature");
   write_file(out, "engine-display.png", png, written);
   free(png);
+
+  /* The upscale outputs at the display size; export follows it. */
+  mt_upscale_options upscale_options, rejected;
+  OK(mt_upscale_options_default(&upscale_options));
+  REQUIRE(upscale_options.struct_size == sizeof upscale_options && upscale_options.albedo_detail == 0
+    && upscale_options.ratio_range[0] == 0.7f && upscale_options.coverage_threshold == 0.95f, "upscale defaults");
+  rejected = upscale_options;
+  rejected.ratio_range[0] = 0.f;
+  mt_upscale upscale = 0;
+  STATUS(mt_display_add_upscale(display, &rejected, &upscale, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  OK(mt_display_set_size(display, width * 2, height * 2, error, sizeof error));
+  OK(mt_display_add_upscale(display, &upscale_options, &upscale, error, sizeof error));
+  OK(mt_display_read_pixels(display, render, MT_DISPLAY_RGBA8, NULL, 0, &written, &image_width, &image_height, error, sizeof error));
+  REQUIRE(written == (size_t)width * height * 16 && image_width == width * 2 && image_height == height * 2, "upscaled size");
+  OK(mt_upscale_destroy(upscale, error, sizeof error));
+  STATUS(mt_upscale_destroy(upscale, error, sizeof error), MT_ERROR_INVALID_HANDLE);
+  OK(mt_display_set_size(display, width, height, error, sizeof error));
+  OK(mt_display_read_pixels(display, render, MT_DISPLAY_RGBA8, NULL, 0, &written, &image_width, &image_height, error, sizeof error));
+  REQUIRE(image_width == width && image_height == height, "upscale removed");
 
   mt_jnlm_options jnlm;
   OK(mt_jnlm_options_default(&jnlm));

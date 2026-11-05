@@ -694,8 +694,9 @@ impl Display {
         Ok(Some(composed.presented))
     }
 
-    /// The render's complete image composed with these settings at its own size:
-    /// straight-alpha RGBA8, top row first. Leaves the presentation texture unchanged.
+    /// The render's complete image composed with these settings at its own size,
+    /// or at the final size of sized display passes: straight-alpha RGBA8, top row
+    /// first. Leaves the presentation texture unchanged.
     pub fn read_rgba8(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
         let result = (|| {
             let composed = self.compose(render, false)?.unwrap();
@@ -712,7 +713,13 @@ impl Display {
                 capture.read_image(&composed.texture)
             }
             .map_err(|e| error(Status::Error, e.to_string()))?;
-            Ok((capture.size[0], capture.size[1], rgba))
+            // Display passes can change the image size.
+            let size = if composed.premultiplied {
+                capture.size
+            } else {
+                [composed.texture.width(), composed.texture.height()]
+            };
+            Ok((size[0], size[1], rgba))
         })();
         self.engine.flush();
         result

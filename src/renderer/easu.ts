@@ -1,11 +1,9 @@
 import type {PostProcess} from '../Display.js';
 import {areaDownsampleShader, easuShader} from './wgsl/easu.wgsl.js';
-import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, TONE_LUT_SIZE} from './wgsl/easuDetail.wgsl.js';
+import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, EASU_DETAIL, TONE_LUT_SIZE} from './wgsl/easuDetail.wgsl.js';
 import {borrowedAovRevision} from './WGPUAov.js';
 import {TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
 
-// Regularizes the local albedo variance of the albedo-radiance fit, in squared albedo units.
-const GUIDED_EPSILON = 1e-4;
 /** Display-space albedo compensation controls. */
 export interface EasuOptions {
   /** Recover texture detail using enabled display-resolution diffuseAlbedo, specularAlbedo and depth AOVs. Default false. Missing or mismatched AOVs use EASU alone; unsupported surfaces and silhouettes receive no compensation. */ albedoDetail?: boolean;
@@ -21,8 +19,8 @@ export function createEasuPass(options: EasuOptions = {}): EasuPass { return cre
 /** @internal Plain albedo ratios (guided false), the separate-lobe approximation and depth-guided silhouettes are retained for comparisons; not package exports. */
 export function createEasuPassImpl(options: EasuOptions = {}, separate = false, silhouettes = false, guided = true): EasuPass {
   const detailEnabled = options.albedoDetail ?? false;
-  const [min, max] = options.ratioRange ?? [0.7, 1.43];
-  const depth = options.depthThreshold ?? .02, coverage = options.coverageThreshold ?? .95;
+  const [min, max] = options.ratioRange ?? EASU_DETAIL.ratioRange;
+  const depth = options.depthThreshold ?? EASU_DETAIL.depthThreshold, coverage = options.coverageThreshold ?? EASU_DETAIL.coverageThreshold;
   if (![min,max,depth,coverage].every(Number.isFinite) || min <= 0 || max < min || depth <= 0 || coverage <= 0 || coverage > 1) throw new RangeError('Invalid EASU detail compensation options.');
   const devices = new Map<GPUDevice, {pipelines: Map<string, GPURenderPipeline>; scratch?: GPUTexture[]; key?: unknown[]; tone?: GPUTexture; toneKey?: string; fit?: GPUTexture[]}>();
   const retire = (device: GPUDevice, resources: (GPUTexture | GPUBuffer)[]) => {
@@ -91,7 +89,7 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false, 
       aovs.forEach((image,index)=>entries.push({binding:2+index,resource:image!.createView()}));
       entries.push({binding:5,resource:state.scratch[0].createView()},{binding:6,resource:state.scratch[1].createView()});
       if (silhouettes) entries.push({binding:10,resource:state.scratch[2].createView()});
-      entries.push({binding:7,resource:{buffer:buffer([1e-3,coverage,depth,1e-4])}});
+      entries.push({binding:7,resource:{buffer:buffer([EASU_DETAIL.minimumAlbedo,coverage,depth,EASU_DETAIL.depthTolerance])}});
       // The ratio is applied through the same grading and tone mapping as the composed image,
       // tabulated once per display setting.
       const display = render._engine.display, extended = output.format === 'rgba16float';
@@ -106,7 +104,7 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false, 
         draw.setPipeline(build);draw.setBindGroup(0,group);draw.draw(3);draw.end();
         state.toneKey = toneKey;
       }
-      const toneEntries: GPUBindGroupEntry[] = [{binding:8,resource:state.tone.createView()},{binding:9,resource:{buffer:buffer([tone[1],GUIDED_EPSILON,0,0])}}];
+      const toneEntries: GPUBindGroupEntry[] = [{binding:8,resource:state.tone.createView()},{binding:9,resource:{buffer:buffer([tone[1],EASU_DETAIL.guidedEpsilon,0,0])}}];
       entries.push(...toneEntries);
       if (cache) device.queue.submit([cache.finish()]);
       if (guided) {

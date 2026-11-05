@@ -35,3 +35,23 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   output[index]=aovResolvedValue(source,parameters.w&255u);
 }
 `;
+
+/** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
+export const aovBorrowDepthShader = aovResolveCommon + /* wgsl */ `
+@group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
+@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if(any(id.xy>=parameters.xy)){return;}
+  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
+  let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
+  textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
+}`;
+/** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
+export const aovBorrowReflectanceShader = aovResolveCommon + /* wgsl */ `
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
+}
+@fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let id=vec2u(position.xy);
+  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
+  return clamp(bitcast<vec4f>(aovResolvedValue(source,parameters.w)),vec4f(0),vec4f(1));
+}`;

@@ -49,9 +49,15 @@ struct LoopEntry {
 }
 enum Object {
     Engine(EngineEntry),
-    Display { engine: u64 },
+    Display {
+        engine: u64,
+    },
     Render(RenderEntry),
     Loop(LoopEntry),
+    Upscale {
+        engine: u64,
+        _subscription: PostProcessSubscription,
+    },
 }
 impl Object {
     fn engine(&self) -> Option<u64> {
@@ -60,6 +66,7 @@ impl Object {
             Object::Display { engine } => Some(*engine),
             Object::Render(r) => Some(r.engine),
             Object::Loop(l) => Some(l.engine),
+            Object::Upscale { engine, .. } => Some(*engine),
         }
     }
 }
@@ -149,6 +156,12 @@ fn display_of(handle: u64) -> Result<Display> {
             }
             _ => Err(invalid_handle()),
         }
+    })
+}
+fn display_engine(handle: u64) -> Result<u64> {
+    registry(|r| match r.objects.get(&handle) {
+        Some(Object::Display { engine }) => Ok(*engine),
+        _ => Err(invalid_handle()),
     })
 }
 fn render_of(handle: u64) -> Result<Arc<Render>> {
@@ -406,7 +419,7 @@ pub struct MtRenderOptions {
     adaptive_target_frame_ms: f64,
     adaptive_min_scale: f64,
     alpha_blend_strategy: u32,
-    reserved_tail: u32,
+    aov_resolution: u32,
     caustic_flags: u32,
     light_photons: u32,
     photon_map_photons: u32,
@@ -528,12 +541,11 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
         light_photons: settings.caustics.light_photons,
         photon_map_photons: settings.caustics.photon_map_photons,
         photon_map_radius: settings.caustics.photon_map_radius,
-        reserved_tail: 0,
+        aov_resolution: settings.aov_resolution as u32,
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
     if options.caustic_flags & !6 != 0
-        || options.reserved_tail != 0
         || options.bevel > 1
         || options.allow_multiple_samples_per_frame > 1
     {
@@ -557,6 +569,11 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
             16
         } else {
             options.aov_samples
+        },
+        aov_resolution: match options.aov_resolution {
+            0 => AovResolution::Render,
+            1 => AovResolution::Display,
+            _ => return Err(invalid("Unknown AOV resolution")),
         },
         max_samples: options.max_samples,
         bounces: options.bounces,
@@ -909,7 +926,7 @@ pub unsafe extern "C" fn mt_engine_destroy(
             Object::Loop(_) => 0,
             Object::Render(r) if r.owner.is_some() => 1,
             Object::Render(_) => 2,
-            Object::Display { .. } => 3,
+            Object::Display { .. } | Object::Upscale { .. } => 3,
             Object::Engine(_) => 4,
         });
         let mut engine = None;
@@ -1107,6 +1124,79 @@ pub unsafe extern "C" fn mt_display_settings_default(output: *mut MtDisplaySetti
     }
     unsafe { output.write(display_record(&DisplaySettings::default())) };
     0
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtUpscaleOptions {
+    struct_size: u32,
+    albedo_detail: u32,
+    ratio_range: [f32; 2],
+    depth_threshold: f32,
+    coverage_threshold: f32,
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_upscale_options_default(output: *mut MtUpscaleOptions) -> i32 {
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
+    }
+    let defaults = EasuOptions::default();
+    unsafe {
+        output.write(MtUpscaleOptions {
+            struct_size: std::mem::size_of::<MtUpscaleOptions>() as u32,
+            albedo_detail: u32::from(defaults.albedo_detail),
+            ratio_range: defaults.ratio_range,
+            depth_threshold: defaults.depth_threshold,
+            coverage_threshold: defaults.coverage_threshold,
+        })
+    };
+    0
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_display_add_upscale(
+    handle: u64,
+    options: *const MtUpscaleOptions,
+    output: *mut u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let options = unsafe { record(options)? };
+        if output.is_null() {
+            return Err(invalid("Null output"));
+        }
+        if options.albedo_detail > 1 {
+            return Err(invalid("albedo_detail must be 0 or 1"));
+        }
+        let display = display_of(handle)?;
+        let engine = display_engine(handle)?;
+        let subscription = display.add_upscale(EasuOptions {
+            albedo_detail: options.albedo_detail != 0,
+            ratio_range: options.ratio_range,
+            depth_threshold: options.depth_threshold,
+            coverage_threshold: options.coverage_threshold,
+        })?;
+        let id = insert(Object::Upscale {
+            engine,
+            _subscription: subscription,
+        })?;
+        unsafe { output.write(id) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn mt_upscale_destroy(handle: u64, error_out: *mut c_char, capacity: usize) -> i32 {
+    call(error_out, capacity, || {
+        let removed = registry(|r| {
+            let Some(Object::Upscale { engine, .. }) = r.objects.get(&handle) else {
+                return Err(invalid_handle());
+            };
+            check_owner_thread(r, *engine)?;
+            Ok(r.objects.remove(&handle))
+        })?;
+        // The subscription removes the pass outside the registry lock.
+        drop(removed);
+        Ok(())
+    })
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_aov_options_default(output: *mut MtAovDisplayOptions) -> i32 {
@@ -2542,6 +2632,17 @@ mod tests {
     }
     #[test]
     fn header_enums_match_the_conversions() {
+        for (name, resolution) in [
+            ("MT_AOV_RESOLUTION_RENDER", AovResolution::Render),
+            ("MT_AOV_RESOLUTION_DISPLAY", AovResolution::Display),
+        ] {
+            let mut options = render_options(&RenderSettings::default());
+            options.aov_resolution = value(name);
+            assert_eq!(
+                render_settings(&options).unwrap().aov_resolution,
+                resolution
+            );
+        }
         for (name, status) in [
             ("MT_RENDER_PREPARING", RenderStatus::Preparing),
             ("MT_RENDER_COMPILING", RenderStatus::Compiling),
@@ -2691,11 +2792,14 @@ mod tests {
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
+        assert_eq!(size_of::<MtUpscaleOptions>(), 24);
+        assert_eq!(offset_of!(MtUpscaleOptions, ratio_range), 8);
+        assert_eq!(offset_of!(MtUpscaleOptions, coverage_threshold), 20);
         assert_eq!(size_of::<MtRenderOptions>(), 128);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_target_frame_ms), 88);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_min_scale), 96);
         assert_eq!(offset_of!(MtRenderOptions, alpha_blend_strategy), 104);
-        assert_eq!(offset_of!(MtRenderOptions, reserved_tail), 108);
+        assert_eq!(offset_of!(MtRenderOptions, aov_resolution), 108);
         assert_eq!(offset_of!(MtRenderOptions, seed), 44);
         assert_eq!(offset_of!(MtRenderOptions, aovs), 48);
         assert_eq!(offset_of!(MtRenderOptions, resolution_scale), 56);
@@ -2784,7 +2888,8 @@ mod tests {
             |o: &mut MtRenderOptions| o.sampling_pattern = 3,
             |o: &mut MtRenderOptions| o.max_samples = 0,
             |o: &mut MtRenderOptions| o.alpha_blend_strategy = 2,
-            |o: &mut MtRenderOptions| o.reserved_tail = 1,
+            |o: &mut MtRenderOptions| o.aov_resolution = 2,
+            |o: &mut MtRenderOptions| o.aov_resolution = 1,
             |o: &mut MtRenderOptions| o.caustic_flags = 16,
             |o: &mut MtRenderOptions| o.caustic_flags = 8,
             |o: &mut MtRenderOptions| o.photon_map_radius = -1.,
