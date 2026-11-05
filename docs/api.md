@@ -360,7 +360,9 @@ surface outputs, set `aovResolution: 'display'` on a scale-based render. The
 default is `'render'`. AOV readbacks and visualization use their own dimensions;
 beauty and denoiser guides keep the render dimensions. Both modes stop at
 `min(samples, aovSamples)`; display mode also caps at 4, follows canvas resizes,
-and rejects fixed-size renders. WebGL falls back to render dimensions and warns
+and rejects fixed-size renders. During tracing, display mode starts after the first
+beauty sample and adds one AOV sample per frame; the frame that reaches
+`maxSamples` completes the rest. WebGL falls back to render dimensions and warns
 once per render. In display mode `diffuseAlbedo` and `specularAlbedo` are
 texture albedo estimates (base and specular color, metalness, coat tint and
 dielectric F0) rather than directional-hemispherical reflectance; they cover

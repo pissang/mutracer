@@ -1,6 +1,7 @@
 import type {PostProcess} from '../Display.js';
 import {easuShader} from './wgsl/easu.wgsl.js';
 import {albedoDownsampleShader, easuDetailShader} from './wgsl/easuDetail.wgsl.js';
+import {borrowedAovRevision} from './WGPUAov.js';
 
 /** Display-space albedo compensation controls. */
 export interface EasuOptions {
@@ -20,7 +21,7 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false):
   const [min, max] = options.ratioRange ?? [0.9, 1.1];
   const depth = options.depthThreshold ?? .02, coverage = options.coverageThreshold ?? .95;
   if (![min,max,depth,coverage].every(Number.isFinite) || min <= 0 || max < min || depth <= 0 || coverage <= 0 || coverage > 1) throw new RangeError('Invalid EASU detail compensation options.');
-  const devices = new Map<GPUDevice, {pipelines: Map<string, GPURenderPipeline>; scratch?: GPUTexture[]}>();
+  const devices = new Map<GPUDevice, {pipelines: Map<string, GPURenderPipeline>; scratch?: GPUTexture[]; key?: unknown[]}>();
   const retire = (device: GPUDevice, resources: (GPUTexture | GPUBuffer)[]) => {
     // This callback's encoder is submitted after it returns.
     void Promise.resolve().then(() => device.queue.onSubmittedWorkDone()).catch(() => {}).then(() => resources.forEach(resource => resource.destroy()));
@@ -51,14 +52,20 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false):
       if (!state.scratch || state.scratch[0].width !== input.width || state.scratch[0].height !== input.height) {
         if(state.scratch)retire(device,state.scratch);
         state.scratch = [0,1].map(index => device.createTexture({label:`EASU low albedo ${index}`,size:[input.width,input.height],format:'rgba16float',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.RENDER_ATTACHMENT}));
+        state.key = undefined;
       }
-      const down = pipeline('Albedo area downsample',albedoDownsampleShader,['rgba16float','rgba16float']);
-      const group = device.createBindGroup({layout:down.getBindGroupLayout(0),entries:[
-        {binding:0,resource:aovs[0]!.createView()},{binding:1,resource:aovs[1]!.createView()},
-        {binding:2,resource:{buffer:buffer([input.width,input.height,0,0])}}
-      ]});
-      const draw = encoder.beginRenderPass({label:'Albedo area downsample',colorAttachments:state.scratch.map(image=>({view:image.createView(),loadOp:'clear',storeOp:'store'}))});
-      draw.setPipeline(down);draw.setBindGroup(0,group);draw.draw(3);draw.end();
+      // Low albedo depends only on the AOV contents and beauty size; reuse it across presents.
+      const key = [state.scratch[0], aovs[0], aovs[1], borrowedAovRevision.get(aovs[0]!), borrowedAovRevision.get(aovs[1]!)];
+      if (!state.key || key.some((value, index) => value !== state.key![index])) {
+        const down = pipeline('Albedo area downsample',albedoDownsampleShader,['rgba16float','rgba16float']);
+        const group = device.createBindGroup({layout:down.getBindGroupLayout(0),entries:[
+          {binding:0,resource:aovs[0]!.createView()},{binding:1,resource:aovs[1]!.createView()},
+          {binding:2,resource:{buffer:buffer([input.width,input.height,0,0])}}
+        ]});
+        const draw = encoder.beginRenderPass({label:'Albedo area downsample',colorAttachments:state.scratch.map(image=>({view:image.createView(),loadOp:'clear',storeOp:'store'}))});
+        draw.setPipeline(down);draw.setBindGroup(0,group);draw.draw(3);draw.end();
+        state.key = key;
+      }
       aovs.forEach((image,index)=>entries.push({binding:2+index,resource:image!.createView()}));
       state.scratch.forEach((image,index)=>entries.push({binding:5+index,resource:image.createView()}));
       entries.push({binding:7,resource:{buffer:buffer([1e-3,coverage,depth,1e-4])}});

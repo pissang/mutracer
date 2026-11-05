@@ -989,7 +989,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
-      rayTracePass.renderAovs(aov, camera, sampleCount, Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution());
+      // Display AOVs only add detail: keep the first beauty image's latency and
+      // spread their full-canvas samples over frames instead of batching them.
+      // The converging trace completes any remaining samples.
+      const display = aovResolution();
+      const aovTarget = display && sampleCount < maxSamples ? Math.min(sampleCount - 1, aov.samples + 1) : sampleCount;
+      if (aovTarget > 0) rayTracePass.renderAovs(aov, camera, aovTarget, Math.min(execution.aovSamples ?? 16, display ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, display);
     }
     if (sampleCount !== frameSampleCount && realtime && realtimeDeferPostProcess && sampleCount < renderSampleTarget) {
       postProcessPending = true;

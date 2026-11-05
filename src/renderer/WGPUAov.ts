@@ -4,6 +4,8 @@ import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
 import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
+/** @internal Content revision of each borrowed AOV texture; changes whenever it is re-resolved. */
+export const borrowedAovRevision = new WeakMap<GPUTexture, number>();
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
   readonly history = new AovHistory();
@@ -173,6 +175,7 @@ export class WGPUAov {
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass({label:`Resolve ${kind}`});
       pass.setPipeline(entry.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
       device.queue.submit([encoder.finish()]);parameters.destroy();entry.samples=this.samples;entry.revision=this.revision;
+      borrowedAovRevision.set(entry.image, (borrowedAovRevision.get(entry.image) ?? 0) + 1);
     }
     return entry.image;
   }
