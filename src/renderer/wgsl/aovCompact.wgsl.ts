@@ -16,5 +16,5 @@ fn loadAov(source: u32) -> ${type} {
     bitcast<vec4f>(vec4u(accumulation[o+4u],accumulation[o+5u],accumulation[o+6u],accumulation[o+7u])),
     bitcast<vec4f>(vec4u(accumulation[o+8u],accumulation[o+9u],accumulation[o+10u],accumulation[o+11u])),
     bitcast<vec4f>(vec4u(accumulation[o+12u],accumulation[o+13u],accumulation[o+14u],accumulation[o+15u])));
-}`).replace(/let pixel=accumulation\[source\];/g, 'let pixel=loadAov(source);').replace('let pixel = accumulation[index];', 'let pixel = loadAov(index);');
+}`).split(`let pixel=accumulation[source];`).join(`let pixel=loadAov(source);`).replace(`let pixel = accumulation[index];`, `let pixel = loadAov(index);`);
 }

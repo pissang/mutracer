@@ -45,7 +45,7 @@ fn detailEncode(c: vec3f) -> vec3f {
  * The last two are retained for comparisons.
  */
 export function easuDetailShader(separate = false, silhouettes = false, guided = true) {
-  return easuShader.replace('@vertex fn vertex', /* wgsl */ `
+  return easuShader.replace(`@vertex fn vertex`, /* wgsl */ `
 @group(0) @binding(2) var diffuseHi: texture_2d<f32>;
 @group(0) @binding(3) var specularHi: texture_2d<f32>;
 @group(0) @binding(4) var depthHi: texture_2d<f32>;
@@ -58,7 +58,7 @@ fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
   return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
 }
 ${toneCodingDefine}
-@vertex fn vertex`).replace('  return clamp(result/total,lower,upper);', /* wgsl */ `
+@vertex fn vertex`).replace(`return clamp(result/total,lower,upper);`, /* wgsl */ `
   let color=clamp(result/total,lower,upper);
   var diffuse=vec4f(0);var specular=vec4f(0);
   for(var i=0u;i<12u;i++){

@@ -122,3 +122,35 @@ describe('shader generation independent of source formatting', () => {
     expect(compact.source).toContain('sample_colorTex(');
   });
 });
+
+describe('display upscale shaders independent of source formatting', () => {
+  it('generates the same EASU detail, guide and display AOV shaders from build-formatted sources', () => {
+    gpu();
+    const load = (loader: typeof original) => loader('src/renderer/wgsl/easuDetail.wgsl.ts');
+    const source = load(original), compact = load(stripped);
+    for (const separate of [false, true]) for (const silhouettes of [false, true]) for (const guided of [false, true]) {
+      expect(tokens(compact.easuDetailShader(separate, silhouettes, guided))).toEqual(tokens(source.easuDetailShader(separate, silhouettes, guided)));
+    }
+    for (const depth of [false, true]) expect(tokens(compact.albedoDownsampleShader(depth))).toEqual(tokens(source.albedoDownsampleShader(depth)));
+    expect(tokens(compact.guidedCoefficientShader)).toEqual(tokens(source.guidedCoefficientShader));
+    expect(tokens(compact.toneLutShader)).toEqual(tokens(source.toneLutShader));
+    // The detail variants must differ from plain EASU in both builds.
+    const easu = original('src/renderer/wgsl/easu.wgsl.ts').easuShader, compactEasu = stripped('src/renderer/wgsl/easu.wgsl.ts').easuShader;
+    expect(tokens(compact.easuDetailShader())).not.toEqual(tokens(compactEasu));
+    expect(tokens(source.easuDetailShader())).not.toEqual(tokens(easu));
+    const read = (loader: typeof original) => {
+      const {compactAovReadShader} = loader('src/renderer/wgsl/aovCompact.wgsl.ts');
+      const common = loader('src/renderer/wgsl/aovResolve.wgsl.ts').aovResolveCommon;
+      const display = loader('src/renderer/wgsl/aovDisplay.wgsl.ts').aovDisplayShader('rgba16float');
+      return [compactAovReadShader(common, '@group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;', 'AovResolvedAccumulation'),
+        compactAovReadShader(display, '@group(0) @binding(0) var<storage, read> accumulation: array<DisplayAovAccum>;', 'DisplayAovAccum')];
+    };
+    const [readSource, readCompact] = [read(original), read(stripped)];
+    readSource.forEach((code, index) => {
+      expect(code).toContain('loadAov(');
+      expect(tokens(readCompact[index])).toEqual(tokens(code));
+    });
+    const options = {hasDisplacement: false, blasLayoutMask: 1, displayAovStorage: true};
+    expect(tokens(compactRayTrace(options))).toEqual(tokens(rayTrace(options)));
+  });
+});

@@ -4,8 +4,8 @@ import {aovCompactStorage} from './aovCompact.wgsl.js';
 // Web-only storage specialization. The default shader (also used by native)
 // remains byte-identical; geometry/material evaluation comes from that source.
 export default aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + original
-  .replace('var<storage, read_write> aovAccum: array<AovAccumulation>;', 'var<storage, read_write> aovAccum: array<u32>;')
-  .replace('fn aovMatrix(', /* wgsl */ `fn aovLoad(index: u32) -> AovAccumulation {
+  .replace(`var<storage, read_write> aovAccum: array<AovAccumulation>;`, `var<storage, read_write> aovAccum: array<u32>;`)
+  .replace(`fn aovMatrix(`, /* wgsl */ `fn aovLoad(index: u32) -> AovAccumulation {
   if(AOV_COMPACT){
     let o=index*6u;
     return AovAccumulation(vec4f(bitcast<f32>(aovAccum[o]),0,0,0),vec4f(0,0,0,bitcast<f32>(aovAccum[o+1u])),
@@ -28,16 +28,16 @@ fn aovStore(index: u32,pixel: AovAccumulation){
   }
 }
 fn aovMatrix(`)
-  .replace('if (sample == 0u) { aovAccum[index] = AovAccumulation(); }', 'var pixel=AovAccumulation(); if(sample>0u){pixel=aovLoad(index);}')
-  .replace('if (!aovSurface(ray, &si, &material)) { return; }', 'if (!aovSurface(ray, &si, &material)) { aovStore(index,pixel); return; }')
-  .replace(/aovAccum\[index\]\./g, 'pixel.')
-  .replace('pixel.position += vec4f(si.position, 1.0);', 'pixel.position += vec4f(si.position, 1.0); aovStore(index,pixel);')
-  .replace('(material.transmissionDispersionScale > 0.0);', '(material.transmissionDispersionScale > 0.0) | (AOV_DISPLAY && material.transmissionWeight > 0.0);')
+  .replace(`if (sample == 0u) { aovAccum[index] = AovAccumulation(); }`, `var pixel=AovAccumulation(); if(sample>0u){pixel=aovLoad(index);}`)
+  .replace(`if (!aovSurface(ray, &si, &material)) { return; }`, `if (!aovSurface(ray, &si, &material)) { aovStore(index,pixel); return; }`)
+  .split(`aovAccum[index].`).join(`pixel.`)
+  .replace(`pixel.position += vec4f(si.position, 1.0);`, `pixel.position += vec4f(si.position, 1.0); aovStore(index,pixel);`)
+  .replace(`(material.transmissionDispersionScale > 0.0);`, `(material.transmissionDispersionScale > 0.0) | (AOV_DISPLAY && material.transmissionWeight > 0.0);`)
   // Display-resolution reflectance only guides texture detail, so it uses the
   // resolved texture albedo instead of directional-hemispherical quadrature.
   // Uniform layer factors cancel in detail ratios, so coat, fuzz, sheen-like
   // and anisotropic surfaces stay valid; transmission and cutouts do not.
-  .replace('if (AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {', /* wgsl */ `if (AOV_DISPLAY && (aovParameters.w & 24u) != 0u) {
+  .replace(`if (AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {`, /* wgsl */ `if (AOV_DISPLAY && (aovParameters.w & 24u) != 0u) {
     let blocked = (material.materialType != STANDARD) | (material.alpha < 1.0) | (material.transmissionWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0);
     if (!blocked) {
