@@ -2,7 +2,7 @@ import {ViewerBvhCache} from './bvhCache';
 import {causticOptions} from '../caustics';
 import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ViewerOrbitControls } from './orbitControls';
 import {
   Engine, Render, RenderLoop, Sync, ProceduralSky,
   THREESync, type DisplaySettings,
@@ -79,7 +79,7 @@ export class ViewerEngine {
   private readonly scene = new THREE.Scene();
   private readonly perspectiveCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
   private readonly orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
-  private readonly controls: OrbitControls;
+  private readonly controls: ViewerOrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
   private readonly sky = new ProceduralSky({ time: get().settings.skyTime });
@@ -165,7 +165,7 @@ export class ViewerEngine {
     this.ground.name = 'Ground';
     this.scene.add(this.ground);
 
-    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls = new ViewerOrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
@@ -825,6 +825,7 @@ export class ViewerEngine {
     const scale = toDistance / Math.max(distance, 1e-6);
     to.position.copy(target).addScaledVector(direction, toDistance);
     to.up.copy(from.up);
+    to.scale.copy(from.scale);
     to.zoom = 1;
     to.near = from.near * scale;
     to.far = from.far * scale;
@@ -869,6 +870,7 @@ export class ViewerEngine {
     } }));
     const camera = this.camera;
     camera.position.fromArray(saved.position);
+    camera.scale.set(1, 1, 1);
     // Earlier versions saved a tilted up after orbiting from a scene camera.
     camera.up.set(0, 1, 0);
     this.controls.target.fromArray(saved.target);
@@ -917,6 +919,7 @@ export class ViewerEngine {
     const camera = this.camera;
     camera.position.copy(position);
     camera.quaternion.copy(quaternion);
+    source.getWorldScale(camera.scale);
     // OrbitControls orbits around world +Y; a tilted up would roll every
     // later frame. The view direction is kept and only authored roll is dropped.
     camera.up.set(0, 1, 0);
@@ -960,6 +963,10 @@ export class ViewerEngine {
     // Fitting also leaves the selected model camera. A reload restores the saved
     // camera only after the new model has been fitted.
     setSettings({ cameraIndex: -1 });
+    // Both projections outlive model loads. Discard any imported reflection or
+    // scale when framing a new orbit view, including Reset all and scene loads.
+    this.perspectiveCamera.scale.set(1, 1, 1);
+    this.orthographicCamera.scale.set(1, 1, 1);
     if (this.needsResize) this.resize();
     const box = this.modelBounds();
     const center = box.getCenter(new THREE.Vector3());
@@ -998,6 +1005,7 @@ export class ViewerEngine {
 
   /** Places the orbit camera explicitly. */
   lookAt(position: THREE.Vector3, target: THREE.Vector3) {
+    this.camera.scale.set(1, 1, 1);
     this.camera.position.copy(position);
     this.controls.target.copy(target);
     this.controls.update();

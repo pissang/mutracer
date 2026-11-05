@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ViewerOrbitControls as OrbitControls } from '../src/engine/orbitControls';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadedModel } from '../src/engine/loadModel';
 import {readURLSettings} from '../src/urlSettings';
@@ -81,7 +81,57 @@ describe('AOV preview settings', () => {
 });
 
 describe('imported camera choice', () => {
-  it.each(['perspective', 'orthographic'] as const)('continues orbiting a transformed %s scene camera from its view around world up', async (projection) => {
+  it.each((['perspective', 'orthographic'] as const).flatMap(projection => (['load', 'fit', 'reset'] as const).map(action => ({projection, action}))))('clears reflected camera state: $projection, $action', async ({projection, action}) => {
+    const viewer = engine();
+    const data = model(0);
+    const source = projection === 'perspective' ? new THREE.PerspectiveCamera() : new THREE.OrthographicCamera(-2, 2, 2, -2);
+    source.position.set(0, 2, 5);
+    source.lookAt(0, .5, 0);
+    source.scale.x = -1;
+    data.root.add(source);
+    await viewer.loadModel(data);
+    const orbit = viewer as unknown as {
+      perspectiveCamera: THREE.PerspectiveCamera; orthographicCamera: THREE.OrthographicCamera;
+      controls: OrbitControls; beginOrbit(): void; activeCamera(): THREE.Camera;
+      switchProjection(from: THREE.PerspectiveCamera | THREE.OrthographicCamera): void;
+    };
+    orbit.controls = new OrbitControls(orbit.perspectiveCamera);
+    Object.assign(viewer, { engine: { display: { canvas: { width: 800, height: 600 }, setSize: vi.fn() } }, final: {}, preview: {} });
+    viewer.applyModelCamera(source.uuid);
+    orbit.beginOrbit();
+    expect(orbit.activeCamera().matrixWorld.determinant()).toBeLessThan(0);
+    await viewer.loadModel(model(0));
+    if (action !== 'load') {
+      // Existing tabs may already have leaked reflection in either projection.
+      orbit.perspectiveCamera.scale.x = orbit.orthographicCamera.scale.x = -1;
+      if (action === 'fit') viewer.fit();
+      else {
+        Object.assign(viewer, { materials: { resetAll: vi.fn() } });
+        const unsubscribe = useViewer.subscribe((next, previous) => {
+          if (next.settings.projection !== previous.settings.projection) {
+            orbit.switchProjection(previous.settings.projection === 'perspective' ? orbit.perspectiveCamera : orbit.orthographicCamera);
+          }
+        });
+        try { (viewer as unknown as { resetAll(): void }).resetAll(); } finally { unsubscribe(); }
+      }
+    }
+    const camera = orbit.activeCamera();
+    camera.updateMatrixWorld(true);
+    expect(camera.matrixWorld.determinant()).toBeGreaterThan(0);
+    const point = orbit.controls.target.clone().lerp(camera.position, .2);
+    const project = () => point.clone().applyMatrix4(camera.matrixWorld.clone().invert()).applyMatrix4(camera.projectionMatrix);
+    const before = project();
+    orbit.controls.rotateLeft(.05);
+    camera.updateMatrixWorld(true);
+    expect(project().x).toBeGreaterThan(before.x);
+    const from = camera as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+    setSettings({ projection: (from as THREE.PerspectiveCamera).isPerspectiveCamera ? 'orthographic' : 'perspective' });
+    orbit.switchProjection(from);
+    orbit.activeCamera().updateMatrixWorld(true);
+    expect(orbit.activeCamera().matrixWorld.determinant()).toBeGreaterThan(0);
+  });
+
+  it.each((['perspective', 'orthographic'] as const).flatMap(projection => [false, true].map(reflected => ({projection, reflected}))))('continues orbiting a transformed scene camera: $projection, reflected=$reflected', async ({projection, reflected}) => {
     const viewer = engine();
     const data = model(0);
     const source = projection === 'perspective'
@@ -94,7 +144,7 @@ describe('imported camera choice', () => {
     const parent = new THREE.Group();
     parent.position.set(1, 2, -1);
     parent.rotation.set(0.1, -0.3, 0.15);
-    parent.scale.setScalar(2);
+    parent.scale.set(reflected ? -2 : 2, 2, 2);
     parent.add(source);
     data.root.add(parent);
     await viewer.loadModel(data);
