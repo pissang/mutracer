@@ -21,6 +21,7 @@ pub struct Settings {
     scale: Option<f32>,
     preview: bool,
     preview_scale: f32,
+    display_upscale: bool,
     denoise: bool,
     method: denoiser::Choice,
     oidn: denoiser::OidnSettings,
@@ -95,6 +96,7 @@ impl Snapshot {
                 scale: v.resolution.scale,
                 preview: v.preview_enabled,
                 preview_scale: v.preview_scale,
+                display_upscale: v.display_upscale,
                 denoise: v.denoise,
                 method: v.denoiser_choice,
                 oidn: v.oidn_settings,
@@ -132,6 +134,7 @@ impl Snapshot {
             v.resolution.scale = s.scale;
             v.preview_enabled = s.preview;
             v.preview_scale = s.preview_scale;
+            v.display_upscale = s.display_upscale;
             v.denoise = s.denoise;
             v.denoiser_choice = s.method;
             v.oidn_settings = s.oidn;
@@ -272,6 +275,7 @@ impl Viewer {
         self.aov_display = Default::default();
         self.preview_enabled = true;
         self.preview_scale = 0.5;
+        self.display_upscale = true;
         self.denoise = true;
         self.denoiser_choice = Default::default();
         self.oidn_settings = Default::default();
@@ -309,6 +313,7 @@ mod tests {
                 scale: Some(0.5),
                 preview: true,
                 preview_scale: 0.5,
+                display_upscale: true,
                 denoise: true,
                 method: Default::default(),
                 oidn: Default::default(),

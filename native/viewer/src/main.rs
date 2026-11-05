@@ -85,6 +85,8 @@ struct Target {
     _events: api::Subscription,
     sample_times: Arc<Mutex<std::collections::VecDeque<f64>>>,
     _sample_events: Vec<api::Subscription>,
+    /// Display upscale pass, registered while it applies.
+    upscale: Option<api::PostProcessSubscription>,
 }
 #[derive(Default)]
 struct InputActivity(api::SyncActivity);
@@ -166,7 +168,20 @@ impl Target {
             preparations,
             errors,
             _events: events,
+            upscale: None,
         })
+    }
+    /// Registers or removes the display upscale pass.
+    fn configure_upscale(&mut self, enabled: bool) -> Result<()> {
+        if !enabled {
+            self.upscale = None;
+        } else if self.upscale.is_none() {
+            self.upscale = Some(self.engine.display().add_upscale(api::EasuOptions {
+                albedo_detail: true,
+                ..Default::default()
+            })?);
+        }
+        Ok(())
     }
     fn final_render(&self) -> &api::Render {
         self.render_loop.final_render()
@@ -331,6 +346,9 @@ struct Viewer {
     debug_open: bool,
     preview_enabled: bool,
     preview_scale: f32,
+    /// Upscale reduced final and preview images to the viewport. Default true.
+    display_upscale: bool,
+    applied_upscale: Option<bool>,
     applied_denoise: Option<(
         bool,
         bool,
@@ -516,6 +534,8 @@ impl Viewer {
                 .is_ok_and(|v| v == "true"),
             preview_enabled: true,
             preview_scale: 0.5,
+            display_upscale: true,
+            applied_upscale: None,
             applied_denoise: None,
             oidn_settings: Default::default(),
             jnlm_settings: Default::default(),
@@ -793,10 +813,10 @@ impl Viewer {
         self.push_bytes(bytes, self.size, held)
     }
     fn push_bytes(&mut self, bytes: Arc<Vec<u8>>, size: [u32; 2], held: bool) -> Result<()> {
-        let mut settings = render_settings(&self.settings, size, held);
-        settings.aovs = self.output_mask();
+        let settings = self.final_settings(render_settings(&self.settings, size, held));
         let aovs = self.output_mask();
-        let (preview_scale, adaptive_resolution) = self.preview_resolution_settings(size);
+        let display_size = self.display_size(size);
+        let (preview_scale, adaptive_resolution) = self.preview_resolution_settings(display_size);
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
         target
@@ -814,7 +834,10 @@ impl Viewer {
                 transmissive_output_alpha_min: self.settings.transmissive_output_alpha_min,
                 ..denoiser::preview_settings()
             })?;
-        target.engine.display().set_size(size[0], size[1])?;
+        target
+            .engine
+            .display()
+            .set_size(display_size[0], display_size[1])?;
         target.engine.set_scene_shared(bytes)?;
         // A descriptor carries the latest camera, including combined edits and
         // newly loaded scenes. Retire the preceding camera-only override.
@@ -823,6 +846,40 @@ impl Viewer {
         self.pose_presented = false;
         self.error.clear();
         Ok(())
+    }
+    /// Whether the display upscale pass applies: final channel only, as on the Web.
+    fn upscale_enabled(&self) -> bool {
+        self.display_upscale && self.display_settings.output == 0
+    }
+    /// The display size for a final render size. An upscaled viewport-relative
+    /// render presents at the viewport's physical size, from which the engine
+    /// derives the same render size.
+    fn display_size(&self, size: [u32; 2]) -> [u32; 2] {
+        match self.resolution.scale {
+            Some(scale) if self.upscale_enabled() => {
+                if self.resolution.scaled(scale) == size {
+                    self.resolution.full
+                } else {
+                    size.map(|v| ((v as f64 / scale as f64).round() as u32).max(1))
+                }
+            }
+            _ => size,
+        }
+    }
+    /// Final render size and AOVs. With the upscale pass, a viewport-relative
+    /// render scales the display size; a reduced one also traces
+    /// display-resolution detail guides.
+    fn final_settings(&self, mut settings: api::RenderSettings) -> api::RenderSettings {
+        settings.aovs = self.output_mask();
+        settings.aov_resolution = api::AovResolution::Render;
+        if let Some(scale) = self.resolution.scale.filter(|_| self.upscale_enabled()) {
+            settings.size = api::RenderSize::Scale(scale as f64);
+            if scale < 1. {
+                settings.aovs = 1 | 8 | 16;
+                settings.aov_resolution = api::AovResolution::Display;
+            }
+        }
+        settings
     }
     fn preview_resolution_settings(&self, size: [u32; 2]) -> (f64, api::AdaptiveResolution) {
         let [min_scale, scale] =
@@ -908,7 +965,7 @@ impl Viewer {
                 self.gpu.as_ref(),
                 self.submission_gate.as_ref(),
                 self.backend,
-                render_settings(&self.settings, self.size, held),
+                self.final_settings(render_settings(&self.settings, self.size, held)),
             )?);
             self.change = self.change.max(Change::Scene);
             self.applied_denoise = None;
@@ -920,6 +977,21 @@ impl Viewer {
                     .map(|target| target.engine.device_loss_notifier()),
             ),
         );
+        // Upscaling changes the display and final render sizes, which a scene push applies.
+        let upscale = self.upscale_enabled();
+        if self
+            .applied_upscale
+            .replace(upscale)
+            .is_some_and(|u| u != upscale)
+        {
+            self.change = self.change.max(Change::Scene);
+        }
+        for target in [Some(&mut self.target), self.replacement.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            target.configure_upscale(upscale)?;
+        }
         let enabled = self.preview_enabled;
         for target in [Some(&mut self.target), self.replacement.as_mut()]
             .into_iter()
@@ -943,12 +1015,16 @@ impl Viewer {
             let mut settings = target.final_render().settings()?;
             settings.allow_multiple_samples_per_frame = !held;
             let aovs = self.output_mask();
-            settings.aovs = aovs;
+            // Display-resolution detail AOVs follow the scene push that sized them.
+            if settings.aov_resolution == api::AovResolution::Render {
+                settings.aovs = aovs;
+            }
             if let Some(preview) = target.render_loop.preview() {
                 let mut preview_settings = preview.settings()?;
                 preview_settings.aovs = aovs;
                 preview_settings.aov_samples = 1;
-                let (scale, adaptive) = self.preview_resolution_settings(self.size);
+                let (scale, adaptive) =
+                    self.preview_resolution_settings(self.display_size(self.size));
                 preview_settings.size = api::RenderSize::Scale(scale);
                 preview_settings.adaptive_resolution = Some(adaptive);
                 preview.set_settings(preview_settings)?;

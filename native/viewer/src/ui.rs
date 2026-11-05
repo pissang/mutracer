@@ -662,6 +662,7 @@ impl Viewer {
                             }
                         }
 
+                        controls::toggle(ui, "Display upscale", &mut self.display_upscale);
                         controls::toggle(ui, "Interactive preview", &mut self.preview_enabled);
                         if self.preview_enabled {
                             controls::scalar(
