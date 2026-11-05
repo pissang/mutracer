@@ -786,9 +786,12 @@ export class ViewerEngine {
 
   private configureUpscale(s: Settings = this.settings) {
     const r = this.final;
-    const enabled = !this.exporting && this.engine.backend === 'webgpu' && s.displayUpscale && r.resolutionScale < 1 && s.output === 'final';
-    r.aovs = enabled ? ['depth','diffuseAlbedo','specularAlbedo'] : VIEWER_AOVS.filter(kind => kind === s.output);
-    r.aovResolution = enabled ? 'display' : 'render';
+    // The pass also serves the reduced-resolution preview when the final render is full size;
+    // it copies images that already match the canvas. Detail AOVs are traced only for a reduced final.
+    const enabled = !this.exporting && this.engine.backend === 'webgpu' && s.displayUpscale && s.output === 'final';
+    const detail = enabled && r.resolutionScale < 1;
+    r.aovs = detail ? ['depth','diffuseAlbedo','specularAlbedo'] : VIEWER_AOVS.filter(kind => kind === s.output);
+    r.aovResolution = detail ? 'display' : 'render';
     this.removeUpscale?.();this.removeUpscale = undefined;
     if (enabled) {
       // Preview uses EASU alone: it has no display-resolution reflectance AOVs.

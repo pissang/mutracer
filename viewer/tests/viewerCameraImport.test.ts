@@ -452,4 +452,13 @@ describe('display upscale policy',()=>{
   expect(viewer.final.aovs).toEqual([]);expect(dispose).toHaveBeenCalled();
   if(backend==='webgpu')expect(remove).toHaveBeenCalledOnce();
  });
+ it('keeps the pass for a reduced preview but traces no detail AOVs for a full-resolution final',()=>{
+  const add=vi.fn(()=>vi.fn());
+  const viewer=Object.assign(Object.create(ViewerEngine.prototype),{
+   engine:{backend:'webgpu',display:{addPostProcess:add}},final:{resolutionScale:1},
+   settings:{...DEFAULT_SETTINGS},upscalePass:Object.assign(vi.fn(),{dispose:vi.fn()})
+  });
+  viewer.configureUpscale();
+  expect(add).toHaveBeenCalledOnce();expect(viewer.final.aovs).toEqual([]);expect(viewer.final.aovResolution).toBe('render');
+ });
 });
