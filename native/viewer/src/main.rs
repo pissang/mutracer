@@ -84,6 +84,7 @@ struct Target {
     errors: Arc<Mutex<Vec<String>>>,
     _events: api::Subscription,
     sample_times: Arc<Mutex<std::collections::VecDeque<f64>>>,
+    render_time: Arc<Mutex<dock::RenderTime>>,
     _sample_events: Vec<api::Subscription>,
     /// Display upscale pass, registered while it applies.
     upscale: Option<api::PostProcessSubscription>,
@@ -144,21 +145,28 @@ impl Target {
             _ => {}
         });
         let sample_times = Arc::new(Mutex::new(std::collections::VecDeque::new()));
-        let sample_events = [render_loop.preview().unwrap(), render_loop.final_render()]
-            .into_iter()
-            .map(|render| {
-                let times = sample_times.clone();
-                render.on_sample(move |event| {
-                    let mut times = times.lock().unwrap();
-                    times.push_back(event.frame_time_ms);
-                    if times.len() > 80 {
-                        times.pop_front();
-                    }
+        let mut sample_events: Vec<_> =
+            [render_loop.preview().unwrap(), render_loop.final_render()]
+                .into_iter()
+                .map(|render| {
+                    let times = sample_times.clone();
+                    render.on_sample(move |event| {
+                        let mut times = times.lock().unwrap();
+                        times.push_back(event.frame_time_ms);
+                        if times.len() > 80 {
+                            times.pop_front();
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect();
+        let render_time = Arc::new(Mutex::new(dock::RenderTime::default()));
+        let time = render_time.clone();
+        sample_events.push(render_loop.final_render().on_sample(move |event| {
+            time.lock().unwrap().record(event);
+        }));
         Ok(Self {
             sample_times,
+            render_time,
             _sample_events: sample_events,
             engine,
             render_loop,
@@ -977,14 +985,26 @@ impl Viewer {
                     .map(|target| target.engine.device_loss_notifier()),
             ),
         );
-        // Upscaling changes the display and final render sizes, which a scene push applies.
+        // Upscaling changes target/display sizing, not the scene or camera.
+        // Recommitting the scene here can retire a target with a batch still in flight.
         let upscale = self.upscale_enabled();
         if self
             .applied_upscale
             .replace(upscale)
             .is_some_and(|u| u != upscale)
         {
-            self.change = self.change.max(Change::Scene);
+            let display_size = self.display_size(self.size);
+            let settings = self.final_settings(render_settings(&self.settings, self.size, held));
+            for target in [Some(&self.target), self.replacement.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                target.final_render().set_settings(settings.clone())?;
+                target
+                    .engine
+                    .display()
+                    .set_size(display_size[0], display_size[1])?;
+            }
         }
         for target in [Some(&mut self.target), self.replacement.as_mut()]
             .into_iter()

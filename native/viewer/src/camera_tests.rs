@@ -43,6 +43,87 @@ fn matches_fresh(viewer: &Viewer) -> Result<()> {
 
 #[test]
 #[ignore = "requires real GPU with Software BVH and HWRT"]
+fn display_upscale_can_toggle_after_rendering_and_while_paused() -> Result<()> {
+    for backend in [0, 1] {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(&default_model())?;
+        viewer.backend = backend;
+        viewer.size = [96, 64];
+        viewer.resolution.full = [192, 128];
+        viewer.resolution.scale = Some(0.5);
+        viewer.settings.max_samples = 4;
+        viewer.denoise = false;
+        viewer.focus.enabled = false;
+        settle(&mut viewer, &ctx)?;
+        let scene_revision = viewer.target.engine.diagnostics().scene_revision;
+        let hdr = viewer.hdr()?;
+        for running in [true, false] {
+            viewer.running = running;
+            for upscale in [false, true, false, true] {
+                viewer.display_upscale = upscale;
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                loop {
+                    viewer.tick(&ctx)?;
+                    ensure!(viewer.error.is_empty(), "{}", viewer.error);
+                    if viewer.change == Change::None && !viewer.preparing() {
+                        break;
+                    }
+                    ensure!(
+                        std::time::Instant::now() < deadline,
+                        "Upscale toggle timed out"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                if running {
+                    settle(&mut viewer, &ctx)?;
+                    assert_eq!(viewer.samples, 4);
+                    assert_eq!(
+                        viewer.final_render().settings()?.size,
+                        if upscale {
+                            api::RenderSize::Scale(0.5)
+                        } else {
+                            api::RenderSize::Fixed {
+                                width: 96,
+                                height: 64,
+                            }
+                        }
+                    );
+                }
+                assert_eq!(
+                    viewer.target.engine.diagnostics().scene_revision,
+                    scene_revision
+                );
+                assert_eq!(
+                    viewer.target.engine.display().size(),
+                    if upscale { [192, 128] } else { [96, 64] }
+                );
+                assert_eq!(viewer.hdr()?, hdr, "Upscale changed raw accumulation");
+            }
+        }
+        viewer.running = true;
+        viewer.settings.max_samples = 16384;
+        viewer.size = [192, 128];
+        viewer.resolution.full = [384, 256];
+        viewer.dirty(Change::Scene);
+        for denoise in [false, true] {
+            viewer.denoise = denoise;
+            for upscale in [false, true, false, true] {
+                // Change the display while final-render work is still in flight.
+                viewer.tick(&ctx)?;
+                viewer.display_upscale = upscale;
+                for _ in 0..20 {
+                    viewer.tick(&ctx)?;
+                    ensure!(viewer.error.is_empty(), "{}", viewer.error);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires real GPU with Software BVH and HWRT"]
 fn camera_edits_keep_scene_and_survive_material_and_layout_updates() -> Result<()> {
     for backend in [0, 1] {
         let ctx = egui::Context::default();

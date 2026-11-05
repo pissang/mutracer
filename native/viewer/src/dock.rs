@@ -3,6 +3,56 @@ use crate::{Change, Viewer, resolution, theme};
 use eframe::egui::{self, Align2, Color32, FontId, Sense, Stroke};
 use std::time::{Duration, Instant};
 
+#[derive(Default)]
+pub(super) struct RenderTime(f64);
+
+impl RenderTime {
+    pub(super) fn record(&mut self, event: &crate::api::SampleEvent) {
+        if event.is_first_frame {
+            self.0 = 0.;
+        }
+        // Completed final-render batches exclude preview, setup, denoising and idle time.
+        self.0 += event.frame_time_ms;
+    }
+
+    fn label(&self) -> String {
+        let seconds = self.0 / 1000.;
+        if seconds < 60. {
+            format!("{seconds:.1} s")
+        } else {
+            let seconds = seconds.round() as u64;
+            format!("{}m {:02}s", seconds / 60, seconds % 60)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_time_accumulates_completed_batches_and_resets_on_restart() {
+        let mut time = RenderTime::default();
+        assert_eq!(time.label(), "0.0 s");
+        for (samples, is_first_frame, frame_time_ms) in
+            [(4, true, 1200.), (8, false, 800.), (12, false, 60000.)]
+        {
+            time.record(&crate::api::SampleEvent {
+                samples,
+                is_first_frame,
+                frame_time_ms,
+            });
+        }
+        assert_eq!(time.label(), "1m 02s");
+        time.record(&crate::api::SampleEvent {
+            samples: 4,
+            is_first_frame: true,
+            frame_time_ms: 300.,
+        });
+        assert_eq!(time.label(), "0.3 s");
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Action {
     Pause,
@@ -169,7 +219,7 @@ impl Viewer {
     }
     pub(super) fn render_dock(&mut self, ctx: &egui::Context, viewport: egui::Rect) -> egui::Rect {
         let available = (viewport.width() - 24.).max(1.);
-        let tiny = available < 220.;
+        let tiny = available < 280.;
         let camera_width: f32 = if self.model.1.cameras.is_empty() {
             44.
         } else {
@@ -180,15 +230,15 @@ impl Viewer {
         } else {
             0.
         };
-        let inline_width = if self.denoise { 560. } else { 420. } + focus_width;
+        let inline_width = if self.denoise { 616. } else { 476. } + focus_width;
         let inline = available >= inline_width + camera_width + 8.;
-        let stacked = !tiny && !inline && available < 260. + camera_width + 8.;
+        let stacked = !tiny && !inline && available < 300. + camera_width + 8.;
         let width = if tiny {
             available.min(180.)
         } else if inline {
             inline_width
         } else {
-            available.min(260.)
+            available.min(300.)
         };
         let camera_width = camera_width.min(available);
         let total_width = if tiny {
@@ -551,11 +601,18 @@ impl Viewer {
         if spinning {
             ui.ctx().request_repaint_after(Duration::from_millis(32));
         }
-        response.on_hover_text(format!("{label} · {} spp", self.samples));
+        let time = if self.samples == 0 {
+            RenderTime::default().label()
+        } else {
+            self.target.render_time.lock().unwrap().label()
+        };
+        let summary = format!("{} spp · {time}", self.samples);
+        response.on_hover_text(format!("{label} · {summary}"));
         if tiny {
             return;
         }
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(72., 30.), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(128., 30.), Sense::hover());
+        response.on_hover_text("Render time excludes scene setup, preview, denoising and pauses.");
         ui.painter().text(
             rect.left_top(),
             Align2::LEFT_TOP,
@@ -566,7 +623,7 @@ impl Viewer {
         ui.painter().text(
             rect.left_bottom(),
             Align2::LEFT_BOTTOM,
-            format!("{} spp", self.samples),
+            summary,
             FontId::monospace(theme::FONT_SMALL),
             theme::SUBTLE,
         );
