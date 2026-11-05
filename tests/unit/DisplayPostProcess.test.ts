@@ -7,8 +7,8 @@ import {renderFixture} from '../helpers/renderPipeline';
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 function fixture() {
   vi.stubGlobal('GPUTextureUsage', {TEXTURE_BINDING: 1, RENDER_ATTACHMENT: 2, STORAGE_BINDING: 4, COPY_SRC: 8, COPY_DST: 16});
-  const encoder = {finish: vi.fn(() => ({}))};
-  const device = {createTexture: vi.fn(({size, format}) => ({...size, depthOrArrayLayers: 1, mipLevelCount: 1, sampleCount: 1, format, destroy: vi.fn()})),
+  const encoder = {copyTextureToTexture: vi.fn(), finish: vi.fn(() => ({}))};
+  const device = {limits: {maxTextureDimension2D: 8192}, createTexture: vi.fn(({size, format}) => ({...size, depthOrArrayLayers: 1, mipLevelCount: 1, sampleCount: 1, format, destroy: vi.fn()})),
     createCommandEncoder: vi.fn(() => encoder), queue: {submit: vi.fn(), onSubmittedWorkDone: vi.fn(async () => {})}} as unknown as GPUDevice;
   const chain = new DisplayPostProcess(device);
   const input = {width: 32, height: 16, format: 'rgba8unorm'} as GPUTexture;
@@ -28,6 +28,31 @@ describe('display GPU passes', () => {
     expect(device.queue.submit).toHaveBeenCalledOnce();
     chain.run(input, [pass], render); expect(device.createTexture).toHaveBeenCalledTimes(2);
     chain.run(input, [], render); expect(chain.output).toBeUndefined();
+  });
+  it('resizes several times using each previous output and the current canvas', () => {
+    const {chain, input} = fixture();
+    const contexts: Parameters<PostProcess>[0][] = [];
+    const pass: PostProcess = ctx => contexts.push(ctx);
+    const first = vi.fn((_: unknown, display: {width: number; height: number}) => display);
+    chain.run(input, [pass, pass, pass], {} as Render, {width: 100, height: 60}, [
+      {outputSize: first}, {outputSize: size => ({width: size.width / 2, height: size.height / 2})}, {outputSize: (_, display) => display}
+    ]);
+    expect(first).toHaveBeenCalledWith({width: 32, height: 16}, {width: 100, height: 60});
+    expect(contexts.map(ctx => [ctx.output.width, ctx.output.height])).toEqual([[100,60], [50,30], [100,60]]);
+    expect(contexts[0].output).toBe(contexts[2].output);
+    expect(contexts[2]).toMatchObject({width: 32, height: 16});
+  });
+  it.each([0, -1, NaN, Infinity, 1.5, 8193])('discards the entire chain for invalid dimension %s', width => {
+    const {chain, input, device} = fixture(); const pass = vi.fn();
+    expect(() => chain.run(input, [pass, pass], {} as Render, input, [{}, {outputSize: () => ({width, height: 1})}])).toThrow(RangeError);
+    expect(pass).not.toHaveBeenCalled(); expect(device.queue.submit).not.toHaveBeenCalled(); expect(chain.output).toBeUndefined();
+  });
+  it('crops a fixed render before a resizing export pass', () => {
+    const {chain, input, encoder} = fixture(); const pass = vi.fn();
+    chain.run(input, [pass], {} as Render, {width: 100, height: 60}, [{outputSize: (_, display) => display}], {width: 29, height: 13});
+    expect(encoder.copyTextureToTexture).toHaveBeenCalledWith({texture: input, origin: {x: 1, y: 1}}, {texture: pass.mock.calls[0][0].input}, {width: 29, height: 13});
+    expect(pass.mock.calls[0][0].input).toMatchObject({width: 29, height: 13});
+    expect(chain.output).toMatchObject({width: 100, height: 60});
   });
   it('discards all commands on an exception and skips the rest of the chain', () => {
     const {chain, device, input} = fixture();
@@ -52,7 +77,7 @@ describe('Display pass registration', () => {
   function setup(backend: 'webgpu' | 'webgl' = 'webgpu') {
     const value = renderFixture({backend}); const render = new Render(value.engine);render.refine();
     const {chain, input} = fixture();
-    value.targets[0].applyPostProcesses = vi.fn((passes, selected) => {if (backend === 'webgpu') chain.run(input, passes, selected);});
+    value.targets[0].applyPostProcesses = vi.fn((passes, selected, options, crop) => {if (backend === 'webgpu') chain.run(input, passes, selected, value.engine.display.canvas, options, crop);});
     value.targets[0].getOutputTexture = vi.fn(() => chain.output ?? input);
     return {...value, render, chain, input};
   }

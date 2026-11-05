@@ -18,8 +18,8 @@ remove(); // Safe to call again.
 
 Passes run in registration order on every `present()` and `toBlob()`, after
 composition and denoising. They receive the selected complete render, including
-fallbacks, at its actual dimensions. Export uses the same chain without resizing
-or changing the display canvas. `readPixels()` never runs these passes.
+fallbacks, at its actual dimensions. Export uses the same chain without changing the display canvas; fixed-size
+renders are cropped to their requested size before entering the chain. `readPixels()` never runs these passes.
 
 For a complete overlay implementation, see
 [`createCrosshairPass`](../examples/shared/crosshairPass.ts). It loads the input
@@ -40,7 +40,19 @@ when that state changes. This refreshes the overlay without tracing more samples
 `getOutputTexture(kind)` requires `'hdr'` or `'display'`; both return undefined
 on WebGL, before a complete sample or after disposal. There are no passes by
 default. `addPostProcess(pass)` returns an idempotent unregister function.
-`PostProcess` and `PostProcessContext` are exported types.
+`PostProcess`, `PostProcessContext` and `PostProcessOptions` are exported types.
+
+Use `addPostProcess(pass, {outputSize: (input, display) => display})` to output
+at canvas resolution. The default preserves the input dimensions. Each callback
+receives the previous pass's dimensions and the current canvas dimensions, also
+for `toBlob()`. A chain can change size more than once. Return positive integer
+width and height within `device.limits.maxTextureDimension2D`; invalid dimensions
+discard the whole chain and emit an engine error, as callback exceptions do.
+
+`ctx.width` and `ctx.height` remain the actual render dimensions. Read
+`ctx.input.width/height` and `ctx.output.width/height` for the pass dimensions.
+`toBlob()` exports the final chain dimensions; `getOutputTexture('display')`
+borrows that actual-sized image, which may differ from the render size.
 
 | Image | Meaning |
 | --- | --- |
@@ -79,9 +91,3 @@ discards the chain's recorded commands, displays the original composed image
 and emits the engine `error` event. GPU validation errors remain WebGPU errors;
 the callback must record valid commands.
 
-## Implementation notes
-
-The composed image is kept separately, so a thrown callback cannot leave a
-partly processed result.
-Display passes do not enter denoiser inputs, change samples or invalidate cached
-filter results. HDR-stage callbacks are outside this API.

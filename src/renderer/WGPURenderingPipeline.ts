@@ -1630,8 +1630,8 @@ width: renderWidth, height: renderHeight,
       if (kind === 'hdr') return resolvedSamples > 0 ? getFrameInput('color') : undefined;
       return displayPostProcess.output ?? presentationTexture;
     },
-    applyPostProcesses(passes, render) {
-      if (presentationTexture) displayPostProcess.run(presentationTexture, passes, render);
+    applyPostProcesses(passes, render, options, crop) {
+      if (presentationTexture) displayPostProcess.run(presentationTexture, passes, render, canvas, options, crop);
     },
     trace,
     drawPostProcess() {

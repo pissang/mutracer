@@ -361,6 +361,7 @@ export default class Render {
   private get _current() { const inputs = this._engine._inputs; return inputs.scene === this._input.scene && inputs.camera === this._input.camera && !this._disposed; }
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
+  /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
@@ -782,7 +783,7 @@ export default class Render {
     }
     target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
   }
-  /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
+  /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes; its dimensions may differ from this render. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
     if (this._engine.backend !== 'webgpu' || (kind === 'hdr' ? !this._complete : !this._current || !this._target?.presentationComplete || (!this._complete && !this._target.getAovSamples?.()))) return;
     return this._target?.getOutputTexture?.(kind);
