@@ -9,6 +9,7 @@ import { MAX_PATH_EVENTS_WEBGL } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import reflectanceWGSL from './aovReflectance.wgsl.js';
 import aovTraceWGSL from './aovTrace.wgsl.js';
+import aovTraceDisplayWGSL from './aovTraceDisplay.wgsl.js';
 import depthQueryWGSL from './depthQuery.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -52,6 +53,8 @@ export interface RayTraceShaderOptions {
   /** Reuse browser RGB paths until the first wavelength-dependent IOR. Default false. */
   shareSpectralPrefix?: boolean;
   independentTextures?: boolean;
+  /** WebGPU display AOV storage specialization. Default false preserves the native/default shader. */
+  displayAovStorage?: boolean;
   hasDisplacement: boolean;
   hasVolumes?: boolean;
   hasVolumeNoise?: boolean;
@@ -1199,7 +1202,7 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + depthQueryWGSL + reflectanceWGSL + aovTraceWGSL;
+  let specializedSource = source + depthQueryWGSL + reflectanceWGSL + (options.displayAovStorage ? aovTraceDisplayWGSL : aovTraceWGSL);
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,

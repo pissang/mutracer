@@ -41,6 +41,7 @@ describe('image export camera', () => {
     const encode = vi.spyOn(engine.display, 'toBlob').mockResolvedValue(blob);
     const viewer = Object.create(ViewerEngine.prototype) as ViewerEngine;
     Object.assign(viewer, {
+      upscalePass: Object.assign(vi.fn(),{dispose:vi.fn()}),
       engine, final, modelCameras: [source], settings: useViewer.getState().settings,
       sync: {update: vi.fn()}, viewSync: {update: vi.fn()}, applyBackground: vi.fn()
     });

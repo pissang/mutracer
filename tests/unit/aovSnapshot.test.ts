@@ -11,6 +11,7 @@ function fixture() {
   const pipeline = vi.fn(() => ({getBindGroupLayout: () => ({})}));
   const device = {
     limits: {maxStorageBufferBindingSize: 1 << 24, maxBufferSize: 1 << 24},
+    createTexture: ({size, format}: GPUTextureDescriptor) => ({width:(size as number[])[0],height:(size as number[])[1],depthOrArrayLayers:1,format,createView:()=>({}),destroy:vi.fn()}),
     createBuffer: (options: GPUBufferDescriptor) => {
       const buffer = {size: options.size, destroy: vi.fn(), unmap: vi.fn(), getMappedRange: () => new ArrayBuffer(options.size)} as unknown as GPUBuffer;
       buffers.push(buffer); return buffer;
@@ -20,22 +21,44 @@ function fixture() {
       expect(Object.keys(parsed.storages).length).toBeLessThanOrEqual(8);
       return {};
     },
-    createComputePipeline: pipeline, createBindGroup: bind,
+    createComputePipeline: pipeline, createRenderPipeline: pipeline, createBindGroup: bind,
     createCommandEncoder: () => ({
-      beginComputePass: () => ({setPipeline() {}, setBindGroup() {}, dispatchWorkgroups: dispatch, end() {}}), finish: () => ({})
+      beginComputePass: () => ({setPipeline() {}, setBindGroup() {}, dispatchWorkgroups: dispatch, end() {}}),
+      beginRenderPass: () => ({setPipeline() {}, setBindGroup() {}, draw: dispatch, end() {}}), finish: () => ({})
     }),
     queue: {submit, writeBuffer: write, onSubmittedWorkDone: async () => {}}
   } as unknown as GPUDevice;
   const state = new WGPUAov(device); state.resize(7, 5); state.samples = 4;
-  return {state, buffers, dispatch, submit, pipeline, bind, write};
+  return {state, device, buffers, dispatch, submit, pipeline, bind, write};
 }
 beforeEach(() => {
   vi.stubGlobal('GPUShaderStage', {COMPUTE: 4, VERTEX: 1, FRAGMENT: 2});
+  vi.stubGlobal('GPUTextureUsage', {STORAGE_BINDING:1,TEXTURE_BINDING:2,COPY_SRC:4,RENDER_ATTACHMENT:8});
   vi.stubGlobal('GPUBufferUsage', {STORAGE: 1, COPY_SRC: 2, COPY_DST: 4, UNIFORM: 8});
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('GPU AOV snapshots', () => {
+  it('borrows raw AOV textures at their own dimensions and invalidates on restart/resize', async () => {
+    const {state, dispatch} = fixture();
+    const first = state.texture('depth')!;
+    expect(first).toMatchObject({width:7,height:5,format:'rg32float'});
+    const calls = dispatch.mock.calls.length;
+    expect(state.texture('depth')).toBe(first);expect(dispatch).toHaveBeenCalledTimes(calls);
+    state.reset();expect(state.texture('depth')).toBeUndefined();
+    state.samples=4;expect(state.texture('depth')).toBe(first);expect(dispatch).toHaveBeenCalledTimes(calls+1);
+    state.resize(10,8,true);state.samples=1;
+    expect(state.texture('diffuseAlbedo')).toMatchObject({width:10,height:8,format:'rgba8unorm-srgb'});
+    await vi.waitFor(()=>expect(first.destroy).toHaveBeenCalledOnce());
+    state.dispose();expect(state.texture('depth')).toBeUndefined();
+  });
+  it('bounds compact display AOV allocation to 40 bytes per pixel including three borrowed images', () => {
+    const {state, device} = fixture();
+    Object.assign(device.limits,{maxBufferSize:1e9,maxStorageBufferBindingSize:1e9});
+    state.resize(3000,2000,true);state.samples=1;
+    state.texture('depth');state.texture('diffuseAlbedo');state.texture('specularAlbedo');
+    expect(state.bytes).toBe(3000*2000*40+64);
+  });
   it('supports every requested subset within baseline device binding limits', () => {
     for (let mask = 1; mask < 128; mask++) {
       const kinds = AOV_KINDS.filter((_, i) => mask & (1 << i));

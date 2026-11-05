@@ -29,6 +29,7 @@ function engine() {
   const viewer = Object.create(ViewerEngine.prototype);
   Object.assign(viewer, {
     pickRequest: 0, pickObjects: new Map(), pickMaterials: new Map(),
+    upscalePass: Object.assign(vi.fn(), {dispose: vi.fn()}),
     initialURLSettings: readURLSettings(), loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
     modelGroup: new THREE.Group(), hiddenAtLoad: new Set(), ground: new THREE.Mesh(),
     canvas: { clientWidth: 800, clientHeight: 600 }, needsResize: false,
@@ -434,5 +435,21 @@ describe('initial link and preset precedence',()=>{
   const replacement=model(0);replacement.lighting=data.lighting;
   await viewer.loadModel(replacement);
   expect(useViewer.getState().settings).toMatchObject({lighting:'environment',envId:'model',envIntensity:1,envRotation:0});
+ });
+});
+
+describe('display upscale policy',()=>{
+ it.each(['webgpu','webgl'])('enables display AOVs only for reduced beauty on %s',backend=>{
+  const remove=vi.fn(), add=vi.fn(()=>remove),dispose=vi.fn();
+  const viewer=Object.assign(Object.create(ViewerEngine.prototype),{
+   engine:{backend,display:{addPostProcess:add}},final:{resolutionScale:.5},
+   settings:{...DEFAULT_SETTINGS},upscalePass:Object.assign(vi.fn(),{dispose})
+  });
+  viewer.configureUpscale();
+  expect(viewer.final.aovs).toEqual(backend==='webgpu'?['depth','diffuseAlbedo','specularAlbedo']:[]);
+  expect(add).toHaveBeenCalledTimes(backend==='webgpu'?1:0);
+  viewer.settings.displayUpscale=false;viewer.configureUpscale();
+  expect(viewer.final.aovs).toEqual([]);expect(dispose).toHaveBeenCalled();
+  if(backend==='webgpu')expect(remove).toHaveBeenCalledOnce();
  });
 });

@@ -27,6 +27,7 @@ const parsers = {
   groundShadow: boolean, groundOpacity: number(0, 1),
   volumes: boolean, volumeDensity: number(0, 10), volumeWarp: number(0, 4),
   caustics: boolean,causticLightTracing:boolean,causticPhotonMapping:boolean,
+  displayUpscale: boolean,
   maxSamples: number(1, Infinity, true), bounces: number(1, Infinity, true), resolutionScale: number(Number.MIN_VALUE, 1), resolutionHeight: nullable(number(1, 16384, true)), outputAspect: nullable(number(.01, 100)),
   samplingPattern: choice('sobol', 'zsobol', 'random'), bvhBuilder: choice('tinybvh', 'builtin'), clamping: number(0),
   denoise: boolean, denoiseModel: choice('jnlm', 'standard', 'small', 'cleanAuxLarge'), denoiseWhileConverging: boolean,

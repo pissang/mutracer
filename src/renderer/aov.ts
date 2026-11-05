@@ -2,6 +2,8 @@
 export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion';
 export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
 export const AOV_BACKGROUND_ID = 0xffffffff;
+/** Display-resolution AOVs only guide texture detail; 4 jittered samples match 16 within measurement noise. */
+export const DISPLAY_AOV_SAMPLE_CAP = 4;
 // Four vec4 lanes for accumulated geometry/reflectance; two for center ID/motion.
 // Depth and roughness share a lane; coverage is position.w.
 export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32,

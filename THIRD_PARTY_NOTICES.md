@@ -170,3 +170,10 @@ The developer/viewer PBRT importer includes spectral tables derived from
 from `src/pbrt/util/loopsubdiv.cpp`, copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob,
 and Greg Humphreys. Licensed under Apache-2.0; the license is reproduced in
 [`LICENSES/pbrt-v4-Apache-2.0.txt`](LICENSES/pbrt-v4-Apache-2.0.txt).
+
+## AMD FidelityFX FSR 1
+
+The optional EASU display pass adapts the 32-bit EASU functions from
+[FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR),
+`ffx_fsr1.h` v1.20210629, copyright (c) 2021 Advanced Micro Devices, Inc.
+Licensed under MIT; see [LICENSES/FidelityFX-FSR.txt](LICENSES/FidelityFX-FSR.txt).

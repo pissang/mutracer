@@ -58,7 +58,7 @@ describe('viewer code snippet', () => {
     expect(code).toContain('light.target.position.set(0, 1, 0)');
   });
   it('leaves library defaults out', () => {
-    const code = generateCode(snapshot({ toneMapping: 'agx', exposure: 1, denoise: false, groundOpacity: 1 }));
+    const code = generateCode(snapshot({ toneMapping: 'agx', exposure: 1, denoise: false, groundOpacity: 1, displayUpscale: false }));
     expect(syntaxErrors(code)).toEqual([]);
     expect(code).not.toContain('engine.display,');
     expect(code).toContain("loadAsync('https://example.com/model.glb')");
@@ -88,10 +88,14 @@ describe('viewer code snippet', () => {
     expect(code).not.toContain("aovs: ['depth',");
   });
 
-  it('omits preview AOV passes for beauty and only integrates reflectance when displayed', () => {
+  it('omits preview AOV passes for beauty and includes final display detail inputs', () => {
     const beauty = generateCode(snapshot({output: 'final'}));
     expect(syntaxErrors(beauty)).toEqual([]);
-    expect(beauty).not.toContain('aovs:');
+    expect(beauty).toContain("aovs: ['depth', 'diffuseAlbedo', 'specularAlbedo'], aovResolution: 'display'");
+    expect(beauty).not.toContain('preview: { aovs:');
+    expect(beauty).toContain('createEasuPass({albedoDetail: true})');
+    expect(generateCode(snapshot({displayUpscale:false}))).not.toContain('createEasuPass');
+    expect(generateCode(snapshot({}, {webgpu:false}))).not.toContain('createEasuPass');
     for (const output of ['diffuseAlbedo', 'specularAlbedo'] as const) {
       const code = generateCode(snapshot({output}));
       expect(syntaxErrors(code)).toEqual([]);

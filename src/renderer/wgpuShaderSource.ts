@@ -14,6 +14,8 @@ export interface WGPUShaderFeatures {
   channelIndependentRis?: boolean;
   /** Reuse browser RGB paths until the first wavelength-dependent IOR. Default false. */
   shareSpectralPrefix?: boolean;
+  /** WebGPU display AOV storage specialization. Default false preserves the native/default shader. */
+  displayAovStorage?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;

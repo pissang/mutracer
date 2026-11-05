@@ -56,6 +56,7 @@ export interface Settings {
   causticLightTracing:boolean;
   causticPhotonMapping:boolean;
   resolutionScale: number;
+  displayUpscale: boolean;
   /** Fixed render height that keeps the viewport's shape; overrides resolutionScale. */
   resolutionHeight: number | null;
   outputAspect: number | null;
@@ -139,6 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   caustics: false,
   causticLightTracing:true,causticPhotonMapping:false,
   resolutionScale: 0.5,
+  displayUpscale: true,
   resolutionHeight: null,
   outputAspect: null,
   samplingPattern: 'sobol',
@@ -319,7 +321,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'resolutionHeight', 'outputAspect', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'displayUpscale', 'resolutionHeight', 'outputAspect', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'
@@ -453,7 +455,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity',
-  volumes: 'Volumes', volumeDensity: 'Volume density', volumeWarp: 'Volume warp', maxSamples: 'Samples', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
+  volumes: 'Volumes', volumeDensity: 'Volume density', volumeWarp: 'Volume warp', maxSamples: 'Samples', displayUpscale: 'Display upscale', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',

@@ -4,7 +4,7 @@ import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../pr
 import * as THREE from 'three';
 import { ViewerOrbitControls } from './orbitControls';
 import {
-  Engine, Render, RenderLoop, Sync, ProceduralSky,
+  Engine, Render, RenderLoop, Sync, ProceduralSky, createEasuPass,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
@@ -142,6 +142,8 @@ export class ViewerEngine {
   private focusQueryVersion = 0;
   private manualFocus: { x: number; y: number } | null = null;
   private disposed = false;
+  private removeUpscale?: () => void;
+  private readonly upscalePass = createEasuPass({albedoDetail: true});
   private readonly unsubscribe: () => void;
   private readonly resizeObserver: ResizeObserver;
 
@@ -194,6 +196,7 @@ export class ViewerEngine {
     void this.engine.init().then(info => {
       if (this.disposed) return;
       set({ backend: { name: info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
+      this.configureUpscale();
       return this.updateDenoiser();
     }).catch(() => {});
     this.unsubscribe = useViewer.subscribe((state, prev) => {
@@ -219,6 +222,7 @@ export class ViewerEngine {
   dispose() {
     this.modelController?.abort();
     this.disposed = true;
+    this.removeUpscale?.(); this.upscalePass.dispose();
     ++this.focusQueryVersion;
     clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
@@ -707,6 +711,7 @@ export class ViewerEngine {
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = renderResolutionScale(s, display.canvas.height);
+    this.configureUpscale(s);
     r.caustics = this.preview.caustics = causticOptions(s);
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -777,6 +782,18 @@ export class ViewerEngine {
     if (prev && URL_SETTINGS_FIELDS.some(changed)) {
       writeHash(s, get().model?.presetId ?? null);
     }
+  }
+
+  private configureUpscale(s: Settings = this.settings) {
+    const r = this.final;
+    const enabled = !this.exporting && this.engine.backend === 'webgpu' && s.displayUpscale && r.resolutionScale < 1 && s.output === 'final';
+    r.aovs = enabled ? ['depth','diffuseAlbedo','specularAlbedo'] : VIEWER_AOVS.filter(kind => kind === s.output);
+    r.aovResolution = enabled ? 'display' : 'render';
+    this.removeUpscale?.();this.removeUpscale = undefined;
+    if (enabled) {
+      // Preview uses EASU alone: it has no display-resolution reflectance AOVs.
+      this.removeUpscale = this.engine.display.addPostProcess(this.upscalePass, {outputSize: (_, canvas) => canvas});
+    } else this.upscalePass.dispose();
   }
 
   private updateDenoiser() {
@@ -1474,7 +1491,7 @@ export class ViewerEngine {
   /** Renders an independent fixed-size image without resizing the viewport. */
   async renderImage(options: ExportOptions, type = 'image/png', quality?: number): Promise<Blob> {
     if (this.exporting) throw new Error('A render is already running');
-    this.exporting = true; this.exportAbort = new AbortController();
+    this.exporting = true; this.removeUpscale?.(); this.removeUpscale = undefined; this.exportAbort = new AbortController();
     const background = this.settings.background;
     const source = this.activeCamera();
     source.updateWorldMatrix(true, false);
@@ -1489,7 +1506,7 @@ export class ViewerEngine {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
-        aovs: this.final.aovs, aovSamples: this.final.aovSamples,
+        aovs: VIEWER_AOVS.filter(kind => kind === this.settings.output), aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping, caustics: this.final.caustics,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
@@ -1502,7 +1519,7 @@ export class ViewerEngine {
     } finally {
       image?.dispose(); this.settings = get().settings; this.applyBackground();
       this.sync.update(); this.viewSync.update(); this.engine.update();
-      this.exporting = false; this.exportAbort = null; set({export: null});
+      this.exporting = false; this.configureUpscale(); this.exportAbort = null; set({export: null});
     }
   }
 
@@ -1590,6 +1607,7 @@ export class ViewerEngine {
     const size = this.engine.display.canvas;
     if (size.width !== width || size.height !== height) this.engine.display.setSize(width, height);
     this.final.resolutionScale = renderResolutionScale(this.settings, height);
+    this.configureUpscale();
     setAspect(this.activeCamera(), this.viewAspect());
   }
 

@@ -100,7 +100,7 @@ export type { SamplingPattern } from './renderer/sampling.js';
 export { default as Engine } from './Engine.js';
 export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
 export { default as Display } from './Display.js';
-export type { BlobOptions, DisplayChannel, AovIdComponent, DisplaySettings, PostProcess, PostProcessContext } from './Display.js';
+export type { BlobOptions, DisplayChannel, AovIdComponent, DisplaySettings, PostProcess, PostProcessContext, PostProcessOptions } from './Display.js';
 export { default as Render } from './Render.js';
 export type { RenderOptions, RenderSettings, CausticSettings, RefineOptions, ConvergeOptions, ConvergeResult, DenoiserOptions, Denoiser, DenoiseInput, CustomDenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
 
@@ -113,3 +113,5 @@ export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 export type {AovKind} from './renderer/aov.js';
 
 export {MAX_VOLUMES, type SceneVolume, type SceneVolumeNoise} from './scene/SceneVolume.js';
+export {createEasuPass} from './renderer/easu.js';
+export type {EasuOptions, EasuPass} from './renderer/easu.js';

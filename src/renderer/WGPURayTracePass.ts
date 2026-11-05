@@ -443,7 +443,7 @@ class WGPURayTracePass {
   // leave global bindings dirty after switching back to a prepared target.
   private _needsUpdateOutputBindGroup = false;
 
-  private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
+  private _aovPipelines = new WeakMap<GPUComputePipeline, Map<number, {
     accumulation?: GPUComputePipeline; center?: GPUComputePipeline; error?: unknown;
   }>>();
   private _depthCompute?: GPUProgrammableStage;
@@ -1092,7 +1092,8 @@ class WGPURayTracePass {
             cameraProjectionInverse: true,
             perInstanceBounds: true,
             compactVertices: true,
-            dynamicEnvironment: true
+            dynamicEnvironment: true,
+            displayAovStorage: true
           },
           bake
         );
@@ -1237,16 +1238,17 @@ class WGPURayTracePass {
     if (index >= 0) this._queuedCompiles.push(...this._queuedCompiles.splice(index, 1));
   }
 
-  private _prepareAovPipelines(kinds: readonly AovKind[]) {
+  private _prepareAovPipelines(kinds: readonly AovKind[], compact = false, display = false) {
     const trace = this._rayTracePipeline;
     if (!trace || !this._depthCompute) return;
     const reflectance = (aovMask(kinds) & 24) !== 0;
     let variants = this._aovPipelines.get(trace);
     if (!variants) { variants = new Map(); this._aovPipelines.set(trace, variants); }
-    let pipelines = variants.get(reflectance);
+    const key = Number(reflectance) + Number(compact)*2 + Number(display)*4;
+    let pipelines = variants.get(key);
     if (!pipelines) {
       pipelines = {};
-      variants.set(reflectance, pipelines);
+      variants.set(key, pipelines);
       const pending = pipelines;
       const textures = this._bindless, groupIndex = textures ? 2 : 3;
       const output = this._device.createBindGroupLayout({entries: [
@@ -1258,7 +1260,7 @@ class WGPURayTracePass {
       ]});
       const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
       const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
-      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0}};
+      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0, AOV_COMPACT: compact ? 1 : 0, AOV_DISPLAY: display ? 1 : 0}};
       // Keep the UI responsive during first use, and reuse both variants across
       // preview/final target changes rather than recreating synchronous pipelines.
       void Promise.all([
@@ -1271,23 +1273,24 @@ class WGPURayTracePass {
     return pipelines;
   }
 
-  prepareAovs(kinds: readonly AovKind[]) {
-    const pipelines = this._prepareAovPipelines(kinds);
+  prepareAovs(kinds: readonly AovKind[], compact = false, display = false) {
+    const pipelines = this._prepareAovPipelines(kinds, compact, display);
     return !!pipelines?.accumulation && !!pipelines.center;
   }
 
-  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[]) {
+  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[], resolution?: {width: number; height: number}) {
     const groups = this._rayTraceBindGroups;
     if (!groups || !this._tlas || !this._preparedMeshData || !kinds.length) return false;
-    const pipelines = this._prepareAovPipelines(kinds);
+    const compact = !!resolution && kinds.every(kind => ['depth','diffuseAlbedo','specularAlbedo'].includes(kind));
+    const pipelines = this._prepareAovPipelines(kinds, compact, !!resolution);
     if (!pipelines?.accumulation || !pipelines.center) return false;
-    state.resize(this._width, this._height);
+    state.resize(resolution?.width ?? this._width, resolution?.height ?? this._height, compact);
     const textures = this._bindless, groupIndex = textures ? 2 : 3;
     const target = Math.min(samples, cap);
     if (state.centerReady && state.samples >= target) return true;
     if (!state.frame) {
       const primitiveIds = this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
-      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history, primitiveIds, false);
+      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, state.width, state.height, state.history, primitiveIds, false);
       state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
     this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
@@ -1307,7 +1310,7 @@ class WGPURayTracePass {
       pass.setBindGroup(groupIndex, output); pass.dispatchWorkgroups(Math.ceil(state.width/8), Math.ceil(state.height/8)); pass.end();
       device.queue.submit([encoder.finish()]); parameters.destroy();
     };
-    if (!state.centerReady) { run(pipelines.center, 0); state.centerReady = true; state.history.accept(state.frame); }
+    if (!state.centerReady) { if (!compact) run(pipelines.center, 0); state.centerReady = true; state.history.accept(state.frame); }
     if ((aovMask(kinds) & 31) === 0) state.samples = target;
     while (state.samples < target) { run(pipelines.accumulation, state.samples); state.samples++; }
     return true;

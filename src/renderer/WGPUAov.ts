@@ -1,11 +1,18 @@
+import {textureBytes} from './gpuMemory.js';
+import {compactAovReadShader} from './wgsl/aovCompact.wgsl.js';
+import {aovResolveCommon} from './wgsl/aovResolve.wgsl.js';
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
 import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
+/** @internal Content revision of each borrowed AOV texture; changes whenever it is re-resolved. */
+export const borrowedAovRevision = new WeakMap<GPUTexture, number>();
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
   readonly history = new AovHistory();
-  width = 0; height = 0; samples = 0; centerReady = false;
+  width = 0; height = 0; samples = 0; centerReady = false; compact = false;
+  private revision = 0;
+  private readonly borrowed = new Map<AovKind, {image: GPUTexture; pipeline: GPUComputePipeline | GPURenderPipeline; samples: number; revision: number}>();
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
   frame?: AovFrameSnapshot;
   private displayPipeline?: GPUComputePipeline;
@@ -18,19 +25,27 @@ export class WGPUAov {
   private readonly snapshotLeases = new WeakMap<GPUBuffer, {kind: AovKind; generation: number}>();
   private readonly snapshotBuffers = new Set<GPUBuffer>();
   constructor(readonly device: GPUDevice) {}
+  private resolveCode(code: string) {
+    if (!this.compact) return code;
+    return code.includes('struct DisplayAovAccum')
+      ? compactAovReadShader(code, '@group(0) @binding(0) var<storage, read> accumulation: array<DisplayAovAccum>;', 'DisplayAovAccum')
+      : compactAovReadShader(code, '@group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;', 'AovResolvedAccumulation');
+  }
   reset() {
-    if (this.centerReady && this.center && this.previousCenter) {
+    this.revision++;
+    if (!this.compact && this.centerReady && this.center && this.previousCenter) {
       const encoder=this.device.createCommandEncoder();encoder.copyBufferToBuffer(this.center,0,this.previousCenter,0,this.center.size);this.device.queue.submit([encoder.finish()]);
     }
     this.samples = 0; this.centerReady = false; this.frame = undefined; }
-  resize(width: number, height: number) {
-    if (width === this.width && height === this.height) return;
-    if (width*height*AOV_LAYOUT.accumulatedBytes>this.device.limits.maxStorageBufferBindingSize || width*height*AOV_LAYOUT.accumulatedBytes>this.device.limits.maxBufferSize) throw new RangeError('AOV accumulation exceeds device buffer limits');
-    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height;
+  resize(width: number, height: number, compact = false) {
+    if (width === this.width && height === this.height && compact === this.compact) return;
+    const stride = compact ? 24 : AOV_LAYOUT.accumulatedBytes;
+    if (width*height*stride>this.device.limits.maxStorageBufferBindingSize || width*height*stride>this.device.limits.maxBufferSize) throw new RangeError('AOV accumulation exceeds device buffer limits');
+    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height; this.compact = compact; this.displayPipeline = undefined;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-    this.accumulation = this.device.createBuffer({label: 'AOV accumulation', size: width * height * AOV_LAYOUT.accumulatedBytes, usage});
-    this.previousCenter = this.device.createBuffer({label: 'Previous AOV center', size: width*height*AOV_LAYOUT.centerBytes, usage});
-    this.center = this.device.createBuffer({label: 'AOV center', size: width * height * AOV_LAYOUT.centerBytes, usage});
+    this.accumulation = this.device.createBuffer({label: 'AOV accumulation', size: width * height * stride, usage});
+    this.previousCenter = this.device.createBuffer({label: 'Previous AOV center', size: compact ? 32 : width*height*AOV_LAYOUT.centerBytes, usage});
+    this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * AOV_LAYOUT.centerBytes, usage});
   }
   setScene(words: Uint32Array, primitiveIds?: Uint32Array) {
     const bytes = words.byteLength + (primitiveIds?.byteLength ?? 0);
@@ -50,7 +65,7 @@ export class WGPUAov {
     }
     this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = words.byteLength;
   }
-  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
+  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.borrowed.values()].reduce((bytes, entry) => bytes + textureBytes(entry.image), 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
   snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
     const device = this.device;
@@ -58,11 +73,11 @@ export class WGPUAov {
     const unique = AOV_KINDS.filter(kind => kinds.includes(kind));
     const batches: {kinds: AovKind[]; pipeline: GPUComputePipeline}[] = [];
     for (let offset = 0; offset < unique.length; offset += AOV_SNAPSHOT_BATCH_SIZE) {
-      const batch = unique.slice(offset, offset + AOV_SNAPSHOT_BATCH_SIZE), key = batch.join(',');
+      const batch = unique.slice(offset, offset + AOV_SNAPSHOT_BATCH_SIZE), key = `${this.compact}:${batch.join(',')}`;
       let pipeline = this.resolvePipelines.get(key);
       if (!pipeline) {
         pipeline = device.createComputePipeline({label: 'AOV snapshot', layout: 'auto',
-          compute: {module: device.createShaderModule({code: aovSnapshotShader(batch)}), entryPoint: 'main'}});
+          compute: {module: device.createShaderModule({code: this.resolveCode(aovSnapshotShader(batch))}), entryPoint: 'main', ...(this.compact ? {constants: {AOV_COMPACT: 1}} : {})}});
         this.resolvePipelines.set(key, pipeline);
       }
       batches.push({kinds: batch, pipeline});
@@ -119,7 +134,7 @@ export class WGPUAov {
   visualize(kind: AovKind, options: AovDisplayOptions, linear: boolean): GPUTexture {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
     const device=this.device;
-    this.displayPipeline ??= device.createComputePipeline({label:'AOV visualization',layout:'auto',compute:{module:device.createShaderModule({code:aovDisplayShader('rgba16float')}),entryPoint:'main'}});
+    this.displayPipeline ??= device.createComputePipeline({label:'AOV visualization',layout:'auto',compute:{module:device.createShaderModule({code:this.resolveCode(aovDisplayShader('rgba16float'))}),entryPoint:'main',...(this.compact ? {constants:{AOV_COMPACT:1}} : {})}});
     if(!this.displayTexture || this.displayTexture.width!==this.width || this.displayTexture.height!==this.height){
       this.displayTexture?.destroy();
       this.displayTexture=device.createTexture({label:'AOV display image',size:[this.width,this.height],format:'rgba16float',usage:GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
@@ -130,7 +145,79 @@ export class WGPUAov {
     const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.displayPipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();
     return this.displayTexture;
   }
+  texture(kind: 'depth' | 'diffuseAlbedo' | 'specularAlbedo'): GPUTexture | undefined {
+    if (!this.samples || !this.accumulation || !this.center) return;
+    const device = this.device;
+    let entry = this.borrowed.get(kind);
+    if (!entry) {
+      // Reflectance in [0,1] is stored sRGB-encoded in 8 bits (decoded on load), halving its memory
+      // with fine steps for dark albedo; depth keeps float32 precision.
+      const depth = kind === 'depth', format: GPUTextureFormat = depth ? 'rg32float' : 'rgba8unorm-srgb';
+      const constants = this.compact ? {constants: {AOV_COMPACT: 1}} : {};
+      let pipeline: GPUComputePipeline | GPURenderPipeline;
+      if (depth) {
+        const code = aovResolveCommon + `
+@group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
+@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if(any(id.xy>=parameters.xy)){return;}
+  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
+  let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
+  textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
+}`;
+        pipeline = device.createComputePipeline({label: `Borrow ${kind}`, layout: 'auto', compute: {
+          module: device.createShaderModule({code:this.resolveCode(code)}), entryPoint: 'main', ...constants}});
+      } else {
+        const code = aovResolveCommon + `
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
+}
+@fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let id=vec2u(position.xy);
+  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
+  return clamp(bitcast<vec4f>(aovResolvedValue(source,parameters.w)),vec4f(0),vec4f(1));
+}`;
+        const module = device.createShaderModule({code:this.resolveCode(code)});
+        pipeline = device.createRenderPipeline({label: `Borrow ${kind}`, layout: 'auto', vertex: {module, entryPoint: 'vertex', ...constants},
+          fragment: {module, entryPoint: 'fragment', targets: [{format}], ...constants}});
+      }
+      const image = device.createTexture({label: `Borrow ${kind}`, size: [this.width,this.height], format,
+        usage: (depth ? GPUTextureUsage.STORAGE_BINDING : GPUTextureUsage.RENDER_ATTACHMENT) | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC});
+      entry = {image, pipeline, samples: -1, revision: -1}; this.borrowed.set(kind, entry);
+    }
+    if (entry.samples !== this.samples || entry.revision !== this.revision) {
+      const parameters = device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
+      new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)]); parameters.unmap();
+      const encoder = device.createCommandEncoder();
+      const entries: GPUBindGroupEntry[] = [{binding:0,resource:{buffer:this.accumulation}},{binding:1,resource:{buffer:this.center}},{binding:3,resource:{buffer:parameters}}];
+      if (kind === 'depth') {
+        const pipeline = entry.pipeline as GPUComputePipeline;
+        const group = device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[...entries,{binding:2,resource:entry.image.createView()}]});
+        const pass = encoder.beginComputePass({label:`Resolve ${kind}`});
+        pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
+      } else {
+        const pipeline = entry.pipeline as GPURenderPipeline;
+        const group = device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries});
+        const pass = encoder.beginRenderPass({label:`Resolve ${kind}`,colorAttachments:[{view:entry.image.createView(),loadOp:'clear',storeOp:'store'}]});
+        pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.draw(3);pass.end();
+      }
+      device.queue.submit([encoder.finish()]);parameters.destroy();entry.samples=this.samples;entry.revision=this.revision;
+      borrowedAovRevision.set(entry.image, (borrowedAovRevision.get(entry.image) ?? 0) + 1);
+    }
+    return entry.image;
+  }
   async read(kind: AovKind) {
+    if (this.compact) {
+      const buffers = this.snapshot([kind]), source = buffers[kind]!;
+      const staging = this.device.createBuffer({size: source.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+      try {
+        const encoder = this.device.createCommandEncoder();encoder.copyBufferToBuffer(source,0,staging,0,source.size);
+        this.device.queue.submit([encoder.finish()]);await staging.mapAsync(GPUMapMode.READ);
+        return {width:this.width,height:this.height,data:new Float32Array(staging.getMappedRange().slice(0))};
+      } finally {
+        if(staging.mapState==='mapped')staging.unmap();staging.destroy();
+        this.snapshotLeases.delete(source);this.snapshotBuffers.delete(source);source.destroy();
+      }
+    }
     const center = kind === 'id' || kind === 'motion';
     const source = center ? this.center! : this.accumulation!;
     const staging = this.device.createBuffer({size: source.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
@@ -159,6 +246,7 @@ export class WGPUAov {
     } finally { if (staging.mapState === 'mapped') staging.unmap(); staging.destroy(); }
   }
   dispose() {
+    const borrowed = [...this.borrowed.values()];this.borrowed.clear();
     const texture=this.displayTexture;this.displayTexture=undefined;
     this.scenePrimitives = undefined; this.scenePrimitiveOffset = 0;
     this.snapshotGeneration++;
@@ -166,6 +254,6 @@ export class WGPUAov {
     pooled.forEach(buffer => this.snapshotBuffers.delete(buffer));
     const buffers=[this.accumulation,this.center,this.scene,this.previousCenter,...pooled];
     this.accumulation=this.center=this.scene=this.previousCenter=undefined;
-    void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
+    void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{borrowed.forEach(entry=>entry.image.destroy());texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
   }
 }

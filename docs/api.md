@@ -127,6 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
+| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 4 samples; requires a scale-based render. WebGL falls back with one warning |
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
@@ -351,9 +352,23 @@ const depth = await render.readPixels('depth'); // Float32Array, RGBA
 const ids = await render.readPixels('id');      // Uint32Array, RGBA
 ```
 
-You can change `render.aovs` or `render.aovSamples` after sampling. Continue
+You can change `render.aovs`, `render.aovSamples` or `render.aovResolution` after sampling. Continue
 calling `refine()` to regenerate AOVs for the current view; beauty samples and
-completed denoising are preserved. AOV accumulation restarts when either changes.
+completed denoising are preserved. AOV accumulation restarts when any of them changes.
+
+To keep beauty at reduced resolution while reading or displaying full-resolution
+surface outputs, set `aovResolution: 'display'` on a scale-based render. The
+default is `'render'`. AOV readbacks and visualization use their own dimensions;
+beauty and denoiser guides keep the render dimensions. Both modes stop at
+`min(samples, aovSamples)`; display mode also caps at 4, follows canvas resizes,
+and rejects fixed-size renders. During tracing, display mode starts after the first
+beauty sample and adds one AOV sample per frame; the frame that reaches
+`maxSamples` completes the rest. WebGL falls back to render dimensions and warns
+once per render. In display mode `diffuseAlbedo` and `specularAlbedo` are
+texture albedo estimates (base and specular color, metalness, coat tint and
+dielectric F0) rather than directional-hemispherical reflectance; they cover
+coat, fuzz and anisotropic surfaces and exclude transmission, cutouts and media.
+Custom denoiser AOV inputs require `'render'` resolution.
 
 | Kind | RGBA contents |
 | --- | --- |
@@ -366,8 +381,7 @@ completed denoising are preserved. AOV accumulation restarts when either changes
 | `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
 
 Depth, position, roughness and reflectance average independent jittered primary
-rays, including depth of field, up to `min(samples, aovSamples)`. RGB values use
-hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
+rays, including depth of field. RGB values use hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
 uses only supported hits for both normalization and valid coverage. A blank pixel
 is zero. These passes preserve beauty samples but do not sample the same paths.
 Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
@@ -393,14 +407,18 @@ Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
 dispersion, partial alpha and nonstandard materials are unsupported by this
 reflectance estimate. Such hits contribute to `roughness.b` and have zero
-reflectance validity. Reflectance uses expensive BSDF quadrature; request it
-only when needed.
+reflectance validity. Display mode also marks transmissive surfaces invalid.
+Reflectance tracing can be expensive; request it only when needed.
 
 Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
-are no AOV allocations or passes. Enabling any kind costs about 128 GPU bytes
-per pixel on WebGPU or 192 on WebGL, plus scene identity/history data; each
-custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
+are no AOV allocations or passes. Enabling any kind normally costs about 128 GPU bytes
+per AOV pixel on WebGPU or 192 on WebGL, plus scene identity/history data.
+WebGPU display mode requesting only depth and/or diffuse/specular albedo costs
+24 bytes per pixel plus small scene metadata; borrowing all three GPU textures
+adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its reflectance
+accumulation has half precision. Other AOV selections use the full allocation;
+each custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
 reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
 WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
 sample runs independently of tile/adaptive sampling and may exceed the render's
@@ -631,10 +649,14 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## GPU output and display passes
 
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
-`display.addPostProcess(pass)` returns unregister and runs on every present/export.
-Both are WebGPU-only. Textures are rounded up to multiples of 16 pixels, so a
-fixed render's texture can include extra pixels around the requested image. See
-[formats, lifecycle and overlay example](./post-processing.md).
+`render.getAovTexture('diffuseAlbedo' | 'specularAlbedo' | 'depth')` borrows raw
+linear AOV textures at their own resolution after sampling; WebGL returns undefined.
+`display.addPostProcess(pass, options?)` returns unregister and runs on every present/export.
+Both are WebGPU-only. `options.outputSize` defaults to preserving input dimensions;
+the final display texture and export can differ from the render size. Fixed renders
+are cropped to their requested rectangle before export passes. HDR textures can
+include extra pixels around a fixed render's requested image. See
+[formats, lifecycle, EASU upscale and overlay examples](./post-processing.md).
 
 Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.
 

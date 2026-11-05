@@ -866,3 +866,23 @@ it('executes the affine-budget schedule with complete coverage and unchanged pix
   for(const order of perPixel.values())expect(order).toEqual(Array.from({length:64},(_,i)=>19+i));
   pipeline.manager.dispose();
 });
+
+it('spreads display-resolution AOV samples after the first beauty sample and completes them on convergence', () => {
+  const pipeline = createPipeline(false), camera = new Camera({projection: 'perspective'});
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4,
+    dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 6,
+    transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false,
+    aovs: ['diffuseAlbedo', 'specularAlbedo', 'depth'], aovResolution: 'display'});
+  const pass = mocks.TracePass.latest, requests: [number, number][] = [];
+  const render = (state: WGPUAov, _camera: Camera, samples: number, cap: number) => {
+    requests.push([pipeline.getTotalSamplesRendered(), samples]); state.samples = Math.max(state.samples, Math.min(samples, cap)); return true;
+  };
+  vi.spyOn(pass, 'renderAovs').mockImplementation(render as unknown as () => boolean);
+  for (let i = 0; i < 40 && pipeline.getTotalSamplesRendered() < 6; i++) pipeline.trace(camera, 6);
+  expect(pipeline.getTotalSamplesRendered()).toBe(6);
+  // Beauty sample 1 has no AOV work; later frames add one sample; the converging frame completes the cap.
+  expect(requests.map(([beauty]) => beauty)).not.toContain(1);
+  expect(requests.filter(([beauty]) => beauty < 6).every(([, samples], index) => samples === index + 1)).toBe(true);
+  expect(requests.at(-1)).toEqual([6, 6]);
+  pipeline.manager.dispose();
+});

@@ -39,10 +39,15 @@ export interface PostProcessContext {
   /** Engine device; may change after recovery. */ device: GPUDevice;
   /** Record commands here; the library finishes and submits it. */ encoder: GPUCommandEncoder;
   /** Read-only composed display image, top row first; no additional color conversion. */ input: GPUTexture;
-  /** Fully write this image. Same format and dimensions as input; supports render, storage and copy writes. */ output: GPUTexture;
+  /** Fully write this image. Same format as input; dimensions follow outputSize; supports render, storage and copy writes. */ output: GPUTexture;
   /** Actual render width. */ width: number;
   /** Actual render height. */ height: number;
   /** Selected complete render, including a selected fallback. */ render: Render;
+}
+/** Optional dimensions for a display pass. */
+export interface PostProcessOptions {
+  /** Output dimensions per invocation, bounded by maxTextureDimension2D. Default undefined preserves input size. Display is the current canvas size, including during export. */
+  outputSize?: (input: {width: number; height: number}, display: {width: number; height: number}) => {width: number; height: number};
 }
 /** Synchronous display pass. Images and encoder are borrowed only during the call; do not retain or destroy them. */
 export type PostProcess = (context: PostProcessContext) => void;
@@ -97,11 +102,11 @@ export default class Display {
     target.activate();
     applyDisplaySettings(this, target);
   }
-  private readonly _postProcesses: {pass: PostProcess}[] = [];
+  private readonly _postProcesses: {pass: PostProcess; options: PostProcessOptions}[] = [];
   private _warnedPostProcess = false;
   /** Registers a display pass in order and returns an idempotent removal function. Default no passes. WebGPU only; WebGL skips passes with one warning. Runs after composition on every present/toBlob, without tracing or invalidating denoising. A thrown error discards the whole chain, presents the original image and emits engine error. */
-  addPostProcess(pass: PostProcess): () => void {
-    const entry = {pass};
+  addPostProcess(pass: PostProcess, options: PostProcessOptions = {}): () => void {
+    const entry = {pass, options: {...options}};
     this._postProcesses.push(entry);
     if (this.engine.backend === 'webgl') this.warnPostProcess();
     return () => { const index = this._postProcesses.indexOf(entry); if (index >= 0) this._postProcesses.splice(index, 1); };
@@ -109,7 +114,7 @@ export default class Display {
   private warnPostProcess() {
     if (!this._warnedPostProcess) { this._warnedPostProcess = true; console.warn('Display post-processing requires WebGPU; passes are ignored on WebGL.'); }
   }
-  private compose(render: Render) {
+  private compose(render: Render, exporting = false) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
     if (!target) return;
@@ -120,8 +125,12 @@ export default class Display {
     this._configure(render);
     target.drawPostProcess();
     if (this._postProcesses.length && this.engine.backend === 'webgl') this.warnPostProcess();
-    try { target.applyPostProcesses?.(this._postProcesses.map(entry => entry.pass), render); }
-    catch (error) { this.engine._notifyError(error); }
+    try { target.applyPostProcesses?.(this._postProcesses.map(entry => entry.pass), render, this._postProcesses.map(entry => entry.options), exporting ? render._exportCrop : undefined); }
+    catch (error) {
+      // Preserve the pre-chain export crop even when a callback or size fails.
+      target.applyPostProcesses?.([], render, [], exporting ? render._exportCrop : undefined);
+      this.engine._notifyError(error);
+    }
     return target;
   }
   /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
@@ -136,11 +145,12 @@ export default class Display {
     this.engine._present(target);
     return selected;
   }
-  /** Encodes this render at its actual dimensions using these settings; leaves the display canvas unchanged. */
+  /** Encodes the display chain at its final dimensions (default render dimensions), cropping fixed renders before passes using these settings; leaves the display canvas unchanged. */
   async toBlob(render: Render, options: BlobOptions = {}): Promise<Blob> {
-    const target = this.compose(render);
+    const target = this.compose(render, true);
     if (!target) throw new Error('Render has no complete image.');
-    const image = render._cropOutput(await target.readPresentation());
+    const presentation = await target.readPresentation();
+    const image = this.engine.backend === 'webgpu' ? presentation : render._cropOutput(presentation);
     const canvas = createCanvas(image.width, image.height, 'convertToBlob' in this.canvas);
     const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('The image encoding context is not available.');

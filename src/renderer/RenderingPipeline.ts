@@ -220,7 +220,8 @@ export interface RenderPasses {
   trace(camera: Camera, maxSamples: number): boolean;
   drawPostProcess(): void;
   /** Apply display-only passes to the last composed image; absent on WebGL. */
-  applyPostProcesses?(passes: readonly PostProcess[], render: Render): void;
+  applyPostProcesses?(passes: readonly PostProcess[], render: Render, options?: readonly import('../Display.js').PostProcessOptions[], crop?: {width: number; height: number}): void;
+  getAovTexture?(kind: 'diffuseAlbedo' | 'specularAlbedo' | 'depth'): GPUTexture | undefined;
   getOutputTexture?(kind: 'hdr' | 'display'): GPUTexture | undefined;
   /** Configure deterministic headless batches used by offline frame export. */
   setOfflineRenderOptions(options: {

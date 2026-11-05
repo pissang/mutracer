@@ -10,6 +10,7 @@ const both = ['webgpu', 'webgl'] as const;
 // Trace fields are exhaustive: adding a pipeline setting requires a descriptor.
 export const traceSchema = {
   aovs: {key: 'aovs', default: [], kind: 'execution', backends: both},
+  aovResolution: {key: 'aovResolution', default: 'render', kind: 'execution', backends: both},
   aovSamples: {key: 'aovSamples', default: 16, kind: 'execution', backends: both},
   bounces: {key: 'bounces', default: 3, kind: 'image', backends: both},
   clamping: {key: 'clamping', default: 0, kind: 'image', backends: both},
