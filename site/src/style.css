@@ -78,8 +78,8 @@ a { color: inherit; }
   transition: border-color 0.15s, background-color 0.15s;
 }
 .drop::before, .drop::after { content: ''; position: absolute; inset: 0; pointer-events: none; }
-/* Classroom by Christophe Seux (CC0), rendered in MuTracer at 128 spp with OIDN. */
-.drop::before { z-index: -2; background: url('./assets/classroom2-background.webp') center / cover no-repeat; }
+/* Kroken by Angelo Ferretti (CC BY-ND 2.0), rendered in MuTracer at 128 spp. */
+.drop::before { z-index: -2; background: url('./assets/kroken-background.webp') center / cover no-repeat; }
 .drop::after {
   z-index: -1;
   background: linear-gradient(90deg, var(--panel) 0%, rgb(24 25 27 / 0.98) 32%, rgb(24 25 27 / 0.92) 50%, rgb(24 25 27 / 0.6) 67%, rgb(24 25 27 / 0.2) 100%);
