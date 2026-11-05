@@ -5,19 +5,8 @@ import {composeDefine} from './compose.frag.wgsl.js';
 export const TONE_LUT_LOG2 = [-24, 24] as const;
 export const TONE_LUT_SIZE = 1024;
 
-/** separate: lobe-share approximation; silhouettes: depth-guided edge reconstruction. Both are retained for comparisons. */
-export function easuDetailShader(separate = false, silhouettes = false) {
-  return easuShader.replace('@vertex fn vertex', /* wgsl */ `
-@group(0) @binding(2) var diffuseHi: texture_2d<f32>;
-@group(0) @binding(3) var specularHi: texture_2d<f32>;
-@group(0) @binding(4) var depthHi: texture_2d<f32>;
-@group(0) @binding(5) var diffuseLo: texture_2d<f32>;
-@group(0) @binding(6) var specularLo: texture_2d<f32>;
-@group(0) @binding(7) var<uniform> detail: vec4f;
-${silhouettes ? '@group(0) @binding(10) var depthLo: texture_2d<f32>;' : ''}
-fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
-  return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
-}
+// Tone table lookups and display encoding shared by the detail passes; tone.x is the maximum display value.
+const toneCodingDefine = /* wgsl */ `
 // Row 0: display value of a gray scene-linear input at TONE_LUT_LOG2 stops, per channel.
 // Row 1: log2 scene-linear input per channel for display values (sqrt-spaced up to tone.x).
 @group(0) @binding(8) var toneLut: texture_2d<f32>;
@@ -48,6 +37,27 @@ fn detailEncode(c: vec3f) -> vec3f {
   let a=max(c,vec3f(0));
   return select(1.055*pow(a,vec3f(1.0/2.4))-0.055,a*12.92,a<=vec3f(0.0031308));
 }
+`;
+
+/**
+ * guided: scale only the albedo-correlated part of local scene-linear radiance (default);
+ * separate: lobe-share approximation; silhouettes: depth-guided edge reconstruction.
+ * The last two are retained for comparisons.
+ */
+export function easuDetailShader(separate = false, silhouettes = false, guided = true) {
+  return easuShader.replace('@vertex fn vertex', /* wgsl */ `
+@group(0) @binding(2) var diffuseHi: texture_2d<f32>;
+@group(0) @binding(3) var specularHi: texture_2d<f32>;
+@group(0) @binding(4) var depthHi: texture_2d<f32>;
+@group(0) @binding(5) var diffuseLo: texture_2d<f32>;
+@group(0) @binding(6) var specularLo: texture_2d<f32>;
+@group(0) @binding(7) var<uniform> detail: vec4f;
+${silhouettes ? '@group(0) @binding(10) var depthLo: texture_2d<f32>;' : ''}
+${guided ? '@group(0) @binding(11) var slopeLo: texture_2d<f32>;\n@group(0) @binding(12) var offsetLo: texture_2d<f32>;' : ''}
+fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
+  return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
+}
+${toneCodingDefine}
 @vertex fn vertex`).replace('  return clamp(result/total,lower,upper);', /* wgsl */ `
   let color=clamp(result/total,lower,upper);
   var diffuse=vec4f(0);var specular=vec4f(0);
@@ -62,6 +72,17 @@ fn detailEncode(c: vec3f) -> vec3f {
   let slo=min(min(loadLow(specularLo,base),loadLow(specularLo,base+vec2i(1,0))),min(loadLow(specularLo,base+vec2i(0,1)),loadLow(specularLo,base+vec2i(1,1))));
   let shi=max(max(loadLow(specularLo,base),loadLow(specularLo,base+vec2i(1,0))),max(loadLow(specularLo,base+vec2i(0,1)),loadLow(specularLo,base+vec2i(1,1))));
   diffuse=clamp(diffuse/total,dlo,dhi);specular=clamp(specular/total,slo,shi);
+  ${guided ? `var slope=vec4f(0);var intercept=vec4f(0);
+  for(var i=0u;i<12u;i++){
+    let weight=easuWeight(vec2f(offsets[i])-phase,direction,length,lobe);
+    slope+=loadLow(slopeLo,base+offsets[i])*weight;intercept+=loadLow(offsetLo,base+offsets[i])*weight;
+  }
+  var lowerSlope=loadLow(slopeLo,base);var upperSlope=lowerSlope;var lowerIntercept=loadLow(offsetLo,base);var upperIntercept=lowerIntercept;
+  for(var k=1;k<4;k++){
+    let q=base+vec2i(k&1,k>>1u);let a=loadLow(slopeLo,q);let b=loadLow(offsetLo,q);
+    lowerSlope=min(lowerSlope,a);upperSlope=max(upperSlope,a);lowerIntercept=min(lowerIntercept,b);upperIntercept=max(upperIntercept,b);
+  }
+  slope=clamp(slope/total,lowerSlope,upperSlope);intercept=clamp(intercept/total,lowerIntercept,upperIntercept);` : ''}
   let p=vec2i(position.xy);let size=vec2i(textureDimensions(depthHi));
   let d=textureLoad(diffuseHi,p,0);let s=textureLoad(specularHi,p,0);let z=textureLoad(depthHi,p,0).xy;
   let tolerance=max(detail.w,detail.z*abs(z.x));
@@ -108,6 +129,11 @@ fn detailEncode(c: vec3f) -> vec3f {
   let rd=clamp(d.rgb/max(diffuse.rgb,vec3f(detail.x)),vec3f(outputSize.z),vec3f(outputSize.w));
   let rs=clamp(s.rgb/max(specular.rgb,vec3f(detail.x)),vec3f(outputSize.z),vec3f(outputSize.w));
   ratio=share*rd+(vec3f(1)-share)*rs;` : ''}
+  ${guided ? `// Local radiance is modeled as slope * albedo + intercept. Only the albedo-correlated
+  // part follows the full-resolution albedo; the intercept, such as specular highlights,
+  // does not. Pure diffuse (zero intercept) reduces to the albedo ratio.
+  let modeled=slope.rgb*low+intercept.rgb;
+  ratio=select(ratio,clamp((slope.rgb*(d.rgb+s.rgb)+intercept.rgb)/max(modeled,vec3f(1e-8)),vec3f(outputSize.z),vec3f(outputSize.w)),modeled>vec3f(1e-8));` : ''}
   ratio=select(vec3f(1),ratio,low>vec3f(detail.x));
   // Albedo ratios are scene-linear; the composed image is tone mapped and sRGB encoded.
   return vec4f(detailEncode(toneAware(detailDecode(color.rgb),ratio)),color.a);`);
@@ -166,5 +192,36 @@ fn toneGray(x: f32) -> vec3f {
     result[c]=0.5*(lo+hi);
   }
   return vec4f(result,1);
+}
+`;
+
+// Per low-resolution pixel, fits scene-linear radiance x ~ slope * albedo + offset over a
+// 3x3 window of guided samples, per channel (a guided-filter regression). Flat albedo
+// gives slope ~0, so its radiance is not modulated; tone.y regularizes the variance.
+export const guidedCoefficientShader = /* wgsl */ `
+@group(0) @binding(0) var colorImage: texture_2d<f32>;
+@group(0) @binding(1) var diffuseLo: texture_2d<f32>;
+@group(0) @binding(2) var specularLo: texture_2d<f32>;
+${toneCodingDefine}
+fn loadAt(image: texture_2d<f32>, p: vec2i) -> vec4f {return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);}
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
+}
+struct Result {@location(0) slope: vec4f, @location(1) offset: vec4f,}
+@fragment fn fragment(@builtin(position) position: vec4f) -> Result {
+  let center=vec2i(position.xy);
+  var weight=0.0;var meanAlbedo=vec3f(0);var meanRadiance=vec3f(0);var meanProduct=vec3f(0);var meanSquare=vec3f(0);
+  for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){
+    let q=center+vec2i(x,y);let d=loadAt(diffuseLo,q);let s=loadAt(specularLo,q);
+    let w=step(0.5,min(d.a,s.a));let albedo=d.rgb+s.rgb;
+    let radiance=exp2(toneInverse(detailDecode(loadAt(colorImage,q).rgb)));
+    weight+=w;meanAlbedo+=albedo*w;meanRadiance+=radiance*w;meanProduct+=albedo*radiance*w;meanSquare+=albedo*albedo*w;
+  }}
+  var result: Result;
+  if(weight<1.0){return result;}
+  meanAlbedo/=weight;meanRadiance/=weight;meanProduct/=weight;meanSquare/=weight;
+  let slope=max((meanProduct-meanAlbedo*meanRadiance)/(meanSquare-meanAlbedo*meanAlbedo+vec3f(tone.y)),vec3f(0));
+  result.slope=vec4f(slope,1);result.offset=vec4f(meanRadiance-slope*meanAlbedo,1);
+  return result;
 }
 `;

@@ -57,9 +57,12 @@ to release its scratch images.
 EASU works on display-encoded RGB after tone mapping, including extended-range
 output, and preserves alpha. EASU alone cannot recover missing texture detail.
 Albedo compensation recovers supported surface texture detail but cannot recover
-reflection, refraction or geometric detail. It is a display-space approximation:
-bright and clipped highlights can change incorrectly. Transmission, cutouts,
-background, low coverage and depth boundaries receive EASU alone.
+reflection, refraction or geometric detail. It maps the displayed image back
+through the display transform, estimates locally how much radiance follows albedo,
+and changes only that part, so specular highlights mostly keep their brightness.
+Clipped highlights cannot be recovered. Transmission, cutouts, background, low
+coverage and depth boundaries receive EASU alone. With detail, a present costs about
+2.6 ms at 6 MP on an Apple M4 Max, compared with about 0.5 ms for EASU alone.
 
 ## Options and image semantics
 
@@ -99,7 +102,7 @@ See [custom denoiser image semantics](./denoising.md#custom-denoisers).
 
 `createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
 missing AOVs or AOV dimensions different from the output use EASU alone. Detail
-options are `ratioRange` (default `[0.85, 1.18]`, positive finite linear bounds),
+options are `ratioRange` (default `[0.7, 1.43]`, positive finite linear bounds),
 `depthThreshold` (default `0.02`, positive relative departure of neighboring
 inverse depth from a plane, so sloped surfaces are not treated as silhouettes) and
 `coverageThreshold` (default `0.95`, in `(0, 1]`). Wider ranges recover more
