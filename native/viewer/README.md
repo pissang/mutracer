@@ -30,9 +30,10 @@ repository root:
 ```bash
 npm ci
 npm ci --prefix native/toolchain --include=optional
-export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
 npm run native:viewer
 ```
+
+The viewer commands find the bundled scriptc unless `MUTRACER_SCRIPTC` is set.
 
 Add `-- /absolute/path/model.glb` to open a model at launch.
 `npm run native:viewer:build` builds without opening the app, into

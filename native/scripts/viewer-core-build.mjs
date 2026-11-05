@@ -10,10 +10,18 @@ import {archiveName,nativeToolchainEnv} from './platform.mjs';
 
 export const viewerRoot=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+// MUTRACER_SCRIPTC overrides the compiler installed by npm ci --prefix native/toolchain.
+function bundledCompiler() {
+  const result=spawnSync(process.execPath,['native/toolchain/compiler.mjs'],{cwd:viewerRoot,encoding:'utf8'});
+  if(result.status!==0||!result.stdout.trim())
+    throw new Error('Install the native compiler with: npm ci --prefix native/toolchain --include=optional, or set MUTRACER_SCRIPTC.');
+  return result.stdout.trim();
+}
+
 export async function prepareViewerCore(out,target,environment=process.env) {
   mkdirSync(out,{recursive:true});
-  const compiler=environment.MUTRACER_SCRIPTC??'scriptc';
-  const env={...nativeToolchainEnv(environment),CARGO_TARGET_DIR:target,
+  const compiler=environment.MUTRACER_SCRIPTC||bundledCompiler();
+  const env={...nativeToolchainEnv(environment),MUTRACER_SCRIPTC:compiler,CARGO_TARGET_DIR:target,
     MUTRACER_AOT_ARCHIVE:resolve(environment.MUTRACER_AOT_PREBUILT??resolve(out,archiveName('render-core')))};
   function run(command,args) {
     const result=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:viewerRoot,env,stdio:'inherit'});

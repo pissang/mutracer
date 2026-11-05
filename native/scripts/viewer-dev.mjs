@@ -51,11 +51,6 @@ UI function edits retain the current scene and GPU resources. Restart for state 
   }
   viewerPlatform();
   checkDxVersion(options.command,options.env);
-  if(!options.env.MUTRACER_SCRIPTC) {
-    const compiler=spawnSync(process.execPath,['native/toolchain/compiler.mjs'],{cwd:viewerRoot,encoding:'utf8'});
-    if(compiler.status!==0||!compiler.stdout.trim())throw new Error('Install the native compiler with: npm ci --prefix native/toolchain --include=optional');
-    options.env.MUTRACER_SCRIPTC=compiler.stdout.trim();
-  }
   const {env}=await prepareViewerCore(options.out,options.target,options.env);
   // The development app needs the same DXC runtime as the packaged Windows app.
   if(windows)env.PATH=resolve(prepareDxc(),'bin/x64')+delimiter+env.PATH;
