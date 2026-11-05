@@ -358,9 +358,10 @@ completed denoising are preserved. AOV accumulation restarts when any of them ch
 To keep beauty at reduced resolution while reading or displaying full-resolution
 surface outputs, set `aovResolution: 'display'` on a scale-based render. The
 default is `'render'`. AOV readbacks and visualization use their own dimensions;
-beauty and denoiser guides keep the render dimensions. Display mode stops at
-`min(samples, aovSamples, 16)`, follows canvas resizes, and rejects fixed-size
-renders. WebGL falls back to render dimensions and warns once per render.
+beauty and denoiser guides keep the render dimensions. Both modes stop at
+`min(samples, aovSamples)`; display mode also caps at 16, follows canvas resizes,
+and rejects fixed-size renders. WebGL falls back to render dimensions and warns
+once per render.
 Custom denoiser AOV inputs require `'render'` resolution.
 
 | Kind | RGBA contents |
@@ -374,8 +375,7 @@ Custom denoiser AOV inputs require `'render'` resolution.
 | `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
 
 Depth, position, roughness and reflectance average independent jittered primary
-rays, including depth of field, up to `min(samples, aovSamples)`. RGB values use
-hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
+rays, including depth of field. RGB values use hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
 uses only supported hits for both normalization and valid coverage. A blank pixel
 is zero. These passes preserve beauty samples but do not sample the same paths.
 Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
@@ -401,7 +401,8 @@ Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
 dispersion, partial alpha and nonstandard materials are unsupported by this
 reflectance estimate. Such hits contribute to `roughness.b` and have zero
-reflectance validity. Reflectance tracing can be expensive; request it only when needed.
+reflectance validity. Display mode also marks transmissive surfaces invalid.
+Reflectance tracing can be expensive; request it only when needed.
 
 Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
@@ -410,8 +411,7 @@ per AOV pixel on WebGPU or 192 on WebGL, plus scene identity/history data.
 WebGPU display mode requesting only depth and/or diffuse/specular albedo costs
 24 bytes per pixel plus small scene metadata; borrowing all three GPU textures
 adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its reflectance
-accumulation has half precision and excludes transmissive surfaces in addition
-to the unsupported materials above. Other AOV selections use the full allocation;
+accumulation has half precision. Other AOV selections use the full allocation;
 each custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
 reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
 WebGPU dimensions remain subject to device buffer limits. A full-frame AOV

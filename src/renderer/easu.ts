@@ -6,7 +6,7 @@ import {albedoDownsampleShader, easuDetailShader} from './wgsl/easuDetail.wgsl.j
 export interface EasuOptions {
   /** Recover texture detail using enabled display-resolution diffuseAlbedo, specularAlbedo and depth AOVs. Default false. Missing or mismatched AOVs use EASU alone; unsupported surfaces and silhouettes receive no compensation. */ albedoDetail?: boolean;
   /** Per-channel compensation bounds, positive finite min <= max. Default [0.25, 4]. */ ratioRange?: readonly [number, number];
-  /** Relative depth jump rejecting compensation across silhouettes, positive finite. Default 0.02. */ depthThreshold?: number;
+  /** Relative depth jump rejecting compensation across silhouettes, positive finite; absolute tolerance is at least 1e-4 scene units. Default 0.02. */ depthThreshold?: number;
   /** Minimum valid AOV coverage in (0,1]. Default 0.95. */ coverageThreshold?: number;
 }
 /** A display pass with optional scratch images. Dispose after unregistering; it may be used again. */

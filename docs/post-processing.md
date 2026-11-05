@@ -46,6 +46,8 @@ const removeUpscale = engine.display.addPostProcess(pass, {
 });
 ```
 
+Register the upscale before overlays that should stay at canvas resolution.
+
 To recover texture detail, enable `diffuseAlbedo`, `specularAlbedo` and `depth`
 on a scale-based render with `aovResolution: 'display'`, and create the pass with
 `createEasuPass({albedoDetail: true})`. Keep beauty at the desired reduced
@@ -99,7 +101,8 @@ See [custom denoiser image semantics](./denoising.md#custom-denoisers).
 `createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
 missing AOVs or AOV dimensions different from the output use EASU alone. Detail
 options are `ratioRange` (default `[0.25, 4]`, positive finite bounds),
-`depthThreshold` (default `0.02`, positive relative depth jump) and
+`depthThreshold` (default `0.02`, positive relative depth jump, with a `1e-4`
+scene-unit tolerance floor) and
 `coverageThreshold` (default `0.95`, in `(0, 1]`). Keep compensation ranges narrow
 when the material or lighting produces halos or color changes. The optional
 AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs).
