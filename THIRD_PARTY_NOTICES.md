@@ -163,3 +163,10 @@ and MIT license are described in the TinyBVH section above; the full text is
 also included in [`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt).
 These license files are copied without modification from the installed
 packages and the checked-in TinyBVH license.
+
+## AMD FidelityFX FSR 1
+
+The optional EASU display pass adapts the 32-bit EASU functions from
+[FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR),
+`ffx_fsr1.h` v1.20210629, copyright (c) 2021 Advanced Micro Devices, Inc.
+Licensed under MIT; see [LICENSES/FidelityFX-FSR.txt](LICENSES/FidelityFX-FSR.txt).

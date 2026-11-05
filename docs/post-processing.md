@@ -35,6 +35,18 @@ A changing overlay can read application state in its callback. `RenderLoop`
 stops presenting after convergence, so explicitly call `display.present(final)`
 when that state changes. This refreshes the overlay without tracing more samples.
 
+For edge-adaptive enlargement without sharpening:
+
+```ts
+import {createEasuPass} from '@meimu/mutracer';
+const removeUpscale = engine.display.addPostProcess(createEasuPass(), {
+  outputSize: (_, display) => display
+});
+```
+
+EASU works on display-encoded RGB after tone mapping, including extended-range
+output, and preserves alpha. It cannot recover detail absent from its input.
+
 ## Options and image semantics
 
 `getOutputTexture(kind)` requires `'hdr'` or `'display'`; both return undefined

@@ -116,6 +116,9 @@ function DebugControls() {
       {s.output === 'position' && <Scrub label="Position scale" value={s.aovPositionScale} min={0.001} max={10000} log onChange={(v) => setSettings({aovPositionScale: v})} />}
       {s.output === 'motion' && <Scrub label="Motion scale" value={s.aovMotionScale} min={0.01} max={1000} log onChange={(v) => setSettings({aovMotionScale: v})} />}
       {s.output === 'id' && <Field label="ID component"><Select label="ID component" value={s.aovIdComponent} options={(['object', 'instance', 'material', 'primitive'] as const).map(value => ({value, label: value}))} onChange={(v) => setSettings({aovIdComponent: v})} /></Field>}
+      {!webgl && <Switch label="Display upscale" checked={s.displayUpscale} onChange={(v) => setSettings({displayUpscale: v})}>
+        <span className="field-label">Display upscale</span>
+      </Switch>}
       <Switch label="Interactive preview" checked={s.previewEnabled} onChange={(v) => setSettings({ previewEnabled: v })}>
         <span className="field-label">Interactive preview</span>
       </Switch>

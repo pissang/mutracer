@@ -50,6 +50,7 @@ export interface Settings {
   causticLightTracing:boolean;
   causticPhotonMapping:boolean;
   resolutionScale: number;
+  displayUpscale: boolean;
   /** Fixed render height that keeps the viewport's shape; overrides resolutionScale. */
   resolutionHeight: number | null;
   samplingPattern: SamplingPattern;
@@ -129,6 +130,7 @@ export const DEFAULT_SETTINGS: Settings = {
   caustics: false,
   causticLightTracing:true,causticPhotonMapping:false,
   resolutionScale: 0.5,
+  displayUpscale: true,
   resolutionHeight: null,
   samplingPattern: 'sobol',
   // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
@@ -308,7 +310,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'resolutionHeight', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'caustics', 'causticLightTracing','causticPhotonMapping', 'resolutionScale', 'displayUpscale', 'resolutionHeight', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'

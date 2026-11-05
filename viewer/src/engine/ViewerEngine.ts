@@ -3,7 +3,7 @@ import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../pr
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render, RenderLoop, Sync, ProceduralSky,
+  Engine, Render, RenderLoop, Sync, ProceduralSky, createEasuPass,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
@@ -136,6 +136,8 @@ export class ViewerEngine {
   private focusQueryVersion = 0;
   private manualFocus: { x: number; y: number } | null = null;
   private disposed = false;
+  private removeUpscale?: () => void;
+  private readonly upscalePass = createEasuPass();
   private readonly unsubscribe: () => void;
   private readonly resizeObserver: ResizeObserver;
 
@@ -211,6 +213,7 @@ export class ViewerEngine {
 
   dispose() {
     this.disposed = true;
+    this.removeUpscale?.();
     ++this.focusQueryVersion;
     clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
@@ -667,6 +670,13 @@ export class ViewerEngine {
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = renderResolutionScale(s, display.canvas.height);
+    this.removeUpscale?.(); this.removeUpscale = undefined;
+    if (this.engine.backend !== 'webgl' && s.displayUpscale && r.resolutionScale < 1 && s.output === 'final') {
+      this.removeUpscale = display.addPostProcess(ctx => {
+        if (ctx.render === this.final) this.upscalePass(ctx);
+        else ctx.encoder.copyTextureToTexture({texture: ctx.input}, {texture: ctx.output}, {width: ctx.input.width, height: ctx.input.height});
+      }, {outputSize: (input, canvas) => this.final._presentable ? canvas : input});
+    }
     r.caustics = this.preview.caustics = causticOptions(s);
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);

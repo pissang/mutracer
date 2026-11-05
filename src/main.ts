@@ -111,3 +111,5 @@ export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';
 export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 
 export type {AovKind} from './renderer/aov.js';
+
+export {createEasuPass} from './renderer/easu.js';
