@@ -15,3 +15,11 @@ it('keeps standard presentation when HDR capability detection fails', () => {
   const surface = new WGPUCanvasSurface({getContext: () => ({configure})} as unknown as HTMLCanvasElement, {} as GPUDevice, 'bgra8unorm');
   surface.configure(true); expect(surface.hdr).toBe(false); expect(configure).toHaveBeenCalledOnce(); surface.dispose();
 });
+it('leaves the canvas configured when a replaced surface is disposed late', () => {
+  const configure = vi.fn(), unconfigure = vi.fn(); const context = {configure, unconfigure};
+  const canvas = {getContext: () => context} as unknown as HTMLCanvasElement;
+  const first = new WGPUCanvasSurface(canvas, {} as GPUDevice, 'bgra8unorm');
+  const second = new WGPUCanvasSurface(canvas, {} as GPUDevice, 'bgra8unorm');
+  first.dispose(); expect(unconfigure).not.toHaveBeenCalled();
+  second.dispose(); expect(unconfigure).toHaveBeenCalledOnce();
+});
