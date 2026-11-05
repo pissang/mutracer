@@ -99,9 +99,9 @@ See [custom denoiser image semantics](./denoising.md#custom-denoisers).
 
 `createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
 missing AOVs or AOV dimensions different from the output use EASU alone. Detail
-options are `ratioRange` (default `[0.9, 1.1]`, positive finite linear bounds),
-`depthThreshold` (default `0.02`, positive relative depth jump, with a `1e-4`
-scene-unit tolerance floor) and
+options are `ratioRange` (default `[0.85, 1.18]`, positive finite linear bounds),
+`depthThreshold` (default `0.02`, positive relative departure of neighboring
+inverse depth from a plane, so sloped surfaces are not treated as silhouettes) and
 `coverageThreshold` (default `0.95`, in `(0, 1]`). Wider ranges recover more
 texture contrast but can alter highlights and silhouettes. The optional
 AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs).

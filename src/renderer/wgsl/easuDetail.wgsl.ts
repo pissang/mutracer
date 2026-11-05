@@ -5,7 +5,8 @@ import {composeDefine} from './compose.frag.wgsl.js';
 export const TONE_LUT_LOG2 = [-24, 24] as const;
 export const TONE_LUT_SIZE = 1024;
 
-export function easuDetailShader(separate = false) {
+/** separate: lobe-share approximation; silhouettes: depth-guided edge reconstruction. Both are retained for comparisons. */
+export function easuDetailShader(separate = false, silhouettes = false) {
   return easuShader.replace('@vertex fn vertex', /* wgsl */ `
 @group(0) @binding(2) var diffuseHi: texture_2d<f32>;
 @group(0) @binding(3) var specularHi: texture_2d<f32>;
@@ -13,6 +14,7 @@ export function easuDetailShader(separate = false) {
 @group(0) @binding(5) var diffuseLo: texture_2d<f32>;
 @group(0) @binding(6) var specularLo: texture_2d<f32>;
 @group(0) @binding(7) var<uniform> detail: vec4f;
+${silhouettes ? '@group(0) @binding(10) var depthLo: texture_2d<f32>;' : ''}
 fn loadLow(image: texture_2d<f32>, p: vec2i) -> vec4f {
   return textureLoad(image,clamp(p,vec2i(0),vec2i(textureDimensions(image))-1),0);
 }
@@ -62,12 +64,41 @@ fn detailEncode(c: vec3f) -> vec3f {
   diffuse=clamp(diffuse/total,dlo,dhi);specular=clamp(specular/total,slo,shi);
   let p=vec2i(position.xy);let size=vec2i(textureDimensions(depthHi));
   let d=textureLoad(diffuseHi,p,0);let s=textureLoad(specularHi,p,0);let z=textureLoad(depthHi,p,0).xy;
-  var valid=min(min(d.a,s.a),min(diffuse.a,specular.a))>=detail.y && z.y>=detail.y;
+  let tolerance=max(detail.w,detail.z*abs(z.x));
   let radius=max(vec2i(1),vec2i(ceil(outputSize.xy/vec2f(textureDimensions(colorImage)))));
-  for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){
-    let neighbor=textureLoad(depthHi,clamp(p+vec2i(x,y)*radius,vec2i(0),size-1),0).xy;
-    valid=valid && neighbor.y>=detail.y && abs(neighbor.x-z.x)<=max(detail.w,detail.z*abs(z.x));
-  }}
+  // A silhouette changes hit coverage or breaks the planarity of inverse depth,
+  // which is linear in screen space on planes; sloped planes are not silhouettes.
+  var silhouette=false;let inverse=1.0/max(z.x,1e-6);
+  let directions=array<vec2i,4>(vec2i(1,0),vec2i(0,1),vec2i(1,1),vec2i(1,-1));
+  for(var k=0;k<4;k++){
+    let a=textureLoad(depthHi,clamp(p+directions[k]*radius,vec2i(0),size-1),0).xy;
+    let b=textureLoad(depthHi,clamp(p-directions[k]*radius,vec2i(0),size-1),0).xy;
+    silhouette=silhouette || abs(a.y-z.y)>0.5 || abs(b.y-z.y)>0.5 ||
+      (min(min(a.y,b.y),z.y)>0.0 && abs(1.0/max(a.x,1e-6)+1.0/max(b.x,1e-6)-2.0*inverse)>detail.z*inverse);
+  }
+  ${silhouettes ? `  // Transmissive and other unguided hits show surfaces behind their depth; keep EASU there.
+  let guided=min(d.a,s.a)>=detail.y;
+  if(silhouette && z.y>=0.5 && !guided){return color;}
+  if(silhouette){
+    // Silhouettes: estimate this surface's color from covered low-resolution neighbors
+    // at a similar nearest depth, the background from uncovered ones, and mix them by
+    // this pixel's full-resolution hit coverage, which keeps edges antialiased.
+    let center=vec2i(round(point));var front=vec4f(0);var back=vec4f(0);var frontWeight=0.0;var backWeight=0.0;
+    for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){
+      let q=center+vec2i(x,y);let offset=vec2f(q)-point;
+      let lowDepth=loadLow(depthLo,q).xy;let spatial=exp(-dot(offset,offset));
+      let similar=exp(-pow(abs(lowDepth.x-z.x)/tolerance,2.0));
+      let sample=loadColor(q);let value=vec4f(detailDecode(sample.rgb),sample.a);
+      let f=spatial*lowDepth.y*lowDepth.y*select(1.0,similar,z.y>0.0);let b=spatial*(1.0-lowDepth.y)*(1.0-lowDepth.y);
+      front+=value*f;frontWeight+=f;back+=value*b;backWeight+=b;
+    }}
+    let haveFront=frontWeight>1e-3;let haveBack=backWeight>1e-3;
+    if(!haveFront && !haveBack){return color;}
+    var mixed=select(back/max(backWeight,1e-8),front/max(frontWeight,1e-8),haveFront);
+    if(haveFront && haveBack){mixed=mix(back/backWeight,front/frontWeight,z.y);}
+    return vec4f(detailEncode(mixed.rgb),mixed.a);
+  }
+` : '  if(silhouette){return color;}\n'}  let valid=min(min(d.a,s.a),min(diffuse.a,specular.a))>=detail.y && z.y>=detail.y;
   if(!valid){return color;}
   let low=diffuse.rgb+specular.rgb;
   var ratio=clamp((d.rgb+s.rgb)/max(low,vec3f(detail.x)),vec3f(outputSize.z),vec3f(outputSize.w));
@@ -83,26 +114,29 @@ fn detailEncode(c: vec3f) -> vec3f {
 }
 
 // Exact box overlap integrates noninteger footprints instead of point sampling.
-export const albedoDownsampleShader = /* wgsl */ `
+export const albedoDownsampleShader = (depthOutput = false) => /* wgsl */ `
 @group(0) @binding(0) var diffuse: texture_2d<f32>;
 @group(0) @binding(1) var specular: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> outputSize: vec4f;
+@group(0) @binding(3) var depth: texture_2d<f32>;
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
   let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
 }
-struct Result {@location(0) diffuse: vec4f, @location(1) specular: vec4f,}
+struct Result {@location(0) diffuse: vec4f, @location(1) specular: vec4f, ${depthOutput ? '@location(2) depth: vec4f,' : ''}}
 @fragment fn fragment(@builtin(position) p: vec4f) -> Result {
   let scale=vec2f(textureDimensions(diffuse))/outputSize.xy;
   let start=floor(p.xy)*scale;let end=start+scale;
-  var d=vec4f(0);var s=vec4f(0);
+  var d=vec4f(0);var s=vec4f(0);var nearest=3.4e38;var hits=0.0;
   for(var y=i32(floor(start.y));y<i32(ceil(end.y));y++){
     for(var x=i32(floor(start.x));x<i32(ceil(end.x));x++){
       let overlap=max(vec2f(0),min(vec2f(vec2i(x+1,y+1)),end)-max(vec2f(vec2i(x,y)),start));let weight=overlap.x*overlap.y;
-      let a=textureLoad(diffuse,vec2i(x,y),0);let b=textureLoad(specular,vec2i(x,y),0);
+      let a=textureLoad(diffuse,vec2i(x,y),0);let b=textureLoad(specular,vec2i(x,y),0);let z=textureLoad(depth,vec2i(x,y),0).xy;
       d+=vec4f(a.rgb*a.a,a.a)*weight;s+=vec4f(b.rgb*b.a,b.a)*weight;
+      hits+=z.y*weight;if(z.y>0.0){nearest=min(nearest,z.x);}
     }
   }
   var result: Result;
+  ${depthOutput ? 'result.depth=vec4f(select(0.0,nearest,hits>0.0),hits/(scale.x*scale.y),0,0);' : ''}
   result.diffuse=vec4f(d.rgb/max(d.a,1e-8),d.a/(scale.x*scale.y));
   result.specular=vec4f(s.rgb/max(s.a,1e-8),s.a/(scale.x*scale.y));return result;
 }
