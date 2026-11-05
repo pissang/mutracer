@@ -113,3 +113,4 @@ export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 export type {AovKind} from './renderer/aov.js';
 
 export {createEasuPass} from './renderer/easu.js';
+export type {EasuOptions, EasuPass} from './renderer/easu.js';

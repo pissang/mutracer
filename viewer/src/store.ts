@@ -442,7 +442,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
   envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
-  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
+  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', displayUpscale: 'Display upscale', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',

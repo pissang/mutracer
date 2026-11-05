@@ -18,8 +18,9 @@ remove(); // Safe to call again.
 
 Passes run in registration order on every `present()` and `toBlob()`, after
 composition and denoising. They receive the selected complete render, including
-fallbacks, at its actual dimensions. Export uses the same chain without changing the display canvas; fixed-size
-renders are cropped to their requested size before entering the chain. `readPixels()` never runs these passes.
+fallbacks, at its actual dimensions. Export uses the same chain without changing
+the display canvas; fixed-size renders are cropped to their requested size before
+entering the chain. `readPixels()` never runs these passes.
 
 For a complete overlay implementation, see
 [`createCrosshairPass`](../examples/shared/crosshairPass.ts). It loads the input
@@ -39,13 +40,25 @@ For edge-adaptive enlargement without sharpening:
 
 ```ts
 import {createEasuPass} from '@meimu/mutracer';
-const removeUpscale = engine.display.addPostProcess(createEasuPass(), {
+const pass = createEasuPass();
+const removeUpscale = engine.display.addPostProcess(pass, {
   outputSize: (_, display) => display
 });
 ```
 
+To recover texture detail, enable `diffuseAlbedo`, `specularAlbedo` and `depth`
+on a scale-based render with `aovResolution: 'display'`, and create the pass with
+`createEasuPass({albedoDetail: true})`. Keep beauty at the desired reduced
+`resolutionScale`. Unregister the pass, then call `pass.dispose()` when finished
+to release its scratch images.
+
 EASU works on display-encoded RGB after tone mapping, including extended-range
-output, and preserves alpha. It cannot recover detail absent from its input.
+output, and preserves alpha. EASU alone cannot recover missing texture detail.
+Albedo compensation recovers supported surface texture detail but cannot recover
+reflection, refraction or geometric detail. It is a display-space approximation:
+bright and clipped highlights can change incorrectly. Coat and other unsupported
+reflectance surfaces, transmission, background, low coverage and depth boundaries
+receive EASU alone.
 
 ## Options and image semantics
 
@@ -82,6 +95,20 @@ For an opaque flat background, `readPixels('hdr')` additionally multiplies RGB
 by primary-hit coverage for partially hit pixels, restoring the per-sample
 average. Thus that CPU readback can differ from the borrowed native HDR texture.
 See [custom denoiser image semantics](./denoising.md#custom-denoisers).
+
+`createEasuPass()` defaults to EASU alone. `albedoDetail` defaults to `false`;
+missing AOVs or AOV dimensions different from the output use EASU alone. Detail
+options are `ratioRange` (default `[0.25, 4]`, positive finite bounds),
+`depthThreshold` (default `0.02`, positive relative depth jump) and
+`coverageThreshold` (default `0.95`, in `(0, 1]`). Keep compensation ranges narrow
+when the material or lighting produces halos or color changes. The optional
+AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs).
+
+`render.getAovTexture(kind)` borrows enabled `diffuseAlbedo`, `specularAlbedo` or
+`depth` outputs after an AOV sample completes, only on WebGPU. Reflectance uses
+linear `rgba16float`, with valid coverage in alpha; depth uses `rg32float`, with
+camera-forward depth in red and hit coverage in green. These raw textures follow
+the same borrowing lifetime as `getOutputTexture()` and have the AOV dimensions.
 
 ## Caveats
 

@@ -97,9 +97,11 @@ export function generateCode(snapshot: CodeSnapshot): string {
   const lens = !ortho && s.fStop > 0;
   const lines: string[] = [];
   const out = (...rows: string[]) => lines.push(...rows);
+  const upscale = snapshot.webgpu && s.displayUpscale && s.resolutionScale < 1 && s.output === 'final';
   const imports = ['Engine', 'RenderLoop', 'THREESync'];
   if (lens || snapshot.animation) imports.push('Sync');
   if (procedural) imports.push('ProceduralSky');
+  if (upscale) imports.push('createEasuPass');
 
   const placeholders = [
     ...(snapshot.modelUrl ? [] : ['./model.glb']),
@@ -291,7 +293,8 @@ export function generateCode(snapshot: CodeSnapshot): string {
     if (s[key] !== fallback) final[key] = s[key];
   }
   if (s.caustics) final.caustics = causticOptions(s);
-  if (aovs.length) final.aovs = aovs;
+  if (upscale) {final.aovs = ['depth','diffuseAlbedo','specularAlbedo'];final.aovResolution = 'display';}
+  else if (aovs.length) final.aovs = aovs;
   final.denoiser = denoiser(s, snapshot.webgpu, false);
   let preview: Record<string, unknown> | false = false;
   if (s.previewEnabled) {
@@ -318,6 +321,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     ...loopOptions.map((option, i) => `  ${option}${i < loopOptions.length - 1 ? ',' : ''}`),
     '});',
     '',
+    ...(upscale ? ['engine.display.addPostProcess(createEasuPass({albedoDetail: true, ratioRange: [0.9, 1.1]}), {outputSize: (_, display) => display});', ''] : []),
     'new ResizeObserver(() => {',
     '  const scale = Math.min(devicePixelRatio, 2);',
     '  engine.display.setSize(Math.round(canvas.clientWidth * scale), Math.round(canvas.clientHeight * scale));',
