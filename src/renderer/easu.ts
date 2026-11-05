@@ -15,7 +15,7 @@ export interface EasuOptions {
 }
 /** A display pass with optional scratch images. Dispose after unregistering; it may be used again. */
 export type EasuPass = PostProcess & {dispose(): void};
-/** Creates an edge-adaptive display-space upscale pass (AMD FSR 1 EASU), without sharpening. Register with outputSize: (_, display) => display. WebGPU only; supports rgba8unorm and extended-range rgba16float, including alpha. Default EASU alone. */
+/** Creates an edge-adaptive display-space upscale pass (AMD FSR 1 EASU), without sharpening. Register with outputSize: (_, display) => display. WebGPU only; supports rgba8unorm and extended-range rgba16float, including alpha. Copies inputs that already have the output size. Default EASU alone. */
 export function createEasuPass(options: EasuOptions = {}): EasuPass { return createEasuPassImpl(options); }
 
 /** @internal Plain albedo ratios (guided false), the separate-lobe approximation and depth-guided silhouettes are retained for comparisons; not package exports. */
@@ -33,6 +33,11 @@ export function createEasuPassImpl(options: EasuOptions = {}, separate = false, 
   const owned = (state: {scratch?: GPUTexture[]; tone?: GPUTexture; fit?: GPUTexture[]}) => [...(state.scratch ?? []), ...(state.tone ? [state.tone] : []), ...(state.fit ?? [])];
   const pass: PostProcess = ctx => {
     const {device, encoder, input, output, render} = ctx;
+    // Nothing to upscale, for example a full-resolution render beside a reduced preview.
+    if (input.width === output.width && input.height === output.height) {
+      encoder.copyTextureToTexture({texture: input}, {texture: output}, [input.width, input.height]);
+      return;
+    }
     for (const [previous, old] of devices) if (previous !== device) {retire(previous,owned(old));devices.delete(previous);}
     let state = devices.get(device);
     if (!state) {state = {pipelines: new Map()}; devices.set(device, state);}

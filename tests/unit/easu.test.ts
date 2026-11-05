@@ -68,3 +68,12 @@ it('declares the bindings the pass supplies in every EASU shader', async()=>{
  for(const depth of [false,true]) expect(bindings(albedoDownsampleShader(depth))).toEqual([0,1,2,3]);
  expect(bindings(toneLutShader)).toEqual([0,1]);
 });
+
+it('copies an input that already has the output size without creating pipelines',()=>{
+ const copy=vi.fn();const device={createShaderModule:vi.fn(),createRenderPipeline:vi.fn(),createTexture:vi.fn()} as unknown as GPUDevice;
+ const image=(width:number,height:number)=>({width,height,format:'rgba8unorm',createView:()=>({})}) as unknown as GPUTexture;
+ const input=image(16,8),output=image(16,8);
+ createEasuPass({albedoDetail:true})({device,encoder:{copyTextureToTexture:copy} as unknown as GPUCommandEncoder,input,output,width:16,height:8,render:{} as never});
+ expect(copy).toHaveBeenCalledWith({texture:input},{texture:output},[16,8]);
+ expect(device.createRenderPipeline).not.toHaveBeenCalled();expect(device.createTexture).not.toHaveBeenCalled();
+});
