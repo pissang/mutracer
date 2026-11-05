@@ -53,6 +53,35 @@ Photon gathering filters photon flux by the camera path's channel. This splits R
 across the camera paths and applies no second spectral weight, so energy is shared
 between path tracing and caustics the same way as without dispersion.
 
+## Shared prefixes
+
+With `dispersionWavelengths: 3`, the three channel paths of a pixel sample are
+identical until the first wavelength-dependent IOR: they use the same random numbers
+and carry full RGB until then. The integrators trace that prefix once, checkpoint
+the path, material, auxiliary outputs and random-stream state at the first
+dispersive interaction, and replay only the wavelength-specific suffix for each
+channel. RGB results completed before any dispersion are reused for all three.
+WGSL replays the suffixes inside the flat, alpha, volume and guide paths; GLSL
+traces all three in one fragment invocation (`spectralPrefix.glsl.ts`). Images are
+the same as with independent paths; only the work is shared. MNEE keeps independent
+paths, because its connection solver can disperse before the camera boundary.
+
+Tracing three suffixes in one WebGL draw makes that draw about three times longer.
+See [WebGL 2 backend](./webgl.md) for the timeout risk this adds on large images.
+
+## Direct-light resampling
+
+Direct lighting selects among `directLightCandidates` light samples by resampled
+importance sampling. When the three channel paths share a prefix, they share one
+reservoir, so the target cannot depend on the channel a path carries. The target
+is the full RGB contribution with equal channel weights; only the final estimator
+keeps the path's channel (`sampleMaterial.wgsl.ts`). A luminance target would
+underweight saturated red and blue light and raise their noise. Equal weights reduce
+that, but a strongly colored region can still converge more slowly in one channel
+than with independent per-channel paths; [sampling](../sampling.md) documents this
+caveat. Single-wavelength previews and non-dispersive renders keep the luminance
+target. WebGL draws one light candidate and has no reservoir.
+
 ## Short-wavelength IOR limit
 
 Cauchy IOR rises quickly at short wavelengths. At strong dispersion scales, violet
