@@ -68,7 +68,7 @@ describe('display GPU passes', () => {
     chain.run(input, [() => {}], {} as Render);
     const old = chain.output!;
     chain.run({...input, width: 64, format: 'rgba16float'} as GPUTexture, [() => {}], {} as Render);
-    expect(old.destroy).not.toHaveBeenCalled(); expect(chain.getMemoryBytes()).toBe(64 * 16 * 8 * 2);
+    expect(old.destroy).not.toHaveBeenCalled(); expect(chain.getMemoryBytes()).toBe(64 * 16 * 8); // one pass needs one image
     done();await vi.waitFor(() => expect(old.destroy).toHaveBeenCalledOnce());
     chain.dispose(); expect(chain.output).toBeUndefined();expect(chain.getMemoryBytes()).toBe(0);
   });

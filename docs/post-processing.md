@@ -108,7 +108,8 @@ AOVs add tracing and memory cost; see [surface outputs](./api.md#surface-outputs
 
 `render.getAovTexture(kind)` borrows enabled `diffuseAlbedo`, `specularAlbedo` or
 `depth` outputs after an AOV sample completes, only on WebGPU. Reflectance uses
-linear `rgba16float`, with valid coverage in alpha; depth uses `rg32float`, with
+`rgba8unorm-srgb`, which loads as linear values in [0, 1], with valid coverage in
+alpha; depth uses `rg32float`, with
 camera-forward depth in red and hit coverage in green. These raw textures follow
 the same borrowing lifetime as `getOutputTexture()` and have the AOV dimensions.
 

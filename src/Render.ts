@@ -793,7 +793,7 @@ export default class Render {
     }
     target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
   }
-  /** Borrows a raw linear primary-surface texture at the AOV resolution, top row first; default undefined until an enabled AOV has samples. WebGPU only. Diffuse/specular use rgba16float with validity coverage in alpha; depth uses rg32float (depth, hit coverage). Borrowing follows getOutputTexture's lifetime rules; restart invalidates it. */
+  /** Borrows a raw linear primary-surface texture at the AOV resolution, top row first; default undefined until an enabled AOV has samples. WebGPU only. Diffuse/specular use rgba8unorm-srgb (loads as linear [0,1]) with validity coverage in alpha; depth uses rg32float (depth, hit coverage). Borrowing follows getOutputTexture's lifetime rules; restart invalidates it. */
   getAovTexture(kind: 'diffuseAlbedo' | 'specularAlbedo' | 'depth'): GPUTexture | undefined {
     if (this._engine.backend !== 'webgpu' || !this._current || !this.aovs.includes(kind) || !this.aovSamplesRendered) return;
     return this._target?.getAovTexture?.(kind);

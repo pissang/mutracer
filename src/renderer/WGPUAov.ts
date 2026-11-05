@@ -1,3 +1,4 @@
+import {textureBytes} from './gpuMemory.js';
 import {compactAovReadShader} from './wgsl/aovCompact.wgsl.js';
 import {aovResolveCommon} from './wgsl/aovResolve.wgsl.js';
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
@@ -11,7 +12,7 @@ export class WGPUAov {
   readonly history = new AovHistory();
   width = 0; height = 0; samples = 0; centerReady = false; compact = false;
   private revision = 0;
-  private readonly borrowed = new Map<AovKind, {image: GPUTexture; pipeline: GPUComputePipeline; samples: number; revision: number}>();
+  private readonly borrowed = new Map<AovKind, {image: GPUTexture; pipeline: GPUComputePipeline | GPURenderPipeline; samples: number; revision: number}>();
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
   frame?: AovFrameSnapshot;
   private displayPipeline?: GPUComputePipeline;
@@ -64,7 +65,7 @@ export class WGPUAov {
     }
     this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = words.byteLength;
   }
-  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.borrowed.values()].reduce((bytes, entry) => bytes + entry.image.width*entry.image.height*8, 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
+  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.borrowed.values()].reduce((bytes, entry) => bytes + textureBytes(entry.image), 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
   snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
     const device = this.device;
@@ -149,31 +150,56 @@ export class WGPUAov {
     const device = this.device;
     let entry = this.borrowed.get(kind);
     if (!entry) {
-      const format = kind === 'depth' ? 'rg32float' : 'rgba16float';
-      const code = aovResolveCommon + `
-@group(0) @binding(2) var image: texture_storage_2d<${format},write>;
+      // Reflectance in [0,1] is stored sRGB-encoded in 8 bits (decoded on load), halving its memory
+      // with fine steps for dark albedo; depth keeps float32 precision.
+      const depth = kind === 'depth', format: GPUTextureFormat = depth ? 'rg32float' : 'rgba8unorm-srgb';
+      const constants = this.compact ? {constants: {AOV_COMPACT: 1}} : {};
+      let pipeline: GPUComputePipeline | GPURenderPipeline;
+      if (depth) {
+        const code = aovResolveCommon + `
+@group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
   if(any(id.xy>=parameters.xy)){return;}
   let source=id.x+(parameters.y-1u-id.y)*parameters.x;
   let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
-  textureStore(image,vec2i(id.xy),${kind === 'depth' ? 'vec4f(value.x,value.w,0,0)' : 'value'});
+  textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
 }`;
-      const pipeline = device.createComputePipeline({label: `Borrow ${kind}`, layout: 'auto', compute: {
-        module: device.createShaderModule({code:this.resolveCode(code)}), entryPoint: 'main', ...(this.compact ? {constants: {AOV_COMPACT: 1}} : {})
-      }});
+        pipeline = device.createComputePipeline({label: `Borrow ${kind}`, layout: 'auto', compute: {
+          module: device.createShaderModule({code:this.resolveCode(code)}), entryPoint: 'main', ...constants}});
+      } else {
+        const code = aovResolveCommon + `
+@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
+}
+@fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let id=vec2u(position.xy);
+  let source=id.x+(parameters.y-1u-id.y)*parameters.x;
+  return clamp(bitcast<vec4f>(aovResolvedValue(source,parameters.w)),vec4f(0),vec4f(1));
+}`;
+        const module = device.createShaderModule({code:this.resolveCode(code)});
+        pipeline = device.createRenderPipeline({label: `Borrow ${kind}`, layout: 'auto', vertex: {module, entryPoint: 'vertex', ...constants},
+          fragment: {module, entryPoint: 'fragment', targets: [{format}], ...constants}});
+      }
       const image = device.createTexture({label: `Borrow ${kind}`, size: [this.width,this.height], format,
-        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC});
+        usage: (depth ? GPUTextureUsage.STORAGE_BINDING : GPUTextureUsage.RENDER_ATTACHMENT) | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC});
       entry = {image, pipeline, samples: -1, revision: -1}; this.borrowed.set(kind, entry);
     }
     if (entry.samples !== this.samples || entry.revision !== this.revision) {
       const parameters = device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
       new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)]); parameters.unmap();
-      const group = device.createBindGroup({layout:entry.pipeline.getBindGroupLayout(0),entries:[
-        {binding:0,resource:{buffer:this.accumulation}},{binding:1,resource:{buffer:this.center}},
-        {binding:2,resource:entry.image.createView()},{binding:3,resource:{buffer:parameters}}
-      ]});
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass({label:`Resolve ${kind}`});
-      pass.setPipeline(entry.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
+      const encoder = device.createCommandEncoder();
+      const entries: GPUBindGroupEntry[] = [{binding:0,resource:{buffer:this.accumulation}},{binding:1,resource:{buffer:this.center}},{binding:3,resource:{buffer:parameters}}];
+      if (kind === 'depth') {
+        const pipeline = entry.pipeline as GPUComputePipeline;
+        const group = device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[...entries,{binding:2,resource:entry.image.createView()}]});
+        const pass = encoder.beginComputePass({label:`Resolve ${kind}`});
+        pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
+      } else {
+        const pipeline = entry.pipeline as GPURenderPipeline;
+        const group = device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries});
+        const pass = encoder.beginRenderPass({label:`Resolve ${kind}`,colorAttachments:[{view:entry.image.createView(),loadOp:'clear',storeOp:'store'}]});
+        pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.draw(3);pass.end();
+      }
       device.queue.submit([encoder.finish()]);parameters.destroy();entry.samples=this.samples;entry.revision=this.revision;
       borrowedAovRevision.set(entry.image, (borrowedAovRevision.get(entry.image) ?? 0) + 1);
     }

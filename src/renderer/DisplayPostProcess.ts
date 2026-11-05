@@ -34,15 +34,15 @@ export class DisplayPostProcess {
     const acquire = (size: Size, previous: GPUTexture) => {
       const key = `${size.width}:${size.height}:${input.format}`;
       active.add(key);
-      let pair = this.textures.get(key);
-      if (!pair) {
-        pair = Array.from({length: 2}, (_, index) => this.device.createTexture({
-          label: `Display post-process ${index}`, size, format: input.format,
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST
-        }));
-        this.textures.set(key, pair);
-      }
-      return pair[0] === previous ? pair[1] : pair[0];
+      // Allocate the second image of a size only when consecutive passes need to ping-pong.
+      const pair = this.textures.get(key) ?? [];
+      this.textures.set(key, pair);
+      const index = pair[0] === previous ? 1 : 0;
+      pair[index] ??= this.device.createTexture({
+        label: `Display post-process ${index}`, size, format: input.format,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST
+      });
+      return pair[index];
     };
     const actual = render._output?.getMemory() ?? input;
     const encoder = this.device.createCommandEncoder();
