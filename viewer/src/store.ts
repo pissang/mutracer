@@ -293,6 +293,7 @@ export interface ViewerState {
   modelLighting: { available: boolean; warnings: string[] } | null;
   loading: LoadingState | null;
   envLoading: EnvLoadingState | null;
+  oidnLoading: boolean;
   /** Bounding radius of the loaded model in scene units. */
   modelRadius: number;
   error: string | null;
@@ -415,6 +416,7 @@ export const useViewer = create<ViewerState>(() => ({
   modelLighting: null,
   loading: null,
   envLoading: null,
+  oidnLoading: false,
   modelRadius: 1,
   error: null,
   toast: null,

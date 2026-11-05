@@ -86,7 +86,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .brand__mark { display: block; width: 30px; height: 30px; flex: none; border-radius: 9px; }
 .brand__name { display: grid; gap: 4px; min-width: 0; }
 .brand strong { display: block; font-size: 13px; font-weight: 650; line-height: 1; white-space: nowrap; }
-.brand__version { color: var(--cv-warning); font-size: 10px; line-height: 1; white-space: nowrap; }
+.brand__version { color: var(--cv-text-3); font-size: 10px; line-height: 1; white-space: nowrap; }
 .header__center, .header__right { display: flex; align-items: center; gap: 8px; }
 .header__right { justify-content: flex-end; }
 .header .divider { width: 1px; height: 20px; background: var(--cv-divider-subtle); margin: 0 4px; }
@@ -252,6 +252,8 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .dock { width: max-content; max-width: 100%; min-width: 0; flex-wrap: wrap; height: auto; min-height: 46px; padding: 0 6px 0 9px; gap: 4px; }
 .dock .sep { height: 22px; margin: 0 2px; }
 .dock__summary, .dock__settings, .dock__denoise { display: contents; }
+.oidn-loading { height: auto; min-height: 30px; padding: 6px 10px; gap: 7px; color: var(--cv-text-2); font-size: 11px; pointer-events: none; }
+.oidn-loading svg { animation: ring-spin 0.9s linear infinite; }
 .dock .dock__more { display: none; }
 .dock-options { width: 240px; padding: 12px; }
 .dock-options [role='dialog'] { display: grid; gap: 12px; outline: none; }

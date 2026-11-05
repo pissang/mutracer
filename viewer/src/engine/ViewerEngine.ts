@@ -127,6 +127,7 @@ export class ViewerEngine {
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
+  private denoiserUpdateToken = 0;
   private pickRequest = 0;
   private pickObjects = new Map<number, string>();
   private pickMaterials = new Map<number, string>();
@@ -222,6 +223,8 @@ export class ViewerEngine {
   dispose() {
     this.modelController?.abort();
     this.disposed = true;
+    ++this.denoiserUpdateToken;
+    set({ oidnLoading: false });
     this.removeUpscale?.(); this.upscalePass.dispose();
     ++this.focusQueryVersion;
     clearTimeout(this.denoiserUpdateTimer);
@@ -310,7 +313,6 @@ export class ViewerEngine {
     const pbrt = files.some(f => /\.pbrt(?:\.gz)?$/i.test(f.path));
     if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend), { presetId: null, credit: null, sourceUrl: null });
     const hdr = files.find((f) => isHDRFile(f.path));
-    const models = files.filter((f) => !isHDRFile(f.path));
     if (hdr) {
       try {
         this.setEnvironmentData(parseHDR(await hdr.file.arrayBuffer()), 'custom');
@@ -318,13 +320,14 @@ export class ViewerEngine {
         showToast(`Could not read ${hdr.file.name}: ${(error as Error).message}`, 'error');
       }
     }
-    if (!models.some((f) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(f.path))) {
+    if (!files.some((f) => isModelFile(f.path))) {
       if (!hdr) showToast(MATERIALX_IMPORT ? 'Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip'
         : 'Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
       return;
     }
-    const main = models.find((f) => /\.(glb|gltf|pbrt|pbrt\.gz)$/i.test(f.path))!;
-    return this.load(main.file.name, (progress, signal) => loadModelFromFiles(models, progress, signal, this.modelBackend),
+    const main = files.find((f) => isModelFile(f.path))!;
+    // Referenced HDRs also belong to the model's lighting and cached source.
+    return this.load(main.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend),
       { presetId: null, credit: null, sourceUrl: null });
   }
 
@@ -799,12 +802,19 @@ export class ViewerEngine {
     } else this.upscalePass.dispose();
   }
 
-  private updateDenoiser() {
-    if (!this.engine.backend) return;
+  private async updateDenoiser() {
+    if (this.disposed || !this.engine.backend) return;
+    const token = ++this.denoiserUpdateToken;
     const final = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS);
     const preview = this.settings.previewEnabled ? getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true) : null;
-    const failed = (error: Error) => showToast(`Denoiser failed to load: ${error.message}`, 'error');
-    this.final.setDenoiser(final).catch(failed); this.preview.setDenoiser(preview).catch(failed);
+    set({ oidnLoading: final?.type === 'oidn' || preview?.type === 'oidn' });
+    const results = await Promise.allSettled([
+      this.final.setDenoiser(final), this.preview.setDenoiser(preview)
+    ]);
+    if (this.disposed || token !== this.denoiserUpdateToken) return;
+    set({ oidnLoading: false });
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed?.status === 'rejected') showToast(`Denoiser failed to load: ${failed.reason.message}`, 'error');
   }
 
   // ----------------------------------------------------------------- camera

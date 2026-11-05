@@ -7,6 +7,7 @@ import { hashModelPreset, setUi, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
 import { DebugOverlay } from './DebugOverlay';
 import { StatusBar } from './StatusBar';
+import { OIDNLoadingStatus } from './OIDNLoadingStatus';
 import { CameraControls } from './ViewControls';
 import { Select } from './ui/controls';
 
@@ -60,6 +61,7 @@ export function Viewport() {
           <FocusFrame />
           <DebugOverlay />
           <div className="viewport-bottom">
+            <OIDNLoadingStatus />
             <Credit />
             <AnimationBar />
             <div className="viewport-footer">
