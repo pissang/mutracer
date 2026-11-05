@@ -97,6 +97,25 @@ describe('Display pass registration', () => {
     vi.stubGlobal('document', {createElement: () => ({width: 0, height: 0, getContext: () => ({putImageData() {}}), toBlob: (done: (blob: Blob) => void) => done(new Blob())})});
     await engine.display.toBlob(render);expect(pass).toHaveBeenCalledTimes(2);expect(targets[0].readPresentation).toHaveBeenCalledOnce();engine.dispose();
   });
+  it('exports the chain size after cropping fixed renders and preserves the crop on failure', async () => {
+    vi.spyOn(console,'error').mockImplementation(()=>{});
+    const {engine,targets}=renderFixture();const render=new Render(engine,{width:29,height:13});render.refine();
+    const {chain,input,encoder}=fixture();
+    targets[0].applyPostProcesses=(passes,selected,options,crop)=>chain.run(input,passes,selected,engine.display.canvas,options,crop);
+    targets[0].readPresentation=async()=>{const image=chain.output??input;return {width:image.width,height:image.height,data:new Float32Array(image.width*image.height*4)};};
+    const images: {width:number;height:number}[]=[];
+    vi.stubGlobal('ImageData',class {constructor(_:unknown,width:number,height:number){images.push({width,height});}});
+    vi.stubGlobal('document',{createElement:()=>({width:0,height:0,getContext:()=>({putImageData(){}}),toBlob:(done:(blob:Blob)=>void)=>done(new Blob())})});
+    engine.display.setSize(100,60);
+    const size=vi.fn((previous:{width:number;height:number},display:{width:number;height:number})=>display);
+    const remove=engine.display.addPostProcess(()=>{}, {outputSize:size});
+    await engine.display.toBlob(render);
+    expect(size).toHaveBeenCalledWith({width:29,height:13},{width:100,height:60});
+    expect(images.at(-1)).toEqual({width:100,height:60});
+    expect(encoder.copyTextureToTexture).toHaveBeenCalled();remove();
+    engine.display.addPostProcess(()=>{throw new Error('bad export');});await engine.display.toBlob(render);
+    expect(images.at(-1)).toEqual({width:29,height:13});engine.dispose();
+  });
   it('reports errors and still presents the pre-hook image', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const {engine, render, targets, chain} = setup();const error = new Error('display failed'), listener = vi.fn(), last = vi.fn();

@@ -44,6 +44,7 @@ export class DisplayPostProcess {
       }
       return pair[0] === previous ? pair[1] : pair[0];
     };
+    const actual = render._output?.getMemory() ?? input;
     const encoder = this.device.createCommandEncoder();
     let previous = input;
     try {
@@ -54,7 +55,7 @@ export class DisplayPostProcess {
       }
       for (let index = 0; index < passes.length; index++) {
         const output = acquire(sizes[index], previous);
-        passes[index]({device: this.device, encoder, input: previous, output, width: input.width, height: input.height, render});
+        passes[index]({device: this.device, encoder, input: previous, output, width: actual.width, height: actual.height, render});
         previous = output;
       }
       this.device.queue.submit([encoder.finish()]);

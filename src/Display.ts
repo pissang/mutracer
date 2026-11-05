@@ -126,7 +126,11 @@ export default class Display {
     target.drawPostProcess();
     if (this._postProcesses.length && this.engine.backend === 'webgl') this.warnPostProcess();
     try { target.applyPostProcesses?.(this._postProcesses.map(entry => entry.pass), render, this._postProcesses.map(entry => entry.options), exporting ? render._exportCrop : undefined); }
-    catch (error) { this.engine._notifyError(error); }
+    catch (error) {
+      // Preserve the pre-chain export crop even when a callback or size fails.
+      target.applyPostProcesses?.([], render, [], exporting ? render._exportCrop : undefined);
+      this.engine._notifyError(error);
+    }
     return target;
   }
   /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
