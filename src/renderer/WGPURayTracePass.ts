@@ -1289,7 +1289,9 @@ class WGPURayTracePass {
     const target = Math.min(samples, cap);
     if (state.centerReady && state.samples >= target) return true;
     if (!state.frame) {
-      const primitiveIds = this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
+      // Only the center pass reads primitive IDs and compact display AOVs skip
+      // it; building the map walks every BVH leaf on the main thread.
+      const primitiveIds = compact ? undefined : this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
       const packed = packAovScene(this._preparedMeshData, this._tlas, camera, state.width, state.height, state.history, primitiveIds, false);
       state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
