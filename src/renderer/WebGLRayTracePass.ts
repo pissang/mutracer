@@ -1,7 +1,5 @@
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
-import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
-import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport} from './researchTransport.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
 import {prepareWebGLLightSampling} from './webglLightSampling.js';
@@ -105,20 +103,6 @@ type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 // A defensive mixture keeps weak-but-wide lights from being starved by an
 // imperfect scalar power estimate while still favoring dominant emitters.
 const POWER_WEIGHTED_LIGHT_MIX = 0.25;
-
-// setShader preserves existing bindings; remove bindings absent from this variant.
-function volumeBindingExclusions(hasVolumes: boolean, hasVolumeNoise: boolean) {
-  return {
-    uniforms: [
-      ...(!hasVolumes ? ['volumeCount', 'volumeWorldToLocal', 'volumeColorAnisotropy', 'volumeParams'] : []),
-      ...(!hasVolumeNoise ? ['volumeNoiseSizeOctaves', 'volumeNoiseOffsetCoverage', 'volumeNoiseParams'] : [])
-    ],
-    defines: [
-      ...(!hasVolumes ? ['HAS_VOLUMES'] : []),
-      ...(!hasVolumeNoise ? ['HAS_VOLUME_NOISE'] : [])
-    ]
-  };
-}
 
 function packLightsToTexture(
   texture: WebGLTexture2D,
@@ -420,40 +404,6 @@ class WebGLRayTracePass {
     this._hasEnvMap = !!envImage;
   }
 
-  private _hasVolumes = false;
-  private _hasVolumeNoise = false;
-  setVolumes(volumes?: SceneVolume[]) {
-    const packed = packVolumes(volumes), hasVolumes = packed.count > 0;
-    if (!hasVolumes && !this._hasVolumes) return;
-    if (hasVolumes !== this._hasVolumes || packed.hasNoise !== this._hasVolumeNoise) {
-      this._hasVolumes = hasVolumes;
-      this._hasVolumeNoise = packed.hasNoise;
-      researchTransport()?.configure(this, 'webgl', true);
-      const shader = hasVolumes ? createRayTraceFragmentShader({hasVolumes: true, hasVolumeNoise: packed.hasNoise, channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix}) : createRayTraceFragmentShader({channelIndependentLight: this._spectral, shareSpectralPrefix: this._spectral && this._shareSpectralPrefix});
-      shader.parallelCompile = true;
-      const excluded = volumeBindingExclusions(hasVolumes, packed.hasNoise);
-      this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
-    }
-    if (hasVolumes) {
-      const matrices = new Float32Array(128), colors = new Float32Array(32), params = new Float32Array(32);
-      for (let i = 0; i < 8; i++) {
-        matrices.set(packed.data.subarray(i * VOLUME_FLOATS, i * VOLUME_FLOATS + 16), i * 16);
-        colors.set(packed.data.subarray(i * VOLUME_FLOATS + 16, i * VOLUME_FLOATS + 20), i * 4);
-        params.set(packed.data.subarray(i * VOLUME_FLOATS + 20, i * VOLUME_FLOATS + 24), i * 4);
-      }
-      if (packed.hasNoise) {
-        const size = new Float32Array(32), offset = new Float32Array(32), params = new Float32Array(32);
-        for (let i = 0; i < 8; i++) {
-          size.set(packed.data.subarray(i * VOLUME_FLOATS + 24, i * VOLUME_FLOATS + 28), i * 4);
-          offset.set(packed.data.subarray(i * VOLUME_FLOATS + 28, i * VOLUME_FLOATS + 32), i * 4);
-          params.set(packed.data.subarray(i * VOLUME_FLOATS + 32, i * VOLUME_FLOATS + 36), i * 4);
-        }
-        this._mainPass.setUniforms({volumeNoiseSizeOctaves: size, volumeNoiseOffsetCoverage: offset, volumeNoiseParams: params});
-      }
-      this._mainPass.setUniforms({volumeCount: packed.count, volumeWorldToLocal: matrices, volumeColorAnisotropy: colors, volumeParams: params});
-    }
-  }
-
   setBackground(background?: SceneBackground) {
     this._backgroundMapTransform.set(backgroundMapTransform(background));
     const rotation = backgroundMapRotation(background);
@@ -625,7 +575,7 @@ class WebGLRayTracePass {
   }
 
   getDiagnostics() {
-    return { textureAtlas: this._materialData?.textureAtlasStats, volumes: {count: this._hasVolumes ? this._mainPass.getUniform('volumeCount') : 0, causticsDisabledReason: this._hasVolumes ? 'Scene volumes use ordinary path tracing; caustic estimators are disabled.' : undefined} };
+    return { textureAtlas: this._materialData?.textureAtlasStats };
   }
 
   private _updateMeshData() {
@@ -735,13 +685,11 @@ class WebGLRayTracePass {
     if (spectral !== !!this._spectral) {
       this._spectral = spectral;
       const shader = createRayTraceFragmentShader({
-        hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
         channelIndependentLight: spectral, shareSpectralPrefix: spectral && this._shareSpectralPrefix
       });
-      if (!researchTransport()?.configure(this, 'webgl', this._hasVolumes)?.enabled) {
-        const excluded = volumeBindingExclusions(this._hasVolumes, this._hasVolumeNoise);
+      if (!researchTransport()?.configure(this, 'webgl')?.enabled) {
         shader.parallelCompile = true;
-        this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
+        this._mainPass.setShader(shader);
       }
     }
 
@@ -1017,16 +965,14 @@ class WebGLRayTracePass {
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
     const wasIndependent = this._independentSpectralPaths;
-    const research = researchTransport()?.configure(this, 'webgl', this._hasVolumes);
+    const research = researchTransport()?.configure(this, 'webgl');
     this._independentSpectralPaths = !!research?.enabled;
     const share = options.dispersionWavelengths !== 1;
     if (this._spectral && (share !== this._shareSpectralPrefix || wasIndependent) && !research?.enabled) {
       const shader = createRayTraceFragmentShader({
-        hasVolumes: this._hasVolumes, hasVolumeNoise: this._hasVolumeNoise,
         channelIndependentLight: true, shareSpectralPrefix: share
       });
-      const excluded = volumeBindingExclusions(this._hasVolumes, this._hasVolumeNoise);
-      shader.parallelCompile = true; this._mainPass.setShader(shader, excluded.uniforms, excluded.defines);
+      shader.parallelCompile = true; this._mainPass.setShader(shader);
     }
     this._shareSpectralPrefix = share;
     this._tracePasses.forEach(pass => {
@@ -1077,7 +1023,7 @@ class WebGLRayTracePass {
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
 
-    if (!this._hasVolumes) researchTransport()?.prepare(this, 'webgl');
+    researchTransport()?.prepare(this, 'webgl');
 
     const res=this._preparedMeshData;
     if(res) {

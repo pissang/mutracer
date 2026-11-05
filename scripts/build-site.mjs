@@ -17,7 +17,7 @@ await build({
   configFile: path.join(root, 'viewer/vite.config.ts'),
   build: { outDir: path.join(out, 'viewer') }
 });
-// Includes procedural examples such as volumes.html; their page list lives in the Vite config.
+// Public example pages are listed in the Vite config.
 await build({ configFile: path.join(root, 'examples/vite.config.ts') });
 
 // The viewer build emits the weights at its root; the site serves them at /oidn/weights/.

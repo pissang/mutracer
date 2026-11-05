@@ -112,6 +112,5 @@ export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
 
 export type {AovKind} from './renderer/aov.js';
 
-export {MAX_VOLUMES, type SceneVolume, type SceneVolumeNoise} from './scene/SceneVolume.js';
 export {createEasuPass} from './renderer/easu.js';
 export type {EasuOptions, EasuPass} from './renderer/easu.js';

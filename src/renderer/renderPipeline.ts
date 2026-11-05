@@ -34,7 +34,6 @@ export interface RenderPipeline {
   setMeshes: SceneResources['setMeshes'];
   setLights: SceneResources['setLights'];
   setBackground: SceneResources['setBackground'];
-  setVolumes?: SceneResources['setVolumes'];
   setTextureAtlasBudget: SceneResources['setTextureAtlasBudget'];
   readDepthSamples(camera: Camera, area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
   pickSurface?(camera: Camera, x: number, y: number): Promise<SurfaceHit | null | undefined>;
@@ -44,7 +43,7 @@ export interface RenderPipeline {
 
 /** Shared scene ownership; every image operation explicitly selects its target. */
 export function makeRenderPipeline(
-  scene: Pick<RenderPipeline, 'setMeshes' | 'setLights' | 'setBackground' | 'setVolumes' | 'setTextureAtlasBudget' | 'getDiagnostics' | 'dispose'> & {
+  scene: Pick<RenderPipeline, 'setMeshes' | 'setLights' | 'setBackground' | 'setTextureAtlasBudget' | 'getDiagnostics' | 'dispose'> & {
     setCamera(camera: Camera): void;
     readDepthSamples(area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
     pickSurface?: SceneResources['pickSurface'];
@@ -81,7 +80,6 @@ export function makeRenderPipeline(
     releaseTarget(target) { if (targets.delete(target)) { settings.delete(target); target.dispose(); } },
     setMeshes: (meshes, update) => scene.setMeshes(meshes, update),
     setLights: lights => scene.setLights(lights),
-    setVolumes: volumes => scene.setVolumes?.(volumes),
     setBackground(value) {
       background = value; scene.setBackground(value);
       for (const target of targets) target.synchronizeBackground(value);

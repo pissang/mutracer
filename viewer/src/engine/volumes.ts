@@ -1,10 +1,9 @@
 import { Box3, Vector3 } from 'three';
-import type { SceneVolume } from '@meimu/mutracer';
-import type { Settings } from '../store';
+import type { SceneVolume } from '../../../src/scene/SceneVolume';
 
 /** Uses an example's volumes, or ground fog scaled to the loaded model. */
 export function sceneVolumes(
-  settings: Pick<Settings, 'volumes' | 'volumeDensity' | 'volumeWarp'>,
+  settings: {volumes: boolean; volumeDensity: number; volumeWarp: number},
   bounds: Box3,
   authored?: SceneVolume[]
 ): SceneVolume[] {

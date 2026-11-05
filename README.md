@@ -197,7 +197,6 @@ invisible render for export. See [independent render results](./docs/progressive
 | Guide | Contents |
 | --- | --- |
 | [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export |
-| [Volumes](./docs/volumes.md) | Bounded volumes, height fog and overlapping local fog |
 | [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, update costs |
 | [API reference](./docs/api.md) | Engine, Display and Render options, methods and scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |

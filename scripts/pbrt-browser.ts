@@ -47,7 +47,7 @@ async function run(sequenceOffset = 0, prefix = '') {
   const errors: string[] = [];
   engine.on('error', event => errors.push(event.message));
   try {
-    sync.update(); if (!engine.camera) throw new Error('PBRT camera synchronization failed'); engine.camera.fStop = model.settings.fStop; engine.camera.focusDistance = model.settings.focusDistance; engine.camera.metersPerUnit = 1; if (sync.scene) sync.scene.volumes = model.volumes; engine.update();
+    sync.update(); if (!engine.camera) throw new Error('PBRT camera synchronization failed'); engine.camera.fStop = model.settings.fStop; engine.camera.focusDistance = model.settings.focusDistance; engine.camera.metersPerUnit = 1; engine.update();
     await checkpoint('device-and-pipelines');
     await engine.init();
     const adapter = engine.info;

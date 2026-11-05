@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import {MAX_PATH_EVENTS_WGPU, MAX_PATH_EVENTS_WEBGL, normalizeBounces} from '../../src/renderer/pathLimits';
-import type { SceneVolume } from '../../src/scene/SceneVolume';
 import { geometry, type PLYDecoder } from './geometry';
 import { material, interiorMedium, type Warn } from './materials';
 import { first, scalar, vector, type Entity, type Scene, type Shape } from './scene';
@@ -10,7 +9,7 @@ import type { Resolver } from './source';
 import { reprojectEnvironment } from './environment';
 import { mediumBoundary } from './mediumBoundary';
 export interface Converted {
-  root: THREE.Group; environment: Image | null; volumes: SceneVolume[];
+  root: THREE.Group; environment: Image | null;
   settings: { width: number; height: number; bounces: number; samples: number; exposure: number; fStop: number; focusDistance: number };
 }
 const mirror = new THREE.Matrix4().makeScale(1, 1, -1);
@@ -18,6 +17,7 @@ const mirror = new THREE.Matrix4().makeScale(1, 1, -1);
 /** Both geometry and camera receive the same world reflection. The camera's
  * local reflection changes PBRT's +Z viewing direction to Three's -Z. */
 export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeImage, onProgress?: (loaded: number, total: number) => void, decodePLY?: PLYDecoder, backend: 'webgpu' | 'webgl' = 'webgpu'): Promise<Converted> {
+  if (scene.cameraMedium) throw new Error('PBRT camera media are not supported in this release.');
   const root = new THREE.Group(); root.name = scene.entry.split('/').pop() ?? 'PBRT';
   const warningKeys = new Set<string>();
   const warn: Warn = (entity, handling, code = 'approximation') => {
@@ -234,23 +234,6 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
 
   }
   for (const medium of Object.values(scene.media)) if (medium.type !== 'homogeneous') warn(medium, `${medium.type} medium skipped`, 'medium');
-  const volumes: SceneVolume[] = [];
-  if (scene.cameraMedium) {
-    const medium = scene.media[scene.cameraMedium];
-    if (!medium) throw new Error(`Undefined camera medium ${scene.cameraMedium}`);
-    if (medium.type === 'homogeneous') {
-      root.updateMatrixWorld(true);
-      const bounds = new THREE.Box3().setFromObject(root);
-      if (scene.camera) bounds.expandByPoint(new THREE.Vector3().setFromMatrixPosition(mirror.clone().multiply(new THREE.Matrix4().fromArray(scene.camera.transform))));
-      if (bounds.isEmpty()) bounds.set(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
-      bounds.expandByScalar(Math.max(.1, bounds.getSize(new THREE.Vector3()).length() * .1));
-      const a = await textures.value(medium.params, 'sigma_a', [1, 1, 1], medium), s = await textures.value(medium.params, 'sigma_s', [1, 1, 1], medium);
-      const extinction = a.color.map((v, i) => v + s.color[i]), average = extinction.reduce((a, b) => a + b) / 3;
-      if (Math.max(...extinction) - Math.min(...extinction) > 1e-6) warn(medium, 'Colored extinction averaged for SceneVolume', 'medium');
-      volumes.push({ bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }, density: average * scalar(medium.params, 'scale', 1), color: s.color.map(v => average > 0 ? Math.min(1, v / average) : 0) as [number, number, number], anisotropy: scalar(medium.params, 'g', 0) });
-      if (medium.params.Le) warn(medium, 'Medium emission ignored', 'medium');
-    }
-  }
   if (film.sensor && first(film, 'sensor', 'cie1931') !== 'cie1931') warn(scene.film!, 'Sensor approximated by CIE 1931', 'camera');
   if (film.whitebalance) warn(scene.film!, 'White balance ignored', 'camera');
   root.updateMatrixWorld(true);
@@ -289,5 +272,5 @@ export async function convert(scene: Scene, resolver: Resolver, decode?: DecodeI
   // A primary-surface mask cannot isolate shadows or indirect paths through
   // null or inconsistent medium boundaries. Preserve all measurements.
   root.userData.pbrtComparable = !scene.warnings.some(w => ['medium-shadow', 'medium-topology', 'medium-orientation', 'medium-camera', 'path-depth'].includes(w.code));
-  return { root, environment, volumes, settings: { width, height, bounces, samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
+  return { root, environment, settings: { width, height, bounces, samples: scalar(scene.sampler?.params ?? {}, 'pixelsamples', 16), exposure: scalar(film, 'iso', 100) / 100 * (scalar(cp, 'shutterclose', 1) - scalar(cp, 'shutteropen', 0)), fStop, focusDistance } };
 }

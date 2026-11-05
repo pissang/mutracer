@@ -1,4 +1,4 @@
-import {assertNoResearchArtifacts, assertNoProductionResearchImports, isResearchSource} from './check-research-artifacts.mjs';
+import {assertNoResearchArtifacts, assertNoProductionResearchImports} from './check-research-artifacts.mjs';
 import ts from 'typescript';
 import { createShaderFormattingTransformer } from './shader-formatting.mjs';
 import { loadShaderIdentifierMap } from './shader-identifiers.mjs';
@@ -21,7 +21,10 @@ const configPath = path.join(projectRoot, 'tsconfig.json');
 const config = ts.readConfigFile(configPath, ts.sys.readFile);
 const parsed = ts.parseJsonConfigFileContent(config.config ?? {}, ts.sys, projectRoot);
 assertNoProductionResearchImports(projectRoot);
-const program = ts.createProgram(parsed.fileNames.filter(filename => !isResearchSource(projectRoot, filename)), parsed.options);
+// Emit the public entry points and their dependencies, rather than every source
+// file in the repository (which also contains disconnected experiments).
+const program = ts.createProgram(['src/main.ts', 'src/oidn.ts'].map(filename =>
+  path.join(projectRoot, filename)), parsed.options);
 const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
   ...ts.getPreEmitDiagnostics(program)];
 if (!diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) {

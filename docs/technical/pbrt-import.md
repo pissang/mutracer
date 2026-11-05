@@ -90,10 +90,10 @@ transmission color: choose depth `d=1/max(1,max(sigma_t))`, set color
 `exp(-sigma_t*d)` and scatter color `sigma_s/sigma_t`, with scaled coefficients.
 This preserves the existing packer's coefficients without hitting its color floor.
 `MediumInterface` orders inside then outside. The geometric normal points toward
-outside, after ReverseOrientation and handedness. The camera medium is handled
-by SceneVolume. If only the other outside medium remains, conversion flips
-winding and normals together and encodes it as the material interior. Both
-non-camera media cannot be represented: conversion warns and uses inside only.
+outside, after ReverseOrientation and handedness. The importer rejects scenes
+with a camera medium. If only an outside medium remains, conversion flips
+winding and normals together and encodes it as the material interior. Two
+media cannot be represented: conversion warns and uses inside only.
 Material variants include both names to avoid sharing different boundaries.
 
 The extra medium-side reversal reciprocates thick dielectric IOR: PBRT's

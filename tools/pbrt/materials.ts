@@ -16,8 +16,7 @@ export function anisotropicRoughness(alphaU: number, alphaV: number) {
     rotation: alphaV > alphaU ? Math.PI / 2 : 0
   };
 }
-/** A material medium occupies the normal's negative half-space. Camera medium
- * is already represented by SceneVolume; it is not another interior layer. */
+/** A material medium occupies the normal's negative half-space. */
 export function interiorMedium(shape: Shape, scene: Scene, warn?: Warn): { name: string; flip: boolean } {
   for (const name of [shape.inside, shape.outside]) if (name && !scene.media[name]) throw new Error(`Undefined medium ${name}`);
   const inside = shape.inside !== scene.cameraMedium ? shape.inside : '';

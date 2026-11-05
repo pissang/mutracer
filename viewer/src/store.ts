@@ -43,12 +43,6 @@ export interface Settings {
   backgroundColor: string;
   groundShadow: boolean;
   groundOpacity: number;
-  /** Shows preset volumes or model-sized ground fog. Default false; Halloween defaults to true. */
-  volumes: boolean;
-  /** Scales volume density; `1` uses the preset or automatic fog density. Default 1. */
-  volumeDensity: number;
-  /** Noise warp in multiples of the noise size. Default 0.5. */
-  volumeWarp: number;
 
   maxSamples: number;
   bounces: number;
@@ -132,9 +126,6 @@ export const DEFAULT_SETTINGS: Settings = {
   groundedRadius: null,
   groundShadow: true,
   groundOpacity: 0.8,
-  volumes: false,
-  volumeDensity: 1,
-  volumeWarp: 0.5,
   maxSamples: 64,
   bounces: 6,
   caustics: false,
@@ -457,7 +448,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity',
-  volumes: 'Volumes', volumeDensity: 'Volume density', volumeWarp: 'Volume warp', maxSamples: 'Samples', displayUpscale: 'Display upscale', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
+  maxSamples: 'Samples', displayUpscale: 'Display upscale', resolutionScale: 'Resolution', resolutionHeight: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',

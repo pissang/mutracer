@@ -1,6 +1,4 @@
 import {spectralPrefixGlsl, prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './chunks/spectralPrefix.glsl.js';
-import {volumeNoiseGlsl} from './chunks/volumeNoise.glsl.js';
-import {createVolumeGlsl, createVolumePathGlsl} from './chunks/volume.glsl.js';
 import {researchTransport} from '../researchTransport.js';
 import { MAX_PATH_EVENTS_WEBGL } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
@@ -69,26 +67,20 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
     aux: ['RayTraceAuxiliary', 'outAux'], depth: ['int', 'depth'], event: ['int', 'idx'],
     ignored: ['bool', 'sampleIgnored'], opaque: ['bool', 'isOpaque'], ...prefixRandomBindings
   };
-  const hasVolumes = (options[0] as {hasVolumes?: boolean} | undefined)?.hasVolumes ?? false;
-  const hasVolumeNoise = (options[0] as {hasVolumeNoise?: boolean} | undefined)?.hasVolumeNoise ?? false;
-  const research = hasVolumes ? undefined : researchTransport()?.fragment(typeof options[0] === 'object' ? [] : options);
+  const research = researchTransport()?.fragment(typeof options[0] === 'object' ? [] : options);
   const enabled = research?.enabled ?? false;
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
-  const rayTraceCore = createRayTraceCoreGlsl(fragments, hasVolumes);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, hasVolumes, hasVolumeNoise, channelIndependentLight);
+  const rayTraceCore = createRayTraceCoreGlsl(fragments);
+  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, channelIndependentLight);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
-    BOUNCES: 2,
-    ...(hasVolumes ? {HAS_VOLUMES: true} : {}),
-    ...(hasVolumeNoise ? {HAS_VOLUME_NOISE: true} : {})
+    BOUNCES: 2
   },
   uniforms: {
-    ...(hasVolumes ? {volumeCount: Shader.uniform('int'), volumeWorldToLocal: Shader.arrayUniform('mat4', 8), volumeColorAnisotropy: Shader.arrayUniform('vec4', 8), volumeParams: Shader.arrayUniform('vec4', 8)} : {}),
-    ...(hasVolumeNoise ? {volumeNoiseSizeOctaves: Shader.arrayUniform('vec4', 8), volumeNoiseOffsetCoverage: Shader.arrayUniform('vec4', 8), volumeNoiseParams: Shader.arrayUniform('vec4', 8)} : {}),
     emissiveLightData: Shader.uniform('sampler2D'), emissiveLightColumns: Shader.uniform('int'),
     emissiveChoiceOffset: Shader.uniform('int'), emissiveChoiceCount: Shader.uniform('int'), emissivePmfOffset: Shader.uniform('int'),
     emissiveWeightTotal: Shader.uniform('float',0),
@@ -135,7 +127,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${hasVolumeNoise ? volumeNoiseGlsl + '\n' : ''}${hasVolumes ? createVolumeGlsl(hasVolumeNoise) + '\n' : ''}${research?.declarations ?? ''}${sampleMaterialGlsl}
+${research?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -147,13 +139,13 @@ struct RayTraceAuxiliary {
   bool isShadowCatcher;
 };
 
-${sharePrefix ? spectralPrefixGlsl + prefixCheckpoint('spSurface', surfacePrefix) : ''}void ${sharePrefix && !hasVolumes ? 'shadeSurfaceVertex' : 'bounce'}(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux${sharePrefix && !hasVolumes ? ', out bool sampleIgnored' : ''}) {${sharePrefix && !hasVolumes ? '\n  sampleIgnored = false;' : ''}
+${sharePrefix ? spectralPrefixGlsl + prefixCheckpoint('spSurface', surfacePrefix) : ''}void ${sharePrefix ? 'shadeSurfaceVertex' : 'bounce'}(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux${sharePrefix ? ', out bool sampleIgnored' : ''}) {${sharePrefix ? '\n  sampleIgnored = false;' : ''}
   samplingBounce = uint(max(depth, 0));
   // The bounce will be doubled on the transmission material.
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
   // It will cause shader compilation too slow.
-${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
+${intelMac ? doubleTransmissionCheckCode : ''}
 
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
   if (isShadowCatcher) {
@@ -194,7 +186,7 @@ ${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
 #else
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
       bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathChannel);
-      ${hasVolumes ? 'if (!path.volumeScattered) ' : ''}path.li += path.beta * bg.rgb * bg.a;
+      path.li += path.beta * bg.rgb * bg.a;
 #endif
       path.abort = true;
       return;
@@ -226,7 +218,7 @@ ${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
       }
 #if !defined(USE_ENVMAP)
       // TODO treat background as a light source
-      if (towardsCam${hasVolumes ? ' && !path.volumeScattered' : ''}) {
+      if (towardsCam) {
         path.li += path.beta * sampling_power_heuristic(path.scatteringPdf, 1.0) * bg.rgb;
       }
 #endif
@@ -235,7 +227,7 @@ ${intelMac && !hasVolumes ? doubleTransmissionCheckCode : ''}
     return;
   }
 
-${sharePrefix && !hasVolumes ? '  sampleIgnored = false;' : '  bool sampleIgnored = false;'}
+${sharePrefix ? '  sampleIgnored = false;' : '  bool sampleIgnored = false;'}
   if ((mat.materialType == STANDARD || mat.materialType == UNLIT)) {
     if (transmissiveOutputAlphaMin < 1.0) {
       // TODO increase the alpha when there are more bounces.
@@ -302,15 +294,11 @@ ${sharePrefix && !hasVolumes ? '  sampleIgnored = false;' : '  bool sampleIgnore
     return;
   }
 
-${hasVolumes ? /* glsl */ `  si.volumeResample = sampleIgnored;
-  return;
-}
-void completeVolumeVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
-` : sharePrefix ? /* glsl */ `  return;
+${sharePrefix ? /* glsl */ `  return;
 }
 void completeSurfaceVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
 ` : ''}  // Next ray hit
-${hasVolumes || sharePrefix ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
+${sharePrefix ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 `}
@@ -494,7 +482,7 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   return dot(result, result) > 1e-12 ? normalize(result) : source.normal;
 }
 
-${hasVolumes ? createVolumePathGlsl(hasVolumeNoise, sharePrefix) + '\n' : ''}vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
   Path path; path.scatteringMediumEntered = false;
   path.ray = ray;
   path.li = vec3(0);
@@ -508,7 +496,7 @@ ${hasVolumes ? createVolumePathGlsl(hasVolumeNoise, sharePrefix) + '\n' : ''}vec
   path.isNextRefraction = false;
   path.abort = false;
   int depth = 0;
-${sharePrefix && !hasVolumes ? /* glsl */ `  int spSlot = spCall++;
+${sharePrefix ? /* glsl */ `  int spSlot = spCall++;
   if (spActive && spChannel > 1 && spCompleted[spSlot].ready) return spReplay(spSlot, outAux);
   bool isOpaque = !si.isTransparency;
   bool sampleIgnored = false, spResume = false;
@@ -646,31 +634,7 @@ ${sharePrefix ? /* glsl */ `    spPrimary = SpectralPrimary(si, mat, outAux, s0,
       mat.dispersionAbbeNumber
     );
   }
-  ${hasVolumes ? /* glsl */ `float maximum = si.hit ? distance(si.position, ray.o) : INF;
-  si.mediumType = 0; si.mediumAnisotropy = 0.0; si.volumeSuppressed = false; si.volumeResample = false;
-  if (si.hit && mat.materialType == SHADOW_CATCHER) {
-    outAux.albedo = vec3(1.0); outAux.normal = dot(si.normal, ray.d) > 0.0 ? -si.normal : si.normal;
-    si.albedoSampled = true;
-  }
-  RayTraceAuxiliary originalAux = outAux;
-  uvec4 guideRng = s0; uint guideCounter = hashedCounter;
-  float guideWavelength = pathWavelength; int guideChannel = pathChannel;
-  vec4 result = integrateVolumePath(si, ray, mat, true, outAux);
-  if (${hasVolumeNoise ? 'volumeHasDensity(ray, maximum)' : 'volumeTransmittance(ray, maximum) < 1.0'}) {
-    if (si.hit && !si.albedoSampled && (mat.alpha < 1.0 || (mat.specularRoughness <= 0.02 && mat.baseMetalness > 0.98))) {
-      uvec4 endRng = s0; uint endCounter = hashedCounter;
-      float endWavelength = pathWavelength; int endChannel = pathChannel;
-      s0 = guideRng; hashedCounter = guideCounter; samplingBounce = 0u;
-      pathWavelength = guideWavelength; pathChannel = guideChannel;
-      RayTraceAuxiliary guideAux = originalAux;
-      vec4 ignored = integrateVolumePath(si, ray, mat, false, guideAux);
-      outAux.albedo = guideAux.albedo; outAux.normal = guideAux.normal;
-      s0 = endRng; hashedCounter = endCounter;
-      pathWavelength = endWavelength; pathChannel = endChannel;
-    } else { outAux.albedo = originalAux.albedo; outAux.normal = originalAux.normal; }
-  }
-  ${hasVolumeNoise ? 'volumeNoiseGuides' : 'volumeGuides'}(ray, maximum, outAux);
-  return result;` : /* glsl */ `return integrateOnePath(si, ray, mat, outAux);`}
+  return integrateOnePath(si, ray, mat, outAux);
 }
 
 void ${sharePrefix ? 'traceSpectralWavelength' : 'main'}(${sharePrefix ? 'int channel' : ''}) {

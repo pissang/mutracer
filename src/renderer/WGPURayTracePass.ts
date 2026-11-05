@@ -3,8 +3,6 @@ import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '.
 import {causticDiagnostics} from './causticDiagnostics.js';
 import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
 import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
-import {packVolumes, VOLUME_FLOATS} from './volumeData.js';
-import type {SceneVolume} from '../scene/SceneVolume.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
 import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
@@ -43,7 +41,7 @@ import {
 } from './wgpuBindless.js';
 import {wgpuMaterialConstants} from './wgpuMaterialConstants.js';
 import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} from './wgpuShaderSource.js';
-import {makeWebRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
+import {makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
 import {constants} from './webgl.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WGPU} from './pathLimits.js';
@@ -352,7 +350,7 @@ class WGPURayTracePass {
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
   };
-  private _rtUniform = makeWebRayTraceUniform(true);
+  private _rtUniform = makeRayTraceUniform();
   private _mapInfoUniform!: GPUBuffer;
   private _attributeData?: Uint32Array;
   private _attributeStride = 0;
@@ -938,8 +936,6 @@ class WGPURayTracePass {
       const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
       const structure = {
         shareSpectralPrefix: Boolean(constants.SPECTRAL) && this._shareSpectralPrefix,
-        hasVolumes: !!this._constants.HAS_VOLUMES,
-        hasVolumeNoise: !!this._constants.HAS_VOLUME_NOISE,
         hasDisplacement: this._hasDisplacement,
         caustics: this._causticKey,
         bindless: !!this._bindless,
@@ -1643,7 +1639,7 @@ class WGPURayTracePass {
       pass.setBindGroup(idx, bindGroup);
     });
 
-    if (!this._constants?.HAS_VOLUMES) researchTransport()?.capture(this);
+    researchTransport()?.capture(this);
     pass.dispatchWorkgroups(
       Math.ceil(dispatchWidth / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
       Math.ceil(dispatchHeight / (this._transport?.workgroupSize ?? WORKGROUP_SIZE)),
@@ -1695,7 +1691,6 @@ class WGPURayTracePass {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
       textureAtlas: atlas,
-      volumes: {count: this._rtUniform.views.volumeCount?.[0] ?? 0, causticsDisabledReason: this._constants.HAS_VOLUMES ? 'Scene volumes use ordinary path tracing; MNEE, light tracing and photon mapping are disabled.' : undefined},
       materialTextures: {
         requested: this._textureSelection.requested,
         active: this._bindless ? 'bindless' as const : 'atlas' as const,
@@ -1824,10 +1819,10 @@ class WGPURayTracePass {
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
     this._causticSettings = settings;
-    const transport = researchTransport()?.configure(this, 'webgpu', !!this._constants?.HAS_VOLUMES);
+    const transport = researchTransport()?.configure(this, 'webgpu');
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
-    const hasCaster = !this._constants?.HAS_VOLUMES && !!(settings?.lightTracing || settings?.photonMapping) &&
+    const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
       this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
@@ -2163,19 +2158,6 @@ class WGPURayTracePass {
     return true;
   }
 
-  setVolumes(volumes?: SceneVolume[]) {
-    const packed = packVolumes(volumes);
-    this._rtUniform.views.volumeCount[0] = packed.count;
-    // Keep the compact homogeneous record ABI and its generated shader unchanged.
-    const stride = packed.hasNoise ? VOLUME_FLOATS : 24;
-    this._rtUniform.views.volumeRecords.fill(0);
-    for (let i = 0; i < 8; i++) this._rtUniform.views.volumeRecords.set(packed.data.subarray(i * VOLUME_FLOATS, i * VOLUME_FLOATS + stride), i * stride);
-    if (packed.hasNoise) this._constants.HAS_VOLUME_NOISE = true;
-    else delete this._constants.HAS_VOLUME_NOISE;
-    if (packed.count) this._constants.HAS_VOLUMES = true;
-    else delete this._constants.HAS_VOLUMES;
-  }
-
   setBackground(background?: SceneBackground) {
     this._rtUniform.views.backgroundMapTransform.set(backgroundMapTransform(background));
     this._rtUniform.views.backgroundMapRotation.set(backgroundMapRotation(background));
@@ -2273,7 +2255,7 @@ class WGPURayTracePass {
       this._lightSamplingScratch,
       this._shadowCatcherLightChoices
     );
-    if (!this._constants?.HAS_VOLUMES) researchTransport()?.prepare(this, 'webgpu', lighting);
+    researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;

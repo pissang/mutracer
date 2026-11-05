@@ -15,8 +15,6 @@ export default function rayTraceCore({
   compactVertices = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
-  hasVolumes = false,
-  hasVolumeNoise = false,
   hasSceneAlpha = true,
   cameraProjectionInverse = false,
   caustics = false,
@@ -26,8 +24,6 @@ export default function rayTraceCore({
   compactVertices?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
-  hasVolumes?: boolean;
-  hasVolumeNoise?: boolean;
   hasSceneAlpha?: boolean;
   cameraProjectionInverse?: boolean;
   caustics?: boolean;
@@ -57,8 +53,7 @@ struct Ray {
   d: vec3f,
 };
 
-struct SurfaceInteraction {${hasVolumes ? /* wgsl */ `
-  volumeSuppressed: bool,` : ''}
+struct SurfaceInteraction {
   position: vec3f,
   // For perfect specular or transmission surface
   // We use the albedo and normal of first diffuse or glossy surface hit instead for denoising
@@ -179,8 +174,7 @@ ${hasCoatNormals ? /* wgsl */ `
   thinWalled: bool,
 };
 
-struct Path {${hasVolumes ? /* wgsl */ `
-  volumeScattered: bool,` : ''}
+struct Path {
   // Sticky for this path: an SSS walk must retain its chance to reach the boundary.
   scatteringMediumEntered: bool,
   ray: Ray,
@@ -269,15 +263,7 @@ struct CameraUniform {
   focusDistance: f32,${cameraProjectionInverse ? '\n  projectionInv: mat4x4<f32>,' : ''}
 };
 
-${hasVolumes ? /* wgsl */ `struct VolumeRecord {
-  worldToLocal: mat4x4f,
-  colorAnisotropy: vec4f,
-  params: vec4f,${hasVolumeNoise ? /* wgsl */ `
-  noiseSizeOctaves: vec4f,
-  noiseOffsetCoverage: vec4f,
-  noiseParams: vec4f,` : ''}
-}
-` : ''}struct RayTraceUniform {
+struct RayTraceUniform {
   outputSize: vec2f,
   sampleCount: f32,
   scaleOffset: vec4f,
@@ -314,9 +300,7 @@ ${hasVolumes ? /* wgsl */ `struct VolumeRecord {
   environmentRotation: mat4x4f,
   backgroundMapTransform: vec4f,
   backgroundMapRotation: mat4x4f,
-${hasVolumes ? /* wgsl */ `  volumeCount: i32,
-  volumeRecords: array<VolumeRecord, 8>,
-` : ''}}
+}
 
 // Buffers
 @group(0) @binding(0) var<storage, read> bvhBuffer: array<vec4f>;

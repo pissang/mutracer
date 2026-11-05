@@ -31,7 +31,6 @@ import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
-import { sceneVolumes } from './volumes';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
@@ -412,7 +411,6 @@ export class ViewerEngine {
       model: { name, ...meta },
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
     });
-    this.applyVolumes();
     this.awaitingFirstSample = true;
     if (model.pbrt?.warnings.length) showToast(`${model.pbrt.warnings.length} PBRT import warnings`, 'warning', [{ label: 'Details', onClick: () => setUi({ right: true, tab: 'environment' }) }]);
     writeHash(this.settings, meta.presetId);
@@ -558,16 +556,6 @@ export class ViewerEngine {
     this.model.revoke();
     this.model = null;
     this.materials.setModel(null, null);
-  }
-
-  private applyVolumes() {
-    const scene = this.sync.scene;
-    if (!scene) return;
-    const preset = MODEL_PRESETS.find((p) => p.id === get().model?.presetId);
-    const authored = this.model?.pbrt?.volumes.map(volume => ({
-      ...volume, transform: Array.from(this.model!.root.matrixWorld.elements)
-    })) ?? [];
-    scene.volumes = [...authored, ...sceneVolumes(this.settings, this.modelBounds(), preset?.volumes)];
   }
 
   private createSync() {
@@ -737,7 +725,6 @@ export class ViewerEngine {
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = true;
-    if (changed('volumes') || changed('volumeDensity') || changed('volumeWarp')) this.applyVolumes();
 
     if ((changed('envId') || changed('envResolution') || (changed('skyTime') && s.envId === 'sky')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();

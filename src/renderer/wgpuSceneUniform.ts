@@ -60,17 +60,7 @@ function makeRayTraceUniformCore(RayTraceUniformValues: ArrayBuffer) {
     views: RayTraceUniformViews
   };
 }
-// Native continues to use the original no-volumes record and scene ABI.
 export function makeRayTraceUniform() { return makeRayTraceUniformCore(new ArrayBuffer(320)); }
-
-// Web reserves the entire volumes capacity once; volume count edits never resize it.
-export function makeWebRayTraceUniform(hasVolumeNoise = false) {
-  const uniform = makeRayTraceUniformCore(new ArrayBuffer(hasVolumeNoise ? 1488 : 1104));
-  return {buffer: uniform.buffer, views: {...uniform.views,
-    volumeCount: new Int32Array(uniform.buffer, 320, 1),
-    volumeRecords: new Float32Array(uniform.buffer, 336, hasVolumeNoise ? 288 : 192)
-  }};
-}
 
 export function packWgpuAnalyticLights(
   lights: AnalyticLight[],

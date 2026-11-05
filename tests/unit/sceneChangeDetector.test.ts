@@ -23,7 +23,7 @@ const texture = () => new Texture({ data: new Uint8Array(4), width: 1, height: 1
 describe('scene change detection', () => {
   it('is stable after commit, preserves uncommitted edits, and resets for a new pipeline', () => {
     const { scene, detector, mesh } = fixture();
-    expect(detector.detect(scene)).toEqual({ meshes: 'none', transforms: [], colors: [], geometries: [], materials: [], lights: false, background: false, volumes: false, volumeStructure: false });
+    expect(detector.detect(scene)).toEqual({ meshes: 'none', transforms: [], colors: [], geometries: [], materials: [], lights: false, background: false });
     mesh.transform[12] = 3;
     const changes = detector.detect(scene);
     expect(changes.meshes).toBe('incremental');

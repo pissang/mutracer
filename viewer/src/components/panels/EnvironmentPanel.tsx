@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Button, FileTrigger } from 'react-aria-components';
-import { CloudFog, Globe, Image, Lamp, Square, Sun, Upload } from 'lucide-react';
+import { Globe, Image, Lamp, Square, Sun, Upload } from 'lucide-react';
 import { autoGroundedSkybox, setSettings, useViewer } from '../../store';
 import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS } from '../../engine/presets';
 import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engine/studio';
@@ -148,19 +148,6 @@ export function EnvironmentPanel() {
           <>
             <Scrub label="Opacity" value={s.groundOpacity} min={0} max={1} onChange={(v) => setSettings({ groundOpacity: v })} />
             <Hint>A shadow-catcher plane under the model. Pair it with a transparent background for product shots.</Hint>
-          </>
-        )}
-      </Section>
-
-      <Section
-        title="Volumes"
-        icon={<CloudFog size={14} />}
-        actions={<Switch label="Volumes" checked={s.volumes} onChange={(v) => setSettings({ volumes: v })} />}
-      >
-        {s.volumes && (
-          <>
-            <Scrub label="Density" value={s.volumeDensity} min={0} max={4} onChange={(v) => setSettings({ volumeDensity: v })} />
-            <Scrub label="Warp" title="Bends the noise edges, in multiples of the noise size" value={s.volumeWarp} min={0} max={4} onChange={(v) => setSettings({ volumeWarp: v })} />
           </>
         )}
       </Section>

@@ -499,7 +499,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 
 | Export | Description |
 | --- | --- |
-| `Scene` | `{ meshes: (Mesh \| InstancedMesh)[], lights, background?, volumes? }`; see below |
+| `Scene` | `{ meshes: (Mesh \| InstancedMesh)[], lights, background? }`; see below |
 | `Mesh` | `new Mesh(geometry, material \| material[])`, `transform` |
 | `InstancedMesh`, `InstancedMeshOptions` | `new InstancedMesh(geometry, material \| material[], {count, transforms?, colors?})`; local Float32 column-major matrices default to identity, multiplied by inherited transform; count selects the active prefix; `colors` defaults to undefined (white linear RGB); `markUpdated(): this` notifies both matrices and colors; `markTransformsUpdated(start = 0, count = this.count - start): this` and `markColorsUpdated(start = 0, count = this.count - start): this` notify each separately. Each advances version once, initially 0. See [updates and costs](./updates.md#instanced-meshes) |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
@@ -556,38 +556,6 @@ different precision.
 and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only
 `version`. See [scene updates](./updates.md) for when to call each.
-
-### SceneVolume
-
-`Scene.volumes` is an optional array, default none, with at most `MAX_VOLUMES` (8)
-entries. Invalid values or excess volumes throw `RangeError`.
-See [usage, costs and limits](./volumes.md).
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `density` | Required | Finite, nonnegative density multiplier: extinction per world unit at `baseHeight`, before any density field |
-| `bounds` | Required | Local `{min: Vec3, max: Vec3}`, finite with each `min < max` |
-| `shape` | `'box'` | `'box'` or the `'ellipsoid'` inscribed in the bounds |
-| `transform` | Identity | Finite invertible affine column-major local-to-world `Mat4`; scaling changes shape, not density |
-| `color` | `[1, 1, 1]` | Single-scattering albedo, each channel in `[0, 1]` |
-| `anisotropy` | `0` | Henyey–Greenstein parameter in `[-0.999, 0.999]` |
-| `heightFalloff` | `0` | Finite nonnegative exponential density decay per world unit along +Y; zero is uniform |
-| `baseHeight` | Lowest world Y of the shape | Finite world height where `density` applies |
-| `noise` | None | `SceneVolumeNoise`, world-space procedural density multiplier; moving or scaling the boundary does not move the pattern |
-| `edgeFade` | `0` | Boundary fade width in `[0, 1]`, as a fraction of local half extent; independent of noise |
-
-`SceneVolumeNoise` options:
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `size` | Required | Largest noise feature size per world axis, finite and positive `Vec3` |
-| `octaves` | `4` | Integer fractal layer count from 1 to 6 |
-| `coverage` | `0.5` | Approximate filled fraction, in `[0, 1]` |
-| `softness` | `0.3` | Transition width, in `[0, 1]`; zero is a hard threshold |
-| `offset` | `[0, 0, 0]` | Finite world-space `Vec3`; edits move the pattern and reset accumulation |
-| `warp` | `0` | Breaks up and bends density edges, in multiples of `size`; finite and nonnegative |
-
-Values and transformed bounds must fit GPU float32 storage.
 
 ### ProceduralSky
 

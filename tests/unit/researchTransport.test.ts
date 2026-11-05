@@ -72,7 +72,7 @@ it('restores shared spectral rendering after leaving an experimental connection 
   const pass = Object.assign(Object.create(Pass.prototype), {
     _meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial({transmissionWeight: 1, transmissionDispersionScale: 1, specularRoughness: 0}))],
     _mainPass: {setShader}, _tracePasses: [{setUniform: vi.fn()}],
-    _spectral: true, _shareSpectralPrefix: true, _hasVolumes: false
+    _spectral: true, _shareSpectralPrefix: true
   });
   const quality = {bounces: 8, bevel: false, dispersionWavelengths: 3 as 1 | 3, directLightCandidates: 4};
   registerMnee(); mneeDiagnostics.mnee = true;

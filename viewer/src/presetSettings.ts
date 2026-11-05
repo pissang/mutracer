@@ -2,12 +2,12 @@ import type {Settings} from './store';
 /** Stage and lighting choices a collection example stores with its curated view. */
 export const STAGE_FIELDS=['lighting','envId','envRotation','background'] as const;
 export type PresetStage=Pick<Settings,typeof STAGE_FIELDS[number]>;
-type PresetFields=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|'causticPhotonMapping'|'bounces'|'volumes'>;
+type PresetFields=Pick<Settings,'groundShadow'|'caustics'|'causticLightTracing'|'causticPhotonMapping'|'bounces'>;
 /** Display settings stay the viewer's own unless an example stores a look. */
 const DISPLAY_FIELDS=['toneMapping','exposure','bloomIntensity','bloomThreshold','bloomRadius'] as const;
 export type PresetRenderSettings=PresetFields&Pick<Settings,typeof DISPLAY_FIELDS[number]>;
 /**
- * Settings applied when a scene loads. Volumes default off unless the example enables them.
+ * Settings applied when a scene loads.
  * Research scenes turn off the ground shadow and
  * Cornell Caustic turns on light tracing and photon mapping. Other first views restore the defaults so a
  * scene-specific choice does not carry over; a reopened scene with a saved view keeps stored and URL settings.
@@ -15,7 +15,6 @@ export type PresetRenderSettings=PresetFields&Pick<Settings,typeof DISPLAY_FIELD
 export function presetSettings(presetId:string|null,research:boolean,restored:boolean,defaults:PresetFields,url:Partial<PresetRenderSettings>={},scene:Partial<PresetRenderSettings>={}):Partial<PresetRenderSettings>|undefined {
  const fresh=presetId!==null&&!restored;
  const patch:Partial<PresetRenderSettings>={
-  ...(!restored?{volumes:scene.volumes??defaults.volumes}:{}),
   ...(research?{groundShadow:false}:fresh?{groundShadow:defaults.groundShadow}:{}),
   ...(presetId==='research-cornell-caustic'?{caustics:true,causticLightTracing:true,causticPhotonMapping:true}
    :fresh?{caustics:defaults.caustics,causticLightTracing:defaults.causticLightTracing,causticPhotonMapping:defaults.causticPhotonMapping}:{}),

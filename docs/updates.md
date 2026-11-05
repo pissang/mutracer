@@ -12,7 +12,7 @@ Changes restart each render at its next refine. See
 
 `engine.update()` compares the scene with its last commit. It detects every
 property assignment, membership change and small value such as matrices,
-material parameters, light parameters, background fields and fog fields. It does not read
+material parameters, light parameters and background fields. It does not read
 the contents of large arrays or images, so in-place edits to them need a
 notification first:
 
@@ -138,8 +138,6 @@ and other transport/layout changes below can still require compilation.
 | Change | When a different shader variant is needed |
 | --- | --- |
 | Material, texture or lighting features | Newly required support is not covered by a prepared shader: coat/fuzz, thin film, subsurface, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
-| Volumes | Adding the first volume or removing the last on either WebGPU or WebGL 2; parameter edits and other volume count changes only restart accumulation |
-| Heterogeneous volumes | Adding the first `noise` or positive `edgeFade`, or removing the last; edits to noise fields and `edgeFade` while this mode remains active only restart accumulation |
 | Transport and transparency | Enabling/disabling medium or dispersion support, changing whether any non-opaque material exists, or changing whether deterministic primary BLEND splitting is needed |
 | Shading and geometry structure | Changing required UV/tangent/coat-normal frames, displacement or material-bevel support, vertex/BVH layouts or required traversal capacity |
 | Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |

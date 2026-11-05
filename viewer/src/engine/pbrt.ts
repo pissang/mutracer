@@ -74,7 +74,7 @@ export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, si
     source.files = [...files.values()];
     const warnings = built.scene.warnings;
     return { name: source.files.find(item => item.path === source.mainPath)?.file.name ?? source.mainPath.split('/').pop()!, root: converted.root, animations: [], source,
-      pbrt: { settings: converted.settings, warnings, volumes: converted.volumes },
+      pbrt: { settings: converted.settings, warnings },
       lighting: { available: true, useByDefault: true, environment: converted.environment && { ...converted.environment, data: converted.environment.data as Float32Array }, warnings: warnings.map(formatWarning) }, revoke() {} };
   } catch (error) {
     if (error instanceof RangeError || /memory|allocation/i.test(String(error))) throw new Error(`PBRT scene could not fit the browser memory budget: ${(error as Error).message}`);

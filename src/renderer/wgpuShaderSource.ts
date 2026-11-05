@@ -54,11 +54,9 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   return `\n${defineCode}\n${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
-  if (!constants.HAS_VOLUMES) constants = researchTransport()?.constants(constants, features) ?? constants;
+  constants = researchTransport()?.constants(constants, features) ?? constants;
   return (features.independentTextures ? 'enable wgpu_binding_array;\n' : '') + wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
-    hasVolumes: Boolean(constants.HAS_VOLUMES),
-    hasVolumeNoise: Boolean(constants.HAS_VOLUME_NOISE),
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,

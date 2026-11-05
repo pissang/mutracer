@@ -60,7 +60,7 @@ copies to coexist in browser memory.
 | constant / scale / constant checkerboard | Supported; other procedural textures use a warned constant approximation. Anisotropic roughness textures currently use 0.5. |
 | point / spot / distant / diffuse area / infinite | Existing MuTracer lights and emissive meshes; equal-area environments use solid-angle supersampling with total-energy preservation. Portals are ignored with a warning. |
 | goniometric / projection | Skipped with a warning. |
-| homogeneous | Inside or outside material medium (outside reverses the boundary), or a bounded camera volume. Two non-camera media use inside only, with a warning. Colored camera extinction is averaged with a warning. |
+| homogeneous | Inside or outside material medium (outside reverses the boundary). Two media use inside only, with a warning. Scenes with a camera medium cannot be opened. |
 | uniformgrid / rgbgrid / nanovdb / cloud | Skipped with a warning. |
 | normalmap / alpha | Normal map and material opacity variants. Material bump is baked to UV-space normals; shape displacement keeps the height-field approximation. |
 
@@ -74,7 +74,6 @@ Approximations are excluded from strict material-region comparisons. Indirect
 light can still pass through an approximate material before reaching a comparable
 region; the primary-surface mask cannot separate those paths. The two-run noise
 estimate does not by itself establish matching renderer behavior.
-PBRT camera media stay active in the viewer; enabling Volumes adds ground fog.
 Material bump changes shading only; its appearance on curved surfaces and at
 different texture scales is approximate, with a warning.
 When normalmap is also present, it takes precedence and bump is warned and ignored.

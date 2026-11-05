@@ -55,13 +55,6 @@ describe('medium boundary diagnostics', () => {
     expect(scene.warnings.some(w => w.code === 'medium-camera')).toBe(true);
     expect(root.userData.pbrtComparable).toBe(false);
   });
-  it('uses the first interface when the camera is inside a nested medium', async () => {
-    const {scene, root} = await load(`MediumInterface "" "m" LookAt 0 0 1.5 0 0 0 0 1 0 Camera "perspective"
-      WorldBegin ${medium} Material "dielectric" MediumInterface "m" "" Shape "sphere" "float radius" 2
-      MediumInterface "" "m" Shape "sphere"`);
-    expect(scene.warnings.filter(w => ['medium-camera', 'medium-topology', 'medium-orientation'].includes(w.code))).toEqual([]);
-    expect(root.userData.pbrtComparable).toBe(true);
-  });
   it('checks transformed instances in their world orientation', async () => {
     for (const reverse of [false, true]) {
       const {scene} = await load(`${camera} WorldBegin ${medium}

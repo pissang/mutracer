@@ -2,43 +2,29 @@ import {expect,it} from 'vitest';
 import {leavingDisplaySettings,presetSettings,presetStageSettings,STAGE_FIELDS} from '../src/presetSettings';
 import {ENVIRONMENT_PRESETS} from '../src/engine/presets';
 import {PUBLIC_MODEL_PRESETS} from '../src/engine/publicModelPresets';
-import {packVolumes} from '../../src/renderer/volumeData';
-const defaults={groundShadow:true,caustics:false,causticLightTracing:true,causticPhotonMapping:false,bounces:6,volumes:false};
+const defaults={groundShadow:true,caustics:false,causticLightTracing:true,causticPhotonMapping:false,bounces:6};
 it('keeps research and Cornell settings to their own built-in scenes',()=>{
  const cornell={groundShadow:false,caustics:true,causticLightTracing:true,causticPhotonMapping:true};
- expect(presetSettings('research-cornell-caustic',true,false,defaults)).toEqual({...cornell,bounces:6,volumes:false});
+ expect(presetSettings('research-cornell-caustic',true,false,defaults)).toEqual({...cornell,bounces:6});
  expect(presetSettings('research-cornell-caustic',true,true,defaults)).toEqual(cornell);
  expect(presetSettings('research-cornell-box',true,false,defaults)).toEqual({...defaults,groundShadow:false});
  expect(presetSettings('research-cornell-box',true,true,defaults)).toEqual({groundShadow:false});
  expect(presetSettings('spheres',false,false,defaults)).toEqual(defaults);
  expect(presetSettings('spheres',false,true,defaults)).toBeUndefined();
- expect(presetSettings(null,false,false,defaults)).toEqual({volumes:false});
+ expect(presetSettings(null,false,false,defaults)).toBeUndefined();
 });
 
 it('gives only explicit valid link fields precedence over scene defaults',()=>{
  expect(presetSettings('research-cornell-caustic',true,false,defaults,{caustics:false,causticLightTracing:false}))
-  .toEqual({groundShadow:false,caustics:false,causticLightTracing:false,causticPhotonMapping:true,bounces:6,volumes:false});
+  .toEqual({groundShadow:false,caustics:false,causticLightTracing:false,causticPhotonMapping:true,bounces:6});
 });
 
 it('applies example render choices on fresh loads, preserves restored settings and lets URLs win',()=>{
- const scene={groundShadow:false,caustics:true,causticLightTracing:true,causticPhotonMapping:true,bounces:12,volumes:false};
+ const scene={groundShadow:false,caustics:true,causticLightTracing:true,causticPhotonMapping:true,bounces:12};
  expect(presetSettings('crystal-lens',false,false,defaults,{},scene)).toEqual(scene);
  expect(presetSettings('crystal-lens',false,true,defaults,{},scene)).toBeUndefined();
  expect(presetSettings('crystal-lens',false,false,defaults,{caustics:false,bounces:8},scene)).toEqual({...scene,caustics:false,bounces:8});
  expect(presetSettings('toycar',false,false,defaults)).toEqual(defaults);
-});
-
-it('enables volumes only for Halloween by default, preserving restored and explicit link settings',()=>{
- for(const preset of PUBLIC_MODEL_PRESETS) {
-  const patch=presetSettings(preset.id,false,false,defaults,{},preset.renderSettings);
-  expect(patch?.volumes,preset.id).toBe(preset.id==='halloween');
- }
- const halloween=PUBLIC_MODEL_PRESETS.find((preset)=>preset.id==='halloween')!;
- expect(presetSettings('halloween',false,false,defaults,{volumes:false},halloween.renderSettings)?.volumes).toBe(false);
- expect(presetSettings('spheres',false,false,defaults,{volumes:true})?.volumes).toBe(true);
- expect(presetSettings(null,false,false,defaults,{volumes:true})).toEqual({volumes:true});
- expect(presetSettings('halloween',false,true,defaults,{},halloween.renderSettings)).toBeUndefined();
- expect(presetSettings(null,false,true,defaults)).toBeUndefined();
 });
 
 it('restores the display only when leaving an example that stored a look',()=>{
@@ -64,9 +50,4 @@ it('keeps collection stages complete, on listed HDRIs and in the minority',()=>{
   expect(Object.keys(preset.stage!).sort()).toEqual([...STAGE_FIELDS].sort());
   expect(ENVIRONMENT_PRESETS.find((env)=>env.id===preset.stage!.envId)?.polyHaven).toBe(true);
  }
-});
-it('stores valid example volumes within the scene limit',()=>{
- const volumes=PUBLIC_MODEL_PRESETS.filter((preset)=>preset.volumes);
- expect(volumes.map((preset)=>preset.id)).toEqual(['halloween']);
- for(const preset of volumes)expect(packVolumes(preset.volumes).count).toBe(preset.volumes!.length);
 });

@@ -16,7 +16,7 @@ export interface LoadedModel {
   root: THREE.Object3D;
   animations: THREE.AnimationClip[];
   lighting?: ModelLighting;
-  pbrt?: { settings: Converted['settings']; warnings: Warning[]; volumes: Converted['volumes'] };
+  pbrt?: { settings: Converted['settings']; warnings: Warning[] };
   /** Original files, including external buffers/textures, for reloads from OPFS. */
   source?: ModelSource;
   /** Releases blob URLs created for local files. */
