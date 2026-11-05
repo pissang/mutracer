@@ -8,17 +8,28 @@ pub(crate) struct PipelineState {
     source: Arc<str>,
     default: Option<Arc<Pipelines>>,
     /// Display-resolution variants, indexed by compact storage.
-    display: [Option<Arc<Pipelines>>; 2],
-    display_shader: Option<wgpu::ShaderModule>,
+    display: [DisplayPipelines; 2],
+    display_shader: Arc<std::sync::OnceLock<std::result::Result<wgpu::ShaderModule, String>>>,
+}
+/// Display-resolution pipelines compile a second copy of the path tracer, which
+/// can take a second on a cold driver cache, so they build on a worker thread.
+enum DisplayPipelines {
+    Idle,
+    Compiling(std::sync::mpsc::Receiver<std::result::Result<Arc<Pipelines>, String>>),
+    Ready(Arc<Pipelines>),
+    Failed(String),
 }
 pub(crate) fn pipeline_cache(source: &str) -> PipelineCache {
     Arc::new(Mutex::new(PipelineState {
         source: source.into(),
         default: None,
-        display: [None, None],
-        display_shader: None,
+        display: [DisplayPipelines::Idle, DisplayPipelines::Idle],
+        display_shader: Default::default(),
     }))
 }
+/// Held by tests to keep display pipelines compiling.
+#[cfg(test)]
+pub(crate) static DISPLAY_COMPILE_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 pub(crate) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     trace: wgpu::ComputePipeline,
@@ -31,11 +42,12 @@ pub(crate) const COMPACT_MASK: u32 = 1 | 8 | 16;
 const COMPACT_BYTES: u64 = 24;
 static BORROW_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 fn create_pipelines(
-    query: &Query,
+    gpu: &GpuDevice,
+    layouts: &[wgpu::BindGroupLayout],
     module: &wgpu::ShaderModule,
     constants: &[(&str, f64)],
 ) -> Result<Pipelines> {
-    let device = &query.gpu.device;
+    let device = &gpu.device;
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     // Driver pipeline failures are internal errors, outside validation's
     // scope. Return them to the render without an uncaptured-error panic.
@@ -63,9 +75,9 @@ fn create_pipelines(
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("AOV layout"),
         bind_group_layouts: &[
-            Some(&query.layouts[0]),
-            Some(&query.layouts[1]),
-            Some(&query.layouts[2]),
+            Some(&layouts[0]),
+            Some(&layouts[1]),
+            Some(&layouts[2]),
             Some(&layout),
         ],
         ..Default::default()
@@ -80,7 +92,7 @@ fn create_pipelines(
                 constants,
                 ..Default::default()
             },
-            cache: query.gpu.pipeline_cache.as_ref(),
+            cache: gpu.pipeline_cache.as_ref(),
         })
     };
     let trace = pipeline("aovTrace");
@@ -168,48 +180,83 @@ impl Query {
     pub(crate) fn size(&self) -> [u32; 2] {
         self.size
     }
-    fn pipelines(&self, layout: Layout) -> Result<Arc<Pipelines>> {
+    /// The pipelines of a layout, or `None` while display pipelines compile on
+    /// a worker; the first call for a display layout starts that compilation.
+    pub(crate) fn pipelines(&self, layout: Layout) -> Result<Option<Arc<Pipelines>>> {
         let mut cached = self.pipelines.lock().unwrap_or_else(|e| e.into_inner());
         if !layout.display {
             if let Some(pipelines) = &cached.default {
-                return Ok(pipelines.clone());
+                return Ok(Some(pipelines.clone()));
             }
             let pipelines = Arc::new(create_pipelines(
-                self,
+                &self.gpu,
+                &self.layouts,
                 &self.shader,
                 &[("DEPTH_QUERY_MODE", 1.)],
             )?);
             cached.default = Some(pipelines.clone());
-            return Ok(pipelines);
+            return Ok(Some(pipelines));
         }
-        let index = usize::from(layout.compact);
-        if let Some(pipelines) = &cached.display[index] {
-            return Ok(pipelines.clone());
+        let (source, shader) = (cached.source.clone(), cached.display_shader.clone());
+        let slot = &mut cached.display[usize::from(layout.compact)];
+        if let DisplayPipelines::Compiling(receive) = slot {
+            *slot = match receive.try_recv() {
+                Ok(Ok(pipelines)) => DisplayPipelines::Ready(pipelines),
+                Ok(Err(error)) => DisplayPipelines::Failed(error),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(None),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    DisplayPipelines::Failed("Display AOV compilation stopped".into())
+                }
+            };
         }
-        if cached.display_shader.is_none() {
-            let source = display_source(&cached.source)?;
-            let device = &self.gpu.device;
-            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("MuTracer display AOVs"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            if let Some(error) = pollster::block_on(validation.pop()) {
-                return Err(error.to_string().into());
-            }
-            cached.display_shader = Some(module);
+        match slot {
+            DisplayPipelines::Ready(pipelines) => return Ok(Some(pipelines.clone())),
+            DisplayPipelines::Failed(error) => return Err(error.clone().into()),
+            _ => {}
         }
-        let pipelines = Arc::new(create_pipelines(
-            self,
-            cached.display_shader.as_ref().unwrap(),
-            &[
-                ("DEPTH_QUERY_MODE", 1.),
-                ("AOV_DISPLAY", 1.),
-                ("AOV_COMPACT", f64::from(u8::from(layout.compact))),
-            ],
-        )?);
-        cached.display[index] = Some(pipelines.clone());
-        Ok(pipelines)
+        let (send, receive) = std::sync::mpsc::channel();
+        let (gpu, layouts, compact) = (self.gpu.clone(), self.layouts.clone(), layout.compact);
+        std::thread::Builder::new()
+            .name("MuTracer display AOVs".into())
+            .spawn(move || {
+                #[cfg(test)]
+                drop(DISPLAY_COMPILE_GATE.read());
+                let result = shader
+                    .get_or_init(|| {
+                        let source = display_source(&source).map_err(|e| e.to_string())?;
+                        // Error scopes belong to this thread.
+                        let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+                        let module =
+                            gpu.device
+                                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                                    label: Some("MuTracer display AOVs"),
+                                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                                });
+                        match pollster::block_on(validation.pop()) {
+                            Some(error) => Err(error.to_string()),
+                            None => Ok(module),
+                        }
+                    })
+                    .clone()
+                    .and_then(|module| {
+                        create_pipelines(
+                            &gpu,
+                            &layouts,
+                            &module,
+                            &[
+                                ("DEPTH_QUERY_MODE", 1.),
+                                ("AOV_DISPLAY", 1.),
+                                ("AOV_COMPACT", f64::from(u8::from(compact))),
+                            ],
+                        )
+                        .map(Arc::new)
+                        .map_err(|e| e.to_string())
+                    });
+                let _ = send.send(result);
+            })
+            .map_err(|e| format!("Display AOV compilation thread: {e}"))?;
+        *slot = DisplayPipelines::Compiling(receive);
+        Ok(None)
     }
 }
 struct Borrowed {
@@ -259,7 +306,9 @@ impl Output {
                 "AOV accumulation exceeds the storage binding size limit",
             ));
         }
-        let pipelines = query.pipelines(layout)?;
+        let pipelines = query
+            .pipelines(layout)?
+            .ok_or("Display AOV pipelines are not ready")?;
         let previous = previous.filter(|p| p.layout == layout && !layout.compact);
         let center_bytes = if layout.compact { 32 } else { pixels * 32 };
         let buffer = |label, size| {

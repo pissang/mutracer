@@ -244,3 +244,73 @@ fn display_aovs_and_upscale_hardware() {
 fn upscale_downsamples_and_copies() {
     downsample_and_copy(Backend::Software);
 }
+
+/// While display AOV pipelines compile, sampling skips them and the upscale
+/// shows EASU alone; a finished render keeps refining until they are ready.
+fn display_aovs_compile_off_thread(backend: Backend) {
+    let _lock = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let engine = engine(backend, [48, 32]);
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 4,
+            bounces: 1,
+            size: RenderSize::Scale(0.5),
+            aovs: 1 | 8 | 16,
+            aov_resolution: AovResolution::Display,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let display = engine.display();
+    let gate = crate::aov::DISPLAY_COMPILE_GATE
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut status = RenderStatus::Preparing;
+    let started = std::time::Instant::now();
+    while render.samples() < 4 || status == RenderStatus::Preparing {
+        assert!(started.elapsed().as_secs() < 60, "beauty never finished");
+        status = render.refine().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(render.samples(), 4);
+    assert_eq!(status, RenderStatus::Converging, "waits for display AOVs");
+    assert_eq!(render.aov_samples_rendered(), 0);
+    assert!(render.get_aov_texture(PixelKind::Depth).unwrap().is_none());
+    let easu = display.add_upscale(EasuOptions::default()).unwrap();
+    let alone = display.read_rgba8(&render).unwrap();
+    drop(easu);
+    let _detail = display
+        .add_upscale(EasuOptions {
+            albedo_detail: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(display.read_rgba8(&render).unwrap(), alone);
+    drop(gate);
+    let started = std::time::Instant::now();
+    while render.refine().unwrap() != RenderStatus::Finished {
+        assert!(
+            started.elapsed().as_secs() < 60,
+            "display AOVs never compiled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(render.aov_samples_rendered(), DISPLAY_AOV_SAMPLE_CAP);
+    let depth = render.get_aov_texture(PixelKind::Depth).unwrap().unwrap();
+    assert_eq!([depth.width(), depth.height()], [48, 32]);
+    assert_eq!(display.read_rgba8(&render).unwrap().0, 48);
+    assert!(engine.last_error().is_none());
+}
+#[test]
+#[ignore = "requires real GPU"]
+fn display_aovs_compile_off_thread_software() {
+    display_aovs_compile_off_thread(Backend::Software);
+}
+#[test]
+#[ignore = "requires real hardware ray-query GPU"]
+fn display_aovs_compile_off_thread_hardware() {
+    display_aovs_compile_off_thread(Backend::Hardware);
+}

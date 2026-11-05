@@ -110,6 +110,13 @@ render accumulates, they start after the first beauty sample and add one sample
 per batch; the batch that reaches `max_samples` completes the rest. Beauty,
 denoising and denoiser guides keep the render size.
 
+Their pipelines, a second compilation of the path tracer, build on a worker
+thread when the render is published; this can take about a second on a cold
+driver shader cache. Until they are ready, AOV sampling waits and the upscale
+uses EASU alone; a render that finishes first keeps refining until they are, and
+`converge` waits for them. The pass's own pipelines also compile on a worker
+when it is added, and detail starts once they are ready.
+
 - EASU works on the composed, display-encoded image and preserves alpha. Alone,
   it cannot recover missing texture detail.
 - Detail compensation recovers the texture of supported surfaces, not

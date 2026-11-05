@@ -749,6 +749,10 @@ pub(super) struct RenderState {
     aov_camera: [u8; 128],
     /// Display size at the latest commit, for display-resolution AOVs.
     aov_display: [u32; 2],
+    /// Display AOV sampling waits for its pipelines to compile.
+    aov_pending: bool,
+    /// Input generation whose display AOV pipelines were requested.
+    aov_requested: Option<u64>,
     published: Option<TargetKey>,
     /// `SharedScene::generation` of the published target.
     generation: u64,
@@ -1132,7 +1136,10 @@ fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<
             state.engine_events.push(event);
         }
         match step? {
-            Step::Published => return Ok(true),
+            Step::Published => {
+                request_display_aovs(state.renders.get_mut(&id).unwrap());
+                return Ok(true);
+            }
             Step::Failed => return Ok(false),
             Step::Waiting if !blocking => return Ok(false),
             Step::Waiting => {
@@ -1496,10 +1503,28 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
     }
     Ok(events)
 }
+/// Starts compiling display AOV pipelines when a target is published, so they
+/// are usually ready by the first AOV sample. Compilation never blocks this thread.
+fn request_display_aovs(render: &mut RenderState) {
+    let mask = render.settings.aovs | render.denoise.custom_aovs;
+    if render.settings.aov_resolution != AovResolution::Display
+        || mask == 0
+        || render.aov_requested == Some(render.input_generation)
+    {
+        return;
+    }
+    render.aov_requested = Some(render.input_generation);
+    let layout = aov_layout(render, mask);
+    if let Ok(query) = context::aov_query(render.context) {
+        // Errors surface again when sampling needs the pipelines.
+        let _ = query.pipelines(layout);
+    }
+}
 fn update_aovs(render: &mut RenderState) -> Result<()> {
     let mask = render.settings.aovs | render.denoise.custom_aovs;
     if mask == 0 {
         render.aov = None;
+        render.aov_pending = false;
         return Ok(());
     }
     if render.samples == 0 {
@@ -1552,6 +1577,14 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
     if render.aov.as_ref().is_none_or(|a| {
         a.generation != render.input_generation || a.mask != mask || a.layout != layout
     }) {
+        // Until display pipelines compile, the upscale uses EASU alone.
+        render.aov_pending = query
+            .pipelines(layout)
+            .map_err(|e| error(Status::Error, e.to_string()))?
+            .is_none();
+        if render.aov_pending {
+            return Ok(());
+        }
         // Only the center pass reads identities and history; compact display
         // AOVs skip it and the metadata, whose primitive IDs walk every BVH leaf.
         let words = if layout.compact {
@@ -2207,6 +2240,8 @@ impl Render {
                 temporal: None,
                 aov_camera: [0; 128],
                 aov_display: [0; 2],
+                aov_pending: false,
+                aov_requested: None,
                 published: None,
                 generation: 0,
                 input_generation: 0,
@@ -2847,6 +2882,26 @@ impl Render {
             }
             Ok(())
         });
+        if result.is_ok() {
+            // Converge is a blocking call: wait here for display AOV pipelines
+            // that compile on a worker, then complete the AOVs.
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while self.with(|state, id| {
+                let render = state.renders.get_mut(&id).unwrap();
+                if render.aov_pending {
+                    update_aovs(render)?;
+                }
+                Ok(render.aov_pending)
+            })? {
+                if Instant::now() > deadline {
+                    return Err(error(
+                        Status::Timeout,
+                        "Display AOV pipelines did not compile",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         result
     }
     fn run_converge(
@@ -3465,7 +3520,16 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
     if render.denoise.worker.is_none() {
         render.adapt_resolution();
     }
-    let converged = render.samples >= render.settings.max_samples;
+    let mut converged = render.samples >= render.settings.max_samples;
+    if converged && render.aov_pending && render.denoise.worker.is_none() {
+        // Beauty finished before the display AOV pipelines: keep ticking until
+        // they compile, then complete the AOVs and present with detail.
+        update_aovs(render)?;
+        if !render.aov_pending {
+            render.output.invalidate();
+        }
+        converged = !render.aov_pending;
+    }
     render.status = match (render.denoise.worker.is_some(), converged) {
         (true, true) => RenderStatus::Denoising,
         (false, true) => RenderStatus::Finished,
