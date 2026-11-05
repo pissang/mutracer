@@ -21,12 +21,7 @@ export class AovPrimitiveCache {
       if (cached && cached.geometry === geometry && cached.indices === indices &&
           cached.topology === geometry.topologyVersion && cached.triangleIds === triangleIds) return cached.ids;
       const bvh = new Uint32Array(buffer), ids = new Uint32Array(bvh.length / 4).fill(AOV_BACKGROUND_ID);
-      const triangles = new Map<string, number>();
-      for (let t = 0; t < indices.length / 3; t++) triangles.set(`${indices[t*3]},${indices[t*3+1]},${indices[t*3+2]}`, t);
-      for (let record = 0; record < ids.length; record++) {
-        const triangle = triangles.get(`${bvh[record*4]},${bvh[record*4+1]},${bvh[record*4+2]}`);
-        if (triangle !== undefined) ids[record] = triangle;
-      }
+      matchSourceTriangles(bvh, indices, ids);
       // Builder metadata distinguishes displaced/duplicate index triples.
       if (triangleIds) for (let i = 0; i < triangleIds.length; i += 2) ids[triangleIds[i]] = triangleIds[i+1];
       this.blases.set(buffer, {geometry, indices, topology: geometry.topologyVersion, triangleIds, ids});
@@ -41,5 +36,34 @@ export class AovPrimitiveCache {
       this.combined = combined; this.parts = parts; this.tlasRecords = tlasRecords;
     }
     return this.combined;
+  }
+}
+
+/**
+ * Writes the source triangle whose index triple equals each record's first
+ * three words; the last duplicate wins. Triangles are bucketed by first index
+ * in typed arrays, so a lookup compares only the triangles sharing that vertex.
+ */
+function matchSourceTriangles(bvh: Uint32Array, indices: Uint16Array | Uint32Array, ids: Uint32Array) {
+  const triangles = indices.length / 3;
+  let vertices = 0;
+  for (let i = 0; i < indices.length; i += 3) if (indices[i] >= vertices) vertices = indices[i] + 1;
+  const start = new Uint32Array(vertices + 1);
+  for (let t = 0; t < triangles; t++) start[indices[t*3] + 1]++;
+  for (let v = 0; v < vertices; v++) start[v + 1] += start[v];
+  // Each bucket stores (second index, third index, triangle) contiguously, so
+  // a lookup touches one random cache line instead of three.
+  const entries = new Uint32Array(triangles * 3), next = start.slice(0, vertices);
+  for (let t = 0; t < triangles; t++) {
+    const e = next[indices[t*3]]++ * 3;
+    entries[e] = indices[t*3 + 1]; entries[e + 1] = indices[t*3 + 2]; entries[e + 2] = t;
+  }
+  for (let record = 0; record < ids.length; record++) {
+    const a = bvh[record*4];
+    if (a >= vertices) continue;
+    const b = bvh[record*4 + 1], c = bvh[record*4 + 2];
+    for (let e = start[a + 1] * 3; (e -= 3) >= start[a] * 3;) {
+      if (entries[e] === b && entries[e + 1] === c) { ids[record] = entries[e + 2]; break; }
+    }
   }
 }
