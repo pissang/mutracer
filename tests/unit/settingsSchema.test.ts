@@ -6,7 +6,7 @@ import { bvhConfig, engineSchema, workerCount } from '../../src/settings/engine'
 import { renderFixture } from '../helpers/renderPipeline';
 
 const renderChanges: Record<string, unknown> = {
-  aovs: ['depth'], aovSamples: 8,
+  aovs: ['depth'], aovSamples: 8, aovResolution: 'display',
   bounces: 5, clamping: 2, bevel: false, bevelSamples: 12, dispersionWavelengths: 1,
   caustics: {photonMapping: true, lightTracing: {photonsPerSample: 32}},
   directLightCandidates: 8, alphaBlendStrategy: 'deterministic-source-over', transmissiveOutputAlphaMin: .3,

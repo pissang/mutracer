@@ -18,7 +18,7 @@ export function loopImageState(render: Render, display: Display): string {
   return JSON.stringify([
     render.samples, render.width, render.height, render.maxSamples, imageFields.map(key => render[key]),
     render.resolutionScale, render.adaptiveResolution, render.denoiser, render.denoising,
-    render.aovs, render.aovSamples,
+    render.aovs, render.aovSamples, render.aovResolution,
     display.canvas.width, display.canvas.height, display.toneMapping, display.toneMappingExposure,
     display.contrast, display.saturation, display.temperature, display.tint, display.vignette,
     display.bloomIntensity, display.bloomThreshold, display.bloomRadius, display.hdrOutputEnabled,

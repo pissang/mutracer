@@ -791,6 +791,8 @@ output.color = color;
   }
 
   function finishPresentation(encoder: GPUCommandEncoder, displayTexture: GPUTexture) {
+    const presentationWidth = displayAovKind(output) ? displayTexture.width : renderWidth;
+    const presentationHeight = displayAovKind(output) ? displayTexture.height : renderHeight;
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
       : undefined;
@@ -798,8 +800,8 @@ output.color = color;
       activeHDRPeakMeter?.encode(
         encoder,
         displayTexture,
-        renderWidth,
-        renderHeight
+        presentationWidth,
+        presentationHeight
       ) ?? false;
 
     if (output === 'normal' || output === 'albedo') {
@@ -810,14 +812,14 @@ output.color = color;
       displayTexture = getFrameInput('shadowCatcher');
     }
 
-    if (displayTexture.width < renderWidth || displayTexture.height < renderHeight) {
-      readbackPass.setSize(renderWidth, renderHeight);
+    if (displayTexture.width < presentationWidth || displayTexture.height < presentationHeight) {
+      readbackPass.setSize(presentationWidth, presentationHeight);
       readbackPass.createPass(encoder, { inputTex: displayTexture });
       displayTexture = readbackPass.getOutput('color');
     }
     // Keep the completed denoise visible until its replacement is ready.
     if (!(preserveDenoisedOutput && output === 'final' && !denoiseValid && presentationDenoised)) {
-      const width = renderWidth, height = renderHeight;
+      const width = presentationWidth, height = presentationHeight;
       if (!presentationTexture || presentationTexture.width !== width || presentationTexture.height !== height || presentationTexture.format !== displayTexture.format) {
         const previous = presentationTexture;
         presentationTexture = device.createTexture({
@@ -842,6 +844,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     drawPostProcess(device.createCommandEncoder(), false, true);
   }
 
+  const aovResolution = () => execution?.aovResolution === 'display' ? {width: canvas.width, height: canvas.height} : undefined;
+  const compactAov = () => !!aovResolution() && !!execution?.aovs?.every(kind => ['depth','diffuseAlbedo','specularAlbedo'].includes(kind));
   function trace(camera: Camera, maxSamples: number) {
     applyTraceQuality();
     // A call to draw means accumulation has been invalidated. Cancel OIDN
@@ -860,7 +864,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // Waiting for a shader is not an input change: this render's samples and
     // complete image stay valid, and only Render's restart discards them.
     if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return true;
-    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs, compactAov(), !!aovResolution())) return true;
 
     const resetAccumulation = isFirstFrame;
     if (resetAccumulation) aov.reset();
@@ -985,7 +989,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
-      rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+      rayTracePass.renderAovs(aov, camera, sampleCount, Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution());
     }
     if (sampleCount !== frameSampleCount && realtime && realtimeDeferPostProcess && sampleCount < renderSampleTarget) {
       postProcessPending = true;
@@ -1564,7 +1568,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
       if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
       const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
-      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples) aov.samples = 0;
+      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples || execution?.aovResolution !== settings.aovResolution) aov.reset();
       execution = { ...settings, aovs: [...(settings.aovs ?? [])] };
       // Presentation may still name the previous preview's AOV. Drop that
       // selection before tracing with a smaller set; Display validates and
@@ -1625,6 +1629,7 @@ width: renderWidth, height: renderHeight,
       sampleCount = 0;
     },
 
+    getAovTexture(kind) {return execution?.aovs?.includes(kind) ? aov.texture(kind) : undefined;},
     getOutputTexture(kind) {
       flushPostProcess();
       if (kind === 'hdr') return resolvedSamples > 0 ? getFrameInput('color') : undefined;
@@ -1675,7 +1680,7 @@ width: renderWidth, height: renderHeight,
       const pipelineError = rayTracePass.getPipelineError();
       if (pipelineError) throw pipelineError;
       if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
-      return rayTracePass.renderAovs(aov, camera, samples, execution.aovSamples ?? 16, execution.aovs);
+      return rayTracePass.renderAovs(aov, camera, samples, Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution());
     },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
@@ -1688,7 +1693,7 @@ width: renderWidth, height: renderHeight,
         const pipelineError = rayTracePass.getPipelineError();
         if (pipelineError) throw pipelineError;
         if (!rayTracePass.isCompilingShader() && rayTracePass.isPipelineReady() &&
-          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) break;
+          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution())) break;
         // Display frames stop on a hidden page, but compilation still completes.
         await new Promise<void>(resolve => setTimeout(resolve, 16));
       }

@@ -512,3 +512,11 @@ it('makes completed denoised pixels readable inside the finished status listener
   expect(loop.tick()).toBe('denoising'); await settle(); expect(loop.tick()).toBe('finished');
   expect((await pixels)!.data[1]).toBe(1); expect(targets[0].readOutput).toHaveBeenCalledWith('denoised'); loop.dispose(); engine.dispose();
 });
+
+it('wakes a finished render when AOV resolution changes without restarting beauty',()=>{
+ const {engine,targets}=renderFixture();const loop=new RenderLoop(engine,{preview:false,final:{maxSamples:1,aovs:['depth']}});
+ expect(loop.tick()).toBe('finished');
+ loop.final.aovResolution='display';loop.tick();
+ expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({aovResolution:'display'}));
+ expect(loop.final.samples).toBe(1);loop.dispose();engine.dispose();
+});

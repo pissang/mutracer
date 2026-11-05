@@ -108,6 +108,7 @@ export interface CausticSettings {
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
+  /** AOV dimensions. Default render; display uses the canvas size and at most 16 samples on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. */ aovResolution?: 'render' | 'display';
   /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
@@ -230,6 +231,8 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
   /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
+  /** AOV dimensions. Default render; display uses canvas dimensions and at most 16 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. */ aovResolution: 'render' | 'display' = 'render';
+  private _warnedAovResolution = false;
   /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
@@ -414,7 +417,7 @@ export default class Render {
     const target = this._synchronize();
     if (!target) return this._status = 'preparing';
     const before = target.getAovSamples?.() ?? 0;
-    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples);
+    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples, this.aovResolution === 'display' && this._engine.backend === 'webgpu' ? 16 : Infinity);
     if (!target.refineAovs?.(this._targetCamera(this._engine._inputs.value!), Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
     if ((target.getAovSamples?.() ?? 0) > before) {
       this._frameTime = Math.max(.001, performance.now() - started);
@@ -425,6 +428,9 @@ export default class Render {
   }
   private _validate() {
     aovMask(this.aovs);
+    if (this.aovResolution !== 'render' && this.aovResolution !== 'display') throw new Error('Unknown aovResolution.');
+    if (this.aovResolution === 'display' && this._fixed) throw new Error('aovResolution display requires a scale-based render.');
+    if (this.aovResolution === 'display' && this._denoiserOptions?.type === 'custom' && this._denoiserOptions.aovs?.length) throw new Error('Custom denoiser AOV inputs require aovResolution render.');
     if (!Number.isInteger(this.aovSamples) || this.aovSamples < 1) throw new Error('aovSamples must be a positive integer.');
     if (!Number.isFinite(this.maxSamples) || this.maxSamples < 1) throw new Error('maxSamples must be positive.');
     if (this.dispersionWavelengths !== 1 && this.dispersionWavelengths !== 3) throw new Error('dispersionWavelengths must be 1 or 3.');
@@ -472,6 +478,10 @@ export default class Render {
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
     const settings=collectTraceSettings(this,sampleCap);
+    if (this.aovResolution === 'display' && this._engine.backend === 'webgl') {
+      settings.aovResolution = 'render';
+      if (!this._warnedAovResolution) {this._warnedAovResolution = true; console.warn('Display-resolution AOVs require WebGPU; using render resolution.');}
+    }
     settings.batchSamples = this._refineOptions?.batchSamples ?? settings.batchSamples;
     if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
     return settings;
@@ -762,7 +772,7 @@ export default class Render {
       }
     });
   }
-  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. Beauty/guide reads are empty until a beauty sample completes. AOV reads require explicit aovs enablement. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
+  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. Beauty/guide reads are empty until a beauty sample completes. AOV reads require explicit aovs enablement and use the AOV dimensions. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
   readPixels(kind: 'id'): Promise<{width: number; height: number; data: Uint32Array}>;
   readPixels(kind?: 'hdr' | 'denoised' | 'albedo' | 'normal' | Exclude<AovKind, 'id'>): Promise<{width: number; height: number; data: Float32Array}>;
   readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
@@ -782,6 +792,11 @@ export default class Render {
       kind = 'hdr';
     }
     target.activate(); return this._cropOutput(await target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal'));
+  }
+  /** Borrows a raw linear primary-surface texture at the AOV resolution, top row first; default undefined until an enabled AOV has samples. WebGPU only. Diffuse/specular use rgba16float with validity coverage in alpha; depth uses rg32float (depth, hit coverage). Borrowing follows getOutputTexture's lifetime rules; restart invalidates it. */
+  getAovTexture(kind: 'diffuseAlbedo' | 'specularAlbedo' | 'depth'): GPUTexture | undefined {
+    if (this._engine.backend !== 'webgpu' || !this._current || !this.aovs.includes(kind) || !this.aovSamplesRendered) return;
+    return this._target?.getAovTexture?.(kind);
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes; its dimensions may differ from this render. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {

@@ -127,6 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
+| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 16 samples; requires a scale-based render. WebGL falls back with one warning |
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
@@ -350,9 +351,17 @@ const depth = await render.readPixels('depth'); // Float32Array, RGBA
 const ids = await render.readPixels('id');      // Uint32Array, RGBA
 ```
 
-You can change `render.aovs` or `render.aovSamples` after sampling. Continue
+You can change `render.aovs`, `render.aovSamples` or `render.aovResolution` after sampling. Continue
 calling `refine()` to regenerate AOVs for the current view; beauty samples and
-completed denoising are preserved. AOV accumulation restarts when either changes.
+completed denoising are preserved. AOV accumulation restarts when any of them changes.
+
+To keep beauty at reduced resolution while reading or displaying full-resolution
+surface outputs, set `aovResolution: 'display'` on a scale-based render. The
+default is `'render'`. AOV readbacks and visualization use their own dimensions;
+beauty and denoiser guides keep the render dimensions. Display mode stops at
+`min(samples, aovSamples, 16)`, follows canvas resizes, and rejects fixed-size
+renders. WebGL falls back to render dimensions and warns once per render.
+Custom denoiser AOV inputs require `'render'` resolution.
 
 | Kind | RGBA contents |
 | --- | --- |
@@ -392,14 +401,18 @@ Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
 dispersion, partial alpha and nonstandard materials are unsupported by this
 reflectance estimate. Such hits contribute to `roughness.b` and have zero
-reflectance validity. Reflectance uses expensive BSDF quadrature; request it
-only when needed.
+reflectance validity. Reflectance tracing can be expensive; request it only when needed.
 
 Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
-are no AOV allocations or passes. Enabling any kind costs about 128 GPU bytes
-per pixel on WebGPU or 192 on WebGL, plus scene identity/history data; each
-custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
+are no AOV allocations or passes. Enabling any kind normally costs about 128 GPU bytes
+per AOV pixel on WebGPU or 192 on WebGL, plus scene identity/history data.
+WebGPU display mode requesting only depth and/or diffuse/specular albedo costs
+24 bytes per pixel plus small scene metadata; borrowing all three GPU textures
+adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its reflectance
+accumulation has half precision and excludes transmissive surfaces in addition
+to the unsupported materials above. Other AOV selections use the full allocation;
+each custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
 reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
 WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
 sample runs independently of tile/adaptive sampling and may exceed the render's
@@ -598,12 +611,14 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## GPU output and display passes
 
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
+`render.getAovTexture('diffuseAlbedo' | 'specularAlbedo' | 'depth')` borrows raw
+linear AOV textures at their own resolution after sampling; WebGL returns undefined.
 `display.addPostProcess(pass, options?)` returns unregister and runs on every present/export.
 Both are WebGPU-only. `options.outputSize` defaults to preserving input dimensions;
 the final display texture and export can differ from the render size. Fixed renders
 are cropped to their requested rectangle before export passes. HDR textures can
 include extra pixels around a fixed render's requested image. See
-[formats, lifecycle and overlay example](./post-processing.md).
+[formats, lifecycle, EASU upscale and overlay examples](./post-processing.md).
 
 Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.
 
