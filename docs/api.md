@@ -127,7 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
-| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 16 samples; requires a scale-based render. WebGL falls back with one warning |
+| `aovResolution` | `'render'` | `'display'` traces AOVs at canvas size on WebGPU, capped at 4 samples; requires a scale-based render. WebGL falls back with one warning |
 | `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
@@ -359,7 +359,7 @@ To keep beauty at reduced resolution while reading or displaying full-resolution
 surface outputs, set `aovResolution: 'display'` on a scale-based render. The
 default is `'render'`. AOV readbacks and visualization use their own dimensions;
 beauty and denoiser guides keep the render dimensions. Both modes stop at
-`min(samples, aovSamples)`; display mode also caps at 16, follows canvas resizes,
+`min(samples, aovSamples)`; display mode also caps at 4, follows canvas resizes,
 and rejects fixed-size renders. WebGL falls back to render dimensions and warns
 once per render. In display mode `diffuseAlbedo` and `specularAlbedo` are
 texture albedo estimates (base and specular color, metalness, coat tint and

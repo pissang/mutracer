@@ -3,7 +3,7 @@ import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
 import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
-import {aovMask} from './aov.js';
+import {aovMask, DISPLAY_AOV_SAMPLE_CAP} from './aov.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -989,7 +989,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
-      rayTracePass.renderAovs(aov, camera, sampleCount, Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution());
+      rayTracePass.renderAovs(aov, camera, sampleCount, Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution());
     }
     if (sampleCount !== frameSampleCount && realtime && realtimeDeferPostProcess && sampleCount < renderSampleTarget) {
       postProcessPending = true;
@@ -1680,7 +1680,7 @@ width: renderWidth, height: renderHeight,
       const pipelineError = rayTracePass.getPipelineError();
       if (pipelineError) throw pipelineError;
       if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
-      return rayTracePass.renderAovs(aov, camera, samples, Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution());
+      return rayTracePass.renderAovs(aov, camera, samples, Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution());
     },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
@@ -1693,7 +1693,7 @@ width: renderWidth, height: renderHeight,
         const pipelineError = rayTracePass.getPipelineError();
         if (pipelineError) throw pipelineError;
         if (!rayTracePass.isCompilingShader() && rayTracePass.isPipelineReady() &&
-          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), Math.min(execution.aovSamples ?? 16, aovResolution() ? 16 : Infinity), execution.aovs, aovResolution())) break;
+          rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution())) break;
         // Display frames stop on a hidden page, but compilation still completes.
         await new Promise<void>(resolve => setTimeout(resolve, 16));
       }

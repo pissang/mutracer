@@ -1,4 +1,4 @@
-import type {AovKind} from './renderer/aov.js';
+import {DISPLAY_AOV_SAMPLE_CAP, type AovKind} from './renderer/aov.js';
 import {aovMask} from './renderer/aov.js';
 import {displayAovKind} from './renderer/aovDisplay.js';
 import type {DisplayChannel} from './renderer/RenderingPipeline.js';
@@ -108,7 +108,7 @@ export interface CausticSettings {
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
-  /** AOV dimensions. Default render; display uses the canvas size and at most 16 samples on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. */ aovResolution?: 'render' | 'display';
+  /** AOV dimensions. Default render; display uses the canvas size and at most 4 samples on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. */ aovResolution?: 'render' | 'display';
   /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
@@ -231,7 +231,7 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
   /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
-  /** AOV dimensions. Default render; display uses canvas dimensions and at most 16 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. */ aovResolution: 'render' | 'display' = 'render';
+  /** AOV dimensions. Default render; display uses canvas dimensions and at most 4 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. */ aovResolution: 'render' | 'display' = 'render';
   private _warnedAovResolution = false;
   /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
@@ -417,7 +417,7 @@ export default class Render {
     const target = this._synchronize();
     if (!target) return this._status = 'preparing';
     const before = target.getAovSamples?.() ?? 0;
-    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples, this.aovResolution === 'display' && this._engine.backend === 'webgpu' ? 16 : Infinity);
+    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples, this.aovResolution === 'display' && this._engine.backend === 'webgpu' ? DISPLAY_AOV_SAMPLE_CAP : Infinity);
     if (!target.refineAovs?.(this._targetCamera(this._engine._inputs.value!), Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
     if ((target.getAovSamples?.() ?? 0) > before) {
       this._frameTime = Math.max(.001, performance.now() - started);
