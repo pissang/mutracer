@@ -18,6 +18,13 @@ static void log_message(void *user,const uint8_t *message,size_t length){(void)u
 static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1000.+t.tv_nsec/1e6;}
 static void *alloc(size_t n,size_t s){void *p=calloc(n,s);if(!p){fprintf(stderr,"allocation failed\n");exit(1);}return p;}
 static uint32_t number(const char *s,uint32_t min,uint32_t max){char *end;unsigned long n=strtoul(s,&end,10);if(!*s||*end||n<min||n>max){fprintf(stderr,"invalid argument: %s (%u..%u)\n",s,min,max);exit(1);}return (uint32_t)n;}
+/* A comma-separated filter keeps a group of edits in one engine/process. */
+static int selected(const char *filter,const char *name){
+  if(!filter)return 1;
+  size_t length=strlen(name);
+  for(const char *at=filter;*at;){const char *end=strchr(at,',');size_t n=end?(size_t)(end-at):strlen(at);if(n==length&&!memcmp(at,name,n))return 1;if(!end)break;at=end+1;}
+  return 0;
+}
 typedef struct {
   mt_scene scene;mt_engine engine;mt_render render;
   mt_scene_geometry_id geometry;mt_scene_material_id material;
@@ -38,10 +45,12 @@ static void event(const mt_engine_event *e,void *user){
 static mt_engine_diagnostics_info diagnostics(Bench *b){mt_engine_diagnostics_info d={.struct_size=sizeof d};CHECK(mt_engine_diagnostics(b->engine,&d,error,sizeof error));return d;}
 static void commit(Bench *b,const char *name,int repeat,uint32_t expected){
   uint32_t predicted,changed,status=0;double start=now();
-  CHECK(mt_scene_pending_commit_kind(b->scene,&predicted,error,sizeof error));double prediction_ms=now()-start;
+  int camera_only=!strcmp(name,"engine_camera");
+  if(getenv("MUTRACER_NATIVE_PROFILE"))fprintf(stderr,"{\"editCostProfile\":{\"case\":\"%s\",\"repeat\":%d}}\n",name,repeat);
+  if(camera_only){predicted=MT_COMMIT_NONE;expected=MT_COMMIT_NONE;}else CHECK(mt_scene_pending_commit_kind(b->scene,&predicted,error,sizeof error));double prediction_ms=now()-start;
   mt_engine_diagnostics_info before=diagnostics(b);
   b->compile_count=0;b->progress_seen=0;b->preparation_ms=0;
-  start=now();CHECK(mt_engine_set_scene_object(b->engine,b->scene,error,sizeof error));double set_ms=now()-start;
+  start=now();if(camera_only){CHECK(mt_engine_set_camera(b->engine,&b->camera,error,sizeof error));}else{CHECK(mt_engine_set_scene_object(b->engine,b->scene,error,sizeof error));}double set_ms=now()-start;
   start=now();CHECK(mt_engine_update(b->engine,&changed,error,sizeof error));double update_ms=now()-start,returned=now();
   if(!changed){fprintf(stderr,"no change in %s repeat %d\n",name,repeat);exit(1);}
   mt_render_snapshot r={.struct_size=sizeof r};mt_engine_diagnostics_info after=diagnostics(b);
@@ -52,11 +61,11 @@ static void commit(Bench *b,const char *name,int repeat,uint32_t expected){
     preparing|=after.preparing;compiling|=after.compiling;
     if(!after.preparing&&!after.compiling&&!ready){ready=1;ready_ms=now()-returned;}
     if(r.status==MT_RENDER_ERROR){fprintf(stderr,"render error: %s\n",r.message);exit(1);}
-    if(after.scene_revision>before.scene_revision&&r.samples>=1&&!after.preparing&&!after.compiling)break;
+    if((camera_only||after.scene_revision>before.scene_revision)&&r.samples>=1&&!after.preparing&&!after.compiling)break;
     if(now()-returned>300000){fprintf(stderr,"sample timeout: %s\n",name);exit(1);}mt_host_pause();
   }
   if(repeat>=0){
-    printf("{\"case\":\"%s\",\"repeat\":%d,\"predicted\":%u,\"actual\":%u,\"documented\":%u,\"doc_mismatch\":%s,\"prediction_ms\":%.6f,\"set_ms\":%.6f,\"update_ms\":%.6f,\"first_sample_ms\":%.6f,\"ready_ms\":%.6f,\"preparation_event_ms\":%.6f,\"preparing_seen\":%u,\"compiling_seen\":%u,\"revision\":%" PRIu64 ",\"compilations_started\":%" PRIu64 ",\"compilations_completed\":%" PRIu64 ",\"cache_hits\":%" PRIu64 ",\"cached_pipelines\":%u,\"backend\":%u,\"polls\":%u,\"compile_event_ms\":[",name,repeat,predicted,r.last_commit,expected,(expected!=r.last_commit&&after.compilations_started==before.compilations_started)?"true":"false",prediction_ms,set_ms,update_ms,now()-returned,ready_ms,b->preparation_ms,preparing,compiling,after.scene_revision,after.compilations_started-before.compilations_started,after.compilations_completed-before.compilations_completed,after.pipeline_cache_hits-before.pipeline_cache_hits,after.cached_pipelines,r.backend,polls);
+    printf("{\"case\":\"%s\",\"repeat\":%d,\"predicted\":%u,\"actual\":%u,\"documented\":%u,\"doc_mismatch\":%s,\"prediction_ms\":%.6f,\"set_ms\":%.6f,\"update_ms\":%.6f,\"first_sample_ms\":%.6f,\"ready_ms\":%.6f,\"preparation_event_ms\":%.6f,\"preparing_seen\":%u,\"compiling_seen\":%u,\"revision\":%" PRIu64 ",\"compilations_started\":%" PRIu64 ",\"compilations_completed\":%" PRIu64 ",\"cache_hits\":%" PRIu64 ",\"cached_pipelines\":%u,\"backend\":%u,\"polls\":%u,\"compile_event_ms\":[",name,repeat,predicted,camera_only?MT_COMMIT_NONE:r.last_commit,expected,(!camera_only&&expected!=r.last_commit&&after.compilations_started==before.compilations_started)?"true":"false",prediction_ms,set_ms,update_ms,now()-returned,ready_ms,b->preparation_ms,preparing,compiling,after.scene_revision,after.compilations_started-before.compilations_started,after.compilations_completed-before.compilations_completed,after.pipeline_cache_hits-before.pipeline_cache_hits,after.cached_pipelines,r.backend,polls);
     for(unsigned i=0;i<b->compile_count;i++)printf("%s%.6f",i?",":"",b->compile_ms[i]);puts("]}");fflush(stdout);
   }
 }
@@ -98,18 +107,17 @@ static void build(Bench *b,uint32_t backend,uint32_t meshes,uint32_t materials,u
   printf("{\"metadata\":true,\"adapter\":\"%s\",\"requested_backend\":%u,\"hardware_ray_query\":%u,\"meshes\":%u,\"materials\":%u,\"lights\":%u,\"grid\":%u,\"triangles\":%" PRIu64 ",\"instances\":%u,\"width\":%u,\"height\":%u,\"abi\":%u}\n",info.adapter_name,backend,info.hardware_ray_query,meshes,materials,lights,grid,(uint64_t)meshes*grid*grid*2,instances,width,height,mt_abi_version());free(m);
 }
 typedef struct {const char *name;uint32_t property;float original[3],value[3];uint32_t expected;} Scalar;
-#define F(name,p,old,v) {name,p,{old,0,0},{v,0,0},MT_COMMIT_FULL}
-#define I(name,p,old,v) {name,p,{old,0,0},{v,0,0},MT_COMMIT_INCREMENTAL}
+#define P(name,p,old,v) {name,p,{old,0,0},{v,0,0},MT_COMMIT_INCREMENTAL}
 static const Scalar scalars[]={
- {"base_color",2,{.8f,.8f,.8f},{.4f,.5f,.6f},2},I("roughness",7,.3f,.6f),I("metalness",4,0,.3f),I("transmission",10,0,.2f),I("ior",8,1.5f,1.6f),
- {"emission_color",34,{1,1,1},{.4f,.5f,.6f},1},F("emission_strength",35,0,.2f),F("coat",25,0,.3f),F("opacity",36,1,.8f),
- F("base_weight",1,1,.9f),F("diffuse_roughness",3,0,.2f),F("specular_weight",5,1,.7f),{"specular_color",6,{1,1,1},{.7f,.8f,.9f},1},F("anisotropy",9,0,.2f),
- {"transmission_color",11,{1,1,1},{.8f,.9f,.7f},1},F("transmission_depth",12,0,.2f),{"transmission_scatter",13,{0,0,0},{.1f,.2f,.3f},1},F("scatter_anisotropy",14,0,.2f),F("dispersion_scale",15,0,.2f),F("dispersion_abbe",16,20,30),
- F("subsurface",17,0,.2f),{"subsurface_color",18,{.8f,.8f,.8f},{.4f,.5f,.6f},1},F("subsurface_radius",19,1,.8f),{"radius_scale",20,{1,.5f,.25f},{.8f,.4f,.2f},1},F("subsurface_anisotropy",21,0,.2f),
- F("fuzz",22,0,.2f),{"fuzz_color",23,{1,1,1},{.4f,.5f,.6f},1},F("fuzz_roughness",24,.5f,.7f),{"coat_color",26,{1,1,1},{.4f,.5f,.6f},1},F("coat_roughness",27,0,.2f),F("coat_anisotropy",28,0,.2f),F("coat_ior",29,1.6f,1.7f),F("coat_darkening",30,0,.2f),
- F("thin_film",31,0,.2f),F("film_thickness",32,.5f,.6f),F("film_ior",33,1.4f,1.5f),F("anisotropy_rotation",71,0,.2f),F("coat_rotation",72,0,.2f)
+ {"base_color",2,{.8f,.8f,.8f},{.4f,.5f,.6f},2},P("roughness",7,.3f,.6f),P("metalness",4,0,.3f),P("transmission",10,0,.2f),P("ior",8,1.5f,1.6f),
+ {"emission_color",34,{1,1,1},{.4f,.5f,.6f},2},P("emission_strength",35,0,.2f),P("coat",25,0,.3f),P("opacity",36,1,.8f),
+ P("base_weight",1,1,.9f),P("diffuse_roughness",3,0,.2f),P("specular_weight",5,1,.7f),{"specular_color",6,{1,1,1},{.7f,.8f,.9f},2},P("anisotropy",9,0,.2f),
+ {"transmission_color",11,{1,1,1},{.8f,.9f,.7f},2},P("transmission_depth",12,0,.2f),{"transmission_scatter",13,{0,0,0},{.1f,.2f,.3f},2},P("scatter_anisotropy",14,0,.2f),{"dispersion_scale",15,{0,0,0},{.2f,0,0},MT_COMMIT_FULL},P("dispersion_abbe",16,20,30),
+ {"subsurface",17,{0,0,0},{.2f,0,0},MT_COMMIT_FULL},{"subsurface_color",18,{.8f,.8f,.8f},{.4f,.5f,.6f},2},P("subsurface_radius",19,1,.8f),{"radius_scale",20,{1,.5f,.25f},{.8f,.4f,.2f},2},P("subsurface_anisotropy",21,0,.2f),
+ P("fuzz",22,0,.2f),{"fuzz_color",23,{1,1,1},{.4f,.5f,.6f},2},P("fuzz_roughness",24,.5f,.7f),{"coat_color",26,{1,1,1},{.4f,.5f,.6f},2},P("coat_roughness",27,0,.2f),P("coat_anisotropy",28,0,.2f),P("coat_ior",29,1.6f,1.7f),P("coat_darkening",30,0,.2f),
+ P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
-static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch"};
+static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera"};
 static void edit(Bench *b,unsigned c,int on){
   switch(c){
   case 0:b->camera.world_matrix[12]+=on?.01f:-.01f;CHECK(mt_scene_set_default_camera(b->scene,&b->camera,error,sizeof error));break;
@@ -129,6 +137,7 @@ static void edit(Bench *b,unsigned c,int on){
   case 16:b->ld.intensity=on?.2f:.1f;CHECK(mt_scene_set_light(b->scene,b->light,&b->ld,error,sizeof error));break;
   case 17:case 18:if(c==17)b->env_settings.intensity=on?.8f:1;else b->env_settings.rotation=on?.1f:0;CHECK(mt_scene_set_environment_settings(b->scene,&b->env_settings,error,sizeof error));break;
   case 19:case 20:b->environment.environment=(on==(c==19))?b->textures[2]:0;CHECK(mt_scene_set_environment(b->scene,&b->environment,error,sizeof error));break;
+  case 22:b->camera.world_matrix[12]+=on?.01f:-.01f;break;
   case 21:edit(b,0,on);edit(b,1,on);material(b,MT_MAT_SPECULAR_ROUGHNESS,on?.6f:.3f,0,0);edit(b,16,on);edit(b,17,on);break;
   }
 }
@@ -146,18 +155,23 @@ int main(int argc,char **argv){
     material(&b,MT_MAT_COAT_WEIGHT,0,0,0);material(&b,MT_MAT_SUBSURFACE_WEIGHT,0,0,0);commit(&b,"variant_return",(int)r,1);
   }
   for(unsigned c=0;c<sizeof scalars/sizeof scalars[0];c++){
-    const Scalar *s=&scalars[c];if(filter&&strcmp(filter,s->name))continue;
+    const Scalar *s=&scalars[c];if(!selected(filter,s->name))continue;
     for(uint32_t r=0;r<repeats+1;r++){material(&b,s->property,s->value[0],s->value[1],s->value[2]);commit(&b,s->name,(int)r,s->expected);material(&b,s->property,s->original[0],s->original[1],s->original[2]);commit(&b,"reset",-1,s->expected);}
   }
   for(unsigned c=0;c<sizeof edits/sizeof edits[0];c++){
-    if((filter&&strcmp(filter,edits[c]))||(c==2&&!instances))continue;
+    if(!selected(filter,edits[c])||(c==2&&!instances))continue;
     /* The inverse state of removal/replacement/add-environment has to exist. */
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
-    uint32_t expected=(c==4||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
-    for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,"reset",-1,expected);}
+    uint32_t expected=((c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
+    for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
+  }
+  if(selected(filter,"scene_unchanged"))for(uint32_t r=0;r<=repeats;r++){
+    if(getenv("MUTRACER_NATIVE_PROFILE"))fprintf(stderr,"{\"editCostProfile\":{\"case\":\"scene_unchanged\",\"repeat\":%u}}\n",r);
+    double start=now();CHECK(mt_engine_set_scene_object(b.engine,b.scene,error,sizeof error));double elapsed=now()-start;
+    printf("{\"case\":\"scene_unchanged\",\"repeat\":%u,\"predicted\":0,\"actual\":0,\"doc_mismatch\":false,\"prediction_ms\":0,\"set_ms\":%.6f,\"update_ms\":0,\"first_sample_ms\":0,\"ready_ms\":0,\"preparation_event_ms\":0,\"compile_event_ms\":[],\"cache_hits\":0}\n",r,elapsed);
   }
   CHECK(mt_engine_destroy(b.engine,error,sizeof error));CHECK(mt_scene_destroy(b.scene,error,sizeof error));free(b.positions);free(b.uv);free(b.indices);free(b.matrices);return 0;
 }

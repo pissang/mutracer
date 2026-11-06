@@ -14,7 +14,7 @@ if(args.includes('--help')){
                          Override each selected preset; grid is quads per side
   --repeats N            Warm repetitions after the first observation (5..100)
   --width N --height N   Output pixels (default: 1280 x 720)
-  --case NAME            Select one edit; initial and variant probes always run
+  --case NAME[,NAME...]  Select edits; initial and variant probes always run
   --output DIRECTORY    JSONL, logs, commands and median/p90 summary
 Build the current SDK with native:scene:static first. CARGO_TARGET_DIR selects
 its Cargo target; default: .native-build/scene-core/cargo-target.`);
