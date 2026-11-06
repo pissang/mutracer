@@ -449,3 +449,12 @@ fn environment_controls_are_validated_and_incremental() {
         assert!(Arc::ptr_eq(&old, &f.scene.descriptor().unwrap()));
     }
 }
+
+#[test]
+fn recreated_mesh_identity_requires_full_even_with_the_same_records() {
+    Fixture::new().check("remove/add same mesh slot", Full, |f| {
+        let mesh = f.scene.mesh_mut(f.mesh).unwrap().clone();
+        f.scene.remove_mesh(f.mesh).unwrap();
+        f.mesh = f.scene.add_mesh(mesh).unwrap();
+    });
+}

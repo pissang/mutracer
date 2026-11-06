@@ -782,3 +782,67 @@ fn assert_material_hdr(retained: &Render, full: &Render, a: &[f32], b: &[f32], l
     }
     assert_eq!(count, 0, "{label}: HDR words differ");
 }
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn recreated_mesh_identity_full_commit_matches_fresh_on_both_backends() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let g = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        let mesh = scene.add_mesh(Mesh::new(g, material)).unwrap();
+        scene
+            .add_light(Light::Directional {
+                color: [1.; 3],
+                intensity: 2.,
+                transform: Mat4::IDENTITY,
+            })
+            .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let settings = RenderSettings {
+            max_samples: 8,
+            size: RenderSize::Fixed {
+                width: 1280,
+                height: 720,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        let values = scene.mesh_mut(mesh).unwrap().clone();
+        scene.remove_mesh(mesh).unwrap();
+        scene.add_mesh(values).unwrap();
+        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Full);
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Full));
+        assert_eq!(render.backend().unwrap().0, backend);
+        let fresh = Engine::new(EngineOptions { backend }).unwrap();
+        let reference = Render::new(&fresh, settings).unwrap();
+        fresh.set_scene_object(&scene).unwrap();
+        fresh.update().unwrap();
+        reference.converge(ConvergeOptions::new(8)).unwrap();
+        let a = render.read_pixels(PixelKind::Hdr).unwrap();
+        let b = reference.read_pixels(PixelKind::Hdr).unwrap();
+        assert_material_hdr(
+            &render,
+            &reference,
+            &a.data,
+            &b.data,
+            &format!("{backend:?}-recreated-mesh"),
+        );
+        println!("MESH_IDENTITY_EQUIVALENCE {backend:?} actual=Full bits=equal");
+    }
+}

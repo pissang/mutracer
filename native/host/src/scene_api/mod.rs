@@ -951,6 +951,17 @@ pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         return CommitKind::Full;
     }
     let n = b[h::MESH_COUNT] as usize;
+    // The shared scene tracker treats a new mesh identity as membership change,
+    // even when a removed slot is reused with identical geometry/material data.
+    // Mirror its effective IDs before paying for lazy sync initialization.
+    let (ai, bi) = (a[h::MESH_AOV_IDS] as usize, b[h::MESH_AOV_IDS] as usize);
+    if (0..n).any(|i| {
+        let previous = if ai == 0 { i as u32 } else { a[ai + i] };
+        let next = if bi == 0 { i as u32 } else { b[bi + i] };
+        previous != next
+    }) {
+        return CommitKind::Full;
+    }
     let mut structural = false;
     for i in 0..n {
         let ao = a[h::MESH_OFFSET] as usize + i * m::WORDS;
