@@ -204,6 +204,16 @@ static VtValue LightValue(LightData const &d, char const *name) {
   auto it = d.values.find(TfToken(name));
   return it == d.values.end() ? VtValue() : it->second;
 }
+float DistantLightIrradiance(float intensity, float angleDegrees,
+                             bool normalize) {
+  // UsdLux sizeFactor for DistantLight (usdLux/schema.usda, inputs:normalize).
+  double theta = std::clamp(double(angleDegrees) * M_PI / 360, 0., M_PI),
+         s2 = std::sin(theta) * std::sin(theta);
+  double size = theta == 0          ? 1
+                : theta <= M_PI / 2 ? s2 * M_PI
+                                    : (2 - s2) * M_PI;
+  return normalize ? intensity : float(intensity * size);
+}
 static float Number(VtValue const &v, float fallback) {
   if (v.IsHolding<float>())
     return v.Get<float>();
@@ -308,11 +318,23 @@ void Param::ApplyLight(SdfPath const &path, LightData const &d) {
     light.type = MT_LIGHT_TYPE_SPHERE;
     light.size_or_radius = Number(LightValue(d, "radius"), .5f);
   } else {
+    // UsdLux gives distant lights angular radiance; the SDK takes irradiance.
     light.type = MT_LIGHT_TYPE_DIRECTIONAL;
-    light.size_or_radius = Number(LightValue(d, "angle"), .53f);
+    light.intensity = DistantLightIrradiance(
+        light.intensity, Number(LightValue(d, "angle"), .53f),
+        Number(LightValue(d, "normalize"), 0) != 0);
   }
-  if (Number(LightValue(d, "normalize"), 0))
+  if (light.type != MT_LIGHT_TYPE_DIRECTIONAL &&
+      Number(LightValue(d, "normalize"), 0))
     Warn("UsdLux normalize is unsupported; using SDK radiance units");
+  // The SDK has no per-lobe light multipliers. Equal multipliers, such as the
+  // pi that Hydra puts on its default camera light, scale the whole light.
+  float diffuse = Number(LightValue(d, "diffuse"), 1),
+        specular = Number(LightValue(d, "specular"), 1);
+  if (diffuse == specular)
+    light.intensity *= diffuse;
+  else
+    Warn("unequal light diffuse/specular multipliers are unsupported");
   auto &handle = lightHandles[path];
   if (!handle)
     Check(mt_scene_add_light(scene, &light, &handle, e, sizeof e), e);

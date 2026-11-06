@@ -57,6 +57,7 @@ def DistantLight "Light"
 {
     color3f inputs:color = (1, 1, 1)
     float inputs:intensity = 2
+    bool inputs:normalize = 1
     double3 xformOp:translate = (0, 0, 3)
     uniform token[] xformOpOrder = ["xformOp:translate"]
 }

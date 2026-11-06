@@ -37,6 +37,10 @@ double Milliseconds(Clock::time_point start);
 void Check(int32_t status, char const *error);
 void Matrix(GfMatrix4d const &m, float *out);
 void Warn(std::string const &message);
+// Illuminance of a UsdLux distant light on a surface facing it. Without
+// normalization, intensity is the radiance of a disk of `angleDegrees`.
+float DistantLightIrradiance(float intensity, float angleDegrees,
+                             bool normalize);
 struct Primvar {
   VtValue value;
   HdInterpolation interpolation = HdInterpolationConstant;

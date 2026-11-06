@@ -73,10 +73,13 @@ OpenPBR's independent layers cannot all be expressed by PreviewSurface.
 
 Rect, sphere and distant lights are supported. Shaping cones become SDK spots;
 dome maps provide environment lighting. Disk, cylinder and linked lights are
-skipped with warnings. USD light normalization, color temperature, IES shaping,
-distant angular size and arbitrary dome tilt are not supported; intensities use
-SDK radiance units. There is one environment dome. Light textures are currently
-supported only through the environment, not rectangular emitters.
+skipped with warnings. Distant light intensity follows UsdLux, including
+`angle` and `normalize`, and renders as a sharp directional light. Other lights
+use SDK radiance units and ignore `normalize`. Equal diffuse and specular
+multipliers scale the light; unequal ones are ignored. Color temperature, IES
+shaping and arbitrary dome tilt are not supported. There is one environment
+dome. Light textures are currently supported only through the environment, not
+rectangular emitters.
 
 Perspective, orthographic and depth-of-field cameras are supported. Off-axis
 perspective frusta use a symmetric approximation with a warning. A zero focus

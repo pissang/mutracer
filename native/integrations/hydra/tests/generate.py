@@ -59,6 +59,7 @@ for name,kind in [('rect','RectLight'),('sphere','SphereLight'),('distant','Dist
     UsdGeom.XformCommonAPI(light).SetTranslate((0,0,3))
     if kind=='RectLight': light.CreateWidthAttr(2);light.CreateHeightAttr(2)
     if kind=='SphereLight':light.CreateRadiusAttr(.2)
+    if kind=='DistantLight':light.CreateNormalizeAttr(True)
     if name=='spot':
         shaping=UsdLux.ShapingAPI.Apply(light.GetPrim());shaping.CreateShapingConeAngleAttr(35);shaping.CreateShapingConeSoftnessAttr(.25)
     camera=UsdGeom.Camera.Define(stage,'/Camera');UsdGeom.XformCommonAPI(camera).SetTranslate((0,0,5))

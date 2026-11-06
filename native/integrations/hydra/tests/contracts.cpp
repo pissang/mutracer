@@ -29,6 +29,15 @@ int main() {
   Require(linear.floats.size() == 16 && linear.floats[0] == 1 &&
               linear.floats[3] == 1,
           "Hio raw to RGBA32F conversion");
+  // Hydra's default camera light: 15000 over 0.53 degrees is about unit lux.
+  Require(std::abs(DistantLightIrradiance(15000, .53f, false) - 1.0081f) < 1e-4f,
+          "distant radiance integrates over the angular disk");
+  Require(DistantLightIrradiance(2, .53f, true) == 2 &&
+              DistantLightIrradiance(2, 0, false) == 2,
+          "normalized and zero-angle distant intensity is illuminance");
+  Require(std::abs(DistantLightIrradiance(1, 270, false) -
+                   float((2 - .5) * M_PI)) < 1e-5f,
+          "distant lights wider than a hemisphere");
   Delegate delegate;
   Require(!delegate.IsStopped() && delegate.Stop(false) && delegate.IsStopped(),
           "Hydra stop state");
