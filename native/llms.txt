@@ -30,6 +30,7 @@
 ## Display and output
 
 - Composition order, effects, shadow catchers, RGBA8/PNG export: [composition](docs/display.md#composition).
+- C Metal host-device imports, GPU color/depth exports and cross-queue timelines: [Metal hosts](docs/metal.md).
 - C Vulkan device/image sharing and native display callbacks: [Vulkan hosts](docs/vulkan.md).
 - Rust GPU textures and custom passes: [GPU images](docs/display.md#gpu-images-rust), [passes](docs/display.md#custom-display-passes-rust).
 - Sharp reduced-resolution renders: `add_upscale` / `mt_display_add_upscale` with display-resolution AOVs; [display upscale](docs/display.md#display-upscale).

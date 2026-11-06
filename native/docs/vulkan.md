@@ -92,8 +92,9 @@ SDR and HDR-window formats and the exact layouts.
   add intermediate images and GPU work.
 - Sharing requires the same device and exact queue. Cross-device external memory,
   other queues, queue-family transfers and external semaphore handoffs are not
-  exposed. Hosts that cannot participate in instance/device creation need a
-  separate integration path.
+  exposed. Metal hosts with an already-created device can use the independent
+  [texture export path](metal.md); already-created Vulkan devices still need a
+  separate external-memory integration.
 - Native handles and Vulkan feature declarations are trusted caller inputs;
   invalid handles or queue/layout/lifetime violations cannot be made safe by
   argument validation.

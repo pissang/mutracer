@@ -110,6 +110,7 @@ inspect fixed-sample images separately.
 | `npm run native:context`, `native:jobs`, `native:camera`, `native:settings`, `native:engine` | Yes | One C host each: retained scenes, polling and cancellation, camera updates, render settings, engine API |
 | `npm run native:edit-cost -- --scales S,M,L,LI` | Yes | Measures scene edit latency and shader cache reuse on Software and HWRT; run `native:scene:static` first; performance evidence only, outside CI |
 | `node native/validation/scene-api-render.mjs` | Yes | C ABI, selected adapter, scene handles, exact AOV readback and custom-filter snapshots |
+| `node native/validation/metal-render.mjs` | Yes, Metal | Objective-C host: GPU color/depth/display, timelines, cancellation, resize and backpressure on Software/HWRT; `--shared` checks a shared queue, `--bench` measures readback/export and `--gpu-timing` records optional kernel timestamps |
 | `node native/validation/vulkan-render.mjs` | Yes | C Vulkan device negotiation/import, queue/image leases, host copies, post-processing and retirement, on Software and HWRT |
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
 | `node native/validation/matrix-verify.mjs`, `vector-verify.mjs` | No | Precision checks |
@@ -826,3 +827,18 @@ The ignored `gltf_layers_render_and_retained_texture_edit_match_full` test also
 checks AOV beauty preservation, stable imported IDs and reflectance invalidity
 for unsupported glTF layers. The Vulkan interop test enables depth/ID outputs,
 checks readback exclusion during an image lease, and reads them after release.
+
+## Metal texture export validation
+
+The macOS `native:ci:gpu` gate runs `metal-render.mjs` with Metal API Validation.
+For focused iteration, build/finalize the host cdylib with the current archive,
+set `CARGO_TARGET_DIR` to that host target and `MUTRACER_NATIVE_OUTPUT` outside
+the checkout, then run the script directly. `--shared` tests a supplied host queue;
+the default uses independent queues. Run `--bench` without validation/timestamps
+for CPU call and throughput measurements, then separately use
+`MUTRACER_NATIVE_GPU_TIMESTAMPS=1 --gpu-timing` for GPU conversion timings.
+The latter flag is a script argument; the environment variable enables timers.
+The reported GPU timeline interval includes CPU submission gaps; only the optional
+`metalExportGpuMs` pass timestamps measure kernels. Record measurement windows and
+other GPU/build workloads. Neither this host nor the injected loss-notification
+Rust test validates physical GPU removal or a real Hgi/Hydra consumer.
