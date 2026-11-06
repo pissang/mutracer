@@ -56,6 +56,11 @@ catch driver behavior or check pixels.
 It checks conservative and gray SSS spheres and a closed cube against independent
 random-walk references.
 
+[`gpu/backfaceCulling.html`](./gpu/backfaceCulling.html) (and `?webgl`) puts
+culled single-sided backfaces in front of a lit, shadowed quad in several
+traversal orders and expects the HDR, guides and depth of the quad alone; it
+sets `window.backfaceResult` with any failures.
+
 [`gpu/shaderSource.html`](./gpu/shaderSource.html) exposes
 `shaderSourceTests.capture(layout, postProcess)` for before/after comparisons.
 It uses four OpenPBR layer materials, four background configurations, Sobol
