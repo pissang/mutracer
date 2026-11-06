@@ -34,6 +34,7 @@ typedef struct {
   mt_scene_light_desc ld;mt_scene_instances_desc instances;
   mt_scene_environment_desc environment;mt_scene_environment_settings env_settings;
   mt_camera_v4 camera;float *positions,*uv,*matrices;uint32_t *indices;unsigned char pixels[256];
+  mt_scene_mesh_id *meshes;mt_scene_material_id *materials;uint32_t mesh_count,material_count;
   double compilation_start,preparation_start,preparation_ms,compile_ms[64];unsigned compile_count,progress_seen;
 } Bench;
 static void event(const mt_engine_event *e,void *user){
@@ -83,12 +84,12 @@ static void build(Bench *b,uint32_t backend,uint32_t meshes,uint32_t materials,u
   float hdr[128];for(unsigned i=0;i<128;i++)hdr[i]=i%4==3?1:.1f;
   mt_scene_texture_desc hd;CHECK(mt_scene_texture_desc_default(&hd));hd.storage=MT_TEXTURE_STORAGE_RGBA32F;hd.width=8;hd.height=4;hd.pixels=hdr;hd.pixel_bytes=sizeof hdr;
   CHECK(mt_scene_add_texture(b->scene,&hd,&b->textures[2],error,sizeof error));
-  mt_scene_material_id *m=alloc(materials,sizeof *m);mt_scene_material_desc mat;CHECK(mt_scene_material_desc_default(&mat));
+  mt_scene_material_id *m=alloc(materials,sizeof *m);b->materials=m;b->material_count=materials;b->meshes=alloc(meshes,sizeof *b->meshes);b->mesh_count=meshes;mt_scene_material_desc mat;CHECK(mt_scene_material_desc_default(&mat));
   for(uint32_t i=0;i<materials;i++){CHECK(mt_scene_add_material(b->scene,&mat,&m[i],error,sizeof error));if(i%2)CHECK(mt_scene_material_set_texture(b->scene,m[i],MT_MAT_MAP,b->textures[0],error,sizeof error));}
   b->material=m[0];CHECK(mt_scene_mesh_desc_default(&b->md));
   for(uint32_t i=0;i<meshes;i++){
     mt_scene_geometry_id g;CHECK(mt_scene_add_geometry(b->scene,&b->gd,&g,error,sizeof error));b->md.geometry=g;b->md.material=m[i%materials];b->md.world_matrix[12]=(float)(i%64)*1.1f;b->md.world_matrix[14]=(float)(i/64)*1.1f;
-    mt_scene_mesh_id mesh;CHECK(mt_scene_add_mesh(b->scene,&b->md,&mesh,error,sizeof error));if(i==0){b->geometry=g;b->mesh=mesh;}
+    mt_scene_mesh_id mesh;CHECK(mt_scene_add_mesh(b->scene,&b->md,&mesh,error,sizeof error));b->meshes[i]=mesh;if(i==0){b->geometry=g;b->mesh=mesh;}
   }
   b->md.geometry=b->geometry;b->md.material=b->material;mt_scene_identity(b->md.world_matrix);
   /* Keep the edited material off the large batch: emission must measure one
@@ -104,7 +105,7 @@ static void build(Bench *b,uint32_t backend,uint32_t meshes,uint32_t materials,u
   mt_engine_options eo;CHECK(mt_engine_options_default(&eo));eo.backend=backend;CHECK(mt_engine_create(&eo,&b->engine,error,sizeof error));CHECK(mt_engine_set_callback(b->engine,event,b,error,sizeof error));
   mt_render_options ro;CHECK(mt_render_options_default(&ro));ro.width=width;ro.height=height;ro.max_samples=1;ro.batch_samples=0;CHECK(mt_render_create(b->engine,&ro,&b->render,error,sizeof error));
   mt_engine_snapshot info={.struct_size=sizeof info};CHECK(mt_engine_info(b->engine,&info,error,sizeof error));
-  printf("{\"metadata\":true,\"adapter\":\"%s\",\"requested_backend\":%u,\"hardware_ray_query\":%u,\"meshes\":%u,\"materials\":%u,\"lights\":%u,\"grid\":%u,\"triangles\":%" PRIu64 ",\"instances\":%u,\"width\":%u,\"height\":%u,\"abi\":%u}\n",info.adapter_name,backend,info.hardware_ray_query,meshes,materials,lights,grid,(uint64_t)meshes*grid*grid*2,instances,width,height,mt_abi_version());free(m);
+  printf("{\"metadata\":true,\"adapter\":\"%s\",\"requested_backend\":%u,\"hardware_ray_query\":%u,\"meshes\":%u,\"materials\":%u,\"lights\":%u,\"grid\":%u,\"triangles\":%" PRIu64 ",\"instances\":%u,\"width\":%u,\"height\":%u,\"abi\":%u}\n",info.adapter_name,backend,info.hardware_ray_query,meshes,materials,lights,grid,(uint64_t)meshes*grid*grid*2,instances,width,height,mt_abi_version());
 }
 typedef struct {const char *name;uint32_t property;float original[3],value[3];uint32_t expected;} Scalar;
 #define P(name,p,old,v) {name,p,{old,0,0},{v,0,0},MT_COMMIT_INCREMENTAL}
@@ -117,7 +118,10 @@ static const Scalar scalars[]={
  P("fuzz",22,0,.2f),{"fuzz_color",23,{1,1,1},{.4f,.5f,.6f},2},P("fuzz_roughness",24,.5f,.7f),{"coat_color",26,{1,1,1},{.4f,.5f,.6f},2},P("coat_roughness",27,0,.2f),P("coat_anisotropy",28,0,.2f),P("coat_ior",29,1.6f,1.7f),P("coat_darkening",30,0,.2f),
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
-static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera"};
+static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384"};
+/* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
+static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
   switch(c){
   case 0:b->camera.world_matrix[12]+=on?.01f:-.01f;CHECK(mt_scene_set_default_camera(b->scene,&b->camera,error,sizeof error));break;
@@ -138,6 +142,11 @@ static void edit(Bench *b,unsigned c,int on){
   case 17:case 18:if(c==17)b->env_settings.intensity=on?.8f:1;else b->env_settings.rotation=on?.1f:0;CHECK(mt_scene_set_environment_settings(b->scene,&b->env_settings,error,sizeof error));break;
   case 19:case 20:b->environment.environment=(on==(c==19))?b->textures[2]:0;CHECK(mt_scene_set_environment(b->scene,&b->environment,error,sizeof error));break;
   case 22:b->camera.world_matrix[12]+=on?.01f:-.01f;break;
+  case 23:case 24:case 25:for(uint32_t i=0;i<batch_size(c);i++){float w[16];mt_scene_identity(w);w[12]=(float)(i%64)*1.1f+(on?.01f:0);w[14]=(float)(i/64)*1.1f;CHECK(mt_scene_set_mesh_transform(b->scene,b->meshes[i],w,error,sizeof error));}break;
+  case 26:case 27:case 28:for(uint32_t i=0;i<batch_size(c);i++)CHECK(mt_scene_material_set_float(b->scene,b->materials[i],MT_MAT_SPECULAR_ROUGHNESS,on?.6f:.3f,0,0,error,sizeof error));break;
+  case 29:edit(b,1,on);break;
+  case 31:case 32:case 33:{uint32_t n=(const uint32_t[]){64,1024,16384}[c-31];for(uint32_t i=0;i<n;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;}
+  case 30:CHECK(mt_scene_material_set_float(b->scene,b->material,MT_MAT_BASE_COLOR,on?.4f:.8f,on?.5f:.8f,on?.6f:.8f,error,sizeof error));break;
   case 21:edit(b,0,on);edit(b,1,on);material(b,MT_MAT_SPECULAR_ROUGHNESS,on?.6f:.3f,0,0);edit(b,16,on);edit(b,17,on);break;
   }
 }
@@ -160,10 +169,18 @@ int main(int argc,char **argv){
   }
   for(unsigned c=0;c<sizeof edits/sizeof edits[0];c++){
     if(!selected(filter,edits[c])||(c==2&&!instances))continue;
+    if((c>=23&&c<=25&&batch_size(c)>meshes)||(c>=26&&c<=28&&batch_size(c)>materials))continue;
+    if(c>=31&&c<=33&&(const uint32_t[]){64,1024,16384}[c-31]>instances)continue;
+    if(c==29||c==30){
+      /* Each repetition first commits a full preparation (unmeasured), so the
+       * measured edit is the first incremental commit after it. */
+      for(uint32_t r=0;r<repeats+1;r++){edit(&b,11,1);commit(&b,"setup",-1,1);edit(&b,c,1);commit(&b,edits[c],(int)r,2);edit(&b,c,0);commit(&b,"reset",-1,2);edit(&b,11,0);commit(&b,"cleanup",-1,1);}
+      continue;
+    }
     /* The inverse state of removal/replacement/add-environment has to exist. */
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
-    uint32_t expected=((c==2&&instances>64)||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
+    uint32_t expected=((c==2&&instances>64)||c==32||c==33||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
     for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
@@ -173,5 +190,5 @@ int main(int argc,char **argv){
     double start=now();CHECK(mt_engine_set_scene_object(b.engine,b.scene,error,sizeof error));double elapsed=now()-start;
     printf("{\"case\":\"scene_unchanged\",\"repeat\":%u,\"predicted\":0,\"actual\":0,\"doc_mismatch\":false,\"prediction_ms\":0,\"set_ms\":%.6f,\"update_ms\":0,\"first_sample_ms\":0,\"ready_ms\":0,\"preparation_event_ms\":0,\"compile_event_ms\":[],\"cache_hits\":0}\n",r,elapsed);
   }
-  CHECK(mt_engine_destroy(b.engine,error,sizeof error));CHECK(mt_scene_destroy(b.scene,error,sizeof error));free(b.positions);free(b.uv);free(b.indices);free(b.matrices);return 0;
+  CHECK(mt_engine_destroy(b.engine,error,sizeof error));CHECK(mt_scene_destroy(b.scene,error,sizeof error));free(b.positions);free(b.uv);free(b.indices);free(b.matrices);free(b.meshes);free(b.materials);return 0;
 }
