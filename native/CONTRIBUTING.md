@@ -117,7 +117,7 @@ inspect fixed-sample images separately.
 | `npm run native:viewer:dev` | Yes | Interactive viewer with Subsecond UI hot reload |
 | `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and linked denoising runtime |
 | `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, all AOVs and real-window startup |
-| `npm run native:sdk:package` | No | Packages the SDK and checks C linking |
+| `npm run native:sdk:package` | No | Packages the SDK and checks C/CMake shared and static linking after relocation |
 | `npm run native:check` | No | Compiler capability probe; reports the incomplete browser API port and exits with status 1 |
 
 - The host commands build on `native:scene`, and `native:engine` chains the
@@ -261,9 +261,13 @@ After `native:ci`, run `native:sdk:package` with the same
 `MUTRACER_NATIVE_OUTPUT` and its `CARGO_TARGET_DIR=.../host-target`.
 For `native:scene:static` outputs, the default `.../cargo-target` applies.
 `MUTRACER_NATIVE_DIST` selects the archive destination. Packages contain C headers
-and shared/static libraries; debug symbols are archived separately in
-`sdk-symbols/`. Packaging checks API availability and C linking without a GPU;
-rendering still requires `native:ci:gpu` validation.
+and shared/static libraries plus a relocatable CMake config; debug symbols are
+archived separately in `sdk-symbols/`. Packaging requires CMake 3.20+ and checks
+all C exports and direct C linking. It also extracts the archive elsewhere,
+hides the staged SDK, and configures, builds and runs CMake consumers of both
+targets with Node, npm, scriptc and Rust tools removed from `PATH`. These CPU
+consumers check the ABI and scene creation/destruction. Rendering still requires
+`native:ci:gpu` validation.
 
 ## Architecture
 

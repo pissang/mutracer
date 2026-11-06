@@ -40,6 +40,33 @@ and lifetime. The guides cover workflows and behavior across calls.
 
 ## Build and link
 
+### Precompiled C SDK
+
+Extract the SDK archive for your OS and CPU architecture, then set
+`CMAKE_PREFIX_PATH` to its root. You need CMake 3.20+ and a C compiler; Node,
+npm, scriptc and Rust are not required.
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(my_renderer LANGUAGES C)
+find_package(MuTracer CONFIG REQUIRED)
+add_executable(my_renderer main.c)
+target_link_libraries(my_renderer PRIVATE MuTracer::mutracer)
+```
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/MuTracer-SDK-PLATFORM
+cmake --build build --config Release
+```
+
+Use `MuTracer::mutracer_static` for static linking, including its system library
+dependencies. The extracted SDK can be moved without regenerating its CMake
+files. For shared linking, distribute the shared library with your application.
+On Windows, compile with `/MD` and place the package's `lib/*.dll` beside your
+executable or add that directory to `PATH`.
+
+### Build from source
+
 Requirements: Node with the project's npm dependencies, stable Rust, a C++20
 compiler and scriptc 0.4.4 from `native/toolchain`. Windows also needs the
 [MSVC toolchain setup](CONTRIBUTING.md#windows). Linux shared SDK builds also
@@ -52,10 +79,10 @@ export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
 npm run native:scene:static
 ```
 
-The last command compiles the shared TypeScript core to
-`.native-build/scene-core/render-core.lib.a` (`render-core.lib` on Windows),
-builds the native library into `.native-build/scene-core/cargo-target/release/`
-and runs CPU-only checks. Set `MUTRACER_NATIVE_OUTPUT` to use another directory.
+The build writes the core archive to `.native-build/scene-core/render-core.lib.a`
+(`render-core.lib` on Windows) and native libraries to
+`.native-build/scene-core/cargo-target/release/`, and runs CPU-only checks.
+Set `MUTRACER_NATIVE_OUTPUT` to use another directory.
 
 - **Rust**: depend on the `mutracer-native-probe` crate in `native/host` by path,
   and set `MUTRACER_AOT_ARCHIVE` to the archive's absolute path when building.
@@ -193,8 +220,6 @@ check them on the validation scenes; they need a GPU and are described in the
   must be 0.
 - Pass a NULL destination with size 0 to query a required size.
 - Inputs are copied during the call. The library keeps only callback user data.
-- When loading the library dynamically, compare `mt_abi_version()` with the
-  `MT_ABI_VERSION` you compiled against.
 - Pixel readback is linear RGBA32F. Engine images are top row first; context
   images and custom denoiser inputs are bottom row first.
 - Thread rules differ by API: see [engine](docs/engine.md#threads-and-callbacks)
@@ -210,6 +235,20 @@ check them on the validation scenes; they need a GPU and are described in the
   profiling messages serially on the emitting thread, including library
   threads. Messages are valid only during the callback, which must not call the
   library. Unregistering waits for a running callback.
+
+## C ABI versions
+
+The C ABI is experimental and can change between versions. `MT_ABI_VERSION`
+increases whenever a C declaration or record layout changes incompatibly.
+When loading a library dynamically, resolve and call `mt_abi_version()` first;
+reject the library if it differs from the `MT_ABI_VERSION` you compiled against.
+
+The CMake package version follows the native Rust crate version, independently
+of the ABI number and the browser library's version. A package version alone
+does not establish ABI compatibility. Versioned `find_package` requests accept
+only the exact package version. After `find_package(MuTracer CONFIG REQUIRED)`,
+read `MuTracer_ABI_VERSION` to check the package's ABI at configure time; the
+runtime check is still needed when dynamically loading a library.
 
 ## Ray tracing backends
 

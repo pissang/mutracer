@@ -2,7 +2,8 @@
 // staticlib gives every platform one authoritative export list, without Rust's
 // cdylib exports also exposing dependency #[no_mangle] functions.
 import {createHash} from 'node:crypto';
-import {copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {archiveName, cCompiler, executable, nativeTar, nativeToolchainEnv, spawnNative, viewerPlatform, windows} from './platform.mjs';
@@ -10,6 +11,8 @@ import {checkSdkExports, nativeLinkArguments, publicApiSymbols} from './sdk-symb
 import {bundleWindowsRuntime} from './windows-redist.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {finalizeHostLibrary} from './finalize-host-library.mjs';
+import {sdkCmakeConfig, sdkVersion} from './sdk-cmake.mjs';
+import {checkCmakeConsumer} from './sdk-cmake-consumer.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-build/scene-core');
@@ -23,8 +26,9 @@ const env = nativeToolchainEnv({...process.env, CARGO_TARGET_DIR: target,
   MUTRACER_AOT_ARCHIVE: resolve(process.env.MUTRACER_AOT_ARCHIVE ?? resolve(out, archiveName('render-core')))});
 mkdirSync(work, {recursive: true});
 let log = '';
-function run(command, args) {
-  const result = spawnNative(command, args, {cwd: root, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024});
+function run(command, args, {cwd = root, env: commandEnv = env, raw = false} = {}) {
+  const result = (raw ? spawnSync : spawnNative)(command, args,
+    {cwd, env: commandEnv, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024});
   log += `${JSON.stringify([command, ...args])}\n${result.stdout ?? ''}${result.stderr ?? ''}\n`;
   writeFileSync(resolve(work, 'package.log'), log);
   if (result.error || result.status !== 0) throw result.error ?? Error(`${command} failed; see ${work}/package.log`);
@@ -43,6 +47,7 @@ const headers = readdirSync(resolve(root, 'native/include')).filter(file => file
 const exports = publicApiSymbols(headers.map(file => readFileSync(resolve(root, 'native/include', file), 'utf8')));
 const abi = Number(/#define\s+MT_ABI_VERSION\s+(\d+)/.exec(readFileSync(resolve(root, 'native/include/mutracer-status.h'), 'utf8'))?.[1]);
 if (!abi) throw Error('Missing C ABI version');
+const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
 const staticName = windows ? 'mutracer_native_probe.lib' : 'libmutracer_native_probe.a';
 const sharedName = windows ? 'mutracer_native_probe.dll' : `libmutracer_native_probe.${mac ? 'dylib' : 'so'}`;
 const sourceStatic = resolve(target, 'release', staticName), shared = resolve(lib, sharedName);
@@ -57,6 +62,17 @@ copyFileSync(sourceStatic, resolve(lib, staticName));
 // symbol suffixes in archive members, which can introduce duplicate definitions
 // at the consumer's final link, even with only -S. Never strip a link input.
 writeFileSync(resolve(lib, 'native-static-libs.json'), JSON.stringify(nativeLibraries, null, 2) + '\n');
+const cmake = resolve(lib, 'cmake/MuTracer');
+mkdirSync(cmake, {recursive: true});
+writeFileSync(resolve(cmake, 'MuTracerConfig.cmake'), sdkCmakeConfig({platform: process.platform, version, abi, nativeLibraries}));
+const versionScript = resolve(work, 'cmake-version.cmake');
+writeFileSync(versionScript, `cmake_minimum_required(VERSION 3.20)
+include(CMakePackageConfigHelpers)
+set(CMAKE_SIZEOF_VOID_P 8)
+write_basic_package_version_file("${resolve(cmake, 'MuTracerConfigVersion.cmake').replaceAll('\\', '/')}"
+  VERSION "${version}" COMPATIBILITY ExactVersion)
+`);
+run('cmake', ['-P', versionScript]);
 
 if (mac) {
   const list = resolve(work, 'exports.macos');
@@ -132,11 +148,10 @@ for (const kind of ['shared', 'static']) {
   // cl emits the object alongside /Fe; it is validation material, not SDK data.
   if (windows) rmSync(resolve(lib, 'consumer.obj'), {force: true});
 }
-const summary = {platform, exports, nativeLibraries,
+const summary = {platform, version, abi, exports, nativeLibraries,
   staticBytes: statSync(resolve(lib, staticName)).size, sharedBytes: statSync(shared).size,
   validated: {exports: true, staticConsumer: true, sharedConsumer: true, staticArchiveUnmodified: true}};
 if (!readFileSync(sourceStatic).equals(readFileSync(resolve(lib, staticName)))) throw Error('Static SDK archive was modified');
-writeFileSync(resolve(work, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
 mkdirSync(dist, {recursive: true});
 function archive(directory, destination) {
   const extension = platform === 'linux-x64' ? 'tar.gz' : 'zip';
@@ -147,7 +162,18 @@ function archive(directory, destination) {
   if (mac) run('ditto', ['-c', '-k', '--keepParent', resolve(work, directory), path]);
   else run(nativeTar, [windows ? '-acf' : '-czf', path, '-C', work, directory]);
   writeFileSync(path + '.sha256', `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${filename}\n`);
+  return path;
 }
-archive(name, dist);
+const sdkArchive = archive(name, dist);
+// Hide the staged SDK so an accidental absolute path cannot pass relocation.
+const hidden = stage + '-unavailable';
+renameSync(stage, hidden);
+try {
+  summary.cmakeConsumerDirectory = checkCmakeConsumer({archive: sdkArchive, name, work, env, run, abi, version});
+  Object.assign(summary.validated, {relocatedCmakeShared: true, relocatedCmakeStatic: true, withoutSdkBuildTools: true});
+} finally {
+  renameSync(hidden, stage);
+}
+writeFileSync(resolve(work, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
 archive(`${name}-symbols`, resolve(out, 'sdk-symbols'));
-console.log(`Native SDK: ${dist}\n${summary.exports.length} public C exports; shared/static consumers passed`);
+console.log(`Native SDK: ${dist}\n${summary.exports.length} public C exports; C and relocated CMake shared/static consumers passed`);
