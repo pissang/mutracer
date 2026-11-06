@@ -38,7 +38,11 @@ pub(crate) fn read(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("MuTracer HDR readback"),
+        });
     for (i, buffer) in buffers.into_iter().enumerate() {
         encoder.copy_buffer_to_buffer(buffer, 0, &staging, plane * i as u64, plane);
     }

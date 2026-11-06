@@ -1280,8 +1280,9 @@ impl GpuScene {
                 layout::ray_uniform::SEQUENCE_SEED as u64,
                 &frame[8..12],
             );
-            let mut encoder =
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MuTracer path trace sample"),
+            });
             let pair = (sample - start) * target.caustics.as_ref().map_or(1, |c| c.pass_count());
             let pt_pair = pair + target.caustics.as_ref().map_or(0, |c| c.pt_pair());
             // Browser emission uses its f32 sampleCount, including the sequence offset.
@@ -1300,6 +1301,7 @@ impl GpuScene {
             }
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("MuTracer path trace"),
                     timestamp_writes: timer.map(|t| t.pass(pt_pair)),
                     ..Default::default()
                 });

@@ -365,7 +365,9 @@ impl Output {
     pub(crate) fn render(&mut self, query: &Query, samples: u32, mask: u32) -> Result<()> {
         self.gpu.loss.check()?;
         let device = &self.gpu.device;
-        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("MuTracer AOV trace"),
+        });
         let run =
             |encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, sample: u32| {
                 let parameters: Vec<_> =
@@ -391,7 +393,10 @@ impl Output {
                     }),
                 });
                 {
-                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("MuTracer AOV trace"),
+                        ..Default::default()
+                    });
                     pass.set_pipeline(pipeline);
                     for (i, group) in query.groups.iter().enumerate() {
                         pass.set_bind_group(i as u32, group, &[]);

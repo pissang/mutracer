@@ -528,7 +528,11 @@ impl Render {
         // submit runs. No background submit may advance that relay between them.
         gpu.queue.exclusive_submit(|queue| -> Result<u64> {
             let timer = crate::profiling::GpuTimer::new(&gpu.device, 1, false);
-            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("MuTracer Metal output export"),
+                });
             for (pair, (item, source)) in images.iter().zip(&sources).enumerate() {
                 let kind = match item.kind {
                     MetalOutput::Hdr => 0,

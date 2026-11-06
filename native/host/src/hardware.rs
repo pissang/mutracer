@@ -381,15 +381,21 @@ pub fn prepare_reusing(
     let upload_drain_ms = drain_started.elapsed().as_secs_f64() * 1000.0;
     let as_started = std::time::Instant::now();
     let timer = super::profiling::GpuTimer::new(device, 1, true);
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("MuTracer initial BLAS build"),
+    });
     if let Some(t) = &timer {
         t.stamp(&mut encoder, 0);
     }
     encoder.build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
+    encoder.insert_debug_marker("MuTracer initial BLAS build complete");
     let blas_submission = queue.submit([encoder.finish()]);
     wait_for_as(device, blas_submission)?;
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("MuTracer initial TLAS build"),
+    });
     encoder.build_acceleration_structures(std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(), [&tlas]);
+    encoder.insert_debug_marker("MuTracer initial TLAS build complete");
     if let Some(t) = &timer {
         t.stamp(&mut encoder, 1);
         t.resolve(&mut encoder);

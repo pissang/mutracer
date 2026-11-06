@@ -406,6 +406,28 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
       if (camera.sensor_height <= 0)
         camera.sensor_height = 24;
       Matrix(view.GetInverse(), camera.world_matrix);
+      // Diagnostic snapshot for SDK-only reproductions. Keep Hydra's resolved
+      // geometry/materials, but bake the active view and render dimensions into
+      // the descriptor (Scene itself does not own this render's camera).
+      if (auto path = std::getenv("MUTRACER_HYDRA_CAPTURE_SCENE")) {
+        size_t length = 0;
+        Check(mt_scene_encode(param->scene, nullptr, 0, &length, e, sizeof e), e);
+        std::vector<uint8_t> bytes(length);
+        Check(mt_scene_encode(param->scene, bytes.data(), bytes.size(), &length,
+                              e, sizeof e), e);
+        mt_scene_header_v4 header;
+        std::memcpy(&header, bytes.data(), sizeof header);
+        header.width = rw;
+        header.height = rh;
+        header.quality_flags = MT_QUALITY_DISPERSION; // Default render, bevel off.
+        std::memcpy(bytes.data(), &header, sizeof header);
+        std::memcpy(bytes.data() + header.camera_offset * 4, &camera,
+                    sizeof camera);
+        std::ofstream capture(path, std::ios::binary);
+        capture.write(reinterpret_cast<char const *>(bytes.data()), bytes.size());
+        if (!capture)
+          throw std::runtime_error("Could not write diagnostic scene capture");
+      }
       Check(mt_engine_set_camera(param->engine, &camera, e, sizeof e), e);
       auto begin = Clock::now();
       Check(mt_engine_update(param->engine, nullptr, e, sizeof e), e);
