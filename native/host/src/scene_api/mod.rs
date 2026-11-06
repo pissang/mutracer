@@ -426,7 +426,7 @@ impl EnvironmentSettings {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Dirty {
     geometry: BTreeSet<Key>,
     material: BTreeSet<Key>,
@@ -437,12 +437,94 @@ struct Dirty {
     environment: bool,
     camera: bool,
 }
+/// Records rewritten in place between two descriptors with the same layout:
+/// every other record and payload is identical. Indices are descriptor order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Changes {
+    pub geometries: BTreeSet<usize>,
+    pub materials: BTreeSet<usize>,
+    pub meshes: BTreeSet<usize>,
+    pub lights: BTreeSet<usize>,
+}
+impl Changes {
+    /// `commit_plan::unchanged_records` hints: one byte per geometry, then per
+    /// texture; 1 marks records these changes leave identical.
+    pub(crate) fn unchanged(&self, words: &[u32]) -> Vec<u8> {
+        (0..words[h::GEOMETRY_COUNT] as usize)
+            .map(|i| u8::from(!self.geometries.contains(&i)))
+            .chain((0..words[h::TEXTURE_COUNT]).map(|_| 1))
+            .collect()
+    }
+    fn extend(&mut self, other: &Changes) {
+        self.geometries.extend(&other.geometries);
+        self.materials.extend(&other.materials);
+        self.meshes.extend(&other.meshes);
+        self.lights.extend(&other.lights);
+    }
+}
+/// Changes from recent descriptors of one scene to the descriptor it travels
+/// with. A weak entry never matches a descriptor other than the one it names.
+#[derive(Default)]
+pub(crate) struct SceneDelta(Vec<(std::sync::Weak<Vec<u8>>, Changes)>);
+impl SceneDelta {
+    /// Changes since `previous`, or None when it is not a recent descriptor.
+    pub(crate) fn since(&self, previous: &Arc<Vec<u8>>) -> Option<&Changes> {
+        self.0
+            .iter()
+            .find(|(base, _)| std::ptr::eq(base.as_ptr(), Arc::as_ptr(previous)))
+            .map(|(_, changes)| changes)
+    }
+}
+/// Descriptors a delta may still describe; older engines compare whole scenes.
+const DELTA_HISTORY: usize = 4;
+/// `MUTRACER_SCENE_DIRTY=0` encodes every edited scene completely and publishes
+/// no deltas (whole-scene comparison); `verify` also checks each dirty encoding
+/// against the complete one. Debug switches for A/B comparisons.
+#[derive(Clone, Copy, PartialEq)]
+enum DirtyMode {
+    On,
+    Off,
+    Verify,
+}
+fn dirty_mode() -> DirtyMode {
+    match std::env::var("MUTRACER_SCENE_DIRTY").as_deref() {
+        Ok("0") => DirtyMode::Off,
+        Ok("verify") => DirtyMode::Verify,
+        _ => DirtyMode::On,
+    }
+}
+/// Slot-to-descriptor indices of each arena, valid while no resource is added or removed.
+#[derive(Clone, Default)]
+struct Dense {
+    geometries: Vec<u32>,
+    materials: Vec<u32>,
+    textures: Vec<u32>,
+    meshes: Vec<u32>,
+    lights: Vec<u32>,
+}
+fn dense<T>(a: &Arena<T>) -> Vec<u32> {
+    let mut next = 0;
+    a.slots
+        .iter()
+        .map(|s| {
+            let i = next;
+            next += u32::from(s.value.is_some());
+            if s.value.is_some() { i } else { u32::MAX }
+        })
+        .collect()
+}
+fn lookup<T>(a: &Arena<T>, dense: &[u32], k: Key) -> Result<usize> {
+    a.get(k)?;
+    Ok(dense[k.index as usize] as usize)
+}
 struct Cache {
     bytes: Arc<Vec<u8>>,
     words: Vec<u32>,
     revision: u64,
     geometries: Vec<Geometry>,
     textures: Vec<encoder::Texture>,
+    dense: Dense,
+    delta: Arc<SceneDelta>,
 }
 /// A flat scene. Handles are scoped to this scene; removing referenced resources
 /// returns InvalidHandle until their users are edited or removed.
@@ -579,29 +661,118 @@ struct Resolved {
     environment_index: u32,
     background_index: u32,
 }
-fn index<T>(a: &Arena<T>, k: Key) -> Result<usize> {
-    a.get(k)?;
-    a.iter()
-        .position(|(key, _)| key == k)
-        .ok_or_else(invalid_handle)
-}
 impl Scene {
-    fn resolve(&self) -> Result<Resolved> {
-        for (_, g) in self.geometries.iter() {
-            let vertices = g.positions.len() / 3;
-            if g.positions.len() % 3 != 0
-                || g.indices.len() % 3 != 0
-                || [
-                    (g.normals.len(), 3),
-                    (g.uv[0].len(), 2),
-                    (g.uv[1].len(), 2),
-                    (g.colors.len(), 3),
-                    (g.tangents.len(), 4),
-                    (g.material_indices.len(), 1),
-                ]
+    fn dense(&self) -> Dense {
+        Dense {
+            geometries: dense(&self.geometries),
+            materials: dense(&self.materials),
+            textures: dense(&self.textures),
+            meshes: dense(&self.meshes),
+            lights: dense(&self.lights),
+        }
+    }
+    fn texture_index(&self, d: &Dense, id: Option<TextureId>) -> Result<Option<usize>> {
+        id.map(|id| lookup(&self.textures, &d.textures, id.0))
+            .transpose()
+    }
+    fn resolve_material(
+        &self,
+        d: &Dense,
+        material: &OpenPbrMaterial,
+    ) -> Result<(encoder::Material, BTreeMap<u32, [u32; 3]>)> {
+        let mut v = material.values.clone();
+        for (slot, id) in material.textures.iter().enumerate() {
+            v.maps[slot] = self.texture_index(d, *id)?.map_or(u32::MAX, |i| i as u32);
+        }
+        let mut properties = material.properties.clone();
+        for (&id, texture) in &material.texture_properties {
+            properties.insert(
+                id,
+                [
+                    self.texture_index(d, *texture)?
+                        .map_or(u32::MAX, |i| i as u32),
+                    0,
+                    0,
+                ],
+            );
+        }
+        Ok((v, properties))
+    }
+    fn resolve_mesh(&self, d: &Dense, mesh: &Mesh) -> Result<encoder::Mesh> {
+        Ok(encoder::Mesh {
+            name: String::new(),
+            geometry: lookup(&self.geometries, &d.geometries, mesh.geometry.0)?,
+            material: lookup(&self.materials, &d.materials, mesh.material.0)?,
+            materials: mesh
+                .materials
                 .iter()
-                .any(|&(len, n)| len != 0 && len != vertices * n)
-            {
+                .map(|id| lookup(&self.materials, &d.materials, id.0))
+                .collect::<Result<_>>()?,
+            transform: mesh.transform,
+            instances: mesh.instances.clone(),
+        })
+    }
+    fn resolve_light(&self, d: &Dense, light: &Light) -> Result<([u32; l::WORDS], Arc<[u8]>)> {
+        let mut w = [0; l::WORDS];
+        let mut ies = Arc::from([]);
+        let (kind, color, intensity, transform) = match light {
+            Light::Rect {
+                color,
+                intensity,
+                width,
+                height,
+                spread,
+                transform,
+                texture,
+            } => {
+                w[l::SIZE] = width.to_bits();
+                w[l::HEIGHT_OR_INNER] = height.to_bits();
+                w[l::SPREAD_OR_OUTER] = spread.to_bits();
+                w[l::TEXTURE] = self.texture_index(d, *texture)?.map_or(0, |i| i as u32 + 1);
+                (0, color, intensity, transform)
+            }
+            Light::Sphere {
+                color,
+                intensity,
+                radius,
+                transform,
+            } => {
+                w[l::SIZE] = radius.to_bits();
+                (1, color, intensity, transform)
+            }
+            Light::Directional {
+                color,
+                intensity,
+                transform,
+            } => (2, color, intensity, transform),
+            Light::Spot {
+                color,
+                intensity,
+                inner,
+                outer,
+                transform,
+                ies: profile,
+            } => {
+                w[l::HEIGHT_OR_INNER] = inner.to_bits();
+                w[l::SPREAD_OR_OUTER] = outer.to_bits();
+                ies = profile.clone();
+                (3, color, intensity, transform)
+            }
+        };
+        w[l::TYPE] = kind;
+        w[l::INTENSITY] = intensity.to_bits();
+        for i in 0..3 {
+            w[l::COLOR + i] = color[i].to_bits();
+        }
+        for (i, v) in transform.to_cols_array().iter().enumerate() {
+            w[l::TRANSFORM + i] = v.to_bits();
+        }
+        Ok((w, ies))
+    }
+    fn resolve(&self) -> Result<Resolved> {
+        let d = self.dense();
+        for (_, g) in self.geometries.iter() {
+            if !valid_geometry(g) {
                 return Err(invalid("Invalid geometry attribute length"));
             }
         }
@@ -615,13 +786,8 @@ impl Scene {
             }
         }
         for (_, m) in self.meshes.iter() {
-            if let Some(i) = &m.instances {
-                if i.colors
-                    .as_ref()
-                    .is_some_and(|c| c.len() != i.transforms.len() * 3)
-                {
-                    return Err(invalid("Invalid instance color length"));
-                }
+            if !valid_instances(m) {
+                return Err(invalid("Invalid instance color length"));
             }
         }
         let mut r = Resolved {
@@ -656,118 +822,28 @@ impl Scene {
             });
         }
         for (_, material) in self.materials.iter() {
-            let mut v = material.values.clone();
-            for (slot, id) in material.textures.iter().enumerate() {
-                v.maps[slot] = id
-                    .map(|id| index(&self.textures, id.0))
-                    .transpose()?
-                    .map_or(u32::MAX, |i| i as u32);
-            }
+            let (v, properties) = self.resolve_material(&d, material)?;
             r.materials.push(v);
-            let mut properties = material.properties.clone();
-            for (&id, texture) in &material.texture_properties {
-                properties.insert(
-                    id,
-                    [
-                        texture
-                            .map(|id| index(&self.textures, id.0))
-                            .transpose()?
-                            .map_or(u32::MAX, |i| i as u32),
-                        0,
-                        0,
-                    ],
-                );
-            }
             r.properties.push(properties);
         }
         for (_, mesh) in self.meshes.iter() {
-            r.meshes.push(encoder::Mesh {
-                name: String::new(),
-                geometry: index(&self.geometries, mesh.geometry.0)?,
-                material: index(&self.materials, mesh.material.0)?,
-                materials: mesh
-                    .materials
-                    .iter()
-                    .map(|id| index(&self.materials, id.0))
-                    .collect::<Result<_>>()?,
-                transform: mesh.transform,
-                instances: mesh.instances.clone(),
-            });
+            r.meshes.push(self.resolve_mesh(&d, mesh)?);
         }
         for (_, light) in self.lights.iter() {
-            let mut w = [0; l::WORDS];
-            let mut ies = Arc::from([]);
-            let (kind, color, intensity, transform) = match light {
-                Light::Rect {
-                    color,
-                    intensity,
-                    width,
-                    height,
-                    spread,
-                    transform,
-                    texture,
-                } => {
-                    w[l::SIZE] = width.to_bits();
-                    w[l::HEIGHT_OR_INNER] = height.to_bits();
-                    w[l::SPREAD_OR_OUTER] = spread.to_bits();
-                    w[l::TEXTURE] = texture
-                        .map(|id| index(&self.textures, id.0))
-                        .transpose()?
-                        .map_or(0, |i| i as u32 + 1);
-                    (0, color, intensity, transform)
-                }
-                Light::Sphere {
-                    color,
-                    intensity,
-                    radius,
-                    transform,
-                } => {
-                    w[l::SIZE] = radius.to_bits();
-                    (1, color, intensity, transform)
-                }
-                Light::Directional {
-                    color,
-                    intensity,
-                    transform,
-                } => (2, color, intensity, transform),
-                Light::Spot {
-                    color,
-                    intensity,
-                    inner,
-                    outer,
-                    transform,
-                    ies: profile,
-                } => {
-                    w[l::HEIGHT_OR_INNER] = inner.to_bits();
-                    w[l::SPREAD_OR_OUTER] = outer.to_bits();
-                    ies = profile.clone();
-                    (3, color, intensity, transform)
-                }
-            };
-            w[l::TYPE] = kind;
-            w[l::INTENSITY] = intensity.to_bits();
-            for i in 0..3 {
-                w[l::COLOR + i] = color[i].to_bits();
-            }
-            for (i, v) in transform.to_cols_array().iter().enumerate() {
-                w[l::TRANSFORM + i] = v.to_bits();
-            }
+            let (w, ies) = self.resolve_light(&d, light)?;
             r.lights.push(w);
             r.ies.push(ies);
         }
-        r.environment_index = self
-            .environment
-            .texture
-            .map(|id| index(&self.textures, id.0))
-            .transpose()?
-            .map_or(0, |i| i as u32 + 1);
-        r.background_index = self
-            .environment
-            .background
-            .map(|id| index(&self.textures, id.0))
-            .transpose()?
-            .map_or(0, |i| i as u32 + 1);
+        (r.environment_index, r.background_index) = self.environment_indices(&d)?;
         Ok(r)
+    }
+    fn environment_indices(&self, d: &Dense) -> Result<(u32, u32)> {
+        Ok((
+            self.texture_index(d, self.environment.texture)?
+                .map_or(0, |i| i as u32 + 1),
+            self.texture_index(d, self.environment.background)?
+                .map_or(0, |i| i as u32 + 1),
+        ))
     }
     fn next_words(&self, previous: Option<&[u32]>) -> Result<Vec<u32>> {
         let mut words = previous.unwrap_or(&[]).to_vec();
@@ -800,11 +876,13 @@ impl Scene {
         }
         words[h::LENGTH] = words.len() as u32;
     }
+    /// Encodes the whole scene, patching `words` in place when its layout still
+    /// fits. Returns the resolved payloads that later patches compare against.
     fn encode_into(
         &self,
         words: &mut Vec<u32>,
         previous: Option<(&[Geometry], &[encoder::Texture])>,
-    ) -> Result<()> {
+    ) -> Result<(Vec<Geometry>, Vec<encoder::Texture>)> {
         let r = self.resolve()?;
         let camera = self.camera.unwrap_or_default().to_bytes();
         let env = encoder::Environment {
@@ -852,10 +930,119 @@ impl Scene {
         self.environment_settings.encode(words);
         GroundedBackground::encode(self.grounded_background, words);
         self.write_aov_ids(words);
-        Ok(())
+        Ok((r.geometries, r.textures))
+    }
+    /// Rewrites only the records edited since `cache` was encoded. Returns None,
+    /// leaving `words` untouched, when an edit changes the layout or needs the
+    /// complete encoder (resources added or removed, textures, invalid values).
+    fn encode_dirty(
+        &self,
+        dirty: &Dirty,
+        cache: &Cache,
+        words: &mut Vec<u32>,
+    ) -> Option<(Changes, Vec<(usize, Geometry)>)> {
+        if dirty.structure || !dirty.texture.is_empty() {
+            return None;
+        }
+        let d = &cache.dense;
+        let mut changes = Changes::default();
+        let mut geometries = Vec::new();
+        for &k in &dirty.geometry {
+            let g = self.geometries.get(k).ok()?;
+            let i = lookup(&self.geometries, &d.geometries, k).ok()?;
+            if !valid_geometry(g) || !encoder::geometry_fits(words, i, g) {
+                return None;
+            }
+            geometries.push((i, g));
+            changes.geometries.insert(i);
+        }
+        let mut materials = Vec::new();
+        for &k in &dirty.material {
+            let i = lookup(&self.materials, &d.materials, k).ok()?;
+            let (m, properties) = self.resolve_material(d, self.materials.get(k).ok()?).ok()?;
+            if !encoder::material_fits(words, i, Some(&properties)) {
+                return None;
+            }
+            materials.push((i, m, properties));
+            changes.materials.insert(i);
+        }
+        let mut meshes = Vec::new();
+        for &k in &dirty.mesh {
+            let mesh = self.meshes.get(k).ok()?;
+            let i = lookup(&self.meshes, &d.meshes, k).ok()?;
+            let m = self.resolve_mesh(d, mesh).ok()?;
+            if !valid_instances(mesh) || !encoder::mesh_fits(words, i, &m) {
+                return None;
+            }
+            meshes.push((i, m));
+            changes.meshes.insert(i);
+        }
+        let mut lights = Vec::new();
+        for &k in &dirty.light {
+            let i = lookup(&self.lights, &d.lights, k).ok()?;
+            let (record, ies) = self.resolve_light(d, self.lights.get(k).ok()?).ok()?;
+            if !encoder::light_fits(words, i, &ies) {
+                return None;
+            }
+            lights.push((i, record, ies));
+            changes.lights.insert(i);
+        }
+        let environment = if dirty.environment {
+            Some(self.environment_indices(d).ok()?)
+        } else {
+            None
+        };
+        // Every check passed; nothing above wrote to `words`.
+        for &(i, g) in &geometries {
+            encoder::write_geometry(words, i, g, cache.geometries.get(i));
+        }
+        for (i, m) in &meshes {
+            encoder::write_mesh_records(words, *i, m);
+        }
+        for (i, m, properties) in &materials {
+            encoder::write_material_records(words, *i, m, Some(properties));
+        }
+        for (i, record, ies) in &lights {
+            encoder::write_light_records(words, *i, record, Some(ies));
+        }
+        if dirty.camera {
+            let camera = self.camera.unwrap_or_default().to_bytes();
+            let at = words[h::CAMERA_OFFSET] as usize;
+            bytemuck::cast_slice_mut(&mut words[at..at + camera.len() / 4])
+                .copy_from_slice(&camera);
+        }
+        if let Some((environment, background)) = environment {
+            let color = self.environment.color;
+            encoder::write_background(
+                words,
+                &encoder::Environment {
+                    enabled: false,
+                    width: 0,
+                    height: 0,
+                    pixels: Arc::from([]),
+                    background: false,
+                    background_color: [color[0], color[1], color[2]],
+                    background_alpha: color[3],
+                },
+                0,
+            );
+            words[h::ENVIRONMENT_TEXTURE] = environment;
+            words[h::BACKGROUND_TEXTURE] = background;
+            self.environment_settings.encode(words);
+            GroundedBackground::encode(self.grounded_background, words);
+        }
+        let geometries = geometries
+            .into_iter()
+            .map(|(i, g)| (i, g.clone()))
+            .collect();
+        Some((changes, geometries))
     }
     /// Encodes an immutable snapshot. Repeated calls without edits share one buffer.
     pub fn descriptor(&self) -> Result<Arc<Vec<u8>>> {
+        self.descriptor_with_delta().map(|(bytes, _)| bytes)
+    }
+    /// Like [`Scene::descriptor`], with the records changed since recent snapshots.
+    pub(crate) fn descriptor_with_delta(&self) -> Result<(Arc<Vec<u8>>, Arc<SceneDelta>)> {
         let started = std::time::Instant::now();
         let mut cache = self.cache.lock().unwrap();
         if let Some(c) = &*cache {
@@ -866,23 +1053,65 @@ impl Scene {
                         serde_json::json!({"nativeSceneObjectProfile": {"cached": true, "totalMs": started.elapsed().as_secs_f64()*1e3}})
                     );
                 }
-                return Ok(c.bytes.clone());
+                return Ok((c.bytes.clone(), c.delta.clone()));
             }
         }
+        let mode = dirty_mode();
+        let dirty = self.dirty.lock().unwrap().clone();
         let mut words = cache
             .as_mut()
             .map(|c| std::mem::take(&mut c.words))
             .unwrap_or_default();
-        if let Err(e) = self.encode_into(
-            &mut words,
-            cache
-                .as_ref()
-                .map(|c| (c.geometries.as_slice(), c.textures.as_slice())),
-        ) {
-            if let Some(c) = cache.as_mut() {
-                c.words = bytemuck::pod_collect_to_vec::<u8, u32>(&c.bytes);
+        let dirty_encoding = match (&*cache, mode) {
+            (Some(c), DirtyMode::On | DirtyMode::Verify) => {
+                self.encode_dirty(&dirty, c, &mut words)
             }
-            return Err(e);
+            _ => None,
+        };
+        let (changes, edited) = dirty_encoding.unzip();
+        let (geometries, textures) = match edited {
+            Some(edited) => {
+                let c = cache.as_mut().unwrap();
+                let mut geometries = std::mem::take(&mut c.geometries);
+                for (i, g) in edited {
+                    geometries[i] = g;
+                }
+                (geometries, std::mem::take(&mut c.textures))
+            }
+            None => match self.encode_into(
+                &mut words,
+                cache
+                    .as_ref()
+                    .map(|c| (c.geometries.as_slice(), c.textures.as_slice())),
+            ) {
+                Ok(resolved) => resolved,
+                Err(e) => {
+                    if let Some(c) = cache.as_mut() {
+                        c.words = bytemuck::pod_collect_to_vec::<u8, u32>(&c.bytes);
+                    }
+                    return Err(e);
+                }
+            },
+        };
+        if mode == DirtyMode::Verify && changes.is_some() {
+            // Previously encoded arrays only skip unchanged payload copies, so
+            // the complete patch from the cached bytes needs none.
+            let c = cache.as_ref().unwrap();
+            let mut complete = bytemuck::pod_collect_to_vec::<u8, u32>(&c.bytes);
+            if !self
+                .encode_into(&mut complete, None)
+                .is_ok_and(|_| complete == words)
+            {
+                *cache = None;
+                native_log!(
+                    "{}",
+                    serde_json::json!({"nativeSceneDirtyMismatch": {"revision": self.revision}})
+                );
+                return Err(api::error(
+                    Status::Error,
+                    "Dirty scene encoding differs from the complete encoding",
+                ));
+            }
         }
         let encoded = started.elapsed();
         let mut bytes = cache
@@ -893,31 +1122,55 @@ impl Scene {
         bytes.clear();
         bytes.extend_from_slice(bytemuck::cast_slice(&words));
         let copied = started.elapsed();
-        if let Err(e) = crate::scene::validate(&bytes) {
+        // Records outside the changes keep the previous, validated payloads.
+        let validated = match &changes {
+            Some(changes) => crate::scene::validate_changed(&bytes, &changes.unchanged(&words)),
+            None => crate::scene::validate(&bytes),
+        };
+        if let Err(e) = validated {
             *cache = None;
             return Err(api::error(Status::InvalidArgument, e.to_string()));
         }
         let validated = started.elapsed();
-        let r = self.resolve()?;
         if crate::profiling::enabled() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
             native_log!(
                 "{}",
-                serde_json::json!({"nativeSceneObjectProfile": {"cached": false,
+                serde_json::json!({"nativeSceneObjectProfile": {"cached": false, "dirty": changes.is_some(),
                 "encodeMs": ms(encoded), "copyMs": ms(copied-encoded), "validateMs": ms(validated-copied),
-                "resolveMs": ms(started.elapsed()-validated), "bytes": bytes.len()}})
+                "bytes": bytes.len()}})
             );
         }
         let bytes = Arc::new(bytes);
+        let (dense, delta) = match (changes, cache.take()) {
+            (Some(changes), Some(c)) => {
+                let mut entries = Vec::with_capacity(DELTA_HISTORY);
+                for (base, previous) in c.delta.0.iter().rev().take(DELTA_HISTORY - 1).rev() {
+                    let mut previous = previous.clone();
+                    previous.extend(&changes);
+                    entries.push((base.clone(), previous));
+                }
+                entries.push((Arc::downgrade(&bytes), Changes::default()));
+                (c.dense, SceneDelta(entries))
+            }
+            _ if mode == DirtyMode::Off => (self.dense(), SceneDelta::default()),
+            _ => (
+                self.dense(),
+                SceneDelta(vec![(Arc::downgrade(&bytes), Changes::default())]),
+            ),
+        };
+        let delta = Arc::new(delta);
         *cache = Some(Cache {
             bytes: bytes.clone(),
             words,
             revision: self.revision,
-            geometries: r.geometries,
-            textures: r.textures,
+            geometries,
+            textures,
+            dense,
+            delta: delta.clone(),
         });
         *self.dirty.lock().unwrap() = Dirty::default();
-        Ok(bytes)
+        Ok((bytes, delta))
     }
     /// Predicts the next descriptor commit using the retained update planner.
     /// Full is returned before the first snapshot; the engine reports the actual result.
@@ -929,13 +1182,51 @@ impl Scene {
         if c.revision == self.revision {
             return Ok(CommitKind::Incremental);
         }
-        let next = self.next_words(Some(&c.words))?;
+        let dirty = self.dirty.lock().unwrap().clone();
+        let mut next = c.words.clone();
+        let changes = match dirty_mode() {
+            DirtyMode::Off => None,
+            _ => self
+                .encode_dirty(&dirty, c, &mut next)
+                .map(|(changes, _)| changes),
+        };
+        if changes.is_none() {
+            next = self.next_words(Some(&c.words))?;
+        }
         let bytes: Vec<u8> = bytemuck::cast_slice(&next).to_vec();
-        crate::scene::validate(&bytes).map_err(|e| invalid(&e.to_string()))?;
-        Ok(predict(&c.bytes, &bytes))
+        match &changes {
+            Some(changes) => crate::scene::validate_changed(&bytes, &changes.unchanged(&next)),
+            None => crate::scene::validate(&bytes),
+        }
+        .map_err(|e| invalid(&e.to_string()))?;
+        Ok(predict_with(&c.bytes, &bytes, changes.as_ref()))
     }
 }
-pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
+fn valid_geometry(g: &Geometry) -> bool {
+    let vertices = g.positions.len() / 3;
+    g.positions.len() % 3 == 0
+        && g.indices.len() % 3 == 0
+        && [
+            (g.normals.len(), 3),
+            (g.uv[0].len(), 2),
+            (g.uv[1].len(), 2),
+            (g.colors.len(), 3),
+            (g.tangents.len(), 4),
+            (g.material_indices.len(), 1),
+        ]
+        .iter()
+        .all(|&(len, n)| len == 0 || len == vertices * n)
+}
+fn valid_instances(m: &Mesh) -> bool {
+    m.instances.as_ref().is_none_or(|i| {
+        i.colors
+            .as_ref()
+            .is_none_or(|c| c.len() == i.transforms.len() * 3)
+    })
+}
+/// Predicts the commit kind of `next` over `previous`; with `changes`, only the
+/// listed records can differ.
+pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Changes>) -> CommitKind {
     fn aligned(bytes: &[u8]) -> std::borrow::Cow<'_, [u32]> {
         match bytemuck::try_cast_slice(bytes) {
             Ok(words) => std::borrow::Cow::Borrowed(words),
@@ -951,19 +1242,26 @@ pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         return CommitKind::Full;
     }
     let n = b[h::MESH_COUNT] as usize;
+    // Changed records keep their identities; otherwise every mesh is a candidate.
+    let meshes: Vec<usize> = match changes {
+        Some(c) => c.meshes.iter().copied().collect(),
+        None => (0..n).collect(),
+    };
     // The shared scene tracker treats a new mesh identity as membership change,
     // even when a removed slot is reused with identical geometry/material data.
     // Mirror its effective IDs before paying for lazy sync initialization.
     let (ai, bi) = (a[h::MESH_AOV_IDS] as usize, b[h::MESH_AOV_IDS] as usize);
-    if (0..n).any(|i| {
-        let previous = if ai == 0 { i as u32 } else { a[ai + i] };
-        let next = if bi == 0 { i as u32 } else { b[bi + i] };
-        previous != next
-    }) {
+    if changes.is_none()
+        && (0..n).any(|i| {
+            let previous = if ai == 0 { i as u32 } else { a[ai + i] };
+            let next = if bi == 0 { i as u32 } else { b[bi + i] };
+            previous != next
+        })
+    {
         return CommitKind::Full;
     }
     let mut structural = false;
-    for i in 0..n {
+    for &i in &meshes {
         let ao = a[h::MESH_OFFSET] as usize + i * m::WORDS;
         let bo = b[h::MESH_OFFSET] as usize + i * m::WORDS;
         if a[ao..ao + 4] != b[bo..bo + 4] {
@@ -971,7 +1269,7 @@ pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         }
     }
     let mut colors = Vec::new();
-    for i in 0..n {
+    for &i in &meshes {
         let (aa, bb) = (a[h::BATCH_OFFSET] as usize, b[h::BATCH_OFFSET] as usize);
         if (aa == 0) != (bb == 0) {
             structural = true;
@@ -1002,13 +1300,21 @@ pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         camera: true,
         resolution: false,
         quality: false,
-        transforms: (0..n).collect(),
+        transforms: meshes,
         colors,
-        geometries: (0..b[h::GEOMETRY_COUNT] as usize).collect(),
-        materials: (0..b[h::MATERIAL_COUNT] as usize).collect(),
+        geometries: match changes {
+            Some(c) => c.geometries.iter().copied().collect(),
+            None => (0..b[h::GEOMETRY_COUNT] as usize).collect(),
+        },
+        materials: match changes {
+            Some(c) => c.materials.iter().copied().collect(),
+            None => (0..b[h::MATERIAL_COUNT] as usize).collect(),
+        },
     };
-    if !crate::commit_plan::displacement_map_changed(previous, next)
-        && crate::commit_plan::plan(previous, next, &sync, true).is_some()
+    // Changes never include textures: texture edits encode the whole scene.
+    let textures_unchanged = changes.is_some();
+    if (textures_unchanged || !crate::commit_plan::displacement_map_changed(previous, next))
+        && crate::commit_plan::plan_with(previous, next, &sync, true, textures_unchanged).is_some()
     {
         CommitKind::Incremental
     } else {
@@ -1314,3 +1620,6 @@ mod oracle_tests;
 
 #[cfg(test)]
 mod commit_kind_tests;
+
+#[cfg(test)]
+mod dirty_tests;

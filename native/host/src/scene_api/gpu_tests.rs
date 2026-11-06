@@ -842,3 +842,257 @@ fn recreated_mesh_identity_full_commit_matches_fresh_on_both_backends() {
         println!("MESH_IDENTITY_EQUIVALENCE {backend:?} actual=Full bits=equal");
     }
 }
+
+/// Dirty scene-object commits against whole-scene comparison: the dirty engine
+/// commits each batch at once (with deltas and batched transforms), the other
+/// engine commits the same edits one at a time from plain descriptors. Commit
+/// kinds and images must be identical; Full commits also match a fresh engine.
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
+    use CommitKind::{Full, Incremental};
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut s = Scene::new();
+        let quad = |x: f32| {
+            let mut g = Geometry::new(
+                vec![x, -0.5, 0., x + 0.4, -0.5, 0., x, 0.5, 0., x + 0.4, 0.5, 0.],
+                vec![0, 1, 2, 2, 1, 3],
+            );
+            g.uv[0] = vec![0., 0., 1., 0., 0., 1., 1., 1.].into();
+            g
+        };
+        let geometries: Vec<_> = (0..3)
+            .map(|i| s.add_geometry(quad(-1. + i as f32 * 0.5)).unwrap())
+            .collect();
+        let t = s
+            .add_texture(Texture::rgba8(1, 1, vec![255, 200, 150, 255]))
+            .unwrap();
+        let materials: Vec<_> = (0..3)
+            .map(|i| {
+                let mut m = OpenPbrMaterial::default();
+                m.values.color = [0.3 + 0.2 * i as f32, 0.5, 0.7];
+                s.add_material(m).unwrap()
+            })
+            .collect();
+        let mut meshes: Vec<_> = (0..4)
+            .map(|i| {
+                let mut mesh = Mesh::new(geometries[i % 3], materials[i % 3]);
+                mesh.transform = Mat4::from_translation(Vec3::new(0., i as f32 * 0.2 - 0.3, 0.));
+                s.add_mesh(mesh).unwrap()
+            })
+            .collect();
+        let instanced = s
+            .add_mesh(Mesh {
+                instances: Some(Instances {
+                    transforms: (0..70)
+                        .map(|i| {
+                            Mat4::from_translation(Vec3::new(
+                                (i % 10) as f32 * 0.15 - 0.7,
+                                (i / 10) as f32 * 0.1 - 0.4,
+                                -0.5,
+                            )) * Mat4::from_scale(Vec3::splat(0.2))
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                    colors: None,
+                }),
+                ..Mesh::new(geometries[0], materials[1])
+            })
+            .unwrap();
+        let light = s
+            .add_light(Light::Rect {
+                color: [1.; 3],
+                intensity: 3.,
+                width: 1.,
+                height: 1.,
+                spread: 1.,
+                transform: Mat4::from_translation(Vec3::new(0., 0., 2.)),
+                texture: None,
+            })
+            .unwrap();
+        s.add_light(Light::Directional {
+            color: [1.; 3],
+            intensity: 1.,
+            transform: Mat4::IDENTITY,
+        })
+        .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        s.set_default_camera(Some(camera));
+        let settings = RenderSettings {
+            max_samples: 8,
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 24,
+            },
+            ..Default::default()
+        };
+        let engine = || Engine::new(EngineOptions { backend }).unwrap();
+        let (dirty, whole) = (engine(), engine());
+        let (dirty_render, whole_render) = (
+            Render::new(&dirty, settings.clone()).unwrap(),
+            Render::new(&whole, settings.clone()).unwrap(),
+        );
+        let commit = |e: &Engine, r: &Render| {
+            e.update().unwrap();
+            r.converge(ConvergeOptions::new(8)).unwrap();
+            r.last_commit().unwrap()
+        };
+        // The whole-scene engine commits each edit separately.
+        let sequential = |s: &Scene| {
+            whole.set_scene_shared(s.descriptor().unwrap()).unwrap();
+            commit(&whole, &whole_render)
+        };
+        dirty.set_scene_object(&s).unwrap();
+        commit(&dirty, &dirty_render);
+        sequential(&s);
+        for step in 0..12 {
+            let expected = match step {
+                0 => {
+                    s.mesh_mut(meshes[0]).unwrap().transform =
+                        Mat4::from_translation(Vec3::new(0.1, -0.3, 0.));
+                    Some(Incremental)
+                }
+                1 => {
+                    // One dirty commit: several meshes, an instance and two materials.
+                    for (k, &mesh) in meshes.iter().enumerate().skip(1) {
+                        s.mesh_mut(mesh).unwrap().transform = Mat4::from_translation(Vec3::new(
+                            0.05 * k as f32,
+                            k as f32 * 0.2 - 0.3,
+                            0.1,
+                        ));
+                        sequential(&s);
+                    }
+                    let i = s.mesh_mut(instanced).unwrap().instances.as_mut().unwrap();
+                    Arc::make_mut(&mut i.transforms)[5] =
+                        Mat4::from_translation(Vec3::new(0., 0.3, -0.4))
+                            * Mat4::from_scale(Vec3::splat(0.3));
+                    sequential(&s);
+                    s.material_mut(materials[0]).unwrap().values.roughness = 0.7;
+                    sequential(&s);
+                    s.material_mut(materials[2])
+                        .unwrap()
+                        .set_float(4, [0.4, 0., 0.])
+                        .unwrap();
+                    Some(Incremental)
+                }
+                2 => {
+                    // Edited and restored before the commit.
+                    let original = s.mesh(meshes[1]).unwrap().transform;
+                    s.mesh_mut(meshes[1]).unwrap().transform = Mat4::IDENTITY;
+                    s.mesh_mut(meshes[1]).unwrap().transform = original;
+                    None
+                }
+                3 => {
+                    if let Light::Rect { intensity, .. } = s.light_mut(light).unwrap() {
+                        *intensity = 4.;
+                    }
+                    sequential(&s);
+                    camera.world_matrix[12] = 0.1;
+                    s.set_default_camera(Some(camera));
+                    Some(Incremental)
+                }
+                4 => {
+                    Arc::make_mut(&mut s.geometry_mut(geometries[1]).unwrap().positions)[1] -= 0.1;
+                    Some(Incremental)
+                }
+                5 => {
+                    // Two snapshots before one update: the delta spans both.
+                    s.mesh_mut(meshes[0]).unwrap().transform =
+                        Mat4::from_translation(Vec3::new(0.2, -0.3, 0.));
+                    dirty.set_scene_object(&s).unwrap();
+                    sequential(&s);
+                    s.material_mut(materials[1]).unwrap().values.color = [0.9, 0.2, 0.2];
+                    Some(Incremental)
+                }
+                6 => {
+                    // Added and removed in one batch.
+                    let added = s.add_mesh(Mesh::new(geometries[2], materials[0])).unwrap();
+                    s.remove_mesh(added).unwrap();
+                    None
+                }
+                7 => {
+                    // Same record under a new identity.
+                    let mesh = s.mesh(meshes[3]).unwrap().clone();
+                    s.remove_mesh(meshes[3]).unwrap();
+                    meshes[3] = s.add_mesh(mesh).unwrap();
+                    Some(Full)
+                }
+                8 => {
+                    s.material_mut(materials[2]).unwrap().textures[0] = Some(t);
+                    Some(Full)
+                }
+                9 => {
+                    let i = s.mesh_mut(instanced).unwrap().instances.as_mut().unwrap();
+                    for m in Arc::make_mut(&mut i.transforms) {
+                        *m = Mat4::from_translation(Vec3::new(0.05, 0., 0.)) * *m;
+                    }
+                    Some(Full)
+                }
+                10 => {
+                    // A rejected snapshot leaves both engines unchanged.
+                    s.material_mut(materials[0]).unwrap().values.roughness = 2.;
+                    assert_eq!(
+                        dirty.set_scene_object(&s).unwrap_err().status,
+                        Status::InvalidArgument
+                    );
+                    assert!(s.descriptor().is_err());
+                    s.material_mut(materials[0]).unwrap().values.roughness = 0.5;
+                    s.mesh_mut(meshes[2]).unwrap().transform =
+                        Mat4::from_translation(Vec3::new(0., 0.1, 0.2));
+                    // The rejected snapshot dropped the scene's cache, so the
+                    // prediction is Full while the engines still update in place.
+                    None
+                }
+                _ => {
+                    let mut controls = s.environment_settings();
+                    controls.intensity = 2.;
+                    s.set_environment_settings(controls).unwrap();
+                    sequential(&s);
+                    s.material_mut(materials[1])
+                        .unwrap()
+                        .values
+                        .emission_strength = 0.5;
+                    Some(Incremental)
+                }
+            };
+            let predicted = s.pending_commit_kind().unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(predicted, expected, "{backend:?} step {step} prediction");
+            }
+            dirty.set_scene_object(&s).unwrap();
+            let committed = commit(&dirty, &dirty_render);
+            if step != 10 {
+                assert_eq!(committed, Some(predicted), "{backend:?} step {step} actual");
+            }
+            assert_eq!(
+                sequential(&s),
+                committed,
+                "{backend:?} step {step} whole-scene kind"
+            );
+            let fresh = engine();
+            let reference = Render::new(&fresh, settings.clone()).unwrap();
+            fresh.set_scene_object(&s).unwrap();
+            commit(&fresh, &reference);
+            for kind in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo] {
+                let a = dirty_render.read_pixels(kind).unwrap();
+                let mut others = vec![(&whole_render, "whole-scene")];
+                // Incremental refits keep the previous TLAS topology, so only
+                // full preparations are compared with a fresh engine.
+                if committed == Some(Full) {
+                    others.push((&reference, "fresh full"));
+                }
+                for (other, name) in others {
+                    let b = other.read_pixels(kind).unwrap();
+                    let differing = (a.data.iter().zip(&b.data))
+                        .filter(|(x, y)| x.to_bits() != y.to_bits())
+                        .count();
+                    assert_eq!(
+                        differing, 0,
+                        "{backend:?} step {step} {kind:?}: {differing} values differ from {name}"
+                    );
+                }
+            }
+        }
+    }
+}

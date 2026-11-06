@@ -819,6 +819,18 @@ impl PreparedState {
     ) -> Result<SceneSync> {
         let state = self.clone();
         runtime::call(move || {
+            struct SyncProfile;
+            impl Drop for SyncProfile {
+                fn drop(&mut self) {
+                    let _ = preparation_profile(0);
+                }
+            }
+            let _profile = if crate::profiling::enabled() {
+                preparation_profile(1)?;
+                Some(SyncProfile)
+            } else {
+                None
+            };
             if !state.synced.load(std::sync::atomic::Ordering::Acquire) {
                 state.sync_step(&previous)?;
                 state.accept_sync_inner()?;

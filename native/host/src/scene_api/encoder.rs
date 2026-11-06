@@ -474,8 +474,156 @@ pub fn material_values(material: &Material) -> serde_json::Map<String, serde_jso
     }
     values
 }
+fn write_floats(w: &mut [u32], at: usize, v: &[f32]) {
+    for (k, v) in v.iter().enumerate() {
+        w[at + k] = v.to_bits();
+    }
+}
+/// Whether geometry `index` keeps its counts and attribute presence, so its
+/// payload can be rewritten in place.
+pub(super) fn geometry_fits(w: &[u32], index: usize, g: &Geometry) -> bool {
+    let o = w[h::GEOMETRY_OFFSET] as usize + index * g::WORDS;
+    if w[o + g::VERTEX_COUNT] as usize * 3 != g.positions.len()
+        || w[o + g::INDEX_COUNT] as usize != g.indices.len()
+    {
+        return false;
+    }
+    [
+        (g::NORMAL, g.normals.len()),
+        (g::UV, g.uv[0].len()),
+        (g::UV1, g.uv[1].len()),
+        (g::COLOR, g.colors.len()),
+        (g::TANGENT, g.tangents.len()),
+        (g::MATERIAL_INDEX, g.material_indices.len()),
+    ]
+    .iter()
+    .all(|&(field, len)| (w[o + field] == 0) == (len == 0))
+}
+/// Rewrites a fitting geometry's payloads unless every attribute array is the
+/// one `previous` encoded.
+pub(super) fn write_geometry(
+    w: &mut [u32],
+    index: usize,
+    g: &Geometry,
+    previous: Option<&Geometry>,
+) {
+    if previous.is_some_and(|a| {
+        Arc::ptr_eq(&a.positions, &g.positions)
+            && Arc::ptr_eq(&a.indices, &g.indices)
+            && Arc::ptr_eq(&a.normals, &g.normals)
+            && Arc::ptr_eq(&a.uv[0], &g.uv[0])
+            && Arc::ptr_eq(&a.uv[1], &g.uv[1])
+            && Arc::ptr_eq(&a.colors, &g.colors)
+            && Arc::ptr_eq(&a.tangents, &g.tangents)
+            && Arc::ptr_eq(&a.material_indices, &g.material_indices)
+    }) {
+        return;
+    }
+    let o = w[h::GEOMETRY_OFFSET] as usize + index * g::WORDS;
+    for (field, data) in [
+        (g::POSITION, &g.positions),
+        (g::NORMAL, &g.normals),
+        (g::UV, &g.uv[0]),
+        (g::UV1, &g.uv[1]),
+        (g::COLOR, &g.colors),
+        (g::TANGENT, &g.tangents),
+    ] {
+        let at = w[o + field] as usize;
+        write_floats(w, at, data);
+    }
+    for (field, data) in [
+        (g::INDICES, &g.indices),
+        (g::MATERIAL_INDEX, &g.material_indices),
+    ] {
+        let at = w[o + field] as usize;
+        w[at..at + data.len()].copy_from_slice(data);
+    }
+}
+/// Whether mesh `index` keeps its material table length and batch shape.
+pub(super) fn mesh_fits(w: &[u32], index: usize, m: &Mesh) -> bool {
+    let o = w[h::MESH_OFFSET] as usize + index * wire_mesh::WORDS;
+    if w[o + wire_mesh::MATERIAL_COUNT] as usize != m.materials.len() {
+        return false;
+    }
+    let batches = w[h::BATCH_OFFSET] as usize;
+    if batches == 0 {
+        return m.instances.is_none();
+    }
+    let o = batches + index * crate::layout::batch::WORDS;
+    w[o] == m
+        .instances
+        .as_ref()
+        .map_or(u32::MAX, |x| x.transforms.len() as u32)
+        && (w[o + 2] != 0) == m.instances.as_ref().is_some_and(|x| x.colors.is_some())
+}
+pub(super) fn write_mesh_records(w: &mut [u32], index: usize, m: &Mesh) {
+    let o = w[h::MESH_OFFSET] as usize + index * wire_mesh::WORDS;
+    write_mesh(w, o, m);
+    let at = w[o + wire_mesh::MATERIAL_TABLE] as usize;
+    for (k, id) in m.materials.iter().enumerate() {
+        w[at + k] = *id as u32;
+    }
+    if let Some(inst) = &m.instances {
+        let o = w[h::BATCH_OFFSET] as usize + index * crate::layout::batch::WORDS;
+        let at = w[o + 1] as usize;
+        for (k, m) in inst.transforms.iter().enumerate() {
+            write_floats(w, at + k * 16, &m.to_cols_array());
+        }
+        if let Some(colors) = &inst.colors {
+            let at = w[o + 2] as usize;
+            write_floats(w, at, colors);
+        }
+    }
+}
+/// Whether material `index` keeps its extension count.
+pub(super) fn material_fits(
+    w: &[u32],
+    index: usize,
+    properties: Option<&std::collections::BTreeMap<u32, [u32; 3]>>,
+) -> bool {
+    let o = w[h::MATERIAL_OFFSET] as usize + index * mat::WORDS;
+    let extra = properties.map_or(0, |p| {
+        p.keys().filter(|id| !extension_ids().contains(id)).count()
+    });
+    w[o + mat::EXTENSION_COUNT] as usize == MATERIAL_EXTENSIONS + extra
+}
+pub(super) fn write_material_records(
+    w: &mut [u32],
+    index: usize,
+    m: &Material,
+    properties: Option<&std::collections::BTreeMap<u32, [u32; 3]>>,
+) {
+    let o = w[h::MATERIAL_OFFSET] as usize + index * mat::WORDS;
+    write_material(w, o, m);
+    write_properties(w, o, properties);
+}
+/// Whether light `index` keeps its IES profile length.
+pub(super) fn light_fits(w: &[u32], index: usize, ies: &[u8]) -> bool {
+    let o = w[h::LIGHT_OFFSET] as usize + index * light_wire::WORDS;
+    w[o + light_wire::IES_BYTES] as usize == ies.len()
+}
+pub(super) fn write_light_records(
+    w: &mut [u32],
+    index: usize,
+    record: &[u32; light_wire::WORDS],
+    ies: Option<&Arc<[u8]>>,
+) {
+    let o = w[h::LIGHT_OFFSET] as usize + index * light_wire::WORDS;
+    let at = w[o + light_wire::IES_OFFSET];
+    let len = w[o + light_wire::IES_BYTES];
+    w[o..o + light_wire::WORDS].copy_from_slice(record);
+    w[o + light_wire::IES_OFFSET] = at;
+    w[o + light_wire::IES_BYTES] = len;
+    if let Some(ies) = ies {
+        for (k, b) in ies.chunks(4).enumerate() {
+            let mut word = [0; 4];
+            word[..b.len()].copy_from_slice(b);
+            w[at as usize + k] = u32::from_le_bytes(word);
+        }
+    }
+}
 /// Background words; the environment map is texture `environment` (index + 1).
-fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
+pub(super) fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
     let color = environment.background_color;
     for (k, c) in color.iter().enumerate() {
         w[h::BACKGROUND_COLOR + k] = c.to_bits();
@@ -542,23 +690,8 @@ impl SceneData<'_> {
             return false;
         }
         for (i, g) in self.geometries.iter().enumerate() {
-            let o = w[h::GEOMETRY_OFFSET] as usize + i * g::WORDS;
-            if w[o + g::VERTEX_COUNT] as usize * 3 != g.positions.len()
-                || w[o + g::INDEX_COUNT] as usize != g.indices.len()
-            {
+            if !geometry_fits(w, i, g) {
                 return false;
-            }
-            for (field, len) in [
-                (g::NORMAL, g.normals.len()),
-                (g::UV, g.uv[0].len()),
-                (g::UV1, g.uv[1].len()),
-                (g::COLOR, g.colors.len()),
-                (g::TANGENT, g.tangents.len()),
-                (g::MATERIAL_INDEX, g.material_indices.len()),
-            ] {
-                if (w[o + field] == 0) != (len == 0) {
-                    return false;
-                }
             }
         }
         let mut offsets = std::collections::HashMap::new();
@@ -589,12 +722,8 @@ impl SceneData<'_> {
                 return false;
             }
         }
-        for (i, _) in self.materials.iter().enumerate() {
-            let o = w[h::MATERIAL_OFFSET] as usize + i * mat::WORDS;
-            let extra = self.properties.get(i).map_or(0, |p| {
-                p.keys().filter(|id| !extension_ids().contains(id)).count()
-            });
-            if w[o + mat::EXTENSION_COUNT] as usize != MATERIAL_EXTENSIONS + extra {
+        for i in 0..self.materials.len() {
+            if !material_fits(w, i, self.properties.get(i)) {
                 return false;
             }
         }
@@ -603,89 +732,23 @@ impl SceneData<'_> {
             return false;
         }
         for (i, m) in self.meshes.iter().enumerate() {
-            let o = w[h::MESH_OFFSET] as usize + i * wire_mesh::WORDS;
-            if w[o + wire_mesh::MATERIAL_COUNT] as usize != m.materials.len() {
+            if !mesh_fits(w, i, m) {
                 return false;
-            }
-            if batches != 0 {
-                let o = batches + i * crate::layout::batch::WORDS;
-                if w[o]
-                    != m.instances
-                        .as_ref()
-                        .map_or(u32::MAX, |x| x.transforms.len() as u32)
-                    || (w[o + 2] != 0) != m.instances.as_ref().is_some_and(|x| x.colors.is_some())
-                {
-                    return false;
-                }
             }
         }
         for (i, ies) in self.ies.iter().enumerate() {
-            let o = w[h::LIGHT_OFFSET] as usize + i * light_wire::WORDS;
-            if w[o + light_wire::IES_BYTES] as usize != ies.len() {
+            if !light_fits(w, i, ies) {
                 return false;
             }
         }
-        fn floats(w: &mut [u32], at: usize, v: &[f32]) {
-            for (k, v) in v.iter().enumerate() {
-                w[at + k] = v.to_bits();
-            }
-        }
         for (i, g) in self.geometries.iter().enumerate() {
-            if previous.and_then(|(g, _)| g.get(i)).is_some_and(|a| {
-                Arc::ptr_eq(&a.positions, &g.positions)
-                    && Arc::ptr_eq(&a.indices, &g.indices)
-                    && Arc::ptr_eq(&a.normals, &g.normals)
-                    && Arc::ptr_eq(&a.uv[0], &g.uv[0])
-                    && Arc::ptr_eq(&a.uv[1], &g.uv[1])
-                    && Arc::ptr_eq(&a.colors, &g.colors)
-                    && Arc::ptr_eq(&a.tangents, &g.tangents)
-                    && Arc::ptr_eq(&a.material_indices, &g.material_indices)
-            }) {
-                continue;
-            }
-            let o = w[h::GEOMETRY_OFFSET] as usize + i * g::WORDS;
-            for (field, data) in [
-                (g::POSITION, &g.positions),
-                (g::NORMAL, &g.normals),
-                (g::UV, &g.uv[0]),
-                (g::UV1, &g.uv[1]),
-                (g::COLOR, &g.colors),
-                (g::TANGENT, &g.tangents),
-            ] {
-                let at = w[o + field] as usize;
-                floats(w, at, data);
-            }
-            for (field, data) in [
-                (g::INDICES, &g.indices),
-                (g::MATERIAL_INDEX, &g.material_indices),
-            ] {
-                let at = w[o + field] as usize;
-                w[at..at + data.len()].copy_from_slice(data);
-            }
+            write_geometry(w, i, g, previous.and_then(|(g, _)| g.get(i)));
         }
         for (i, m) in self.meshes.iter().enumerate() {
-            let o = w[h::MESH_OFFSET] as usize + i * wire_mesh::WORDS;
-            write_mesh(w, o, m);
-            let at = w[o + wire_mesh::MATERIAL_TABLE] as usize;
-            for (k, id) in m.materials.iter().enumerate() {
-                w[at + k] = *id as u32;
-            }
-            if let Some(inst) = &m.instances {
-                let o = batches + i * crate::layout::batch::WORDS;
-                let at = w[o + 1] as usize;
-                for (k, m) in inst.transforms.iter().enumerate() {
-                    floats(w, at + k * 16, &m.to_cols_array());
-                }
-                if let Some(colors) = &inst.colors {
-                    let at = w[o + 2] as usize;
-                    floats(w, at, colors);
-                }
-            }
+            write_mesh_records(w, i, m);
         }
         for (i, m) in self.materials.iter().enumerate() {
-            let o = w[h::MATERIAL_OFFSET] as usize + i * mat::WORDS;
-            write_material(w, o, m);
-            write_properties(w, o, self.properties.get(i));
+            write_material_records(w, i, m, self.properties.get(i));
         }
         for (i, t) in self.textures.iter().enumerate() {
             let o = w[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
@@ -698,7 +761,7 @@ impl SceneData<'_> {
                     .and_then(|t| t.float_pixels.as_ref())
                     .is_some_and(|a| Arc::ptr_eq(a, p))
                 {
-                    floats(w, at, p);
+                    write_floats(w, at, p);
                 }
                 continue;
             }
@@ -713,24 +776,12 @@ impl SceneData<'_> {
                 .copy_from_slice(&t.pixels[..bytes]);
         }
         for (i, record) in self.lights.iter().enumerate() {
-            let o = w[h::LIGHT_OFFSET] as usize + i * light_wire::WORDS;
-            let at = w[o + light_wire::IES_OFFSET];
-            let len = w[o + light_wire::IES_BYTES];
-            w[o..o + light_wire::WORDS].copy_from_slice(record);
-            w[o + light_wire::IES_OFFSET] = at;
-            w[o + light_wire::IES_BYTES] = len;
-            if let Some(ies) = self.ies.get(i) {
-                for (k, b) in ies.chunks(4).enumerate() {
-                    let mut word = [0; 4];
-                    word[..b.len()].copy_from_slice(b);
-                    w[at as usize + k] = u32::from_le_bytes(word);
-                }
-            }
+            write_light_records(w, i, record, self.ies.get(i));
         }
         if env.enabled {
             let o = w[h::TEXTURE_OFFSET] as usize + self.textures.len() * tex::WORDS;
             let at = w[o + tex::PIXELS] as usize;
-            floats(w, at, &env.pixels);
+            write_floats(w, at, &env.pixels);
         }
         let at = w[h::CAMERA_OFFSET] as usize;
         bytemuck::cast_slice_mut(&mut w[at..at + camera.len() / 4]).copy_from_slice(camera);

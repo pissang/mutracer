@@ -1,5 +1,6 @@
 import {nativeTangentRequirements} from './scene-tangents.js';
-import {generateVertexTangents, hasGeneratedVertexTangents} from '../../src/util/geometry.js';
+import {preparationMark} from './preparation-profile.js';
+import {installGeneratedVertexTangents, hasGeneratedVertexTangents} from '../../src/util/geometry.js';
 import {materialNeedsVertexTangents} from '../../src/renderer/tangentRequirements.js';
 // Incremental scene sync: each commit's descriptor is compared record by record
 // with the previous one, and changed records update retained scene objects the
@@ -7,10 +8,10 @@ import {materialNeedsVertexTangents} from '../../src/renderer/tangentRequirement
 // classifies the edits exactly as engine.update() does.
 import {SceneChangeTracker, type SceneSnapshotAdapter, type SceneChangeSet} from '../../src/renderer/sceneChangeCore.js';
 import {NativeMaterialSnapshot, captureNativeMaterial, nativeMaterialMatches, syncNativeMaterial} from './material-snapshot.generated.js';
-import {decodeTexture, decodeMaterial, decodeGeometry, decodeMeshMaterials, decodeInstances, decodeLight} from './scene-records.js';
+import {decodeTexture, decodeMaterial, decodeMeshMaterials, decodeInstances, decodeLight} from './scene-records.js';
 import {HEADER as H, TEXTURE as T, MATERIAL as MAT, GEOMETRY as G, MESH as M, BATCH as B, LIGHT as L, CAMERA as C, EXTENSION as E,
   VERSION} from './layout.js';
-import Geometry from '../../src/scene/Geometry.js';
+import Geometry, {Attribute} from '../../src/scene/Geometry.js';
 import MeshState from '../../src/scene/MeshState.js';
 import MaterialState from '../../src/scene/MaterialState.js';
 import type {TextureDataSource} from '../../src/scene/textureData.js';
@@ -116,7 +117,28 @@ function sameRecord(a: Uint32Array, ao: number, b: Uint32Array, bo: number, word
   }
   return true;
 }
-function copyFloats(target: Float32Array, source: Float32Array) { target.set(source); }
+/**
+ * Attribute storage of a descriptor geometry without its values: record words
+ * decide what changed, and change tracking compares storage identity, sizes and
+ * versions, never contents. Shapes match decodeGeometry, including generated
+ * normals and tangents, without the cost of decoding or generating them.
+ */
+function geometryShape(u: Uint32Array, off: number, needsTangents: boolean): Geometry {
+  const count = u[off + G.VERTEX_COUNT];
+  const geometry = new Geometry({position: new Attribute(new Float32Array(count * 3), 3),
+    indices: new Attribute(new Uint32Array(u[off + G.INDEX_COUNT]), 1), normal: new Attribute(new Float32Array(count * 3), 3)});
+  if (u[off + G.UV]) geometry.uv = new Attribute(new Float32Array(count * 2), 2);
+  if (u[off + G.UV1]) geometry.uv1 = new Attribute(new Float32Array(count * 2), 2);
+  if (u[off + G.COLOR]) geometry.color = new Attribute(new Float32Array(count * 3), 3);
+  if (u[off + G.TANGENT]) geometry.tangent = new Attribute(new Float32Array(count * 4), 4);
+  if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(count), 1);
+  if (needsTangents) generateTangentShape(geometry);
+  return geometry;
+}
+/** generateVertexTangents' attribute, without computing its values. */
+function generateTangentShape(geometry: Geometry) {
+  if (!geometry.tangent && geometry.uv && geometry.vertexCount) installGeneratedVertexTangents(geometry, new Float32Array(geometry.vertexCount * 3));
+}
 
 export class NativeSceneChanges {
   scene: SceneChangeSet;
@@ -145,8 +167,10 @@ export class SyncedScene {
    * Applies the descriptor to the retained objects and returns the pending
    * changes. An `owned` descriptor is kept for the next comparison instead of
    * a copy; the caller must not modify it afterwards. `unchanged` holds one
-   * byte per geometry, then per texture; 1 skips comparing that record because
-   * the host found it identical to the previous descriptor.
+   * byte per geometry, then per texture, optionally followed by one per
+   * material and per mesh; 1 skips comparing that record because the host found
+   * it identical to the previous descriptor. Mesh bytes cover the record, its
+   * material table and its instance batch.
    */
   sync(bytes: Uint8Array, owned = false, unchanged?: Uint8Array): NativeSceneChanges {
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
@@ -154,26 +178,43 @@ export class SyncedScene {
     if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
     const old = this.bytes, first = old.length === 0;
     const geometries = u[H.GEOMETRY_COUNT];
+    const records = geometries + u[H.TEXTURE_COUNT], materials = u[H.MATERIAL_COUNT], meshes = u[H.MESH_COUNT];
     const hints = !first && unchanged && old[H.GEOMETRY_COUNT] === geometries && old[H.TEXTURE_COUNT] === u[H.TEXTURE_COUNT] &&
-      unchanged.length === geometries + u[H.TEXTURE_COUNT] ? unchanged : undefined;
+      (unchanged.length === records || old[H.MATERIAL_COUNT] === materials && old[H.MESH_COUNT] === meshes &&
+        unchanged.length === records + materials + meshes) ? unchanged : undefined;
+    const objects = hints && hints.length > records ? hints : undefined;
+    preparationMark('sync.begin');
     const replaced = this.syncTextures(bytes, u, f, old, first, hints, geometries);
-    this.syncMaterials(u, f, old, first, replaced);
+    preparationMark('sync.textures');
+    this.syncMaterials(u, f, old, first, replaced, objects, records);
+    preparationMark('sync.materials');
     this.syncGeometries(u, f, old, first, hints);
-    this.syncMeshes(u, f, old, first);
+    preparationMark('sync.geometries');
+    this.syncMeshes(u, f, old, first, objects, records + materials);
+    preparationMark('sync.meshes');
     // Material-only edits can add the first tangent consumer. Capture the new
     // attribute identity before change detection, forcing a full preparation.
-    for (const mesh of this.meshes) {
+    // The previous sync left no candidate, so with object hints only edited
+    // meshes can become one unless a material or geometry changed.
+    const tangentCandidates = objects !== undefined && replaced.size === 0 &&
+      objects.subarray(0, geometries).every(v => v === 1) && objects.subarray(records, records + materials).every(v => v === 1);
+    for (let i = 0; i < this.meshes.length; i++) {
+      if (tangentCandidates && objects[records + materials + i]) continue;
+      const mesh = this.meshes[i];
       if (!mesh.geometry.tangent && mesh.geometry.uv && mesh.materials.some(materialNeedsVertexTangents)) {
-        generateVertexTangents(mesh.geometry);
+        generateTangentShape(mesh.geometry);
       }
     }
+    preparationMark('sync.tangents');
     this.syncLights(bytes, u, f, old, first, replaced);
     this.syncBackground(u, f);
+    preparationMark('sync.lights');
     const camera = first || !sameWords(old, old[H.CAMERA_OFFSET], u, u[H.CAMERA_OFFSET], C.WORDS);
     const resolution = first || old[H.WIDTH] !== u[H.WIDTH] || old[H.HEIGHT] !== u[H.HEIGHT];
     const quality = first || ((old[H.QUALITY_FLAGS] ^ u[H.QUALITY_FLAGS]) & 3) !== 0;
     this.bytes = owned ? u : u.slice();
     const changes = this.tracker.detect({meshes: this.meshes, lights: this.lights, background: this.background});
+    preparationMark('sync.detect');
     return new NativeSceneChanges(changes, camera, resolution, quality);
   }
   /** Accepts the last detected changes once the host has applied them. */
@@ -208,9 +249,11 @@ export class SyncedScene {
     return replaced;
   }
 
-  private syncMaterials(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, replaced: Set<number>) {
+  private syncMaterials(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, replaced: Set<number>,
+    unchanged: Uint8Array | undefined, hintOffset: number) {
     const count = u[H.MATERIAL_COUNT];
     for (let i = 0; i < count; i++) {
+      if (unchanged && unchanged[hintOffset + i] && replaced.size === 0) continue;
       const off = u[H.MATERIAL_OFFSET] + i * MAT.WORDS;
       if (first || i >= old[H.MATERIAL_COUNT]) { this.materials[i] = decodeMaterial(u, f, off, this.textures); continue; }
       const prior = old[H.MATERIAL_OFFSET] + i * MAT.WORDS;
@@ -227,12 +270,12 @@ export class SyncedScene {
     for (let i = 0; i < count; i++) {
       if (unchanged && unchanged[i]) continue;
       const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, vertices = u[off + G.VERTEX_COUNT];
-      if (first || i >= old[H.GEOMETRY_COUNT]) { this.geometries[i] = decodeGeometry(u, f, off, undefined, false, required[i]); continue; }
+      if (first || i >= old[H.GEOMETRY_COUNT]) { this.geometries[i] = geometryShape(u, off, required[i]); continue; }
       const prior = old[H.GEOMETRY_OFFSET] + i * G.WORDS;
       const spans = [G.POSITION, G.INDICES, G.NORMAL, G.UV, G.UV1, G.COLOR, G.TANGENT, G.MATERIAL_INDEX];
       const sizes = [vertices * 3, u[off + G.INDEX_COUNT], vertices * 3, vertices * 2, vertices * 2, vertices * 3, vertices * 4, vertices];
       if (sameRecord(old, prior, u, off, G.WORDS, spans, sizes)) continue;
-      const geometry = this.geometries[i], fresh = decodeGeometry(u, f, off, undefined, false, required[i] || hasGeneratedVertexTangents(geometry));
+      const geometry = this.geometries[i], fresh = geometryShape(u, off, required[i] || hasGeneratedVertexTangents(geometry));
       const samePresence = old[prior + G.VERTEX_COUNT] === vertices && old[prior + G.INDEX_COUNT] === u[off + G.INDEX_COUNT] &&
         (old[prior + G.NORMAL] === 0) === (u[off + G.NORMAL] === 0) && (old[prior + G.UV] === 0) === (u[off + G.UV] === 0) &&
         (old[prior + G.UV1] === 0) === (u[off + G.UV1] === 0) && (old[prior + G.COLOR] === 0) === (u[off + G.COLOR] === 0) &&
@@ -246,31 +289,22 @@ export class SyncedScene {
         geometry.markUpdated();
         continue;
       }
-      // Generated normals and tangents follow the new positions, as a full commit would.
-      copyFloats(geometry.position.array, fresh.position.array);
-      copyFloats(geometry.normal.array, fresh.normal.array);
-      const uv = geometry.uv, uv1 = geometry.uv1, color = geometry.color, tangent = geometry.tangent;
-      if (uv && fresh.uv) copyFloats(uv.array, fresh.uv.array);
-      if (uv1 && fresh.uv1) copyFloats(uv1.array, fresh.uv1.array);
-      if (color && fresh.color) copyFloats(color.array, fresh.color.array);
-      if (tangent && fresh.tangent) copyFloats(tangent.array, fresh.tangent.array);
+      // Attribute storage is kept; only its version records the edit.
       const topology = !sameWords(old, old[prior + G.INDICES], u, u[off + G.INDICES], u[off + G.INDEX_COUNT]) ||
         (u[off + G.MATERIAL_INDEX] !== 0 && !sameWords(old, old[prior + G.MATERIAL_INDEX], u, u[off + G.MATERIAL_INDEX], vertices));
       if (topology) {
-        const indices = geometry.indices.array, source = fresh.indices.array;
-        if (indices instanceof Uint32Array && source instanceof Uint32Array) indices.set(source);
-        else geometry.indices = fresh.indices;
-        const materialIndex = geometry.materialIndex, sourceIndex = fresh.materialIndex;
-        if (materialIndex && sourceIndex) materialIndex.array.set(sourceIndex.array);
+        if (!(geometry.indices.array instanceof Uint32Array)) geometry.indices = fresh.indices;
         geometry.markUpdated();
       } else geometry.markVerticesUpdated();
     }
     this.geometries.length = count;
   }
 
-  private syncMeshes(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean) {
+  private syncMeshes(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, unchanged: Uint8Array | undefined, hintOffset: number) {
     const count = u[H.MESH_COUNT];
     for (let i = 0; i < count; i++) {
+      // Unchanged records keep their geometry, materials, transform, identity and batch.
+      if (unchanged && unchanged[hintOffset + i] && i < this.meshes.length) continue;
       const off = u[H.MESH_OFFSET] + i * M.WORDS;
       const geometry = this.geometries[u[off + M.GEOMETRY]], materials = decodeMeshMaterials(u, off, this.materials);
       let mesh = i < this.meshes.length && !first ? this.meshes[i] : undefined;

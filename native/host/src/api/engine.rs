@@ -276,11 +276,15 @@ pub(super) struct State {
     pub(super) disposed: bool,
     pub(super) device_failed: bool,
     source_scene: Option<Arc<Vec<u8>>>,
+    /// Records changed since recent scene-object snapshots; see `set_scene_object`.
+    source_delta: Option<Arc<crate::scene_api::SceneDelta>>,
     /// Set by `set_scene_shared`: a new Arc is a changed scene, without comparing bytes.
     source_shared: bool,
     source_camera: Option<Camera>,
     /// Committed by `update`; renders read only these.
     pub(super) scene: Option<Arc<Vec<u8>>>,
+    /// Delta published with `scene`, letting an incremental commit skip unchanged records.
+    pub(super) scene_delta: Option<Arc<crate::scene_api::SceneDelta>>,
     pub(super) camera: Option<[u8; 128]>,
     pub(super) scene_revision: u64,
     pub(super) camera_revision: u64,
@@ -410,9 +414,11 @@ impl Engine {
                     disposed: false,
                     device_failed: false,
                     source_scene: None,
+                    source_delta: None,
                     source_shared: false,
                     source_camera: None,
                     scene: None,
+                    scene_delta: None,
                     camera: None,
                     scene_revision: 0,
                     camera_revision: 0,
@@ -547,6 +553,7 @@ impl Engine {
         camera_offset(descriptor)?;
         let mut state = self.live()?;
         state.source_scene = Some(Arc::new(descriptor.to_vec()));
+        state.source_delta = None;
         state.source_shared = false;
         Ok(())
     }
@@ -554,21 +561,34 @@ impl Engine {
     /// which must not change afterwards. `update` treats a new Arc as a changed
     /// scene without comparing bytes; passing the committed Arc again changes nothing.
     pub fn set_scene_shared(&self, descriptor: Arc<Vec<u8>>) -> Result<()> {
+        self.set_scene_delta(descriptor, None)
+    }
+    fn set_scene_delta(
+        &self,
+        descriptor: Arc<Vec<u8>>,
+        delta: Option<Arc<crate::scene_api::SceneDelta>>,
+    ) -> Result<()> {
         camera_offset(&descriptor)?;
         let mut state = self.live()?;
         state.source_scene = Some(descriptor);
+        state.source_delta = delta;
         state.source_shared = true;
         Ok(())
     }
     /// Records a checked scene snapshot, shared by all renders. Takes effect at update.
+    /// The scene's edited objects travel with it, so an incremental update skips
+    /// comparing unchanged records.
     pub fn set_scene_object(&self, scene: &crate::scene_api::Scene) -> Result<()> {
-        self.set_scene_shared(scene.descriptor()?)
+        let (descriptor, delta) = scene.descriptor_with_delta()?;
+        self.set_scene_delta(descriptor, Some(delta))
     }
     /// Records an empty scene, committed by the next update. Cancels old work,
     /// drops all render images and scene resources; renders can be reused.
     /// Update may wait for scene preparation and submitted GPU work to retire.
     pub fn clear_scene(&self) -> Result<()> {
-        self.live()?.source_scene = None;
+        let mut state = self.live()?;
+        state.source_scene = None;
+        state.source_delta = None;
         Ok(())
     }
     /// Records the camera for every render; `None` uses the scene's camera record.
@@ -596,6 +616,7 @@ impl Engine {
             };
             if !same {
                 state.scene = state.source_scene.clone();
+                state.scene_delta = state.source_delta.clone();
                 state.scene_revision += 1;
                 changed = true;
                 if state.scene.is_none() {
@@ -603,6 +624,7 @@ impl Engine {
                 }
             }
             state.source_scene = state.scene.clone();
+            state.source_delta = state.scene_delta.clone();
             let camera = state.source_camera.map(|c| c.to_bytes());
             if camera != state.camera {
                 state.camera = camera;

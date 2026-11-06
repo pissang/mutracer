@@ -1255,6 +1255,7 @@ pub(super) fn scene_step(
         &bytes,
         &settings,
         CommitPath::IncrementalOnly,
+        state.scene_delta.as_deref(),
     )) {
         Ok(outcome) => match outcome {
             CommitOutcome::Done => {
@@ -1287,7 +1288,7 @@ pub(super) fn scene_step(
                     break Err(error(Status::Unavailable, e.to_string()));
                 }
                 let result = crate::runtime::with_loss(&gpu, || {
-                    context::commit_path(context, &bytes, &settings, CommitPath::FullOnly)
+                    context::commit_path(context, &bytes, &settings, CommitPath::FullOnly, None)
                 });
                 match context_result(result.map(|_| ())) {
                     Err(e) if e.status == Status::Busy => {

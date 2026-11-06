@@ -166,6 +166,7 @@ fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
                 &bytes,
                 &settings::RenderSettings::default(),
                 CommitPath::IncrementalOnly,
+                None,
             )
             .map_err(|error| error.to_string()),
         )
@@ -181,7 +182,8 @@ fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
             f.owner,
             &next,
             &settings::RenderSettings::default(),
-            CommitPath::FullOnly
+            CommitPath::FullOnly,
+            None
         )
         .unwrap(),
         CommitOutcome::Done
@@ -290,6 +292,7 @@ fn target_preparation_rejects_a_scene_commit_that_started_after_its_snapshot() {
                     &input,
                     &settings::RenderSettings::default(),
                     CommitPath::FullOnly,
+                    None,
                 )
                 .map(|_| ()),
             )

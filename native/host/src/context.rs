@@ -759,7 +759,15 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
             ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        commit_inner(handle, bytes, unsafe { *settings }, None, CommitPath::Any).map(|_| ())
+        commit_inner(
+            handle,
+            bytes,
+            unsafe { *settings },
+            None,
+            CommitPath::Any,
+            None,
+        )
+        .map(|_| ())
     });
     write_result(error, capacity, result)
 }
@@ -784,13 +792,16 @@ pub(crate) enum CommitOutcome {
 }
 /// L1 entry point: a shared descriptor, which the context keeps without copying,
 /// and borrowed settings, with an explicit commit path.
+/// `delta` names the records that changed since recent descriptors of the same
+/// scene object; it only narrows comparisons and never changes the outcome.
 pub(crate) fn commit_path(
     handle: u64,
     bytes: &Arc<Vec<u8>>,
     settings: &settings::RenderSettings,
     path: CommitPath,
+    delta: Option<&crate::scene_api::SceneDelta>,
 ) -> Result<CommitOutcome> {
-    platform_scope(|| commit_inner(handle, bytes, *settings, Some(bytes), path))
+    platform_scope(|| commit_inner(handle, bytes, *settings, Some(bytes), path, delta))
 }
 
 fn commit_inner(
@@ -799,6 +810,7 @@ fn commit_inner(
     settings: settings::RenderSettings,
     shared: Option<&Arc<Vec<u8>>>,
     path: CommitPath,
+    delta: Option<&crate::scene_api::SceneDelta>,
 ) -> Result<CommitOutcome> {
     if bytes.len() > scene::MAX_BYTES {
         return Err(fail(
@@ -844,8 +856,13 @@ fn commit_inner(
         // The TS core trusts validated descriptors only. Validation and sync
         // failures fall through to full preparation, which reports them.
         let started = std::time::Instant::now();
+        // A scene object's delta lists every record that may differ from `previous`.
+        let changes = delta.and_then(|d| d.since(&previous));
         // Records identical to the validated previous descriptor skip element scans.
-        let unchanged = commit_plan::unchanged_records(&previous, bytes);
+        let unchanged = match changes {
+            Some(changes) => commit_plan::unchanged_records_with(&previous, bytes, changes),
+            None => commit_plan::unchanged_records(&previous, bytes),
+        };
         let hinted = started.elapsed();
         let valid = scene::validate_changed(bytes, &unchanged).is_ok();
         let validated = started.elapsed();
@@ -853,23 +870,31 @@ fn commit_inner(
         let next = shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec()));
         let copied = started.elapsed();
         let compatible = valid
-            && crate::scene_api::predict(&previous, bytes) == crate::api::CommitKind::Incremental;
+            && crate::scene_api::predict_with(&previous, bytes, changes)
+                == crate::api::CommitKind::Incremental;
         let structural = started.elapsed();
         let compatible = compatible
-            && commit_plan::changed_materials(&previous, bytes).is_some_and(|patch| {
-                patch[4..8] == 0u32.to_le_bytes()
-                    || retained.materials_compatible(patch).unwrap_or(false)
-            });
+            && commit_plan::changed_materials_with(&previous, bytes, changes.map(|c| &c.materials))
+                .is_some_and(|patch| {
+                    patch[4..8] == 0u32.to_le_bytes()
+                        || retained.materials_compatible(patch).unwrap_or(false)
+                });
         let preflighted = started.elapsed();
         let sync = compatible
             .then(|| {
+                let mut unchanged = unchanged;
+                if let Some(changes) = changes {
+                    commit_plan::extend_object_hints(&mut unchanged, bytes, changes);
+                }
                 retained
                     .sync(previous.clone(), next.clone(), unchanged)
                     .ok()
             })
             .flatten();
         let synced = started.elapsed();
-        let steps = sync.and_then(|sync| commit_plan::plan(&previous, bytes, &sync, scene_only));
+        let steps = sync.and_then(|sync| {
+            commit_plan::plan_with(&previous, bytes, &sync, scene_only, changes.is_some())
+        });
         let planned = started.elapsed();
         let mut finished = false;
         with_registry(|registry| {
@@ -898,7 +923,7 @@ fn commit_inner(
                     serde_json::json!({"nativeCommitProfile": {"bytes": bytes.len(),
                     "hintMs": ms(hinted), "validateMs": ms(validated - hinted), "copyMs": ms(copied - validated), "preflightMs": ms(structural - copied), "materialCheckMs": ms(preflighted - structural), "syncMs": ms(synced - preflighted),
                     "planMs": ms(planned - synced), "applyMs": ms(started.elapsed() - planned),
-                    "steps": steps.as_ref().map(Vec::len), "incremental": finished}})
+                    "steps": steps.as_ref().map(Vec::len), "incremental": finished, "delta": changes.is_some()}})
                 );
             }
             Ok(())

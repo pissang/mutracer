@@ -191,6 +191,39 @@ pub(crate) fn unchanged_records(previous: &[u8], next: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Like [`unchanged_records`], comparing only geometries `changes` lists; the
+/// scene object's delta guarantees every other record is identical.
+pub(crate) fn unchanged_records_with(
+    previous: &[u8],
+    next: &[u8],
+    changes: &crate::scene_api::Changes,
+) -> Vec<u8> {
+    let (a, b) = (Words(previous), Words(next));
+    if a.len() < h::WORDS || b.len() < h::WORDS {
+        return Vec::new();
+    }
+    (0..b.u(h::GEOMETRY_COUNT))
+        .map(|i| !changes.geometries.contains(&i) || geometry_unchanged(&a, &b, i) == Some(true))
+        .chain((0..b.u(h::TEXTURE_COUNT)).map(|_| true))
+        .map(u8::from)
+        .collect()
+}
+/// Appends one byte per material, then per mesh, to sync hints from
+/// [`unchanged_records`]: 1 when `changes` leaves that record identical.
+pub(crate) fn extend_object_hints(
+    unchanged: &mut Vec<u8>,
+    next: &[u8],
+    changes: &crate::scene_api::Changes,
+) {
+    let b = Words(next);
+    if unchanged.len() != b.u(h::GEOMETRY_COUNT) + b.u(h::TEXTURE_COUNT) {
+        return;
+    }
+    unchanged
+        .extend((0..b.u(h::MATERIAL_COUNT)).map(|i| u8::from(!changes.materials.contains(&i))));
+    unchanged.extend((0..b.u(h::MESH_COUNT)).map(|i| u8::from(!changes.meshes.contains(&i))));
+}
+
 fn geometry_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     let (ao, bo) = (
         a.u(h::GEOMETRY_OFFSET) + index * g::WORDS,
@@ -352,13 +385,23 @@ fn material_steps(a: &Words, b: &Words, indices: &[usize]) -> Option<Step> {
 
 /// Sparse changed materials for the cheap shader/transport preflight. Both
 /// descriptors have already passed validation; this does not mutate sync state.
-pub(crate) fn changed_materials(previous: &[u8], next: &[u8]) -> Option<Vec<u8>> {
+/// Only `candidates` are compared when given; every other material record
+/// must then be identical.
+pub(crate) fn changed_materials_with(
+    previous: &[u8],
+    next: &[u8],
+    candidates: Option<&std::collections::BTreeSet<usize>>,
+) -> Option<Vec<u8>> {
     let (a, b) = (Words(previous), Words(next));
     if a.u(h::MATERIAL_COUNT) != b.u(h::MATERIAL_COUNT) {
         return None;
     }
     let mut changed = Vec::new();
-    for index in 0..b.u(h::MATERIAL_COUNT) {
+    let candidates: Vec<usize> = match candidates {
+        Some(c) => c.iter().copied().collect(),
+        None => (0..b.u(h::MATERIAL_COUNT)).collect(),
+    };
+    for index in candidates {
         let (ao, bo) = (
             a.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
             b.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
@@ -472,11 +515,23 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
 /// or `None` when only full preparation reproduces it. With `scene_only` the
 /// header size and bevel/dispersion bits are ignored: they shape only the own
 /// target of a scene that renders through linked targets.
+#[cfg(test)]
 pub(crate) fn plan(
     previous: &[u8],
     next: &[u8],
     sync: &SceneSync,
     scene_only: bool,
+) -> Option<Vec<Step>> {
+    plan_with(previous, next, sync, scene_only, false)
+}
+/// Like [`plan`]; `textures_unchanged` asserts that every texture record and
+/// its pixels are identical, skipping their comparison.
+pub(crate) fn plan_with(
+    previous: &[u8],
+    next: &[u8],
+    sync: &SceneSync,
+    scene_only: bool,
+    textures_unchanged: bool,
 ) -> Option<Vec<Step>> {
     let (a, b) = (Words(previous), Words(next));
     if a.len() < h::WORDS
@@ -486,7 +541,12 @@ pub(crate) fn plan(
     {
         return None;
     }
-    let (textures, atlas) = changed_textures(&a, &b)?;
+    let (textures, atlas) = if textures_unchanged && a.u(h::TEXTURE_COUNT) == b.u(h::TEXTURE_COUNT)
+    {
+        (Vec::new(), false)
+    } else {
+        changed_textures(&a, &b)?
+    };
     // The environment map is a light to the sync, so its edits may not set `background`.
     let environment_maps = textures.iter().any(|&i| {
         [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE]
