@@ -26,7 +26,7 @@ const sourceOracleRoot = resolve(output, 'javascript-source');
 const sourceEntry = resolve(root, 'native/tests/modules/shader-generation.ts');
 const sourceConfig = ts.readConfigFile(resolve(root, 'tsconfig.json'), ts.sys.readFile);
 const sourceOptions = ts.parseJsonConfigFileContent(sourceConfig.config, ts.sys, root).options;
-const sourceProgram = ts.createProgram([sourceEntry, resolve(root, 'native/tests/modules/displacement.ts'), resolve(root, 'native/tests/modules/ies.ts')], { ...sourceOptions, rootDir: root,
+const sourceProgram = ts.createProgram([sourceEntry, resolve(root, 'native/tests/modules/displacement.ts'), resolve(root, 'native/tests/modules/ies.ts'), resolve(root, 'native/tests/modules/material-data.ts')], { ...sourceOptions, rootDir: root,
   outDir: sourceOracleRoot, declaration: false, sourceMap: false, inlineSources: false });
 const sourceDiagnostics = [...ts.getPreEmitDiagnostics(sourceProgram), ...sourceProgram.emit().diagnostics];
 if (sourceDiagnostics.some(item => item.category === ts.DiagnosticCategory.Error)) {
@@ -49,7 +49,7 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
     const adapter = readFileSync(resolve(root, `native/tests/modules/${name}.ts`), 'utf8');
     const javascript = ts.transpileModule(adapter, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
       .replaceAll('../../../src/', pathToFileURL(resolve(root, 'lib') + '/').href);
-    const oracle = ['shader-generation', 'displacement', 'ies'].includes(name)
+    const oracle = ['shader-generation', 'displacement', 'ies', 'material-data'].includes(name)
       ? await import(pathToFileURL(resolve(sourceOracleRoot, `native/tests/modules/${name}.js`)).href)
       : await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
     if (name === 'math') for (const [i, values] of [[0, 0, 0], [1, 2, 3], [-1.25, .3, 4], [.3, -.7, 1.2], [1e-6, 2e-6, -3e-6], [100, -50, .125]].entries()) {
