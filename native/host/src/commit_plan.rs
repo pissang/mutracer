@@ -269,9 +269,11 @@ fn geometry_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     Some(Step::Geometry(bytes))
 }
 
-/// Above this many changed instances in one batch, full preparation is cheaper
-/// than one retained transform update (and TLAS refit) per instance.
-const MAX_INSTANCE_STEPS: usize = 64;
+/// Changed instances one batch may refit incrementally: at least this many, or
+/// up to half of the batch. Batched transforms refit once per commit, but a
+/// software refit of nearly every instance of a large batch costs more than
+/// full preparation.
+const MIN_INSTANCE_EDITS: usize = 64;
 
 fn transform_steps(a: &Words, b: &Words, index: usize, steps: &mut Vec<Step>) -> Option<()> {
     let (am, bm) = (
@@ -297,6 +299,7 @@ fn transform_steps(a: &Words, b: &Words, index: usize, steps: &mut Vec<Step>) ->
         return None;
     }
     let (at, btr) = (a.u(ao + bt::TRANSFORMS), b.u(bo + bt::TRANSFORMS));
+    let limit = MIN_INSTANCE_EDITS.max(count / 2);
     let mut changed = 0;
     for k in 0..count {
         let next = b.span(btr + k * 16, 16)?;
@@ -304,7 +307,7 @@ fn transform_steps(a: &Words, b: &Words, index: usize, steps: &mut Vec<Step>) ->
             continue;
         }
         changed += 1;
-        if changed > MAX_INSTANCE_STEPS {
+        if changed > limit {
             return None;
         }
         let mut bytes = record(&[1, index as u32, k as u32 + 1, 0]);

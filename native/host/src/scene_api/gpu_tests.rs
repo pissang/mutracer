@@ -884,11 +884,11 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
         let instanced = s
             .add_mesh(Mesh {
                 instances: Some(Instances {
-                    transforms: (0..70)
+                    transforms: (0..140)
                         .map(|i| {
                             Mat4::from_translation(Vec3::new(
-                                (i % 10) as f32 * 0.15 - 0.7,
-                                (i / 10) as f32 * 0.1 - 0.4,
+                                (i % 14) as f32 * 0.1 - 0.7,
+                                (i / 14) as f32 * 0.08 - 0.4,
                                 -0.5,
                             )) * Mat4::from_scale(Vec3::splat(0.2))
                         })
@@ -946,7 +946,7 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
         dirty.set_scene_object(&s).unwrap();
         commit(&dirty, &dirty_render);
         sequential(&s);
-        for step in 0..12 {
+        for step in 0..13 {
             let expected = match step {
                 0 => {
                     s.mesh_mut(meshes[0]).unwrap().transform =
@@ -1023,9 +1023,21 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
                     Some(Full)
                 }
                 9 => {
+                    // More than 64 but at most half of the batch: one refit.
+                    for k in 0..66 {
+                        let i = s.mesh_mut(instanced).unwrap().instances.as_mut().unwrap();
+                        let m = &mut Arc::make_mut(&mut i.transforms)[k * 2];
+                        *m = Mat4::from_translation(Vec3::new(0.05, 0., 0.)) * *m;
+                        if k == 32 {
+                            sequential(&s);
+                        }
+                    }
+                    Some(Incremental)
+                }
+                12 => {
                     let i = s.mesh_mut(instanced).unwrap().instances.as_mut().unwrap();
                     for m in Arc::make_mut(&mut i.transforms) {
-                        *m = Mat4::from_translation(Vec3::new(0.05, 0., 0.)) * *m;
+                        *m = Mat4::from_translation(Vec3::new(0., 0.03, 0.)) * *m;
                     }
                     Some(Full)
                 }

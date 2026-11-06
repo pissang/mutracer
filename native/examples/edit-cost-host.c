@@ -119,7 +119,7 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
@@ -145,7 +145,7 @@ static void edit(Bench *b,unsigned c,int on){
   case 23:case 24:case 25:for(uint32_t i=0;i<batch_size(c);i++){float w[16];mt_scene_identity(w);w[12]=(float)(i%64)*1.1f+(on?.01f:0);w[14]=(float)(i/64)*1.1f;CHECK(mt_scene_set_mesh_transform(b->scene,b->meshes[i],w,error,sizeof error));}break;
   case 26:case 27:case 28:for(uint32_t i=0;i<batch_size(c);i++)CHECK(mt_scene_material_set_float(b->scene,b->materials[i],MT_MAT_SPECULAR_ROUGHNESS,on?.6f:.3f,0,0,error,sizeof error));break;
   case 29:edit(b,1,on);break;
-  case 31:case 32:case 33:{uint32_t n=(const uint32_t[]){64,1024,16384}[c-31];for(uint32_t i=0;i<n;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;}
+  case 31:case 32:case 33:case 34:{uint32_t n=c==34?b->instances.count/2:(const uint32_t[]){64,1024,16384}[c-31];for(uint32_t i=0;i<n;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;}
   case 30:CHECK(mt_scene_material_set_float(b->scene,b->material,MT_MAT_BASE_COLOR,on?.4f:.8f,on?.5f:.8f,on?.6f:.8f,error,sizeof error));break;
   case 21:edit(b,0,on);edit(b,1,on);material(b,MT_MAT_SPECULAR_ROUGHNESS,on?.6f:.3f,0,0);edit(b,16,on);edit(b,17,on);break;
   }
@@ -170,7 +170,7 @@ int main(int argc,char **argv){
   for(unsigned c=0;c<sizeof edits/sizeof edits[0];c++){
     if(!selected(filter,edits[c])||(c==2&&!instances))continue;
     if((c>=23&&c<=25&&batch_size(c)>meshes)||(c>=26&&c<=28&&batch_size(c)>materials))continue;
-    if(c>=31&&c<=33&&(const uint32_t[]){64,1024,16384}[c-31]>instances)continue;
+    if((c>=31&&c<=33&&(const uint32_t[]){64,1024,16384}[c-31]>instances)||(c==34&&instances<2))continue;
     if(c==29||c==30){
       /* Each repetition first commits a full preparation (unmeasured), so the
        * measured edit is the first incremental commit after it. */
@@ -180,7 +180,9 @@ int main(int argc,char **argv){
     /* The inverse state of removal/replacement/add-environment has to exist. */
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
-    uint32_t expected=((c==2&&instances>64)||c==32||c==33||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
+    /* Full above max(64, half of the batch) changed instances. */
+    uint32_t limit=instances/2>64?instances/2:64;
+    uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
     for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
