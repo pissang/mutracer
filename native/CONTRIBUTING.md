@@ -735,6 +735,24 @@ MT_LOOP_ITERATIONS=2000 MT_LOOP_BATCHED=1 cargo test \
   zero-failure run does not establish a fix. Revisions from before incremental
   commits reject the later padded transform packet; record any adaptation.
 
+For Hydra failures, set `MUTRACER_HYDRA_CAPTURE_SCENE=/absolute/scene.bin` to
+capture the resolved scene with the current camera and render dimensions. The
+file is overwritten when the view or scene changes. Build
+`validation/scene-replay.c` against the same SDK and run
+`scene-replay scene.bin /absolute/output-prefix BACKEND SAMPLES [BOUNCES]`
+without Hydra. It uses seed 12345, Sobol, four direct-light candidates and one
+sample per batch; the default scattering depth is three. HDR and depth are SDK
+top-first RGBA32F, and IDs are raw uint32 records, rather than Hydra's mapped
+formats. Keep captures outside the checkout; they contain the scene's asset data.
+
+Path tracing, AOV tracing, AS builds, HDR readback and Metal exports carry
+diagnostic labels or signposts. Check system GPU-restart logs even when a host
+exits successfully. `hardware_shadow_excludes_only_the_origin_primitive` is a
+focused real-GPU visibility check for both indexed layouts and opaque/candidate
+geometry; it also checks that another instance or a farther occluder still blocks
+the ray. These diagnostics do not establish a fix for the intermittent sample
+miss described above.
+
 ### oidn-webgpu release integration
 
 The Rust adapter uses only the crate's documented Model, Denoiser,
