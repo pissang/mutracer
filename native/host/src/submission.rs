@@ -1,6 +1,10 @@
 //! Coordinate a shared presentation queue with background native uploads.
 use std::sync::{Arc, Condvar, Mutex};
 
+#[cfg(target_os = "macos")]
+type MetalSharedEvent =
+    objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>>;
+
 #[derive(Default)]
 struct State {
     paused: bool,
@@ -70,6 +74,9 @@ impl Drop for Submission<'_> {
 #[derive(Clone)]
 pub(crate) struct GpuQueue {
     queue: wgpu::Queue,
+    submit_lock: Arc<Mutex<()>>,
+    #[cfg(target_os = "macos")]
+    metal_barrier: Arc<Mutex<Option<(MetalSharedEvent, u64)>>>,
     gate: Option<Arc<SubmissionGate>>,
     #[cfg(test)]
     readbacks: Arc<std::sync::atomic::AtomicU64>,
@@ -78,6 +85,9 @@ impl GpuQueue {
     pub(crate) fn new(queue: wgpu::Queue, gate: Option<Arc<SubmissionGate>>) -> Self {
         Self {
             queue,
+            submit_lock: Default::default(),
+            #[cfg(target_os = "macos")]
+            metal_barrier: Default::default(),
             gate,
             #[cfg(test)]
             readbacks: Default::default(),
@@ -94,6 +104,9 @@ impl GpuQueue {
         let (send, receive) = std::sync::mpsc::channel();
         {
             let _submission = self.gate.as_ref().map(|gate| gate.enter());
+            let _exclusive = self.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
+            #[cfg(target_os = "macos")]
+            self.stage_metal_barrier();
             wgpu::util::DownloadBuffer::read_buffer(device, &self.queue, &source, move |result| {
                 let _ = send.send(result.map(|buffer| buffer.to_vec()));
             });
@@ -134,8 +147,40 @@ impl GpuQueue {
         &self,
         commands: impl IntoIterator<Item = wgpu::CommandBuffer>,
     ) -> wgpu::SubmissionIndex {
+        self.exclusive_submit(|queue| queue.submit(commands))
+    }
+    // Foreign event staging is queue-wide. Keep it atomic with submit, including
+    // background uploads and DownloadBuffer's internal submission.
+    pub(crate) fn exclusive_submit<T>(&self, f: impl FnOnce(&wgpu::Queue) -> T) -> T {
         let _submission = self.gate.as_ref().map(|gate| gate.enter());
-        self.queue.submit(commands)
+        let _exclusive = self.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(target_os = "macos")]
+        self.stage_metal_barrier();
+        f(&self.queue)
+    }
+    // Metal's strict relay is monotonic: a later wait-free submission must not
+    // publish a higher relay value that bypasses an outstanding foreign wait.
+    // Every later submission therefore also waits for the last export's native
+    // completion. Must be set while holding exclusive_submit's lock.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_metal_barrier(
+        &self,
+        event: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>>,
+        value: u64,
+    ) {
+        *self.metal_barrier.lock().unwrap() = Some((event, value));
+    }
+    #[cfg(target_os = "macos")]
+    fn stage_metal_barrier(&self) {
+        use objc2_metal::MTLSharedEvent;
+        let mut barrier = self.metal_barrier.lock().unwrap();
+        if let Some((event, value)) = barrier.as_ref() {
+            if event.signaledValue() >= *value {
+                *barrier = None;
+            } else if let Some(queue) = unsafe { self.queue.as_hal::<wgpu::hal::api::Metal>() } {
+                queue.add_wait_event(event.clone(), *value);
+            }
+        }
     }
 }
 impl std::ops::Deref for GpuQueue {

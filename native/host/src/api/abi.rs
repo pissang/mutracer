@@ -2,6 +2,8 @@
 //!
 //! Objects live in one registry. Each call clones what it needs out of the
 //! registry and runs without holding it, so callbacks may call back into the ABI.
+#[path = "abi_metal.rs"]
+mod metal;
 #[path = "abi_vulkan.rs"]
 mod vulkan;
 use super::*;
@@ -48,6 +50,16 @@ struct LoopEntry {
     callbacks: Vec<LoopSubscription>,
 }
 enum Object {
+    #[cfg(target_os = "macos")]
+    GpuImage {
+        engine: u64,
+        image: super::metal::MetalImage,
+    },
+    #[cfg(target_os = "macos")]
+    GpuTimeline {
+        engine: u64,
+        timeline: super::metal::MetalTimeline,
+    },
     Engine(EngineEntry),
     Display {
         engine: u64,
@@ -63,6 +75,8 @@ impl Object {
     fn engine(&self) -> Option<u64> {
         match self {
             Object::Engine(_) => None,
+            #[cfg(target_os = "macos")]
+            Object::GpuImage { engine, .. } | Object::GpuTimeline { engine, .. } => Some(*engine),
             Object::Display { engine } => Some(*engine),
             Object::Render(r) => Some(r.engine),
             Object::Loop(l) => Some(l.engine),
@@ -904,7 +918,7 @@ pub unsafe extern "C" fn mt_engine_destroy(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        engine_of(handle)?;
+        metal::check_destroy(&engine_of(handle)?)?;
         vulkan::engine_destroyed(handle);
         // Loops first, then renders, then the engine; dropped outside the registry.
         let mut removed = registry(|r| {
@@ -928,6 +942,8 @@ pub unsafe extern "C" fn mt_engine_destroy(
             Object::Render(_) => 2,
             Object::Display { .. } | Object::Upscale { .. } => 3,
             Object::Engine(_) => 4,
+            #[cfg(target_os = "macos")]
+            Object::GpuImage { .. } | Object::GpuTimeline { .. } => 3,
         });
         let mut engine = None;
         for object in removed {

@@ -33,6 +33,8 @@ mod depth;
 mod display;
 mod easu;
 mod engine;
+#[cfg(target_os = "macos")]
+pub mod metal;
 mod post_process;
 mod render;
 mod render_loop;

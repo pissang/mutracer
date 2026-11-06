@@ -190,3 +190,11 @@ Technology License 1.0 (TOST), [full text](LICENSES/OpenUSD-TOST.txt) and
 [upstream NOTICE](LICENSES/OpenUSD-NOTICE.txt).
 Source: <https://github.com/PixarAnimationStudios/OpenUSD/tree/v26.03/pxr/imaging/plugin/hdEmbree>.
 OpenUSD and its build dependencies are external requirements, not bundled here.
+
+## oidn-webgpu-native Metal imports
+
+Device import and timeline staging in `native/host/src/api/metal.rs` adapt
+`src/gpu_capi/metal.rs` from [oidn-webgpu-native 0.2.0](https://crates.io/crates/oidn-webgpu-native/0.2.0).
+Copyright (c) 2024 pissang. MIT License
+([LICENSES/OIDNWebNative-MIT.txt](LICENSES/OIDNWebNative-MIT.txt)).
+Modified for MuTracer renderer features, texture exports and batched timelines.

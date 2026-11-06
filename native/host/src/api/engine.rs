@@ -332,6 +332,8 @@ pub(super) struct Inner {
     /// Set while `flush` runs callbacks; nested flushes leave events to it.
     dispatching: AtomicBool,
     pub(super) gpu: GpuDevice,
+    #[cfg(target_os = "macos")]
+    pub(super) metal: Mutex<Option<super::metal::State>>,
     pub(super) adapter: Option<wgpu::Adapter>,
     pub(super) backend: Backend,
 }
@@ -427,6 +429,8 @@ impl Engine {
                 listeners: Mutex::new(Listeners::default()),
                 dispatching: AtomicBool::new(false),
                 gpu,
+                #[cfg(target_os = "macos")]
+                metal: Mutex::new(None),
                 adapter,
                 backend: options.backend,
             }),

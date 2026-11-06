@@ -3058,6 +3058,19 @@ impl Render {
         }
         Ok(ConvergeResult { samples: target })
     }
+    #[cfg(target_os = "macos")]
+    pub(super) fn metal_hdr_inputs(&self) -> Result<([wgpu::Buffer; 3], [u32; 4])> {
+        self.with(|state, id| {
+            if !readiness(state, id).complete {
+                return Err(error(Status::InvalidState, "No completed HDR export image"));
+            }
+            Ok(state.renders[&id]
+                .capture
+                .as_ref()
+                .unwrap()
+                .metal_hdr_inputs())
+        })
+    }
     /// Borrows an output texture without CPU readback or waiting for another sample.
     /// `None` before a complete image; Display also needs a previous compose.
     /// A composed auxiliary image does not require a beauty sample.

@@ -454,6 +454,20 @@ impl Display {
     pub fn compose_with(&self, settings: &Settings) {
         self.compose_inner(settings, true);
     }
+    // Metal exports match L1 CPU HDR readback exactly, including its f32 mean
+    // and opaque-background rules. These are immutable captured GPU buffers.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn metal_hdr_inputs(&self) -> ([wgpu::Buffer; 3], [u32; 4]) {
+        (
+            [self.raw.clone(), self.normal.clone(), self.albedo.clone()],
+            [
+                self.size[0],
+                self.size[1],
+                self.original_samples,
+                self.metadata.opaque_background() as u32,
+            ],
+        )
+    }
     /// Resolved raw ray color, without denoising or display transforms. Match
     /// WebGPU's hit normalization and per-pixel coverage, including blank pixels.
     pub(crate) fn hdr_texture(&mut self) -> wgpu::Texture {
