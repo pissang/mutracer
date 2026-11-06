@@ -1,0 +1,1 @@
+{"Plugins":[{"Type":"library","Name":"hdMuTracer","Root":"..","LibraryPath":"@CMAKE_SHARED_LIBRARY_PREFIX@hdMuTracer@CMAKE_SHARED_LIBRARY_SUFFIX@","ResourcePath":"resources","Info":{"Types":{"HdMuTracerRendererPlugin":{"bases":["HdRendererPlugin"],"displayName":"MuTracer","priority":0}}}}]}

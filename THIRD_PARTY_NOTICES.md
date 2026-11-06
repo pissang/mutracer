@@ -177,3 +177,16 @@ The optional Web and native EASU display upscale adapts the 32-bit EASU function
 [FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR),
 `ffx_fsr1.h` v1.20210629, copyright (c) 2021 Advanced Micro Devices, Inc.
 Licensed under MIT; see [LICENSES/FidelityFX-FSR.txt](LICENSES/FidelityFX-FSR.txt).
+
+## OpenUSD Hydra integration shells
+
+`native/integrations/hydra/bridge.h`, `delegate.cpp` and `scene.cpp` adapt Hydra
+plugin shells and instancer transform composition from OpenUSD v26.03,
+`pxr/imaging/plugin/hdEmbree`, commit
+`1818e14bae0036ac4bc7b4e60826b5797076a4fe`. Copyright 2016–2019 Pixar.
+They replace Embree rendering with the MuTracer C SDK, queued scene snapshots,
+identity mapping and CPU AOV resolve. Applicable license: Tomorrow Open Source
+Technology License 1.0 (TOST), [full text](LICENSES/OpenUSD-TOST.txt) and
+[upstream NOTICE](LICENSES/OpenUSD-NOTICE.txt).
+Source: <https://github.com/PixarAnimationStudios/OpenUSD/tree/v26.03/pxr/imaging/plugin/hdEmbree>.
+OpenUSD and its build dependencies are external requirements, not bundled here.

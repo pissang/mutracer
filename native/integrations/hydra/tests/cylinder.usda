@@ -1,0 +1,72 @@
+#usda 1.0
+(
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def "Materials"
+{
+    def Material "Open"
+    {
+        token outputs:mtlx:surface.connect = </Materials/Open/Surface.outputs:out>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_open_pbr_surface_surfaceshader"
+            color3f inputs:base_color = (0.4, 0.15, 0.05)
+            float inputs:coat_weight = 0.25
+            color3f inputs:emission_color = (0.2, 0.4, 0.1)
+            float inputs:emission_luminance = 0.1
+            token outputs:out
+        }
+    }
+
+    def Material "Preview"
+    {
+        token outputs:surface.connect = </Materials/Preview/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.1, 0.3, 0.7)
+            float inputs:roughness = 0.25
+            token outputs:surface
+        }
+    }
+}
+
+def Mesh "Mesh" (
+    prepend apiSchemas = ["MaterialBindingAPI"]
+)
+{
+    uniform bool doubleSided = 1
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    rel material:binding = </Materials/Open>
+    normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+        interpolation = "vertex"
+    )
+    point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+    texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+        interpolation = "faceVarying"
+    )
+    uniform token subdivisionScheme = "none"
+}
+
+def CylinderLight "Light"
+{
+    color3f inputs:color = (1, 1, 1)
+    float inputs:intensity = 2
+    double3 xformOp:translate = (0, 0, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+
+def Camera "Camera"
+{
+    float2 clippingRange = (0.1, 100)
+    float focalLength = 50
+    float horizontalAperture = 36
+    float verticalAperture = 36
+    double3 xformOp:translate = (0, 0, 5)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
