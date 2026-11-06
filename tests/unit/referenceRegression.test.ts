@@ -15,10 +15,11 @@ describe('focused native validation', () => {
     expect(() => ciOptions(['--gpu-tests', '['])).toThrow();
   });
   it('intersects only/skip and selects GPU names with an expression', () => {
-    const options = ciOptions(['--only', 'host-tests,postprocess-shaders', '--skip', 'postprocess-shaders',
+    const options = ciOptions(['--only', 'host-tests,postprocess-shaders,metal-gpu-host', '--skip', 'postprocess-shaders',
       '--gpu-tests', 'display|jnlm', '--batch-gpu-tests']);
     expect(options.subset).toBe(true);
     expect(options.enabled('host-tests')).toBe(true);
+    expect(options.enabled('metal-gpu-host')).toBe(true);
     expect(options.enabled('postprocess-shaders')).toBe(false);
     expect(options.enabled('raw-gpu-fixtures')).toBe(false);
     expect(options.gpuFilter!.test('display::jnlm::tests::capture')).toBe(true);

@@ -104,6 +104,7 @@ const joinLane=async pending=>{const error=await pending;if(error)throw error;};
 let hostGpuTests;
 if(hostGpuValidation&&enabled('host-tests'))hostGpuTests=await runHostGpuTests();
 if(gpuValidation){
+ if(process.platform==='darwin')await run('metal-gpu-host',process.execPath,['native/validation/metal-render.mjs'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'metal-host'),MTL_DEBUG_LAYER:'1'});
  await run('viewer-gpu-animation','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml','gpu_animated_poses','--','--ignored','--nocapture'],{CARGO_TARGET_DIR:viewerTarget});
  await run('raw-gpu-fixtures','npm',['run','native:scene'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8',...prebuilt},{timeout:1800000});
  // A standalone window uses the SDK surface path, separate from egui's surface.

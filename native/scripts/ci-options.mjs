@@ -2,7 +2,7 @@ export const steps=new Set(['compiler-version','windows-msvc-runtime','aot-build
  'adapter-info','gpu-availability','host-tests','postprocess-shaders','postprocess-shaders','jnlm-shaders','scene-picking',
  'viewer-tests','build-lib','modules-build','modules-verify','storage-verify','viewer-build','viewer-gpu-animation',
  'raw-gpu-fixtures','viewer-gpu-surface','c-window','ray-query-contracts','c-hosts','scene-api-c-host',
- 'viewer-gpu-package','scene-static']);
+ 'viewer-gpu-package','scene-static','metal-gpu-host']);
 
 export function ciOptions(args){
 function option(name){
