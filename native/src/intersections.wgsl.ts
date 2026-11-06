@@ -44,8 +44,9 @@ fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i3
   var query: ray_query;
   // OPAQUE is enabled only for all-double-sided, non-alpha, non-PDM geometry.
   // A previous-record or instance restriction still requires every candidate.
-  // Shadow retains its existing alpha-aware terminate-on-first-hit semantics.
-  let flags = ${opaqueClosest ? 'select(select(0u, 2u, skipRecord >= 0 || onlyInstance >= 0), 4u, shadow)' : 'select(2u, 4u, shadow)'};
+  // Shadow must expose opaque candidates too: the current triangle is excluded
+  // by the software query contract. Terminate only after accepting a candidate.
+  let flags = ${opaqueClosest ? 'select(select(0u, 2u, skipRecord >= 0 || onlyInstance >= 0), 6u, shadow)' : 'select(2u, 6u, shadow)'};
   let minimum = select(0.0, 1e-7, shadow);
   rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u, minimum, limit, ray.o, ray.d));
   var generated: MtHit;
@@ -57,7 +58,7 @@ fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i3
     let record = mtRecord(instance, candidate.primitive_index);
 ${diagnostic ? `    mtCandidateCount++;
     if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedSeen++; }` : ''}
-    if (!shadow && record == skipRecord && instance == skipInstance) { continue; }
+    if (record == skipRecord && instance == skipInstance) { continue; }
     let index = mtIndices(instance, record);
     var tri = mtTriangle(index);
     let w2l = mtWorldToLocal(instance);
@@ -145,7 +146,7 @@ ${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool {
   let limit = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
   if (limit <= 1e-7) { return false; }
-  return mtTrace(ray, limit, true, -1, -1, -1, true, false).kind != 0u;
+  return mtTrace(ray, limit, true, -1, currTriangleIndex, currInstanceIndex, true, false).kind != 0u;
 }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
   mtComplete(ray, si, mtTrace(ray, maxDistance, false, instanceIndex, -1, -1, true, false));
