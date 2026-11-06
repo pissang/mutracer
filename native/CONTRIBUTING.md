@@ -108,6 +108,7 @@ inspect fixed-sample images separately.
 | `npm run native:scene` | Yes | Builds the AOT archive and library; verifies preparation and rendering on 33 fixtures |
 | `npm run native:scene:static` | No | The same build with descriptor, packet, resource and WGSL contracts, without rendering |
 | `npm run native:context`, `native:jobs`, `native:camera`, `native:settings`, `native:engine` | Yes | One C host each: retained scenes, polling and cancellation, camera updates, render settings, engine API |
+| `npm run native:edit-cost -- --scales S,M,L,LI` | Yes | Measures scene edit latency and shader cache reuse on Software and HWRT; run `native:scene:static` first; performance evidence only, outside CI |
 | `node native/validation/scene-api-render.mjs` | Yes | C ABI, selected adapter, scene handles, exact AOV readback and custom-filter snapshots |
 | `node native/validation/vulkan-render.mjs` | Yes | C Vulkan device negotiation/import, queue/image leases, host copies, post-processing and retirement, on Software and HWRT |
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
