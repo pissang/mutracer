@@ -82,8 +82,12 @@ static void build(Bench *b,uint32_t backend,uint32_t meshes,uint32_t materials,u
     mt_scene_mesh_id mesh;CHECK(mt_scene_add_mesh(b->scene,&b->md,&mesh,error,sizeof error));if(i==0){b->geometry=g;b->mesh=mesh;}
   }
   b->md.geometry=b->geometry;b->md.material=b->material;mt_scene_identity(b->md.world_matrix);
+  /* Keep the edited material off the large batch: emission must measure one
+   * material edit without exhausting the emissive-light sampling texture. */
+  b->md.material=m[materials-1];
   CHECK(mt_scene_instances_desc_default(&b->instances));b->instances.count=instances;
   if(instances){b->matrices=alloc((size_t)instances*16,sizeof(float));for(uint32_t i=0;i<instances;i++){mt_scene_identity(b->matrices+i*16);b->matrices[i*16+12]=(float)(i%512)*1.1f;b->matrices[i*16+14]=100+(float)(i/512)*1.1f;}b->instances.transforms=b->matrices;CHECK(mt_scene_add_instances(b->scene,&b->md,&b->instances,&b->batch,error,sizeof error));}
+  b->md.material=b->material;
   CHECK(mt_scene_light_desc_default(&b->ld));for(uint32_t i=0;i<lights;i++){b->ld.type=i%4;b->ld.intensity=.1f;const float at[]={2,8,2},target[]={0,0,0};mt_scene_look_at(b->ld.world_matrix,at,target);mt_scene_light_id id;CHECK(mt_scene_add_light(b->scene,&b->ld,&id,error,sizeof error));if(!i)b->light=id;}
   b->ld.type=MT_LIGHT_TYPE_RECT;
   CHECK(mt_scene_environment_desc_default(&b->environment));b->environment.environment=b->textures[2];CHECK(mt_scene_set_environment(b->scene,&b->environment,error,sizeof error));CHECK(mt_scene_environment_settings_default(&b->env_settings));
