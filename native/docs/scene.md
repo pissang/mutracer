@@ -45,14 +45,16 @@ rotations together when the visible background should follow the lighting.
 
 Edit the scene through its `*_mut` accessors (Rust) or `mt_scene_set_*` and
 `mt_scene_remove_*` calls (C), then call `set_scene_object` and `update` again.
-Several edits can share one update. The engine compares the new snapshot with
-the committed scene and reuses prepared resources when it can. Every commit
-restarts accumulation, and both paths render the same image.
+Several edits can share one update. The scene records which objects were edited,
+and the engine compares those with the committed scene and reuses prepared
+resources when it can. Every commit restarts accumulation, and both paths render
+the same image.
 
 These edits commit incrementally:
 
-- Camera changes; mesh matrices; up to 64 changed instance matrices per batch
-  in one update; existing instance colors.
+- Camera changes; mesh matrices; changes to at most 64, or at most half, of a
+  batch's instance matrices in one update; existing instance colors. All
+  matrices changed in one update share one acceleration-structure refit.
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
@@ -75,14 +77,24 @@ previous image stays visible ([engine updates](engine.md#updates)):
 - Changes to a texture used as a displacement map.
 - Changed triangle indices, vertex or index counts, or UVs.
 - Adding, removing or reordering mesh references; changed instance counts or
-  presence of instance colors; more than 64 changed instance matrices in one batch.
+  presence of instance colors; changes to more than 64 and more than half of a
+  batch's instance matrices in one update.
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
 
 `pending_commit_kind` / `mt_scene_pending_commit_kind` predicts the next commit
 but cannot see shader, traversal and atlas requirements; `mt_render_info` reports
-the actual one. Comparison scans the scene, so edit cost grows with scene size.
-Keep one Scene and edit it in place to reuse its encoding storage.
+the actual one.
+
+Keep one Scene and edit it in place. Encoding and comparison then cost in
+proportion to the edited objects, plus validation and change detection passes
+over the meshes. Adding or removing resources, editing textures and layout
+changes such as a new vertex attribute encode the whole scene, and the following
+update compares all of it. Snapshots from `set_scene` / `set_scene_shared` are
+also compared in full, as are scenes that produced more than three snapshots
+since the engine's last update, for example for other engines. The first
+incremental update after a full preparation builds comparison state for every
+object and takes longer than later edits.
 
 ## Pick scene objects
 

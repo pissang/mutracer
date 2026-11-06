@@ -154,6 +154,10 @@ int32_t mt_scene_set_grounded_background(mt_scene scene, const mt_scene_grounded
 /* NULL camera uses the standard 45-degree perspective default. Engine camera
  * overrides this fallback. Output dimensions and quality remain per-render. */
 int32_t mt_scene_set_default_camera(mt_scene scene, const mt_camera_v4 *camera, char *error, size_t capacity);
+/* Records a snapshot of scene for the next mt_engine_update; repeated calls
+ * without edits reuse it. The objects edited since recent snapshots travel with
+ * it, so the update compares only those. Invalid scenes return INVALID_ARGUMENT
+ * or INVALID_HANDLE. Costs: native/docs/scene.md "Edit a scene". */
 int32_t mt_engine_set_scene_object(mt_engine engine, mt_scene scene, char *error, size_t capacity);
 /* Copies a v4 snapshot (dimensions 1x1, quality 0) for advanced consumers and
  * byte comparison. NULL output, capacity 0 queries bytes. written is required. */
