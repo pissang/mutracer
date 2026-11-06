@@ -15,14 +15,16 @@ let hit = intersectTriangle(o, d, tri, maxDim, shear, tMax);
 if (hit.t > 0.0) {
   let e1 = tri.p1 - tri.p0;
   let e2 = tri.p2 - tri.p0;
-  hitNormal = normalize(cross(e1, e2));
+  // Keep the candidate normal local: a culled backface must not overwrite the
+  // normal of the closest hit accepted so far.
+  let candidateNormal = normalize(cross(e1, e2));
   let sideMaterialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
   let materialDoubleSided = materialsBuffer[sideMaterialIndex].doubleSided > 0.5;
-  if (!doubleSided && !materialDoubleSided && dot(hitNormal, d) > 0.0) {
-    hitNormal = vec3f(0.0);
+  if (!doubleSided && !materialDoubleSided && dot(candidateNormal, d) > 0.0) {
     continue;
   }
 
+  hitNormal = candidateNormal;
   tMax = hit.t;
   isHit = true;
   isHitCurrent = true;

@@ -26,7 +26,6 @@ function getBVHTraverseCode(
           TriangleIntersect hit = intersectTriangle(o, d, tri, maxDim, shear, tMax);
 
           if (hit.t > 0.0) {
-            tMax = hit.t;
             vec3 e1 = tri.p1 - tri.p0;
             vec3 e2 = tri.p2 - tri.p0;
             vec3 faceNormal = normalize(cross(e1, e2));
@@ -36,10 +35,12 @@ function getBVHTraverseCode(
             bool materialDoubleSided = fetchMatData(
               sideMaterialIndex * MAT_DATA_SIZE + MAT_ROW_ALPHA
             ).z > 0.5;
+            // A culled backface is transparent and must not shorten the ray.
             if (!doubleSided && !materialDoubleSided && dot(faceNormal, d) > 0.0) {
               continue;
             }
 
+            tMax = hit.t;
             ${handleHitCode}
           }
         }
