@@ -852,7 +852,16 @@ fn commit_inner(
         // One copy of the caller's descriptor serves the sync and, once applied, the context.
         let next = shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec()));
         let copied = started.elapsed();
-        let sync = valid
+        let compatible = valid
+            && crate::scene_api::predict(&previous, bytes) == crate::api::CommitKind::Incremental;
+        let structural = started.elapsed();
+        let compatible = compatible
+            && commit_plan::changed_materials(&previous, bytes).is_some_and(|patch| {
+                patch[4..8] == 0u32.to_le_bytes()
+                    || retained.materials_compatible(patch).unwrap_or(false)
+            });
+        let preflighted = started.elapsed();
+        let sync = compatible
             .then(|| {
                 retained
                     .sync(previous.clone(), next.clone(), unchanged)
@@ -879,14 +888,15 @@ fn commit_inner(
                     let context = registry.contexts.get_mut(&handle).unwrap();
                     finished = apply_incremental(context, &retained, &next, steps)?
                 }
-                None => retained.reset_sync()?,
+                None if compatible => retained.reset_sync()?,
+                None => {}
             }
             if crate::profiling::enabled() {
                 let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
                 native_log!(
                     "{}",
                     serde_json::json!({"nativeCommitProfile": {"bytes": bytes.len(),
-                    "hintMs": ms(hinted), "validateMs": ms(validated - hinted), "copyMs": ms(copied - validated), "syncMs": ms(synced - copied),
+                    "hintMs": ms(hinted), "validateMs": ms(validated - hinted), "copyMs": ms(copied - validated), "preflightMs": ms(structural - copied), "materialCheckMs": ms(preflighted - structural), "syncMs": ms(synced - preflighted),
                     "planMs": ms(planned - synced), "applyMs": ms(started.elapsed() - planned),
                     "steps": steps.as_ref().map(Vec::len), "incremental": finished}})
                 );
@@ -1388,23 +1398,27 @@ unsafe fn update_camera_in(context: &mut Context, input: *const u8, length: usiz
 /// Validated material update on an idle context; used by incremental commit.
 unsafe fn update_material_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
-    if input.is_null() || length != 48 {
-        return Err(fail(
-            Status::InvalidArgument,
-            "Material descriptor must contain exactly 48 bytes",
-        ));
-    }
     let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-    let packed = scene
+    let retained = scene
         .retained
+        .clone()
+        .ok_or("No retained material preparation")?;
+    let packed = retained.materials(bytes).map_err(rejected)?;
+    context
+        .scene
         .as_ref()
-        .ok_or("No retained material preparation")?
-        .material(bytes)
-        .map_err(rejected)?;
+        .unwrap()
+        .validate_lighting(&packed, context.target.as_ref())?;
     context.failed = true;
-    context.scene.as_mut().unwrap().update_material(&packed)?;
+    context
+        .scene
+        .as_mut()
+        .unwrap()
+        .update_lighting(&packed, context.target.as_ref())?;
+    retained.accept_lighting()?;
     context.finish_update()
 }
+
 /// Validated environment update on an idle context; used by incremental commit.
 unsafe fn update_environment_in(
     context: &mut Context,

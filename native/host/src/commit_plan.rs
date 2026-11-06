@@ -297,31 +297,90 @@ fn instance_color_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     Some(Step::InstanceColors(bytes))
 }
 
-fn material_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
+// Texture references and geometry properties are outside parameter commits.
+// Missing extension entries mean defaults, so compare by ID rather than offset
+// or extension count: adding the first numeric override is still incremental.
+fn material_compatible(a: &Words, b: &Words, index: usize) -> Option<bool> {
     let (ao, bo) = (
         a.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
         b.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
     );
-    // The retained path patches base color, roughness, metalness, transmission and IOR.
-    for k in mat::EMISSION_COLOR..mat::WORDS {
-        if k != mat::EXTENSION_OFFSET && a.u(ao + k) != b.u(bo + k) {
+    if a.span(ao + mat::MAP, 4)? != b.span(bo + mat::MAP, 4)? {
+        return Some(false);
+    }
+    let extensions = |w: &Words, o: usize| -> Option<std::collections::BTreeMap<usize, Vec<u8>>> {
+        let mut entries = std::collections::BTreeMap::new();
+        for i in 0..w.u(o + mat::EXTENSION_COUNT) {
+            let at = w.u(o + mat::EXTENSION_OFFSET) + i * crate::layout::extension::WORDS;
+            let id = w.u(at);
+            // Texture properties, displacement, and UV assignments.
+            if crate::material_properties::MATERIAL_PROPERTIES.get(id)?.0 == TEXTURE_PROPERTY
+                || matches!(id, 55 | 56 | 57 | 58 | 60 | 61 | 76)
+            {
+                entries.insert(id, w.span(at, crate::layout::extension::WORDS)?.to_vec());
+            }
+        }
+        Some(entries)
+    };
+    Some(extensions(a, ao)? == extensions(b, bo)?)
+}
+
+fn material_steps(a: &Words, b: &Words, indices: &[usize]) -> Option<Step> {
+    // Version 2: count, reserved[2], then (source index, record offset) pairs.
+    // Only changed records and their extensions cross the AOT boundary.
+    let mut bytes = record(&[2, indices.len() as u32, 0, 0]);
+    bytes.resize((4 + indices.len() * 2) * 4, 0);
+    for (i, &index) in indices.iter().enumerate() {
+        if !material_compatible(a, b, index)? {
             return None;
         }
+        let bo = b.u(h::MATERIAL_OFFSET) + index * mat::WORDS;
+        let offset = bytes.len() / 4;
+        bytes[(4 + i * 2) * 4..(6 + i * 2) * 4]
+            .copy_from_slice(&record(&[index as u32, offset as u32]));
+        bytes.extend_from_slice(b.span(bo, mat::WORDS)?);
+        let count = b.u(bo + mat::EXTENSION_COUNT) * crate::layout::extension::WORDS;
+        let ext = if count == 0 { 0 } else { bytes.len() / 4 };
+        bytes[(offset + mat::EXTENSION_OFFSET) * 4..(offset + mat::EXTENSION_OFFSET + 1) * 4]
+            .copy_from_slice(&(ext as u32).to_le_bytes());
+        if count > 0 {
+            bytes.extend_from_slice(b.span(b.u(bo + mat::EXTENSION_OFFSET), count)?);
+        }
     }
-    let extensions = b.u(bo + mat::EXTENSION_COUNT) * crate::layout::extension::WORDS;
-    if !same_span(
-        a,
-        a.u(ao + mat::EXTENSION_OFFSET),
-        b,
-        b.u(bo + mat::EXTENSION_OFFSET),
-        extensions,
-    )? {
+    Some(Step::Material(bytes))
+}
+
+/// Sparse changed materials for the cheap shader/transport preflight. Both
+/// descriptors have already passed validation; this does not mutate sync state.
+pub(crate) fn changed_materials(previous: &[u8], next: &[u8]) -> Option<Vec<u8>> {
+    let (a, b) = (Words(previous), Words(next));
+    if a.u(h::MATERIAL_COUNT) != b.u(h::MATERIAL_COUNT) {
         return None;
     }
-    let mut bytes = record(&[1, index as u32, 0, 0]);
-    bytes.extend_from_slice(b.span(bo + mat::BASE_COLOR, 7)?);
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    Some(Step::Material(bytes))
+    let mut changed = Vec::new();
+    for index in 0..b.u(h::MATERIAL_COUNT) {
+        let (ao, bo) = (
+            a.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
+            b.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
+        );
+        let same =
+            (0..mat::WORDS).all(|k| k == mat::EXTENSION_OFFSET || a.u(ao + k) == b.u(bo + k));
+        if !same
+            || !same_span(
+                &a,
+                a.u(ao + mat::EXTENSION_OFFSET),
+                &b,
+                b.u(bo + mat::EXTENSION_OFFSET),
+                b.u(bo + mat::EXTENSION_COUNT) * crate::layout::extension::WORDS,
+            )?
+        {
+            changed.push(index);
+        }
+    }
+    match material_steps(&a, &b, &changed)? {
+        Step::Material(bytes) => Some(bytes),
+        _ => unreachable!(),
+    }
 }
 
 fn light_steps(a: &Words, b: &Words, next: &[u8], steps: &mut Vec<Step>) -> Option<()> {
@@ -439,7 +498,9 @@ pub(crate) fn plan(
         steps.push(Step::Atlas(next.to_vec()));
     }
     for &index in &sync.geometries {
-        steps.push(geometry_step(&a, &b, index)?);
+        if !geometry_unchanged(&a, &b, index)? {
+            steps.push(geometry_step(&a, &b, index)?);
+        }
     }
     for &index in &sync.transforms {
         transform_steps(&a, &b, index, &mut steps)?;
@@ -447,8 +508,8 @@ pub(crate) fn plan(
     for &index in &sync.colors {
         steps.push(instance_color_step(&a, &b, index)?);
     }
-    for &index in &sync.materials {
-        steps.push(material_step(&a, &b, index)?);
+    if !sync.materials.is_empty() {
+        steps.push(material_steps(&a, &b, &sync.materials)?);
     }
     if sync.lights {
         light_steps(&a, &b, next, &mut steps)?;

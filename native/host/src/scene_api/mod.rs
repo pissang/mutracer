@@ -856,9 +856,16 @@ impl Scene {
     }
     /// Encodes an immutable snapshot. Repeated calls without edits share one buffer.
     pub fn descriptor(&self) -> Result<Arc<Vec<u8>>> {
+        let started = std::time::Instant::now();
         let mut cache = self.cache.lock().unwrap();
         if let Some(c) = &*cache {
             if c.revision == self.revision {
+                if crate::profiling::enabled() {
+                    native_log!(
+                        "{}",
+                        serde_json::json!({"nativeSceneObjectProfile": {"cached": true, "totalMs": started.elapsed().as_secs_f64()*1e3}})
+                    );
+                }
                 return Ok(c.bytes.clone());
             }
         }
@@ -877,6 +884,7 @@ impl Scene {
             }
             return Err(e);
         }
+        let encoded = started.elapsed();
         let mut bytes = cache
             .as_mut()
             .and_then(|c| Arc::get_mut(&mut c.bytes))
@@ -884,11 +892,22 @@ impl Scene {
             .unwrap_or_default();
         bytes.clear();
         bytes.extend_from_slice(bytemuck::cast_slice(&words));
+        let copied = started.elapsed();
         if let Err(e) = crate::scene::validate(&bytes) {
             *cache = None;
             return Err(api::error(Status::InvalidArgument, e.to_string()));
         }
+        let validated = started.elapsed();
         let r = self.resolve()?;
+        if crate::profiling::enabled() {
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            native_log!(
+                "{}",
+                serde_json::json!({"nativeSceneObjectProfile": {"cached": false,
+                "encodeMs": ms(encoded), "copyMs": ms(copied-encoded), "validateMs": ms(validated-copied),
+                "resolveMs": ms(started.elapsed()-validated), "bytes": bytes.len()}})
+            );
+        }
         let bytes = Arc::new(bytes);
         *cache = Some(Cache {
             bytes: bytes.clone(),
@@ -916,9 +935,15 @@ impl Scene {
         Ok(predict(&c.bytes, &bytes))
     }
 }
-fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
-    let a: Vec<u32> = bytemuck::pod_collect_to_vec::<u8, u32>(previous);
-    let b: Vec<u32> = bytemuck::pod_collect_to_vec::<u8, u32>(next);
+pub(crate) fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
+    fn aligned(bytes: &[u8]) -> std::borrow::Cow<'_, [u32]> {
+        match bytemuck::try_cast_slice(bytes) {
+            Ok(words) => std::borrow::Cow::Borrowed(words),
+            Err(_) => std::borrow::Cow::Owned(bytemuck::pod_collect_to_vec::<u8, u32>(bytes)),
+        }
+    }
+    let a = aligned(previous);
+    let b = aligned(next);
     if [h::GEOMETRY_COUNT, h::MESH_COUNT, h::MATERIAL_COUNT]
         .iter()
         .any(|&i| a[i] != b[i])

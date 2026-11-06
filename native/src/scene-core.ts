@@ -54,10 +54,14 @@ import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.j
 import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../../src/util/geometry.js';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
+import {syncNativeMaterial} from './material-snapshot.generated.js';
+import {materialEmission} from '../../src/renderer/materialEmission.js';
+import {colorLuminance} from '../../src/renderer/lightSampling.js';
+import {WGPU_SCENE_FEATURE_BITS} from '../../src/renderer/WGPUSceneFeatures.js';
 import { materialUsesMedium } from '../../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../../src/renderer/wgpuMaterialConstants.js';
-import { ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities } from '../../src/renderer/shaderCapabilities.js';
+import { ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities, retainedShaderCapabilities } from '../../src/renderer/shaderCapabilities.js';
 import { wgpuSceneFeatureFlags } from '../../src/renderer/WGPUSceneFeatures.js';
 import { nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../../src/renderer/wgpuShaderSource.js';
@@ -155,12 +159,19 @@ export function acceptSceneTransform(token: number): Uint8Array {
 // validates resource shapes and completes GPU writes. Rejected edits never alter
 // the inputs of a subsequent partial update.
 const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; environmentPower: number; lightTextures?: number[];
+  materials?: {changes: Map<MaterialState, MaterialState>; emissive: EmissiveTriangle[]; bindings: PreparedScene['emissiveBindings']};
   maps?: {environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number};
   atlas?: {table: MaterialData; textureIds: Map<TextureState, number>}}>();
 export function acceptSceneLighting(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingLighting.get(token);
   if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   state.lights = pending.lights; state.rt = pending.rt; state.environmentPower = pending.environmentPower;
+  const materials = pending.materials;
+  if (materials) {
+    for (const [target, source] of materials.changes) syncNativeMaterial(target, source);
+    state.emissive = materials.emissive; state.prepared.emissiveBindings = materials.bindings;
+    state.table.repackParams(state.ordered);
+  }
   if (pending.lightTextures) state.table.lightTexturesIndices = pending.lightTextures;
   const atlas = pending.atlas;
   if (atlas) { state.table = atlas.table; state.textureIds = atlas.textureIds; }
@@ -250,6 +261,7 @@ export function releaseSceneParameters(token: number): Uint8Array {
 // Version 1: source material index and seven scalar parameters. Maps, emission,
 // geometry and compile-time feature changes require a full commit instead.
 export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8Array {
+  if (new Uint32Array(bytes.buffer, bytes.byteOffset, 1)[0] >= 2) return sceneMaterialRecords(bytes, token);
   const state = retainedScenes.get(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, 12);
@@ -272,6 +284,75 @@ export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8
   new Uint32Array(result.buffer).set([1, packed.byteLength, 0, 0]);
   result.set(new Uint8Array(packed.buffer), 16);
   return result;
+}
+
+// Version 2 sparse material records, generated only from a validated descriptor.
+// Transport/layout requirements stay exact; data feature flags may use any
+// support present in the committed shader (the same distinction as WebGPU).
+function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
+  pendingLighting.delete(token);
+  const state = retainedScenes.get(token);
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  let repacked = false;
+  try {
+    const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const textures: PixelTexture[] = [];
+    for (const [texture, index] of state.textureIds) if (texture instanceof PixelTexture) textures[index] = texture;
+    const changes = new Map<MaterialState, MaterialState>();
+    let emission = false;
+    for (let i = 0; i < u[1]; i++) {
+      const previous = state.source[u[4 + i * 2]], next = decodeMaterial(u, f, u[5 + i * 2], textures);
+      next.aovId = previous.aovId;
+      changes.set(previous, next);
+      emission ||= previous.emissionLuminance !== next.emissionLuminance ||
+        (previous.emissionColor[0] !== next.emissionColor[0] || previous.emissionColor[1] !== next.emissionColor[1] || previous.emissionColor[2] !== next.emissionColor[2]) ||
+        previous.coatWeight !== next.coatWeight || (previous.coatColor[0] !== next.coatColor[0] || previous.coatColor[1] !== next.coatColor[1] || previous.coatColor[2] !== next.coatColor[2]) ||
+        previous.unlit !== next.unlit || previous.shadowCatcher !== next.shadowCatcher;
+    }
+    const ordered = state.ordered.map(material => changes.get(material) ?? material);
+    const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
+    const before = wgpuMaterialConstants(state.ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
+    const after = wgpuMaterialConstants(ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
+    if (state.hardware) {
+      const opaque = hardwareOpaqueGeometryFlags(ordered, state.bindings, state.hardware.geometries.length);
+      if (opaque.some((value, i) => value !== state.hardware!.geometries[i].opaque))
+        return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    }
+    const supported = Number(state.shader.constants.SCENE_CAPABILITIES);
+    if ((wgpuSceneFeatureFlags(after) & supported) !== wgpuSceneFeatureFlags(after))
+      return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    for (const key of Object.keys(before)) {
+      if (key in WGPU_SCENE_FEATURE_BITS || key === 'MATERIAL_CAPABILITIES') continue;
+      if (before[key] !== after[key]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    }
+    if (u[0] === 3) return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+    state.table.repackParams(ordered); repacked = true;
+    const packed = new Uint8Array(state.table.getBufferArray().buffer);
+    const records: number[][] = [resourceRecord(RESOURCE.MATERIALS, KIND.BUFFER, packed.length, 0, 0, 0, 0)];
+    const parts = [packed];
+    const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+    rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(after);
+    let emissive = state.emissive, bindings = state.prepared.emissiveBindings;
+    if (emission) {
+      bindings = state.prepared.instanceBindings.filter(binding => binding.materialIndices.some(index => {
+        const material = ordered[index];
+        return !material.unlit && !material.shadowCatcher && colorLuminance(materialEmission(material)) > 1e-8;
+      }));
+      emissive = state.emissiveCache.collect(bindings, ordered).map(triangle => ({...triangle}));
+      const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+      packLightingUniform(rt, lighting);
+      records.push(resourceRecord(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, lighting.lightUniform.byteLength, 0, 0, 0, 0),
+        resourceRecord(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, FORMAT.RGBA32_FLOAT));
+      parts.push(new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer));
+    }
+    records.push(resourceRecord(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, rt.buffer.byteLength, 0, 0, 0, 0));
+    parts.push(new Uint8Array(rt.buffer));
+    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower: state.environmentPower,
+      materials: {changes, emissive, bindings}});
+    return updatePacket(records, parts);
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
+  finally { if (repacked) state.table.repackParams(state.ordered); }
 }
 
 // Versioned experimental wire protocol. The Rust boundary validates every span,
@@ -507,13 +588,14 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const mapInfo = packMapInfo(table, Number(constants.NUM_MAPS));
   const atlas = table.atlas, atlasLayers = Math.max(1, atlas.pages.length), atlasBytes = independentTextures ? new Uint8Array(0) : packAtlas(table);
   const emissiveCache = new EmissiveTriangleCache();
-  const emissive = emissiveCache.collect(prepared.emissiveBindings, prepared.materials);
+  const emissive = emissiveCache.collect(prepared.emissiveBindings, prepared.materials).map(triangle => ({...triangle}));
   // Native scalar edits can enable metal/transmission without replacing the
   // pipeline. Light-list edits can change types, and deformation can turn a
   // degenerate emitter into a light, so retain every light implementation too.
   constants.MATERIAL_CAPABILITIES = ALL_MATERIAL_SHADER_CAPABILITIES;
   constants.LIGHT_CAPABILITIES = ALL_LIGHT_SHADER_CAPABILITIES;
   updateSceneShaderCapabilities(constants);
+  constants.SCENE_CAPABILITIES = retainedShaderCapabilities(constants).SCENE_CAPABILITIES;
   const lighting = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
   const {lightData, lightWidth, lightHeight, lightUniform} = lighting;
   const rt = makeRayTraceUniform();

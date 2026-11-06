@@ -101,7 +101,7 @@ fn material_core_fields_are_incremental() {
 }
 
 #[test]
-fn other_material_fields_require_full_preparation() {
+fn openpbr_parameters_are_incremental_candidates() {
     for (name, property, value) in [
         ("emission color", 34, [0.2, 0.3, 0.4]),
         ("emission strength", 35, [2., 0., 0.]),
@@ -110,7 +110,7 @@ fn other_material_fields_require_full_preparation() {
         ("opacity", 36, [0.5, 0., 0.]),
         ("OpenPBR specular weight", 5, [0.5, 0., 0.]),
     ] {
-        Fixture::new().check(name, Full, |f| {
+        Fixture::new().check(name, Incremental, |f| {
             f.scene
                 .material_mut(f.material)
                 .unwrap()
@@ -118,13 +118,17 @@ fn other_material_fields_require_full_preparation() {
                 .unwrap()
         });
     }
-    Fixture::new().check("thin-walled", Full, |f| {
+    Fixture::new().check("thin-walled", Incremental, |f| {
         f.scene
             .material_mut(f.material)
             .unwrap()
             .set_uint(37, 1)
             .unwrap()
     });
+}
+
+#[test]
+fn material_texture_references_require_full_preparation() {
     for slot in 0..9 {
         let mut f = Fixture::new();
         f.scene.material_mut(f.material).unwrap().textures[slot] = Some(f.texture);

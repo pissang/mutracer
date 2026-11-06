@@ -1684,17 +1684,6 @@ impl GpuScene {
         }
         Ok(())
     }
-    fn update_material(&mut self, packed: &[u8]) -> Result<()> {
-        let buffer = self
-            .buffers
-            .get(&layout::resource::MATERIALS)
-            .ok_or("Missing raw material buffer")?;
-        if buffer.size() != packed.len() as u64 {
-            return Err("Material buffer size mismatch".into());
-        }
-        self.gpu.queue.write_buffer(buffer, 0, packed);
-        Ok(())
-    }
 }
 
 fn render_scene(

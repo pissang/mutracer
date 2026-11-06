@@ -1389,11 +1389,41 @@ impl PreparedState {
         }
         Ok(())
     }
+    pub(super) fn materials_compatible(&self, mut bytes: Vec<u8>) -> Result<bool> {
+        // Version 3 checks shader requirements without changing prepared state.
+        bytes[..4].copy_from_slice(&3u32.to_le_bytes());
+        let state = self.clone();
+        runtime::call(move || {
+            let packet = native_step(mt_core_scene_material, &bytes, state.token)?;
+            Ok(packet[..4] == 1u32.to_le_bytes())
+        })
+    }
+    /// Sparse OpenPBR records from a validated descriptor, using resource writes.
+    pub(super) fn materials(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_scene_material(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    state.token,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            lighting_result(pointer, size, &[4, 7, 8, 24])
+        })
+    }
+    #[cfg(test)]
     pub(super) fn material(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         let state = self.clone();
         let bytes = bytes.to_vec();
         runtime::call(move || state.material_inner(&bytes))
     }
+    #[cfg(test)]
     fn material_inner(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         if bytes.len() != 48 {
             return Err("Material descriptor must contain exactly 48 bytes".into());

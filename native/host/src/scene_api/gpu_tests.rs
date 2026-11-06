@@ -473,3 +473,312 @@ fn selected_adapter_renders_4k_and_environment_controls() {
     assert_eq!(small.read_pixels(PixelKind::Hdr).unwrap(), expected);
     assert_ne!(*original, *with_default);
 }
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn openpbr_parameter_commits_match_full_on_both_backends() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let mut geometry =
+            Geometry::new(vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.], vec![0, 1, 2]);
+        geometry.normals = vec![0., 0., 1., 0., 0., 1., 0., 0., 1.].into();
+        geometry.uv[0] = vec![0., 0., 1., 0., 0.5, 1.].into();
+        geometry.tangents = vec![1., 0., 0., 1., 1., 0., 0., 1., 1., 0., 0., 1.].into();
+        let g = scene.add_geometry(geometry).unwrap();
+        let mut material = OpenPbrMaterial::default();
+        material.values.alpha_cutoff = 0.;
+        material.values.double_sided = true;
+        // Keep every shader feature needed by numeric edits active, including
+        // medium/dispersion and non-opaque coverage. First-use tests follow.
+        for (id, value) in [
+            (10, 0.2),
+            (12, 0.3),
+            (15, 0.1),
+            (17, 0.2),
+            (22, 0.2),
+            (25, 0.2),
+            (31, 0.2),
+            (36, 0.8),
+            (9, 0.2),
+            (71, 0.1),
+            (28, 0.2),
+            (72, 0.1),
+            (53, 0.01),
+        ] {
+            material.set_float(id, [value, 0., 0.]).unwrap();
+        }
+        let id = scene.add_material(material).unwrap();
+        scene.add_mesh(Mesh::new(g, id)).unwrap();
+        // A receiver makes the zero/nonzero emission transition observable
+        // through light sampling as well as through direct camera visibility.
+        let receiver = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        let mut mesh = Mesh::new(g, receiver);
+        mesh.transform = Mat4::from_translation(Vec3::new(0., -1., 1.));
+        scene.add_mesh(mesh).unwrap();
+        scene
+            .add_light(Light::Directional {
+                color: [1.; 3],
+                intensity: 2.,
+                transform: Mat4::IDENTITY,
+            })
+            .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let settings = RenderSettings {
+            max_samples: 8,
+            size: RenderSize::Fixed {
+                width: 1280,
+                height: 720,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(render.backend().unwrap().0, backend);
+        let mut edits: Vec<(u32, [f32; 3])> = Vec::new();
+        for property in 1..=36 {
+            let kind = crate::material_properties::MATERIAL_PROPERTIES[property as usize].0;
+            let value = match property {
+                8 => 1.7,
+                16 => 30.,
+                29 => 1.8,
+                32 => 0.6,
+                33 => 1.5,
+                _ => 0.4,
+            };
+            edits.push((
+                property,
+                if kind == 1 {
+                    [0.4, 0.5, 0.6]
+                } else {
+                    [value, 0., 0.]
+                },
+            ));
+        }
+        edits.extend([
+            (53, [0.02, 0., 0.]),
+            (45, [0.7, 0.8, 0.]),
+            (62, [0.2, 0., 0.]),
+            (75, [0.8, 0.7, 0.]),
+        ]);
+        edits.extend([
+            (71, [0.3, 0., 0.]),
+            (72, [0.3, 0., 0.]),
+            (35, [0., 0., 0.]),
+            (35, [0.6, 0., 0.]),
+            (25, [0., 0., 0.]),
+            (25, [0.2, 0., 0.]),
+        ]);
+        for (property, value) in edits {
+            // Encode before the edit: the prediction is against this snapshot.
+            scene.descriptor().unwrap();
+            scene
+                .material_mut(id)
+                .unwrap()
+                .set_float(property, value)
+                .unwrap();
+            assert_eq!(
+                scene.pending_commit_kind().unwrap(),
+                CommitKind::Incremental,
+                "property {property}"
+            );
+            engine.set_scene_object(&scene).unwrap();
+            engine.update().unwrap();
+            render.converge(ConvergeOptions::new(8)).unwrap();
+            assert_eq!(
+                render.last_commit().unwrap(),
+                Some(CommitKind::Incremental),
+                "{backend:?} property {property}"
+            );
+            let fresh = Engine::new(EngineOptions { backend }).unwrap();
+            let reference = Render::new(&fresh, settings.clone()).unwrap();
+            fresh.set_scene_object(&scene).unwrap();
+            fresh.update().unwrap();
+            reference.converge(ConvergeOptions::new(8)).unwrap();
+            let a = render.read_pixels(PixelKind::Hdr).unwrap();
+            let b = reference.read_pixels(PixelKind::Hdr).unwrap();
+            assert_material_hdr(
+                &render,
+                &reference,
+                &a.data,
+                &b.data,
+                &format!("{backend:?}-property-{property}"),
+            );
+            println!("OPENPBR_EQUIVALENCE {backend:?} property={property} bits=equal");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn openpbr_first_use_and_transport_changes_keep_full_fallback() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let g = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let mut values = OpenPbrMaterial::default();
+        values.values.alpha_cutoff = 0.;
+        values.values.double_sided = true;
+        let material = scene.add_material(values).unwrap();
+        scene.add_mesh(Mesh::new(g, material)).unwrap();
+        scene
+            .add_light(Light::Directional {
+                color: [1.; 3],
+                intensity: 2.,
+                transform: Mat4::IDENTITY,
+            })
+            .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let settings = RenderSettings {
+            max_samples: 8,
+            size: RenderSize::Fixed {
+                width: 1280,
+                height: 720,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        for (property, value, expected) in [
+            (25, 0.3, CommitKind::Full),
+            (22, 0.3, CommitKind::Incremental),
+            (31, 0.3, CommitKind::Full),
+            (31, 0., CommitKind::Incremental),
+            (31, 0.2, CommitKind::Incremental),
+            (17, 0.3, CommitKind::Full),
+            (10, 0.3, CommitKind::Incremental),
+            (15, 0.2, CommitKind::Full),
+            (15, 0., CommitKind::Full),
+            (36, 0.8, CommitKind::Full),
+            (36, 0.5, CommitKind::Incremental),
+            (36, 1., CommitKind::Full),
+            (37, 1., CommitKind::Full),
+            (37, 0., CommitKind::Full),
+            (
+                38,
+                0.,
+                if backend == Backend::Hardware {
+                    CommitKind::Full
+                } else {
+                    CommitKind::Incremental
+                },
+            ),
+            (
+                38,
+                1.,
+                if backend == Backend::Hardware {
+                    CommitKind::Full
+                } else {
+                    CommitKind::Incremental
+                },
+            ),
+            (51, 1., CommitKind::Full),
+            (51, 0., CommitKind::Incremental),
+            (52, 1., CommitKind::Incremental),
+            (52, 0., CommitKind::Incremental),
+        ] {
+            scene.descriptor().unwrap();
+            let m = scene.material_mut(material).unwrap();
+            if matches!(property, 37 | 38 | 51 | 52) {
+                m.set_uint(property, value as u32).unwrap();
+            } else {
+                m.set_float(property, [value, 0., 0.]).unwrap();
+            }
+            // Scene prediction lacks the engine's compiled support and therefore
+            // reports a candidate; the actual commit enforces that support.
+            assert_eq!(
+                scene.pending_commit_kind().unwrap(),
+                CommitKind::Incremental
+            );
+            engine.set_scene_object(&scene).unwrap();
+            engine.update().unwrap();
+            render.converge(ConvergeOptions::new(8)).unwrap();
+            assert_eq!(
+                render.last_commit().unwrap(),
+                Some(expected),
+                "{backend:?} property={property} value={value}"
+            );
+            assert_eq!(render.backend().unwrap().0, backend);
+            let fresh = Engine::new(EngineOptions { backend }).unwrap();
+            let reference = Render::new(&fresh, settings.clone()).unwrap();
+            fresh.set_scene_object(&scene).unwrap();
+            fresh.update().unwrap();
+            reference.converge(ConvergeOptions::new(8)).unwrap();
+            let a = render.read_pixels(PixelKind::Hdr).unwrap();
+            let b = reference.read_pixels(PixelKind::Hdr).unwrap();
+            assert_material_hdr(
+                &render,
+                &reference,
+                &a.data,
+                &b.data,
+                &format!("{backend:?}-property-{property}-value-{value}"),
+            );
+            println!(
+                "OPENPBR_FALLBACK {backend:?} property={property} value={value} actual={expected:?} bits=equal"
+            );
+        }
+    }
+}
+
+// Keep strict comparisons, but capture repeat controls before failing so a
+// transient HWRT miss can be distinguished from a retained-parameter mismatch.
+fn assert_material_hdr(retained: &Render, full: &Render, a: &[f32], b: &[f32], label: &str) {
+    let differences = |x: &[f32], y: &[f32]| {
+        x.iter()
+            .zip(y)
+            .filter(|(x, y)| x.to_bits() != y.to_bits())
+            .count()
+    };
+    let count = differences(a, b);
+    if count != 0 {
+        let directory = std::env::var_os("MUTRACER_TEST_CAPTURE")
+            .map(|p| std::path::PathBuf::from(p).join(label));
+        if let Some(p) = &directory {
+            std::fs::create_dir_all(p).unwrap();
+            std::fs::write(p.join("retained.rgba32f"), bytemuck::cast_slice(a)).unwrap();
+            std::fs::write(p.join("full.rgba32f"), bytemuck::cast_slice(b)).unwrap();
+        }
+        for round in 0..3 {
+            retained.restart().unwrap();
+            full.restart().unwrap();
+            retained.converge(ConvergeOptions::new(8)).unwrap();
+            full.converge(ConvergeOptions::new(8)).unwrap();
+            let c = retained.read_pixels(PixelKind::Hdr).unwrap();
+            let d = full.read_pixels(PixelKind::Hdr).unwrap();
+            println!(
+                "OPENPBR_REPEAT_CONTROL {label} round={round} retained_repeat={} full_repeat={} pair={}",
+                differences(a, &c.data),
+                differences(b, &d.data),
+                differences(&c.data, &d.data)
+            );
+            if let Some(p) = &directory {
+                std::fs::write(
+                    p.join(format!("retained-repeat-{round}.rgba32f")),
+                    bytemuck::cast_slice(&c.data),
+                )
+                .unwrap();
+                std::fs::write(
+                    p.join(format!("full-repeat-{round}.rgba32f")),
+                    bytemuck::cast_slice(&d.data),
+                )
+                .unwrap();
+            }
+        }
+    }
+    assert_eq!(count, 0, "{label}: HDR words differ");
+}

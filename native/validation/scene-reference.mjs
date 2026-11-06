@@ -104,7 +104,7 @@ export async function referenceScene(bytes, sourceRoot) {
     // when comparing shader source. The independent browser capture below
     // keeps its own lean pipeline and dynamic environment implementation.
     const {wgpuShaderSource} = await load('renderer/wgpuShaderSource.js');
-    const {ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities} = await load('renderer/shaderCapabilities.js');
+    const {ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities, retainedShaderCapabilities} = await load('renderer/shaderCapabilities.js');
     // Web-only per-instance TLAS boxes and bin counts are intentionally not
     // native wire data. Repack the independent public-scene preparation into
     // the native layout for byte contracts; leave the actual Web capture intact.
@@ -142,6 +142,7 @@ export async function referenceScene(bytes, sourceRoot) {
     const constants = {...pass._constants, ...sceneTraversalConstants(stacks.tlas, stacks.blas), MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
         LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};
     updateSceneShaderCapabilities(constants);
+    constants.SCENE_CAPABILITIES = retainedShaderCapabilities(constants).SCENE_CAPABILITIES;
     const nativeShader = wgpuShaderSource(constants, {compactVertices:true, hasDisplacement:pass._hasDisplacement, hasAlpha:false,
         hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
         hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:1}, true);

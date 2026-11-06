@@ -1,8 +1,9 @@
 import {expect, it, vi} from 'vitest';
-import {retainedSceneParameters, sceneMaterialParameters, sceneLightListParameters, releaseSceneParameters} from '../../native/src/scene-core';
+import {retainedSceneParameters, sceneMaterialParameters, sceneLightListParameters, acceptSceneLighting, releaseSceneParameters} from '../../native/src/scene-core';
 import {HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, CAMERA as C, LIGHT as L, VERSION} from '../../native/src/layout';
 import * as shaderSource from '../../src/renderer/wgpuShaderSource';
 import {MATERIAL_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
+import {PACKET_ENTRY as PE, PACKET_HEADER as PH, WRITE_ENTRY as WE, RESOURCE} from '../../native/src/layout';
 import {materialLayoutFields} from '../../src/renderer/materialLayoutSchema';
 
 function triangleScene() {
@@ -69,4 +70,55 @@ it('keeps native scalar transport and light-list edits available in the original
       expect(generate.mock.calls.length).toBe(shaderCalls);
     }
   } finally {releaseSceneParameters(token); vi.restoreAllMocks();}
+});
+
+
+function materialPatch(scene: Uint8Array) {
+  const source = new Uint32Array(scene.buffer), material = source[H.MATERIAL_OFFSET];
+  const patch = new Uint8Array((6 + MAT.WORDS) * 4), u = new Uint32Array(patch.buffer);
+  u.set([2, 1, 0, 0, 0, 6]); u.set(source.subarray(material, material + MAT.WORDS), 6);
+  return patch;
+}
+function packetResource(packet: Uint8Array, id: number, write = false) {
+  const u = new Uint32Array(packet.buffer), stride = write ? WE.WORDS : PE.WORDS;
+  for (let i = 0; i < u[PH.COUNT]; i++) {
+    const o = PH.WORDS + i * stride;
+    if (u[o] === id) {
+      const offset = u[o + (write ? WE.BYTE_OFFSET : PE.BYTE_OFFSET)], length = u[o + PE.LENGTH];
+      return packet.slice(offset, offset + length);
+    }
+  }
+  return undefined;
+}
+it('refreshes zero/nonzero emission sampling and stages material acceptance', () => {
+  const scene = triangleScene(), token = 4830;
+  const material = new Uint32Array(scene.buffer)[H.MATERIAL_OFFSET];
+  new Float32Array(scene.buffer).set([1, 1, 1], material + MAT.EMISSION_COLOR);
+  try {
+    const initial = retainedSceneParameters(scene, token);
+    const patch = materialPatch(scene), floats = new Float32Array(patch.buffer);
+    floats[6 + MAT.EMISSION_LUMINANCE] = 2;
+    const lit = sceneMaterialParameters(patch, token);
+    expect(new Uint32Array(lit.buffer)[0]).toBe(VERSION.RESOURCE_WRITES);
+    expect(packetResource(lit, RESOURCE.LIGHT_SAMPLING, true)).not.toEqual(packetResource(initial, RESOURCE.LIGHT_SAMPLING));
+    expect(new Uint32Array(acceptSceneLighting(token).buffer)[0]).toBe(1);
+    floats[6 + MAT.EMISSION_LUMINANCE] = 0;
+    const dark = sceneMaterialParameters(patch, token);
+    expect(packetResource(dark, RESOURCE.LIGHT_SAMPLING, true)).toEqual(packetResource(initial, RESOURCE.LIGHT_SAMPLING));
+    expect(packetResource(dark, RESOURCE.MATERIALS, true)).toEqual(packetResource(initial, RESOURCE.MATERIALS));
+  } finally {releaseSceneParameters(token);}
+});
+it('rejects missing layer/transport support and leaves accepted parameters intact', () => {
+  const scene = triangleScene(), token = 4831;
+  try {
+    const initial = retainedSceneParameters(scene, token);
+    const patch = materialPatch(scene), f = new Float32Array(patch.buffer);
+    f[6 + MAT.COAT_WEIGHT] = 0.5;
+    expect(new Uint32Array(sceneMaterialParameters(patch, token).buffer)[0]).toBe(2);
+    f[6 + MAT.COAT_WEIGHT] = 0; f[6 + MAT.OPACITY] = 0.5;
+    expect(new Uint32Array(sceneMaterialParameters(patch, token).buffer)[0]).toBe(2);
+    f[6 + MAT.OPACITY] = 1;
+    const unchanged = sceneMaterialParameters(patch, token);
+    expect(packetResource(unchanged, RESOURCE.MATERIALS, true)).toEqual(packetResource(initial, RESOURCE.MATERIALS));
+  } finally {releaseSceneParameters(token);}
 });
