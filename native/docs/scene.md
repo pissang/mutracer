@@ -51,11 +51,13 @@ restarts accumulation, and both paths render the same image.
 
 These edits commit incrementally:
 
-- Camera changes; mesh and instance matrices; existing instance colors.
+- Camera changes; mesh matrices; up to 64 changed instance matrices per batch
+  in one update; existing instance colors.
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
-- Material base color, roughness, metalness, transmission and IOR, unless the
-  edit needs a new shader variant.
+- OpenPBR numeric and color parameters while the prepared shader and traversal
+  support remain compatible. Emission edits also refresh light sampling;
+  switching emission on or off is incremental.
 - Texture sampling parameters and pixels, including environment and background
   map pixels and sizes, while the texture atlas still fits.
 - Adding, removing and changing lights; background color; environment/background
@@ -64,18 +66,21 @@ These edits commit incrementally:
 These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):
 
-- Other material properties, including emission color and strength, coat,
-  opacity, thin walls and other OpenPBR layers, and adding, removing or changing
-  a material's texture references.
+- Adding, removing or changing a material's texture references, UV projection
+  settings or displacement settings.
+- Parameter edits that require new shader support or change transparency, medium,
+  dispersion or traversal requirements. For example, the first use of coat/fuzz,
+  thin film or subsurface may need full preparation; later compatible weight and
+  color edits are incremental.
 - Changes to a texture used as a displacement map.
 - Changed triangle indices, vertex or index counts, or UVs.
 - Adding, removing or reordering mesh references; changed instance counts or
-  presence of instance colors.
+  presence of instance colors; more than 64 changed instance matrices in one batch.
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
 
 `pending_commit_kind` / `mt_scene_pending_commit_kind` predicts the next commit
-but cannot see shader-variant and atlas requirements; `mt_render_info` reports
+but cannot see shader, traversal and atlas requirements; `mt_render_info` reports
 the actual one. Comparison scans the scene, so edit cost grows with scene size.
 Keep one Scene and edit it in place to reuse its encoding storage.
 

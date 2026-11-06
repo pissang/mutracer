@@ -165,6 +165,10 @@ changes only the camera is incremental.
   and textures, and 64 analytic lights. Meshes and expanded instances are limited
   to 16,777,216 and the memory budget (160 bytes per instance); HWRT also checks
   the selected GPU's TLAS instance limit.
+- Emissive triangles, including every expanded instance, must fit the 4096×4096
+  light-sampling texture. Preparation rejects scenes that exceed it with
+  `Too many emissive triangles for the light sampling texture.` Reduce emissive
+  geometry or keep large instance batches on non-emissive materials.
 - Output edges 1–8,192 with at most 16,777,216 pixels; actual output is also
   limited by the selected GPU's storage-buffer, texture and dispatch limits.
 - Input and prepared geometry each default to an 8 GiB admission budget, changed
