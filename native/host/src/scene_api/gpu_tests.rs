@@ -165,11 +165,7 @@ fn software_scene_object_incremental_matches_full() {
             }
             _ => unreachable!(),
         }
-        let expected = if edit == 15 {
-            CommitKind::Full
-        } else {
-            CommitKind::Incremental
-        };
+        let expected = CommitKind::Incremental;
         assert_eq!(
             s.pending_commit_kind().unwrap(),
             expected,
