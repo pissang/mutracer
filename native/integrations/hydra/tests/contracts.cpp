@@ -33,6 +33,31 @@ int main() {
   Require(!delegate.IsStopped() && delegate.Stop(false) && delegate.IsStopped(),
           "Hydra stop state");
   Require(delegate.Restart() && !delegate.IsStopped(), "Hydra restart state");
+  Require(delegate.GetRenderSetting(TfToken("forceCpuOutput")) == VtValue(0),
+          "automatic GPU output is the default");
+  Buffer buffer(SdfPath("/Buffer"));
+  Require(buffer.Allocate(GfVec3i(2, 2, 1), HdFormatFloat32Vec4, false),
+          "float color allocation");
+  unsigned reads = 0;
+  buffer.readOnMap = [&] {
+    ++reads;
+    buffer.pixels[0] = 42;
+  };
+  Require(static_cast<uint8_t *>(buffer.Map())[0] == 42,
+          "Map invokes lazy readback");
+  buffer.Map();
+  Require(reads == 1 && buffer.IsMapped(),
+          "nested Map reuses pinned CPU pixels");
+  Require(!buffer.Allocate(GfVec3i(3, 2, 1), HdFormatFloat32Vec4, false),
+          "mapped pixels cannot be resized");
+  buffer.Unmap();
+  buffer.Unmap();
+  buffer.Map();
+  buffer.Unmap();
+  Require(reads == 2 && !buffer.IsMapped(), "new Map refreshes CPU pixels");
+  Require(buffer.Allocate(GfVec3i(3, 2, 1), HdFormatFloat32Vec4, false) &&
+              !buffer.readOnMap && !buffer.output,
+          "resize invalidates the old readback callback and GPU binding");
   OutputResources output;
   bool rejected = false;
   try {

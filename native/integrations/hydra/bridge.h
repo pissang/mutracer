@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -30,6 +31,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 namespace mtHydra {
+class GpuOutput;
 using Clock = std::chrono::steady_clock;
 double Milliseconds(Clock::time_point start);
 void Check(int32_t status, char const *error);
@@ -127,9 +129,16 @@ public:
   std::map<uint32_t, Identity> identities;
   std::string sdkError;
   int backend = -1;
+  uint32_t actualBackend = 0;
+  Hgi *hgi = nullptr;
+  bool forceCpu = false;
+  bool usingGpuOutput = false;
+  uint64_t skippedExports = 0;
+  std::unique_ptr<GpuOutput> gpu;
   uint32_t predicted = 0;
   double submitMs = 0, updateMs = 0;
   double readHdrMs = 0, readDepthMs = 0, readIdMs = 0;
+  double exportMs = 0, convertMs = 0;
   std::ofstream trace;
   Param();
   ~Param() override;
@@ -141,12 +150,11 @@ public:
               double readMs);
 };
 // All AOVs select one backend together. GPU installation must supply BOTH Hgi
-// color/depth handles and a completed synchronization point before publishing.
-// P0-6 will implement this interface; CPU buffers currently return no resource.
+// color/depth handles after ordering their producer before host consumers.
 struct OutputResources {
   HgiTextureHandle color, depth;
   // The caller owns these host-Hgi textures and must finish the SDK/host
-  // synchronization before installation, retaining them until Clear().
+  // GPU queue handoff before installation, retaining them until Clear().
   void Install(HgiTextureHandle c, HgiTextureHandle d) {
     if (!c || !d)
       throw std::invalid_argument(
@@ -169,6 +177,8 @@ public:
   HdFormat GetFormat() const override { return format; }
   bool IsMultiSampled() const override { return multisampled; }
   void *Map() override {
+    if (!mappers && readOnMap)
+      readOnMap();
     ++mappers;
     return pixels.data();
   }
@@ -188,11 +198,14 @@ public:
   TfToken role;
   std::shared_ptr<OutputResources> output;
   std::vector<uint8_t> pixels;
+  std::function<void()> readOnMap;
   std::atomic<bool> converged{false};
 
 private:
   void _Deallocate() override {
     pixels.clear();
+    readOnMap = {};
+    output.reset();
     width = height = 0;
   }
   unsigned width = 0, height = 0;
@@ -232,6 +245,7 @@ public:
   TfToken GetMaterialBindingPurpose() const override;
   TfTokenVector GetMaterialRenderContexts() const override;
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
+  void SetDrivers(HdDriverVector const &) override;
   HdAovDescriptor GetDefaultAovDescriptor(TfToken const &) const override;
   bool IsStopSupported() const override { return true; }
   bool IsStopped() const override { return param->stopped.load(); }

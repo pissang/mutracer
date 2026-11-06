@@ -4,6 +4,9 @@
 #include "pxr/base/tf/errorMark.h"
 #include "pxr/base/trace/collector.h"
 #include "pxr/base/trace/reporter.h"
+#include "pxr/imaging/hgi/blitCmds.h"
+#include "pxr/imaging/hgi/blitCmdsOps.h"
+#include "pxr/imaging/hgi/hgi.h"
 #include "pxr/usd/usd/stage.h"
 #include "pxr/usd/usdGeom/imageable.h"
 #include "pxr/usd/usdGeom/mesh.h"
@@ -11,11 +14,13 @@
 #include "pxr/usd/usdShade/material.h"
 #include "pxr/usd/usdShade/shader.h"
 #include "pxr/usdImaging/usdImagingGL/engine.h"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <thread>
 PXR_NAMESPACE_USING_DIRECTIVE
 using namespace mtHydra;
+void DelayHostConsumers(Hgi *);
 int main(int argc, char **argv) {
   if (argc < 3) {
     std::cerr << "hydraTrace scene.usda output-prefix [renderer] [width] "
@@ -41,6 +46,9 @@ int main(int argc, char **argv) {
   UsdImagingGLEngine::Parameters ep;
   ep.rendererPluginId = TfToken(renderer);
   UsdImagingGLEngine engine(ep);
+  if (auto cpu = std::getenv("MUTRACER_HYDRA_CPU"))
+    engine.SetRendererSetting(TfToken("forceCpuOutput"),
+                              VtValue(std::stoi(cpu)));
   if (auto backend = std::getenv("MUTRACER_HYDRA_BACKEND"))
     engine.SetRendererSetting(TfToken("backend"), VtValue(std::stoi(backend)));
   engine.SetRendererSetting(
@@ -56,7 +64,7 @@ int main(int argc, char **argv) {
                             VtValue(false));
   engine.SetRenderBufferSize(GfVec2i(width, height));
   engine.SetRenderViewport(GfVec4d(0, 0, width, height));
-  if (std::getenv("MUTRACER_HYDRA_BENCH") ||
+  if (!std::getenv("MUTRACER_HYDRA_ALL_AOVS") ||
       renderer == "HdStormRendererPlugin")
     engine.SetRendererAov(HdAovTokens->color);
   else
@@ -82,12 +90,18 @@ int main(int argc, char **argv) {
     params.clearColor = GfVec4f(.2f, .3f, .4f, .5f);
   engine.SetEnablePresentation(false);
   std::ofstream frames(prefix + "-frames.jsonl");
+  std::ofstream summaries(prefix + "-summary.jsonl");
   auto run = [&](std::string const &label) {
+    std::vector<double> frameTimes;
     auto start = Clock::now();
     unsigned frame = 0;
     do {
       auto begin = Clock::now();
       engine.Render(stage->GetPseudoRoot(), params);
+      if (std::getenv("MUTRACER_HYDRA_SLOW_HOST") && frame >= 20 &&
+          frame % 20 == 0)
+        DelayHostConsumers(engine.GetHgi());
+      frameTimes.push_back(Milliseconds(begin));
       frames << "{\"edit\":\"" << label << "\",\"frame\":" << frame++
              << ",\"ms\":" << Milliseconds(begin)
              << ",\"converged\":" << (engine.IsConverged() ? "true" : "false")
@@ -104,6 +118,16 @@ int main(int argc, char **argv) {
       if (!engine.IsConverged())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (!engine.IsConverged());
+    double wallMs = Milliseconds(start);
+    std::sort(frameTimes.begin(), frameTimes.end());
+    auto percentile = [&](double p) {
+      return frameTimes[size_t((frameTimes.size() - 1) * p)];
+    };
+    summaries << "{\"phase\":\"" << label << "\",\"frames\":" << frame
+              << ",\"wallMs\":" << wallMs << ",\"p50Ms\":" << percentile(.5)
+              << ",\"p95Ms\":" << percentile(.95) << ",\"samplesPerSecond\":"
+              << (label == "warmup" ? 4 : samples) * 1000. / wallMs << "}\n";
+    summaries.flush();
     if (!std::getenv("MUTRACER_HYDRA_BENCH"))
       for (auto token :
            {HdAovTokens->color, HdAovTokens->depth, HdAovTokens->primId,
@@ -112,6 +136,35 @@ int main(int argc, char **argv) {
         if (!b)
           continue;
         b->Resolve();
+        if (token == HdAovTokens->color || token == HdAovTokens->depth) {
+          // Read the texture returned by the actual HdxAovInputTask, separately
+          // from Map(), so comparisons exercise the GPU conversion/consumer
+          // path.
+          auto texture = engine.GetAovTexture(token);
+          if (texture) {
+            // Task-list changes in OpenUSD 26.03 can leave stale task-context
+            // textures. Reject them before encoding an out-of-bounds read.
+            if (texture->GetDescriptor().dimensions !=
+                GfVec3i(b->GetWidth(), b->GetHeight(), 1))
+              throw std::runtime_error(
+                  "Hdx returned a stale AOV texture after a task-list change");
+            std::vector<uint8_t> pixels(size_t(b->GetWidth()) * b->GetHeight() *
+                                        HdDataSizeOfFormat(b->GetFormat()));
+            HgiTextureGpuToCpuOp op;
+            op.gpuSourceTexture = texture;
+            op.cpuDestinationBuffer = pixels.data();
+            op.destinationBufferByteSize = pixels.size();
+            auto commands = engine.GetHgi()->CreateBlitCmds();
+            commands->CopyTextureGpuToCpu(op);
+            engine.GetHgi()->SubmitCmds(commands.get(),
+                                        HgiSubmitWaitTypeWaitUntilCompleted);
+            std::ofstream out(prefix + "-" + label + "-" + token.GetString() +
+                                  "-hgi.bin",
+                              std::ios::binary);
+            out.write(reinterpret_cast<char const *>(pixels.data()),
+                      pixels.size());
+          }
+        }
         auto data = b->Map();
         if (data) {
           std::cerr << "AOV " << token << " format " << int(b->GetFormat())
@@ -139,6 +192,12 @@ int main(int argc, char **argv) {
       run("steady");
     } else
       run("initial");
+    if (std::getenv("MUTRACER_HYDRA_COMPARE")) {
+      engine.SetRendererSetting(TfToken("forceCpuOutput"), VtValue(1));
+      run("cpu");
+      engine.SetRendererSetting(TfToken("forceCpuOutput"), VtValue(0));
+      run("gpu-repeat");
+    }
     if (argc > 7) {
       auto mesh = stage->GetPrimAtPath(SdfPath("/Mesh"));
       for (int i = 0; i < 4; ++i) {
@@ -187,6 +246,40 @@ int main(int argc, char **argv) {
           .GetAttribute(TfToken("focusDistance"))
           .Set(6.f);
       run("lens");
+      for (auto size :
+           {GfVec2i(192, 128), GfVec2i(320, 240), GfVec2i(width, height)}) {
+        engine.SetRenderBufferSize(size);
+        engine.SetRenderViewport(GfVec4d(0, 0, size[0], size[1]));
+        run("resize" + std::to_string(size[0]));
+      }
+      engine.SetRendererSetting(TfToken("resolutionScale"), VtValue(.6f));
+      run("scale");
+      if (!std::getenv("MUTRACER_HYDRA_SKIP_SWITCH"))
+        for (int cpu : {1, 0, 1, 0}) {
+          engine.SetRendererSetting(TfToken("forceCpuOutput"), VtValue(cpu));
+          run("switch" + std::to_string(cpu));
+        }
+      if (std::getenv("MUTRACER_HYDRA_AOV_SWITCH")) {
+        engine.SetRendererAovs({HdAovTokens->color, HdAovTokens->depth});
+        run("aov-color-depth");
+        engine.SetRendererAov(HdAovTokens->color);
+        run("aov-viewport");
+      }
+      for (int backend : {0, 1}) {
+        engine.SetRendererSetting(TfToken("backend"), VtValue(backend));
+        run("backend" + std::to_string(backend));
+      }
+      engine.SetRendererSetting(TfToken("convergedSamplesPerPixel"),
+                                VtValue(16384));
+      for (unsigned i = 0; i < 20; ++i)
+        engine.Render(stage->GetPseudoRoot(), params);
+      engine.StopRenderer();
+      if (std::getenv("MUTRACER_HYDRA_CANCEL_EXIT"))
+        return 0;
+      engine.RestartRenderer();
+      engine.SetRendererSetting(TfToken("convergedSamplesPerPixel"),
+                                VtValue(samples));
+      run("restart");
     }
   } catch (std::exception const &e) {
     std::cerr << e.what() << '\n';

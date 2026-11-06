@@ -4,6 +4,7 @@
 // nested identity paths, C SDK. TOST 1.0: ../../../LICENSES/OpenUSD-TOST.txt.
 // Other bridge code is original.
 #include "bridge.h"
+#include "gpu.h"
 #include "pxr/base/gf/quatd.h"
 #include "pxr/base/gf/quatf.h"
 #include "pxr/base/gf/quath.h"
@@ -192,6 +193,7 @@ void Param::Cancel() {
   }
 }
 Param::~Param() {
+  gpu.reset();
   char e[1024] = {};
   if (engine)
     mt_engine_destroy(engine, e, sizeof e);
@@ -321,6 +323,7 @@ bool Param::Apply(int requestedBackend) {
   char e[2048] = {};
   auto begin = Clock::now();
   if (!engine || backend != requestedBackend) {
+    gpu.reset();
     if (engine) {
       render = 0;
       Check(mt_engine_destroy(engine, e, sizeof e), e);
@@ -329,7 +332,20 @@ bool Param::Apply(int requestedBackend) {
     mt_engine_options options;
     mt_engine_options_default(&options);
     options.backend = requestedBackend;
-    Check(mt_engine_create(&options, &engine, e, sizeof e), e);
+    auto status = CreateHostEngine(hgi, options, &engine, e, sizeof e);
+    if (status == MT_OK) {
+      try {
+        gpu = std::make_unique<GpuOutput>(hgi, engine);
+      } catch (std::exception const &error) {
+        Warn(std::string("GPU output initialization failed: ") + error.what());
+        Check(mt_engine_destroy(engine, e, sizeof e), e);
+        engine = 0;
+      }
+    }
+    if (!gpu) {
+      Warn(std::string("CPU output: ") + e);
+      Check(mt_engine_create(&options, &engine, e, sizeof e), e);
+    }
     backend = requestedBackend;
     Check(mt_engine_set_callback(
               engine,
@@ -537,12 +553,16 @@ void Param::Record(uint32_t actual, uint32_t samples, double refineMs,
           << ",\"submitMs\":" << submitMs << ",\"updateMs\":" << updateMs
           << ",\"refineMs\":" << refineMs << ",\"readHdrMs\":" << readHdrMs
           << ",\"readDepthMs\":" << readDepthMs << ",\"readIdMs\":" << readIdMs
+          << ",\"gpuOutput\":" << (usingGpuOutput ? "true" : "false")
+          << ",\"renderBackend\":" << actualBackend
+          << ",\"skippedExports\":" << skippedExports
+          << ",\"exportMs\":" << exportMs << ",\"convertMs\":" << convertMs
           << ",\"readMs\":" << readMs << ",\"samples\":" << samples << "}\n";
     trace.flush();
   }
   events.clear();
   submitMs = updateMs = 0;
-  readHdrMs = readDepthMs = readIdMs = 0;
+  readHdrMs = readDepthMs = readIdMs = exportMs = convertMs = 0;
 }
 } // namespace mtHydra
 PXR_NAMESPACE_CLOSE_SCOPE

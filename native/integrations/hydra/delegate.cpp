@@ -3,8 +3,10 @@
 // (Copyright 2016-2019 Pixar). Rewritten for queued Sync and the MuTracer SDK.
 // Applicable TOST 1.0 license: ../../../LICENSES/OpenUSD-TOST.txt.
 #include "bridge.h"
+#include "gpu.h"
 #include "pxr/base/gf/half.h"
 #include "pxr/base/tf/diagnostic.h"
+#include "pxr/imaging/hd/driver.h"
 #include "pxr/imaging/hd/renderIndex.h"
 #include "pxr/imaging/hd/renderPassState.h"
 #include "pxr/imaging/hd/rendererPlugin.h"
@@ -13,6 +15,7 @@
 #include "pxr/imaging/hd/resourceRegistry.h"
 #include "pxr/imaging/hd/sceneDelegate.h"
 #include "pxr/imaging/hd/tokens.h"
+#include "pxr/imaging/hgi/tokens.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -195,6 +198,8 @@ bool Buffer::Allocate(GfVec3i const &size, HdFormat fmt, bool ms) {
   if (fmt != HdFormatFloat32Vec4 && fmt != HdFormatFloat16Vec4 &&
       fmt != HdFormatFloat32 && fmt != HdFormatInt32)
     return false;
+  readOnMap = {};
+  output.reset();
   width = size[0];
   height = size[1];
   format = fmt;
@@ -202,6 +207,99 @@ bool Buffer::Allocate(GfVec3i const &size, HdFormat fmt, bool ms) {
   pixels.assign(size_t(width) * height * HdDataSizeOfFormat(format), 0);
   converged = false;
   return true;
+}
+static void ReadBuffers(Param *param,
+                        HdRenderPassAovBindingVector const &bindings,
+                        uint32_t width, uint32_t height, float scale,
+                        GfMatrix4d const &projection) {
+  char e[2048] = {};
+  std::map<uint32_t, std::vector<uint8_t>> images;
+  for (auto const &a : bindings) {
+    uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
+                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
+                                                      : MT_IMAGE_ID;
+    if (images.count(kind))
+      continue;
+    auto &bytes = images[kind];
+    bytes.resize(size_t(width) * height * 16);
+    size_t written;
+    auto readStart = Clock::now();
+    Check(mt_render_read_pixels(param->render, kind, bytes.data(), bytes.size(),
+                                &written, e, sizeof e),
+          e);
+    double ms = Milliseconds(readStart);
+    if (kind == MT_IMAGE_HDR)
+      param->readHdrMs = ms;
+    else if (kind == MT_IMAGE_DEPTH)
+      param->readDepthMs = ms;
+    else
+      param->readIdMs = ms;
+  }
+  for (auto const &a : bindings) {
+    auto b = dynamic_cast<Buffer *>(a.renderBuffer);
+    if (!b || b->IsMapped())
+      continue;
+    if ((a.aovName == HdAovTokens->depth &&
+         b->GetFormat() != HdFormatFloat32) ||
+        (a.aovName != HdAovTokens->color && a.aovName != HdAovTokens->depth &&
+         b->GetFormat() != HdFormatInt32))
+      throw std::runtime_error("unsupported AOV format");
+    uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
+                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
+                                                      : MT_IMAGE_ID;
+    auto const *floats = reinterpret_cast<float const *>(images[kind].data());
+    auto const *ids = reinterpret_cast<uint32_t const *>(images[kind].data());
+    GfVec4f clear(0);
+    if (a.clearValue.IsHolding<GfVec4f>())
+      clear = a.clearValue.Get<GfVec4f>();
+    else if (a.clearValue.IsHolding<GfVec4d>())
+      clear = GfVec4f(a.clearValue.Get<GfVec4d>());
+    for (unsigned y = 0; y < b->GetHeight(); ++y)
+      for (unsigned x = 0; x < b->GetWidth(); ++x) {
+        size_t src =
+            (size_t(std::min(height - 1,
+                             uint32_t((b->GetHeight() - 1 - y) * scale))) *
+                 width +
+             std::min(width - 1, uint32_t(x * scale))) *
+            4;
+        size_t dst = size_t(y) * b->GetWidth() + x;
+        if (kind == MT_IMAGE_HDR) {
+          float pixel[4];
+          float alpha = std::clamp(floats[src + 3], 0.f, 1.f);
+          for (int k = 0; k < 3; ++k)
+            pixel[k] = std::fma(floats[src + k], alpha,
+                                clear[k] * clear[3] * (1 - alpha));
+          pixel[3] = std::fma(clear[3], (1 - alpha), alpha);
+          if (b->GetFormat() == HdFormatFloat32Vec4)
+            std::memcpy(b->pixels.data() + dst * 16, pixel, 16);
+          else if (b->GetFormat() == HdFormatFloat16Vec4)
+            for (int k = 0; k < 4; ++k)
+              reinterpret_cast<GfHalf *>(b->pixels.data())[dst * 4 + k] =
+                  pixel[k];
+        } else if (kind == MT_IMAGE_DEPTH) {
+          float depth = 1;
+          if (floats[src + 3] > 0) {
+            auto clip = GfVec4d(0, 0, -floats[src], 1) * projection;
+            depth = std::clamp(float((clip[2] / clip[3] + 1) * .5), 0.f, 1.f);
+          }
+          std::memcpy(b->pixels.data() + dst * 4, &depth, 4);
+        } else {
+          int value = -1;
+          auto i = param->identities.find(ids[src]);
+          if (i != param->identities.end()) {
+            if (a.aovName == HdAovTokens->primId)
+              value = i->second.primId;
+            else if (a.aovName == HdAovTokens->elementId &&
+                     ids[src + 3] < i->second.faces.size())
+              value = i->second.faces[ids[src + 3]];
+            else if (a.aovName == HdAovTokens->instanceId &&
+                     ids[src + 1] < i->second.instances.size())
+              value = i->second.instances[ids[src + 1]].index;
+          }
+          std::memcpy(b->pixels.data() + dst * 4, &value, 4);
+        }
+      }
+  }
 }
 class Pass final : public HdRenderPass {
 public:
@@ -247,8 +345,14 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
   try {
     auto delegate = GetRenderIndex()->GetRenderDelegate();
     auto nextBindings = state->GetAovBindings();
-    if (nextBindings.empty())
+    if (nextBindings.empty()) {
+      if (param->gpu)
+        param->gpu->Invalidate();
+      bindings.clear();
+      lastSamples = UINT32_MAX;
+      converged = true;
       return;
+    }
     auto buffer = dynamic_cast<Buffer *>(nextBindings.front().renderBuffer);
     if (!buffer)
       return;
@@ -260,6 +364,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
     uint32_t rw = std::max(1u, uint32_t(w * scale)),
              rh = std::max(1u, uint32_t(h * scale));
     auto settings = delegate->GetRenderSettingsVersion();
+    param->forceCpu = Setting(delegate, "forceCpuOutput", 0) != 0;
     bool changed = param->Apply(Setting(delegate, "backend", MT_BACKEND_HWRT));
     bool cameraChanged = state->GetWorldToViewMatrix() != view ||
                          state->GetProjectionMatrix() != projection ||
@@ -333,16 +438,84 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
       lastSettings = settings;
       lastSamples = UINT32_MAX;
     }
+    if (param->gpu && bindings != nextBindings)
+      param->gpu->Invalidate();
     if (changed || cameraChanged || bindings != nextBindings) {
       converged = false;
       lastSamples = UINT32_MAX;
       bindings = nextBindings;
     }
+    Buffer *colorBuffer = nullptr, *depthBuffer = nullptr;
+    for (auto const &a : bindings) {
+      if (a.aovName == HdAovTokens->color)
+        colorBuffer = dynamic_cast<Buffer *>(a.renderBuffer);
+      if (a.aovName == HdAovTokens->depth)
+        depthBuffer = dynamic_cast<Buffer *>(a.renderBuffer);
+    }
+    bool gpuBindings = colorBuffer && depthBuffer &&
+                       (colorBuffer->GetFormat() == HdFormatFloat32Vec4 ||
+                        colorBuffer->GetFormat() == HdFormatFloat16Vec4) &&
+                       depthBuffer->GetFormat() == HdFormatFloat32 &&
+                       colorBuffer->GetWidth() == depthBuffer->GetWidth() &&
+                       colorBuffer->GetHeight() == depthBuffer->GetHeight();
+    bool gpuOutput = param->gpu && !param->forceCpu && gpuBindings;
+    if (!gpuOutput) {
+      if (output->color) {
+        if (param->gpu)
+          param->gpu->Invalidate();
+        output->Clear();
+        lastSamples = UINT32_MAX;
+      }
+    }
+    if (gpuOutput) {
+      GfVec4f clear(0);
+      for (auto const &a : bindings)
+        if (a.aovName == HdAovTokens->color &&
+            a.clearValue.IsHolding<GfVec4f>())
+          clear = a.clearValue.Get<GfVec4f>();
+      try {
+        param->gpu->Prepare(width, height, w, h, colorBuffer->GetFormat(),
+                            clear, output);
+      } catch (std::exception const &error) {
+        Warn(std::string("CPU output: Hgi conversion setup failed: ") +
+             error.what());
+        param->gpu.reset();
+        output->Clear();
+        gpuOutput = false;
+      }
+    }
+    param->usingGpuOutput = gpuOutput;
+    if (param->forceCpu)
+      Warn("CPU output: forced by forceCpuOutput");
+    if (param->gpu && !param->forceCpu && !gpuBindings)
+      Warn("CPU output: compatible color/depth AOV pair is required");
     for (auto const &a : bindings)
       if (auto b = dynamic_cast<Buffer *>(a.renderBuffer)) {
         b->converged = false;
         b->role = a.aovName;
         b->output = output;
+        b->readOnMap = {};
+        if (gpuOutput) {
+          // Map is a synchronous, on-demand SDK read. Weak ownership lets Hydra
+          // destroy buffers after the pass/delegate without a dangling
+          // callback.
+          std::weak_ptr<Param> weak = param;
+          auto pw = width, ph = height;
+          auto proj = projection;
+          b->readOnMap = [weak, a, pw, ph, scale, proj] {
+            if (auto p = weak.lock()) {
+              std::lock_guard<std::mutex> lock(p->mutex);
+              mt_render_snapshot info{};
+              info.struct_size = sizeof info;
+              char error[2048] = {};
+              Check(mt_render_info(p->render, &info, error, sizeof error),
+                    error);
+              if (!info.samples)
+                return;
+              ReadBuffers(p.get(), {a}, pw, ph, scale, proj);
+            }
+          };
+        }
       }
     auto refine = Clock::now();
     Check(mt_render_refine_until(param->render, 8, nullptr, e, sizeof e), e);
@@ -350,6 +523,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
     mt_render_snapshot info{};
     info.struct_size = sizeof info;
     Check(mt_render_info(param->render, &info, e, sizeof e), e);
+    param->actualBackend = info.backend;
     if (info.status == MT_RENDER_ERROR)
       throw std::runtime_error(param->sdkError.empty() ? info.message
                                                        : param->sdkError);
@@ -361,100 +535,30 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
     if (ready) {
       auto start = Clock::now();
       param->readHdrMs = param->readDepthMs = param->readIdMs = 0;
-      std::map<uint32_t, std::vector<uint8_t>> images;
-      for (auto const &a : bindings) {
-        uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
-                        : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
-                                                          : MT_IMAGE_ID;
-        if (images.count(kind))
-          continue;
-        auto &bytes = images[kind];
-        bytes.resize(size_t(width) * height * 16);
-        size_t written;
-        auto readStart = Clock::now();
-        Check(mt_render_read_pixels(param->render, kind, bytes.data(),
-                                    bytes.size(), &written, e, sizeof e),
-              e);
-        double ms = Milliseconds(readStart);
-        if (kind == MT_IMAGE_HDR)
-          param->readHdrMs = ms;
-        else if (kind == MT_IMAGE_DEPTH)
-          param->readDepthMs = ms;
-        else
-          param->readIdMs = ms;
-      }
-      for (auto const &a : bindings) {
-        auto b = dynamic_cast<Buffer *>(a.renderBuffer);
-        if (!b || b->IsMapped())
-          continue;
-        if ((a.aovName == HdAovTokens->depth &&
-             b->GetFormat() != HdFormatFloat32) ||
-            (a.aovName != HdAovTokens->color &&
-             a.aovName != HdAovTokens->depth &&
-             b->GetFormat() != HdFormatInt32))
-          throw std::runtime_error("unsupported AOV format");
-        uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
-                        : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
-                                                          : MT_IMAGE_ID;
-        auto const *floats =
-            reinterpret_cast<float const *>(images[kind].data());
-        auto const *ids =
-            reinterpret_cast<uint32_t const *>(images[kind].data());
+      if (gpuOutput) {
         GfVec4f clear(0);
-        if (a.clearValue.IsHolding<GfVec4f>())
-          clear = a.clearValue.Get<GfVec4f>();
-        else if (a.clearValue.IsHolding<GfVec4d>())
-          clear = GfVec4f(a.clearValue.Get<GfVec4d>());
-        for (unsigned y = 0; y < b->GetHeight(); ++y)
-          for (unsigned x = 0; x < b->GetWidth(); ++x) {
-            size_t src =
-                (size_t(std::min(height - 1,
-                                 uint32_t((b->GetHeight() - 1 - y) * scale))) *
-                     width +
-                 std::min(width - 1, uint32_t(x * scale))) *
-                4;
-            size_t dst = size_t(y) * b->GetWidth() + x;
-            if (kind == MT_IMAGE_HDR) {
-              float pixel[4];
-              float alpha = std::clamp(floats[src + 3], 0.f, 1.f);
-              for (int k = 0; k < 3; ++k)
-                pixel[k] =
-                    floats[src + k] * alpha + clear[k] * clear[3] * (1 - alpha);
-              pixel[3] = alpha + clear[3] * (1 - alpha);
-              if (b->GetFormat() == HdFormatFloat32Vec4)
-                std::memcpy(b->pixels.data() + dst * 16, pixel, 16);
-              else if (b->GetFormat() == HdFormatFloat16Vec4)
-                for (int k = 0; k < 4; ++k)
-                  reinterpret_cast<GfHalf *>(b->pixels.data())[dst * 4 + k] =
-                      pixel[k];
-            } else if (kind == MT_IMAGE_DEPTH) {
-              float depth = 1;
-              if (floats[src + 3] > 0) {
-                auto clip = GfVec4d(0, 0, -floats[src], 1) * projection;
-                depth =
-                    std::clamp(float((clip[2] / clip[3] + 1) * .5), 0.f, 1.f);
-              }
-              std::memcpy(b->pixels.data() + dst * 4, &depth, 4);
-            } else {
-              int value = -1;
-              auto i = param->identities.find(ids[src]);
-              if (i != param->identities.end()) {
-                if (a.aovName == HdAovTokens->primId)
-                  value = i->second.primId;
-                else if (a.aovName == HdAovTokens->elementId &&
-                         ids[src + 3] < i->second.faces.size())
-                  value = i->second.faces[ids[src + 3]];
-                else if (a.aovName == HdAovTokens->instanceId &&
-                         ids[src + 1] < i->second.instances.size())
-                  value = i->second.instances[ids[src + 1]].index;
-              }
-              std::memcpy(b->pixels.data() + dst * 4, &value, 4);
-            }
+        for (auto const &a : bindings)
+          if (a.aovName == HdAovTokens->color) {
+            if (a.clearValue.IsHolding<GfVec4f>())
+              clear = a.clearValue.Get<GfVec4f>();
+            else if (a.clearValue.IsHolding<GfVec4d>())
+              clear = GfVec4f(a.clearValue.Get<GfVec4d>());
           }
+        if (!param->gpu->Publish(param->render, width, height, w, h,
+                                 colorBuffer->GetFormat(), scale, clear,
+                                 projection, output, param->exportMs,
+                                 param->convertMs)) {
+          ready = false;
+          ++param->skippedExports;
+        }
+      } else {
+        ReadBuffers(param.get(), bindings, width, height, scale, projection);
       }
-      lastSamples = info.samples;
-      lastRead = Clock::now();
-      readMs = Milliseconds(start);
+      if (ready) {
+        lastSamples = info.samples;
+        lastRead = Clock::now();
+        readMs = Milliseconds(start);
+      }
     }
     converged = info.converged && lastSamples == info.samples;
     for (auto const &a : bindings)
@@ -473,6 +577,13 @@ Delegate::Delegate(HdRenderSettingsMap const &settings)
     : HdRenderDelegate(settings), param(std::make_shared<Param>()),
       registry(std::make_shared<HdResourceRegistry>()) {
   _PopulateDefaultSettings(GetRenderSettingDescriptors());
+}
+void Delegate::SetDrivers(HdDriverVector const &drivers) {
+  std::lock_guard<std::mutex> lock(param->mutex);
+  for (auto driver : drivers)
+    if (driver && driver->name == HgiTokens->renderDriver &&
+        driver->driver.IsHolding<Hgi *>())
+      param->hgi = driver->driver.Get<Hgi *>();
 }
 TfTokenVector const &Delegate::GetSupportedRprimTypes() const {
   static TfTokenVector t = {HdPrimTypeTokens->mesh};
@@ -515,7 +626,8 @@ HdRenderSettingDescriptorList Delegate::GetRenderSettingDescriptors() const {
   return {{"Samples", TfToken("convergedSamplesPerPixel"), VtValue(64)},
           {"Backend (0 software, 1 HWRT)", TfToken("backend"), VtValue(1)},
           {"Resolution scale", TfToken("resolutionScale"), VtValue(1.f)},
-          {"Display refresh rate", TfToken("displayRefreshRate"), VtValue(30)}};
+          {"Display refresh rate", TfToken("displayRefreshRate"), VtValue(30)},
+          {"Force CPU output", TfToken("forceCpuOutput"), VtValue(0)}};
 }
 HdAovDescriptor Delegate::GetDefaultAovDescriptor(TfToken const &t) const {
   if (t == HdAovTokens->color)
