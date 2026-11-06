@@ -1025,29 +1025,50 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
 }
 
 // Version 1, source mesh index, local instance index+1 (0=mesh world matrix),
-// reserved=0, matrix[16]. Candidate meshes never mutate accepted source state.
+// reserved=0, matrix[16]. Version 2: [2, count, 0, 0], then count records of
+// [source mesh index, local instance index+1, 0, 0, matrix[16]]; one refit
+// applies them all. Candidate meshes never mutate accepted source state.
 function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
   pendingTransforms.delete(token); transformStages.delete(token);
   const state = retainedScenes.get(token);
-  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 20), f = new Float32Array(bytes.buffer, bytes.byteOffset, 20);
-  const previous = state?.meshes[u[1]];
-  if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
-  const mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
-  const data = previous.instanceData;
-  if (u[2] && (!data || u[2] > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
-  mesh.transform = u[2] ? new Float32Array(matrixStorage(previous.transform)) : f.slice(4, 20);
-  if (data) {
-    const transforms = data.transforms.slice();
-    if (u[2]) transforms.set(f.subarray(4), (u[2] - 1) * 16);
-    mesh.setInstanceState(new InstanceState({count: data.count, transforms, colors: data.colors}));
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2), f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2);
+  const batch = u[0] === 2, count = batch ? u[1] : 1, first = batch ? 4 : 0;
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const meshes = state.meshes.slice(), edited = new Map<MeshState, MeshState>();
+  // Per edited source mesh: undefined after a world-matrix edit (every slot is
+  // dirty), otherwise the edited local instances.
+  const locals = new Map<MeshState, Set<number> | undefined>();
+  for (let r = 0; r < count; r++) {
+    // Both versions place the matrix at record word 4; version 1 starts with its version word.
+    const at = first + r * 20, fields = batch ? at : at + 1, index = u[fields], local = u[fields + 1];
+    const previous = state.meshes[index];
+    if (!previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+    const data = previous.instanceData;
+    if (local && (!data || local > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
+    let mesh = edited.get(previous);
+    if (!mesh) {
+      mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
+      mesh.transform = new Float32Array(matrixStorage(previous.transform));
+      if (data) mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms.slice(), colors: data.colors}));
+      edited.set(previous, mesh); meshes[index] = mesh; locals.set(previous, new Set<number>());
+    }
+    if (local) {
+      mesh.instanceData!.transforms.set(f.subarray(at + 4, at + 20), (local - 1) * 16);
+      locals.get(previous)?.add(local - 1);
+    } else {
+      mesh.transform = f.slice(at + 4, at + 20);
+      locals.set(previous, undefined);
+    }
   }
-  const meshes = state.meshes.slice(); meshes[u[1]] = mesh;
-  const bindings = state.bindings.map(b => ({mesh: b.mesh === previous ? mesh : b.mesh, geometry: b.geometry,
+  const bindings = state.bindings.map(b => ({mesh: edited.get(b.mesh) ?? b.mesh, geometry: b.geometry,
     blasIndex: b.blasIndex, materialIndices: b.materialIndices, displacementScale: b.displacementScale, bvhBounds: b.bvhBounds}));
-  const changedSlots = dirtyPreparedInstanceIndices(state.bindings, new Set([previous]), state.instances);
-  const dirty = new Set<number>();
-  for (const slot of changedSlots) {
-    if (!u[2] || Array.isArray(state.instances) || state.instances.localIndices[slot] === u[2] - 1) dirty.add(slot);
+  const dirty = new Set<number>(), packed = !Array.isArray(state.instances) ? state.instances : undefined;
+  for (let i = 0; i < state.bindings.length; i++) {
+    const source = state.bindings[i].mesh;
+    if (!edited.has(source)) continue;
+    const only = locals.get(source);
+    if (!packed) { dirty.add(i); continue; }
+    for (const slot of packed.bindingSlots[i] ?? []) if (!only || only.has(packed.localIndices[slot])) dirty.add(slot);
   }
   const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty), stage = {meshes, bindings, instances};
   if (sameInstanceMembership(state.instances, instances)) return incrementalTransform(stage, dirty, token);

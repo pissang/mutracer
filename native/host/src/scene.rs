@@ -1025,15 +1025,35 @@ impl PreparedState {
         let bytes = bytes.to_vec();
         runtime::call(move || state.transform_inner(&bytes))
     }
+    /// Version 1 carries one matrix in 80 bytes; version 2 is `[2, count, 0, 0]`
+    /// followed by `count` 80-byte `[mesh, local + 1, 0, 0, matrix]` records.
     fn transform_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
-        if bytes.len() != 80 {
-            return Err("Transform descriptor must contain exactly 80 bytes".into());
-        }
         let w = Words(bytes);
-        if w.u(0) != 1 || w.u(3) != 0 {
-            return Err("Invalid transform version/reserved fields".into());
+        if bytes.len() < 16 || bytes.len() % 4 != 0 {
+            return Err("Transform descriptor must contain 80 bytes per matrix".into());
         }
-        w.affine(4)?;
+        match w.u(0) {
+            1 => {
+                if bytes.len() != 80 || w.u(3) != 0 {
+                    return Err("Invalid transform length/reserved fields".into());
+                }
+                w.affine(4)?;
+            }
+            2 => {
+                let count = w.u(1);
+                if count == 0 || w.u(2) != 0 || w.u(3) != 0 || bytes.len() != 16 + count * 80 {
+                    return Err("Invalid transform batch length/reserved fields".into());
+                }
+                for r in 0..count {
+                    let at = 4 + r * 20;
+                    if w.u(at + 2) != 0 || w.u(at + 3) != 0 {
+                        return Err("Invalid transform batch reserved fields".into());
+                    }
+                    w.affine(at + 4)?;
+                }
+            }
+            _ => return Err("Invalid transform version".into()),
+        }
         self.native_update(
             mt_core_native_transform_begin,
             mt_core_native_transform_finish,

@@ -1525,10 +1525,10 @@ unsafe fn update_transform_in(
     length: usize,
 ) -> Result<()> {
     let scene = ready(context)?;
-    if input.is_null() || length != 80 {
+    if input.is_null() || length < 80 {
         return Err(fail(
             Status::InvalidArgument,
-            "Transform descriptor must contain exactly 80 bytes",
+            "Transform descriptor must contain 80 bytes per matrix",
         ));
     }
     let bytes = unsafe { std::slice::from_raw_parts(input, length) };

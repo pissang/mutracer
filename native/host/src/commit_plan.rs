@@ -314,6 +314,22 @@ fn transform_steps(a: &Words, b: &Words, index: usize, steps: &mut Vec<Step>) ->
     Some(())
 }
 
+/// Joins version-1 transform steps into one version-2 step, so the retained
+/// scene refits its acceleration structure and lighting once for all of them.
+fn transform_batch(steps: Vec<Step>) -> Step {
+    let mut bytes = record(&[2, steps.len() as u32, 0, 0]);
+    for step in steps {
+        let Step::Transform(single) = step else {
+            unreachable!()
+        };
+        // [1, mesh, local + 1, 0, matrix] -> [mesh, local + 1, 0, 0, matrix]
+        bytes.extend_from_slice(&single[4..12]);
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&single[16..80]);
+    }
+    Step::Transform(bytes)
+}
+
 /// Colors replace values only; adding or removing a batch's colors needs full preparation.
 fn instance_color_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     let batch = |w: &Words| {
@@ -562,8 +578,14 @@ pub(crate) fn plan_with(
             steps.push(geometry_step(&a, &b, index)?);
         }
     }
+    let mut transforms = Vec::new();
     for &index in &sync.transforms {
-        transform_steps(&a, &b, index, &mut steps)?;
+        transform_steps(&a, &b, index, &mut transforms)?;
+    }
+    if transforms.len() > 1 {
+        steps.push(transform_batch(transforms));
+    } else {
+        steps.extend(transforms);
     }
     for &index in &sync.colors {
         steps.push(instance_color_step(&a, &b, index)?);
