@@ -138,3 +138,83 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene as SceneObject};
+
+    #[test]
+    #[ignore = "requires real hardware ray queries"]
+    fn hardware_shadow_excludes_only_the_origin_primitive() {
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let gpu = GpuDevice::with_backend(1).unwrap();
+        assert!(gpu.hardware_ray_query);
+        // Exercise opaque closest-hit specialization and candidate-filtered
+        // geometry, with both source-order and leaf-order primitive records.
+        for double_sided in [false, true] {
+            let mut object = SceneObject::new();
+            let mut material = OpenPbrMaterial::default();
+            material.values.double_sided = double_sided;
+            let material = object.add_material(material).unwrap();
+            for z in [0., 0.5] {
+                let geometry = object
+                    .add_geometry(Geometry::new(
+                        vec![-1., -1., z, 1., -1., z, 0., 1., z],
+                        vec![0, 1, 2],
+                    ))
+                    .unwrap();
+                object.add_mesh(Mesh::new(geometry, material)).unwrap();
+            }
+            let mut input = object.descriptor().unwrap().as_ref().clone();
+            input[8..12].copy_from_slice(&8u32.to_le_bytes());
+            input[12..16].copy_from_slice(&8u32.to_le_bytes());
+            for indexed in [false, true] {
+                let (mut scene, mut assets) = scene::prepare_diagnostic(&input, indexed).unwrap();
+                let layout = scene.native_layout.as_ref().unwrap();
+                scene.hwrt = Some(hardware::capture_from_resources(&mut assets, layout).unwrap());
+                scene.hwrt.as_mut().unwrap().shader = Some(AssetId::Packet(33));
+                let shader = assets.get_mut(&AssetId::Packet(33)).unwrap();
+                shader.extend_from_slice(
+                    br#"
+@compute @workgroup_size(8, 8, 1)
+fn shadowContract(@builtin(global_invocation_id) id: vec3u) {
+  if (any(id.xy != vec2u(0u))) { return; }
+  var ray: Ray;
+  initRay(&ray, vec3f(0.0, 0.0, -1.0), vec3f(0.0, 0.0, 1.0));
+  let record = mtRecord(0, 0u);
+  outColor[0] = vec4f(
+    f32(intersectSceneShadow(ray, 1.25, record, 0)),
+    f32(intersectSceneShadow(ray, 1.25, -1, -1)),
+    f32(intersectSceneShadow(ray, 1.25, record, 1)),
+    f32(intersectSceneShadow(ray, 3.0, record, 0)));
+}
+"#,
+                );
+                scene.shader = AssetId::Packet(33);
+                scene.entry_point = "shadowContract".into();
+                let (state, target) = GpuScene::new(
+                    scene,
+                    &RenderOptions {
+                        flags: 4,
+                        ..Default::default()
+                    },
+                    &assets,
+                    gpu.clone(),
+                )
+                .unwrap();
+                state.dispatch_target(&target, 0, 1, None).unwrap();
+                let bytes = read_raw(&gpu, &target.buffers[&10]).unwrap();
+                let values: Vec<_> = bytes[..16]
+                    .chunks_exact(4)
+                    .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                    .collect();
+                assert_eq!(
+                    values,
+                    [0., 1., 1., 1.],
+                    "indexed={indexed}, double_sided={double_sided}"
+                );
+            }
+        }
+    }
+}
