@@ -209,6 +209,9 @@ impl Scene {
                 .enumerate()
                 .map(|(i, (key, _))| (key, i as u32)),
         );
+        // Identity tables are rewritten only by the complete encoder.
+        self.dirty.get_mut().unwrap().structure = true;
+        self.changed();
         Ok(())
     }
     /// Encodes with consumer dimensions; quality flags default zero. Reuses the
