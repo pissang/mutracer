@@ -163,7 +163,7 @@ int main(int argc,char **argv){
     /* The inverse state of removal/replacement/add-environment has to exist. */
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
-    uint32_t expected=((c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
+    uint32_t expected=((c==2&&instances>64)||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20)?1:2;
     for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
