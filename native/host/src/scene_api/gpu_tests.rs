@@ -3,6 +3,138 @@ use crate::api::{
     Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
     RenderSize,
 };
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn software_new_geometry_append_matches_fresh_scene() {
+    new_geometry_append_matches_fresh_scene(Backend::Software);
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn hardware_new_geometry_append_matches_fresh_scene() {
+    new_geometry_append_matches_fresh_scene(Backend::Hardware);
+}
+
+fn new_geometry_append_matches_fresh_scene(backend: Backend) {
+    crate::logging::stderr();
+    let mut scene = Scene::new();
+    let geometry = scene.add_geometry(Geometry::new(
+        vec![-0.4, -0.4, 0., 0.4, -0.4, 0., 0., 0.4, 0.],
+        vec![0, 1, 2],
+    )).unwrap();
+    let mut material = OpenPbrMaterial::default();
+    material.values.emission_strength = 2.;
+    let material = scene.add_material(material).unwrap();
+    scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+    let mut camera = Camera::default();
+    camera.world_matrix[14] = 3.;
+    scene.set_default_camera(Some(camera));
+    let settings = RenderSettings {
+        max_samples: 4,
+        aovs: 32,
+        aov_samples: 1,
+        size: RenderSize::Fixed { width: 32, height: 24 },
+        ..Default::default()
+    };
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+
+    let appended_geometry = scene.add_geometry(Geometry::new(
+        vec![-0.3, -0.3, -0.1, 0.3, -0.3, -0.1, 0., 0.3, -0.1],
+        vec![0, 1, 2],
+    )).unwrap();
+    let mut appended = Mesh::new(appended_geometry, material);
+    appended.instances = Some(Instances {
+        transforms: vec![Mat4::from_translation(Vec3::new(-0.4, 0., 0.)),
+            Mat4::from_translation(Vec3::new(0.4, 0., 0.))].into(),
+        colors: None,
+    });
+    let appended_mesh = scene.add_mesh(appended).unwrap();
+    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+
+    let fresh = Engine::new(EngineOptions { backend }).unwrap();
+    let reference = Render::new(&fresh, settings.clone()).unwrap();
+    fresh.set_scene_object(&scene).unwrap();
+    fresh.update().unwrap();
+    reference.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [PixelKind::Hdr, PixelKind::Id] {
+        let actual = render.read_pixels(kind).unwrap();
+        let expected = reference.read_pixels(kind).unwrap();
+        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "{kind:?}");
+        assert_eq!(actual.id_data, expected.id_data, "{kind:?} ID");
+    }
+    for x in [0.25, 0.5, 0.75] {
+        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", fresh.pick_surface(x, 0.5).unwrap()), "pick {x}");
+    }
+
+    let second_geometry = scene.add_geometry(Geometry::new(
+        vec![-0.2, -0.2, 0.1, 0.2, -0.2, 0.1, 0., 0.2, 0.1],
+        vec![0, 1, 2],
+    )).unwrap();
+    let mut second = Mesh::new(second_geometry, material);
+    second.instances = Some(Instances {
+        transforms: vec![Mat4::from_translation(Vec3::new(-0.7, 0.4, 0.)),
+            Mat4::from_translation(Vec3::new(0.7, 0.4, 0.))].into(),
+        colors: None,
+    });
+    scene.add_mesh(second).unwrap();
+    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+    render.converge(ConvergeOptions::new(4)).unwrap();
+
+    let grown = Engine::new(EngineOptions { backend }).unwrap();
+    let grown_reference = Render::new(&grown, settings.clone()).unwrap();
+    grown.set_scene_object(&scene).unwrap();
+    grown.update().unwrap();
+    grown_reference.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [PixelKind::Hdr, PixelKind::Id] {
+        let actual = render.read_pixels(kind).unwrap();
+        let expected = grown_reference.read_pixels(kind).unwrap();
+        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "grown {kind:?}");
+        assert_eq!(actual.id_data, expected.id_data, "grown {kind:?} ID");
+    }
+    for x in [0.25, 0.5, 0.75] {
+        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", grown.pick_surface(x, 0.5).unwrap()), "grown pick {x}");
+    }
+
+    scene.remove_mesh(appended_mesh).unwrap();
+    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+    render.converge(ConvergeOptions::new(4)).unwrap();
+
+    let deleted = Engine::new(EngineOptions { backend }).unwrap();
+    let deleted_reference = Render::new(&deleted, settings).unwrap();
+    deleted.set_scene_object(&scene).unwrap();
+    deleted.update().unwrap();
+    deleted_reference.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [PixelKind::Hdr, PixelKind::Id] {
+        let actual = render.read_pixels(kind).unwrap();
+        let expected = deleted_reference.read_pixels(kind).unwrap();
+        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "deleted {kind:?}");
+        assert_eq!(actual.id_data, expected.id_data, "deleted {kind:?} ID");
+    }
+    for x in [0.25, 0.5, 0.75] {
+        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", deleted.pick_surface(x, 0.5).unwrap()), "deleted pick {x}");
+    }
+}
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn software_scene_object_incremental_matches_full() {

@@ -742,8 +742,8 @@ pub(super) struct PreparedData {
     material_count: usize,
     light_count: std::sync::atomic::AtomicUsize,
     authoritative_shader: Vec<u8>,
-    authoritative_indices: Vec<u8>,
-    authoritative_bounds: Vec<u8>,
+    authoritative_indices: std::sync::Mutex<Vec<u8>>,
+    authoritative_bounds: std::sync::Mutex<Vec<u8>>,
     /// Whether the TS sync state mirrors the committed descriptor.
     synced: std::sync::atomic::AtomicBool,
 }
@@ -772,6 +772,7 @@ pub(super) struct TargetPacket {
     pub caustics: Option<crate::caustics::Packet>,
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
+#[derive(Clone)]
 pub(super) struct LightingUpdates {
     resources: Vec<(usize, u64, u32, u32, Vec<u8>)>,
     pub native_layout: Option<hardware::NativeLayout>,
@@ -965,27 +966,38 @@ impl PreparedState {
         bytes: &[u8],
         ids: &[usize],
     ) -> Result<LightingUpdates> {
-        let requests = native_step(begin, bytes, self.token)?;
-        if Words(&requests).u(ph::VERSION) == crate::layout::version::RESOURCE_WRITES {
-            return lighting_packet(&requests, ids);
+        let mut requests = native_step(begin, bytes, self.token)?;
+        let mut geometry_jobs = !self.indexed && Words(bytes).u(0) == 5;
+        for _ in 0..4 {
+            let version = Words(&requests).u(ph::VERSION);
+            if version == crate::layout::version::RESOURCE_WRITES || version == 2 {
+                return lighting_packet(&requests, ids);
+            }
+            let tlas = if self.indexed {
+                requests.clone()
+            } else {
+                let instances = !geometry_jobs;
+                geometry_jobs = false;
+                tinybvh::jobs(&requests, instances)?
+            };
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                finish(
+                    tlas.as_ptr(),
+                    tlas.len(),
+                    self.token,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            requests = unsafe {
+                let result = copy_core_result(pointer, size, size);
+                mt_core_collect();
+                result?
+            };
         }
-        let tlas = if self.indexed {
-            requests.clone()
-        } else {
-            tinybvh::jobs(&requests, true)?
-        };
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            finish(
-                tlas.as_ptr(),
-                tlas.len(),
-                self.token,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        lighting_result(pointer, size, ids)
+        Err("Native retained update exceeded preparation phases".into())
     }
 
     pub(super) fn geometry(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -1016,11 +1028,12 @@ impl PreparedState {
             &[1, 2, 3, 7, 8, 24, 31, 38, 53],
         )
     }
-    pub(super) fn accept_geometry(&self) -> Result<()> {
+    pub(super) fn accept_geometry(&self, updates: &LightingUpdates) -> Result<()> {
         let state = self.clone();
-        runtime::call(move || state.accept_geometry_inner())
+        let updates = updates.clone();
+        runtime::call(move || state.accept_geometry_inner(&updates))
     }
-    fn accept_geometry_inner(&self) -> Result<()> {
+    fn accept_geometry_inner(&self, updates: &LightingUpdates) -> Result<()> {
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -1034,6 +1047,17 @@ impl PreparedState {
         if packet[..4] != 1u32.to_le_bytes() {
             return Err("Native geometry acceptance failed".into());
         }
+        for (id, destination, data) in &updates.hardware_writes {
+            let mut target = match *id {
+                35 => self.authoritative_indices.lock().unwrap_or_else(|e| e.into_inner()),
+                38 => self.authoritative_bounds.lock().unwrap_or_else(|e| e.into_inner()),
+                _ => continue,
+            };
+            let start = *destination as usize;
+            let end = start.checked_add(data.len()).ok_or("Accepted HWRT metadata overflow")?;
+            if end > target.len() { target.resize(end, 0); }
+            target[start..end].copy_from_slice(data);
+        }
         Ok(())
     }
     pub(super) fn hardware_geometry(
@@ -1045,12 +1069,33 @@ impl PreparedState {
             .map(|(id, _, _, _, data)| (AssetId::Packet(*id), data.clone()))
             .collect();
         assets.insert(AssetId::Packet(33), self.authoritative_shader.clone());
-        assets.insert(AssetId::Packet(35), self.authoritative_indices.clone());
-        assets.insert(AssetId::Packet(38), self.authoritative_bounds.clone());
         let layout = updates
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
+        let mut indices = self.authoritative_indices.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for (id, destination, data) in &updates.hardware_writes {
+            if *id == 35 {
+                let start = *destination as usize;
+                let end = start.checked_add(data.len()).ok_or("HWRT index offset overflow")?;
+                if end > indices.len() { indices.resize(end, 0); }
+                indices[start..end].copy_from_slice(data);
+            }
+        }
+        assets.insert(AssetId::Packet(35), indices);
+        assets.insert(AssetId::Packet(38), self.authoritative_bounds.lock().unwrap_or_else(|e| e.into_inner()).clone());
+        let vertex_end = layout.hardware_geometries.iter().map(|g|
+            (g.vertex_offset as usize + g.vertex_count as usize) * layout.attribute_stride_bytes).max().unwrap_or(0);
+        let mut attributes = vec![0; vertex_end];
+        for (id, destination, data) in &updates.hardware_writes {
+            if *id == 3 {
+                let start = *destination as usize;
+                let end = start.checked_add(data.len()).ok_or("HWRT attribute offset overflow")?;
+                if end > attributes.len() { return Err("HWRT attribute append exceeds layout".into()); }
+                attributes[start..end].copy_from_slice(data);
+            }
+        }
+        assets.insert(AssetId::Packet(3), attributes);
         let capture = hardware::capture_from_resources(&mut assets, layout)?;
         Ok((capture, assets))
     }
@@ -1102,13 +1147,18 @@ impl PreparedState {
                     return Err("Invalid membership update".into());
                 }
             }
+            5 => {
+                if w.u(1) != 0 || w.u(2) != 0 || w.u(3) != 0 || bytes.len() < 16 + h::WORDS * 4 {
+                    return Err("Invalid geometry append update".into());
+                }
+            }
             _ => return Err("Invalid transform version".into()),
         }
         self.native_update(
             mt_core_native_transform_begin,
             mt_core_native_transform_finish,
             bytes,
-            &[1, 2, 7, 8, 24, 31],
+            &[1, 2, 3, 7, 8, 24, 31, 35, 38, 53],
         )
     }
     pub(super) fn accept_transform(&self) -> Result<()> {
@@ -1626,7 +1676,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             w.u(o + we::BYTE_OFFSET),
             w.u(o + we::DESTINATION),
         );
-        let metadata = matches!(id, 31 | 38 | 53);
+        let metadata = matches!(id, 31 | 35 | 38 | 53);
         // Texture destinations are array layers; the atlas is RGBA8 or RGBA16F.
         let texture = !metadata && id >= crate::layout::resource::ATLAS;
         let atlas = id == crate::layout::resource::ATLAS
@@ -1676,6 +1726,10 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
                 destination as u64,
                 packet[offset..offset + length].to_vec(),
             ));
+            continue;
+        }
+        if id == 35 {
+            hardware_writes.push((id, destination as u64, packet[offset..offset + length].to_vec()));
             continue;
         }
         if id == 31 {
@@ -1815,8 +1869,8 @@ fn prepare_retained_with_settings_inner(
         independent_texture_count: 0,
         indexed: hardware,
         authoritative_shader: Vec::new(),
-        authoritative_indices: Vec::new(),
-        authoritative_bounds: Vec::new(),
+        authoritative_indices: std::sync::Mutex::new(Vec::new()),
+        authoritative_bounds: std::sync::Mutex::new(Vec::new()),
         synced: std::sync::atomic::AtomicBool::new(false),
         light_count: std::sync::atomic::AtomicUsize::new(if bytes.len() >= 32 {
             Words(bytes).u(7)
@@ -1848,11 +1902,11 @@ fn prepare_retained_with_settings_inner(
         .get(&AssetId::Packet(33))
         .cloned()
         .unwrap_or_default();
-    state.authoritative_bounds = assets
+    *state.authoritative_bounds.get_mut().unwrap() = assets
         .get(&AssetId::Packet(38))
         .cloned()
         .unwrap_or_default();
-    state.authoritative_indices = assets
+    *state.authoritative_indices.get_mut().unwrap() = assets
         .get(&AssetId::Packet(35))
         .ok_or("Missing explicit HWRT indices")?
         .clone();

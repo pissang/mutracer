@@ -74,6 +74,7 @@ interface NativeLayout {
   blasOffset: number; isEmpty: boolean; bevel: boolean; hasDisplacement: boolean;
   indexed?: boolean; hardwareGeometries?: HardwareGeometry[];
   instanceCount?: number; instanceCapacity?: number;
+  bvhCapacityBytes?: number; tlasCapacityBytes?: number; attributeCapacityBytes?: number;
 }
 function nativeLayoutBytes(layout: NativeLayout, blasOffset: number, isEmpty: boolean, instanceCount = layout.instanceCount): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({...layout, blasOffset, isEmpty, instanceCount}));
@@ -95,6 +96,7 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   qualityFlags: number; environmentPower: number; meshes: MeshState[];
   textureIds: Map<TextureState, number>; nativeLayout: NativeLayout; hardware?: HardwareScene; prepared: PreparedScene; instances: MeshInstances; tlas: FlattendBVH; emissiveCache: EmissiveTriangleCache;
   bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[];
+  bvhCapacityBytes: number; attributeCapacityBytes: number; instanceCapacity: number;
   shader: SceneShader}>();
 /** Inputs of the production shader, retained so targets can request pattern/bevel-sample variants. */
 interface SceneShader {
@@ -126,7 +128,8 @@ const pendingGeometry = new Map<number, {meshes: MeshState[]; bindings: Prepared
   prepared: PreparedScene; instances: MeshInstances; tlas: FlattendBVH; floatPatches: FloatGeometryPatch[]; uintPatches: UintGeometryPatch[]}>();
 export function acceptSceneGeometry(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingGeometry.get(token);
-  if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  if (!pending) return pendingTransforms.has(token) ? acceptSceneTransform(token) : new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   state.meshes = pending.meshes; state.bindings = pending.bindings; state.blases = pending.blases;
   state.geometries = pending.geometries; state.emissive = pending.emissive; state.rt = pending.rt;
   for (const patch of pending.floatPatches) patch.target.set(patch.data, patch.offset);
@@ -140,7 +143,12 @@ type GeometryStage = {meshes: MeshState[]; prepared: PreparedScene; geometry: Ge
 const transformStages = new Map<number, TransformStage>();
 const geometryStages = new Map<number, GeometryStage>();
 const pendingTransforms = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
-  emissive: EmissiveTriangle[]; rt: ArrayBuffer; instances: MeshInstances; tlas: FlattendBVH; prepared?: PreparedScene}>();
+  emissive: EmissiveTriangle[]; rt: ArrayBuffer; instances: MeshInstances; tlas: FlattendBVH; prepared?: PreparedScene;
+  blases?: BLASInstance[]; geometries?: Geometry[]; hardware?: HardwareScene; nativeLayout?: NativeLayout}>();
+type GeometryAppendStage = {meshes: MeshState[]; prepared: PreparedScene; bindings: PreparedMeshInstanceBinding[]; instances: MeshInstances;
+  newMeshes: MeshState[]; inputGeometries: Geometry[]; blasBytes: Uint8Array; attributeBytes: Uint8Array; attributeOffset: number};
+type GeometryAppendBuild = {phase: 0 | 1; meshes: MeshState[]; inputGeometries: Geometry[]; build: SceneSources; stage?: GeometryAppendStage};
+const pendingGeometryAppends = new Map<number, GeometryAppendBuild>();
 export function acceptSceneTransform(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingTransforms.get(token);
   if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
@@ -149,6 +157,13 @@ export function acceptSceneTransform(token: number): Uint8Array {
   state.meshes = pending.meshes; state.bindings = pending.bindings;
   state.instances = pending.instances; state.tlas = pending.tlas;
   if (pending.prepared) state.prepared = pending.prepared;
+  if (pending.blases) state.blases = pending.blases;
+  if (pending.geometries) state.geometries = pending.geometries;
+  if (pending.hardware) state.hardware = pending.hardware;
+  if (pending.nativeLayout) state.nativeLayout = pending.nativeLayout;
+  state.bvhCapacityBytes = state.nativeLayout.bvhCapacityBytes ?? state.bvhCapacityBytes;
+  state.instanceCapacity = state.nativeLayout.instanceCapacity ?? state.instanceCapacity;
+  state.attributeCapacityBytes = state.nativeLayout.attributeCapacityBytes ?? state.attributeCapacityBytes;
   state.nativeLayout.instanceCount = meshInstancesLength(pending.instances);
   if (!pending.prepared) state.prepared.residentBindings = state.prepared.residentBindings.map(b => {
       const index = previousMeshIndices.get(b.mesh) ?? -1;
@@ -401,6 +416,12 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const materials: MaterialState[] = [];
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
   for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
+  for (let i = 0; i < u[H.MESH_COUNT]; i++) {
+    const off = u[H.MESH_OFFSET] + i * M.WORDS;
+    const count = u[off + M.MATERIAL_COUNT];
+    if (!count && !materials[u[off + M.MATERIAL]]) throw new Error(`mesh ${i} material ${u[off + M.MATERIAL]} outside ${materials.length}`);
+    if (count && !materials[u[u[off + M.MATERIAL_TABLE]]]) throw new Error(`mesh ${i} material table ${u[u[off + M.MATERIAL_TABLE]]} outside ${materials.length}`);
+  }
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const tangentRequirements = nativeTangentRequirements(u, materials);
   const geometries: Geometry[] = [], compactSources: boolean[] = [];
@@ -561,19 +582,23 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings, grounded} = input;
   const capacity = prepared.residentBindings.reduce((n, b) => n + (b.mesh.instanceData?.count ?? 1), 0);
   if (!hardware) {
-    // Worst-case BVH2 uses two node vec4s and one instance vec4 per leaf.
-    // Reserve for all resident instances so hidden-at-creation meshes can return.
-    const padded = new Uint8Array(Math.max(tlas.buffer.byteLength, Math.ceil((capacity * 80 + 256) / 256) * 256));
+    const bytes = tlas.buffer.byteLength;
+    const tlasCapacity = Math.ceil((bytes + Math.min(bytes >> 2, 1 << 20) + 256) / 256) * 256;
+    const padded = new Uint8Array(Math.max(bytes, tlasCapacity));
     padded.set(new Uint8Array(tlas.buffer)); tlas = {...tlas, buffer: padded.buffer};
   }
   const blases = prepared.blases;
   const blas = hardware ? new Uint8Array(hardware.records.buffer) : new Uint8Array(concatBLASBuffers(blases));
+  const tlasCapacityBytes = Math.max(tlas.buffer.byteLength, Math.ceil((Math.max(capacity, Math.ceil(capacity * 1.25)) * 80 + 256) / 256) * 256);
+  const bvhCapacityBytes = tlasCapacityBytes + blas.byteLength
+    + Math.max(64, Math.ceil(blas.byteLength * 0.25));
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const table = newMaterialData(prepared.materials, lights, configuration);
   const geometry = prepared.geometry;
   const {layout: attributeLayout, wordCount: attributeWords, vertexWords: attributeVertexWords} = nativeAttributeLayout(prepared, tlas, hardware);
+  const attributeCapacityWords = attributeWords + Math.max(16, Math.ceil(attributeWords * 0.25));
   const {stride, offsets} = attributeLayout;
   const nativeGeometries = new Set<Geometry>();
   if (compactKernelEnabled(token)) {
@@ -636,9 +661,8 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     records.push(resourceRecord(id, kind, data.length, w, h, layers, format)); parts.push(data);
   }
   add(RESOURCE.BVH, KIND.BUFFER, bvh, 0, 0, 0, 0);
-  const residentInstances = new Uint8Array(Math.max(capacity * 160, WGPU_SCENE_BUFFER_MIN_BYTES));
-  residentInstances.set(new Uint8Array(tlas.instancesBuffer!));
-  add(RESOURCE.INSTANCES, KIND.BUFFER, residentInstances, 0, 0, 0, 0);
+  const instanceCapacity = capacity + Math.max(2, Math.ceil(capacity * 0.25));
+  add(RESOURCE.INSTANCES, KIND.BUFFER, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
   // Reserve the final packet span instead of allocating/copying another scene-sized array.
   add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(0), 0, 0, 0, 0);
   records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
@@ -668,7 +692,8 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     positionOffsetBytes: offsets[0] * 4, blasOffset: rt.views.blasOffset[0],
     isEmpty: rt.views.isEmpty[0] !== 0, bevel: rt.views.bevel[0] !== 0,
     hasDisplacement: features.hasDisplacement, indexed: !!hardware, hardwareGeometries: hardware?.geometries,
-    instanceCount: meshInstancesLength(prepared.instances), instanceCapacity: capacity
+    instanceCount: meshInstancesLength(prepared.instances), instanceCapacity,
+    bvhCapacityBytes, tlasCapacityBytes, attributeCapacityBytes: attributeCapacityWords * WORD_BYTES
   };
   add(RESOURCE.METADATA, KIND.METADATA, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
   const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
@@ -726,7 +751,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
     textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE),
-    shader: sceneShader});
+    shader: sceneShader, bvhCapacityBytes, attributeCapacityBytes: attributeCapacityWords * WORD_BYTES, instanceCapacity});
   preparationMark('packet.begin');
   const packet = resourcePacket(records, parts, width, height, output => {
     preparationMark('compact.begin');
@@ -1307,11 +1332,14 @@ export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): 
     return incrementalTransform({meshes, bindings, instances}, dirty, token);
   } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
 }
-function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: number): Uint8Array {
+function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: number,
+  appendWrites: {blas: Uint8Array; blasOffset: number; attributes: Uint8Array; attributeOffset: number} | undefined = undefined): Uint8Array {
   const state = retainedScenes.get(token);
   if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   const {meshes, bindings, instances} = stage;
-  if (getTraversalStackSizes(tlas, state.blases).tlas > state.tlasStack) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  const blases = stage.prepared?.blases ?? state.blases;
+  const nextTlasStack = getTraversalStackSizes(tlas, blases).tlas;
+  if (nextTlasStack > state.tlasStack) throw new Error(`Full commit required: TLAS stack ${nextTlasStack} exceeds ${state.tlasStack}`);
   const base = new Uint32Array(state.rt)[22] * 16;
   if (!state.hardware) {
     if (tlas.buffer.byteLength > base) throw new Error('Resident TLAS capacity exceeded');
@@ -1329,15 +1357,26 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   packLightingUniform(rt, lighting);
   pendingTransforms.set(token, {meshes, bindings, instances, tlas, emissive, rt: rt.buffer, prepared: stage.prepared});
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
+  const paddedInstanceBytes = new Uint8Array(Math.max(instanceBytes.byteLength, state.instanceCapacity * 160));
+  paddedInstanceBytes.set(instanceBytes);
   const paddedBvh = new Uint8Array(state.hardware ? 0 : Math.max(bvh.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedBvh.set(bvh);
-  const paddedInstances = instanceBytes;
+  const paddedInstances = paddedInstanceBytes;
   const metadata = nativeLayoutBytes(state.nativeLayout, rt.views.blasOffset[0], rt.views.isEmpty[0] !== 0, meshInstancesLength(instances));
-  return updatePacket([
+  const records = [
     [1, 0, paddedBvh.length, 0, 0, 0, 0, 0], [2, 0, paddedInstances.length, 0, 0, 0, 0, 0],
     [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0], [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
     [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0],
     [31, 3, metadata.byteLength, 0, 0, 0, 0, 0]
-  ], [paddedBvh, paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata]);
+  ];
+  const parts = [paddedBvh, paddedInstanceBytes, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata];
+  const destinations = [0, 0, 0, 0, 0, 0];
+  if (appendWrites) {
+    if (state.hardware) throw new Error('Full commit required: indexed HWRT append is not available');
+    records.push([1, 0, appendWrites.blas.byteLength, 0, 0, 0, 0, 0], [3, 0, appendWrites.attributes.byteLength, 0, 0, 0, 0, 0]);
+    parts.push(appendWrites.blas, appendWrites.attributes);
+    destinations.push(appendWrites.blasOffset, appendWrites.attributeOffset);
+  }
+  return updatePacket(records, parts, destinations);
 }
 
 function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
@@ -1600,15 +1639,227 @@ function nativeFloatImage(texture: PixelTexture | undefined): {width: number; he
 export function sceneTransformParameters(bytes: Uint8Array, token: number): Uint8Array {return prepareTransformUpdate(bytes, token, false);}
 export function sceneGeometryParameters(bytes: Uint8Array, token: number): Uint8Array {return prepareGeometryUpdate(bytes, token, false);}
 function requestInstances(instances: MeshInstances): Uint8Array {
-  const data = new Uint8Array(meshInstanceBounds(instances).buffer);
+  const bounds = meshInstanceBounds(instances);
+  for (let i = 0; i < bounds.length; i += 6) {
+    for (let axis = 0; axis < 3; axis++) {
+      const min = bounds[i + axis], max = bounds[i + axis + 3];
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min > max)
+        throw new Error(`Invalid prepared instance bounds ${i / 6}, axis ${axis}: ${min},${max}`);
+    }
+  }
+  const data = new Uint8Array(bounds.buffer);
   return resourcePacket([[0, 0, data.byteLength, 0, 0, 0, 0, 0]], [data], 0, 0);
 }
 export function nativeTransformBegin(bytes: Uint8Array, token: number): Uint8Array {
-  try {return prepareTransformUpdate(bytes, token, true);}
+  try {
+    const words = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    return words[0] === 5 ? prepareNativeGeometryAppend(bytes, token) : prepareTransformUpdate(bytes, token, true);
+  }
   catch (error) {transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_BEGIN, error);}
+}
+function nativeGeometryJobsPacket(build: SceneSources): Uint8Array {
+  const records: number[][] = [], parts: Uint8Array[] = [];
+  for (let i = 0; i < build.jobs.length; i++) {
+    const job = build.jobs[i], geometry = job.bvhGeometry, sourceIndices = geometry.indexArray;
+    const indices = sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices);
+    const positions = new Uint8Array(geometry.position.array.buffer, geometry.position.array.byteOffset, geometry.position.array.byteLength);
+    const normals = job.ranges ? new Uint8Array(geometry.normal.array.buffer, geometry.normal.array.byteOffset, geometry.normal.array.byteLength) : new Uint8Array(0);
+    const ranges = job.ranges ? new Uint8Array(job.ranges.buffer) : new Uint8Array(0);
+    const data = new Uint8Array(16 + positions.length + normals.length + indices.byteLength + ranges.length);
+    new Uint32Array(data.buffer).set([geometry.vertexCount, indices.length, Number(!!job.ranges), 0]);
+    new Float32Array(data.buffer)[3] = job.displacementScale;
+    let offset = 16;
+    for (const part of [positions, normals, new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), ranges]) {data.set(part, offset); offset += part.length;}
+    records.push(resourceRecord(i, KIND.BUFFER, data.byteLength, 0, 0, 0, 0)); parts.push(data);
+  }
+  return resourcePacket(records, parts, 0, 0);
+}
+function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Array {
+  const state = retainedScenes.get(token);
+  if (!state) throw new Error('Missing retained append state');
+  let input: ReturnType<typeof decodeScene>;
+  const descriptor = bytes.subarray(16);
+  try { input = decodeScene(descriptor, token); }
+  catch (error) { throw new Error(`append decodeScene: ${String(error)}`); }
+  const u = new Uint32Array(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength / 4);
+  const oldGeometryCount = state.geometries.length, oldMeshCount = state.meshes.length;
+  if (u[H.GEOMETRY_COUNT] <= oldGeometryCount || input.meshes.length <= oldMeshCount)
+    throw new Error('Invalid geometry append counts');
+  const meshes: MeshState[] = [];
+  for (let i = oldMeshCount; i < input.meshes.length; i++) {
+    const off = u[H.MESH_OFFSET] + i * M.WORDS, geometryIndex = u[off + M.GEOMETRY];
+    if (geometryIndex < oldGeometryCount || u[off + M.MATERIAL_COUNT] > 1)
+      throw new Error('Full commit required: append requires a new single-material geometry');
+    const materialIndex = u[off + M.MATERIAL_COUNT] === 0 ? u[off + M.MATERIAL] : u[u[off + M.MATERIAL_TABLE]];
+    const geometry = input.geometries[geometryIndex], material = state.source[materialIndex];
+    if (!material) throw new Error(`Full commit required: append material ${materialIndex} outside retained table ${state.source.length}`);
+    if (!geometry || geometry.materialIndex || !material || material.displacementMap)
+      throw new Error('Full commit required: append geometry/material layout is incompatible');
+    const mesh = new MeshState(geometry, decodeMeshMaterials(u, off, state.source));
+    mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
+    mesh.visible = (u[off + M.FLAGS] & 1) === 0;
+    mesh.transform = input.meshes[i].transform;
+    const instances = input.meshes[i].instanceData;
+    if (instances) mesh.setInstanceState(new InstanceState({count: instances.count, transforms: instances.transforms, colors: instances.colors}));
+    meshes.push(mesh);
+  }
+  let build: SceneSources;
+  try { build = prepareSceneSources({meshes, textureIds: state.textureIds}); }
+  catch (error) { throw new Error(`append prepareSceneSources: ${String(error)}`); }
+  if (build.jobs.length === 0 || build.jobs.some(job => job.ranges || job.displacementBias !== 0))
+    throw new Error('Full commit required: append requires static non-displaced geometry');
+  if (state.hardware) return prepareNativeHardwareAppend(state, meshes, input.geometries, build, token);
+  pendingGeometryAppends.set(token, {phase: 0, meshes, inputGeometries: state.geometries.concat(input.geometries.slice(oldGeometryCount)), build});
+  return nativeGeometryJobsPacket(build);
+}
+function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retainedScenes.get>>, newMeshes: MeshState[],
+  inputGeometries: Geometry[], build: SceneSources, token: number): Uint8Array {
+  const oldGeometryCount = state.prepared.geometries.length, allMeshes = state.meshes.concat(newMeshes);
+  let phase = 'prepareSceneMeshes';
+  try {
+  const resident = new Map(state.prepared.residentBindings.map(binding => [binding.mesh, binding]));
+  const prepared = prepareSceneMeshes(allMeshes, mesh => {
+    const previous = resident.get(mesh);
+    if (previous) return {geometry: previous.geometry, displacementScale: previous.displacementScale ?? 0};
+    const source = build.sources.get(mesh);
+    if (!source) throw new Error('Missing appended HWRT geometry source');
+    return source;
+  }, computeGeometryBounds, false, false);
+  if (prepared.geometries.length <= oldGeometryCount || prepared.geometries.some((g, i) => i < oldGeometryCount && g !== state.prepared.geometries[i]))
+    throw new Error('Full commit required: appended geometry changes resident HWRT order');
+  phase = 'compactVertexLayout';
+  const layout = compactVertexLayout(prepared.geometries, false);
+  if (layout.stride * 4 !== state.nativeLayout.attributeStrideBytes)
+    throw new Error('Full commit required: appended geometry changes HWRT vertex layout');
+  const oldVertexCount = state.prepared.geometries.reduce((sum, geometry) => sum + geometry.vertexCount, 0);
+  const oldIndexCount = state.prepared.geometries.reduce((sum, geometry) => sum + geometry.indexArray.length, 0);
+  const newGeometryCount = prepared.geometries.length - oldGeometryCount;
+  const newVertexCount = prepared.geometries.slice(oldGeometryCount).reduce((sum, geometry) => sum + geometry.vertexCount, 0);
+  const newIndexCount = prepared.geometries.slice(oldGeometryCount).reduce((sum, geometry) => sum + geometry.indexArray.length, 0);
+  const attributeWords = new Uint32Array(newVertexCount * layout.stride);
+  const indexWords = new Uint32Array(newIndexCount);
+  let indexCursor = 0;
+  for (let i = oldGeometryCount; i < prepared.geometries.length; i++) {
+    const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
+    packCompactVertices(geometry, attributeWords, layout.stride, layout.offsets, 0, geometry.vertexCount,
+      region.vertexOffset - oldVertexCount, false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+    const indices = geometry.indexArray instanceof Uint32Array ? geometry.indexArray : new Uint32Array(geometry.indexArray);
+    indexWords.set(indices, indexCursor); indexCursor += indices.length;
+  }
+  const attributes = new Uint8Array(attributeWords.buffer), indexBytes = new Uint8Array(indexWords.buffer);
+  phase = 'hardware metadata';
+  const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.residentBindings, prepared.geometries.length);
+  const hardware: HardwareScene = {geometries: state.hardware!.geometries.slice(), records: state.hardware!.records,
+    bounds: state.hardware!.bounds};
+  for (let i = oldGeometryCount; i < prepared.geometries.length; i++) {
+    const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
+    hardware.geometries.push({opaque: opaque[i], indexOffset: region.indexOffset, indexCount: geometry.indexArray.length,
+      vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount, procedural: false, dynamic: geometry.dynamic,
+      boundsOffset: state.hardware!.bounds.length / 6});
+  }
+  const instances = prepared.instances;
+  const tlas = linearTlas(instances, hardware);
+  const instanceCount = meshInstancesLength(instances);
+  const nativeLayout: NativeLayout = {...state.nativeLayout, hardwareGeometries: hardware.geometries,
+    instanceCount, instanceCapacity: Math.max(state.instanceCapacity, instanceCount + Math.max(2, Math.ceil(instanceCount * 0.25))),
+    attributeCapacityBytes: Math.max(state.attributeCapacityBytes, oldVertexCount * layout.stride * WORD_BYTES + attributes.byteLength)};
+  const emissive = state.emissiveCache.collect(prepared.emissiveBindings, state.ordered).map(triangle => ({...triangle}));
+  phase = 'lighting';
+  const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  rt.views.isEmpty[0] = Number(instanceCount === 0); packLightingUniform(rt, lighting);
+  phase = 'nativeLayoutBytes';
+  const metadata = nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, rt.views.isEmpty[0] !== 0, instanceCount);
+  const paddedInstances = new Uint8Array(nativeLayout.instanceCapacity! * 160);
+  paddedInstances.set(new Uint8Array(tlas.instancesBuffer!));
+  const changed = new Uint32Array(newGeometryCount);
+  for (let i = 0; i < changed.length; i++) changed[i] = oldGeometryCount + i;
+  const records = [
+    [2, 0, paddedInstances.byteLength, 0, 0, 0, 0, 0],
+    [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
+    [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
+    [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0],
+    [31, 3, metadata.byteLength, 0, 0, 0, 0, 0],
+    [3, 0, attributes.byteLength, 0, 0, 0, 0, 0],
+    [35, 3, indexBytes.byteLength, 0, 0, 0, 0, 0],
+    [53, 3, changed.byteLength, 0, 0, 0, 0, 0]
+  ];
+  const parts = [paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer),
+    new Uint8Array(lighting.lightData.buffer), metadata, attributes, indexBytes, new Uint8Array(changed.buffer)];
+  const destinations = [0, 0, 0, 0, 0, oldVertexCount * layout.stride * WORD_BYTES, oldIndexCount * WORD_BYTES, 0];
+  phase = 'pendingTransforms';
+  pendingTransforms.set(token, {meshes: allMeshes, bindings: prepared.instanceBindings, instances, tlas,
+    emissive, rt: rt.buffer, prepared, blases: prepared.blases, hardware, nativeLayout,
+    geometries: state.geometries.concat(inputGeometries.slice(state.geometries.length))});
+  phase = 'updatePacket';
+  return updatePacket(records, parts, destinations);
+  } catch (error) { throw new Error(`HWRT append ${phase}: ${String(error)}`); }
 }
 export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Array {
   try {
+    const append = pendingGeometryAppends.get(token);
+    if (append) {
+      if (append.phase === 0) {
+        const bvhs = builtBvhs(bytes, append.build.jobs.length);
+        for (let i = 0; i < bvhs.length; i++) setGeometryBvh(append.build.jobs[i].geometry, bvhs[i]);
+        const state = retainedScenes.get(token)!;
+        const allMeshes = state.meshes.concat(append.meshes);
+        const bindings = new Map(state.prepared.residentBindings.map(binding => [binding.mesh, binding]));
+        const prepared = prepareSceneMeshes(allMeshes, mesh => {
+          const resident = bindings.get(mesh);
+          if (resident) return {geometry: resident.geometry, displacementScale: resident.displacementScale ?? 0};
+          return append.build.sources.get(mesh)!;
+        }, undefined, true, false);
+        if (prepared.geometries.length <= state.prepared.geometries.length
+          || prepared.geometries.some((g, i) => i < state.prepared.geometries.length && g !== state.prepared.geometries[i]))
+          throw new Error('Full commit required: appended geometry changes resident BLAS order');
+        for (let i = 0; i < state.prepared.geometries.length; i++) {
+          const before = state.prepared.geometryRegions.get(state.prepared.geometries[i])!, after = prepared.geometryRegions.get(prepared.geometries[i])!;
+          if (before.vertexOffset !== after.vertexOffset || before.indexOffset !== after.indexOffset)
+            throw new Error('Full commit required: appended geometry changes resident regions');
+        }
+        const stage: GeometryAppendStage = {
+          meshes: allMeshes, prepared, bindings: prepared.instanceBindings, instances: prepared.instances,
+          newMeshes: append.meshes, inputGeometries: append.inputGeometries,
+          blasBytes: new Uint8Array(0), attributeBytes: new Uint8Array(0), attributeOffset: 0
+        };
+        const stateBlasCount = state.blases.length;
+        const newBlases = prepared.blases.slice(stateBlasCount);
+        stage.blasBytes = new Uint8Array(concatBLASBuffers(newBlases));
+        const oldVertexCount = state.prepared.geometries.reduce((sum, geometry) => sum + geometry.vertexCount, 0);
+        const layout = compactVertexLayout(prepared.geometries, false);
+        if (layout.stride * 4 !== state.nativeLayout.attributeStrideBytes)
+          throw new Error('Full commit required: appended geometry changes vertex layout');
+        const newVertexCount = prepared.geometries.slice(stateBlasCount).reduce((sum, geometry) => sum + geometry.vertexCount, 0);
+        const attributes = new Uint32Array(newVertexCount * layout.stride);
+        for (let i = stateBlasCount; i < prepared.geometries.length; i++) {
+          const geometry = prepared.geometries[i], region = prepared.geometryRegions.get(geometry)!;
+          packCompactVertices(geometry, attributes, layout.stride, layout.offsets, 0, geometry.vertexCount,
+            region.vertexOffset - oldVertexCount, false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+        }
+        stage.attributeBytes = new Uint8Array(attributes.buffer);
+        stage.attributeOffset = oldVertexCount * layout.stride * WORD_BYTES;
+        append.phase = 1; append.stage = stage;
+        return requestInstances(prepared.instances);
+      }
+      const stage = append.stage!;
+      const state = retainedScenes.get(token)!;
+      const tlas = packBuiltTLAS(stage.instances, stage.prepared.blases, builtBvhs(bytes, 1)[0]);
+      const oldBlasBytes = state.blases.reduce((sum, blas) => sum + blas.bvh.buffer.byteLength, 0);
+      const output = packTransformUpdate(stage, tlas, token, {
+        blas: stage.blasBytes,
+        blasOffset: state.tlas.buffer.byteLength + oldBlasBytes,
+        attributes: stage.attributeBytes,
+        attributeOffset: stage.attributeOffset
+      });
+      const pending = pendingTransforms.get(token);
+      if (pending) {
+        pending.blases = stage.prepared.blases;
+        pending.geometries = stage.inputGeometries;
+      }
+      pendingGeometryAppends.delete(token);
+      return output;
+    }
     const stage = transformStages.get(token), state = retainedScenes.get(token);
     if (!stage || !state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
     const tlas = state.hardware ? linearTlas(stage.instances, state.hardware) : packBuiltTLAS(stage.instances, state.blases, builtBvhs(bytes, 1)[0]);

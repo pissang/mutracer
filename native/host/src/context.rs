@@ -1246,13 +1246,17 @@ fn apply_incremental(
             | commit_plan::Step::LightList(b)
             | commit_plan::Step::InstanceColors(b)
             | commit_plan::Step::Atlas(b) => (b.as_ptr(), b.len()),
-            commit_plan::Step::Membership(b) => (b.as_ptr(), b.len()),
+            commit_plan::Step::Membership(b) | commit_plan::Step::GeometryAppend(b) => {
+                (b.as_ptr(), b.len())
+            }
         };
         let applied = unsafe {
             match step {
                 commit_plan::Step::Geometry(_) => update_geometry_in(context, input, length),
                 commit_plan::Step::Visibility(_) => update_transform_in(context, input, length),
-                commit_plan::Step::Membership(_) => update_transform_in(context, input, length),
+                commit_plan::Step::Membership(_) | commit_plan::Step::GeometryAppend(_) => {
+                    update_transform_in(context, input, length)
+                }
                 commit_plan::Step::Transform(_) => update_transform_in(context, input, length),
                 commit_plan::Step::Material(_) => update_material_in(context, input, length),
                 commit_plan::Step::Light(_) => update_light_in(context, input, length),
@@ -1511,6 +1515,7 @@ unsafe fn update_geometry_in(context: &mut Context, input: *const u8, length: us
         .ok_or("No retained geometry preparation")?
         .geometry(bytes)
         .map_err(rejected)?;
+    scene.grow_updated_buffers(&packed)?;
     scene.validate_lighting(&packed, context.target.as_ref())?;
     let hardware = scene.prepare_geometry_hardware(&packed)?;
     context.failed = true;
@@ -1524,7 +1529,7 @@ unsafe fn update_geometry_in(context: &mut Context, input: *const u8, length: us
         scene.groups[0] = group;
     }
     scene.update_lighting(&packed, context.target.as_ref())?;
-    scene.retained.as_ref().unwrap().accept_geometry()?;
+    scene.retained.as_ref().unwrap().accept_geometry(&packed)?;
     context.finish_update()
 }
 /// Validated transform update on an idle context; used by incremental commit.
@@ -1586,15 +1591,32 @@ fn update_instance_colors_in(context: &mut Context, bytes: &[u8]) -> Result<()> 
 fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates) -> Result<()> {
     ready(context)?;
     let scene = context.scene.as_mut().unwrap();
+    scene.grow_updated_buffers(packed)?;
     scene.validate_lighting(packed, context.target.as_ref())?;
-    let hardware = scene
-        .hardware
-        .as_ref()
-        .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), packed))
-        .transpose()?;
+    let geometry_hardware = if packed.changed_blases.is_some() {
+        scene.prepare_geometry_hardware(packed)?
+    } else {
+        None
+    };
+    let hardware_transform = if geometry_hardware.is_none() {
+        scene
+            .hardware
+            .as_ref()
+            .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), packed))
+            .transpose()?
+    } else {
+        None
+    };
     context.failed = true;
     let scene = context.scene.as_mut().unwrap();
-    if let Some(plan) = hardware {
+    if let Some((resources, capture, group, attributes)) = geometry_hardware {
+        if let Some(buffer) = attributes {
+            scene.buffers.insert(3, buffer);
+        }
+        scene.hardware = Some(resources);
+        scene.scene.hwrt = Some(capture);
+        scene.groups[0] = group;
+    } else if let Some(plan) = hardware_transform {
         scene.hardware.as_mut().unwrap().update_transforms(
             &scene.gpu.device,
             &scene.gpu.queue,
@@ -1603,7 +1625,11 @@ fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates)
         )?;
     }
     scene.update_lighting(packed, context.target.as_ref())?;
-    scene.retained.as_ref().unwrap().accept_transform()?;
+    if packed.changed_blases.is_some() {
+        scene.retained.as_ref().unwrap().accept_geometry(packed)?;
+    } else {
+        scene.retained.as_ref().unwrap().accept_transform()?;
+    }
     context.finish_update()
 }
 /// Validated light update on an idle context; used by incremental commit.
@@ -2548,7 +2574,7 @@ mod tests {
                     state.groups[0] = group;
                     state.update_lighting(&writes, Some(&state_target)).unwrap();
                     state.reset_target(&mut state_target).unwrap();
-                    state.retained.as_ref().unwrap().accept_geometry().unwrap();
+                    state.retained.as_ref().unwrap().accept_geometry(&writes).unwrap();
                     let (expected, mut expected_target) = make(&input);
                     for (current, target) in
                         [(&state, &state_target), (&expected, &expected_target)]
