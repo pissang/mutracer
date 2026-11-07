@@ -324,6 +324,7 @@ export class SyncedScene {
           if (!same) transform.set(f.subarray(off + M.TRANSFORM, off + M.TRANSFORM + 16));
         } else mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
       }
+      mesh.visible = (u[off + M.FLAGS] & 1) === 0;
       mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
       this.syncInstances(mesh, u, f, first, i);
     }
@@ -409,6 +410,7 @@ export function syncNativeScene(bytes: Uint8Array, token: number, owned = false)
   words.push(set.colors.length); for (const mesh of set.colors) words.push(indexOf(scene.meshes, mesh));
   words.push(set.geometries.length); for (const geometry of set.geometries) words.push(indexOf(scene.geometries, geometry));
   words.push(set.materials.length); for (const material of set.materials) words.push(indexOf(scene.materials, material));
+  words.push(set.visibility.length); for (const mesh of set.visibility) words.push(indexOf(scene.meshes, mesh));
   return new Uint8Array(new Uint32Array(words).buffer);
 }
 export function acceptNativeScene(token: number): Uint8Array {

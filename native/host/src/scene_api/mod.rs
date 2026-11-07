@@ -1315,6 +1315,14 @@ pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Change
         camera: true,
         resolution: false,
         quality: false,
+        visibility: meshes
+            .iter()
+            .copied()
+            .filter(|&i| {
+                a[a[h::MESH_OFFSET] as usize + i * m::WORDS + m::FLAGS]
+                    != b[b[h::MESH_OFFSET] as usize + i * m::WORDS + m::FLAGS]
+            })
+            .collect(),
         transforms: meshes,
         colors,
         geometries: match changes {

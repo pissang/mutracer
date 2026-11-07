@@ -10,6 +10,8 @@ use crate::scene::SceneSync;
 pub(crate) enum Step {
     Geometry(Vec<u8>),
     Transform(Vec<u8>),
+    /// Version-3 instance update: [3,count,0,0], then [mesh,flags] pairs.
+    Visibility(Vec<u8>),
     Material(Vec<u8>),
     Light(Vec<u8>),
     Environment(Vec<u8>),
@@ -589,6 +591,14 @@ pub(crate) fn plan_with(
         steps.push(transform_batch(transforms));
     } else {
         steps.extend(transforms);
+    }
+    if !sync.visibility.is_empty() {
+        let mut words = vec![3, sync.visibility.len() as u32, 0, 0];
+        for &i in &sync.visibility {
+            let offset = b.u(h::MESH_OFFSET) + i * m::WORDS;
+            words.extend_from_slice(&[i as u32, b.u(offset + m::FLAGS) as u32]);
+        }
+        steps.push(Step::Visibility(record(&words)));
     }
     for &index in &sync.colors {
         steps.push(instance_color_step(&a, &b, index)?);

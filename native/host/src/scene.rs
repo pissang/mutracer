@@ -771,6 +771,7 @@ pub(super) struct SceneSync {
     pub camera: bool,
     pub resolution: bool,
     pub quality: bool,
+    pub visibility: Vec<usize>,
     pub transforms: Vec<usize>,
     pub colors: Vec<usize>,
     pub geometries: Vec<usize>,
@@ -796,6 +797,7 @@ impl SceneSync {
         let colors = list(&mut at)?;
         let geometries = list(&mut at)?;
         let materials = list(&mut at)?;
+        let visibility = list(&mut at)?;
         Ok(Self {
             meshes: w.u(1) as u32,
             lights: w.u(2) != 0,
@@ -803,6 +805,7 @@ impl SceneSync {
             camera: w.u(4) != 0,
             resolution: w.u(5) != 0,
             quality: w.u(6) != 0,
+            visibility,
             transforms,
             colors,
             geometries,
@@ -1053,6 +1056,17 @@ impl PreparedState {
                         return Err("Invalid transform batch reserved fields".into());
                     }
                     w.affine(at + 4)?;
+                }
+            }
+            3 => {
+                let count = w.u(1);
+                if count == 0 || w.u(2) != 0 || w.u(3) != 0 || bytes.len() != 16 + count * 8 {
+                    return Err("Invalid visibility update".into());
+                }
+                for i in 0..count {
+                    if w.u(5 + i * 2) > 1 {
+                        return Err("Unknown mesh flags".into());
+                    }
                 }
             }
             _ => return Err("Invalid transform version".into()),

@@ -1239,6 +1239,7 @@ fn apply_incremental(
         let (input, length) = match step {
             commit_plan::Step::Geometry(b)
             | commit_plan::Step::Transform(b)
+            | commit_plan::Step::Visibility(b)
             | commit_plan::Step::Material(b)
             | commit_plan::Step::Light(b)
             | commit_plan::Step::Environment(b)
@@ -1250,6 +1251,7 @@ fn apply_incremental(
         let applied = unsafe {
             match step {
                 commit_plan::Step::Geometry(_) => update_geometry_in(context, input, length),
+                commit_plan::Step::Visibility(_) => update_transform_in(context, input, length),
                 commit_plan::Step::Transform(_) => update_transform_in(context, input, length),
                 commit_plan::Step::Material(_) => update_material_in(context, input, length),
                 commit_plan::Step::Light(_) => update_light_in(context, input, length),
@@ -1270,6 +1272,12 @@ fn apply_incremental(
                 if classify(error.as_ref(), Status::Error) != Status::ContextFailed
                     && !context.failed =>
             {
+                if profiling::enabled() {
+                    native_log!(
+                        "{}",
+                        serde_json::json!({"nativeIncrementalFallback": {"step": format!("{:?}", std::mem::discriminant(step)), "reason": error.to_string()}})
+                    );
+                }
                 retained.reset_sync()?;
                 context.descriptor = None;
                 return Ok(false);
@@ -1525,7 +1533,7 @@ unsafe fn update_transform_in(
     length: usize,
 ) -> Result<()> {
     let scene = ready(context)?;
-    if input.is_null() || length < 80 {
+    if input.is_null() || length < 16 {
         return Err(fail(
             Status::InvalidArgument,
             "Transform descriptor must contain 80 bytes per matrix",
@@ -2473,7 +2481,7 @@ mod tests {
                         .iter()
                         .flat_map(|v| v.to_le_bytes())
                         .collect();
-                    bytes.extend_from_slice(&input[120 * 4..129 * 4]);
+                    bytes.extend_from_slice(&input[121 * 4..130 * 4]);
                     let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
                     assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
                     let (resources, capture, group, attributes) =

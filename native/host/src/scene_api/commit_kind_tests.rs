@@ -400,6 +400,7 @@ fn target_settings_are_outside_scene_prediction() {
             lights: false,
             background: false,
             camera: false,
+            visibility: vec![],
             transforms: vec![],
             colors: vec![],
             geometries: vec![],
@@ -456,5 +457,21 @@ fn recreated_mesh_identity_requires_full_even_with_the_same_records() {
         let mesh = f.scene.mesh_mut(f.mesh).unwrap().clone();
         f.scene.remove_mesh(f.mesh).unwrap();
         f.mesh = f.scene.add_mesh(mesh).unwrap();
+    });
+}
+
+#[test]
+fn mesh_visibility_is_incremental_unless_structure_changes() {
+    Fixture::new().check("hide", Incremental, |f| {
+        f.scene.set_mesh_visible(f.mesh, false).unwrap()
+    });
+    Fixture::new().check("hide and transform/material", Incremental, |f| {
+        f.scene.set_mesh_visible(f.mesh, false).unwrap();
+        f.scene.mesh_mut(f.second_mesh).unwrap().transform = Mat4::from_translation(Vec3::X);
+        f.scene.material_mut(f.material).unwrap().values.color = [0.1, 0.3, 0.5];
+    });
+    Fixture::new().check("hide and structure", Full, |f| {
+        f.scene.set_mesh_visible(f.mesh, false).unwrap();
+        f.scene.add_mesh(Mesh::new(f.geometry, f.material)).unwrap();
     });
 }

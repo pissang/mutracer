@@ -117,7 +117,11 @@ impl Fixture {
     /// set, so the complete encoder must take over; a few are invalid.
     fn edit(&mut self, r: &mut Random) {
         let s = &mut self.scene;
-        match r.below(20) {
+        match r.below(21) {
+            20 => {
+                let id = self.meshes[r.below(self.meshes.len())];
+                s.set_mesh_visible(id, r.below(2) != 0).unwrap();
+            }
             0..=3 => {
                 let mesh = self.meshes[r.below(self.meshes.len())];
                 s.mesh_mut(mesh).unwrap().transform =
