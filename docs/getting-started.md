@@ -118,6 +118,8 @@ cameras have no depth of field.
 | Class | Constructor | Notes |
 | --- | --- | --- |
 | `RectLight` | `{ size?, color?, intensity?, texture?, spread? }` | One-sided, emits along local -Z |
+| `DiskLight` | `{ radius?, color?, intensity?, normalize? }` | One-sided local-XY disk, emits along local -Z |
+| `CylinderLight` | `{ length?, radius?, color?, intensity?, normalize?, treatAsLine? }` | Lateral surface around local X; end caps do not emit |
 | `SphereLight` | `{ radius?, color?, intensity? }` | Spherical emitter; radius 0 is a point |
 | `SpotLight` | `{ color?, intensity?, radius?, innerAngle?, outerAngle?, iesProfile? }` | Cone, optional IES emission |
 | `DirectionalLight` | `{ color?, intensity? }` | Emits along local -Z |
@@ -126,13 +128,20 @@ cameras have no depth of field.
 
 Place analytic lights with `light.position = [x, y, z]` and `light.lookAt(target)`.
 Their transform scale is ignored; `size` and `radius` set emitter dimensions.
+Disk and cylinder defaults match UsdLux (`radius: 0.5`, cylinder `length: 1`).
+When `normalize` is true, radiance is divided by disk or cylinder lateral area,
+keeping power constant as dimensions change. `CylinderLight.treatAsLine` is an
+interchange hint; MuTracer always samples the finite-radius area light. These
+lights do not accept `RectLight` textures or `spread`.
 Local +X is the IES azimuth reference; rotate the transform around local Z to
 orient a profile. Invalid mutable values are clamped and reported once without
 failing the render (through `error` events when attached).
 
 Load `.hdr` environments with `await loadRGBE(url)`, which resolves to a
 float `Texture`. Emissive materials (`emissionLuminance > 0`) also act as
-lights.
+lights. A scene supports at most 1,024 analytic lights. Storage and scene-update
+upload cost grow with the count. WebGPU uses constant-time power-weighted
+selection; WebGL recompiles when the count changes and searches its light CDF.
 
 ## Backgrounds
 

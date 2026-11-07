@@ -32,7 +32,7 @@
 - AOVs: `Render.aovs` + `aovSamples` (16); jittered surface outputs plus pixel-center `centerNormal`/`centerDepth`/`centerPosition`, IDs and motion; [formats and costs](docs/api.md#surface-outputs). Custom filters request `aovs` separately. `Display.channel` visualizes explicitly enabled kinds with [display-only mappings](docs/api.md#aov-visualization).
 - Depth: `await engine.readDepthSamples({x,y,size})` uses the committed engine camera; [depth sampling](docs/api.md#depth-sampling).
 - Procedural sky: `new ProceduralSky({resolution:[2048,1024],time:15})` for `EnvironmentLight.map` or backgrounds; Three.js uses the sync's `environment` option. [Options and limits](docs/api.md#proceduralsky).
-- Materials, lights, geometry: OpenPBR constructor parameters, rigid analytic-light transforms and itemSize=1 raw materialIndex; [materials](docs/materials.md), [getting started](docs/getting-started.md).
+- Materials, lights, geometry: OpenPBR parameters, rigid transforms, UsdLux-shaped disk/cylinder lights and itemSize=1 raw materialIndex; [materials](docs/materials.md), [lights](docs/getting-started.md#lights).
 - Release resources with `render.dispose()` or `engine.dispose()` for everything; `sync.dispose()` releases adapter caches.
 
 ## Common pitfalls
