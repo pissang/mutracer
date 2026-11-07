@@ -64,6 +64,12 @@ temporarily retain the previous GPU resources. Benefits depend on scene texture
 sizes and editing patterns; bindless does not guarantee faster rendering.
 See [texture updates](./updates.md#materials-textures-and-lights).
 
+`UdimTexture(tiles)` is a `Texture` for tiled material maps. Each tile has an
+integer `udim` from 1001 through 1100 and a loaded RGBA `TextureDataSource`.
+Missing/out-of-range cells return transparent black; tile sizes may differ and
+are normalized when the set is created. See [UDIM textures](./materials.md#udim-textures)
+for UV transforms, filtering, storage cost and loader limitations.
+
 ### Device requirements
 
 `EngineParams.device` defaults to undefined (the library's shared device). A

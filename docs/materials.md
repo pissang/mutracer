@@ -172,6 +172,30 @@ defaults; invalid channels throw during construction or packing.
 Call `texture.markUpdated()` after editing pixels or UV-array elements;
 assigning a new texture, image or UV array is detected automatically.
 
+### UDIM textures
+
+Use `new UdimTexture([{udim: 1001, image}, ...])` in any material texture slot.
+The tile containing `(u, v)` is numbered `1001 + floor(u) + 10 * floor(v)`.
+Tiles use loaded RGBA pixel data; Three.js and glTF conversion do not discover
+`<UDIM>` paths, so an application or asset loader must load the files and create
+the `UdimTexture` directly.
+
+Missing tiles, negative UVs, and UVs with either coordinate at least 10 sample
+transparent black. `uvScale` and `uvOffset` apply before tile selection;
+`uvChannel` selects the source UV set. `wrapS` and `wrapT` do not wrap the UDIM
+domain. All tiles share the logical texture's `colorSpace` and `flipY`. Differing
+tile sizes are resampled to the largest width and height, and mixing byte and
+float/integer tiles promotes the set to float storage.
+
+Each tile is filtered only within its own boundary, so missing or adjacent tiles
+do not bleed into it. Material textures currently sample LOD 0 on both backends;
+UDIM follows the same filtering rule and does not create a mip chain. The set
+uses a sparse 10×10 logical image, including storage for missing cells, and is
+scaled with other material textures when `textureAtlasBudgetBytes` is exceeded.
+If even the minimum allocation cannot fit, scene preparation reports the same
+budget error as an ordinary texture. Call `markUpdated()` after changing tile
+pixels in place; replace the `UdimTexture` to change its tile set.
+
 ## Alpha
 
 `alphaMode` is `'auto'` (default; derived from the alpha inputs), `'opaque'`,

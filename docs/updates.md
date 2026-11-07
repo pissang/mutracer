@@ -179,6 +179,10 @@ and other transport/layout changes below can still require compilation.
 | Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |
 | Texture capacity | Atlas: increasing the texture count beyond the current capacity. Both modes: first use or last removal of UV1 texture sampling also changes the shader |
 
+Replacing a `UdimTexture` reference follows the same texture-reference path as
+an ordinary `Texture`. Editing its existing tile pixels requires `markUpdated()`;
+changing tile membership requires constructing and assigning a new `UdimTexture`.
+
 With `alphaMode: 'auto'`, opacity, cutoff or alpha-map edits can change the
 resolved transparency mode. Texture edits can also enable independent coat-normal
 or anisotropy frames. These count as structural changes above.
