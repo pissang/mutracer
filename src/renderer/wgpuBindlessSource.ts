@@ -32,7 +32,7 @@ const metadata = /* wgsl */ `struct MaterialTextureInfo {
 };
 @group(1) @binding(3) var<storage, read> materialTextureInfo: array<MaterialTextureInfo>;`;
 const sampling = /* wgsl */ `fn decodeMapColor(idx: i32, c: vec3f) -> vec3f {
-  if (materialTextureInfo[idx].resources.w != 0u) { return c; }
+  if (materialTextureInfo[idx].resources.w % 2u == 1u) { return c; }
   return sRGBToLinear(c);
 }
 fn unpackMaterialIndex(val: i32) -> vec2f {
@@ -46,6 +46,13 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
   let info = materialTextureInfo[idx];
   let tex = getResource<texture_2d<f32>>(info.resources.x);
   let samp = getResource<sampler>(info.resources.y);
-  return textureSampleLevel(tex, samp, uv * info.uvTransform.xy + info.uvTransform.zw, 0.0);
+  var value = uv * info.uvTransform.xy + info.uvTransform.zw;
+  if (USE_UDIM_MAPS && info.resources.w > 1u) {
+    if (value.x < 0.0 || value.y < 0.0 || value.x >= 10.0 || value.y >= 10.0) { return vec4f(0.0); }
+    let halfTexel = 0.5 / vec2f(info.extent.xy);
+    let cell = floor(value);
+    value = (cell + clamp(fract(value), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
+  return textureSampleLevel(tex, samp, value, 0.0);
 }
 `;

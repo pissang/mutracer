@@ -3,6 +3,7 @@ import type {SceneLight} from '../scene/Scene.js';
 import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';
 import {textureWrapIndex} from '../scene/TextureState.js';
+import {isUdimTexture} from '../scene/UdimTexture.js';
 import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureSlots.js';
 import {mergeTexturesFromMaterials} from './materialTextures.js';
 import {createMaterialBufferData, repackMaterialParams} from './materialParams.js';
@@ -25,13 +26,13 @@ export class WGPUBindlessMaterialData {
       if (texture) this.textures.push(texture);
     }
     this.bufferData = createMaterialBufferData(materials);
-    this.defines = {NUM_MAPS: this.textures.length};
+    this.defines = {NUM_MAPS: this.textures.length, NUM_UDIM_MAPS: this.textures.filter(t => isUdimTexture(t)).length};
     for (const slot of MATERIAL_TEXTURE_SLOTS) {
       this.bufferData[slot.index] = maps.indices[slot.property];
       if (slot.define) this.defines[slot.define] = maps.indices[slot.property].filter(index => index >= 0).length;
     }
     this.bufferData.mapUvChannel = this.textures.map(t => t.uvChannel);
-    this.bufferData.mapColorLinear = this.textures.map(textureColorLinear);
+    this.bufferData.mapColorLinear = this.textures.map(t => isUdimTexture(t) ? 2 + textureColorLinear(t) : textureColorLinear(t));
     this.bufferData.mapTransform = this.textures.flatMap(t => [...t.uvScale, ...t.uvOffset]);
     this.bufferData.mapWrap = this.textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]);
   }

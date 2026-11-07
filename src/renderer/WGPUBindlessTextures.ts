@@ -6,6 +6,7 @@ import {createCanvas} from '../util/canvas.js';
 import {writeRawAtlasPlacement} from './textureAtlasPixels.js';
 import {float16Bits} from './float16.js';
 import {textureColorLinear, textureFloatStorage} from './WGPUBindlessMaterialData.js';
+import {isUdimTexture} from '../scene/UdimTexture.js';
 import {bindlessLimitReason, createResourceTable, FIRST_TEXTURE_SLOT, RESOURCE_TABLE_LIMIT, type ResourceTable} from './wgpuBindless.js';
 
 export interface TextureExtent {width: number; height: number;}
@@ -47,7 +48,7 @@ export function packIndependentTextureInfo(textures: readonly Texture[], sizes: 
   textures.forEach((t, i) => {
     const base = i * 12;
     f32.set([...t.uvScale, ...t.uvOffset], base);
-    u32.set([FIRST_TEXTURE_SLOT + i, 1 + textureWrapIndex(t.wrapS) * 3 + textureWrapIndex(t.wrapT), t.uvChannel, textureColorLinear(t), sizes[i].width, sizes[i].height], base + 4);
+    u32.set([FIRST_TEXTURE_SLOT + i, 1 + textureWrapIndex(t.wrapS) * 3 + textureWrapIndex(t.wrapT), t.uvChannel, isUdimTexture(t) ? 2 + textureColorLinear(t) : textureColorLinear(t), sizes[i].width, sizes[i].height], base + 4);
   });
   return data;
 }

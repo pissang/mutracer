@@ -53,9 +53,11 @@ fn sRGBToLinear(c: vec3f) -> vec3f {
 }
 
 fn decodeMapColor(idx: i32, c: vec3f) -> vec3f {
-  if (mapInfo[idx + NUM_MAPS * 2].y > 0.5) { return c; }
+  if (i32(round(mapInfo[idx + NUM_MAPS * 2].y)) % 2 == 1) { return c; }
   return sRGBToLinear(c);
 }
+
+fn isUdimMap(idx: i32) -> bool { return USE_UDIM_MAPS && mapInfo[idx + NUM_MAPS * 2].y > 1.5; }
 
 fn unpackMaterialIndex(val: i32) -> vec2f {
   return vec2f(f32(val >> 8), f32(val & 0xff) / 255.0);
@@ -83,15 +85,26 @@ fn wrappedMapUv(idx: i32, uv: vec2f) -> vec2f {
   let transform = mapInfo[idx + NUM_MAPS];
   let modes = mapInfo[idx + NUM_MAPS * 2].zw;
   let value = uv * transform.xy + transform.zw;
+  if (isUdimMap(idx)) { return value / 10.0; }
   return vec2f(wrapMapCoordinate(value.x, modes.x), wrapMapCoordinate(value.y, modes.y));
 }
 
 fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
 ${independentTextures ? `  let halfTexel = 0.5 / getMapSize(idx);
-  return clamp(wrappedMapUv(idx, uv), halfTexel, 1.0 - halfTexel);` : `  let repeatedUv = wrappedMapUv(idx, uv);
+  var value = wrappedMapUv(idx, uv);
+  if (isUdimMap(idx)) {
+    let cell = floor(value * 10.0);
+    value = (cell + clamp(fract(value * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
+  return clamp(value, halfTexel, 1.0 - halfTexel);` : `  var repeatedUv = wrappedMapUv(idx, uv);
   let atlasTexel = 1.0 / vec2f(textureDimensions(map).xy);
   let firstTexelCenter = getMapOffset(idx);
   let sourceExtent = getMapSize(idx) + atlasTexel;
+  if (isUdimMap(idx)) {
+    let halfTexel = 0.5 * atlasTexel / sourceExtent;
+    let cell = floor(repeatedUv * 10.0);
+    repeatedUv = (cell + clamp(fract(repeatedUv * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
   let sourceOrigin = firstTexelCenter - 0.5 * atlasTexel;
   let lastTexelCenter = firstTexelCenter + sourceExtent - atlasTexel;
   return clamp(
@@ -106,13 +119,15 @@ fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
 }
 
 fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
+  let transformed = uv * mapInfo[idx + NUM_MAPS].xy + mapInfo[idx + NUM_MAPS].zw;
+  if (isUdimMap(idx) && (transformed.x < 0.0 || transformed.y < 0.0 || transformed.x >= 10.0 || transformed.y >= 10.0)) { return vec4f(0.0); }
   let size = ${independentTextures ? 'vec2i(getMapSize(idx))' : 'vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)))'};
   let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);
   let modes = mapInfo[idx + NUM_MAPS * 2].zw;
   // Repeat filtering must cross the logical image boundary, never another
   // atlas placement. Interior/clamped/mirrored footprints use hardware filtering.
-  if ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > f32(size.x - 1))) ||
-      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > f32(size.y - 1)))) {
+  if (!isUdimMap(idx) && ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > f32(size.x - 1))) ||
+      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > f32(size.y - 1))))) {
     let base = vec2i(floor(texel));
     let weight = fract(texel);
     let origin = ${independentTextures ? 'vec2i(0)' : 'vec2i(round(getMapOffset(idx) * vec2f(textureDimensions(map).xy) - vec2f(0.5)))'};

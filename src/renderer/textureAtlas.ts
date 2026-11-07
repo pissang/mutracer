@@ -167,7 +167,7 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
       width, height, floatStorage, bytesPerPixel, mapInfo: placements.flatMap(p => [p.width, p.height, p.layer, 0]),
       mapTransform: textures.flatMap(t => [...t.uvScale, ...t.uvOffset]),
       mapWrap: textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]),
-      mapUvChannel: textures.map(t => t.uvChannel), mapColorLinear,
+      mapUvChannel: textures.map(t => t.uvChannel), mapColorLinear: textures.map((t, i) => t.udim ? 2 + Number(!!mapColorLinear[i]) : mapColorLinear[i]),
       stats: {estimatedBytes: bytes(placements), width, height, layers: unique.length, packTimeMs: 0, scale,
         sourcePixels: unique.reduce((n, i) => n + textures[i].image.width * textures[i].image.height, 0), textureCount: textures.length}};
   }
@@ -259,7 +259,7 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
     floatStorage, bytesPerPixel, mapInfo,
     mapTransform: textures.flatMap(texture => [texture.uvScale[0], texture.uvScale[1], texture.uvOffset[0], texture.uvOffset[1]]),
     mapWrap: textures.flatMap(texture => [textureWrapIndex(texture.wrapS), textureWrapIndex(texture.wrapT)]),
-    mapUvChannel: textures.map(texture => texture.uvChannel), mapColorLinear,
+    mapUvChannel: textures.map(texture => texture.uvChannel), mapColorLinear: textures.map((t, i) => t.udim ? 2 + Number(!!mapColorLinear[i]) : mapColorLinear[i]),
     stats: { estimatedBytes: atlasWidth * atlasHeight * packed.pages.length * bytesPerPixel,
       height: atlasHeight, layers: packed.pages.length, packTimeMs: 0, scale, sourcePixels,
       textureCount: textures.length, width: atlasWidth } };

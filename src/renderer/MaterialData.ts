@@ -54,7 +54,7 @@ export default class MaterialData {
     this.bufferData.mapInfo = this.atlas.mapInfo; this.bufferData.mapTransform = this.atlas.mapTransform;
     this.bufferData.mapWrap = this.atlas.mapWrap;
     this.bufferData.mapUvChannel = this.atlas.mapUvChannel; this.bufferData.mapColorLinear = this.atlas.mapColorLinear;
-    this.defines = {NUM_MAPS: this.textures.length};
+    this.defines = {NUM_MAPS: this.textures.length, NUM_UDIM_MAPS: this.textures.filter(texture => texture.udim).length};
     for (const slot of MATERIAL_TEXTURE_SLOTS) {
       if (slot.define) this.defines[slot.define] = maps.indices[slot.property].filter(index => index >= 0).length;
     }

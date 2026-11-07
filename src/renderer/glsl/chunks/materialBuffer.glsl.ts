@@ -64,8 +64,15 @@ vec2 unpackMaterialIndex(int val) {
 
 #ifdef NUM_MAPS
 vec3 decodeMapColor(int index, vec3 c) {
-  if (mapColorLinear[index] > 0.5) { return c; }
+  if (int(round(mapColorLinear[index])) % 2 == 1) { return c; }
   return sRGBToLinear(c);
+}
+bool isUdimMap(int index) {
+#ifdef NUM_UDIM_MAPS
+  return mapColorLinear[index] > 1.5;
+#else
+  return false;
+#endif
 }
 
 vec2 getMapSize(int index) {
@@ -89,6 +96,7 @@ float wrapMapCoordinate(float value, float mode) {
 vec2 wrappedMapUv(int index, vec2 uv) {
   vec4 transform = mapTransform[index];
   vec2 value = uv * transform.xy + transform.zw;
+  if (isUdimMap(index)) return value / 10.0;
   return vec2(wrapMapCoordinate(value.x, mapWrap[index].x), wrapMapCoordinate(value.y, mapWrap[index].y));
 }
 
@@ -97,6 +105,11 @@ vec2 getMapUV(int index, vec2 uv) {
   vec2 atlasTexel = 1.0 / vec2(textureSize(map, 0).xy);
   vec2 firstTexelCenter = getMapOffset(index);
   vec2 sourceExtent = getMapSize(index) + atlasTexel;
+  if (isUdimMap(index)) {
+    vec2 halfTexel = 0.5 * atlasTexel / sourceExtent;
+    vec2 cell = floor(repeatedUv * 10.0);
+    repeatedUv = (cell + clamp(fract(repeatedUv * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
   vec2 sourceOrigin = firstTexelCenter - 0.5 * atlasTexel;
   vec2 lastTexelCenter = firstTexelCenter + sourceExtent - atlasTexel;
   return clamp(
@@ -118,11 +131,13 @@ vec4 loadMapTexel(int index, ivec2 coordinate, ivec2 size, ivec2 origin, vec2 mo
 }
 
 vec4 sampleMap(int index, vec2 uv) {
+  vec2 transformed = uv * mapTransform[index].xy + mapTransform[index].zw;
+  if (isUdimMap(index) && (transformed.x < 0.0 || transformed.y < 0.0 || transformed.x >= 10.0 || transformed.y >= 10.0)) return vec4(0.0);
   ivec2 size = ivec2(round(getMapSize(index) * vec2(textureSize(map, 0).xy) + 1.0));
   vec2 texel = wrappedMapUv(index, uv) * vec2(size) - 0.5;
   vec2 modes = mapWrap[index];
-  if ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > float(size.x - 1))) ||
-      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > float(size.y - 1)))) {
+  if (!isUdimMap(index) && ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > float(size.x - 1))) ||
+      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > float(size.y - 1))))) {
     ivec2 base = ivec2(floor(texel));
     vec2 weight = fract(texel);
     ivec2 origin = ivec2(round(getMapOffset(index) * vec2(textureSize(map, 0).xy) - 0.5));

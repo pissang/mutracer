@@ -14,6 +14,8 @@ export interface TextureImageSize { width: number; height: number; }
 // dimensions, identity and sampling metadata; it never owns a browser image.
 export default class TextureState {
   image: TextureImageSize;
+  /** True only for a UDIM logical image. Internal portable sampling marker. */
+  readonly udim?: boolean;
   version = 0;
   /** Flip the image vertically when uploading. Default `false`. */
   flipY: boolean = false;

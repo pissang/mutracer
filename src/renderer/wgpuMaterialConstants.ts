@@ -73,7 +73,8 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
 
     NUM_MAPS,
     ...materialTextureFeatures(materialData.defines),
-    USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0
+    USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0,
+    USE_UDIM_MAPS: +materialData.defines.NUM_UDIM_MAPS > 0
   };
 
 }

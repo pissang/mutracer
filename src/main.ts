@@ -54,6 +54,9 @@ export { default as ProceduralSky } from './scene/ProceduralSky.js';
 export type { ProceduralSkyOptions } from './scene/ProceduralSky.js';
 export { default as Texture } from './scene/Texture.js';
 export type { TextureDataSource, TextureWrapMode, TextureColorSpace } from './scene/Texture.js';
+export { default as UdimTexture } from './scene/UdimTexture.js';
+export type { UdimTile } from './scene/UdimTexture.js';
+export { udimTileNumber, udimTileFromUv } from './scene/UdimTexture.js';
 export type { ColorRGB, ColorRGBA, Vec2, Vec3, Mat4 } from './types.js';
 
 // Lights

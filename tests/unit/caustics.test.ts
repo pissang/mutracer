@@ -32,7 +32,7 @@ describe('caustic contracts', () => {
     }
   });
   it('preserves the PM source through the internal opt-out', () => {
-    expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('b58d61f6c06915fe6224a0cf2586f340cfc9960aa2778bbf7f8a0e69a2582193');
+    expect(hash(rayTrace({hasDisplacement:false,photonMapping:true,photonDirectSubset:false}))).toBe('bfe1904e80e4ab023e7f7a07f3c004e360a1074420d95ed91d79ea463ef8842e');
   });
   it.each(['lightTracing', 'photonMapping'] as const)('keeps web %s leaf boxes within the existing storage contract', mode => {
     gpu();
