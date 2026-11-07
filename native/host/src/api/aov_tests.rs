@@ -1602,3 +1602,305 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires real GPU"]
+fn primary_surface_semantics_web_fixture() {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene, Texture};
+    use glam::{Mat4, Vec3};
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let backend = aov_test_backend();
+    let mut scene = Scene::new();
+    let native_positions = vec![
+        -0.65, 1.1, 0., 0.65, 1.1, 0., -0.65, -1.1, 0., 0.65, -1.1, 0.,
+    ];
+    let geometry = scene
+        .add_geometry(Geometry::new(
+            native_positions.clone(),
+            vec![0, 2, 1, 2, 3, 1],
+        ))
+        .unwrap();
+    {
+        let g = scene.geometry_mut(geometry).unwrap();
+        g.uv[0] = vec![0., 1., 1., 1., 0., 0., 1., 0.].into();
+        g.normals = vec![0., 0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1.].into();
+    }
+    let texture = scene
+        .add_texture(Texture::rgba8(1, 1, vec![204, 128, 230, 255]))
+        .unwrap();
+    let mut surfaces = Vec::new();
+    for i in 0..3 {
+        let mut mat = OpenPbrMaterial::default();
+        mat.values.color = [1.; 3];
+        mat.values.roughness = 0.4;
+        mat.values.double_sided = i > 0;
+        if i == 2 {
+            mat.textures[1] = Some(texture);
+        }
+        let material = scene.add_material(mat).unwrap();
+        let mesh = scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        scene.mesh_mut(mesh).unwrap().transform =
+            Mat4::from_translation(Vec3::new((i as f32 - 1.) * 1.6, 0., i as f32 * 0.5))
+                * if i > 0 {
+                    Mat4::from_rotation_y(std::f32::consts::PI)
+                } else {
+                    Mat4::IDENTITY
+                };
+        surfaces.push((mesh.aov_id(), material.aov_id()));
+    }
+    let wide = scene
+        .add_geometry(Geometry::new(
+            vec![-3., 2., 0., 3., 2., 0., -3., -2., 0., 3., -2., 0.],
+            vec![0, 2, 1, 2, 3, 1],
+        ))
+        .unwrap();
+    let mut veil_mat = OpenPbrMaterial::default();
+    veil_mat.values.opacity = 0.25;
+    veil_mat.values.alpha_mode = 3;
+    let veil_material = scene.add_material(veil_mat).unwrap();
+    let veil = scene.add_mesh(Mesh::new(wide, veil_material)).unwrap();
+    scene.mesh_mut(veil).unwrap().transform = Mat4::from_translation(Vec3::new(0., 0., 2.));
+    let mut catcher_mat = OpenPbrMaterial::default();
+    catcher_mat.set_uint(51, 1).unwrap();
+    let catcher_material = scene.add_material(catcher_mat).unwrap();
+    let catcher = scene.add_mesh(Mesh::new(wide, catcher_material)).unwrap();
+    scene.mesh_mut(catcher).unwrap().transform = Mat4::from_translation(Vec3::new(0., 0., 1.8));
+    let mut camera = Camera::default();
+    camera.world_matrix[14] = 6.;
+    camera.focus_distance = 3.;
+    println!("web semantic mesh/material AOV IDs: {surfaces:?}");
+    let evidence = std::env::var("MUTRACER_PRIMARY_EVIDENCE").unwrap_or_default();
+    if !evidence.is_empty() {
+        let input = serde_json::json!({
+            "positions": native_positions,
+            "indices": [0,2,1,2,3,1],
+            "normals": [0.,0.,1.,0.,0.,1.,0.,0.,1.,0.,0.,1.],
+            "uv": [0.,1.,1.,1.,0.,0.,1.,0.],
+            "tangents": null,
+            "normalMapRgba8": [204,128,230,255], "textureColorSpace": "NoColorSpace; RGBA8 unorm bytes",
+            "textureFlipY": false, "textureScale": [1.,1.], "textureOffset": [0.,0.],
+            "normalScale": [1.,1.], "normalMapRotation": 0.,
+            "side": ["FrontSide","DoubleSide","DoubleSide"],
+            "transforms": [[1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.,-1.6,0.,0.,1.],
+                           [-1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,-1.,0.,0.,0.,0.5,1.],
+                           [-1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,-1.,0.,1.6,0.,1.,1.]],
+            "cameraWorld": camera.world_matrix, "cameraProjection": camera.projection,
+            "fovDegrees": camera.fov, "focusDistance": camera.focus_distance, "fStop": camera.f_stop,
+            "width": 48, "height": 32
+        });
+        std::fs::write(
+            format!("{evidence}/native-input.json"),
+            serde_json::to_vec_pretty(&input).unwrap(),
+        )
+        .unwrap();
+    }
+    scene.set_default_camera(Some(camera));
+    if !evidence.is_empty() {
+        std::fs::write(
+            format!("{evidence}/native-scene-descriptor.bin"),
+            scene.descriptor().unwrap().as_ref(),
+        )
+        .unwrap();
+    }
+    let engine = aov_engine(backend);
+    engine.display().set_size(48, 32).unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    let mut settings = RenderSettings {
+        max_samples: 8,
+        bounces: 1,
+        bevel: false,
+        aovs: 127 | 512 | 1024 | 2048,
+        aov_samples: 4,
+        size: RenderSize::Fixed {
+            width: 48,
+            height: 32,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    let capture = |label: &str| {
+        let out = std::env::var("MUTRACER_PRIMARY_EVIDENCE").unwrap_or_default();
+        let mut values = Vec::new();
+        for (kind, name) in [
+            (PixelKind::CenterNormal, "centerNormal"),
+            (PixelKind::CenterDepth, "centerDepth"),
+            (PixelKind::CenterPosition, "centerPosition"),
+        ] {
+            let v = render.read_pixels(kind).unwrap().data;
+            if !out.is_empty() {
+                std::fs::write(
+                    format!("{out}/native-{backend:?}-{label}-{name}.bin"),
+                    v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>(),
+                )
+                .unwrap();
+            }
+            values.push(v);
+        }
+        values
+    };
+    render
+        .converge(ConvergeOptions {
+            sample_sequence_offset: 17,
+            ..ConvergeOptions::new(4)
+        })
+        .unwrap();
+    let base = capture("pinhole");
+    let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let out = std::env::var("MUTRACER_PRIMARY_EVIDENCE").unwrap_or_default();
+    if !out.is_empty() {
+        std::fs::write(
+            format!("{out}/native-{backend:?}-pinhole-id.bin",),
+            ids.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    }
+    let mut hit = [0usize; 4];
+    for (pixel, id) in ids.chunks_exact(4).enumerate() {
+        let o = pixel * 4;
+        if id[0] == u32::MAX {
+            hit[0] += 1;
+            for v in &base {
+                assert_eq!(&v[o..o + 4], &[0.; 4]);
+            }
+            continue;
+        }
+        hit[1] += 1;
+        let i = surfaces
+            .iter()
+            .position(|(mesh, _)| *mesh == id[0])
+            .expect("only fixture surfaces hit");
+        assert_eq!(id[2], surfaces[i].1);
+        let z = i as f32 * 0.5;
+        assert!((base[2][o + 2] - z).abs() < 1e-4);
+        assert!((base[1][o] - (6. - z)).abs() < 1e-4);
+        assert_eq!(base[0][o + 3], 1.);
+        let n = &base[0][o..o + 3];
+        assert!((n.iter().map(|x| x * x).sum::<f32>().sqrt() - 1.).abs() < 1e-4);
+        if i == 0 {
+            assert!(n[2] > 0.99);
+        } else if i == 1 {
+            assert!(n[2] < -0.99, "surface {i} normal {n:?}");
+            hit[2] += 1;
+        } else {
+            assert!(
+                n[0].abs() > 0.5 && n[2] < -0.7 && n[2] > -0.9,
+                "mapped surface normal {n:?}"
+            );
+            hit[3] += 1;
+        }
+    }
+    assert!(
+        hit[0] > 100 && hit[1] > 200 && hit[2] > 20 && hit[3] > 20,
+        "coverage {hit:?}"
+    );
+    render.restart().unwrap();
+    render
+        .converge(ConvergeOptions {
+            sample_sequence_offset: 133,
+            ..ConvergeOptions::new(8)
+        })
+        .unwrap();
+    assert_eq!(base, capture("offset133-spp8"));
+    for (bit, kind, i) in [
+        (512, PixelKind::CenterNormal, 0),
+        (1024, PixelKind::CenterDepth, 1),
+        (2048, PixelKind::CenterPosition, 2),
+    ] {
+        settings.aovs = 127 | bit;
+        render.set_settings(settings.clone()).unwrap();
+        render.restart().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let standalone = render.read_pixels(kind).unwrap().data;
+        assert_eq!(standalone, base[i]);
+        let evidence = std::env::var("MUTRACER_PRIMARY_EVIDENCE").unwrap_or_default();
+        if !evidence.is_empty() {
+            let name = match kind {
+                PixelKind::CenterNormal => "centerNormal",
+                PixelKind::CenterDepth => "centerDepth",
+                _ => "centerPosition",
+            };
+            std::fs::write(
+                format!("{evidence}/native-{backend:?}-standalone-{name}.bin"),
+                standalone
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+    }
+    settings.aovs = 127 | 512 | 1024 | 2048;
+    render.set_settings(settings.clone()).unwrap();
+    render.restart().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let display = engine.display();
+    let mut display_settings = display.settings();
+    for (channel, source) in [
+        (crate::api::Channel::CenterNormal, &base[0]),
+        (crate::api::Channel::CenterDepth, &base[1]),
+        (crate::api::Channel::CenterPosition, &base[2]),
+    ] {
+        display_settings.channel = channel;
+        display.set_settings(display_settings).unwrap();
+        display.present(&render).unwrap();
+        let (width, height, pixels) = display.read_rgba8(&render).unwrap();
+        assert_eq!((width, height), (48, 32));
+        for o in (0..source.len()).step_by(4) {
+            assert_eq!(pixels[o + 3], (source[o + 3] * 255.) as u8);
+            if source[o + 3] == 0. {
+                continue;
+            }
+            for c in 0..3 {
+                let value = match channel {
+                    crate::api::Channel::CenterNormal => source[o + c] * 0.5 + 0.5,
+                    crate::api::Channel::CenterDepth => source[o] / 10.,
+                    _ => source[o + c] * 0.5 + 0.5,
+                };
+                let expected = (value.clamp(0., 1.) * 255.).round() as i32;
+                assert!(
+                    (pixels[o + c] as i32 - expected).abs() <= 2,
+                    "{channel:?} display pixel {:?} expected {expected}",
+                    &pixels[o..o + 4]
+                );
+            }
+        }
+    }
+    camera.projection = 1;
+    camera.left = -3.;
+    camera.right = 3.;
+    camera.bottom = -2.;
+    camera.top = 2.;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.restart().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let ortho = capture("orthographic");
+    let oid = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let mut ortho_hits = 0;
+    for (pixel, id) in oid.chunks_exact(4).enumerate() {
+        if id[0] == u32::MAX {
+            continue;
+        }
+        let o = pixel * 4;
+        let x = (pixel % 48) as f32;
+        let y = (pixel / 48) as f32;
+        assert!((ortho[2][o] - (x + 0.5 - 24.) / 8.).abs() < 1e-3);
+        assert!((ortho[2][o + 1] - (15.5 - y) / 8.).abs() < 1e-3);
+        assert_eq!(ortho[1][o + 3], 1.);
+        ortho_hits += 1;
+    }
+    assert!(ortho_hits > 200);
+    camera.projection = 0;
+    camera.f_stop = 0.15;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.restart().unwrap();
+    render
+        .converge(ConvergeOptions {
+            sample_sequence_offset: 17,
+            ..ConvergeOptions::new(4)
+        })
+        .unwrap();
+    assert_eq!(base, capture("dof"));
+}

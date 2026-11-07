@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Primary surface AOV semantics</title>
+<canvas></canvas>
+<pre id="result">Running</pre>
+<script type="module">
+  import './primarySurfaceDccSemantic.ts';
+  try {
+    document.querySelector('#result').textContent = JSON.stringify(await window.runBenchmark());
+  } catch (error) {
+    document.querySelector('#result').textContent = String(error?.stack ?? error);
+    throw error;
+  }
+</script>
