@@ -283,7 +283,7 @@ quality defaults to the browser encoder value.
 | `temperature`, `tint`, `vignette` | `0` |
 | `bloomIntensity`, `bloomThreshold`, `bloomRadius` | `0`, `1`, `0.6` |
 | `hdrOutputEnabled` | `false`; WebGPU only |
-| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher and the seven [AOV kinds](#aov-visualization) |
+| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher and the [AOV kinds](#aov-visualization) |
 | `aovDepthRange` | `[0, 10]`; finite scene-unit black/white depths, `0 <= near < far` |
 | `aovPositionScale` | `1`; finite positive scene-unit half-range around the origin |
 | `aovMotionScale` | `16`; finite positive pixel displacement for full brightness |
@@ -345,10 +345,10 @@ Request only the surface outputs you need on each render:
 
 ```ts
 const render = new Render(engine, {
-  aovs: ['depth', 'position', 'id', 'motion'], aovSamples: 16
+  aovs: ['centerNormal', 'centerDepth', 'centerPosition', 'id']
 });
 await render.converge({samples: 64});
-const depth = await render.readPixels('depth'); // Float32Array, RGBA
+const depth = await render.readPixels('centerDepth'); // Float32Array, RGBA
 const ids = await render.readPixels('id');      // Uint32Array, RGBA
 ```
 
@@ -359,16 +359,19 @@ completed denoising are preserved. AOV accumulation restarts when any of them ch
 To keep beauty at reduced resolution while reading or displaying full-resolution
 surface outputs, set `aovResolution: 'display'` on a scale-based render. The
 default is `'render'`. AOV readbacks and visualization use their own dimensions;
-beauty and denoiser guides keep the render dimensions. Both modes stop at
-`min(samples, aovSamples)`; display mode also caps at 4, follows canvas resizes,
-and rejects fixed-size renders. During tracing, display mode starts after the first
-beauty sample and adds one AOV sample per frame; the frame that reaches
+beauty and denoiser guides keep the render dimensions. Accumulated outputs stop at
+`min(samples, aovSamples)`; center outputs need one sample. Display mode caps
+accumulated outputs at 4, follows canvas resizes and rejects fixed-size renders.
+During tracing, display mode starts after the first beauty sample and adds one AOV sample per frame; the frame that reaches
 `maxSamples` completes the rest. WebGL falls back to render dimensions and warns
 once per render. Each kind has the same meaning in both modes.
 Custom denoiser AOV inputs require `'render'` resolution.
 
 | Kind | RGBA contents |
 | --- | --- |
+| `centerNormal` | Signed unit world-space shading normal xyz including the base normal map, binary validity |
+| `centerDepth` | Nonnegative camera-forward distance in scene units, 0, 0, binary validity |
+| `centerPosition` | World position xyz, binary validity |
 | `depth` | Camera-forward distance in scene units, 0, 0, coverage |
 | `position` | World position xyz, coverage |
 | `roughness` | Specular roughness, metalness, unsupported-reflectance fraction, coverage |
@@ -386,8 +389,15 @@ is zero. These passes preserve beauty samples but do not sample the same paths.
 Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
 with at most 32 layers.
 
-ID and motion use the unjittered pixel center without depth of field. `Mesh.aovId`
-and `OpenPBRMaterial.aovId` default to process-unique integers. Explicit values
+`centerNormal`, `centerDepth`, `centerPosition`, ID and motion use the same
+unjittered pixel-center ray without depth of field, once per AOV frame. The three
+center surface outputs have alpha 1 on a selected surface and zero RGBA on a miss;
+alpha does not represent material opacity. `centerNormal` preserves the shading
+normal's orientation, including on double-sided backfaces, without flipping toward
+the camera. Single-sided backfaces are culled. It is independent of the OIDN
+`normal` guide, which may follow reflections and face the camera.
+
+`Mesh.aovId` and `OpenPBRMaterial.aovId` default to process-unique integers. Explicit values
 must be integers from 0 through `0xFFFFFFFE`, unique among the scene's objects
 or materials respectively. Commit changes with `engine.update()`. Keep identities
 stable and avoid reusing an ID for a different object while history is live.
@@ -418,6 +428,8 @@ Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
 are no AOV allocations or passes. Enabling any kind normally costs about 128 GPU bytes
 per AOV pixel on WebGPU or 192 on WebGL, plus scene identity/history data.
+Requesting any of the three center surface outputs adds 32 bytes per AOV pixel;
+they share one trace with ID and motion.
 WebGPU display mode requesting only `depth`, `diffuseColor` and/or `specularColor` costs
 24 bytes per pixel plus small scene metadata; borrowing all three GPU textures
 adds another 24 bytes per pixel (about 288 MB total at 6 MP). Its color
@@ -441,8 +453,9 @@ const png = await engine.display.toBlob(render);
 
 | Channel | Display mapping |
 | --- | --- |
-| `depth` | Black at the near depth, white at the far depth, clamped outside the range |
-| `position` | World xyz mapped to RGB; origin is 0.5 and ±position scale maps to 0/1 |
+| `centerNormal` | Signed normal xyz mapped to RGB with `normal * 0.5 + 0.5` |
+| `depth`, `centerDepth` | Black at the near depth, white at the far depth, clamped outside the range |
+| `position`, `centerPosition` | World xyz mapped to RGB; origin is 0.5 and ±position scale maps to 0/1 |
 | `roughness` | RGB = roughness, metalness, unsupported-reflectance fraction |
 | `diffuseAlbedo`, `specularAlbedo`, `diffuseColor`, `specularColor` | Linear RGB clamped to [0, 1], then sRGB encoded |
 | `id` | Stable pseudocolor for the selected uint32 ID component; colors can collide |
@@ -461,8 +474,8 @@ advancing beauty or running a denoiser, including after camera or scene edits.
 When viewing motion, the loop refreshes once inputs settle so stationary surfaces
 return to black. Switching between preview and final first displays zero motion;
 subsequent camera or object changes show motion from that view.
-ID and motion need one center sample; other AOVs stop at the smaller of
-`maxSamples` and `aovSamples`. Loop status can be `finished` while beauty
+Center surface outputs, ID and motion need one center sample; accumulated AOVs
+stop at the smaller of `maxSamples` and `aovSamples`. Loop status can be `finished` while beauty
 `samples` remains zero. Switching back to Final resumes beauty for the current
 view. Direct `render.refine()` and `converge()` still trace beauty and requested
 AOVs together. Use `render.refine(kind)` for a surface-only step and
