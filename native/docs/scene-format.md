@@ -7,9 +7,9 @@ validation rules. The record structs are in
 [`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
 in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
-Version 6 adds disk and cylinder light fields; version 5 descriptors remain
-readable with their original 28-word light records. Rebuild C consumers with the
-current headers. Record type names retain their historical `_v4` suffix.
+The current output format is version 6. Accepted input versions and the v5 light
+record stride are specified under [Header](#header). Rebuild C consumers with
+the current headers. Record type names retain their historical `_v4` suffix.
 
 Most applications should build scenes with the [Scene API](scene.md) instead,
 which needs no offsets and can export descriptors.
@@ -83,8 +83,10 @@ the rules the validator enforces.
 
 ### Header
 
-- `version` must be `MT_VERSION_SCENE` (6); `total_words` is the descriptor
-  length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
+- The encoder writes `MT_VERSION_SCENE` (6); the validator accepts versions 5
+  and 6. Version 5 uses 28-word analytic-light records; version 6 uses 32-word
+  records. `total_words` is the descriptor length. `quality_flags` accepts only
+  the `MT_QUALITY_*` bits.
 - Environment and background maps (`*_texture_plus_one`, 0 for none) must be
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
   fields are ignored. Lighting and the visible background are independent, but

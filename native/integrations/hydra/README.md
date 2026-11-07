@@ -83,18 +83,20 @@ The specular workflow, coat and opacity models are not lossless conversions.
 Alpha cutoff is explicitly zero unless PreviewSurface supplies `opacityThreshold`.
 OpenPBR's independent layers cannot all be expressed by PreviewSurface.
 
-Rect, sphere, disk, cylinder and distant lights are supported. Disk lights use
-local XY and emit toward local -Z. Cylinder lights run along local X and emit
-from the curved side without end caps. `normalize` uses the disk area or
-cylinder's lateral area; `treatAsLine` is retained but does not change area
-sampling. Shaping cones become SDK spots, and dome maps provide environment
-lighting. Distant light intensity follows UsdLux, including `angle` and
-`normalize`, and renders as a sharp directional light. Enabled color
-temperature multiplies the authored light color. Linked lights are skipped.
-Equal diffuse and specular multipliers scale the light; unequal ones are
-ignored. IES shaping and arbitrary dome tilt are unsupported. There is one
-environment dome. Light textures are supported only through the environment,
-not rectangular emitters.
+Rect, sphere, disk, cylinder and distant lights are supported. Rectangular,
+sphere and spot lights use SDK radiance units; their UsdLux `normalize` input is
+unsupported and ignored with a warning. Disk lights use local XY and emit
+toward local -Z. Cylinder lights run along local X and emit from the curved side
+without end caps. Disk and cylinder `normalize` divides intensity by the area
+from their authored dimensions (πr² or 2πrL); `treatAsLine` does not change area
+sampling. Stage `metersPerUnit` metadata does not rescale these dimensions.
+Shaping cones become SDK spots, and dome maps provide environment lighting.
+Distant light intensity follows UsdLux, including `angle` and `normalize`, and
+renders as a sharp directional light. Enabled color temperature multiplies the
+authored light color. Linked lights are skipped. Equal diffuse and specular
+multipliers scale the light; unequal ones are ignored. IES shaping and arbitrary
+dome tilt are unsupported. There is one environment dome. Light textures are
+supported only through the environment, not rectangular emitters.
 
 Perspective, orthographic and depth-of-field cameras are supported. Off-axis
 perspective frusta use a symmetric approximation with a warning. A zero focus
