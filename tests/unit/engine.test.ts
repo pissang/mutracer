@@ -12,6 +12,17 @@ import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
 
 describe('Engine commits inputs', () => {
+  it('classifies supported new geometry as append and falls back for material structure changes', () => {
+    const {engine, pipeline} = renderFixture();
+    const material = new OpenPBRMaterial(), first = new Mesh(createCubeGeometry(), material);
+    const scene = {meshes: [first], lights: []}; engine.scene = scene; engine.update();
+    const appended = new Mesh(createCubeGeometry(), material); scene.meshes = [first, appended]; engine.update();
+    expect(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![1]?.added).toHaveLength(1);
+    const differentMaterial = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+    scene.meshes = [first, appended, differentMaterial]; engine.update();
+    expect(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![1]).toBeUndefined();
+    engine.dispose();
+  });
   it('retains renderer-built BLASes across committed poses and rebuilds edited topology', () => {
     const {engine, pipeline} = renderFixture();
     const geometry = createCubeGeometry(); geometry.dynamic = true;

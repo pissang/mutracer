@@ -87,7 +87,7 @@ import {
   packIESProfiles
 } from './lightSampling.js';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged } from './geometryUpdates.js';
-import Geometry, { Attribute } from '../scene/Geometry.js';
+import Geometry from '../scene/Geometry.js';
 import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH.js';
 import { mergeMeshesToGeometry } from './mergeMeshesToGeometry.js';
 import { packVertexAttributes, vertexAttributeDefines, vertexAttributeLayout, type VertexAttributeLayout } from './webglVertexAttributes.js';
@@ -162,6 +162,7 @@ class WebGLRayTracePass {
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
+  private _appendOnly = false;
   private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
   private _dirtyTransformMeshes = new Set<Mesh>();
@@ -172,6 +173,7 @@ class WebGLRayTracePass {
   /** Float offset of the BLASes and float capacity of the instance region. */
   private _blasBase = 0;
   private _instanceCapacity = 0;
+  private _blasCapacity = 0;
   private _uploadedBlases: ArrayBuffer[] = [];
   private _vertexAttributeData?: Float32Array;
   private _vertexAttributeLayout?: VertexAttributeLayout;
@@ -449,7 +451,8 @@ class WebGLRayTracePass {
     return changed;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[]; added?: readonly Mesh[] }) {
+    this._appendOnly = !!update?.added?.length;
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && meshes === this._meshes) {
@@ -602,6 +605,9 @@ class WebGLRayTracePass {
   }
 
   private _updateMeshData() {
+    const previousPrepared = this._preparedMeshData;
+    const previousMaterialData = this._materialData;
+    const previousLayout = this._vertexAttributeLayout;
     this._pendingGeometryUpdates.clear();
     this._needsUpdateMeshData = false;
 
@@ -619,18 +625,42 @@ class WebGLRayTracePass {
 
     const layout = this._vertexAttributeLayout = vertexAttributeLayout(mergedGeometry);
     let vertexAttributeColumns = 0;
+    let vertexColumns = 0;
     if (mergedGeometry.position.array.length > 0) {
-      setDataTexture(this._positionBufferTex, mergedGeometry.position.array, 3);
-      this._vertexAttributeData = packVertexAttributes(mergedGeometry, layout,
-        new Float32Array(mergedGeometry.vertexCount * layout.stride * 4));
-      vertexAttributeColumns = setDataTexture(this._vertexAttributeTex, this._vertexAttributeData, 4).columnsLog;
+      const oldVertices = previousPrepared?.geometry.vertexCount ?? 0;
+      const append = !!previousPrepared && oldVertices < mergedGeometry.vertexCount &&
+        previousPrepared.geometries.every((geometry, i) => geometry === res.geometries[i]) &&
+        !!previousLayout && previousLayout.stride === layout.stride && previousLayout.tangent === layout.tangent &&
+        previousLayout.color === layout.color && previousLayout.uv1 === layout.uv1;
+      const positions = this._positionBufferTex.source?.data as Float32Array | undefined;
+      if (append && positions && positions.length >= mergedGeometry.position.array.length) {
+        const first = oldVertices * 3;
+        positions.set(mergedGeometry.position.array.subarray(first), first);
+        this._positionBufferTex.updateDataRange(this._renderer.gl, positions, first * 4,
+          (mergedGeometry.position.array.length - first) * 4);
+        vertexColumns = Math.log2(this._positionBufferTex.source.width);
+      } else {
+        const reserve = new Float32Array(Math.ceil(mergedGeometry.position.array.length * 1.5 / 3) * 3);
+        reserve.set(mergedGeometry.position.array);
+        vertexColumns = setDataTexture(this._positionBufferTex, reserve, 3).columnsLog;
+      }
+      const requiredAttributes = mergedGeometry.vertexCount * layout.stride * 4;
+      if (append && this._vertexAttributeData && this._vertexAttributeData.length >= requiredAttributes) {
+        packVertexAttributes(mergedGeometry, layout, this._vertexAttributeData, oldVertices, mergedGeometry.vertexCount - oldVertices);
+        const first = oldVertices * layout.stride * 16;
+        this._vertexAttributeTex.updateDataRange(this._renderer.gl, this._vertexAttributeData, first, (mergedGeometry.vertexCount - oldVertices) * layout.stride * 16);
+        vertexAttributeColumns = Math.log2(this._vertexAttributeTex.source.width);
+      } else {
+        this._vertexAttributeData = packVertexAttributes(mergedGeometry, layout,
+          new Float32Array(Math.ceil(requiredAttributes * 1.5 / 4) * 4));
+        vertexAttributeColumns = setDataTexture(this._vertexAttributeTex, this._vertexAttributeData, 4).columnsLog;
+      }
     }
 
-    this._materialData?.dispose(this._renderer.gl);
-    const materialData = new MaterialTable(
-      materials,
-      this._analyticLights,
-      {
+    const reuseMaterials = this._appendOnly && previousPrepared && previousMaterialData &&
+      materials.length === previousPrepared.materials.length && materials.every((material, i) => material === previousPrepared.materials[i]);
+    if (!reuseMaterials) this._materialData?.dispose(this._renderer.gl);
+    const materialData = reuseMaterials ? previousMaterialData : new MaterialTable(materials, this._analyticLights, {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._renderer.gl.getParameter(
           this._renderer.gl.MAX_ARRAY_TEXTURE_LAYERS
@@ -638,8 +668,7 @@ class WebGLRayTracePass {
         maxTextureDimension2D: this._renderer.gl.getParameter(
           this._renderer.gl.MAX_TEXTURE_SIZE
         )
-      }
-    );
+      });
     this._materialData = materialData;
 
     this._tracePasses.forEach((pass) => {
@@ -648,18 +677,17 @@ class WebGLRayTracePass {
         positionBuffer: this._positionBufferTex,
         vertexAttributes: this._vertexAttributeTex,
 
-        vertexColumns: textureDimensionsFromArray(
-          Attribute.getCount(mergedGeometry.position)
-        ).columnsLog,
+        vertexColumns,
         vertexAttributeColumns,
 
         isEmptyScene: +(res.instances.length === 0)
       });
 
     });
-    this._updateMaterialConstants(materials, materialData, mergedGeometry);
+    if (!reuseMaterials) this._updateMaterialConstants(materials, materialData, mergedGeometry);
     this._materialChanges.capture(materials);
     this._pendingMaterialUpdate = undefined;
+    this._appendOnly = false;
   }
 
   // One texture holds the TLAS, the BLASes and then the instance records. The
@@ -679,9 +707,25 @@ class WebGLRayTracePass {
       if (instances.length) this._bvhBufferTex.updateDataRange(gl, data, instancesStart * 4, instances.length * 4);
       return;
     }
+    const appendPrefix = data && tlasLength <= this._blasBase && instances.length <= this._instanceCapacity &&
+      uploaded.length < blases.length && uploaded.every((buffer, i) => buffer === blases[i].bvh.buffer);
     const blas = new Float32Array(concatBLASBuffers(blases));
+    if (appendPrefix && blas.length <= this._blasCapacity) {
+      const previousLength = uploaded.reduce((sum, buffer) => sum + buffer.byteLength / 4, 0);
+      data!.set(new Float32Array(tlas.buffer));
+      data!.set(blas.subarray(previousLength), this._blasBase + previousLength);
+      data!.set(instances, this._instancesOffset * 4);
+      const gl = this._renderer.gl;
+      if (tlasLength) this._bvhBufferTex.updateDataRange(gl, data!, 0, tlasLength * 4);
+      if (blas.length > previousLength) this._bvhBufferTex.updateDataRange(gl, data!, (this._blasBase + previousLength) * 4, (blas.length - previousLength) * 4);
+      if (instances.length) this._bvhBufferTex.updateDataRange(gl, data!, this._instancesOffset * 16, instances.length * 4);
+      this._uploadedBlases = blases.map(item => item.bvh.buffer);
+      return;
+    }
     const headroom = (length: number) => Math.ceil((length + Math.min(length >> 2, 1 << 18) + 64) / 4) * 4;
-    const blasBase = this._blasBase = headroom(tlasLength), instancesOffset = blasBase + blas.length;
+    const blasBase = this._blasBase = headroom(tlasLength);
+    this._blasCapacity = headroom(blas.length);
+    const instancesOffset = blasBase + this._blasCapacity;
     this._instanceCapacity = headroom(instances.length);
     this._uploadedBlases = blases.map(item => item.bvh.buffer);
     data = this._bvhData = new Float32Array(instancesOffset + this._instanceCapacity);

@@ -157,6 +157,7 @@ export default class Engine {
   private _pendingMeshes: 'none' | 'incremental' | 'full' = 'full';
   private _pendingTransforms = new Set<Mesh>();
   private _pendingVisibility = new Set<Mesh>();
+  private _pendingAdded = new Set<Mesh>();
   private _pendingColors = new Set<InstancedMesh>();
   private _pendingGeometries = new Set<Geometry>();
   private _pendingMaterials = new Set<import('./scene/OpenPBRMaterial.js').default>();
@@ -230,14 +231,18 @@ export default class Engine {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
+      const appendOnly = changes.membershipOnly && changes.added.length > 0 && changes.materials.length === 0 &&
+        changes.added.every(mesh => mesh.materials.length === 1 && !mesh.geometry.materialIndex && !mesh.materials[0].displacementMap);
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
       if (changes.meshes !== 'none' || changes.lights || changes.background || this.scene !== this._sourceScene || force) {
         this._committedScene = this._snapshot.capture(this.scene, changes);
         // Preparing meshes the next upload replaces would only delay that upload.
-        if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) { this._pendingMeshes = 'full'; this._bvhPreparationController?.abort(); }
+        if ((changes.meshes === 'full' && !appendOnly) || force || this.scene !== this._sourceScene) { this._pendingMeshes = 'full'; this._bvhPreparationController?.abort(); }
+        else if (appendOnly && this._pendingMeshes !== 'full') this._pendingMeshes = 'incremental';
         else if (changes.meshes === 'incremental' && this._pendingMeshes !== 'full') this._pendingMeshes = 'incremental';
         for (const mesh of changes.transforms) this._pendingTransforms.add(this._snapshot.mirror(mesh));
         for (const mesh of changes.visibility) this._pendingVisibility.add(this._snapshot.mirror(mesh));
+        for (const mesh of changes.added) this._pendingAdded.add(this._snapshot.mirror(mesh));
         for (const mesh of changes.colors) this._pendingColors.add(this._snapshot.mirror(mesh));
         for (const geometry of changes.geometries) this._pendingGeometries.add(this._snapshot.mirror(geometry));
         for (const material of changes.materials) this._pendingMaterials.add(this._snapshot.mirror(material));
@@ -275,12 +280,12 @@ export default class Engine {
     const budgetChanged = pipeline.setTextureAtlasBudget(this._lastBudget >= 0 ? this._lastBudget : textureBudget(this));
     if (this._pendingMeshes !== 'none' || budgetChanged) pipeline.setMeshes(scene.meshes, this._pendingMeshes === 'full' || budgetChanged ? undefined : {
       transforms: [...this._pendingTransforms], colors: [...this._pendingColors], geometries: [...this._pendingGeometries], materials: [...this._pendingMaterials],
-      visibility: [...this._pendingVisibility]
+      visibility: [...this._pendingVisibility], added: [...this._pendingAdded]
     });
     if (this._pendingLights) pipeline.setLights(scene.lights);
     if (this._pendingBackground) pipeline.setBackground(scene.background);
     this._pendingMeshes = 'none'; this._pendingLights = false; this._pendingBackground = false;
-    this._pendingTransforms.clear(); this._pendingVisibility.clear(); this._pendingColors.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
+    this._pendingTransforms.clear(); this._pendingVisibility.clear(); this._pendingAdded.clear(); this._pendingColors.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
     this._uploadedRevision = this._sceneRevision;
   }
   private _bvhConfig(): BvhBuildConfig { return bvhConfig(this); }

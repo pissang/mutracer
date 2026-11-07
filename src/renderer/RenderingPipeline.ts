@@ -196,6 +196,8 @@ export interface SceneResources {
     materials?: readonly OpenPBRMaterial[];
     /** Meshes whose `visible` flag changed; their resources stay resident. */
     visibility?: readonly Mesh[];
+    /** Newly appended meshes; used to append previously unseen geometry. */
+    added?: readonly Mesh[];
   }): boolean;
   /** Changes the software memory guard used when packing material textures. */
   setTextureAtlasBudget(maxBytes: number): boolean;

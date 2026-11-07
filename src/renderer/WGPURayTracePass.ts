@@ -264,6 +264,7 @@ class WGPURayTracePass {
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
+  private _appendOnly = false;
   private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
@@ -456,6 +457,8 @@ class WGPURayTracePass {
   /** Byte offset of the BLASes in the BVH buffer; the TLAS region before it has headroom. */
   private _blasBase = 0;
   private _uploadedBlases: ArrayBuffer[] = [];
+  /** Bytes reserved after `_blasBase` for append-only BLAS growth. */
+  private _blasCapacity = 0;
 
   // Fold scene invariants before backend inlining; runtime edits use uniforms.
   private _bakePipelineConstants = true;
@@ -1933,7 +1936,8 @@ class WGPURayTracePass {
 
   private _visibleMeshes() { return this._meshes.filter(mesh => mesh.visible); }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[]; added?: readonly Mesh[] }) {
+    this._appendOnly = !!update?.added?.length;
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
@@ -2357,20 +2361,40 @@ class WGPURayTracePass {
       this._instancesBuffer = instancesBuffer;
       return false;
     }
+    const appendPrefix = this._bvhBuffer && this._bvhCPU && tlas.buffer.byteLength <= this._blasBase &&
+      uploaded.length < blases.length && uploaded.every((buffer, i) => buffer === blases[i].bvh.buffer);
+    if (appendPrefix && blasBytes <= this._blasCapacity) {
+      this._device.queue.writeBuffer(this._bvhBuffer!, 0, tlas.buffer);
+      let target = this._blasBase + uploaded.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+      for (let i = uploaded.length; i < blases.length; i++) {
+        const source = blases[i].bvh.buffer;
+        this._device.queue.writeBuffer(this._bvhBuffer!, target, source);
+        target += source.byteLength;
+      }
+      this._uploadedBlases = blases.map(blas => blas.bvh.buffer);
+      this._bvhCPU = {tlas, blases}; this._bvhDataBytes = this._blasBase + blasBytes;
+      const instancesBuffer = this._updateGPUBuffer('Instances', this._instancesBuffer, new Float32Array(tlas.instancesBuffer!));
+      if (instancesBuffer !== this._instancesBuffer) this._needsUpdateBindGroups = true;
+      this._instancesBuffer = instancesBuffer;
+      return false;
+    }
     // Headroom lets later instance-only updates grow the TLAS without moving BLASes.
     const tlasBytes = tlas.buffer.byteLength;
     let blasBase = Math.ceil((tlasBytes + Math.min(tlasBytes >> 2, 1 << 20) + 256) / 256) * 256;
     if (blasBase + blasBytes > limit) blasBase = Math.ceil(tlasBytes / 16) * 16;
     const size = blasBase + blasBytes;
     if (size > limit) throw new RangeError(`BVH buffer requires ${size} bytes; device storage buffer limit is ${limit} bytes.`);
+    const capacity = Math.min(limit - blasBase, Math.ceil((blasBytes + Math.min(blasBytes >> 1, 64 * 1024 * 1024) + 256) / 256) * 256);
+    this._blasCapacity = capacity;
     this._blasBase = blasBase;
     this._uploadedBlases = blases.map(blas => blas.bvh.buffer);
     let bvhBuffer = this._bvhBuffer;
-    if (!bvhBuffer || bvhBuffer.size < Math.max(size, WGPU_SCENE_BUFFER_MIN_BYTES)) {
+    if (!bvhBuffer || bvhBuffer.size < Math.max(blasBase + capacity, WGPU_SCENE_BUFFER_MIN_BYTES)) {
       bvhBuffer?.destroy();
-      bvhBuffer = this._device.createBuffer({label: 'BVH', size: Math.max(size, WGPU_SCENE_BUFFER_MIN_BYTES),
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, mappedAtCreation: size < 0x80000000});
-      if (size < 0x80000000) {
+      const allocationSize = Math.max(blasBase + capacity, WGPU_SCENE_BUFFER_MIN_BYTES);
+      bvhBuffer = this._device.createBuffer({label: 'BVH', size: allocationSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, mappedAtCreation: allocationSize < 0x80000000});
+      if (allocationSize < 0x80000000) {
         this._writeBVH(bvhBuffer.getMappedRange(), tlas, blases);
         bvhBuffer.unmap();
       } else this._uploadBVHBlocks(bvhBuffer, tlas, blases);
@@ -2411,6 +2435,11 @@ class WGPURayTracePass {
   }
 
   private _updateMeshData() {
+    const previousPrepared = this._preparedMeshData;
+    const previousMaterialData = this._materialData;
+    const previousAttributes = this._attributeData;
+    const previousStride = this._attributeStride;
+    const previousOffsets = this._attributeOffsets;
     this._pendingGeometryUpdates.clear();
     this._emissiveCache = new EmissiveTriangleCache();
     const meshes = this._meshes;
@@ -2439,15 +2468,12 @@ class WGPURayTracePass {
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
-    const materialData = (this._materialData = this._createMaterialData(
-      materials,
-      this._analyticLights,
-      {
-        maxTextureArrayBytes: this._maxTextureArrayBytes,
+    const reuseMaterials = this._appendOnly && previousPrepared && previousMaterialData &&
+      materials.length === previousPrepared.materials.length && materials.every((material, i) => material === previousPrepared.materials[i]);
+    const materialData = reuseMaterials ? previousMaterialData : (this._materialData = this._createMaterialData(
+      materials, this._analyticLights, {maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
-        maxTextureDimension2D: this._device.limits.maxTextureDimension2D
-      }
-    ));
+        maxTextureDimension2D: this._device.limits.maxTextureDimension2D}));
     this._emissiveTriangles = this._emissiveCache.collect(
       res.emissiveBindings,
       materials
@@ -2460,9 +2486,17 @@ class WGPURayTracePass {
     const {stride, offsets} = attributeLayout;
     const vertexWords = res.geometries.reduce((sum, g) => sum + g.vertexCount, 0) * stride;
     const materialWords = attributeLayout.constants.HAS_TRIANGLE_MATERIAL ? this._bvhDataBytes / 16 : 0;
+    const appendVertexStart = previousPrepared && previousAttributes && !attributeLayout.constants.HAS_TRIANGLE_MATERIAL &&
+      previousPrepared.geometries.length < res.geometries.length &&
+      previousPrepared.geometries.every((geometry, i) => geometry === res.geometries[i]) &&
+      previousStride === stride && previousOffsets.length === offsets.length && previousOffsets.every((value, i) => value === offsets[i])
+      ? previousPrepared.geometries.reduce((sum, geometry) => sum + geometry.vertexCount, 0) : 0;
     const attrBufferData = new Uint32Array(vertexWords + materialWords);
+    if (appendVertexStart) attrBufferData.set(previousAttributes!.subarray(0, appendVertexStart * stride));
     attributeLayout.constants.MATERIALINDEX_OFF = vertexWords;
-    for (const geometry of res.geometries) {
+    for (let geometryIndex = 0; geometryIndex < res.geometries.length; geometryIndex++) {
+      const geometry = res.geometries[geometryIndex];
+      if (appendVertexStart && geometryIndex < previousPrepared!.geometries.length) continue;
       const region = res.geometryRegions.get(geometry)!;
       packCompactVertices(geometry, attrBufferData, stride, offsets, 0, geometry.vertexCount,
         region.vertexOffset, false, !!attributeLayout.constants.COLOR_FLOAT, !!attributeLayout.constants.NORMAL_FLOAT);
@@ -2470,17 +2504,14 @@ class WGPURayTracePass {
     this._attributeData = attrBufferData; this._attributeStride = stride; this._attributeOffsets = offsets;
     Object.assign(this._constants, attributeLayout.constants);
     this._packTriangleMaterials(res, tlas);
-    this._attrBuffers = this._updateGPUBuffer('Attributes', this._attrBuffers, attrBufferData);
+    if (appendVertexStart && this._attrBuffers && this._attrBuffers.size >= attrBufferData.byteLength) {
+      const byteOffset = appendVertexStart * stride * 4;
+      this._device.queue.writeBuffer(this._attrBuffers, byteOffset, attrBufferData.buffer, byteOffset, attrBufferData.byteLength - byteOffset);
+    } else this._attrBuffers = this._updateGPUBuffer('Attributes', this._attrBuffers, attrBufferData,
+      Math.ceil((attrBufferData.byteLength + Math.min(attrBufferData.byteLength >> 1, 64 * 1024 * 1024) + 255) / 256) * 256);
 
-    this._materialsBuffer = this._updateGPUBuffer(
-      'Materials',
-      this._materialsBuffer,
-      materialData.getBufferArray(),
-      // WGSL requires a runtime array binding to contain at least one
-      // MaterialBuffer element, including while a
-      // scene reload temporarily has no material payload.
-      MATERIAL_FLOAT_COUNT * 4
-    );
+    if (!reuseMaterials) this._materialsBuffer = this._updateGPUBuffer(
+      'Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
 
     const traversalStackSizes = getTraversalStackSizes(tlas, res.blases);
     const blasLayoutBits = {
@@ -2495,8 +2526,7 @@ class WGPURayTracePass {
     );
 
     Object.assign(this._constants, sceneTraversalConstants(traversalStackSizes.tlas, traversalStackSizes.blas, this._constants), attributeLayout.constants);
-    this._updateMaterialConstants(materials, materialData, mergedGeometry);
-    this._updateTextures(materialData);
+    if (!reuseMaterials) { this._updateMaterialConstants(materials, materialData, mergedGeometry); this._updateTextures(materialData); }
 
     this._needsUpdateBindGroups = true;
 
@@ -2514,6 +2544,7 @@ class WGPURayTracePass {
     this._needsUpdateMeshData = false;
     this._needsUpdateMeshMembership = false;
     this._needsRefitTLAS = false;
+    this._appendOnly = false;
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable | WGPUBindlessMaterialData, mergedGeometry: Geometry) {
