@@ -1069,6 +1069,11 @@ impl PreparedState {
                     }
                 }
             }
+            4 => {
+                if w.u(1) != 0 || w.u(2) != 0 || w.u(3) != 0 || bytes.len() < 16 + h::WORDS * 4 {
+                    return Err("Invalid membership update".into());
+                }
+            }
             _ => return Err("Invalid transform version".into()),
         }
         self.native_update(

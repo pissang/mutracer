@@ -1016,11 +1016,11 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
                     let mesh = s.mesh(meshes[3]).unwrap().clone();
                     s.remove_mesh(meshes[3]).unwrap();
                     meshes[3] = s.add_mesh(mesh).unwrap();
-                    Some(Full)
+                    Some(Incremental)
                 }
                 8 => {
                     s.material_mut(materials[2]).unwrap().textures[0] = Some(t);
-                    Some(Full)
+                    Some(Incremental)
                 }
                 9 => {
                     // More than 64 but at most half of the batch: one refit.

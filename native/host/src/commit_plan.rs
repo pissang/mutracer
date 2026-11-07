@@ -22,6 +22,8 @@ pub(crate) enum Step {
     InstanceColors(Vec<u8>),
     /// Material table and atlas repack; carries the full descriptor.
     Atlas(Vec<u8>),
+    /// Mesh membership update; version word followed by the full descriptor.
+    Membership(Vec<u8>),
 }
 
 struct Words<'a>(&'a [u8]);
@@ -351,26 +353,22 @@ fn instance_color_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     Some(Step::InstanceColors(bytes))
 }
 
-// Texture references and geometry properties are outside parameter commits.
-// Missing extension entries mean defaults, so compare by ID rather than offset
-// or extension count: adding the first numeric override is still incremental.
+// Geometry properties are outside parameter commits. Texture references may
+// change when the retained atlas and shader already support the destination;
+// the AOT material preflight rejects the other cases. Missing extension entries
+// mean defaults, so compare structural fields by ID rather than offset/count.
 fn material_compatible(a: &Words, b: &Words, index: usize) -> Option<bool> {
     let (ao, bo) = (
         a.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
         b.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
     );
-    if a.span(ao + mat::MAP, 4)? != b.span(bo + mat::MAP, 4)? {
-        return Some(false);
-    }
     let extensions = |w: &Words, o: usize| -> Option<std::collections::BTreeMap<usize, Vec<u8>>> {
         let mut entries = std::collections::BTreeMap::new();
         for i in 0..w.u(o + mat::EXTENSION_COUNT) {
             let at = w.u(o + mat::EXTENSION_OFFSET) + i * crate::layout::extension::WORDS;
             let id = w.u(at);
-            // Texture properties, displacement, and UV assignments.
-            if crate::material_properties::MATERIAL_PROPERTIES.get(id)?.0 == TEXTURE_PROPERTY
-                || matches!(id, 55 | 56 | 57 | 58 | 60 | 61 | 76)
-            {
+            // Displacement and UV/projection assignments remain structural.
+            if id == DISPLACEMENT_MAP_PROPERTY || matches!(id, 55 | 56 | 57 | 58 | 60 | 61 | 76) {
                 entries.insert(id, w.span(at, crate::layout::extension::WORDS)?.to_vec());
             }
         }
@@ -402,6 +400,77 @@ fn material_steps(a: &Words, b: &Words, indices: &[usize]) -> Option<Step> {
         }
     }
     Some(Step::Material(bytes))
+}
+
+fn mesh_id(w: &Words, index: usize) -> usize {
+    let ids = w.u(h::MESH_AOV_IDS);
+    if ids == 0 { index } else { w.u(ids + index) }
+}
+
+/// Membership-only changes retain every surviving mesh byte-for-byte. New
+/// meshes may only refer to already resident geometry and material records.
+fn membership_step(a: &Words, b: &Words) -> Option<Step> {
+    if a.u(h::GEOMETRY_COUNT) != b.u(h::GEOMETRY_COUNT)
+        || a.u(h::MATERIAL_COUNT) != b.u(h::MATERIAL_COUNT)
+        || a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT)
+    {
+        return None;
+    }
+    let old: std::collections::BTreeMap<usize, usize> = (0..a.u(h::MESH_COUNT))
+        .map(|i| (mesh_id(a, i), i))
+        .collect();
+    for ni in 0..b.u(h::MESH_COUNT) {
+        let Some(&oi) = old.get(&mesh_id(b, ni)) else {
+            continue;
+        };
+        let (ao, bo) = (
+            a.u(h::MESH_OFFSET) + oi * m::WORDS,
+            b.u(h::MESH_OFFSET) + ni * m::WORDS,
+        );
+        if (0..m::WORDS).any(|k| k != m::MATERIAL_TABLE && a.u(ao + k) != b.u(bo + k)) {
+            return None;
+        }
+        let material_count = b.u(bo + m::MATERIAL_COUNT);
+        if !same_span(
+            a,
+            a.u(ao + m::MATERIAL_TABLE),
+            b,
+            b.u(bo + m::MATERIAL_TABLE),
+            material_count,
+        )? {
+            return None;
+        }
+        let (ab, bb) = (a.u(h::BATCH_OFFSET), b.u(h::BATCH_OFFSET));
+        if (ab == 0) != (bb == 0) {
+            return None;
+        }
+        if ab != 0 {
+            let (ab, bb) = (ab + oi * bt::WORDS, bb + ni * bt::WORDS);
+            let count = b.u(bb + bt::COUNT);
+            if a.u(ab + bt::COUNT) != count
+                || (0..bt::WORDS).any(|k| {
+                    !matches!(k, bt::TRANSFORMS | bt::COLORS) && a.u(ab + k) != b.u(bb + k)
+                })
+            {
+                return None;
+            }
+            if count != u32::MAX as usize {
+                if !same_span(
+                    a,
+                    a.u(ab + bt::TRANSFORMS),
+                    b,
+                    b.u(bb + bt::TRANSFORMS),
+                    count * 16,
+                )? || !same_span(a, a.u(ab + bt::COLORS), b, b.u(bb + bt::COLORS), count * 3)?
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut bytes = record(&[4, 0, 0, 0]);
+    bytes.extend_from_slice(b.0);
+    Some(Step::Membership(bytes))
 }
 
 /// Sparse changed materials for the cheap shader/transport preflight. Both
@@ -555,10 +624,7 @@ pub(crate) fn plan_with(
     textures_unchanged: bool,
 ) -> Option<Vec<Step>> {
     let (a, b) = (Words(previous), Words(next));
-    if a.len() < h::WORDS
-        || b.len() < h::WORDS
-        || !scene_only && (sync.resolution || sync.quality)
-        || sync.meshes == 2
+    if a.len() < h::WORDS || b.len() < h::WORDS || !scene_only && (sync.resolution || sync.quality)
     {
         return None;
     }
@@ -575,6 +641,9 @@ pub(crate) fn plan_with(
             .any(|&f| b.u(f) == i + 1)
     });
     let mut steps = Vec::new();
+    if sync.meshes == 2 {
+        steps.push(membership_step(&a, &b)?);
+    }
     if atlas {
         steps.push(Step::Atlas(next.to_vec()));
     }

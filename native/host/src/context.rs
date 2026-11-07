@@ -1209,13 +1209,6 @@ fn incremental_candidate(
         return None;
     }
     let previous = context.descriptor.as_ref()?;
-    // A different mesh count always changes the retained object list, requiring
-    // full preparation. Reject it before synchronous TS sync constructs and then
-    // discards a complete replacement scene on the caller (often the UI thread).
-    let count = layout::header::MESH_COUNT * 4;
-    if previous.get(count..count + 4)? != bytes.get(count..count + 4)? {
-        return None;
-    }
     Some((retained, previous.clone()))
 }
 /// Applies planned retained updates. Ok(false) leaves the scene for full preparation.
@@ -1247,11 +1240,13 @@ fn apply_incremental(
             | commit_plan::Step::LightList(b)
             | commit_plan::Step::InstanceColors(b)
             | commit_plan::Step::Atlas(b) => (b.as_ptr(), b.len()),
+            commit_plan::Step::Membership(b) => (b.as_ptr(), b.len()),
         };
         let applied = unsafe {
             match step {
                 commit_plan::Step::Geometry(_) => update_geometry_in(context, input, length),
                 commit_plan::Step::Visibility(_) => update_transform_in(context, input, length),
+                commit_plan::Step::Membership(_) => update_transform_in(context, input, length),
                 commit_plan::Step::Transform(_) => update_transform_in(context, input, length),
                 commit_plan::Step::Material(_) => update_material_in(context, input, length),
                 commit_plan::Step::Light(_) => update_light_in(context, input, length),

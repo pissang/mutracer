@@ -1049,6 +1049,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   const state = retainedScenes.get(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2), f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2);
   if (u[0] === 3) return prepareVisibilityUpdate(bytes, token, native);
+  if (u[0] === 4) return prepareMembershipUpdate(bytes.subarray(16), token, native);
   const batch = u[0] === 2, count = batch ? u[1] : 1, first = batch ? 4 : 0;
   if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   const meshes = state.meshes.slice(), edited = new Map<MeshState, MeshState>();
@@ -1091,6 +1092,42 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   if (sameInstanceMembership(state.instances, instances)) return incrementalTransform(stage, dirty, token);
   if (native) {transformStages.set(token, stage); return state.hardware ? resourcePacket([], [], 0, 0) : requestInstances(instances);}
   return packTransformUpdate(stage, buildTLAS(instances, state.blases), token);
+}
+function prepareMembershipUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
+  const state = retainedScenes.get(token)!;
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  const byId = new Map(state.meshes.map(mesh => [mesh.aovId, mesh]));
+  const meshes: MeshState[] = [];
+  for (let i = 0; i < u[H.MESH_COUNT]; i++) {
+    const off = u[H.MESH_OFFSET] + i * M.WORDS;
+    const id = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
+    let mesh = byId.get(id);
+    if (!mesh) {
+      mesh = new MeshState(state.geometries[u[off + M.GEOMETRY]], decodeMeshMaterials(u, off, state.source));
+      mesh.aovId = id; mesh.visible = (u[off + M.FLAGS] & 1) === 0;
+      if (u[H.BATCH_OFFSET]) { const instances = decodeInstances(u, f, u[H.BATCH_OFFSET] + i * B.WORDS); if (instances) mesh.setInstanceState(instances); }
+      mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
+    }
+    meshes.push(mesh);
+  }
+  const materials: MaterialState[] = [], materialIndices = new Map<MaterialState, number>();
+  const templates = new Map(state.prepared.residentBindings.map(binding => [binding.mesh.geometry, binding]));
+  const residentBindings: PreparedMeshInstanceBinding[] = [];
+  for (const mesh of meshes) {
+    const template = templates.get(mesh.geometry);
+    if (!template) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    const indices = mesh.materials.map(material => {
+      let index = materialIndices.get(material);
+      if (index === undefined) { index = materials.length; materials.push(material); materialIndices.set(material, index); }
+      return index;
+    });
+    residentBindings.push({...template, mesh, materialIndices: indices});
+  }
+  const prepared = selectVisibleInstances({...state.prepared, materials, residentBindings}, meshes);
+  const stage: TransformStage = {meshes, prepared, bindings: prepared.instanceBindings, instances: prepared.instances};
+  if (native) { transformStages.set(token, stage); return state.hardware ? resourcePacket([], [], 0, 0) : requestInstances(stage.instances); }
+  return packTransformUpdate(stage, buildTLAS(stage.instances, state.blases), token);
 }
 function prepareVisibilityUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
   const state = retainedScenes.get(token)!;

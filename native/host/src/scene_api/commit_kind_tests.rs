@@ -128,16 +128,17 @@ fn openpbr_parameters_are_incremental_candidates() {
 }
 
 #[test]
-fn material_texture_references_require_full_preparation() {
+fn material_texture_references_are_incremental_candidates() {
     for slot in 0..9 {
         let mut f = Fixture::new();
         f.scene.material_mut(f.material).unwrap().textures[slot] = Some(f.texture);
-        f.check(&format!("remove texture slot {slot}"), Full, |f| {
+        let expected = if slot == 8 { Full } else { Incremental };
+        f.check(&format!("remove texture slot {slot}"), expected, |f| {
             f.scene.material_mut(f.material).unwrap().textures[slot] = None
         });
         let mut f = Fixture::new();
         f.scene.material_mut(f.material).unwrap().textures[slot] = None;
-        f.check(&format!("add texture slot {slot}"), Full, |f| {
+        f.check(&format!("add texture slot {slot}"), expected, |f| {
             f.scene.material_mut(f.material).unwrap().textures[slot] = Some(f.texture)
         });
     }
@@ -317,12 +318,6 @@ fn structural_scene_edits_require_full_preparation() {
             g.tangents = vec![0.; 16].into();
             g.uv = [vec![0.; 8].into(), vec![0.; 8].into()];
         }),
-        ("add mesh", |f| {
-            f.scene.add_mesh(Mesh::new(f.geometry, f.material)).unwrap();
-        }),
-        ("remove mesh", |f| {
-            f.scene.remove_mesh(f.second_mesh).unwrap()
-        }),
         ("reorder mesh references", |f| {
             let a = f.scene.mesh(f.mesh).unwrap().clone();
             let b = f.scene.mesh(f.second_mesh).unwrap().clone();
@@ -452,8 +447,14 @@ fn environment_controls_are_validated_and_incremental() {
 }
 
 #[test]
-fn recreated_mesh_identity_requires_full_even_with_the_same_records() {
-    Fixture::new().check("remove/add same mesh slot", Full, |f| {
+fn mesh_membership_is_incremental() {
+    Fixture::new().check("add mesh", Incremental, |f| {
+        f.scene.add_mesh(Mesh::new(f.geometry, f.material)).unwrap();
+    });
+    Fixture::new().check("remove mesh", Incremental, |f| {
+        f.scene.remove_mesh(f.second_mesh).unwrap()
+    });
+    Fixture::new().check("remove/add same mesh slot", Incremental, |f| {
         let mesh = f.scene.mesh_mut(f.mesh).unwrap().clone();
         f.scene.remove_mesh(f.mesh).unwrap();
         f.mesh = f.scene.add_mesh(mesh).unwrap();
@@ -470,7 +471,7 @@ fn mesh_visibility_is_incremental_unless_structure_changes() {
         f.scene.mesh_mut(f.second_mesh).unwrap().transform = Mat4::from_translation(Vec3::X);
         f.scene.material_mut(f.material).unwrap().values.color = [0.1, 0.3, 0.5];
     });
-    Fixture::new().check("hide and structure", Full, |f| {
+    Fixture::new().check("hide and membership", Incremental, |f| {
         f.scene.set_mesh_visible(f.mesh, false).unwrap();
         f.scene.add_mesh(Mesh::new(f.geometry, f.material)).unwrap();
     });

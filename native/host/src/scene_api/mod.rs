@@ -1250,11 +1250,14 @@ pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Change
     }
     let a = aligned(previous);
     let b = aligned(next);
-    if [h::GEOMETRY_COUNT, h::MESH_COUNT, h::MATERIAL_COUNT]
+    if [h::GEOMETRY_COUNT, h::MATERIAL_COUNT]
         .iter()
         .any(|&i| a[i] != b[i])
     {
         return CommitKind::Full;
+    }
+    if a[h::MESH_COUNT] != b[h::MESH_COUNT] {
+        return CommitKind::Incremental;
     }
     let n = b[h::MESH_COUNT] as usize;
     // Changed records keep their identities; otherwise every mesh is a candidate.
@@ -1262,19 +1265,6 @@ pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Change
         Some(c) => c.meshes.iter().copied().collect(),
         None => (0..n).collect(),
     };
-    // The shared scene tracker treats a new mesh identity as membership change,
-    // even when a removed slot is reused with identical geometry/material data.
-    // Mirror its effective IDs before paying for lazy sync initialization.
-    let (ai, bi) = (a[h::MESH_AOV_IDS] as usize, b[h::MESH_AOV_IDS] as usize);
-    if changes.is_none()
-        && (0..n).any(|i| {
-            let previous = if ai == 0 { i as u32 } else { a[ai + i] };
-            let next = if bi == 0 { i as u32 } else { b[bi + i] };
-            previous != next
-        })
-    {
-        return CommitKind::Full;
-    }
     let mut structural = false;
     for &i in &meshes {
         let ao = a[h::MESH_OFFSET] as usize + i * m::WORDS;
