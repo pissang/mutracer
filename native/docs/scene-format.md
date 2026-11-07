@@ -1,4 +1,4 @@
-# Native scene descriptor format (v6)
+# Native scene descriptor format (v7)
 
 `mt_context_commit` and `mt_engine_set_scene` take a scene as one byte buffer:
 the raw scene descriptor. This page is the reference for its layout, values and
@@ -7,9 +7,10 @@ validation rules. The record structs are in
 [`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
 in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
-The current output format is version 6. Accepted input versions and the v5 light
-record stride are specified under [Header](#header). Rebuild C consumers with
-the current headers. Record type names retain their historical `_v4` suffix.
+The current output format is version 7. Accepted input versions and the record
+strides of older versions are specified under [Header](#header). Rebuild C
+consumers with the current headers. Record type names retain their historical
+`_v4` suffix.
 
 Most applications should build scenes with the [Scene API](scene.md) instead,
 which needs no offsets and can export descriptors.
@@ -83,10 +84,11 @@ the rules the validator enforces.
 
 ### Header
 
-- The encoder writes `MT_VERSION_SCENE` (6); the validator accepts versions 5
-  and 6. Version 5 uses 28-word analytic-light records; version 6 uses 32-word
-  records. `total_words` is the descriptor length. `quality_flags` accepts only
-  the `MT_QUALITY_*` bits.
+- The encoder writes `MT_VERSION_SCENE` (7); the validator accepts versions 5
+  to 7. Version 5 uses 28-word analytic-light records; versions 6 and 7 use
+  32-word records. Versions 5 and 6 use 12-word texture records; version 7 adds
+  the texture `udim` word for 13-word records. `total_words` is the descriptor
+  length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
 - Environment and background maps (`*_texture_plus_one`, 0 for none) must be
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
   fields are ignored. Lighting and the visible background are independent, but
@@ -146,10 +148,22 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
 
 ### Textures
 
-- RGBA8 sRGB storage uses one packed word per pixel; RGBA32F uses four linear
-  floats. Pixels are row-major.
+- RGBA8 uses one packed word per pixel; color slots decode it as sRGB and data
+  slots use it as linear values. RGBA32F uses four linear floats. Pixels are
+  row-major.
 - Negative UV scales flip an axis; zero samples a constant coordinate.
 - Textures may be scaled to fit the [GPU texture budget](#limits).
+- A v7 `mt_texture_v4.udim` value of 1 marks a sparse 10×10 grid for tile IDs
+  1001–1100. Store tile coordinates in their corresponding cells, leave missing
+  cells transparent black, and set the logical image dimensions to ten times
+  the maximum tile width and maximum tile height. Tiles are resampled to those
+  common dimensions with nearest-neighbor filtering; tile-local filtering is clamped to
+  each cell. Negative UVs and coordinates at or above 10 sample transparent
+  black. A set uses one storage format: RGBA8 or RGBA32F linear. RGBA8 color
+  slots decode sRGB; RGBA8 data slots stay linear. Descriptors mixing formats
+  are rejected so color and data slots retain their usual interpretation. The
+  full logical grid, including empty cells, counts against texture and GPU
+  budgets.
 
 ### Lights
 
