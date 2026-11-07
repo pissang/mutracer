@@ -196,7 +196,7 @@ bool Buffer::Allocate(GfVec3i const &size, HdFormat fmt, bool ms) {
   if (IsMapped() || size[0] <= 0 || size[1] <= 0 || size[2] != 1)
     return false;
   if (fmt != HdFormatFloat32Vec4 && fmt != HdFormatFloat16Vec4 &&
-      fmt != HdFormatFloat32 && fmt != HdFormatInt32)
+      fmt != HdFormatFloat32Vec3 && fmt != HdFormatFloat32 && fmt != HdFormatInt32)
     return false;
   readOnMap = {};
   output.reset();
@@ -211,13 +211,16 @@ bool Buffer::Allocate(GfVec3i const &size, HdFormat fmt, bool ms) {
 static void ReadBuffers(Param *param,
                         HdRenderPassAovBindingVector const &bindings,
                         uint32_t width, uint32_t height, float scale,
-                        GfMatrix4d const &projection) {
+                        GfMatrix4d const &view, GfMatrix4d const &projection) {
   char e[2048] = {};
   std::map<uint32_t, std::vector<uint8_t>> images;
   for (auto const &a : bindings) {
-    uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
-                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
-                                                      : MT_IMAGE_ID;
+    uint32_t kind = a.aovName == HdAovTokens->color ? MT_IMAGE_HDR
+                    : a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye
+                        ? MT_IMAGE_CENTER_POSITION
+                    : a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye
+                        ? MT_IMAGE_CENTER_NORMAL
+                        : MT_IMAGE_ID;
     if (images.count(kind))
       continue;
     auto &bytes = images[kind];
@@ -239,14 +242,21 @@ static void ReadBuffers(Param *param,
     auto b = dynamic_cast<Buffer *>(a.renderBuffer);
     if (!b || b->IsMapped())
       continue;
-    if ((a.aovName == HdAovTokens->depth &&
-         b->GetFormat() != HdFormatFloat32) ||
-        (a.aovName != HdAovTokens->color && a.aovName != HdAovTokens->depth &&
-         b->GetFormat() != HdFormatInt32))
+    bool vectorAov = a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye ||
+                     a.aovName == HdAovTokens->Peye;
+    bool idAov = a.aovName == HdAovTokens->primId || a.aovName == HdAovTokens->instanceId ||
+                 a.aovName == HdAovTokens->elementId;
+    if ((a.aovName == HdAovTokens->depth && b->GetFormat() != HdFormatFloat32) ||
+        (vectorAov && b->GetFormat() != HdFormatFloat32Vec3 && b->GetFormat() != HdFormatFloat32Vec4) ||
+        (idAov && b->GetFormat() != HdFormatInt32) ||
+        (a.aovName == HdAovTokens->color && b->GetFormat() != HdFormatFloat32Vec4 && b->GetFormat() != HdFormatFloat16Vec4))
       throw std::runtime_error("unsupported AOV format");
-    uint32_t kind = a.aovName == HdAovTokens->color   ? MT_IMAGE_HDR
-                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_DEPTH
-                                                      : MT_IMAGE_ID;
+    uint32_t kind = a.aovName == HdAovTokens->color ? MT_IMAGE_HDR
+                    : a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye
+                        ? MT_IMAGE_CENTER_POSITION
+                    : a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye
+                        ? MT_IMAGE_CENTER_NORMAL
+                        : MT_IMAGE_ID;
     auto const *floats = reinterpret_cast<float const *>(images[kind].data());
     auto const *ids = reinterpret_cast<uint32_t const *>(images[kind].data());
     GfVec4f clear(0);
@@ -276,13 +286,28 @@ static void ReadBuffers(Param *param,
             for (int k = 0; k < 4; ++k)
               reinterpret_cast<GfHalf *>(b->pixels.data())[dst * 4 + k] =
                   pixel[k];
-        } else if (kind == MT_IMAGE_DEPTH) {
+        } else if (a.aovName == HdAovTokens->depth) {
           float depth = 1;
           if (floats[src + 3] > 0) {
-            auto clip = GfVec4d(0, 0, -floats[src], 1) * projection;
+            auto clip = GfVec4d(floats[src], floats[src + 1], floats[src + 2], 1) * view * projection;
             depth = std::clamp(float((clip[2] / clip[3] + 1) * .5), 0.f, 1.f);
           }
           std::memcpy(b->pixels.data() + dst * 4, &depth, 4);
+        } else if (vectorAov) {
+          GfVec3d value(floats[src], floats[src + 1], floats[src + 2]);
+          if (floats[src + 3] <= 0) value = GfVec3d(0);
+          else if (a.aovName == HdAovTokens->Neye) {
+            auto transformed = GfVec4d(value[0], value[1], value[2], 0) *
+                               view.GetInverse().GetTranspose();
+            value = GfVec3d(transformed[0], transformed[1], transformed[2]);
+            value.Normalize();
+          } else if (a.aovName == HdAovTokens->Peye) {
+            auto transformed = GfVec4d(value[0], value[1], value[2], 1) * view;
+            value = GfVec3d(transformed[0], transformed[1], transformed[2]);
+          }
+          size_t stride = b->GetFormat() == HdFormatFloat32Vec4 ? 16 : 12;
+          float pixel[4] = {float(value[0]), float(value[1]), float(value[2]), floats[src + 3]};
+          std::memcpy(b->pixels.data() + dst * stride, pixel, stride);
         } else {
           int value = -1;
           auto i = param->identities.find(ids[src]);
@@ -441,7 +466,13 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
       options.height = rh;
       options.max_samples = std::clamp(
           Setting(delegate, "convergedSamplesPerPixel", 64), 1, 16384);
-      options.aovs = MT_AOV_DEPTH;
+      options.aovs = 0;
+      for (auto const &a : nextBindings) {
+        if (a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye)
+          options.aovs |= MT_AOV_CENTER_POSITION;
+        if (a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye)
+          options.aovs |= MT_AOV_CENTER_NORMAL;
+      }
       for (auto const &a : nextBindings)
         if (a.aovName == HdAovTokens->primId ||
             a.aovName == HdAovTokens->instanceId ||
@@ -480,7 +511,16 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
                        depthBuffer->GetFormat() == HdFormatFloat32 &&
                        colorBuffer->GetWidth() == depthBuffer->GetWidth() &&
                        colorBuffer->GetHeight() == depthBuffer->GetHeight();
-    bool gpuOutput = param->gpu && !param->forceCpu && gpuBindings;
+    // The Hgi conversion shader still consumes the jitter-averaged depth
+    // texture. Center-surface AOVs use the CPU resolve until position export is
+    // available, keeping Hydra depth and IDs on the same hit.
+    bool centerAov = std::any_of(bindings.begin(), bindings.end(), [](auto const &a) {
+      return a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->normal ||
+             a.aovName == HdAovTokens->Neye || a.aovName == HdAovTokens->Peye;
+    });
+    bool gpuOutput = param->gpu && !param->forceCpu && gpuBindings && !centerAov;
+    if (param->gpu && !param->forceCpu && gpuBindings && centerAov)
+      Warn("CPU output: center-surface AOVs require CPU readback until position export is available");
     if (!gpuOutput) {
       if (output->color) {
         if (param->gpu)
@@ -524,7 +564,8 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
           std::weak_ptr<Param> weak = param;
           auto pw = width, ph = height;
           auto proj = projection;
-          b->readOnMap = [weak, a, pw, ph, scale, proj] {
+          auto v = view;
+          b->readOnMap = [weak, a, pw, ph, scale, v, proj] {
             if (auto p = weak.lock()) {
               std::lock_guard<std::mutex> lock(p->mutex);
               mt_render_snapshot info{};
@@ -534,7 +575,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
                     error);
               if (!info.samples)
                 return;
-              ReadBuffers(p.get(), {a}, pw, ph, scale, proj);
+              ReadBuffers(p.get(), {a}, pw, ph, scale, v, proj);
             }
           };
         }
@@ -574,7 +615,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
           ++param->skippedExports;
         }
       } else {
-        ReadBuffers(param.get(), bindings, width, height, scale, projection);
+        ReadBuffers(param.get(), bindings, width, height, scale, view, projection);
       }
       if (ready) {
         lastSamples = info.samples;
@@ -656,6 +697,8 @@ HdAovDescriptor Delegate::GetDefaultAovDescriptor(TfToken const &t) const {
     return {HdFormatFloat32Vec4, true, VtValue(GfVec4f(0))};
   if (t == HdAovTokens->depth)
     return {HdFormatFloat32, false, VtValue(1.f)};
+  if (t == HdAovTokens->normal || t == HdAovTokens->Neye || t == HdAovTokens->Peye)
+    return {HdFormatFloat32Vec3, false, VtValue(GfVec3f(0))};
   if (t == HdAovTokens->primId || t == HdAovTokens->instanceId ||
       t == HdAovTokens->elementId)
     return {HdFormatInt32, false, VtValue(-1)};

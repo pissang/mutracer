@@ -64,13 +64,18 @@ int main(int argc, char **argv) {
                             VtValue(false));
   engine.SetRenderBufferSize(GfVec2i(width, height));
   engine.SetRenderViewport(GfVec4d(0, 0, width, height));
+  std::vector<TfToken> aovs = {HdAovTokens->color, HdAovTokens->depth,
+                               HdAovTokens->primId, HdAovTokens->instanceId,
+                               HdAovTokens->elementId};
+  if (std::getenv("MUTRACER_HYDRA_CENTER_AOVS") &&
+      renderer != "HdStormRendererPlugin")
+    aovs.insert(aovs.end(), {HdAovTokens->normal, HdAovTokens->Neye,
+                             HdAovTokens->Peye});
   if (!std::getenv("MUTRACER_HYDRA_ALL_AOVS") ||
       renderer == "HdStormRendererPlugin")
     engine.SetRendererAov(HdAovTokens->color);
   else
-    engine.SetRendererAovs({HdAovTokens->color, HdAovTokens->depth,
-                            HdAovTokens->primId, HdAovTokens->instanceId,
-                            HdAovTokens->elementId});
+    engine.SetRendererAovs(aovs);
   GfCamera camera;
   camera.SetTransform(GfMatrix4d(1).SetTranslate(GfVec3d(0, 0, 5)));
   camera.SetPerspectiveFromAspectRatioAndFieldOfView(float(width) / height, 45,
@@ -129,9 +134,7 @@ int main(int argc, char **argv) {
               << (label == "warmup" ? 4 : samples) * 1000. / wallMs << "}\n";
     summaries.flush();
     if (!std::getenv("MUTRACER_HYDRA_BENCH"))
-      for (auto token :
-           {HdAovTokens->color, HdAovTokens->depth, HdAovTokens->primId,
-            HdAovTokens->instanceId, HdAovTokens->elementId}) {
+      for (auto token : aovs) {
         auto b = engine.GetAovRenderBuffer(token);
         if (!b)
           continue;
