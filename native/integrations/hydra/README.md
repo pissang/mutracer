@@ -111,8 +111,8 @@ Hardware ray-query limitations are listed in the
 ## Outputs and limits
 
 `color` is premultiplied linear RGBA, composited over the bound AOV clear color.
-`depth` is projected from the pixel-center surface position shared with IDs;
-misses clear to 1. It therefore identifies the same selected surface as
+`depth` projects the pixel-center camera-forward distance shared with IDs to
+clip depth; misses clear to 1. It therefore identifies the same selected surface as
 `primId`, without jitter or depth of field. `normal` is the signed world-space
 shading normal, including the base normal map; `Neye` is that normal in view
 space, and `Peye` is view-space position. These surface outputs use the same
@@ -123,10 +123,14 @@ selection indices, and `elementId` identifies the original polygon face.
 Background and non-instanced instance IDs are -1. The SDK's denoising guide is
 separate from these surface outputs.
 
-Binding any center-surface AOV uses CPU buffers so Hydra depth stays aligned
-with IDs. Each bound center source adds a full RGBA32F SDK readback: position
-for `depth` / `Peye`, normal for `normal` / `Neye`. `usdrecord --disableGpu`
-also uses CPU buffers. GPU output does not add Blender or Vulkan host support.
+With a compatible HgiMetal host, `color` alone or `color` + `depth` uses GPU
+textures without CPU pixel transfers. Color must be float32/float16 RGBA; a bound
+depth must be float32 and the same size. Depth and IDs select the same center
+surface in both GPU and CPU modes. Binding `normal`, `Neye` or `Peye` uses CPU
+buffers and reports the requested AOVs as the fallback reason. CPU mode reads
+each requested center source as RGBA32F; `normal` and `Neye` share one source.
+`usdrecord --disableGpu`, non-Metal hosts and `forceCpuOutput=1` also use CPU
+buffers. GPU output does not add Blender or Vulkan host support.
 OpenUSD 26.03's CPU viewport depth upload fails with Metal API Validation;
 `usdrecord --disableGpu` avoids that host upload path for offline CPU output.
 Recreate the OpenUSD 26.03 host engine when switching between viewport and

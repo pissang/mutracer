@@ -12,11 +12,12 @@ comments specify formats, ownership, errors and thread rules.
    [scene/render workflow](engine.md#render-offline).
 2. Create host textures with shader-write usage and import them with
    `mt_engine_import_metal_image`. Use RGBA32Float or RGBA16Float for HDR, R32Float
-   or RGBA32Float for depth, and RGBA8Unorm for a composed display image.
+   or RGBA32Float for either depth kind, and RGBA8Unorm for composed display.
 3. Create two `MTLSharedEvent` timelines and import them with
    `mt_engine_import_metal_timeline`: host readiness and library completion.
-4. Enable `MT_AOV_DEPTH` on the render when exporting depth. Refine normally;
-   compose with `mt_display_present` before exporting display output.
+4. Enable `MT_AOV_DEPTH` for averaged depth or `MT_AOV_CENTER_DEPTH` for the
+   pixel-center surface shared with IDs. Refine normally; compose with
+   `mt_display_present` before exporting display output.
 
 Imports use `struct_size = sizeof(record)`, `next = NULL` and reserved fields 0.
 Under ARC, pass native objects as `(__bridge void *)object`. Rust hosts use
@@ -25,12 +26,13 @@ Under ARC, pass native objects as `(__bridge void *)object`. Rust hosts use
 
 ## Export and synchronize
 
-Export color and depth together so one done signal covers both:
+Export color and the desired depth together so one done signal covers both.
+For selection, use center depth:
 
 ```c
 mt_gpu_export_image images[] = {
     {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_HDR, NULL, color, MT_GPU_TOP_FIRST, 0},
-    {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_DEPTH, NULL, depth, MT_GPU_TOP_FIRST, 0},
+    {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_CENTER_DEPTH, NULL, depth, MT_GPU_TOP_FIRST, 0},
 };
 mt_gpu_export_desc request = {
     sizeof(request), 2, NULL, images, ready_timeline, ready_value,
@@ -63,17 +65,22 @@ Device loss is terminal and allows engine destruction without guaranteeing done.
 ## Costs and limits
 
 - Exports use the latest published HDR/display and ready depth AOV. They do not
-  wait for another sample or restart accumulation. An unavailable image reports
-  `INVALID_STATE`. Depth and beauty have independent sample counts.
+  wait for another sample or restart accumulation. A disabled or unavailable
+  source reports `INVALID_STATE`. Depth and beauty have independent sample counts.
 - HDR follows `mt_render_read_pixels`, including its coverage and opaque solid
   background behavior. Depth is camera-forward distance in scene units; RGBA
-  depth contains distance, 0, 0, coverage. Convert to clip depth in the host.
+  depth contains distance, 0, 0, coverage. `MT_GPU_OUTPUT_DEPTH` retains the
+  independently sampled, jitter/DOF-averaged result. `MT_GPU_OUTPUT_CENTER_DEPTH`
+  matches `MT_IMAGE_CENTER_DEPTH`: an unjittered pinhole hit shared with IDs, with
+  binary validity instead of averaged coverage. Convert to clip depth in the host.
 - Output is top row first by default, matching engine readback; select
   `MT_GPU_BOTTOM_FIRST` when the consumer expects lower-left image coordinates.
   Textures must exactly match source size; export does not rescale them.
 - This path avoids CPU pixel copies and uploads; it still performs GPU conversion
   and writes the host image. Host textures and normal render/AOV storage remain
-  necessary. First use can block for pipeline compilation; queue saturation can
+  necessary. Each exported depth kind retains an additional 8 bytes per AOV pixel
+  on the GPU; center tracing also has the [center-AOV cost](display.md#aov-channels).
+  First use can block for pipeline compilation; queue saturation can
   also backpressure submission.
 - Export at presentation rate (for example 60 Hz) while continuing refinement.
   Use ring textures to avoid waiting for busy host readers. An unsignalled ready

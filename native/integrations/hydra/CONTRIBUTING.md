@@ -5,11 +5,11 @@ Sync collects snapshots under `Param::mutex`; render-pass Execute and on-demand
 Buffer Map serialize SDK access under that mutex. Stop uses concurrent cancellation.
 CPU and host-Hgi color/depth
 resources share buffer convergence and resolve state; both handles are installed
-together. The host owns its Hgi and must outlive the delegate and render index.
+together (color-only bindings export HDR and clear the internal depth). The host owns its Hgi and must outlive the delegate and render index.
 
 The Metal adapter imports the host device into an independent SDK queue.
 An SDK done wait is submitted to the actual Hgi queue before Hgi compute. Compute
-converts row order, scale, premultiplication/clear and camera-forward depth;
+converts row order, scale, premultiplication/clear and center camera-forward depth;
 a depth-only Hgi graphics pass writes the clip result to a depth attachment for
 presentation and selection. The adapter then signals ready on the GPU. On the
 next publication, a marker after the preceding frame's Hgi commands retires its
@@ -66,6 +66,10 @@ forces CPU output; zero uses automatic GPU selection. Switching output keeps
 the SDK engine and accumulated samples, and drains/releases GPU output textures.
 The default color viewport exercises `HdxAovInputTask`;
 `MUTRACER_HYDRA_ALL_AOVS=1` instead requests the offline multi-AOV task list.
+`MUTRACER_HYDRA_COLOR_ONLY=1` requests an explicit color-only task list;
+`MUTRACER_HYDRA_VECTOR_AOV=normal` (or `Neye` / `Peye`) with `MUTRACER_HYDRA_ALL_AOVS=1`
+checks individual CPU fallback. `MUTRACER_HYDRA_EXPECT_GPU=1` asserts nonempty
+Hgi resources for every bound color/depth buffer (0 asserts CPU buffers).
 Viewport GPU runs dump both the final Hdx textures
 (`*-hgi.bin`) and independent CPU `Map()` results. The phase summaries contain
 frame P50/P95 and samples per wall second, including the harness's 1 ms polling
@@ -82,6 +86,8 @@ Measure without concurrent builds, tests or visible viewport rendering. For
 fixed-sample parity in one host process, set `MUTRACER_HYDRA_COMPARE=1`: initial
 GPU, forced CPU and repeated GPU outputs retain the same Hydra identities and
 prototype ordering. Separate processes can renumber native-instance prototypes.
+`tests/center-depth.usda` has overlapping planes at camera-forward distances 4
+and 5 for checking depth/primId at their boundary and the silhouette.
 
 The `edits` sequence also exercises resize, resolution scale, Software/HWRT and
 CPU/GPU switching, and cancellation followed by restart.
