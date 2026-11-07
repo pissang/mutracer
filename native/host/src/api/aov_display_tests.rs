@@ -83,7 +83,7 @@ fn display_channels(backend: Backend) {
         Status::InvalidState
     );
     let mut options = render.settings().unwrap();
-    options.aovs = 127;
+    options.aovs = 3711;
     options.aov_samples = 4;
     render.set_settings(options).unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
@@ -98,6 +98,9 @@ fn display_channels(backend: Backend) {
         Channel::SpecularAlbedo,
         Channel::Id,
         Channel::Motion,
+        Channel::CenterNormal,
+        Channel::CenterDepth,
+        Channel::CenterPosition,
     ] {
         settings.channel = channel;
         display.set_settings(settings).unwrap();

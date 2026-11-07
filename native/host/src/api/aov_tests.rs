@@ -100,6 +100,14 @@ fn aov_options_validate_without_a_device() {
             Status::InvalidArgument
         );
     }
+    assert!(
+        RenderSettings {
+            aovs: 512 | 1024 | 2048,
+            ..defaults
+        }
+        .validate()
+        .is_ok()
+    );
 }
 #[test]
 #[ignore = "requires real GPU"]
@@ -133,34 +141,89 @@ fn independent_surface_aovs(backend: Backend) {
     )
     .unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [
+        PixelKind::CenterNormal,
+        PixelKind::CenterDepth,
+        PixelKind::CenterPosition,
+    ] {
+        assert_eq!(
+            render.read_pixels(kind).unwrap_err().status,
+            Status::InvalidState
+        );
+    }
     if backend == Backend::Hardware {
         assert_eq!(render.backend().unwrap().0, Backend::Hardware);
     }
     let before = render.read_pixels(PixelKind::Hdr).unwrap();
+    let guides =
+        [PixelKind::Normal, PixelKind::Albedo].map(|kind| render.read_pixels(kind).unwrap());
     let mut settings = render.settings().unwrap();
+    let legacy_kinds = [
+        PixelKind::Depth,
+        PixelKind::Position,
+        PixelKind::Roughness,
+        PixelKind::DiffuseAlbedo,
+        PixelKind::SpecularAlbedo,
+        PixelKind::Id,
+    ];
     settings.aovs = 127;
     settings.aov_samples = 4;
+    render.set_settings(settings.clone()).unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let legacy: Vec<_> = legacy_kinds
+        .iter()
+        .map(|kind| render.read_pixels(*kind).unwrap())
+        .collect();
+    settings.aovs = 127 | 512 | 1024 | 2048;
     render.set_settings(settings).unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
     assert_eq!(before, render.read_pixels(PixelKind::Hdr).unwrap());
+    for (kind, expected) in [PixelKind::Normal, PixelKind::Albedo]
+        .into_iter()
+        .zip(guides)
+    {
+        assert_eq!(render.read_pixels(kind).unwrap(), expected, "{kind:?}");
+    }
+    for (kind, expected) in legacy_kinds.into_iter().zip(legacy) {
+        assert_eq!(render.read_pixels(kind).unwrap(), expected, "{kind:?}");
+    }
     let depth = render.read_pixels(PixelKind::Depth).unwrap();
     assert!(depth.data.iter().all(|v| v.is_finite()));
     assert!(depth.data.chunks_exact(4).any(|v| v[0] > 0. && v[3] > 0.));
     let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let normals = render.read_pixels(PixelKind::CenterNormal).unwrap().data;
+    let center_depth = render.read_pixels(PixelKind::CenterDepth).unwrap().data;
+    let positions = render.read_pixels(PixelKind::CenterPosition).unwrap().data;
+    assert!(
+        normals
+            .iter()
+            .chain(&center_depth)
+            .chain(&positions)
+            .all(|v| v.is_finite())
+    );
+    for ((id, normal), (depth, position)) in ids
+        .chunks_exact(4)
+        .zip(normals.chunks_exact(4))
+        .zip(center_depth.chunks_exact(4).zip(positions.chunks_exact(4)))
+    {
+        let hit = id[0] != u32::MAX;
+        assert_eq!(normal[3] == 1., hit);
+        assert_eq!(depth[3] == 1., hit);
+        assert_eq!(position[3] == 1., hit);
+        if hit {
+            assert!(depth[0] >= 0.);
+        } else {
+            assert_eq!(normal, [0., 0., 0., 0.]);
+            assert_eq!(depth, [0., 0., 0., 0.]);
+            assert_eq!(position, [0., 0., 0., 0.]);
+        }
+    }
     assert!(ids.chunks_exact(4).any(|v| v[0] == 102 && v[2] == 203));
     assert!(ids.chunks_exact(4).all(|v| v[0] == u32::MAX || v[3] < 2));
     assert!(ids.chunks_exact(4).any(|v| v[0] == 101 && v[2] == 202));
     assert!(
         ids.chunks_exact(4)
             .all(|v| v[0] == u32::MAX || [101, 102].contains(&v[0]))
-    );
-    assert!(
-        render
-            .read_pixels(PixelKind::Motion)
-            .unwrap()
-            .data
-            .iter()
-            .all(|v| *v == 0.)
     );
     for kind in [PixelKind::DiffuseAlbedo, PixelKind::SpecularAlbedo] {
         let values = render.read_pixels(kind).unwrap().data;
@@ -230,6 +293,16 @@ fn independent_surface_aovs(backend: Backend) {
         }
     }
     assert!(count > 40);
+    let mut settings = render.settings().unwrap();
+    for aovs in [127, 127 | 512 | 1024 | 2048] {
+        settings.aovs = aovs;
+        render.set_settings(settings.clone()).unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        let retained = render.read_pixels(PixelKind::Motion).unwrap().data;
+        let valid: Vec<_> = retained.chunks_exact(4).filter(|p| p[3] == 3.).collect();
+        assert!(valid.len() > 40, "motion history was lost for {aovs:#x}");
+        assert!(valid.iter().all(|p| p[0].abs() < 1e-5 && p[1].abs() < 1e-5));
+    }
     descriptor[194 * 4..195 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
     engine.set_scene(&descriptor).unwrap();
     engine.update().unwrap();
@@ -646,7 +719,7 @@ fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
         &engine,
         RenderSettings {
             seed: 0,
-            aovs: 127,
+            aovs: 127 | 512 | 1024 | 2048,
             aov_samples: 4,
             max_samples: 4,
             bounces: 1,
@@ -657,6 +730,9 @@ fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
     render.converge(ConvergeOptions::new(4)).unwrap();
     for kind in [
         PixelKind::Id,
+        PixelKind::CenterNormal,
+        PixelKind::CenterDepth,
+        PixelKind::CenterPosition,
         PixelKind::Depth,
         PixelKind::Position,
         PixelKind::DiffuseAlbedo,
@@ -1197,6 +1273,9 @@ fn display_only_aovs_preserve_beauty_and_filter_and_export_without_beauty() {
         Channel::SpecularAlbedo,
         Channel::Id,
         Channel::Motion,
+        Channel::CenterNormal,
+        Channel::CenterDepth,
+        Channel::CenterPosition,
     ] {
         let kind = channel.aov_kind().unwrap();
         let mut settings = render.settings().unwrap();
@@ -1472,6 +1551,7 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
                 size: query.size(),
                 display: false,
                 compact: false,
+                primary: false,
             };
             let mut output = crate::aov::Output::new(&query, 1, &words, None, layout).unwrap();
             output.render(&query, 4, 1).unwrap();

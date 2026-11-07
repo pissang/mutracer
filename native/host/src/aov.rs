@@ -6,9 +6,9 @@ use wgpu::util::DeviceExt;
 pub(crate) type PipelineCache = Arc<Mutex<PipelineState>>;
 pub(crate) struct PipelineState {
     source: Arc<str>,
-    default: Option<Arc<Pipelines>>,
+    default: [Option<Arc<Pipelines>>; 2],
     /// Display-resolution variants, indexed by compact storage.
-    display: [DisplayPipelines; 2],
+    display: [DisplayPipelines; 4],
     display_shader: Arc<std::sync::OnceLock<std::result::Result<wgpu::ShaderModule, String>>>,
 }
 /// Display-resolution pipelines compile a second copy of the path tracer, which
@@ -22,8 +22,8 @@ enum DisplayPipelines {
 pub(crate) fn pipeline_cache(source: &str) -> PipelineCache {
     Arc::new(Mutex::new(PipelineState {
         source: source.into(),
-        default: None,
-        display: [DisplayPipelines::Idle, DisplayPipelines::Idle],
+        default: [None, None],
+        display: std::array::from_fn(|_| DisplayPipelines::Idle),
         display_shader: Default::default(),
     }))
 }
@@ -133,6 +133,7 @@ pub(crate) struct Layout {
     pub display: bool,
     /// 24 B/px storage without center outputs; display only.
     pub compact: bool,
+    pub primary: bool,
 }
 pub(crate) struct Query {
     pipelines: PipelineCache,
@@ -185,20 +186,25 @@ impl Query {
     pub(crate) fn pipelines(&self, layout: Layout) -> Result<Option<Arc<Pipelines>>> {
         let mut cached = self.pipelines.lock().unwrap_or_else(|e| e.into_inner());
         if !layout.display {
-            if let Some(pipelines) = &cached.default {
+            let index = usize::from(layout.primary);
+            if let Some(pipelines) = &cached.default[index] {
                 return Ok(Some(pipelines.clone()));
             }
             let pipelines = Arc::new(create_pipelines(
                 &self.gpu,
                 &self.layouts,
                 &self.shader,
-                &[("DEPTH_QUERY_MODE", 1.)],
+                &[
+                    ("DEPTH_QUERY_MODE", 1.),
+                    ("AOV_PRIMARY", f64::from(u8::from(layout.primary))),
+                ],
             )?);
-            cached.default = Some(pipelines.clone());
+            cached.default[index] = Some(pipelines.clone());
             return Ok(Some(pipelines));
         }
         let (source, shader) = (cached.source.clone(), cached.display_shader.clone());
-        let slot = &mut cached.display[usize::from(layout.compact)];
+        let slot_index = usize::from(layout.compact) + usize::from(layout.primary) * 2;
+        let slot = &mut cached.display[slot_index];
         if let DisplayPipelines::Compiling(receive) = slot {
             *slot = match receive.try_recv() {
                 Ok(Ok(pipelines)) => DisplayPipelines::Ready(pipelines),
@@ -215,7 +221,12 @@ impl Query {
             _ => {}
         }
         let (send, receive) = std::sync::mpsc::channel();
-        let (gpu, layouts, compact) = (self.gpu.clone(), self.layouts.clone(), layout.compact);
+        let (gpu, layouts, compact, primary) = (
+            self.gpu.clone(),
+            self.layouts.clone(),
+            layout.compact,
+            layout.primary,
+        );
         std::thread::Builder::new()
             .name("MuTracer display AOVs".into())
             .spawn(move || {
@@ -247,6 +258,7 @@ impl Query {
                                 ("DEPTH_QUERY_MODE", 1.),
                                 ("AOV_DISPLAY", 1.),
                                 ("AOV_COMPACT", f64::from(u8::from(compact))),
+                                ("AOV_PRIMARY", f64::from(u8::from(primary))),
                             ],
                         )
                         .map(Arc::new)
@@ -309,8 +321,19 @@ impl Output {
         let pipelines = query
             .pipelines(layout)?
             .ok_or("Display AOV pipelines are not ready")?;
-        let previous = previous.filter(|p| p.layout == layout && !layout.compact);
-        let center_bytes = if layout.compact { 32 } else { pixels * 32 };
+        // The optional primary-surface tail changes the buffer length, but the
+        // first 32 bytes per pixel still hold the compatible ID/motion history.
+        let previous = previous.filter(|p| {
+            p.layout.size == layout.size
+                && p.layout.display == layout.display
+                && p.layout.compact == layout.compact
+                && !layout.compact
+        });
+        let center_bytes = if layout.compact {
+            32
+        } else {
+            pixels * 32 * u64::from(1 + u8::from(layout.primary))
+        };
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -469,7 +492,7 @@ impl Output {
             })
         });
         let mut result = Vec::new();
-        for index in 0..7 {
+        for index in 0..10 {
             if mask & (1 << index) == 0 {
                 continue;
             }
@@ -756,7 +779,7 @@ impl Output {
         Ok((entry.image.clone(), entry.revision))
     }
     pub(crate) fn read(&self, kind: u32) -> Result<api::Image> {
-        if !(4..=10).contains(&kind) {
+        if !(4..=13).contains(&kind) {
             return Err("Unknown AOV kind".into());
         }
         // Use the same GPU resolve as immutable filter snapshots. Repeating the
