@@ -12,7 +12,8 @@ const server = await createServer({root, configFile: false, optimizeDeps: {entri
 await server.listen(); let chrome;
 try {
   chrome = await launchChrome();
-  for (const backend of ['webgpu', 'webgl']) {
+  const backends = (process.env.MUTRACER_LIGHT_BACKENDS ?? 'webgpu,webgl').split(',');
+  for (const backend of backends) {
     const page = await chrome.page(`http://127.0.0.1:${server.httpServer.address().port}/tests/gpu/usdLuxLights.html${backend === 'webgl' ? '?webgl' : ''}`);
     try {
       let ready = false;

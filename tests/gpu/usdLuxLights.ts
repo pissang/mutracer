@@ -53,14 +53,20 @@ function cylinderReference(radius: number, length: number, height: number, radia
 }
 
 async function reference() {
-  const c = await context(1, 1e-4);
+  // A 1x1 WebGL render target does not advance offline samples on ANGLE/Metal.
+  // Four pixels over this tiny footprint are numerically equivalent to the axis point.
+  const c = await context(2, 1e-4);
   try {
+    // WebGL 2 submits this offline pass serially and exceeds the per-pass timeout
+    // at 16k samples. The independent analytic/quadrature result remains the
+    // reference; this only controls Monte Carlo uncertainty around it.
+    const samples = backend === 'webgpu' ? 16384 : 512;
     const floor = receiver(), height = 2, radius = 0.5, length = 1, intensity = 12;
     const rows: Record<string, unknown>[] = [];
     const capture = async (name: string, light: DiskLight | CylinderLight, expected: number) => {
       c.engine.scene = {meshes: [floor], lights: [light], background: [0, 0, 0, 1]};
       c.engine.update(); c.render.restart();
-      await c.render.converge({samples: 16384, sampleSequenceOffset: 37, timeoutMs: 180_000});
+      await c.render.converge({samples, sampleSequenceOffset: 37, timeoutMs: 300_000});
       const actual = meanRgb((await c.render.readPixels('hdr')).data);
       rows.push({name, expected, actual, relativeError: Math.abs(actual - expected) / Math.max(Math.abs(expected), 1e-12)});
     };
@@ -77,7 +83,7 @@ async function reference() {
       await capture(`cylinder-${normalize ? 'normalized' : 'radiance'}`, cylinder,
         cylinderReference(radius, length, height, radiance) / Math.PI);
     }
-    return {backend, rows};
+    return {backend, samples, rows};
   } finally { c.dispose(); }
 }
 
@@ -85,6 +91,10 @@ async function matrix() {
   const c = await context(16, 1.5);
   try {
     const floor = receiver(), totalIntensity = 64;
+    const warmupSamples = backend === 'webgpu' ? 32 : 8;
+    const timingSamples = backend === 'webgpu' ? 128 : 16;
+    const timingRepeats = backend === 'webgpu' ? 5 : 3;
+    const noiseSamples = backend === 'webgpu' ? 32 : 8;
     const rows = [];
     for (const count of [64, 256, 1024]) {
       const lights = Array.from({length: count}, () => {
@@ -92,25 +102,27 @@ async function matrix() {
         light.position = [0, 2, 0]; light.lookAt([0, 0, 0]); return light;
       });
       c.engine.scene = {meshes: [floor], lights, background: [0, 0, 0, 1]}; c.engine.update();
-      c.render.restart(); await c.render.converge({samples: 32, sampleSequenceOffset: 9000, timeoutMs: 180_000});
+      c.render.restart(); await c.render.converge({samples: warmupSamples, sampleSequenceOffset: 9000, timeoutMs: 180_000});
       const timings = [];
-      for (let repeat = 0; repeat < 5; repeat++) {
+      for (let repeat = 0; repeat < timingRepeats; repeat++) {
         c.render.restart(); const start = performance.now();
-        await c.render.converge({samples: 128, sampleSequenceOffset: 10000 + repeat * 128, timeoutMs: 180_000});
+        await c.render.converge({samples: timingSamples, sampleSequenceOffset: 10000 + repeat * timingSamples, timeoutMs: 180_000});
         timings.push(performance.now() - start);
       }
-      c.render.restart(); await c.render.converge({samples: 4096, sampleSequenceOffset: 20000, timeoutMs: 180_000});
+      const referenceSamples = backend === 'webgpu' ? 4096 : 128;
+      c.render.restart(); await c.render.converge({samples: referenceSamples, sampleSequenceOffset: 20000, timeoutMs: 180_000});
       const referencePixels = (await c.render.readPixels('hdr')).data;
       const seeds = [];
       for (let seed = 0; seed < 6; seed++) {
-        c.render.restart(); await c.render.converge({samples: 32, sampleSequenceOffset: seed * 32, timeoutMs: 180_000});
+        c.render.restart(); await c.render.converge({samples: noiseSamples, sampleSequenceOffset: seed * noiseSamples, timeoutMs: 180_000});
         const pixels = (await c.render.readPixels('hdr')).data; let squared = 0, referenceSquared = 0;
         for (let i = 0; i < pixels.length; i++) { const delta = pixels[i] - referencePixels[i]; squared += delta * delta; referenceSquared += referencePixels[i] * referencePixels[i]; }
         seeds.push({seed, mean: meanRgb(pixels), relativeRmsError: Math.sqrt(squared / referenceSquared)});
       }
-      timings.sort((a, b) => a - b); const medianMs = timings[2];
-      rows.push({count, totalIntensity, referenceMean: meanRgb(referencePixels), seeds, timingsMs: timings,
-        medianMs, samplesPerSecond: 128 * 16 * 16 / (medianMs / 1000)});
+      timings.sort((a, b) => a - b); const medianMs = timings[Math.floor(timings.length / 2)];
+      rows.push({count, totalIntensity, referenceSamples, referenceMean: meanRgb(referencePixels), seeds, timingsMs: timings,
+        warmupSamples, timingSamples, noiseSamples, medianMs,
+        samplesPerSecond: timingSamples * 16 * 16 / (medianMs / 1000)});
     }
     return {backend, rows};
   } finally { c.dispose(); }
