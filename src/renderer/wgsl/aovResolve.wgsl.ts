@@ -31,7 +31,7 @@ ${primary ? /* wgsl */ `  else if(kind>=${primaryStart}u){
 }
 `; }
 export const aovResolveCommon = resolveCommon(true);
-// The browser and borrowed-output variants retain their existing AOV index map.
+// The browser variants retain their existing AOV index map.
 /** Bit 8 of kind requests top row first. Kept for the native single-output pass. */
 const resolveMain = /* wgsl */ `
 @group(0) @binding(2) var<storage,read_write> output: array<vec4u>;
@@ -48,7 +48,7 @@ export const aovResolveNativeShader = resolveCommon(true, 7) + resolveMain;
 export default resolveCommon(false) + resolveMain;
 
 /** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
-export const aovBorrowDepthShader = resolveCommon(false) + /* wgsl */ `
+const borrowDepthMain = /* wgsl */ `
 @group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
   if(any(id.xy>=parameters.xy)){return;}
@@ -56,6 +56,9 @@ export const aovBorrowDepthShader = resolveCommon(false) + /* wgsl */ `
   let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
   textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
 }`;
+export const aovBorrowDepthShader = resolveCommon(false) + borrowDepthMain;
+/** Native borrowed depth also supports center depth at native AOV index 8. */
+export const aovBorrowDepthNativeShader = resolveCommon(true, 7) + borrowDepthMain;
 /** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
 export const aovBorrowReflectanceShader = resolveCommon(false) + /* wgsl */ `
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {

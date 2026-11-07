@@ -88,8 +88,9 @@ pub struct MetalTimeline {
     engine: Engine,
     event: Arc<Event>,
 }
-/// GPU image to export. Depth requires the render's depth AOV to be enabled and ready.
-#[derive(Clone, Copy, Debug)]
+/// GPU image to export; no default. Each depth kind requires its matching AOV
+/// to be enabled and ready, otherwise export returns `Status::InvalidState`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetalOutput {
     /// Raw linear RGBA, matching `Render::read_pixels(PixelKind::Hdr)`.
     Hdr,
@@ -97,6 +98,42 @@ pub enum MetalOutput {
     Depth,
     /// Composed RGBA8; call `Display::present` first.
     Display,
+    /// Unjittered pinhole center distance, matching `PixelKind::CenterDepth`.
+    /// Uses R32F or RGBA32F (distance,0,0,binary validity), on the ID-selected hit.
+    CenterDepth,
+}
+impl MetalOutput {
+    pub(super) fn from_abi(kind: u32) -> Result<Self> {
+        match kind {
+            0 => Ok(Self::Hdr),
+            1 => Ok(Self::Depth),
+            2 => Ok(Self::Display),
+            3 => Ok(Self::CenterDepth),
+            _ => Err(invalid("Unknown GPU output kind")),
+        }
+    }
+    fn validate_destination(
+        self,
+        format: wgpu::TextureFormat,
+        source: wgpu::Extent3d,
+        destination: wgpu::Extent3d,
+    ) -> Result<()> {
+        let valid = match self {
+            Self::Hdr => matches!(
+                format,
+                wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rgba16Float
+            ),
+            Self::Depth | Self::CenterDepth => matches!(
+                format,
+                wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rgba32Float
+            ),
+            Self::Display => format == wgpu::TextureFormat::Rgba8Unorm,
+        };
+        if !valid || source != destination {
+            return Err(invalid("Export format or dimensions do not match source"));
+        }
+        Ok(())
+    }
 }
 /// Output row order. Default top first matches `Render::read_pixels`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -111,7 +148,7 @@ pub enum MetalRowOrder {
 pub struct MetalExportImage<'a> {
     /// Destination import, on the render's engine; no default.
     pub image: &'a MetalImage,
-    /// HDR, enabled depth or composed display; no default.
+    /// HDR, enabled averaged/center depth or composed display; no default.
     pub kind: MetalOutput,
     /// Top first by convention; set BottomFirst for GL-style consumers.
     pub rows: MetalRowOrder,
@@ -426,9 +463,11 @@ impl State {
 }
 impl Render {
     /// Exports 1..=8 images on the GPU without waiting for another sample. Uses the
-    /// latest published HDR/display and ready depth AOV; does not change refinement.
+    /// latest published HDR/display and ready averaged/center depth AOV; does not
+    /// change refinement. Disabled or unready AOVs return `Status::InvalidState`.
     /// Exact source size is required. HDR: RGBA32F/16F; depth: R32F or RGBA32F
-    /// (distance,0,0,coverage); display: RGBA8Unorm after composition.
+    /// (distance,0,0,coverage), with binary validity for center depth; display:
+    /// RGBA8Unorm after composition.
     ///
     /// Optional ready and required done are GPU waits/signals. Done must increase
     /// beyond the event's observed and previously accepted value (not UINT64_MAX).
@@ -483,26 +522,19 @@ impl Render {
                     self.get_aov_texture(PixelKind::Depth)?
                         .ok_or_else(|| error(Status::InvalidState, "No completed depth image"))?,
                 ),
+                MetalOutput::CenterDepth => {
+                    Source::Texture(self.get_aov_texture(PixelKind::CenterDepth)?.ok_or_else(
+                        || error(Status::InvalidState, "No completed center depth image"),
+                    )?)
+                }
                 MetalOutput::Display => Source::Texture(
                     self.get_output_texture(OutputKind::Display)?
                         .ok_or_else(|| error(Status::InvalidState, "No composed display image"))?,
                 ),
             };
             let format = item.image.texture.format();
-            let valid = match item.kind {
-                MetalOutput::Hdr => matches!(
-                    format,
-                    wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rgba16Float
-                ),
-                MetalOutput::Depth => matches!(
-                    format,
-                    wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rgba32Float
-                ),
-                MetalOutput::Display => format == wgpu::TextureFormat::Rgba8Unorm,
-            };
-            if !valid || source.size() != item.image.texture.size() {
-                return Err(invalid("Export format or dimensions do not match source"));
-            }
+            item.kind
+                .validate_destination(format, source.size(), item.image.texture.size())?;
             sources.push(source);
         }
         engine.poll_device();
@@ -536,7 +568,7 @@ impl Render {
             for (pair, (item, source)) in images.iter().zip(&sources).enumerate() {
                 let kind = match item.kind {
                     MetalOutput::Hdr => 0,
-                    MetalOutput::Depth => 1,
+                    MetalOutput::Depth | MetalOutput::CenterDepth => 1,
                     MetalOutput::Display => 2,
                 };
                 let flip = matches!(item.rows, MetalRowOrder::BottomFirst);

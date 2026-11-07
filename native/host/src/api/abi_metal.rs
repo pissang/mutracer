@@ -216,12 +216,7 @@ unsafe extern "C" fn mt_render_export_gpu(
                     _ => Err(invalid_handle()),
                 })?);
                 kinds.push((
-                    match item.kind {
-                        0 => MetalOutput::Hdr,
-                        1 => MetalOutput::Depth,
-                        2 => MetalOutput::Display,
-                        _ => return Err(invalid("Unknown GPU output kind")),
-                    },
+                    MetalOutput::from_abi(item.kind)?,
                     match item.row_order {
                         0 => MetalRowOrder::TopFirst,
                         1 => MetalRowOrder::BottomFirst,

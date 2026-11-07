@@ -10,7 +10,8 @@ extern "C" {
  */
 typedef uint64_t mt_gpu_image;
 typedef uint64_t mt_gpu_timeline;
-enum { MT_GPU_OUTPUT_HDR = 0, MT_GPU_OUTPUT_DEPTH = 1, MT_GPU_OUTPUT_DISPLAY = 2 };
+enum { MT_GPU_OUTPUT_HDR = 0, MT_GPU_OUTPUT_DEPTH = 1, MT_GPU_OUTPUT_DISPLAY = 2,
+  MT_GPU_OUTPUT_CENTER_DEPTH = 3 };
 enum { MT_GPU_TOP_FIRST = 0, MT_GPU_BOTTOM_FIRST = 1 };
 typedef struct mt_gpu_export_image {
   uint32_t struct_size;
@@ -32,9 +33,13 @@ typedef struct mt_gpu_export_desc {
 } mt_gpu_export_desc;
 /* Export latest published images without CPU pixel transfer or waiting for a new
  * sample. HDR is linear raw RGBA; depth is camera-forward scene-unit distance
- * (not clip depth); display requires mt_display_present first. Exact dimensions
+ * (not clip depth). CENTER_DEPTH matches MT_IMAGE_CENTER_DEPTH: the unjittered
+ * pinhole center hit shared with IDs, with binary validity instead of averaged
+ * coverage. Display requires mt_display_present first. Exact dimensions
  * are required; formats/usage are specified by the platform import declaration.
- * Depth AOV must be enabled and ready. Refinement/sample counts are unchanged.
+ * DEPTH requires MT_AOV_DEPTH; CENTER_DEPTH requires MT_AOV_CENTER_DEPTH.
+ * A disabled or not-yet-ready source returns MT_ERROR_INVALID_STATE.
+ * Refinement/sample counts are unchanged.
  *
  * All validation and encoding finish before acceptance. *sequence is initially
  * set to 0; rejected calls touch no external wait/signal. MT_OK gives a nonzero

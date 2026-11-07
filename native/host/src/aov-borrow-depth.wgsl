@@ -21,6 +21,13 @@ fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
   if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,motion.w);}
+  else if(kind>=7u){
+    let primary=center[source+parameters.x*parameters.y];
+    let normalDepth=bitcast<vec4f>(primary.identity);
+    if(kind==7u){value=vec4f(normalDepth.xyz,primary.motion.w);}
+    else if(kind==8u){value=vec4f(normalDepth.w,0.0,0.0,primary.motion.w);}
+    else{value=primary.motion;}
+  }
   else{
     let pixel=loadAov(source);let hits=pixel.position.w;
     let scale=select(0.0,1.0/max(hits,1.0),hits>0.0);let coverage=hits/f32(max(parameters.z,1u));

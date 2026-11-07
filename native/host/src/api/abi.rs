@@ -2490,6 +2490,7 @@ mod tests {
         let headers = [
             include_str!("../../../include/mutracer-engine.h"),
             include_str!("../../../include/mutracer-status.h"),
+            include_str!("../../../include/mutracer-gpu.h"),
         ];
         let pattern = format!("{name} = ");
         let text = headers
@@ -2714,6 +2715,10 @@ mod tests {
                 "{name}"
             );
         }
+        assert_eq!(value("MT_GPU_OUTPUT_HDR"), 0);
+        assert_eq!(value("MT_GPU_OUTPUT_DEPTH"), 1);
+        assert_eq!(value("MT_GPU_OUTPUT_DISPLAY"), 2);
+        assert_eq!(value("MT_GPU_OUTPUT_CENTER_DEPTH"), 3);
         assert_eq!(value("MT_IMAGE_DENOISED"), 3);
         assert_eq!(value("MT_IMAGE_CENTER_NORMAL"), 11);
         assert_eq!(value("MT_IMAGE_CENTER_DEPTH"), 12);

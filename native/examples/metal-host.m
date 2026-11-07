@@ -12,6 +12,8 @@
 #include <time.h>
 #define REQUIRE(x) do { if (!(x)) { fprintf(stderr,"Failed: %s (%s:%d)\n",#x,__FILE__,__LINE__); exit(1); } } while(0)
 #define CHECK(x) do { mt_status call_status=(x); if(call_status!=MT_OK){fprintf(stderr,"%s: %d %s\n",#x,call_status,error);exit(1);} } while(0)
+_Static_assert(MT_GPU_OUTPUT_HDR==0 && MT_GPU_OUTPUT_DEPTH==1 &&
+  MT_GPU_OUTPUT_DISPLAY==2 && MT_GPU_OUTPUT_CENTER_DEPTH==3, "GPU kind ABI");
 static char error[4096];
 static void log_message(void *user,const uint8_t *message,size_t length) {
   (void)user;
@@ -87,6 +89,7 @@ static mt_render_snapshot info(mt_render render) {
   mt_render_snapshot s={0};s.struct_size=sizeof s;CHECK(mt_render_info(render,&s,error,sizeof error));return s;
 }
 int main(int argc,char **argv) { @autoreleasepool {
+  REQUIRE(mt_abi_version()==MT_ABI_VERSION && MT_ABI_VERSION==11);
   unsigned backend=argc>1?(unsigned)atoi(argv[1]):0;BOOL gpu_timing=argc>2&&!strcmp(argv[2],"--gpu-timing");BOOL bench=gpu_timing||(argc>2&&!strcmp(argv[2],"--bench"));BOOL shared=argc>2&&!strcmp(argv[2],"--shared");
   if(bench)CHECK(mt_set_log_callback(log_message,NULL));
   id<MTLDevice> device=MTLCreateSystemDefaultDevice();REQUIRE(device);id<MTLCommandQueue> host=[device newCommandQueueWithMaxCommandBufferCount:4096];id<MTLCommandQueue> producer=[device newCommandQueue];REQUIRE(host&&producer);
@@ -128,7 +131,49 @@ int main(int argc,char **argv) { @autoreleasepool {
   for(size_t j=0;j<rgba_size;j++)rgba_reference[j]=rgba[j];
   id<MTLTexture> display_texture=texture(device,MTLPixelFormatRGBA8Unorm,width,height);mt_gpu_image display_image=import_image(engine,display_texture);
   mt_gpu_export_image display_export={sizeof display_export,MT_GPU_OUTPUT_DISPLAY,NULL,display_image,0,0};
-  sequence=submit(render,&display_export,1,0,0,di,++dv);check_gpu(device,host,pipeline,display_texture,rgba_reference,4,0,done,dv,nil,0);wait_exports(engine,sequence);free(rgba);free(rgba_reference);CHECK(mt_gpu_image_destroy(display_image,error,sizeof error));
+  sequence=submit(render,&display_export,1,0,0,di,++dv);check_gpu(device,host,pipeline,display_texture,rgba_reference,4,0,done,dv,nil,0);wait_exports(engine,sequence);
+  /* Center depth is opt-in. Rejection must leave sequence and sync untouched. */
+  mt_gpu_export_image center_export={sizeof center_export,MT_GPU_OUTPUT_CENTER_DEPTH,NULL,zi,0,0};
+  mt_gpu_export_desc center_desc={sizeof center_desc,1,NULL,&center_export,0,0,di,dv+1};
+  uint64_t center_rejected=999;
+  REQUIRE(mt_render_export_gpu(render,&center_desc,&center_rejected,error,sizeof error)==MT_ERROR_INVALID_STATE && center_rejected==0);
+  REQUIRE(done.signaledValue==dv);
+  float *old_hdr=readback(render,MT_IMAGE_HDR,(size_t)width*height*16);
+  float *old_depth=readback(render,MT_IMAGE_DEPTH,(size_t)width*height*16);
+  ro.aovs|=MT_AOV_CENTER_DEPTH;CHECK(mt_render_set_options(render,&ro,error,sizeof error));converge(render,7);
+  float *new_hdr=readback(render,MT_IMAGE_HDR,(size_t)width*height*16);
+  float *new_depth=readback(render,MT_IMAGE_DEPTH,(size_t)width*height*16);
+  REQUIRE(!memcmp(old_hdr,new_hdr,(size_t)width*height*16));REQUIRE(!memcmp(old_depth,new_depth,(size_t)width*height*16));
+  sequence=submit(render,images,2,0,0,di,++dv);
+  check_gpu(device,host,pipeline,hdr,old_hdr,0,0,done,dv,nil,0);check_gpu(device,host,pipeline,depth,old_depth,1,0,done,dv,nil,0);wait_exports(engine,sequence);
+  CHECK(mt_display_present(display,render,NULL,NULL,error,sizeof error));
+  sequence=submit(render,&display_export,1,0,0,di,++dv);check_gpu(device,host,pipeline,display_texture,rgba_reference,4,0,done,dv,nil,0);wait_exports(engine,sequence);
+  free(old_hdr);free(old_depth);free(new_hdr);free(new_depth);free(rgba);free(rgba_reference);CHECK(mt_gpu_image_destroy(display_image,error,sizeof error));
+  float *center_reference=readback(render,MT_IMAGE_CENTER_DEPTH,(size_t)width*height*16);
+  unsigned hits=0,misses=0,different=0;
+  float *averaged=readback(render,MT_IMAGE_DEPTH,(size_t)width*height*16);
+  for(size_t i=0;i<(size_t)width*height;i++) {
+    REQUIRE(center_reference[i*4+3]==0 || center_reference[i*4+3]==1);
+    if(center_reference[i*4+3])hits++;else misses++;
+    different+=memcmp(center_reference+i*4,averaged+i*4,16)!=0;
+  }
+  REQUIRE(hits && misses && different);free(averaged);
+  for(unsigned r32=0;r32<2;r32++)for(unsigned flip=0;flip<2;flip++) {
+    id<MTLTexture> t=texture(device,r32?MTLPixelFormatR32Float:MTLPixelFormatRGBA32Float,width,height);
+    mt_gpu_image ti=import_image(engine,t);center_export.image=ti;center_export.row_order=flip;
+    sequence=submit(render,&center_export,1,0,0,di,++dv);
+    check_gpu(device,host,pipeline,t,center_reference,r32?2:1,flip,done,dv,nil,0);wait_exports(engine,sequence);CHECK(mt_gpu_image_destroy(ti,error,sizeof error));
+  }
+  free(center_reference);
+  /* Imported supported formats/sizes can still be wrong for this output kind. */
+  for(unsigned wrong_size=0;wrong_size<2;wrong_size++) {
+    id<MTLTexture> t=texture(device,wrong_size?MTLPixelFormatRGBA32Float:MTLPixelFormatRGBA16Float,wrong_size?width+1:width,height);
+    mt_gpu_image ti=import_image(engine,t);center_export.image=ti;center_desc.done_value=dv+1;
+    center_rejected=999;
+    REQUIRE(mt_render_export_gpu(render,&center_desc,&center_rejected,error,sizeof error)==MT_ERROR_INVALID_ARGUMENT && center_rejected==0);
+    REQUIRE(done.signaledValue==dv);CHECK(mt_gpu_image_destroy(ti,error,sizeof error));
+  }
+  printf("PASS center depth: %u hits, %u misses, %u different from averaged; both formats/rows, opt-in/format/size rejection; old HDR/depth/display unchanged\n",hits,misses,different);
   /* Opaque flat background adds coverage restoration to the CPU HDR contract. */
   mt_scene_builder flat=scene(width,height,1);CHECK(mt_engine_set_scene(engine,mt_scene_builder_bytes(&flat),flat.used*sizeof(uint32_t),error,sizeof error));mt_scene_builder_free(&flat);CHECK(mt_engine_update(engine,NULL,error,sizeof error));converge(render,7);
   float *flat_reference=readback(render,MT_IMAGE_HDR,(size_t)width*height*16);sequence=submit(render,images,2,0,0,di,++dv);check_gpu(device,host,pipeline,hdr,flat_reference,0,0,done,dv,nil,0);wait_exports(engine,sequence);free(flat_reference);

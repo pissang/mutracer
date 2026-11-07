@@ -3302,12 +3302,13 @@ impl Render {
     }
     /// Borrows a raw linear AOV texture at the AOV resolution, top row first:
     /// [`PixelKind::Depth`] as Rg32Float (depth, hit coverage),
+    /// [`PixelKind::CenterDepth`] as Rg32Float (center distance, binary validity),
     /// [`PixelKind::DiffuseAlbedo`] and [`PixelKind::SpecularAlbedo`] as
     /// Rgba8UnormSrgb (sampling returns linear [0,1] reflectance, alpha is valid
     /// coverage). `None` until the enabled kind has a sample of the current
     /// inputs. Other kinds are InvalidArgument. Each borrowed kind keeps its own
-    /// texture: 8 bytes per AOV pixel for depth, 4 for reflectance. Borrowing
-    /// follows [`Render::get_output_texture`]'s lifetime rules.
+    /// texture: 8 bytes per AOV pixel for either depth kind, 4 for reflectance.
+    /// Borrowing follows [`Render::get_output_texture`]'s lifetime rules.
     pub fn get_aov_texture(&self, kind: PixelKind) -> Result<Option<wgpu::Texture>> {
         Ok(self.aov_texture(kind)?.map(|(texture, _)| texture))
     }
@@ -3316,12 +3317,13 @@ impl Render {
     pub(crate) fn aov_texture(&self, kind: PixelKind) -> Result<Option<(wgpu::Texture, u64)>> {
         let index = match kind {
             PixelKind::Depth => 0,
+            PixelKind::CenterDepth => 8,
             PixelKind::DiffuseAlbedo => 3,
             PixelKind::SpecularAlbedo => 4,
             _ => {
                 return Err(error(
                     Status::InvalidArgument,
-                    "Only depth and reflectance AOV textures can be borrowed",
+                    "Only averaged/center depth and reflectance AOV textures can be borrowed",
                 ));
             }
         };

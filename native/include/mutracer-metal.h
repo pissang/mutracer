@@ -45,7 +45,8 @@ mt_status mt_engine_create_metal(const mt_metal_device_desc *desc,
  * storage. No memoryless/managed textures. Host may add ShaderRead for consumption.
  * HDR: MTLPixelFormatRGBA32Float matches MT_IMAGE_HDR exactly; RGBA16Float uses
  * nearest-even float-to-half rounding, including overflow. Depth: R32Float
- * (distance) or RGBA32Float (distance,0,0,coverage).
+ * (distance) or RGBA32Float (distance,0,0,coverage). CENTER_DEPTH uses the same
+ * formats, with center-hit validity in place of coverage.
  * Display: RGBA8Unorm. No conversion of color space, scaling or clip-depth mapping.
  * Exact source dimensions checked on each export, including after render resize.
  * Imported rows default top first; use MT_GPU_BOTTOM_FIRST for a GL-style consumer.

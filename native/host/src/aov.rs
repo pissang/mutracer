@@ -628,15 +628,15 @@ impl Output {
         self.gpu.queue.submit([encoder.finish()]);
         Ok(texture.clone())
     }
-    /// Raw linear depth (Rg32Float: depth, hit coverage) or reflectance
-    /// (Rgba8UnormSrgb, coverage in alpha) for AOV index 0, 3 or 4, top row
+    /// Raw linear depth (Rg32Float: depth, coverage/center validity) or reflectance
+    /// (Rgba8UnormSrgb, coverage in alpha) for AOV index 0, 3, 4 or 8, top row
     /// first, and a revision that changes whenever its contents are resolved.
     pub(crate) fn texture(&mut self, index: u32) -> Result<(wgpu::Texture, u64)> {
-        if self.samples == 0 || ![0, 3, 4].contains(&index) {
+        if self.samples == 0 || ![0, 3, 4, 8].contains(&index) {
             return Err("AOV texture is not available".into());
         }
         let device = &self.gpu.device;
-        let depth = index == 0;
+        let depth = index == 0 || index == 8;
         let constants = self.constants();
         let (compute, render) = self.borrow_pipelines.entry(depth).or_insert_with(|| {
             let options = wgpu::PipelineCompilationOptions {

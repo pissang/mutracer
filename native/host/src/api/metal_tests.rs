@@ -3,6 +3,61 @@ use super::*;
 mod shader_tests {
     use super::*;
     #[test]
+    fn output_kinds_and_center_destination_contract() {
+        for (kind, expected) in [
+            MetalOutput::Hdr,
+            MetalOutput::Depth,
+            MetalOutput::Display,
+            MetalOutput::CenterDepth,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(MetalOutput::from_abi(kind as u32).unwrap(), expected);
+        }
+        assert_eq!(
+            MetalOutput::from_abi(4).unwrap_err().status,
+            Status::InvalidArgument
+        );
+        let size = wgpu::Extent3d {
+            width: 96,
+            height: 64,
+            depth_or_array_layers: 1,
+        };
+        for format in [
+            wgpu::TextureFormat::R32Float,
+            wgpu::TextureFormat::Rgba32Float,
+        ] {
+            MetalOutput::CenterDepth
+                .validate_destination(format, size, size)
+                .unwrap();
+            for wrong in [
+                wgpu::Extent3d { width: 95, ..size },
+                wgpu::Extent3d { height: 63, ..size },
+            ] {
+                assert_eq!(
+                    MetalOutput::CenterDepth
+                        .validate_destination(format, size, wrong)
+                        .unwrap_err()
+                        .status,
+                    Status::InvalidArgument
+                );
+            }
+        }
+        for format in [
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ] {
+            assert_eq!(
+                MetalOutput::CenterDepth
+                    .validate_destination(format, size, size)
+                    .unwrap_err()
+                    .status,
+                Status::InvalidArgument
+            );
+        }
+    }
+    #[test]
     fn every_export_shader_validates() {
         for (format, kind) in [
             (wgpu::TextureFormat::Rgba32Float, 0),
