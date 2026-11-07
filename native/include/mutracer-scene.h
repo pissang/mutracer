@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
-/* Raw scene descriptor v5 records (historical _v4 C type names). The format,
+/* Raw scene descriptor v6 records (historical _v4 C type names). The format,
  * validation rules and limits are in native/docs/scene-format.md.
  * mt_context_commit (mutracer-context.h) consumes the descriptor. Every record is a run of little-endian 32-bit words:
  * uint32_t fields, float fields as IEEE binary32. Offsets are word offsets from
@@ -21,7 +21,7 @@
 #define MT_NO_TEXTURE UINT32_MAX /* Material texture slots and extension textures. */
 #define MT_BATCH_ORDINARY_MESH UINT32_MAX /* mt_batch_v4.count for a non-instanced mesh. */
 enum { MT_LIGHT_TYPE_RECT = 0, MT_LIGHT_TYPE_SPHERE = 1, MT_LIGHT_TYPE_DIRECTIONAL = 2,
-  MT_LIGHT_TYPE_SPOT = 3 };
+  MT_LIGHT_TYPE_SPOT = 3, MT_LIGHT_TYPE_DISK = 4, MT_LIGHT_TYPE_CYLINDER = 5 };
 enum { MT_TEXTURE_STORAGE_RGBA8_SRGB = 0, MT_TEXTURE_STORAGE_RGBA32F = 1 };
 enum { MT_TEXTURE_WRAP_REPEAT = 0, MT_TEXTURE_WRAP_CLAMP_TO_EDGE = 1, MT_TEXTURE_WRAP_MIRRORED_REPEAT = 2 };
 enum { MT_CAMERA_PROJECTION_PERSPECTIVE = 0, MT_CAMERA_PROJECTION_ORTHOGRAPHIC = 1 };
@@ -101,6 +101,10 @@ typedef struct mt_light_v4 {
   uint32_t ies_offset, ies_bytes; /* Spot lights only; LM-63 text, byte length. */
   uint32_t reserved;
   float world_matrix[16];
+  float radius; /* Disk/cylinder radius; zero for v5-compatible light types. */
+  float length; /* Cylinder length; zero for other light types. */
+  uint32_t normalize; /* Disk/cylinder area normalization, 0 or 1. */
+  uint32_t treat_as_line; /* Cylinder hint, 0 or 1; ignored by MuTracer. */
 } mt_light_v4;
 
 typedef struct mt_camera_v4 {

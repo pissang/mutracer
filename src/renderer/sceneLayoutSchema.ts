@@ -13,7 +13,7 @@ function record(fields: Field[]): Record<string, number> {
 // One source for native wire records, resource identities and shared WebGPU
 // bindings. Descriptor offsets are u32 words; uniform offsets are bytes.
 export const WORD_BYTES = 4;
-export const protocolVersions = {SCENE: 5, RESOURCE_PACKET: 1, RESOURCE_WRITES: 3,TARGET_PACKET:4, GEOMETRY_KERNELS: 1};
+export const protocolVersions = {SCENE: 6, RESOURCE_PACKET: 1, RESOURCE_WRITES: 3,TARGET_PACKET:4, GEOMETRY_KERNELS: 1};
 export function sceneRecords() { return {
   HEADER: record([field('VERSION'), field('LENGTH'), field('WIDTH'), field('HEIGHT'),
     field('GEOMETRY_COUNT'), field('MESH_COUNT'), field('MATERIAL_COUNT'), field('LIGHT_COUNT'), field('TEXTURE_COUNT'),
@@ -30,7 +30,8 @@ export function sceneRecords() { return {
   TEXTURE: record([field('WIDTH'), field('HEIGHT'), field('STORAGE'), field('PIXELS'), field('FLIP_Y'), field('UV_CHANNEL'),
     field('UV_SCALE', 2), field('UV_OFFSET', 2), field('WRAP_S'), field('WRAP_T')]),
   LIGHT: record([field('TYPE'), field('COLOR', 3), field('INTENSITY'), field('SIZE'), field('HEIGHT_OR_INNER'),
-    field('SPREAD_OR_OUTER'), field('TEXTURE'), field('IES_OFFSET'), field('IES_BYTES'), field('RESERVED'), field('TRANSFORM', 16)]),
+    field('SPREAD_OR_OUTER'), field('TEXTURE'), field('IES_OFFSET'), field('IES_BYTES'), field('RESERVED'), field('TRANSFORM', 16),
+    field('RADIUS'), field('LENGTH'), field('NORMALIZE'), field('TREAT_AS_LINE')]),
   CAMERA: record([field('PROJECTION'), field('FOV'), field('NEAR'), field('FAR'), field('LEFT'), field('RIGHT'), field('BOTTOM'),
     field('TOP'), field('ZOOM'), field('F_STOP'), field('FOCUS_DISTANCE'), field('SENSOR_HEIGHT'), field('METERS_PER_UNIT'),
     field('RESERVED', 3), field('TRANSFORM', 16)]),

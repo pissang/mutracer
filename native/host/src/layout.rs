@@ -121,7 +121,11 @@ pub mod light {
     pub const IES_BYTES: usize = 10;
     pub const RESERVED: usize = 11;
     pub const TRANSFORM: usize = 12;
-    pub const WORDS: usize = 28;
+    pub const RADIUS: usize = 28;
+    pub const LENGTH: usize = 29;
+    pub const NORMALIZE: usize = 30;
+    pub const TREAT_AS_LINE: usize = 31;
+    pub const WORDS: usize = 32;
 }
 pub mod camera {
     pub const PROJECTION: usize = 0;
@@ -220,7 +224,7 @@ pub mod packet_entry {
     pub const WORDS: usize = 8;
 }
 pub mod version {
-    pub const SCENE: usize = 5;
+    pub const SCENE: usize = 6;
     pub const RESOURCE_PACKET: usize = 1;
     pub const RESOURCE_WRITES: usize = 3;
     pub const TARGET_PACKET: usize = 4;

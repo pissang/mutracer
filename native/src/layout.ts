@@ -121,7 +121,11 @@ export const LIGHT = {
   "IES_BYTES": 10,
   "RESERVED": 11,
   "TRANSFORM": 12,
-  "WORDS": 28
+  "RADIUS": 28,
+  "LENGTH": 29,
+  "NORMALIZE": 30,
+  "TREAT_AS_LINE": 31,
+  "WORDS": 32
 } as const;
 export const CAMERA = {
   "PROJECTION": 0,
@@ -220,7 +224,7 @@ export const PACKET_ENTRY = {
   "WORDS": 8
 } as const;
 export const VERSION = {
-  "SCENE": 5,
+  "SCENE": 6,
   "RESOURCE_PACKET": 1,
   "RESOURCE_WRITES": 3,
   "TARGET_PACKET": 4,
