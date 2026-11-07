@@ -1,9 +1,8 @@
-import InstancedMesh from '../scene/InstancedMesh.js';
 import { getGeometryBvh } from './geometryBvh.js';
 import Geometry from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
-import { materialIsEmissive } from './materialChanges.js';
-import { getBvhBounds, updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH.js';
+import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
+import { selectVisibleInstances } from './scenePreparation.js';
 
 type Prepared = ReturnType<typeof updateMeshInstances>;
 const attributes = ['position', 'normal', 'tangent', 'color', 'uv', 'uv1', 'indices', 'materialIndex'] as const;
@@ -19,7 +18,7 @@ export class MeshMembershipCache {
   private _states = new Map<Geometry, unknown[]>();
   capture(res: Prepared) {
     this._states.clear();
-    for (const binding of res.instanceBindings) if (binding.mesh.geometry === binding.geometry) {
+    for (const binding of res.residentBindings) if (binding.mesh.geometry === binding.geometry) {
       this._states.set(binding.geometry, geometryState(binding.geometry));
     }
   }
@@ -42,7 +41,7 @@ export class MeshMembershipCache {
     // Retired material identities must not remain in the active table.
     const materials: Prepared['materials'] = [];
     const materialIndices = new Map<Prepared['materials'][number], number>();
-    const templates = new Map(res.instanceBindings.map(binding => [binding.geometry, binding]));
+    const templates = new Map(res.residentBindings.map(binding => [binding.geometry, binding]));
     const instanceBindings = meshes.filter(mesh => mesh.geometry.position.array.length > 0).map(mesh => {
       const material = mesh.materials[0];
       let index = materialIndices.get(material);
@@ -54,15 +53,6 @@ export class MeshMembershipCache {
         materialIndices: [index], displacementScale: 0,
         bvhBounds: template?.bvhBounds ?? getBvhBounds(mesh.geometry) };
     });
-    const instances = updateMeshInstanceTransforms(instanceBindings);
-    if (meshes.some(mesh => mesh instanceof InstancedMesh)) return {...res, materials, instances, instanceBindings,
-      emissiveBindings: instanceBindings.filter(binding => materialIsEmissive(materials[binding.materialIndices[0]]))};
-    const ordinary = instances as import('./bvhAccel.js').TLASInstance[];
-    // Match full preparation's exclusion of invalid transforms/bounds.
-    const valid = ordinary.map((instance, i) => instance.bounds.min.every(Number.isFinite) &&
-      instance.bounds.max.every(Number.isFinite) && instance.transform.every(Number.isFinite) ? i : -1).filter(i => i >= 0);
-    const bindings = valid.map(i => instanceBindings[i]);
-    return { ...res, materials, instances: valid.map(i => ordinary[i]), instanceBindings: bindings,
-      emissiveBindings: bindings.filter(binding => materialIsEmissive(materials[binding.materialIndices[0]])) };
+    return selectVisibleInstances({...res, materials, residentBindings: instanceBindings}, meshes);
   }
 }

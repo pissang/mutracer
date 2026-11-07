@@ -18,6 +18,7 @@
 - Texture bindings: `new Engine({textureBinding:'auto'})` tries experimental WebGPU bindless textures with atlas fallback; default `'atlas'`. [Requirements and budget](docs/api.md#texture-bindings).
 - Status: each render exposes `status`, `samples` and `converged`; statuses are preparing, compiling, converging, denoising, finished and error. The first layer leaves frame selection/UI status to the application.
 - Scene: plain `{meshes, lights, background?}`; meshes use world `transform`. `engine.update()` detects assignments, materials and lights; in-place array/pixel edits need `markUpdated()` or dedicated geometry/instance notifications; [updates](docs/updates.md).
+- Hide a mesh with `mesh.visible = false` instead of removing it; it stays resident and toggling only rebuilds instances; [visibility](docs/updates.md#visibility).
 - Conversion hooks: `convertMaterial` / `convertLight` on `FromTHREESceneOptions` and `THREESyncOptions`; undefined uses defaults, null skips; sync caches by source identity/version. [Ownership and light revisions](docs/threejs.md#custom-conversion).
 - Three.js: use `new THREESync(engine, {scene?, camera?, controls?})` with RenderLoop; use GLTFLoader for glTF. [Three.js](docs/threejs.md).
 - Preview: explicit `new Render(engine, {resolutionScale:.5, adaptiveResolution:{targetFrameMs:20,minScale:.25},bounces:2,bevel:false,dispersionWavelengths:1,directLightCandidates:2})`. Give the final render `fallback: preview`; [fallback rules](docs/progressive-rendering.md#caveats).

@@ -83,18 +83,29 @@ export class CommittedScene {
   mirror<T extends object>(source: T): T { return this.copies.get(source); }
 
   capture(scene: Scene, changes: SceneChanges): Scene {
-    if (!this.value || changes.meshes === 'full') this.value = { meshes: this.copy(scene.meshes), lights: this.copy(scene.lights), background: this.copy(scene.background) };
-    else {
-      for (const mesh of changes.transforms) {
-        this.copy(mesh.transform);
-        if (mesh instanceof InstancedMesh) this.copy(mesh, true);
-      }
-      for (const mesh of changes.colors) this.copy(mesh, true);
-      for (const geometry of changes.geometries) this.copy(geometry, true);
-      for (const material of changes.materials) this.copy(material);
-      if (changes.lights) this.value.lights = this.copy(scene.lights);
-      if (changes.background) this.value.background = this.copy(scene.background);
-    }
+    if (this.value && changes.meshes === 'full' && changes.membershipOnly) {
+      // Retained meshes keep their mirrors; only added meshes are copied.
+      const added = new Set(changes.added);
+      const mirrors = scene.meshes.map(mesh => !added.has(mesh) && this.copies.has(mesh) ? this.copies.get(mesh) : this.copy(mesh));
+      this.copies.set(scene.meshes, mirrors);
+      this.value.meshes = mirrors;
+      this.applyIncremental(scene, changes);
+    } else if (!this.value || changes.meshes === 'full') this.value = { meshes: this.copy(scene.meshes), lights: this.copy(scene.lights), background: this.copy(scene.background) };
+    else this.applyIncremental(scene, changes);
     return this.value;
+  }
+
+  private applyIncremental(scene: Scene, changes: SceneChanges) {
+    const value = this.value!;
+    for (const mesh of changes.visibility) this.copies.get(mesh).visible = mesh.visible;
+    for (const mesh of changes.transforms) {
+      this.copy(mesh.transform);
+      if (mesh instanceof InstancedMesh) this.copy(mesh, true);
+    }
+    for (const mesh of changes.colors) this.copy(mesh, true);
+    for (const geometry of changes.geometries) this.copy(geometry, true);
+    for (const material of changes.materials) this.copy(material);
+    if (changes.lights) value.lights = this.copy(scene.lights);
+    if (changes.background) value.background = this.copy(scene.background);
   }
 }

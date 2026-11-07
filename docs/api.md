@@ -504,7 +504,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | Export | Description |
 | --- | --- |
 | `Scene` | `{ meshes: (Mesh \| InstancedMesh)[], lights, background? }`; see below |
-| `Mesh` | `new Mesh(geometry, material \| material[])`, `transform` |
+| `Mesh` | `new Mesh(geometry, material \| material[])`, `transform`; `visible` (default `true`) hides the mesh as if removed while keeping it resident; see [visibility](./updates.md#visibility) |
 | `InstancedMesh`, `InstancedMeshOptions` | `new InstancedMesh(geometry, material \| material[], {count, transforms?, colors?})`; local Float32 column-major matrices default to identity, multiplied by inherited transform; count selects the active prefix; `colors` defaults to undefined (white linear RGB); `markUpdated(): this` notifies both matrices and colors; `markTransformsUpdated(start = 0, count = this.count - start): this` and `markColorsUpdated(start = 0, count = this.count - start): this` notify each separately. Each advances version once, initially 0. See [updates and costs](./updates.md#instanced-meshes) |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | `new OpenPBRMaterial(params?)`; see [materials](./materials.md) |

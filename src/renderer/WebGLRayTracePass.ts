@@ -23,6 +23,7 @@ import depthQueryFrag from './glsl/depthQuery.frag.js';
 import { readFloatPixelsAsync } from './WebGLReadback.js';
 import { DEPTH_SAMPLE_GRID, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache } from './meshMembership.js';
+import { selectVisibleInstances } from './scenePreparation.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import {
@@ -179,6 +180,7 @@ class WebGLRayTracePass {
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
     materialKeys: string[];
+    visible: boolean;
     geometryVersion: number;
     positionArray: Float32Array;
     indexArray: Geometry['indices']['array'];
@@ -441,7 +443,7 @@ class WebGLRayTracePass {
     return changed;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[] }) {
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && meshes === this._meshes) {
@@ -463,7 +465,14 @@ class WebGLRayTracePass {
           for (let i = 0; i < 16; i++) item.matrix[i] = mesh.transform[i];
           this._dirtyTransformMeshes.add(mesh); this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length;
+        // Hidden meshes keep their resident data; only instances are reselected.
+        for (const mesh of update.visibility ?? []) {
+          const item = this._snapshotByMesh.get(mesh);
+          if (item) item.visible = mesh.visible;
+          this._needsUpdateMeshMembership = true;
+        }
+        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length ||
+          !!update.visibility?.length;
       }
     }
     const materialChange = !!update?.materials?.length;
@@ -477,13 +486,14 @@ class WebGLRayTracePass {
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
       materialKeys: mesh.materials.map(getMaterialHashKey),
+      visible: mesh.visible,
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
       matrix: Array.from(mesh.transform as ArrayLike<number>)
     }));
     const membershipChanged = next.length !== this._meshSnapshot.length ||
       next.some((item, i) => item.mesh !== this._meshSnapshot[i]?.mesh || item.instanceCount !== this._meshSnapshot[i]?.instanceCount ||
-        item.materials.some((material, k) => material !== this._meshSnapshot[i]?.materials[k]));
+        item.visible !== this._meshSnapshot[i]?.visible || item.materials.some((material, k) => material !== this._meshSnapshot[i]?.materials[k]));
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
     if (membership) {
@@ -509,7 +519,7 @@ class WebGLRayTracePass {
         const prev = this._meshSnapshot[i];
         return (
           !prev ||
-          item.mesh !== prev.mesh || item.instanceCount !== prev.instanceCount || item.instanceVersion !== prev.instanceVersion || item.instanceTransforms !== prev.instanceTransforms ||
+          item.mesh !== prev.mesh || item.visible !== prev.visible || item.instanceCount !== prev.instanceCount || item.instanceVersion !== prev.instanceVersion || item.instanceTransforms !== prev.instanceTransforms ||
           item.geometry !== prev.geometry || item.colorVersion !== prev.colorVersion || item.instanceColors !== prev.instanceColors ||
           item.materials.length !== prev.materials.length ||
           item.materials.some((material, k) => material !== prev.materials[k]) ||
@@ -729,7 +739,7 @@ class WebGLRayTracePass {
   }
 
   private _updateMeshMembership() {
-    const res = this._pendingMembershipData!;
+    const res = selectVisibleInstances(this._pendingMembershipData ?? this._preparedMeshData!, this._meshes);
     this._preparedMeshData = res;
     this._tlas = buildWebTLAS(res.instances, res.blases);
     this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));

@@ -18,6 +18,14 @@ export default class MeshState extends SceneNode {
   materials: MaterialState[];
   /** Indexed triangle geometry supplied to the constructor; no default. */
   geometry: Geometry;
+  /**
+   * Whether the mesh takes part in rendering. Default `true`. A hidden mesh
+   * renders exactly as if it were removed from `scene.meshes` (no camera,
+   * shadow, indirect, emission, picking or AOV contribution), while its
+   * geometry, BLAS and materials stay resident, so toggling it only rebuilds
+   * instance data.
+   */
+  visible = true;
 
   /** @internal */
   private _instances?: InstanceState;

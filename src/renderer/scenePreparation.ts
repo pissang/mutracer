@@ -146,6 +146,59 @@ export function dirtyPreparedInstanceIndices<M extends MeshState>(bindings: Prep
   return dirty;
 }
 
+function meshIsEmissive(mesh: MeshState) {
+  return mesh.materials.some((material) =>
+    !material.unlit && !material.shadowCatcher &&
+    colorLuminance(material.emissionColor) * material.emissionLuminance > 1e-8);
+}
+
+/** Prepared data whose active instances can be reselected without repacking. */
+export interface ResidentMeshInstances<M extends MeshState> {
+  instances: MeshInstances;
+  instanceBindings: PreparedMeshInstanceBinding<M>[];
+  residentBindings: PreparedMeshInstanceBinding<M>[];
+  emissiveBindings: {mesh: M; geometry: Geometry; materialIndices: number[]}[];
+}
+
+/**
+ * Selects the visible members of `meshes`, in list order, from resident
+ * bindings. Instances, bindings and emissive bindings equal those a full
+ * preparation of the visible meshes would produce; geometry, BLAS and
+ * material slots are reused. Meshes without a resident binding are skipped.
+ */
+export function selectVisibleInstances<M extends MeshState, R extends ResidentMeshInstances<M>>(prepared: R, meshes: readonly M[]): R {
+  const resident = new Map<M, PreparedMeshInstanceBinding<M>>();
+  for (const binding of prepared.residentBindings) resident.set(binding.mesh, binding);
+  const selected: PreparedMeshInstanceBinding<M>[] = [];
+  let packed = false;
+  for (const mesh of meshes) {
+    if (!mesh.visible) continue;
+    if (mesh.instanceData != null) packed = true;
+    const binding = resident.get(mesh);
+    if (binding) selected.push(binding);
+  }
+  let instanceBindings = selected;
+  let instances: MeshInstances;
+  if (packed) instances = updateMeshInstanceTransforms(selected);
+  else {
+    // Match full preparation's exclusion of invalid transforms and bounds.
+    const ordinary = updateMeshInstanceTransforms(selected) as TLASInstance[];
+    const valid: TLASInstance[] = [];
+    instanceBindings = [];
+    for (let i = 0; i < ordinary.length; i++) {
+      const instance = ordinary[i];
+      if (!finiteValues(instance.bounds.min) || !finiteValues(instance.bounds.max) || !finiteValues(instance.transform)) continue;
+      valid.push(instance); instanceBindings.push(selected[i]);
+    }
+    instances = valid;
+  }
+  const emissiveBindings: {mesh: M; geometry: Geometry; materialIndices: number[]}[] = [];
+  for (const binding of instanceBindings) {
+    if (meshIsEmissive(binding.mesh)) emissiveBindings.push({mesh: binding.mesh, geometry: binding.geometry, materialIndices: binding.materialIndices});
+  }
+  return {...prepared, instances, instanceBindings, emissiveBindings};
+}
+
 export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
   prepareGeometry: (mesh: M) => {geometry: Geometry; displacementScale: number},
   boundsForGeometry = getBvhBounds, softwareBvhs = true, mergeAttributes = true) {
@@ -161,6 +214,8 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     materialIndices: number[];
   }[] = [];
   const instanceBindings: PreparedMeshInstanceBinding<M>[] = [];
+  // Hidden meshes keep geometry, BLAS and material slots without instances.
+  const residentBindings: PreparedMeshInstanceBinding<M>[] = [];
 
 
   const instances: TLASInstance[] = meshes
@@ -222,20 +277,20 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
       )) {
         return undefined;
       }
-      if (mesh.materials.some((material) =>
-        !material.unlit && !material.shadowCatcher &&
-        colorLuminance(material.emissionColor) * material.emissionLuminance > 1e-8
-      )) {
-        emissiveBindings.push({ mesh, geometry, materialIndices: materialsIndices });
-      }
-      instanceBindings.push({
+      const binding: PreparedMeshInstanceBinding<M> = {
         mesh,
         geometry,
         blasIndex: geoIdx,
         materialIndices: materialsIndices,
         displacementScale,
         bvhBounds
-      });
+      };
+      residentBindings.push(binding);
+      if (!mesh.visible) return undefined;
+      if (meshIsEmissive(mesh)) {
+        emissiveBindings.push({ mesh, geometry, materialIndices: materialsIndices });
+      }
+      instanceBindings.push(binding);
       return instance;
     })
     .filter((instance) => instance != null) as TLASInstance[];
@@ -260,9 +315,10 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
       return [source, { topologyVersion: source.topologyVersion, indices: source.indices.array,
         indexCount: source.indexArray.length }];
     })),
-    instances: (meshes.some(mesh => mesh.instanceData != null) ? updateMeshInstanceTransforms(instanceBindings) : instances) as MeshInstances,
+    instances: (meshes.some(mesh => mesh.visible && mesh.instanceData != null) ? updateMeshInstanceTransforms(instanceBindings) : instances) as MeshInstances,
     materials,
     instanceBindings,
+    residentBindings,
     emissiveBindings,
     blases: softwareBvhs ? geometries.map((geo) => ({
       bvh: getGeometryBvh(geo)!,

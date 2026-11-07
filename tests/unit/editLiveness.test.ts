@@ -51,6 +51,7 @@ const edits: ((f: Pick<Fixture, Exclude<keyof Fixture, 'gpu'>>) => void)[] = [
   f => { f.engine.display.setSize(128 + 16 * f.pick(8), 96 + 16 * f.pick(8)); },
   f => { f.camera.position = [3 + f.pick(4) * .1, 2, 4]; f.camera.lookAt([0, 0, 0]); },
   f => { if (f.pick(2)) f.scene.meshes = [...f.scene.meshes, f.glass()]; else if (f.scene.meshes.length > 1) f.scene.meshes = f.scene.meshes.slice(0, -1); },
+  f => { const mesh = f.scene.meshes[f.pick(f.scene.meshes.length)]; mesh.visible = !mesh.visible; },
   f => { const material = f.scene.meshes[0].materials[0]; material.baseColor = [f.pick(10) / 10, .5, .5]; },
   f => { const material = f.scene.meshes[0].materials[0]; material.transmissionWeight = f.pick(2); material.coatWeight = f.pick(2); },
   f => { const material = f.scene.meshes[0].materials[0]; material.opacity = f.pick(2) ? 1 : .5; material.alphaMode = material.opacity < 1 ? 'blend' : 'opaque'; },

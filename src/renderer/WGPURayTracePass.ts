@@ -103,6 +103,7 @@ import {
   type EnvironmentSource
 } from './envMapDistribution.js';
 import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
+import {selectVisibleInstances} from './scenePreparation.js';
 import {
   buildWebTLAS,
   type BLASInstance,
@@ -280,6 +281,7 @@ class WGPURayTracePass {
     bvh?: FlattendBVH;
     materials: OpenPBRMaterial[];
     materialKeys: string[];
+    visible: boolean;
     geometryVersion: number;
     positionArray: Float32Array;
     positionItemSize: number;
@@ -897,7 +899,7 @@ class WGPURayTracePass {
       }
 
       this._setCaustics(this._causticSettings);
-      if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._meshes);
+      if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._visibleMeshes());
       this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
       const pipelineInputs = JSON.stringify([
@@ -1002,7 +1004,7 @@ class WGPURayTracePass {
         ? proceduralEnvironmentPower(this._envImageSource)
         : estimateEnvironmentPower(this._envImageSource)
     );
-    const casters = () => causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._meshes);
+    const casters = () => causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._visibleMeshes());
     if (this._lightTracing && this._causticLight) {
       this._causticLight.setDistribution(casters(), emission());
       this._causticLight.use(variant.lightEmitter!);
@@ -1581,7 +1583,7 @@ class WGPURayTracePass {
         initial = typeof requested === 'object' ? requested.initialRadius : undefined;
       const radius =
         Number.isFinite(initial) && initial! > 0 ? initial! : Math.max((causticDiagnostics.photonPerCasterRadius
-          ? causticCasterSpheres(this._meshes).reduce((maximum, s) => Math.max(maximum, s[3]), 0)
+          ? causticCasterSpheres(this._visibleMeshes()).reduce((maximum, s) => Math.max(maximum, s[3]), 0)
           : this._causticBounds[3]) * 0.03, 1e-4);
       const batch = Math.max(
         1,
@@ -1823,11 +1825,11 @@ class WGPURayTracePass {
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
     const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
-      this._meshes.some((mesh) => mesh.materials.some(isCausticSpecular));
+      this._visibleMeshes().some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
       !hasCaster ||
-      !hasStochasticCausticCaster(this._meshes);
+      !hasStochasticCausticCaster(this._visibleMeshes());
     this._lightTracing = !!settings?.lightTracing && hasCaster && photonSupported;
     const photonMapping = !!settings?.photonMapping && hasCaster && photonSupported;
     this._photonMapping = photonMapping;
@@ -1924,7 +1926,9 @@ class WGPURayTracePass {
     this._constants.USE_ENVMAP = !!envImage;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+  private _visibleMeshes() { return this._meshes.filter(mesh => mesh.visible); }
+
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[] }) {
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
@@ -1949,7 +1953,14 @@ class WGPURayTracePass {
           this._dirtyTransformMeshes.add(mesh);
           this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length;
+        // Hidden meshes keep their resident data; only instances are reselected.
+        for (const mesh of update.visibility ?? []) {
+          const item = this._snapshotByMesh.get(mesh);
+          if (item) item.visible = mesh.visible;
+          this._needsUpdateMeshMembership = true;
+        }
+        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length ||
+          !!update.visibility?.length;
       }
     }
     const transformOnlyMeshes = update?.materials?.length || update?.colors?.length ? undefined : update?.transforms;
@@ -1996,6 +2007,7 @@ class WGPURayTracePass {
       bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
       materialKeys: mesh.materials.map(getMaterialHashKey),
+      visible: mesh.visible,
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
@@ -2007,7 +2019,7 @@ class WGPURayTracePass {
     }));
     const membershipChanged = nextSnapshot.length !== previousSnapshot.length ||
       nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh || item.instanceCount !== previousSnapshot[i]?.instanceCount ||
-        item.materials.some((material, k) => material !== previousSnapshot[i]?.materials[k]));
+        item.visible !== previousSnapshot[i]?.visible || item.materials.some((material, k) => material !== previousSnapshot[i]?.materials[k]));
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
     if (membership) {
@@ -2032,7 +2044,7 @@ class WGPURayTracePass {
       (
         nextSnapshot.length !== previousSnapshot.length ||
         nextSnapshot.some(
-          (next, index) => next.mesh !== previousSnapshot[index]?.mesh
+          (next, index) => next.mesh !== previousSnapshot[index]?.mesh || next.visible !== previousSnapshot[index]?.visible
         )
       ) &&
       nextSnapshot.every((next) => {
@@ -2572,11 +2584,8 @@ class WGPURayTracePass {
     this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
     if (update.emission || update.emissiveMap) {
-      const resident = this._residentPreparedMeshData!;
-      resident.emissiveBindings = resident.instanceBindings.filter(binding =>
+      res.emissiveBindings = res.instanceBindings.filter(binding =>
         binding.materialIndices.some(index => materialIsEmissive(res.materials[index])));
-      const active = new Set(this._meshes);
-      res.emissiveBindings = resident.emissiveBindings.filter(binding => active.has(binding.mesh));
       this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
       this._needsUpdateLightSamplingData = true;
     }
@@ -2594,20 +2603,8 @@ class WGPURayTracePass {
       this._needsUpdateMeshMembership = false;
       return;
     }
-    const activeMeshes = new Set(this._meshes);
-    const instanceBindings = resident.instanceBindings.filter(({ mesh }) =>
-      activeMeshes.has(mesh)
-    );
-    const emissiveBindings = resident.emissiveBindings.filter(({ mesh }) =>
-      activeMeshes.has(mesh)
-    );
-    const instances = updateMeshInstanceTransforms(instanceBindings);
-    const res = {
-      ...resident,
-      instances,
-      instanceBindings,
-      emissiveBindings
-    };
+    const res = selectVisibleInstances(resident, this._meshes);
+    const {instances, emissiveBindings} = res;
     this._preparedMeshData = res;
     if (pending) this._residentPreparedMeshData = res;
     this._pendingMembershipData = undefined;

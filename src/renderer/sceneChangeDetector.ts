@@ -11,6 +11,10 @@ import { SceneChangeTracker, type SceneSnapshotAdapter } from './sceneChangeCore
 
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';
+  /** Full only because meshes were added, removed or reordered. */
+  membershipOnly: boolean;
+  added: Mesh[];
+  visibility: Mesh[];
   transforms: Mesh[];
   colors: InstancedMesh[];
   geometries: Geometry[];

@@ -11,6 +11,15 @@ import type { Mat4 } from '../types.js';
 
 export interface SceneChangeSet {
   meshes: 'none' | 'incremental' | 'full';
+  /**
+   * True when `meshes` is full only because meshes were added, removed or
+   * reordered; every retained mesh is unchanged apart from the incremental
+   * lists below. `added` lists meshes absent from the previous commit.
+   */
+  membershipOnly: boolean;
+  added: MeshState[];
+  /** Retained meshes whose `visible` flag changed. */
+  visibility: MeshState[];
   transforms: MeshState[];
   colors: MeshState[];
   geometries: Geometry[];
@@ -118,6 +127,7 @@ class GeometryStorage {
 
 class MeshSnapshot {
   aovId: number;
+  visible: boolean;
   mesh: MeshState;
   geometry: Geometry;
   version: number;
@@ -131,12 +141,12 @@ class MeshSnapshot {
   instanceTransforms: Float32Array | undefined = undefined;
   instanceColors: Float32Array | undefined = undefined;
   constructor(mesh: MeshState) {
-    this.aovId = mesh.aovId;
+    this.aovId = mesh.aovId; this.visible = mesh.visible;
     this.mesh = mesh; this.geometry = mesh.geometry; this.version = mesh.geometry.version;
     this.dynamic = mesh.geometry.dynamic; this.storage = new GeometryStorage(mesh.geometry);
   }
   capture(mesh: MeshState) {
-    this.aovId = mesh.aovId;
+    this.aovId = mesh.aovId; this.visible = mesh.visible;
     this.mesh = mesh; this.geometry = mesh.geometry; this.version = mesh.geometry.version;
     this.dynamic = mesh.geometry.dynamic; this.storage.capture(mesh.geometry);
     const instance = mesh.instanceData;
@@ -176,7 +186,15 @@ export class SceneChangeTracker<L, B, MaterialSnapshot, LightSnapshot, Backgroun
 
   detect(scene: TrackedScene<L, B>): SceneChangeSet {
     const adapter = this.adapter, old = this.snapshot, meshes = scene.meshes;
-    let full = old === undefined || old.meshList !== meshes || old.meshes.length !== meshes.length;
+    // Membership edits (add, remove, reorder) are full for consumers that only
+    // read `meshes`; retained meshes are still matched by identity so that
+    // `membershipOnly` can tell them apart from structural edits.
+    let full = old === undefined;
+    let membership = old !== undefined && (old.meshList !== meshes || old.meshes.length !== meshes.length);
+    let previousIndices: Map<MeshState, number> | undefined = undefined;
+    let matched = 0;
+    const added: MeshState[] = [];
+    const visibility: MeshState[] = [];
     const transforms: MeshState[] = [];
     const colors: MeshState[] = [];
     const geometries = new Set<Geometry>();
@@ -185,12 +203,28 @@ export class SceneChangeTracker<L, B, MaterialSnapshot, LightSnapshot, Backgroun
     seen.clear();
     for (let i = 0; i < meshes.length; i++) {
       const mesh = meshes[i];
-      const prev = old !== undefined && i < old.meshes.length ? old.meshes[i] : undefined;
+      let prevIndex = -1;
+      if (old !== undefined) {
+        if (i < old.meshes.length && old.meshes[i].mesh === mesh) prevIndex = i;
+        else {
+          membership = true;
+          if (previousIndices === undefined) {
+            previousIndices = new Map<MeshState, number>();
+            for (let k = old.meshes.length - 1; k >= 0; k--) previousIndices.set(old.meshes[k].mesh, k);
+          }
+          const found = previousIndices.get(mesh);
+          if (found !== undefined) prevIndex = found;
+        }
+      }
+      const prev = old !== undefined && prevIndex >= 0 ? old.meshes[prevIndex] : undefined;
+      if (prev !== undefined) matched++;
+      else if (old !== undefined) added.push(mesh);
+      if (prev !== undefined && prev.visible !== mesh.visible) visibility.push(mesh);
       let instanceChanged = false;
       const instance = mesh.instanceData;
       if (instance) {
         adapter.validateMesh(mesh);
-        if (prev === undefined || !prev.instanced || prev.instanceCount !== instance.count) full = true;
+        if (prev !== undefined && (!prev.instanced || prev.instanceCount !== instance.count)) full = true;
         if (prev !== undefined && prev.mesh === mesh &&
           (prev.colorVersion !== instance.colorsVersion || !sameFloat32(prev.instanceColors, instance.colors))) colors.push(mesh);
         if (prev !== undefined && prev.mesh === mesh &&
@@ -198,11 +232,12 @@ export class SceneChangeTracker<L, B, MaterialSnapshot, LightSnapshot, Backgroun
           transforms.push(mesh); instanceChanged = true;
         }
       }
-      if (prev === undefined || prev.mesh !== mesh || prev.aovId !== mesh.aovId || prev.geometry !== mesh.geometry || prev.dynamic !== mesh.geometry.dynamic ||
+      if (prev === undefined) { /* added: membership */ }
+      else if (prev.aovId !== mesh.aovId || prev.geometry !== mesh.geometry || prev.dynamic !== mesh.geometry.dynamic ||
         !prev.storage.matches(mesh.geometry) || prev.materials.length !== mesh.materials.length) full = true;
       else for (let k = 0; k < mesh.materials.length; k++) if (prev.materials[k] !== mesh.materials[k]) { full = true; break; }
       if (prev !== undefined && prev.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
-      if (prev !== undefined && prev.mesh === mesh && old !== undefined && !matrixEquals(mesh.transform, old.matrices, i * 16)) {
+      if (prev !== undefined && prev.mesh === mesh && old !== undefined && !matrixEquals(mesh.transform, old.matrices, prevIndex * 16)) {
         if (!instanceChanged) transforms.push(mesh);
       }
       for (let k = 0; k < mesh.materials.length; k++) {
@@ -220,8 +255,11 @@ export class SceneChangeTracker<L, B, MaterialSnapshot, LightSnapshot, Backgroun
     if (old !== undefined && !lightsChanged) {
       for (let i = 0; i < lights.length; i++) if (!adapter.lightsEqual(lights[i], old.lights[i])) { lightsChanged = true; break; }
     }
+    if (old !== undefined && matched < old.meshes.length) membership = true;
     const changes: SceneChangeSet = {
-      meshes: full ? 'full' : transforms.length > 0 || colors.length > 0 || materials.length > 0 || geometries.size > 0 ? 'incremental' : 'none',
+      meshes: full || membership ? 'full' : transforms.length > 0 || colors.length > 0 || materials.length > 0 || geometries.size > 0 ||
+        visibility.length > 0 ? 'incremental' : 'none',
+      membershipOnly: membership && !full, added, visibility,
       transforms, colors, materials, geometries: [...geometries],
       lights: lightsChanged,
       background: old === undefined || !adapter.backgroundsEqual(background, old.background)

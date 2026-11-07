@@ -194,6 +194,8 @@ export interface SceneResources {
     colors?: readonly Mesh[];
     geometries?: readonly Geometry[];
     materials?: readonly OpenPBRMaterial[];
+    /** Meshes whose `visible` flag changed; their resources stay resident. */
+    visibility?: readonly Mesh[];
   }): boolean;
   /** Changes the software memory guard used when packing material textures. */
   setTextureAtlasBudget(maxBytes: number): boolean;

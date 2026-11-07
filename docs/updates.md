@@ -26,9 +26,9 @@ notification first:
 | Both instance matrices and colors | `instancedMesh.markUpdated()` |
 
 Everything else, including the camera, `scene.meshes`, `mesh.transform`,
-replaced geometry, materials, textures or arrays, and `instancedMesh.count`,
-needs only `engine.update()`. Engine BVH settings also take effect at the next
-update; see [BVH](./bvh.md).
+`mesh.visible`, replaced geometry, materials, textures or arrays, and
+`instancedMesh.count`, needs only `engine.update()`. Engine BVH settings also
+take effect at the next update; see [BVH](./bvh.md).
 
 ```ts
 mesh.transform[12] += 0.1;           // detected
@@ -42,11 +42,46 @@ With RenderLoop, edit sources before the next tick; the loop calls sync.update
 and engine.update. THREESync sends resource notifications for you. See
 [Three.js](./threejs.md#keeping-scenes-in-sync).
 
+## Update costs
+
+What `engine.update()` and the next refine redo for each kind of edit, on both
+WebGPU and WebGL 2:
+
+| Edit | Work |
+| --- | --- |
+| Material parameters | Repack material parameters; emission also refreshes light sampling |
+| `mesh.transform`, instance matrices | Refit the top-level BVH over the changed instances |
+| `mesh.visible` | Rebuild the top-level BVH and instance data; geometry, BLASes and materials stay on the GPU |
+| Add, remove or reorder meshes whose geometry is already on the GPU | Same as visibility, plus the material table when the set of materials changes. See [adding and removing](#adding-removing-and-reassigning-meshes) |
+| Texture references, such as `material.map = other` | Rebuild the texture atlas, or with bindless bindings upload the newly referenced images; geometry and BVHs are untouched |
+| New geometry, displacement, array replacement | [Full mesh update](#full-mesh-updates) |
+
 ## Transforms
 
 Edit `mesh.transform` in place while retaining the mesh objects and the
 `scene.meshes` array. Both WebGPU and WebGL 2 refit the top-level BVH over the
 changed instances and upload only the affected ranges.
+
+## Visibility
+
+Set `mesh.visible = false` (default `true`) to hide a mesh without removing it:
+
+```ts
+lamp.visible = false;   // detected
+engine.update();
+```
+
+A hidden mesh renders exactly as if it were removed from `scene.meshes`: it is
+not seen by the camera, casts no shadows, takes no part in indirect light,
+emits no light and is not sampled as a light, and is absent from picking and
+AOVs. Unlike removal, its geometry, BLAS and materials stay resident, so showing
+it again does not prepare mesh data. `InstancedMesh.visible` hides the whole
+batch; to hide single instances, reduce `count` or split the batch.
+
+Caveats: hidden meshes keep their materials' shader features prepared. Hiding
+or showing the last emissive mesh can still change the shader, as removing or
+adding it would. A mesh that is hidden when the scene is first committed is
+prepared in full and costs the same as a visible one.
 
 ## Instanced meshes
 
@@ -212,8 +247,11 @@ and morph targets set `dynamic` automatically; try the
 Adding, removing or reordering meshes, or replacing a mesh's material, is
 cheap when every mesh uses a single material and geometry that is already on
 the GPU: the renderer rebuilds the top-level BVH and instance data and reuses
-vertex data and BLASes. Otherwise, for example with new geometry, displacement
-or a `materialIndex` attribute, it needs a full mesh update.
+vertex data and BLASes, and `engine.update()` copies only the added meshes.
+Otherwise, for example with new geometry, displacement or a `materialIndex`
+attribute, it needs a full mesh update. To take a mesh out temporarily, prefer
+[visibility](#visibility): it stays cheap for every mesh, keeps the mesh resident
+and does not rebuild the material table.
 
 ## Full mesh updates
 
