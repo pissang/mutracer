@@ -16,7 +16,8 @@ function grid(segments = 12) {
   return new Geometry({position: new Attribute(positions,3), uv: new Attribute(uv,2), indices: new Attribute(indices,1)});
 }
 export function createUpdateFixture(count: number, instances: number, segments = 12) {
-  const image = new Texture({width:8,height:8,data:new Uint8Array(256).fill(128)});
+  const pixels=new Uint8Array(256).fill(128);for(let i=3;i<pixels.length;i+=4)pixels[i]=255;
+  const image = new Texture({width:8,height:8,data:pixels});
   const materials = Array.from({length:256}, (_, i) => { const m = new OpenPBRMaterial({map:i%2?image:undefined}); m.aovId = i+10000; return m; });
   const meshes: Mesh[] = Array.from({length:count}, (_, i) => { const m = new Mesh(grid(segments), materials[i%256]); m.transform[12] = (i%64)*1.1; m.transform[14] = Math.floor(i/64)*1.1; m.aovId = i+1; return m; });
   const batch = new InstancedMesh(meshes[0].geometry,materials[255],{count:instances}); batch.aovId = count+1;
@@ -72,12 +73,12 @@ function compare(a: Awaited<ReturnType<typeof capture>>, b: Awaited<ReturnType<t
 }
 function parityFixture(instances:number) {
   const f=createUpdateFixture(24,instances);f.camera.position=[3.21,4,6.3];f.camera.lookAt([0,0,0]);
-  for(let i=0;i<Math.min(instances,64);i++){f.batch.transforms[i*16+12]=(i%8)-4;f.batch.transforms[i*16+14]=Math.floor(i/8)-4;}
+  for(let i=0;i<Math.min(instances,64);i++){f.batch.transforms[i*16+12]=(i%8)-4;f.batch.transforms[i*16+13]=.3;f.batch.transforms[i*16+14]=Math.floor(i/8)-4;}
   return f;
 }
 type Fixture = ReturnType<typeof createUpdateFixture>;
 /** Large batch, mixed commits and repeated shared deformation versus full preparation. */
-export async function parity(backend:Backend,instances=16384) {
+export async function parity(backend:Backend,instances=16384,retainedFull=false) {
   const operations:[string,(f:Fixture)=>void][]=[
     ['one',f=>{f.batch.transforms[13]+=.2;f.batch.markTransformsUpdated(0,1);}],
     ['64',f=>{for(let i=0;i<Math.min(64,instances);i++)f.batch.transforms[i*16+13]+=.15;f.batch.markTransformsUpdated(0,Math.min(64,instances));}],
@@ -89,21 +90,25 @@ export async function parity(backend:Backend,instances=16384) {
     ['restore',f=>{f.batch.transforms[28]=-3;f.batch.markTransformsUpdated(1,1);}]
   ];
   const f=parityFixture(instances),c=await context(backend,f,256,144,['id']),rows=[];
+  const retained=retainedFull?parityFixture(instances):undefined,retainedContext=retained?await context(backend,retained,256,144,['id']):undefined;
   try {for(let step=0;step<operations.length;step++) {
     const [name,edit]=operations[step];edit(f);c.engine.update();const edited=await capture(c);
-    const full=parityFixture(instances);for(let i=0;i<=step;i++)operations[i][1](full);
-    const reference=await context(backend,full,256,144,['id']);
-    try{rows.push({name,...compare(edited,await capture(reference))});}finally{reference.dispose();}
-  }return {backend,instances,rows};}finally{c.dispose();}
+    const full=retained??parityFixture(instances);
+    if(retained){edit(full);full.geometry.position.array=full.geometry.position.array.slice();full.geometry.markVerticesUpdated();retainedContext!.engine.update();}
+    else for(let i=0;i<=step;i++)operations[i][1](full);
+    const reference=retainedContext??await context(backend,full,256,144,['id']);
+    try{rows.push({name,...compare(edited,await capture(reference))});}finally{if(!retainedContext)reference.dispose();}
+  }return {backend,instances,retainedFull,rows};}finally{retainedContext?.dispose();c.dispose();}
 }
 /** Equal-content refit/rebuild throughput, excluding preparation and shader warmup. */
 export async function quality(backend:Backend) {
   const f=createUpdateFixture(1,4096,48),c=await context(backend,f,640,360),rows=[];
-  try{for(let v=0;v<f.geometry.vertexCount;v++)f.geometry.position.array[v*3+1]=.03*Math.sin(v*.13);
-    f.geometry.markVerticesUpdated();c.engine.update();await c.render.converge({samples:1,timeoutMs:180000});await c.complete();
+  try{reset();for(let v=0;v<f.geometry.vertexCount;v++){f.geometry.position.array[v*3+1]=.002*Math.sin(v*.13);f.geometry.position.array[v*3]+=.025*Math.sin(f.geometry.position.array[v*3+2]*5);}
+    const editStart=performance.now();
+    f.geometry.markVerticesUpdated();c.engine.update();await c.render.converge({samples:1,timeoutMs:180000});await c.complete();const deformationStages=structuredClone(profile.stages),deformationMs=performance.now()-editStart;
     for(const rebuilt of [false,true]){if(rebuilt){f.geometry.markUpdated();c.engine.update();await c.render.converge({samples:1,timeoutMs:180000});await c.complete();}
       for(let repeat=0;repeat<5;repeat++){const start=performance.now();await c.render.converge({samples:128,sampleSequenceOffset:3+repeat*128,timeoutMs:180000});await c.complete();const ms=performance.now()-start;rows.push({rebuilt,repeat,ms,samplesPerSecond:128000/ms});}
-    }return {backend,rows};
+    }return {backend,deformationStages,deformationMs,rows};
   }finally{c.dispose();}
 }
 Object.assign(window,{instanceVertexTests:{measure,parity,quality}});
