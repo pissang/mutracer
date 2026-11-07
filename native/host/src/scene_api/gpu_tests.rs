@@ -1,6 +1,7 @@
 use super::*;
 use crate::api::{
-    Backend, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings, RenderSize,
+    Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
+    RenderSize,
 };
 #[test]
 #[ignore = "requires a real GPU; run separately"]
@@ -196,6 +197,336 @@ fn software_scene_object_incremental_matches_full() {
                 "edit {edit} {kind:?}"
             );
         }
+    }
+}
+
+#[derive(Clone)]
+struct UdimImage {
+    width: u32,
+    height: u32,
+    pixels: Vec<f32>,
+}
+fn udim_solid(width: u32, height: u32, color: [f32; 4]) -> UdimImage {
+    UdimImage {
+        width,
+        height,
+        pixels: color.repeat((width * height) as usize),
+    }
+}
+fn udim_cases() -> Vec<(
+    &'static str,
+    Vec<(u32, UdimImage)>,
+    (f32, f32),
+    [f32; 2],
+    [f32; 2],
+    Vec<UdimImage>,
+)> {
+    let red = udim_solid(4, 4, [1., 0., 0., 1.]);
+    let green = udim_solid(4, 4, [0., 1., 0., 1.]);
+    let blue = udim_solid(4, 4, [0., 0., 1., 1.]);
+    let black = udim_solid(4, 4, [0., 0., 0., 0.]);
+    vec![
+        (
+            "boundary",
+            vec![(1001, red.clone()), (1002, green.clone())],
+            (0., 2.),
+            [1., 1.],
+            [0., 0.],
+            vec![red.clone(), green.clone()],
+        ),
+        (
+            "missing",
+            vec![(1001, red.clone()), (1003, blue.clone())],
+            (0., 3.),
+            [1., 1.],
+            [0., 0.],
+            vec![red.clone(), black.clone(), blue.clone()],
+        ),
+        (
+            "negative",
+            vec![(1001, green.clone())],
+            (-1., 1.),
+            [1., 1.],
+            [0., 0.],
+            vec![black.clone(), green.clone()],
+        ),
+        (
+            "domain",
+            vec![(1010, red.clone())],
+            (9., 11.),
+            [1., 1.],
+            [0., 0.],
+            vec![red.clone(), black.clone()],
+        ),
+        (
+            "transform",
+            vec![(1002, green.clone()), (1003, blue.clone())],
+            (0., 1.),
+            [2., 1.],
+            [1., 0.],
+            vec![green.clone(), blue.clone()],
+        ),
+        (
+            "sizes",
+            vec![
+                (1001, udim_solid(1, 2, [1., 128. / 255., 0., 1.])),
+                (1002, udim_solid(4, 1, [128. / 255., 0., 1., 1.])),
+            ],
+            (0., 2.),
+            [1., 1.],
+            [0., 0.],
+            vec![
+                udim_solid(4, 2, [1., 128. / 255., 0., 1.]),
+                udim_solid(4, 2, [128. / 255., 0., 1., 1.]),
+            ],
+        ),
+    ]
+}
+fn add_udim_texture(
+    scene: &mut Scene,
+    tiles: &[(u32, UdimImage)],
+    scale: [f32; 2],
+    offset: [f32; 2],
+) -> TextureId {
+    let width = tiles.iter().map(|(_, tile)| tile.width).max().unwrap() * 10;
+    let height = tiles.iter().map(|(_, tile)| tile.height).max().unwrap() * 10;
+    let mut pixels = vec![0f32; (width * height * 4) as usize];
+    for (number, image) in tiles {
+        let tile = number - 1001;
+        let tw = width / 10;
+        let th = height / 10;
+        for y in 0..th {
+            let sy = (((y as f64 + 0.5) * image.height as f64 / th as f64).floor() as u32)
+                .min(image.height - 1);
+            for x in 0..tw {
+                let sx = (((x as f64 + 0.5) * image.width as f64 / tw as f64).floor() as u32)
+                    .min(image.width - 1);
+                let from = ((sy * image.width + sx) * 4) as usize;
+                let to = (((tile / 10 * th + y) * width + tile % 10 * tw + x) * 4) as usize;
+                pixels[to..to + 4].copy_from_slice(&image.pixels[from..from + 4]);
+            }
+        }
+    }
+    scene
+        .add_texture(Texture {
+            pixels: TexturePixels::Rgba32F(pixels.into()),
+            width,
+            height,
+            uv: 0,
+            scale,
+            offset,
+            wrap: [0, 0],
+            flip_y: false,
+            udim: true,
+        })
+        .unwrap()
+}
+fn udim_plane(
+    scene: &mut Scene,
+    uv: (f32, f32),
+    texture: TextureId,
+    position: f32,
+    width: f32,
+) -> MeshId {
+    let mut geometry = Geometry::new(
+        vec![-1., -1., 0., 1., -1., 0., -1., 1., 0., 1., 1., 0.],
+        vec![0, 1, 2, 2, 1, 3],
+    );
+    geometry.normals = vec![0., 0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1.].into();
+    geometry.uv[0] = vec![uv.0, 0., uv.1, 0., uv.0, 1., uv.1, 1.].into();
+    let geometry = scene.add_geometry(geometry).unwrap();
+    let mut material = OpenPbrMaterial::default();
+    material.values.unlit = true;
+    material.values.double_sided = true;
+    material.values.emission_strength = 4.;
+    material.textures[0] = Some(texture);
+    material.textures[3] = Some(texture);
+    let material = scene.add_material(material).unwrap();
+    let mut mesh = Mesh::new(geometry, material);
+    mesh.transform = Mat4::from_scale_rotation_translation(
+        Vec3::new(width, 1., 1.),
+        glam::Quat::IDENTITY,
+        Vec3::new(position, 0., 0.),
+    );
+    scene.add_mesh(mesh).unwrap()
+}
+fn capture_udim(
+    backend: Backend,
+    tiles: &[(u32, UdimImage)],
+    uv: (f32, f32),
+    scale: [f32; 2],
+    offset: [f32; 2],
+    references: &[UdimImage],
+    udim: bool,
+    case: &str,
+) -> Vec<f32> {
+    let mut scene = Scene::new();
+    if udim {
+        let map = add_udim_texture(&mut scene, tiles, scale, offset);
+        let count = references.len() as f32;
+        udim_plane(&mut scene, uv, map, 0., count);
+    } else {
+        let count = references.len() as f32;
+        for (i, image) in references.iter().enumerate() {
+            let texture = scene
+                .add_texture(Texture {
+                    pixels: TexturePixels::Rgba32F(image.pixels.clone().into()),
+                    width: image.width,
+                    height: image.height,
+                    ..Texture::rgba8(image.width, image.height, vec![])
+                })
+                .unwrap();
+            udim_plane(
+                &mut scene,
+                (0., 1.),
+                texture,
+                i as f32 * 2. - count + 1.,
+                1.,
+            );
+        }
+    }
+    let mut camera = Camera::default();
+    camera.projection = 1;
+    camera.left = -(references.len() as f32);
+    camera.right = references.len() as f32;
+    camera.bottom = -1.;
+    camera.top = 1.;
+    camera.world_matrix[14] = 3.;
+    scene.set_default_camera(Some(camera));
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
+    let settings = RenderSettings {
+        seed: 0,
+        max_samples: 4,
+        bounces: 1,
+        bevel: true,
+        dispersion_wavelengths: 3,
+        direct_light_candidates: 4,
+        sampling_pattern: crate::api::SamplingPattern::Sobol,
+        size: RenderSize::Fixed {
+            width: 72,
+            height: 24,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings).unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render
+        .converge(ConvergeOptions {
+            samples: 4,
+            sample_sequence_offset: 0,
+            ..ConvergeOptions::new(4)
+        })
+        .unwrap();
+    let data = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    if let Ok(path) = std::env::var("MUTRACER_UDIM_OUTPUT") {
+        std::fs::create_dir_all(&path).unwrap();
+        let name = format!(
+            "{}-{}-{}.f32",
+            if backend == Backend::Software {
+                "software"
+            } else {
+                "hwrt"
+            },
+            case,
+            if udim { "udim" } else { "reference" }
+        );
+        let bytes: &[u8] = bytemuck::cast_slice(&data);
+        std::fs::write(std::path::Path::new(&path).join(name), bytes).unwrap();
+    }
+    data
+}
+#[test]
+#[ignore = "requires a real GPU; run through gpu-lock.sh"]
+fn udim_sampling_matches_split_geometry_on_both_backends() {
+    for backend in [Backend::Software, Backend::Hardware] {
+        for (name, tiles, uv, scale, offset, reference) in udim_cases() {
+            let actual = capture_udim(backend, &tiles, uv, scale, offset, &reference, true, name);
+            let expected =
+                capture_udim(backend, &tiles, uv, scale, offset, &reference, false, name);
+            assert_eq!(actual.len(), expected.len());
+            assert!(expected.iter().all(|value| value.is_finite()));
+            assert!(
+                expected
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[..3].iter().any(|value| *value > 1e-5)),
+                "{backend:?} split reference {name} rendered no nonzero RGB"
+            );
+            let distinct_rgb = expected
+                .chunks_exact(4)
+                .map(|pixel| [pixel[0].to_bits(), pixel[1].to_bits(), pixel[2].to_bits()])
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(
+                distinct_rgb.len() > 1,
+                "{backend:?} split reference {name} did not show distinct tile colors"
+            );
+            let max_error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("UDIM {backend:?} {name}: maxAbs={max_error}");
+            assert!(
+                max_error <= 2e-5,
+                "{backend:?} UDIM {name} vs split geometry: {max_error}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run through gpu-lock.sh"]
+fn raw_v5_texture_record_renders_on_both_backends() {
+    let words = crate::scene::small_fixture();
+    let mut words = words
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    let texture_offset = words.len();
+    words.extend_from_slice(&[
+        1,
+        1,
+        0,
+        (texture_offset + 12) as u32,
+        0,
+        0,
+        1f32.to_bits(),
+        1f32.to_bits(),
+        0,
+        0,
+        0,
+        0,
+        u32::MAX,
+    ]);
+    words[crate::layout::header::VERSION] = 5;
+    words[crate::layout::header::LENGTH] = words.len() as u32;
+    words[crate::layout::header::TEXTURE_COUNT] = 1;
+    words[crate::layout::header::TEXTURE_OFFSET] = texture_offset as u32;
+    let raw = words
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+
+    for backend in [Backend::Software, Backend::Hardware] {
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        engine.set_scene(&raw).unwrap();
+        engine.update().unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 1,
+                size: RenderSize::Fixed {
+                    width: 8,
+                    height: 8,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let image = render.read_pixels(PixelKind::Hdr).unwrap();
+        assert!(image.data.iter().all(|value| value.is_finite()));
+        assert!(image.data.chunks_exact(4).all(|pixel| pixel[3] == 1.));
     }
 }
 
