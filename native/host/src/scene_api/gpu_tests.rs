@@ -1263,16 +1263,17 @@ fn resident_membership_matches_fresh_hdr_id_and_picking_on_both_backends() {
         commit(&engine, &render, &scene, "delete-final-reserve");
         scene.set_mesh_visible(added, false).unwrap();
         commit(&engine, &render, &scene, "visibility-after-membership");
+        // One commit restores the only mesh and moves it: the transform step runs
+        // while every instance is still hidden.
         scene.set_mesh_visible(added, true).unwrap();
+        scene.mesh_mut(added).unwrap().transform =
+            Mat4::from_translation(Vec3::new(-0.45, 0.1, 0.));
         commit(
             &engine,
             &render,
             &scene,
-            "restore-visibility-after-membership",
+            "restore-and-transform-after-membership",
         );
-        scene.mesh_mut(added).unwrap().transform =
-            Mat4::from_translation(Vec3::new(-0.45, 0.1, 0.));
-        commit(&engine, &render, &scene, "transform-after-membership");
         scene.material_mut(material).unwrap().textures[0] = Some(uploaded);
         commit(&engine, &render, &scene, "texture-uploaded-reference");
         scene.material_mut(material).unwrap().textures[0] = Some(same_size);

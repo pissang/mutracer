@@ -897,11 +897,13 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   const state = retainedScenes.get(token)!;
   const meshIndices = new Map(state.meshes.map((mesh, index) => [mesh, index]));
   prepared ??= state.prepared;
+  const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
+  // With every instance hidden there is no valid TLAS root (Software keeps zero
+  // padding, which a refit walk would treat as a cyclic node); nothing to upload.
+  if (!meshInstancesLength(stage.instances)) return {records, parts, destinations, tlas: state.tlas, emissive: state.emissive, rt: state.rt};
   // Only the small instance/TLAS candidate is copied; immutable BLAS and vertex
   // allocations are retained. Uploads below contain dirty records and ancestors.
   const tlas = copyTLASForRefit(state.tlas);
-  const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
-  if (!meshInstancesLength(stage.instances)) return {records, parts, destinations, tlas, emissive: state.emissive, rt: state.rt};
   const ranges = state.hardware ? {tlasRanges: [], instanceRanges: refitLinearInstances(tlas.instancesBuffer!, stage.instances,
     state.hardware.geometries.map(g => g.indexOffset / 3), state.prepared.geometries.map(g => state.prepared.geometryRegions.get(g)!.vertexOffset), dirty)} :
     refitTLAS(tlas, stage.instances, prepared.blases, dirty);
