@@ -13,7 +13,8 @@ export class AovPrimitiveCache {
   private tlasRecords = -1;
   private combined?: Uint32Array;
 
-  get(source: Pick<AovSceneSource, 'blases' | 'geometries'>, tlas: FlattendBVH) {
+  /** `blasRecords` is the record offset of the first BLAS; default directly after the TLAS. */
+  get(source: Pick<AovSceneSource, 'blases' | 'geometries'>, tlas: FlattendBVH, blasRecords = tlas.buffer.byteLength / 16) {
     const parts = source.blases.map((blas, index) => {
       const geometry = source.geometries[index], indices = geometry.indexArray;
       const buffer = blas.bvh.buffer, triangleIds = blas.bvh.triangleIds;
@@ -27,7 +28,7 @@ export class AovPrimitiveCache {
       this.blases.set(buffer, {geometry, indices, topology: geometry.topologyVersion, triangleIds, ids});
       return ids;
     });
-    const tlasRecords = tlas.buffer.byteLength / 16;
+    const tlasRecords = blasRecords;
     if (!this.combined || this.tlasRecords !== tlasRecords || parts.length !== this.parts.length ||
         parts.some((part, i) => part !== this.parts[i])) {
       const combined = new Uint32Array(tlasRecords + parts.reduce((count, part) => count + part.length, 0)).fill(AOV_BACKGROUND_ID);

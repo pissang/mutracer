@@ -22,7 +22,7 @@ import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './samp
 import depthQueryFrag from './glsl/depthQuery.frag.js';
 import { readFloatPixelsAsync } from './WebGLReadback.js';
 import { DEPTH_SAMPLE_GRID, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
-import { MeshMembershipCache } from './meshMembership.js';
+import { MeshMembershipCache, refreshMaterialKeys } from './meshMembership.js';
 import { selectVisibleInstances } from './scenePreparation.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
@@ -41,7 +41,8 @@ import {
   refitBLAS,
   refitTLAS,
   mergeRefitRanges,
-  type FlattendBVH
+  type FlattendBVH,
+  type BLASInstance
 } from './bvhAccel.js';
 import {
   generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform, backgroundMapRotation
@@ -168,6 +169,10 @@ class WebGLRayTracePass {
   private _tlas?: FlattendBVH;
   private _bvhData?: Float32Array;
   private _instancesOffset = 0;
+  /** Float offset of the BLASes and float capacity of the instance region. */
+  private _blasBase = 0;
+  private _instanceCapacity = 0;
+  private _uploadedBlases: ArrayBuffer[] = [];
   private _vertexAttributeData?: Float32Array;
   private _vertexAttributeLayout?: VertexAttributeLayout;
   private _meshSnapshot: {
@@ -455,7 +460,7 @@ class WebGLRayTracePass {
             emission: !!pending?.emission || change.emission,
             emissiveMap: !!pending?.emissiveMap || change.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials]) };
-          this._meshSnapshot.forEach(item => { item.materialKeys = item.materials.map(getMaterialHashKey); });
+          refreshMaterialKeys(this._meshSnapshot, update.materials);
         }
         for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
         for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
@@ -476,6 +481,13 @@ class WebGLRayTracePass {
       }
     }
     const materialChange = !!update?.materials?.length;
+    // Materials are shared by many meshes; hash each once per call.
+    const materialKeys = new Map<OpenPBRMaterial, string>();
+    const materialKey = (material: OpenPBRMaterial) => {
+      let key = materialKeys.get(material);
+      if (key === undefined) { key = getMaterialHashKey(material); materialKeys.set(material, key); }
+      return key;
+    };
     const next = meshes.map((mesh) => ({
       mesh,
       instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
@@ -485,7 +497,7 @@ class WebGLRayTracePass {
       colorVersion: mesh instanceof InstancedMesh ? mesh.colorsVersion : 0,
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
-      materialKeys: mesh.materials.map(getMaterialHashKey),
+      materialKeys: mesh.materials.map(materialKey),
       visible: mesh.visible,
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
@@ -602,7 +614,7 @@ class WebGLRayTracePass {
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     this._tlas = buildWebTLAS(res.instances, res.blases);
-    this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
+    this._uploadBVH(res.blases);
 
     const layout = this._vertexAttributeLayout = vertexAttributeLayout(mergedGeometry);
     let vertexAttributeColumns = 0;
@@ -649,19 +661,37 @@ class WebGLRayTracePass {
     this._pendingMaterialUpdate = undefined;
   }
 
-  // One texture holds the TLAS, the BLASes and then the instance records.
-  private _uploadBVH(blas: Float32Array) {
+  // One texture holds the TLAS, the BLASes and then the instance records. The
+  // TLAS and instance regions have headroom, so instance-only updates
+  // (visibility, membership) rewrite them without moving resident BLASes.
+  private _uploadBVH(blases: BLASInstance[]) {
     const tlas = this._tlas!, instances = new Float32Array(tlas.instancesBuffer!);
-    const tlasLength = tlas.buffer.byteLength / 4, instancesOffset = tlasLength + blas.length;
-    const data = this._bvhData = new Float32Array(instancesOffset + instances.length);
+    const tlasLength = tlas.buffer.byteLength / 4, uploaded = this._uploadedBlases;
+    let data = this._bvhData;
+    if (data && tlasLength <= this._blasBase && instances.length <= this._instanceCapacity &&
+      uploaded.length === blases.length && blases.every((blas, i) => blas.bvh.buffer === uploaded[i])) {
+      const instancesStart = this._instancesOffset * 4;
+      data.set(new Float32Array(tlas.buffer));
+      data.set(instances, instancesStart);
+      const gl = this._renderer.gl;
+      if (tlasLength) this._bvhBufferTex.updateDataRange(gl, data, 0, tlasLength * 4);
+      if (instances.length) this._bvhBufferTex.updateDataRange(gl, data, instancesStart * 4, instances.length * 4);
+      return;
+    }
+    const blas = new Float32Array(concatBLASBuffers(blases));
+    const headroom = (length: number) => Math.ceil((length + Math.min(length >> 2, 1 << 18) + 64) / 4) * 4;
+    const blasBase = this._blasBase = headroom(tlasLength), instancesOffset = blasBase + blas.length;
+    this._instanceCapacity = headroom(instances.length);
+    this._uploadedBlases = blases.map(item => item.bvh.buffer);
+    data = this._bvhData = new Float32Array(instancesOffset + this._instanceCapacity);
     data.set(new Float32Array(tlas.buffer));
-    data.set(blas, tlasLength);
+    data.set(blas, blasBase);
     data.set(instances, instancesOffset);
     this._instancesOffset = instancesOffset / 4;
-    if (data.length > 0) setDataTexture(this._bvhBufferTex, data, 4);
+    setDataTexture(this._bvhBufferTex, data, 4);
     this._tracePasses.forEach(pass => pass.setUniforms({
-      bvhColumns: textureDimensionsFromArray(data.length / 4).columnsLog,
-      blasOffset: tlasLength / 4,
+      bvhColumns: textureDimensionsFromArray(data!.length / 4).columnsLog,
+      blasOffset: blasBase / 4,
       instancesOffset: this._instancesOffset
     }));
   }
@@ -742,7 +772,7 @@ class WebGLRayTracePass {
     const res = selectVisibleInstances(this._pendingMembershipData ?? this._preparedMeshData!, this._meshes);
     this._preparedMeshData = res;
     this._tlas = buildWebTLAS(res.instances, res.blases);
-    this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
+    this._uploadBVH(res.blases);
     this._tracePasses.forEach(pass => pass.setUniform('isEmptyScene', +(res.instances.length === 0)));
     this._pendingMembershipData = undefined;
     this._needsUpdateMeshMembership = false;
@@ -766,11 +796,11 @@ class WebGLRayTracePass {
     if (update.resized) {
       res.instances = updateMeshInstanceTransforms(res.instanceBindings);
       refitTLAS(tlas, res.instances, res.blases);
-      this._uploadBVH(new Float32Array(concatBLASBuffers(res.blases)));
+      this._uploadBVH(res.blases);
     } else {
       const ranges = [];
       for (const { blas, offset } of update.blases) {
-        const target = tlas.buffer.byteLength + offset;
+        const target = this._blasBase * 4 + offset;
         new Uint8Array(this._bvhData!.buffer).set(new Uint8Array(blas.buffer), target);
         ranges.push({offset: target, size: blas.buffer.byteLength});
       }
@@ -1138,7 +1168,7 @@ class WebGLRayTracePass {
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
     state.resize(width,height);
     this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & AOV_REFLECTANCE_MASK) !== 0});
-    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas)); state.frame=packed.frame; state.setScene(packed.words); }
+    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas,this._blasBase/4)); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
     this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
     const previous=state.accumulation[(state.samples+1)%2];

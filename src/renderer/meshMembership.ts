@@ -1,6 +1,7 @@
 import { getGeometryBvh } from './geometryBvh.js';
 import Geometry from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
+import { getMaterialHashKey } from '../scene/openPbrSchema.js';
 import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
 import { selectVisibleInstances } from './scenePreparation.js';
 
@@ -54,5 +55,19 @@ export class MeshMembershipCache {
         bvhBounds: template?.bvhBounds ?? getBvhBounds(mesh.geometry) };
     });
     return selectVisibleInstances({...res, materials, residentBindings: instanceBindings}, meshes);
+  }
+}
+/**
+ * Refreshes cached material hash keys of the snapshots that use `changed`,
+ * hashing each changed material once.
+ */
+export function refreshMaterialKeys(snapshots: readonly {materials: readonly Mesh['materials'][number][]; materialKeys: string[]}[],
+  changed: readonly Mesh['materials'][number][]) {
+  const keys = new Map(changed.map(material => [material, getMaterialHashKey(material)]));
+  for (const item of snapshots) {
+    for (let k = 0; k < item.materials.length; k++) {
+      const key = keys.get(item.materials[k]);
+      if (key !== undefined) item.materialKeys[k] = key;
+    }
   }
 }

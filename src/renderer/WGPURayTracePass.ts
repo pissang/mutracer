@@ -104,6 +104,7 @@ import {
 } from './envMapDistribution.js';
 import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
 import {selectVisibleInstances} from './scenePreparation.js';
+import {refreshMaterialKeys} from './meshMembership.js';
 import {
   buildWebTLAS,
   type BLASInstance,
@@ -452,6 +453,9 @@ class WGPURayTracePass {
   private _shaderCache: WGPUShaderCache;
   private _bvhCPU?: {tlas: FlattendBVH; blases: BLASInstance[]};
   private _bvhDataBytes = 0;
+  /** Byte offset of the BLASes in the BVH buffer; the TLAS region before it has headroom. */
+  private _blasBase = 0;
+  private _uploadedBlases: ArrayBuffer[] = [];
 
   // Fold scene invariants before backend inlining; runtime edits use uniforms.
   private _bakePipelineConstants = true;
@@ -1289,7 +1293,7 @@ class WGPURayTracePass {
     if (!state.frame) {
       // Only the center pass reads primitive IDs and compact display AOVs skip
       // it; building the map walks every BVH leaf on the main thread.
-      const primitiveIds = compact ? undefined : this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
+      const primitiveIds = compact ? undefined : this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas, this._blasBase / 16);
       const packed = packAovScene(this._preparedMeshData, this._tlas, camera, state.width, state.height, state.history, primitiveIds, false);
       state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
@@ -1942,7 +1946,7 @@ class WGPURayTracePass {
             emissiveMap: !!pending?.emissiveMap || materialUpdate.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials])
           };
-          this._meshSnapshot.forEach(item => { item.materialKeys = item.materials.map(getMaterialHashKey); });
+          refreshMaterialKeys(this._meshSnapshot, update.materials);
         }
         for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
         for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
@@ -1996,6 +2000,13 @@ class WGPURayTracePass {
       return transformChange;
     }
     const previousSnapshot = this._meshSnapshot;
+    // Materials are shared by many meshes; hash each once per call.
+    const materialKeys = new Map<OpenPBRMaterial, string>();
+    const materialKey = (material: OpenPBRMaterial) => {
+      let key = materialKeys.get(material);
+      if (key === undefined) { key = getMaterialHashKey(material); materialKeys.set(material, key); }
+      return key;
+    };
     const nextSnapshot = meshes.map((mesh) => ({
       mesh,
       instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
@@ -2006,7 +2017,7 @@ class WGPURayTracePass {
       geometry: mesh.geometry,
       bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
-      materialKeys: mesh.materials.map(getMaterialHashKey),
+      materialKeys: mesh.materials.map(materialKey),
       visible: mesh.visible,
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array,
@@ -2326,13 +2337,33 @@ class WGPURayTracePass {
   }
 
   /** Uploads the combined TLAS/BLAS buffer and the instance records. */
-  private _uploadBVH(tlas: FlattendBVH, blases: BLASInstance[]) {
+  /** Returns false when resident BLASes stayed in place and only the TLAS was written. */
+  private _uploadBVH(tlas: FlattendBVH, blases: BLASInstance[]): boolean {
     const stacks = getTraversalStackSizes(tlas, blases);
     this._constants.TLAS_STACK_SIZE = retainedShaderCapacity(stacks.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0));
     this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
-    const size = tlas.buffer.byteLength + blases.reduce((sum, b) => sum + b.bvh.buffer.byteLength, 0);
+    const blasBytes = blases.reduce((sum, b) => sum + b.bvh.buffer.byteLength, 0);
     const limit = Math.min(this._device.limits.maxBufferSize, this._device.limits.maxStorageBufferBindingSize);
+    // Instance-only updates (visibility, membership) keep resident BLASes in
+    // place and rewrite only the TLAS when it fits the reserved region.
+    const uploaded = this._uploadedBlases;
+    if (this._bvhBuffer && this._bvhCPU && tlas.buffer.byteLength <= this._blasBase &&
+      uploaded.length === blases.length && blases.every((blas, i) => blas.bvh.buffer === uploaded[i])) {
+      this._device.queue.writeBuffer(this._bvhBuffer, 0, tlas.buffer);
+      this._bvhCPU = {tlas, blases};
+      const instancesBuffer = this._updateGPUBuffer('Instances', this._instancesBuffer, new Float32Array(tlas.instancesBuffer!));
+      if (instancesBuffer !== this._instancesBuffer) this._needsUpdateBindGroups = true;
+      this._instancesBuffer = instancesBuffer;
+      return false;
+    }
+    // Headroom lets later instance-only updates grow the TLAS without moving BLASes.
+    const tlasBytes = tlas.buffer.byteLength;
+    let blasBase = Math.ceil((tlasBytes + Math.min(tlasBytes >> 2, 1 << 20) + 256) / 256) * 256;
+    if (blasBase + blasBytes > limit) blasBase = Math.ceil(tlasBytes / 16) * 16;
+    const size = blasBase + blasBytes;
     if (size > limit) throw new RangeError(`BVH buffer requires ${size} bytes; device storage buffer limit is ${limit} bytes.`);
+    this._blasBase = blasBase;
+    this._uploadedBlases = blases.map(blas => blas.bvh.buffer);
     let bvhBuffer = this._bvhBuffer;
     if (!bvhBuffer || bvhBuffer.size < Math.max(size, WGPU_SCENE_BUFFER_MIN_BYTES)) {
       bvhBuffer?.destroy();
@@ -2345,7 +2376,7 @@ class WGPURayTracePass {
     } else this._uploadBVHBlocks(bvhBuffer, tlas, blases);
     this._bvhCPU = {tlas, blases};
     this._bvhDataBytes = size;
-    const blasOffset = tlas.buffer.byteLength / 16;
+    const blasOffset = blasBase / 16;
     const instancesBuffer = this._updateGPUBuffer(
       'Instances', this._instancesBuffer, new Float32Array(tlas.instancesBuffer!)
     );
@@ -2353,11 +2384,12 @@ class WGPURayTracePass {
     this._bvhBuffer = bvhBuffer;
     this._instancesBuffer = instancesBuffer;
     this._rtUniform.views.blasOffset.set([blasOffset]);
+    return true;
   }
 
   private _uploadBVHBlocks(buffer: GPUBuffer, tlas: FlattendBVH, blases: BLASInstance[]) {
     this._device.queue.writeBuffer(buffer, 0, tlas.buffer);
-    let target = tlas.buffer.byteLength;
+    let target = this._blasBase;
     for (const blas of blases) {
       const chunkBytes = 64 * 1024 * 1024;
       for (let offset = 0; offset < blas.bvh.buffer.byteLength; offset += chunkBytes) {
@@ -2370,7 +2402,7 @@ class WGPURayTracePass {
   private _writeBVH(buffer: ArrayBuffer, tlas: FlattendBVH, blases: BLASInstance[]) {
     const bytes = new Uint8Array(buffer);
     bytes.set(new Uint8Array(tlas.buffer));
-    let offset = tlas.buffer.byteLength;
+    let offset = this._blasBase;
     for (const blas of blases) {
       bytes.set(new Uint8Array(blas.bvh.buffer), offset);
       offset += blas.bvh.buffer.byteLength;
@@ -2502,7 +2534,7 @@ class WGPURayTracePass {
 
   private _packTriangleMaterials(res: ReturnType<typeof updateMeshInstances>, tlas: FlattendBVH) {
     if (!this._constants.HAS_TRIANGLE_MATERIAL) return;
-    let offset = Number(this._constants.MATERIALINDEX_OFF) + tlas.buffer.byteLength / 16;
+    let offset = Number(this._constants.MATERIALINDEX_OFF) + this._blasBase / 16;
     res.geometries.forEach((g, i) => {
       packTriangleMaterials(g, res.geometryRegions.get(g)!.materialIndices, res.blases[i].bvh.buffer, this._attributeData!, offset);
       offset += res.blases[i].bvh.buffer.byteLength / 16;
@@ -2554,7 +2586,7 @@ class WGPURayTracePass {
       this._uploadBVH(tlas, res.blases);
     } else {
       for (const { blas, offset } of update.blases) {
-        this._device.queue.writeBuffer(this._bvhBuffer!, tlas.buffer.byteLength + offset, blas.buffer);
+        this._device.queue.writeBuffer(this._bvhBuffer!, this._blasBase + offset, blas.buffer);
       }
     }
 
@@ -2610,8 +2642,8 @@ class WGPURayTracePass {
     this._pendingMembershipData = undefined;
     const tlas = buildWebTLAS(instances, res.blases);
     this._tlas = tlas;
-    this._uploadBVH(tlas, res.blases);
-    this._refreshTriangleMaterials(res, tlas);
+    // Triangle materials follow the BLAS layout, which stays put when reused.
+    if (this._uploadBVH(tlas, res.blases)) this._refreshTriangleMaterials(res, tlas);
 
     this._emissiveTriangles = this._emissiveCache.collect(
       emissiveBindings,
@@ -2656,8 +2688,7 @@ class WGPURayTracePass {
     );
     if (!sameInstanceMembership(previousInstances, res.instances)) {
       this._tlas = buildWebTLAS(res.instances, res.blases);
-      this._uploadBVH(this._tlas, res.blases);
-      this._refreshTriangleMaterials(res, this._tlas);
+      if (this._uploadBVH(this._tlas, res.blases)) this._refreshTriangleMaterials(res, this._tlas);
       this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
       this._needsUpdateLightSamplingData = true;
       this._rtUniform.views.isEmpty[0] = +(res.instances.length === 0);

@@ -87,7 +87,7 @@ it('updates direct geometry regions, triangle materials, and BLAS/TLAS uploads w
     _attributeData: new Uint32Array(vertexWords + bvhBytes / 16), _constants: {...layout.constants, MATERIALINDEX_OFF: vertexWords},
     _device: {queue: {writeBuffer(target: any, offset: number, buffer: ArrayBuffer, first = 0, count = buffer.byteLength) {
       writes.push({target, offset, bytes: new Uint8Array(buffer, first, count).slice()});
-    }}}, _bvhDataBytes: bvhBytes, _attrBuffers: {size: (vertexWords + bvhBytes / 16) * 4}, _bvhBuffer: {},
+    }}}, _bvhDataBytes: bvhBytes, _blasBase: tlas.buffer.byteLength, _attrBuffers: {size: (vertexWords + bvhBytes / 16) * 4}, _bvhBuffer: {},
     _pendingGeometryUpdates: new Set([g]), _dirtyTransformMeshes: new Set(), _meshSnapshot: []});
   for (const geometry of res.geometries) packCompactVertices(geometry, pass._attributeData, layout.stride, layout.offsets,
     0, geometry.vertexCount, res.geometryRegions.get(geometry)!.vertexOffset);
@@ -103,15 +103,15 @@ it('updates direct geometry regions, triangle materials, and BLAS/TLAS uploads w
     expect(pass._attributeData[vertexWords + recordOffset + i]).toBe(2);
   }
   expect(writes.some(w => w.target === pass._bvhBuffer)).toBe(true);
-  // A rebuilt TLAS changes every following BLAS material-record address.
+  // Moving the BLAS region changes every BLAS material-record address.
   const previousMaterials = pass._attributeData.slice(vertexWords + tlas.buffer.byteLength / 16);
   const largerTlas = {...tlas, buffer: new ArrayBuffer(tlas.buffer.byteLength + 16)};
-  pass._bvhDataBytes += 16;
+  pass._bvhDataBytes += 16; pass._blasBase += 16;
   pass._attrBuffers.size += 4;
   pass._refreshTriangleMaterials(res, largerTlas);
   expect(pass._attributeData.slice(vertexWords + largerTlas.buffer.byteLength / 16)).toEqual(previousMaterials);
   expect(pass._attributeData.slice(0, first)).toEqual(unchanged);
-  pass._bvhDataBytes -= 16;
+  pass._bvhDataBytes -= 16; pass._blasBase -= 16;
   pass._refreshTriangleMaterials(res, tlas);
 
   // TLAS refits remain backed by the retained per-tree buffers, including debug assembly.
