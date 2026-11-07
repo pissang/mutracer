@@ -2360,7 +2360,8 @@ class WGPURayTracePass {
     this._constants.TLAS_STACK_SIZE = retainedShaderCapacity(stacks.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0));
     this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
     const blasBytes = blases.reduce((sum, b) => sum + b.bvh.buffer.byteLength, 0);
-    const limit = Math.min(this._device.limits.maxBufferSize, this._device.limits.maxStorageBufferBindingSize);
+    // Missing limits (offline capture devices) are unbounded, as for scene buffers above.
+    const limit = Math.min(this._device.limits?.maxBufferSize ?? Infinity, this._device.limits?.maxStorageBufferBindingSize ?? Infinity);
     // Instance-only updates (visibility, membership) keep resident BLASes in
     // place and rewrite only the TLAS when it fits the reserved region.
     const uploaded = this._uploadedBlases;
