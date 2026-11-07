@@ -1,5 +1,5 @@
 // Independent of beauty composition and denoising; shared by WebGPU and native.
-export function aovDisplayShader(format: 'rgba16float' | 'rgba8unorm', primary = false) {
+export function aovDisplayShader(format: 'rgba16float' | 'rgba8unorm', primary = false, linearizePrimary = true) {
   return /* wgsl */ `
 struct DisplayAovAccum { geometry: vec4f, position: vec4f, diffuse: vec4f, specular: vec4f, }
 struct DisplayAovCenter { identity: vec4u, motion: vec4f, }
@@ -32,6 +32,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let pixel = accumulation[index];
   let hit = pixel.position.w;
   var color = vec3f(0.0);
+  var linearize = true;
   var alpha = hit / f32(max(params.sizeKind.z, 1u));
   let inv = 1.0 / max(hit, 1.0);
   if (kind == 0u) {
@@ -55,6 +56,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   }${primary ? /* wgsl */ ` else if (kind >= 9u) {
     let primary = center[index + size.x * size.y];
     let normalDepth = bitcast<vec4f>(primary.identity);
+    ${linearizePrimary ? '' : 'linearize = false;'}
     alpha = primary.motion.w;
     if (kind == 9u) { color = clamp(normalDepth.xyz * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
     else if (kind == 10u) { color = vec3f(clamp((normalDepth.w - params.mapping.x) / (params.mapping.y - params.mapping.x), 0.0, 1.0)); }
@@ -69,7 +71,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     color = clamp(p - 1.0, vec3f(0.0), vec3f(1.0)) * clamp(magnitude / params.mapping.w, 0.0, 1.0);
   }
   if (alpha <= 0.0) { color = vec3f(0.0); }
-  if (params.flags.y != 0u) { color = displayAovLinear(color); }
+  if (params.flags.y != 0u && linearize) { color = displayAovLinear(color); }
   textureStore(image, vec2i(id.xy), vec4f(color, clamp(alpha, 0.0, 1.0)));
 }
 `;

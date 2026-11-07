@@ -1,5 +1,5 @@
 /** Shared normalization for readback and GPU denoiser snapshots. */
-function resolveCommon(primary: boolean) { return /* wgsl */ `
+function resolveCommon(primary: boolean, primaryStart = 9) { return /* wgsl */ `
 struct AovResolvedAccumulation { geometry: vec4f, position: vec4f, diffuse: vec4f, specular: vec4f, }
 struct AovResolvedCenter { identity: vec4u, motion: vec4f, }
 @group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;
@@ -9,11 +9,11 @@ fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
   if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,motion.w);}
-${primary ? /* wgsl */ `  else if(kind>=9u){
+${primary ? /* wgsl */ `  else if(kind>=${primaryStart}u){
     let primary=center[source+parameters.x*parameters.y];
     let normalDepth=bitcast<vec4f>(primary.identity);
-    if(kind==9u){value=vec4f(normalDepth.xyz,primary.motion.w);}
-    else if(kind==10u){value=vec4f(normalDepth.w,0.0,0.0,primary.motion.w);}
+    if(kind==${primaryStart}u){value=vec4f(normalDepth.xyz,primary.motion.w);}
+    else if(kind==${primaryStart + 1}u){value=vec4f(normalDepth.w,0.0,0.0,primary.motion.w);}
     else{value=primary.motion;}
   }
 ` : ''}  else{
@@ -31,9 +31,9 @@ ${primary ? /* wgsl */ `  else if(kind>=9u){
 }
 `; }
 export const aovResolveCommon = resolveCommon(true);
-// The native single-output and borrowed shaders keep their existing layout until the native port.
+// The browser and borrowed-output variants retain their existing AOV index map.
 /** Bit 8 of kind requests top row first. Kept for the native single-output pass. */
-export default resolveCommon(false) + /* wgsl */ `
+const resolveMain = /* wgsl */ `
 @group(0) @binding(2) var<storage,read_write> output: array<vec4u>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -44,6 +44,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   output[index]=aovResolvedValue(source,parameters.w&255u);
 }
 `;
+export const aovResolveNativeShader = resolveCommon(true, 7) + resolveMain;
+export default resolveCommon(false) + resolveMain;
 
 /** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
 export const aovBorrowDepthShader = resolveCommon(false) + /* wgsl */ `

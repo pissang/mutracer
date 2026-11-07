@@ -64,7 +64,15 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let hash = displayAovHash(identity[params.flags.x]);
     color = 0.2 + 0.8 * vec3f(f32(hash & 255u), f32((hash >> 8u) & 255u),
       f32((hash >> 16u) & 255u)) / 255.0;
-  } else if (kind == 6u) {
+  } else if (kind >= 9u) {
+    let primary = center[index + size.x * size.y];
+    let normalDepth = bitcast<vec4f>(primary.identity);
+    linearize = false;
+    alpha = primary.motion.w;
+    if (kind == 9u) { color = clamp(normalDepth.xyz * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
+    else if (kind == 10u) { color = vec3f(clamp((normalDepth.w - params.mapping.x) / (params.mapping.y - params.mapping.x), 0.0, 1.0)); }
+    else { color = clamp(primary.motion.xyz / params.mapping.z * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
+  } else {
     let m = center[index].motion;
     alpha = select(0.0, 1.0, m.w == 3.0);
     let magnitude = length(m.xy);
@@ -72,14 +80,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (magnitude > 0.0) { hue = fract(atan2(m.y, m.x) / 6.28318530718 + 1.0); }
     let p = abs(fract(vec3f(hue) + vec3f(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
     color = clamp(p - 1.0, vec3f(0.0), vec3f(1.0)) * clamp(magnitude / params.mapping.w, 0.0, 1.0);
-  } else {
-    linearize = false;
-    let primary = center[index + size.x * size.y];
-    let normalDepth = bitcast<vec4f>(primary.identity);
-    let position = primary.motion;
-    if (kind == 9u) { alpha = position.w; color = clamp(normalDepth.xyz * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
-    else if (kind == 10u) { alpha = position.w; color = vec3f(clamp((normalDepth.w - params.mapping.x) / (params.mapping.y - params.mapping.x), 0.0, 1.0)); }
-    else { alpha = position.w; color = clamp(position.xyz / params.mapping.z * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
   }
   if (alpha <= 0.0) { color = vec3f(0.0); }
   if (params.flags.y != 0u && linearize) { color = displayAovLinear(color); }
