@@ -7,10 +7,7 @@ validation rules. The record structs are in
 [`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
 in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
-The current output format is version 7. Accepted input versions and the record
-strides of older versions are specified under [Header](#header). Rebuild C
-consumers with the current headers. Record type names retain their historical
-`_v4` suffix.
+See [Header](#header) for the accepted versions and record strides.
 
 Most applications should build scenes with the [Scene API](scene.md) instead,
 which needs no offsets and can export descriptors.
@@ -159,11 +156,9 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
   the maximum tile width and maximum tile height. Tiles are resampled to those
   common dimensions with nearest-neighbor filtering; tile-local filtering is clamped to
   each cell. Negative UVs and coordinates at or above 10 sample transparent
-  black. A set uses one storage format: RGBA8 or RGBA32F linear. RGBA8 color
-  slots decode sRGB; RGBA8 data slots stay linear. Descriptors mixing formats
-  are rejected so color and data slots retain their usual interpretation. The
-  full logical grid, including empty cells, counts against texture and GPU
-  budgets.
+  black. All tiles in a set must use the same storage format; mixed-format
+  descriptors are rejected. The full logical grid, including empty cells,
+  counts against texture and GPU budgets.
 
 ### Lights
 

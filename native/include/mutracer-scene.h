@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
-/* Raw scene descriptor v6 records (historical _v4 C type names). The format,
+/* Raw scene descriptor v7 records (historical _v4 C type names). The format,
  * validation rules and limits are in native/docs/scene-format.md.
  * mt_context_commit (mutracer-context.h) consumes the descriptor. Every record is a run of little-endian 32-bit words:
  * uint32_t fields, float fields as IEEE binary32. Offsets are word offsets from
