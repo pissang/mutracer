@@ -781,7 +781,7 @@ fn assert_material_hdr(retained: &Render, full: &Render, a: &[f32], b: &[f32], l
 
 #[test]
 #[ignore = "requires a real GPU; run separately"]
-fn recreated_mesh_identity_full_commit_matches_fresh_on_both_backends() {
+fn recreated_mesh_identity_commit_matches_fresh_on_both_backends() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
     for backend in [Backend::Software, Backend::Hardware] {
         let mut scene = Scene::new();
@@ -819,11 +819,16 @@ fn recreated_mesh_identity_full_commit_matches_fresh_on_both_backends() {
         let values = scene.mesh_mut(mesh).unwrap().clone();
         scene.remove_mesh(mesh).unwrap();
         scene.add_mesh(values).unwrap();
-        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Full);
+        // The new handle references resident geometry and material, so the
+        // membership edit stays incremental.
+        assert_eq!(
+            scene.pending_commit_kind().unwrap(),
+            CommitKind::Incremental
+        );
         engine.set_scene_object(&scene).unwrap();
         engine.update().unwrap();
         render.converge(ConvergeOptions::new(8)).unwrap();
-        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Full));
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
         assert_eq!(render.backend().unwrap().0, backend);
         let fresh = Engine::new(EngineOptions { backend }).unwrap();
         let reference = Render::new(&fresh, settings).unwrap();
@@ -839,7 +844,7 @@ fn recreated_mesh_identity_full_commit_matches_fresh_on_both_backends() {
             &b.data,
             &format!("{backend:?}-recreated-mesh"),
         );
-        println!("MESH_IDENTITY_EQUIVALENCE {backend:?} actual=Full bits=equal");
+        println!("MESH_IDENTITY_EQUIVALENCE {backend:?} actual=Incremental bits=equal");
     }
 }
 
