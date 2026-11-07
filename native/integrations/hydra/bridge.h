@@ -91,7 +91,8 @@ struct Property {
   bool boolean = false;
 };
 std::vector<Property> OpenPbrDefaults();
-std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &);
+std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &,
+                                      std::vector<std::string> *warnings = nullptr);
 struct TextureData {
   mt_scene_texture_desc desc{};
   std::vector<uint8_t> bytes;

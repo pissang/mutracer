@@ -112,6 +112,56 @@ int main() {
           "Preview emission radiance");
   Require(Find(values, MT_MAT_COAT_IOR).value[0] == 1.5f,
           "Preview coat approximation");
+  node.parameters.clear();
+  node.inputConnections.clear();
+  node.nodeTypeId = TfToken("ND_standard_surface_surfaceshader");
+  node.parameters[TfToken("base")] = VtValue(.7f);
+  node.parameters[TfToken("base_color")] = VtValue(GfVec3f(.8f, .4f, .2f));
+  node.parameters[TfToken("coat")] = VtValue(.5f);
+  node.parameters[TfToken("coat_color")] = VtValue(GfVec3f(.5f, 1, .5f));
+  node.parameters[TfToken("metalness")] = VtValue(.25f);
+  node.parameters[TfToken("sheen_roughness")] = VtValue(.25f);
+  node.parameters[TfToken("thin_film_thickness")] = VtValue(500.f);
+  values = ConvertMaterial(network);
+  Require(Find(values, MT_MAT_BASE_WEIGHT).value[0] == .7f,
+          "Standard Surface base weight");
+  Require(Find(values, MT_MAT_BASE_COLOR).value == GfVec3f(.6f, .4f, .15f),
+          "official coat attenuation translation");
+  Require(Find(values, MT_MAT_SPECULAR_WEIGHT).value[0] == 1 &&
+              Find(values, MT_MAT_COAT_WEIGHT).value[0] == 0,
+          "official metallic specular and coat translation");
+  Require(std::abs(Find(values, MT_MAT_FUZZ_ROUGHNESS).value[0] -
+                       std::pow(.25f, .4f)) < 1e-6f,
+          "official sheen roughness translation");
+  Require(Find(values, MT_MAT_THIN_FILM_WEIGHT).value[0] == 1 &&
+              Find(values, MT_MAT_THIN_FILM_THICKNESS).value[0] == .5f,
+          "official nanometer thin-film translation");
+  SdfPath add("/Add"), multiply("/Multiply"), convert("/Convert");
+  network.nodes[add].nodeTypeId = TfToken("ND_add_color3");
+  network.nodes[add].parameters[TfToken("in1")] = VtValue(GfVec3f(.1f));
+  network.nodes[add].parameters[TfToken("in2")] = VtValue(GfVec3f(.2f));
+  network.nodes[multiply].nodeTypeId = TfToken("ND_multiply_color3");
+  network.nodes[multiply].parameters[TfToken("in2")] = VtValue(GfVec3f(2));
+  network.nodes[multiply].inputConnections[TfToken("in1")] =
+      {{add, TfToken("out")}};
+  network.nodes[convert].nodeTypeId = TfToken("ND_convert_color3_vector3");
+  network.nodes[convert].inputConnections[TfToken("in")] =
+      {{multiply, TfToken("out")}};
+  node.inputConnections[TfToken("base_color")] =
+      {{convert, TfToken("out")}};
+  node.parameters[TfToken("coat")] = VtValue(0.f);
+  values = ConvertMaterial(network);
+  Require(Find(values, MT_MAT_BASE_COLOR).value == GfVec3f(.6f),
+          "connected convert and math nodes fold to a constant");
+  std::vector<std::string> warnings;
+  SdfPath noise("/Noise");
+  network.nodes[noise].nodeTypeId = TfToken("ND_noise3d_color3");
+  node.inputConnections[TfToken("base_color")] = {{noise, TfToken("out")}};
+  node.parameters[TfToken("base_color")] = VtValue(GfVec3f(.25f));
+  values = ConvertMaterial(network, &warnings);
+  Require(Find(values, MT_MAT_BASE_COLOR).value == GfVec3f(.25f) &&
+              !warnings.empty() && warnings.back().find("base_color") != std::string::npos,
+          "procedural graph warns and uses the authored fallback");
   HdMeshTopology topology(TfToken("none"), TfToken("rightHanded"),
                           VtIntArray{4, 3}, VtIntArray{0, 1, 2, 3, 0, 3, 4});
   VtVec3fArray points = {GfVec3f(0, 0, 0), GfVec3f(1, 0, 0), GfVec3f(1, 1, 0),

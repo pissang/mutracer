@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 PXR_NAMESPACE_OPEN_SCOPE
 namespace mtHydra {
@@ -36,6 +37,94 @@ static VtValue Input(HdMaterialNode2 const &n, std::string const &key) {
   auto i = n.parameters.find(TfToken(key));
   return i == n.parameters.end() ? VtValue() : i->second;
 }
+static std::optional<GfVec3f>
+Constant(HdMaterialNetwork2 const &network, HdMaterialNode2 const &node,
+         std::string const &key, std::set<SdfPath> &visiting);
+static std::optional<GfVec3f>
+Constant(HdMaterialNetwork2 const &network, SdfPath const &path,
+         TfToken const &output, std::set<SdfPath> &visiting) {
+  auto found = network.nodes.find(path);
+  if (found == network.nodes.end() || !visiting.insert(path).second)
+    return std::nullopt;
+  auto const &node = found->second;
+  auto id = node.nodeTypeId.GetString();
+  auto in = [&](char const *name, GfVec3f fallback) {
+    auto value = Constant(network, node, name, visiting);
+    return value.value_or(fallback);
+  };
+  std::optional<GfVec3f> result;
+  if (id.find("ND_convert_") == 0 || id.find("ND_dot_") == 0)
+    result = Constant(network, node, "in", visiting);
+  else if (id.find("ND_add_") == 0)
+    result = in("in1", GfVec3f(0)) + in("in2", GfVec3f(0));
+  else if (id.find("ND_subtract_") == 0)
+    result = in("in1", GfVec3f(0)) - in("in2", GfVec3f(0));
+  else if (id.find("ND_multiply_") == 0)
+    result = GfCompMult(in("in1", GfVec3f(0)), in("in2", GfVec3f(1)));
+  else if (id.find("ND_divide_") == 0) {
+    auto a = in("in1", GfVec3f(0)), b = in("in2", GfVec3f(1));
+    result = GfVec3f(b[0] ? a[0] / b[0] : 0, b[1] ? a[1] / b[1] : 0,
+                     b[2] ? a[2] / b[2] : 0);
+  } else if (id.find("ND_mix_") == 0) {
+    auto fg = in("fg", GfVec3f(1)), bg = in("bg", GfVec3f(0));
+    float amount = in("mix", GfVec3f(.5f))[0];
+    result = bg * (1 - amount) + fg * amount;
+  } else if (id.find("ND_clamp_") == 0) {
+    auto x = in("in", GfVec3f(0)), lo = in("low", GfVec3f(0)),
+         hi = in("high", GfVec3f(1));
+    result = GfVec3f(std::clamp(x[0], lo[0], hi[0]),
+                     std::clamp(x[1], lo[1], hi[1]),
+                     std::clamp(x[2], lo[2], hi[2]));
+  } else if (id.find("ND_power_") == 0) {
+    auto a = in("in1", GfVec3f(0)), b = in("in2", GfVec3f(1));
+    result = GfVec3f(std::pow(a[0], b[0]), std::pow(a[1], b[1]),
+                     std::pow(a[2], b[2]));
+  } else if (id.find("ND_dotproduct_") == 0) {
+    auto a = in("in1", GfVec3f(0)), b = in("in2", GfVec3f(0));
+    result = GfVec3f(GfDot(a, b), 0, 0);
+  } else if (id.find("ND_extract_") == 0) {
+    auto x = in("in", GfVec3f(0));
+    int index = int(in("index", GfVec3f(0))[0]);
+    result = GfVec3f(x[std::clamp(index, 0, 2)], 0, 0);
+  } else if (id.find("ND_ifgreater_") == 0 ||
+             id.find("ND_ifequal_") == 0) {
+    float a = in("value1", GfVec3f(0))[0], b = in("value2", GfVec3f(0))[0];
+    bool chooseFirst = id.find("ND_ifgreater_") == 0 ? a > b : a == b;
+    result = in(chooseFirst ? "in1" : "in2", GfVec3f(0));
+  }
+  visiting.erase(path);
+  return result;
+}
+static std::optional<GfVec3f>
+Constant(HdMaterialNetwork2 const &network, HdMaterialNode2 const &node,
+         std::string const &key, std::set<SdfPath> &visiting) {
+  auto connections = node.inputConnections.find(TfToken(key));
+  if (connections != node.inputConnections.end() && !connections->second.empty()) {
+    auto const &c = connections->second.front();
+    return Constant(network, c.upstreamNode, c.upstreamOutputName, visiting);
+  }
+  auto value = Input(node, key);
+  if (value.IsEmpty())
+    return std::nullopt;
+  return Value(value, GfVec3f(0));
+}
+static GfVec3f MaterialInput(HdMaterialNetwork2 const &network,
+                             HdMaterialNode2 const &node, char const *key,
+                             GfVec3f fallback,
+                             std::vector<std::string> *warnings) {
+  std::set<SdfPath> visiting;
+  auto value = Constant(network, node, key, visiting);
+  auto connections = node.inputConnections.find(TfToken(key));
+  if (!value && connections != node.inputConnections.end() &&
+      !connections->second.empty()) {
+    auto message = "connected input " + std::string(key) +
+                   " cannot be reduced to a constant; using the authored fallback";
+    if (warnings)
+      warnings->push_back(message);
+    Warn(message);
+  }
+  return value.value_or(Value(Input(node, key), fallback));
+}
 static HdMaterialNode2 const *Surface(HdMaterialNetwork2 const &n) {
   auto t = n.terminals.find(HdMaterialTerminalTokens->surface);
   if (t == n.terminals.end())
@@ -43,7 +132,8 @@ static HdMaterialNode2 const *Surface(HdMaterialNetwork2 const &n) {
   auto node = n.nodes.find(t->second.upstreamNode);
   return node == n.nodes.end() ? nullptr : &node->second;
 }
-std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network) {
+std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network,
+                                      std::vector<std::string> *warnings) {
   auto values = OpenPbrDefaults();
   auto node = Surface(network);
   if (!node)
@@ -55,7 +145,68 @@ std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network) {
   };
   if (node->nodeTypeId == TfToken("ND_open_pbr_surface_surfaceshader")) {
     for (auto &p : values)
-      p.value = Value(Input(*node, p.name), p.value);
+      p.value = MaterialInput(network, *node, p.name.c_str(), p.value, warnings);
+  } else if (node->nodeTypeId == TfToken("ND_standard_surface_surfaceshader") ||
+             node->nodeTypeId == TfToken("standard_surface")) {
+    auto get = [&](char const *name, GfVec3f fallback) {
+      return MaterialInput(network, *node, name, fallback, warnings);
+    };
+    auto base = get("base", GfVec3f(.8f))[0];
+    auto baseColor = get("base_color", GfVec3f(1));
+    auto metalness = get("metalness", GfVec3f(0))[0];
+    auto coat = get("coat", GfVec3f(0))[0];
+    auto coatColor = get("coat_color", GfVec3f(1));
+    set(MT_MAT_BASE_WEIGHT, GfVec3f(base, 0, 0));
+    set(MT_MAT_BASE_COLOR,
+        GfCompMult(baseColor, GfVec3f(1) * (1 - coat) + coatColor * coat));
+    set(MT_MAT_BASE_DIFFUSE_ROUGHNESS,
+        get("diffuse_roughness", GfVec3f(0)));
+    set(MT_MAT_BASE_METALNESS, GfVec3f(metalness, 0, 0));
+    auto specColor = get("specular_color", GfVec3f(1));
+    set(MT_MAT_SPECULAR_WEIGHT,
+        GfVec3f(metalness > 0 ? 1 : get("specular", GfVec3f(1))[0], 0, 0));
+    set(MT_MAT_SPECULAR_COLOR,
+        GfDot(specColor, GfVec3f(1)) == 0 ? GfVec3f(1) : specColor);
+    set(MT_MAT_SPECULAR_ROUGHNESS,
+        get("specular_roughness", GfVec3f(.2f, 0, 0)));
+    set(MT_MAT_SPECULAR_IOR, get("specular_IOR", GfVec3f(1.5f, 0, 0)));
+    set(MT_MAT_SPECULAR_ANISOTROPY,
+        get("specular_anisotropy", GfVec3f(0)));
+    struct Direct { char const *source; uint32_t target; GfVec3f fallback; };
+    Direct direct[] = {
+        {"transmission", MT_MAT_TRANSMISSION_WEIGHT, GfVec3f(0)},
+        {"transmission_color", MT_MAT_TRANSMISSION_COLOR, GfVec3f(1)},
+        {"transmission_depth", MT_MAT_TRANSMISSION_DEPTH, GfVec3f(0)},
+        {"transmission_scatter", MT_MAT_TRANSMISSION_SCATTER, GfVec3f(0)},
+        {"transmission_scatter_anisotropy", MT_MAT_TRANSMISSION_SCATTER_ANISOTROPY, GfVec3f(0)},
+        {"transmission_dispersion", MT_MAT_TRANSMISSION_DISPERSION_SCALE, GfVec3f(0)},
+        {"subsurface", MT_MAT_SUBSURFACE_WEIGHT, GfVec3f(0)},
+        {"subsurface_color", MT_MAT_SUBSURFACE_COLOR, GfVec3f(1)},
+        {"subsurface_scale", MT_MAT_SUBSURFACE_RADIUS, GfVec3f(1, 0, 0)},
+        {"subsurface_radius", MT_MAT_SUBSURFACE_RADIUS_SCALE, GfVec3f(1)},
+        {"subsurface_anisotropy", MT_MAT_SUBSURFACE_ANISOTROPY, GfVec3f(0)},
+        {"sheen", MT_MAT_FUZZ_WEIGHT, GfVec3f(0)},
+        {"sheen_color", MT_MAT_FUZZ_COLOR, GfVec3f(1)},
+        {"coat_color", MT_MAT_COAT_COLOR, GfVec3f(1)},
+        {"coat_roughness", MT_MAT_COAT_ROUGHNESS, GfVec3f(.1f, 0, 0)},
+        {"coat_anisotropy", MT_MAT_COAT_ANISOTROPY, GfVec3f(0)},
+        {"coat_IOR", MT_MAT_COAT_IOR, GfVec3f(1.5f, 0, 0)},
+        {"coat_affect_roughness", MT_MAT_COAT_DARKENING, GfVec3f(0)},
+        {"thin_film_IOR", MT_MAT_THIN_FILM_IOR, GfVec3f(1.5f, 0, 0)},
+        {"emission", MT_MAT_EMISSION_LUMINANCE, GfVec3f(0)},
+        {"emission_color", MT_MAT_EMISSION_COLOR, GfVec3f(1)},
+        {"thin_walled", MT_MAT_THIN_WALLED, GfVec3f(0)}};
+    for (auto const &m : direct)
+      set(m.target, get(m.source, m.fallback));
+    set(MT_MAT_FUZZ_ROUGHNESS,
+        GfVec3f(std::pow(get("sheen_roughness", GfVec3f(.3f))[0], .4f), 0, 0));
+    set(MT_MAT_COAT_WEIGHT,
+        GfVec3f(coat * metalness > 0 ? 0 : coat, 0, 0));
+    float thickness = get("thin_film_thickness", GfVec3f(0))[0] * .001f;
+    set(MT_MAT_THIN_FILM_WEIGHT, GfVec3f(thickness > 0 ? 1 : 0, 0, 0));
+    set(MT_MAT_THIN_FILM_THICKNESS, GfVec3f(thickness, 0, 0));
+    auto opacity = get("opacity", GfVec3f(1));
+    set(MT_MAT_OPACITY, GfVec3f(opacity[0], 0, 0));
   } else if (node->nodeTypeId == TfToken("UsdPreviewSurface")) {
     struct Mapping {
       char const *name;
@@ -72,8 +223,9 @@ std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network) {
         {"clearcoatRoughness", MT_MAT_COAT_ROUGHNESS, GfVec3f(.01f, 0, 0)},
         {"emissiveColor", MT_MAT_EMISSION_COLOR, GfVec3f(0)}};
     for (auto const &m : map)
-      set(m.id, Value(Input(*node, m.name), m.fallback));
-    auto emission = Value(Input(*node, "emissiveColor"), GfVec3f(0));
+      set(m.id, MaterialInput(network, *node, m.name, m.fallback, warnings));
+    auto emission = MaterialInput(network, *node, "emissiveColor", GfVec3f(0),
+                                  warnings);
     set(MT_MAT_EMISSION_LUMINANCE,
         GfVec3f(emission != GfVec3f(0) ? 1 : 0, 0, 0));
     set(MT_MAT_COAT_IOR, GfVec3f(1.5f, 0, 0));
@@ -195,6 +347,9 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
         error);
   auto root = Surface(network);
   bool preview = root && root->nodeTypeId == TfToken("UsdPreviewSurface");
+  bool standard = root &&
+                  (root->nodeTypeId == TfToken("ND_standard_surface_surfaceshader") ||
+                   root->nodeTypeId == TfToken("standard_surface"));
   float cutoff =
       preview ? Value(Input(*root, "opacityThreshold"), GfVec3f(0))[0] : 0;
   Check(mt_scene_material_set_float(scene, handle, MT_MAT_ALPHA_CUTOFF, cutoff,
@@ -206,33 +361,35 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
 
   struct Slot {
     char const *mx;
+    char const *standard;
     char const *usd;
     uint32_t id;
     bool color;
   };
   Slot slots[] = {
-      {"base_color", "diffuseColor", MT_MAT_MAP, true},
-      {"specular_roughness", "roughness", MT_MAT_ROUGHNESS_MAP, false},
-      {"base_metalness", "metallic", MT_MAT_METALNESS_MAP, false},
-      {"emission_color", "emissiveColor", MT_MAT_EMISSIVE_MAP, true},
-      {"geometry_opacity", "opacity", MT_MAT_ALPHA_MAP, false},
-      {"geometry_normal", "normal", MT_MAT_NORMAL_MAP, false},
-      {"geometry_coat_normal", "__none", MT_MAT_COAT_NORMAL_MAP, false},
-      {"coat_weight", "clearcoat", MT_MAT_COAT_WEIGHT_MAP, false},
-      {"coat_roughness", "clearcoatRoughness", MT_MAT_COAT_ROUGHNESS_MAP,
+      {"base_color", "base_color", "diffuseColor", MT_MAT_MAP, true},
+      {"specular_roughness", "specular_roughness", "roughness", MT_MAT_ROUGHNESS_MAP, false},
+      {"base_metalness", "metalness", "metallic", MT_MAT_METALNESS_MAP, false},
+      {"emission_color", "emission_color", "emissiveColor", MT_MAT_EMISSIVE_MAP, true},
+      {"geometry_opacity", "opacity", "opacity", MT_MAT_ALPHA_MAP, false},
+      {"geometry_normal", "normal", "normal", MT_MAT_NORMAL_MAP, false},
+      {"geometry_coat_normal", "coat_normal", "__none", MT_MAT_COAT_NORMAL_MAP, false},
+      {"coat_weight", "coat", "clearcoat", MT_MAT_COAT_WEIGHT_MAP, false},
+      {"coat_roughness", "coat_roughness", "clearcoatRoughness", MT_MAT_COAT_ROUGHNESS_MAP,
        false},
-      {"specular_color", "__none", MT_MAT_SPECULAR_COLOR_MAP, true},
-      {"specular_weight", "__none", MT_MAT_SPECULAR_WEIGHT_MAP, false},
-      {"transmission_weight", "__none", MT_MAT_TRANSMISSION_MAP, false},
-      {"fuzz_color", "__none", MT_MAT_FUZZ_COLOR_MAP, true},
-      {"fuzz_roughness", "__none", MT_MAT_FUZZ_ROUGHNESS_MAP, false}};
+      {"specular_color", "specular_color", "__none", MT_MAT_SPECULAR_COLOR_MAP, true},
+      {"specular_weight", "specular", "__none", MT_MAT_SPECULAR_WEIGHT_MAP, false},
+      {"transmission_weight", "transmission", "__none", MT_MAT_TRANSMISSION_MAP, false},
+      {"fuzz_color", "sheen_color", "__none", MT_MAT_FUZZ_COLOR_MAP, true},
+      {"fuzz_roughness", "sheen_roughness", "__none", MT_MAT_FUZZ_ROUGHNESS_MAP, false}};
   for (auto const &slot : slots) {
     Check(mt_scene_material_set_texture(scene, handle, slot.id, 0, error,
                                         sizeof error),
           error);
     if (!root)
       continue;
-    auto c = root->inputConnections.find(TfToken(preview ? slot.usd : slot.mx));
+    auto inputName = preview ? slot.usd : standard ? slot.standard : slot.mx;
+    auto c = root->inputConnections.find(TfToken(inputName));
     if (c == root->inputConnections.end() || c->second.empty())
       continue;
     auto connection = c->second.front();
@@ -420,7 +577,7 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
   for (auto const &c : root->inputConnections) {
     bool handled = false;
     for (auto const &s : slots)
-      if (c.first == TfToken(preview ? s.usd : s.mx))
+      if (c.first == TfToken(preview ? s.usd : standard ? s.standard : s.mx))
         handled = true;
     if (!handled) {
       auto i = network.nodes.find(

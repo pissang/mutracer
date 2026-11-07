@@ -1,0 +1,58 @@
+#usda 1.0
+(
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def "Materials"
+{
+    def Material "Standard"
+    {
+        token outputs:mtlx:surface.connect = </Materials/Standard/Surface.outputs:out>
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_standard_surface_surfaceshader"
+            float inputs:base = 0.7
+            color3f inputs:base_color = (0.8, 0.4, 0.2)
+            float inputs:coat = 0.5
+            color3f inputs:coat_color = (0.5, 1, 0.5)
+            float inputs:metalness = 0.25
+            float inputs:sheen_roughness = 0.25
+            float inputs:thin_film_thickness = 500
+            token outputs:out
+        }
+    }
+}
+
+def Mesh "Mesh" (
+    prepend apiSchemas = ["MaterialBindingAPI"]
+)
+{
+    uniform bool doubleSided = 1
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    rel material:binding = </Materials/Standard>
+    normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (interpolation = "vertex")
+    point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+    uniform token subdivisionScheme = "none"
+}
+
+def RectLight "Light"
+{
+    color3f inputs:color = (1, 1, 1)
+    float inputs:height = 2
+    float inputs:intensity = 2
+    float inputs:width = 2
+    double3 xformOp:translate = (0, 0, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+
+def Camera "Camera"
+{
+    float2 clippingRange = (0.1, 100)
+    float focalLength = 50
+    float horizontalAperture = 36
+    float verticalAperture = 36
+    double3 xformOp:translate = (0, 0, 5)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
