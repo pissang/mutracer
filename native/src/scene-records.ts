@@ -12,6 +12,8 @@ import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import {InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight} from '../../src/renderer/lightCore.js';
 import type {AnalyticLightState} from '../../src/scene/lightState.js';
+import DiskLight from '../../src/scene/DiskLight.js';
+import CylinderLight from '../../src/scene/CylinderLight.js';
 
 const NONE = 0xffffffff;
 
@@ -92,12 +94,15 @@ export function decodeInstances(u: Uint32Array, f: Float32Array, io: number): In
     colors: u[io + B.COLORS] ? f.slice(u[io + B.COLORS], u[io + B.COLORS] + instanceCount * 3) : undefined});
 }
 
-export function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined): AnalyticLightState {
+export function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined, version = 6): AnalyticLightState {
   let light: AnalyticLightState;
   if (u[off + L.TYPE] === 0) light = new RectLightState({size: [f[off + L.SIZE], f[off + L.HEIGHT_OR_INNER]], spread: f[off + L.SPREAD_OR_OUTER], texture});
   else if (u[off + L.TYPE] === 1) light = new SphereLight({radius: f[off + L.SIZE]});
   else if (u[off + L.TYPE] === 2) light = new DirectionalLight();
-  else light = new SpotLight({radius: f[off + L.SIZE], innerAngle: f[off + L.HEIGHT_OR_INNER], outerAngle: f[off + L.SPREAD_OR_OUTER]});
+  else if (u[off + L.TYPE] === 3) light = new SpotLight({radius: f[off + L.SIZE], innerAngle: f[off + L.HEIGHT_OR_INNER], outerAngle: f[off + L.SPREAD_OR_OUTER]});
+  else if (u[off + L.TYPE] === 4) light = new DiskLight({radius: version >= 6 ? f[off + L.RADIUS] : f[off + L.SIZE], normalize: version >= 6 && !!u[off + L.NORMALIZE]});
+  else light = new CylinderLight({radius: version >= 6 ? f[off + L.RADIUS] : f[off + L.SIZE], length: version >= 6 ? f[off + L.LENGTH] : f[off + L.HEIGHT_OR_INNER],
+    normalize: version >= 6 && !!u[off + L.NORMALIZE], treatAsLine: version >= 6 && !!u[off + L.TREAT_AS_LINE]});
   light.color = [f[off + L.COLOR], f[off + L.COLOR + 1], f[off + L.COLOR + 2]]; light.intensity = f[off + L.INTENSITY];
   light.transform = f.slice(off + L.TRANSFORM, off + L.TRANSFORM + 16);
   return light;
@@ -105,8 +110,8 @@ export function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, te
 
 /** Lights that reuse an IES offset/length pair share one parsed profile. */
 export function decodeLight(bytes: Uint8Array, u: Uint32Array, f: Float32Array, off: number, textures: PixelTexture[],
-  iesProfiles: Map<string, IESProfile>): AnalyticLightState {
-  const light = lightFromRecord(u, f, off, u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined);
+  iesProfiles: Map<string, IESProfile>, version = 6): AnalyticLightState {
+  const light = lightFromRecord(u, f, off, u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined, version);
   if (light.type === 'SpotLight' && u[off + L.IES_BYTES]) {
     const key = `${u[off + L.IES_OFFSET]}:${u[off + L.IES_BYTES]}`;
     let profile = iesProfiles.get(key);

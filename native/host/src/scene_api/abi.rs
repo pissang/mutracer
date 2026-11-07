@@ -91,6 +91,10 @@ pub struct LightDesc {
     texture: u64,
     ies: *const c_void,
     ies_bytes: usize,
+    radius: f32,
+    length: f32,
+    normalize: u32,
+    treat_as_line: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -204,7 +208,7 @@ defaults! {
  mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0};
  mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,flags:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
  mt_scene_instances_desc_default,InstancesDesc,InstancesDesc{struct_size:size_of::<InstancesDesc>() as u32,count:0,transforms:std::ptr::null(),colors:std::ptr::null()};
- mt_scene_light_desc_default,LightDesc,LightDesc{struct_size:size_of::<LightDesc>() as u32,kind:0,color:[1.;3],intensity:1.,size:1.,height:1.,spread:1.,reserved:0,world_matrix:Mat4::IDENTITY.to_cols_array(),texture:0,ies:std::ptr::null(),ies_bytes:0};
+ mt_scene_light_desc_default,LightDesc,LightDesc{struct_size:size_of::<LightDesc>() as u32,kind:0,color:[1.;3],intensity:1.,size:1.,height:1.,spread:1.,reserved:0,world_matrix:Mat4::IDENTITY.to_cols_array(),texture:0,ies:std::ptr::null(),ies_bytes:0,radius:0.,length:0.,normalize:0,treat_as_line:0};
  mt_scene_environment_settings_default,EnvironmentSettingsDesc,EnvironmentSettingsDesc{struct_size:24,reserved:0,intensity:1.,rotation:0.,background_intensity:1.,background_rotation:0.};
  mt_scene_environment_desc_default,EnvironmentDesc,EnvironmentDesc{struct_size:40,reserved:0,environment:0,background:0,color:[0.,0.,0.,1.]};
 }
@@ -325,7 +329,7 @@ unsafe fn instances(p: *const InstancesDesc) -> Result<Instances> {
 }
 unsafe fn light(e: &Entry, p: *const LightDesc) -> Result<Light> {
     let d = unsafe { record(p) }?;
-    if d.reserved != 0 || d.ies_bytes > 16 * 1024 * 1024 {
+    if d.reserved != 0 || d.normalize > 1 || d.treat_as_line > 1 || d.ies_bytes > 16 * 1024 * 1024 {
         return Err(invalid("Invalid light description"));
     }
     let color = d.color;
@@ -359,6 +363,22 @@ unsafe fn light(e: &Entry, p: *const LightDesc) -> Result<Light> {
             outer: d.spread,
             transform,
             ies: unsafe { input(d.ies.cast::<u8>(), d.ies_bytes) }?.into(),
+        },
+        4 => Light::Disk {
+            color,
+            intensity,
+            radius: d.radius,
+            normalize: d.normalize != 0,
+            transform,
+        },
+        5 => Light::Cylinder {
+            color,
+            intensity,
+            radius: d.radius,
+            length: d.length,
+            normalize: d.normalize != 0,
+            treat_as_line: d.treat_as_line != 0,
+            transform,
         },
         _ => return Err(invalid("Unknown light type")),
     })
@@ -1124,6 +1144,70 @@ mod tests {
                 Status::InvalidHandle as i32
             );
         }
+    }
+    #[test]
+    fn disk_and_cylinder_light_api_fields_decode_without_moving_legacy_members() {
+        assert_eq!(size_of::<LightDesc>(), 144);
+        assert_eq!(std::mem::offset_of!(LightDesc, radius), 128);
+        let entry = Entry {
+            scene: Scene::new(),
+            resources: HashMap::new(),
+            names: HashMap::new(),
+        };
+        let mut desc = LightDesc {
+            struct_size: size_of::<LightDesc>() as u32,
+            kind: 4,
+            color: [0.8, 0.7, 0.6],
+            intensity: 5.,
+            size: 0.,
+            height: 0.,
+            spread: 0.,
+            reserved: 0,
+            world_matrix: Mat4::IDENTITY.to_cols_array(),
+            texture: 0,
+            ies: std::ptr::null(),
+            ies_bytes: 0,
+            radius: 0.75,
+            length: 0.,
+            normalize: 1,
+            treat_as_line: 0,
+        };
+        match unsafe { light(&entry, &desc).unwrap() } {
+            Light::Disk {
+                radius,
+                normalize,
+                color,
+                intensity,
+                ..
+            } => {
+                assert_eq!(radius, 0.75);
+                assert!(normalize);
+                assert_eq!(color, desc.color);
+                assert_eq!(intensity, 5.);
+            }
+            _ => panic!("expected disk light"),
+        }
+        desc.kind = 5;
+        desc.radius = 0.25;
+        desc.length = 1.5;
+        desc.treat_as_line = 1;
+        match unsafe { light(&entry, &desc).unwrap() } {
+            Light::Cylinder {
+                radius,
+                length,
+                normalize,
+                treat_as_line,
+                ..
+            } => {
+                assert_eq!(radius, 0.25);
+                assert_eq!(length, 1.5);
+                assert!(normalize);
+                assert!(treat_as_line);
+            }
+            _ => panic!("expected cylinder light"),
+        }
+        desc.normalize = 2;
+        assert!(unsafe { light(&entry, &desc) }.is_err());
     }
     #[test]
     fn c_defaults_records_and_handle_lifetimes() {

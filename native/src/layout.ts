@@ -325,7 +325,7 @@ export const RAY_UNIFORM = {
 } as const;
 export const UNIFORM_SIZE = {
   "CAMERA_BYTES": 144,
-  "LIGHT_BYTES": 6144
+  "LIGHT_BYTES": 0
 } as const;
 export const HWRT_BINDING = {
   "ACCELERATION": 4,

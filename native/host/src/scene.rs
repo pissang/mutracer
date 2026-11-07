@@ -255,7 +255,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     }
     crate::memory_budget::check(bytes.len(), "Scene descriptor")?;
     let w = Words(bytes);
-    if w.u(h::VERSION) != layout::version::SCENE || w.u(h::LENGTH) != w.len() {
+    let version = w.u(h::VERSION);
+    if !matches!(version, 5 | 6) || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
     if !crate::image_limits::valid([w.u(h::WIDTH) as u32, w.u(h::HEIGHT) as u32]) {
@@ -267,20 +268,23 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         || w.u(h::MESH_COUNT) > instance_limit()
         || w.u(h::MATERIAL_COUNT) == 0
         || w.u(h::MATERIAL_COUNT) > 65536
-        || w.u(h::LIGHT_COUNT) > 64
+        || w.u(h::LIGHT_COUNT) > 1024
         || w.u(h::TEXTURE_COUNT) > 65536
     {
-        return Err(format!("Scene counts exceed limits: geometries {}, meshes {}, materials {}, lights {}, textures {}; require 1..65536 geometry/material, meshes within memory/24-bit instance budget, 0..64 lights, 0..65536 textures", w.u(h::GEOMETRY_COUNT), w.u(h::MESH_COUNT), w.u(h::MATERIAL_COUNT), w.u(h::LIGHT_COUNT), w.u(h::TEXTURE_COUNT)).into());
+        return Err(format!("Scene counts exceed limits: geometries {}, meshes {}, materials {}, lights {}, textures {}; require 1..65536 geometry/material, meshes within memory/24-bit instance budget, 0..1024 lights, 0..65536 textures", w.u(h::GEOMETRY_COUNT), w.u(h::MESH_COUNT), w.u(h::MATERIAL_COUNT), w.u(h::LIGHT_COUNT), w.u(h::TEXTURE_COUNT)).into());
     }
     for (count, offset, stride) in [
         (h::GEOMETRY_COUNT, h::GEOMETRY_OFFSET, g::WORDS),
         (h::MESH_COUNT, h::MESH_OFFSET, m::WORDS),
         (h::MATERIAL_COUNT, h::MATERIAL_OFFSET, mat::WORDS),
-        (h::LIGHT_COUNT, h::LIGHT_OFFSET, l::WORDS),
         (h::TEXTURE_COUNT, h::TEXTURE_OFFSET, t::WORDS),
     ] {
         w.span(w.u(offset), w.u(count) * stride)?;
     }
+    w.span(
+        w.u(h::LIGHT_OFFSET),
+        w.u(h::LIGHT_COUNT) * if version >= 6 { l::WORDS } else { 28 },
+    )?;
     w.reserved(h::RESERVED, 1)?;
 
     w.reserved(h::RESERVED_END, h::WORDS - h::RESERVED_END)?;
@@ -586,8 +590,9 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         w.finite(o + t::UV_SCALE, 4)?;
     }
     for i in 0..w.u(h::LIGHT_COUNT) {
-        let o = w.u(h::LIGHT_OFFSET) + i * l::WORDS;
-        validate_light(&w, o)?;
+        let stride = if version >= 6 { l::WORDS } else { 28 };
+        let o = w.u(h::LIGHT_OFFSET) + i * stride;
+        validate_light(&w, o, version)?;
 
         w.reserved(o + l::RESERVED, 1)?;
         let reference = w.u(o + l::TEXTURE);
@@ -611,8 +616,9 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     w.span(o, cam::WORDS)?;
     validate_camera(&w, o)
 }
-fn validate_light(w: &Words<'_>, o: usize) -> Result<()> {
-    if w.u(o + l::TYPE) > 3 {
+fn validate_light(w: &Words<'_>, o: usize, version: usize) -> Result<()> {
+    let kind = w.u(o + l::TYPE);
+    if kind > if version >= 6 { 5 } else { 3 } {
         return Err("Unsupported analytic light type".into());
     }
     w.finite(o + l::COLOR, 7)?;
@@ -633,6 +639,25 @@ fn validate_light(w: &Words<'_>, o: usize) -> Result<()> {
             || w.f(o + l::SPREAD_OR_OUTER) >= 90.0)
     {
         return Err("Invalid spot light angles".into());
+    }
+    if kind >= 4 {
+        let radius = w.f(o + l::RADIUS);
+        let length = w.f(o + l::LENGTH);
+        if !radius.is_finite()
+            || radius <= 0.0
+            || kind == 5 && (!length.is_finite() || length <= 0.0)
+            || w.u(o + l::NORMALIZE) > 1
+            || w.u(o + l::TREAT_AS_LINE) > 1
+        {
+            return Err("Invalid disk/cylinder light dimensions or flags".into());
+        }
+    } else if version >= 6
+        && (w.f(o + l::RADIUS) != 0.0
+            || w.f(o + l::LENGTH) != 0.0
+            || w.u(o + l::NORMALIZE) != 0
+            || w.u(o + l::TREAT_AS_LINE) != 0)
+    {
+        return Err("Unused analytic light extension fields must be zero".into());
     }
     w.affine(o + l::TRANSFORM)
 }
@@ -1173,8 +1198,8 @@ impl PreparedState {
         runtime::call(move || state.light_inner(&bytes))
     }
     fn light_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
-        if bytes.len() != cam::WORDS * WORD_BYTES {
-            return Err("Light descriptor must contain exactly 128 bytes".into());
+        if bytes.len() != (4 + l::WORDS) * WORD_BYTES {
+            return Err("Light descriptor must contain exactly 144 bytes".into());
         }
         let w = Words(bytes);
         if w.u(0) != 1 || w.u(1) >= self.light_count.load(std::sync::atomic::Ordering::Acquire) {
@@ -1182,7 +1207,7 @@ impl PreparedState {
         }
         w.reserved(2, 2)?;
         w.reserved(12, 4)?;
-        validate_light(&w, 4)?;
+        validate_light(&w, 4, 6)?;
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -2140,7 +2165,13 @@ fn unpack_scene_packet(packet: &[u8]) -> Result<(Scene, Assets)> {
             buffers.push(Buffer {
                 id,
                 size: data.len() as u64,
-                usage: if id <= res::MATERIALS { 140 } else { 72 },
+                usage: if id <= res::MATERIALS {
+                    140
+                } else if id == res::LIGHT_UNIFORM {
+                    wgpu::BufferUsages::STORAGE.bits() | wgpu::BufferUsages::COPY_DST.bits()
+                } else {
+                    72
+                },
                 resource: name.clone(),
             });
         } else if kind == kind::TEXTURE {
@@ -2622,6 +2653,56 @@ pub(crate) mod tests {
             assert!(validate(&change(&input(), h::VERSION, version)).is_err());
         }
     }
+    fn light_scene(count: usize, version: u32) -> Vec<u8> {
+        let mut bytes = input();
+        let offset = bytes.len() / 4;
+        let stride = if version == 5 { 28 } else { l::WORDS };
+        let mut record = vec![0u32; stride];
+        record[l::TYPE] = if version == 5 { 1 } else { 4 };
+        for k in 1..=4 {
+            record[k] = 1f32.to_bits();
+        }
+        record[l::INTENSITY] = 1f32.to_bits();
+        for k in [0, 5, 10, 15] {
+            record[l::TRANSFORM + k] = 1f32.to_bits();
+        }
+        if version >= 6 {
+            record[l::RADIUS] = 0.5f32.to_bits();
+            record[l::NORMALIZE] = 1;
+        }
+        for _ in 0..count {
+            for word in &record {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        let words = bytes.len() / 4;
+        bytes[h::VERSION * 4..h::VERSION * 4 + 4].copy_from_slice(&version.to_le_bytes());
+        bytes[h::LENGTH * 4..h::LENGTH * 4 + 4].copy_from_slice(&(words as u32).to_le_bytes());
+        bytes[h::LIGHT_COUNT * 4..h::LIGHT_COUNT * 4 + 4]
+            .copy_from_slice(&(count as u32).to_le_bytes());
+        bytes[h::LIGHT_OFFSET * 4..h::LIGHT_OFFSET * 4 + 4]
+            .copy_from_slice(&(offset as u32).to_le_bytes());
+        bytes
+    }
+    #[test]
+    fn scene_v5_light_records_remain_readable_and_v6_allows_1024_lights() {
+        assert!(validate(&light_scene(1, 5)).is_ok());
+        assert!(validate(&light_scene(1024, 6)).is_ok());
+        assert!(validate(&light_scene(1025, 6)).is_err());
+        let mut cylinder = light_scene(1, 6);
+        let light = u32::from_le_bytes(
+            cylinder[h::LIGHT_OFFSET * 4..h::LIGHT_OFFSET * 4 + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        cylinder[light * 4..light * 4 + 4].copy_from_slice(&5u32.to_le_bytes());
+        cylinder[(light + l::LENGTH) * 4..(light + l::LENGTH) * 4 + 4]
+            .copy_from_slice(&1.5f32.to_bits().to_le_bytes());
+        assert!(validate(&cylinder).is_ok());
+        cylinder[(light + l::RADIUS) * 4..(light + l::RADIUS) * 4 + 4]
+            .copy_from_slice(&0f32.to_bits().to_le_bytes());
+        assert!(validate(&cylinder).is_err());
+    }
     #[test]
     fn bad_spans_references_numbers_and_unknown_fields_are_recoverable() {
         let bytes = input();
@@ -2874,26 +2955,27 @@ pub(crate) mod tests {
     }
     #[test]
     fn light_extensions_validate_roles_utf8_and_byte_spans() {
-        let mut light = vec![0u32; 28];
+        let mut light = vec![0u32; l::WORDS];
         light[0] = 3;
         for k in 1..=7 {
             light[k] = 1f32.to_bits();
         }
         light[6] = 20f32.to_bits();
         light[7] = 40f32.to_bits();
-        light[9] = 161;
+        light[l::IES_OFFSET] = 165;
         light[10] = 4;
         for k in [0, 5, 10, 15] {
             light[12 + k] = 1f32.to_bits();
         }
         light.push(u32::from_le_bytes(*b"test"));
         let mut bytes = extend(input(), &light);
-        bytes = change(&change(&bytes, 7, 1), 12, 133);
+        bytes = change(&change(&bytes, h::LIGHT_COUNT, 1), h::LIGHT_OFFSET, 133);
+        bytes = change(&bytes, 165, u32::from_le_bytes(*b"test"));
         assert!(validate(&bytes).is_ok()); // Syntax is checked by the original AOT IES parser.
         for (word, value) in [
             (0, 2),
             (141, 1),
-            (142, 162),
+            (142, u32::MAX),
             (143, 0),
             (143, 16385),
             (144, 1),

@@ -383,7 +383,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const kernelHints = takeGeometryKernelHints(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
+  if (u[H.VERSION] !== 5 && u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
   const width = u[H.WIDTH], height = u[H.HEIGHT];
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
@@ -427,8 +427,9 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   }
   const lights: AnalyticLightState[] = [];
   const iesProfiles = new Map<string, IESProfile>();
+  const lightStride = u[H.VERSION] < 6 ? 28 : L.WORDS;
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
-    lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, iesProfiles));
+    lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * lightStride, textures, iesProfiles, u[H.VERSION]));
   }
   preparationMark('decode.end');
   return {width, height, environment, background, environmentSettings, grounded, qualityFlags, environmentDistribution,
@@ -597,7 +598,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(Math.max(stacks.tlas, 32), stacks.blas), ...attributeLayout.constants,
     ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
-  const features = {independentTextures, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
+  const features = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
@@ -869,7 +870,7 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
 
 function prepareNativeLightSampling(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[], environmentPower: number) {
   const lighting = prepareSceneLightSampling(lights, emissive, environmentPower, 4096);
-  const lightUniform = new Float32Array(64 * 24);
+  const lightUniform = new Float32Array(Math.max(1, lights.length) * 24);
   lightUniform.set(packSceneAnalyticLights(lights, table.lightTexturesIndices, lighting.analyticPmfs, i => lighting.profiles.offsets[i]));
   return {...lighting, lightUniform};
 }
@@ -984,14 +985,14 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
 function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, lighting: Parameters<typeof writeTraceLighting>[1]) {
   writeTraceLighting(rt.views, lighting);
 }
-// Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.
+// Version1,index,reserved[2], followed by Light[32]. Attachments remain committed.
 export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array {
   pendingLighting.delete(token);
   const state = retainedScenes.get(token);
-  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 32), f = new Float32Array(bytes.buffer, bytes.byteOffset, 32);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4), f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const previous = state?.lights[u[1]];
   if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
-  const kinds = ['RectLight', 'SphereLight', 'DirectionalLight', 'SpotLight'];
+  const kinds = ['RectLight', 'SphereLight', 'DirectionalLight', 'SpotLight', 'DiskLight', 'CylinderLight'];
   if (previous.type !== kinds[u[4]]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   const light = lightFromRecord(u, f, 4, previous.type === 'RectLight' ? previous.texture : undefined);
   if (light.type === 'SpotLight' && previous.type === 'SpotLight') light.iesProfile = previous.iesProfile;
@@ -1019,8 +1020,9 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
     const textures: PixelTexture[] = [];
     for (const [texture, index] of state.textureIds) if (texture instanceof PixelTexture) textures[index] = texture;
     const lights: AnalyticLightState[] = [], lightTextures: number[] = [], profiles = new Map<string, IESProfile>();
+    const lightStride = u[H.VERSION] < 6 ? 28 : L.WORDS;
     for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
-      const light = decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, profiles);
+      const light = decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * lightStride, textures, profiles, u[H.VERSION]);
       const texture = light.type === 'RectLight' ? light.texture : undefined;
       const atlasIndex = texture ? state.table.textures.indexOf(texture) : -1;
       if (texture && atlasIndex < 0) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);

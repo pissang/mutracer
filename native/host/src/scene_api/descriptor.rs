@@ -188,6 +188,22 @@ impl Scene {
                     transform,
                     ies: data.ies.get(i).cloned().unwrap_or_else(|| Arc::from([])),
                 },
+                4 => Light::Disk {
+                    color,
+                    intensity,
+                    radius: f32::from_bits(w[l::RADIUS]),
+                    normalize: w[l::NORMALIZE] != 0,
+                    transform,
+                },
+                5 => Light::Cylinder {
+                    color,
+                    intensity,
+                    radius: f32::from_bits(w[l::RADIUS]),
+                    length: f32::from_bits(w[l::LENGTH]),
+                    normalize: w[l::NORMALIZE] != 0,
+                    treat_as_line: w[l::TREAT_AS_LINE] != 0,
+                    transform,
+                },
                 _ => return Err(invalid("Invalid light type")),
             };
             scene.add_light(light)?;

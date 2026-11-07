@@ -79,7 +79,7 @@ export const bindGroups = [
     texture('ATLAS', resourceIds.ATLAS, 1, true, true), buffer('MAP_INFO', resourceIds.MAP_INFO, 3, 'uniform'), texture('ENVIRONMENT', resourceIds.ENVIRONMENT, 4),
     texture('ENVIRONMENT_CDF', resourceIds.ENVIRONMENT_CDF, 5), texture('BACKGROUND', resourceIds.BACKGROUND, 6), texture('LIGHT_SAMPLING', resourceIds.LIGHT_SAMPLING, 8),
     texture('ENERGY_LUT', resourceIds.ENERGY_LUT, 9), texture('DISPLACEMENT', resourceIds.DISPLACEMENT, 10)]},
-  {name: 'FRAME', label: 'Uniforms', bindings: [buffer('CAMERA', resourceIds.CAMERA, 0, 'uniform'), buffer('TRACE_UNIFORM', resourceIds.TRACE_UNIFORM, 1, 'uniform'), buffer('LIGHT_UNIFORM', resourceIds.LIGHT_UNIFORM, 2, 'uniform')]},
+  {name: 'FRAME', label: 'Uniforms', bindings: [buffer('CAMERA', resourceIds.CAMERA, 0, 'uniform'), buffer('TRACE_UNIFORM', resourceIds.TRACE_UNIFORM, 1, 'uniform'), buffer('LIGHT_UNIFORM', resourceIds.LIGHT_UNIFORM, 2, 'read-only-storage')]},
   {name: 'OUTPUT', label: 'Ray Trace Out Buffers', bindings: [buffer('COLOR', resourceIds.COLOR, 0, 'storage'), buffer('NORMAL', resourceIds.NORMAL, 1, 'storage'), buffer('ALBEDO', resourceIds.ALBEDO, 2, 'storage'), buffer('SHADOW_CATCHER', resourceIds.SHADOW_CATCHER, 3, 'storage')]}
 ];
 export const hwrtBindings = {ACCELERATION: 4, INDICES: 5, DIAGNOSTIC: 7, PATH_PARAMETERS: 8};
@@ -94,7 +94,7 @@ const rayTraceUniform = Object.fromEntries(Object.entries(uniform.views).map(([n
 rayTraceUniform.BYTES = uniform.buffer.byteLength;
 return rayTraceUniform;
 }
-export const uniformSizes = {CAMERA_BYTES: 144, LIGHT_BYTES: 64 * 6 * 4 * WORD_BYTES};
+export const uniformSizes = {CAMERA_BYTES: 144, LIGHT_BYTES: 0};
 
 // The primary-surface ABI, shared by the trace hook, resolve shader and Rust.
 export const framePixelFields = [

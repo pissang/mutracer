@@ -19,8 +19,10 @@ import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
 import {RectLightState, SphereLight, DirectionalLight, SpotLight} from '../../src/renderer/lightCore.js';
+import DiskLight from '../../src/scene/DiskLight.js';
+import CylinderLight from '../../src/scene/CylinderLight.js';
 
-type AnalyticLight = RectLightState | SphereLight | SpotLight | DirectionalLight;
+type AnalyticLight = RectLightState | SphereLight | SpotLight | DirectionalLight | DiskLight | CylinderLight;
 /** The environment map lights the scene, as EnvironmentLight does in a browser scene. */
 export class NativeEnvironment {
   texture: PixelTexture;
@@ -78,6 +80,14 @@ function captureLight(light: NativeLight): NativeLightSnapshot {
   if (light instanceof SpotLight) {
     numbers.push(3, light.radius, light.innerAngle, light.outerAngle);
     return new NativeLightSnapshot(light, numbers, undefined, light.iesProfile);
+  }
+  if (light instanceof DiskLight) {
+    numbers.push(4, light.radius, light.normalize ? 1 : 0);
+    return new NativeLightSnapshot(light, numbers, undefined, undefined);
+  }
+  if (light instanceof CylinderLight) {
+    numbers.push(5, light.radius, light.length, light.normalize ? 1 : 0, light.treatAsLine ? 1 : 0);
+    return new NativeLightSnapshot(light, numbers, undefined, undefined);
   }
   numbers.push(2);
   return new NativeLightSnapshot(light, numbers, undefined, undefined);
@@ -175,7 +185,7 @@ export class SyncedScene {
   sync(bytes: Uint8Array, owned = false, unchanged?: Uint8Array): NativeSceneChanges {
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-    if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
+    if (u[H.VERSION] !== 5 && u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
     const old = this.bytes, first = old.length === 0;
     const geometries = u[H.GEOMETRY_COUNT];
     const records = geometries + u[H.TEXTURE_COUNT], materials = u[H.MATERIAL_COUNT], meshes = u[H.MESH_COUNT];
@@ -352,16 +362,17 @@ export class SyncedScene {
 
   private syncLights(bytes: Uint8Array, u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, replaced: Set<number>) {
     const count = u[H.LIGHT_COUNT], profiles = new Map<string, IESProfile>();
+    const lightStride = u[H.VERSION] < 6 ? 28 : L.WORDS, oldLightStride = old[H.VERSION] < 6 ? 28 : L.WORDS;
     for (let i = 0; i < count; i++) {
-      const off = u[H.LIGHT_OFFSET] + i * L.WORDS;
-      if (!first && i < old[H.LIGHT_COUNT] && i < this.analyticLights.length) {
-        const prior = old[H.LIGHT_OFFSET] + i * L.WORDS;
+      const off = u[H.LIGHT_OFFSET] + i * lightStride;
+      if (!first && old[H.VERSION] === u[H.VERSION] && i < old[H.LIGHT_COUNT] && i < this.analyticLights.length) {
+        const prior = old[H.LIGHT_OFFSET] + i * oldLightStride;
         const texture = u[off + L.TEXTURE];
         const ies = u[off + L.IES_BYTES] ? (u[off + L.IES_BYTES] + 3) >> 2 : 0;
         if ((texture === 0 || !replaced.has(texture - 1)) && old[prior + L.IES_BYTES] === u[off + L.IES_BYTES] &&
-          sameRecord(old, prior, u, off, L.WORDS, [L.IES_OFFSET], [ies])) continue;
+          sameRecord(old, prior, u, off, lightStride, [L.IES_OFFSET], [ies])) continue;
       }
-      this.analyticLights[i] = decodeLight(bytes, u, f, off, this.textures, profiles);
+      this.analyticLights[i] = decodeLight(bytes, u, f, off, this.textures, profiles, u[H.VERSION]);
     }
     this.analyticLights.length = count;
     const environment = u[H.ENVIRONMENT_TEXTURE] ? this.textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined;

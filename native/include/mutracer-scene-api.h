@@ -82,10 +82,16 @@ typedef struct mt_scene_light_desc {
   float world_matrix[16];
   mt_scene_texture_id texture;
   const void *ies; size_t ies_bytes;
+  float radius; /* Disk/cylinder: positive; otherwise unused and 0. */
+  float length; /* Cylinder: positive; otherwise unused and 0. */
+  uint32_t normalize; /* Disk/cylinder: 0/1, default 0. */
+  uint32_t treat_as_line; /* Cylinder: 0/1 hint, default 0; sampling unchanged. */
 } mt_scene_light_desc; /* Default unit white rectangular light, intensity 1,
- * width/height/spread 1, identity, no texture or IES. Four MT_LIGHT_TYPE_* kinds;
- * texture 0 = none (rect only), IES is LM-63 text (spot only). */
-MT_SCENE_API_LAYOUT(mt_scene_light_desc, 112 + 2 * sizeof(void *));
+ * width/height/spread 1, identity, no texture or IES. Six MT_LIGHT_TYPE_* kinds;
+ * texture 0 = none (rect only), IES is LM-63 text (spot only). Disk radius and
+ * cylinder radius/length must be positive; invalid dimensions or non-boolean
+ * flags return MT_ERROR_INVALID_ARGUMENT. */
+MT_SCENE_API_LAYOUT(mt_scene_light_desc, 128 + 2 * sizeof(void *));
 typedef struct mt_scene_environment_desc {
   uint32_t struct_size, reserved;
   mt_scene_texture_id environment, background;

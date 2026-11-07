@@ -318,6 +318,24 @@ pub enum Light {
         transform: Mat4,
         ies: Arc<[u8]>,
     },
+    /// One-sided disk in local XY, emitting along local -Z.
+    Disk {
+        color: [f32; 3],
+        intensity: f32,
+        radius: f32,
+        normalize: bool,
+        transform: Mat4,
+    },
+    /// Lateral-only cylinder centered on local X; end caps do not emit.
+    Cylinder {
+        color: [f32; 3],
+        intensity: f32,
+        radius: f32,
+        length: f32,
+        normalize: bool,
+        treat_as_line: bool,
+        transform: Mat4,
+    },
 }
 /// Environment/background map handles; None disables each map. Default black,
 /// opaque background and no environment. Maps use their linear pixel values.
@@ -772,6 +790,32 @@ impl Scene {
                 w[l::SPREAD_OR_OUTER] = outer.to_bits();
                 ies = profile.clone();
                 (3, color, intensity, transform)
+            }
+            Light::Disk {
+                color,
+                intensity,
+                radius,
+                normalize,
+                transform,
+            } => {
+                w[l::RADIUS] = radius.to_bits();
+                w[l::NORMALIZE] = *normalize as u32;
+                (4, color, intensity, transform)
+            }
+            Light::Cylinder {
+                color,
+                intensity,
+                radius,
+                length,
+                normalize,
+                treat_as_line,
+                transform,
+            } => {
+                w[l::RADIUS] = radius.to_bits();
+                w[l::LENGTH] = length.to_bits();
+                w[l::NORMALIZE] = *normalize as u32;
+                w[l::TREAT_AS_LINE] = *treat_as_line as u32;
+                (5, color, intensity, transform)
             }
         };
         w[l::TYPE] = kind;
@@ -1485,9 +1529,41 @@ mod tests {
                 transform: Mat4::IDENTITY,
                 ies: Arc::from([]),
             },
+            Light::Disk {
+                color: [0.8, 0.7, 0.6],
+                intensity: 5.,
+                radius: 0.75,
+                normalize: true,
+                transform: Mat4::from_translation(Vec3::Z),
+            },
+            Light::Cylinder {
+                color: [0.4, 0.5, 0.6],
+                intensity: 7.,
+                radius: 0.25,
+                length: 1.5,
+                normalize: true,
+                treat_as_line: true,
+                transform: Mat4::from_translation(Vec3::X),
+            },
         ] {
             s.add_light(light).unwrap();
         }
+        let descriptor = s.descriptor().unwrap();
+        let words = descriptor
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(words[h::VERSION], 6);
+        assert_eq!(words[h::LIGHT_COUNT], 6);
+        let lights = words[h::LIGHT_OFFSET] as usize;
+        assert_eq!(words[lights + 4 * l::WORDS + l::TYPE], 4);
+        assert_eq!(words[lights + 4 * l::WORDS + l::RADIUS], 0.75f32.to_bits());
+        assert_eq!(words[lights + 4 * l::WORDS + l::NORMALIZE], 1);
+        assert_eq!(words[lights + 5 * l::WORDS + l::TYPE], 5);
+        assert_eq!(words[lights + 5 * l::WORDS + l::RADIUS], 0.25f32.to_bits());
+        assert_eq!(words[lights + 5 * l::WORDS + l::LENGTH], 1.5f32.to_bits());
+        assert_eq!(words[lights + 5 * l::WORDS + l::NORMALIZE], 1);
+        assert_eq!(words[lights + 5 * l::WORDS + l::TREAT_AS_LINE], 1);
         s.descriptor().unwrap();
         s.texture_mut(texture).unwrap().scale = [2., 3.];
         let a = s.descriptor().unwrap();

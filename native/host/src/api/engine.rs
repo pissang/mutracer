@@ -227,7 +227,7 @@ pub(super) fn camera_offset(scene: &[u8]) -> Result<usize> {
             "Scene descriptor must be a whole number of words with a complete header",
         ));
     }
-    if word(header::VERSION) != crate::layout::version::SCENE as u32 {
+    if !matches!(word(header::VERSION), 5 | 6) {
         return Err(error(
             Status::InvalidArgument,
             "Scene descriptor version must be MT_VERSION_SCENE",

@@ -4,5 +4,7 @@ import type EnvironmentLightState from './EnvironmentLightState.js';
 import type RectLightState from './RectLightState.js';
 import type SphereLight from './SphereLight.js';
 import type SpotLight from './SpotLight.js';
-export type AnalyticLightState = RectLightState | SphereLight | SpotLight | DirectionalLight;
+import type DiskLight from './DiskLight.js';
+import type CylinderLight from './CylinderLight.js';
+export type AnalyticLightState = RectLightState | SphereLight | SpotLight | DirectionalLight | DiskLight | CylinderLight;
 export type SceneLightState = AmbientLight | EnvironmentLightState | AnalyticLightState;

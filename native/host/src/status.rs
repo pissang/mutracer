@@ -183,7 +183,7 @@ mod tests {
             assert_eq!(value(name), kind as i64, "{name}");
         }
         assert_eq!(value("#define MT_ABI_VERSION"), ABI_VERSION as i64);
-        assert_eq!(ABI_VERSION, 11);
+        assert_eq!(ABI_VERSION, 12);
         assert_eq!(mt_abi_version(), ABI_VERSION);
     }
     #[test]
