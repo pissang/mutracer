@@ -76,7 +76,7 @@ struct Instance {
   std::vector<int> path;
 };
 std::vector<Instance> Flatten(std::map<SdfPath, InstanceData> const &,
-                              SdfPath const &, SdfPath const &);
+                              SdfPath const &, SdfPath const &, bool includeHidden = false);
 struct LightData {
   TfToken type;
   GfMatrix4d matrix{1};

@@ -145,6 +145,13 @@ int main() {
   Require(flat[2].index == 2, "parent-major flattened Hydra index");
   Require(flat[0].matrix.ExtractTranslation() == GfVec3d(1, 2, 0),
           "nested transforms compose");
+  outer.visible = false;
+  Require(Flatten(instances, SdfPath("/Inner"), SdfPath("/Mesh")).empty(),
+          "hidden nested instancer has no visible instances");
+  auto resident = Flatten(instances, SdfPath("/Inner"), SdfPath("/Mesh"), true);
+  Require(resident.size() == flat.size() && resident[2].path == flat[2].path &&
+              resident[2].matrix == flat[2].matrix,
+          "hidden nested instancer retains batch membership and transforms");
   std::cout << "material defaults/37 mappings, PreviewSurface, "
                "triangulation/face-varying, nested identity contracts passed\n";
 }

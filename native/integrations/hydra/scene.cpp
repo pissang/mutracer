@@ -122,7 +122,7 @@ static T Attr(InstanceData const &d, TfToken const &name, int index,
 }
 static std::vector<Instance>
 FlattenImpl(std::map<SdfPath, InstanceData> const &all, SdfPath const &id,
-            SdfPath const &proto, std::set<SdfPath> &visiting) {
+            SdfPath const &proto, std::set<SdfPath> &visiting, bool includeHidden) {
   auto it = all.find(id);
   if (it == all.end())
     return {};
@@ -136,7 +136,7 @@ FlattenImpl(std::map<SdfPath, InstanceData> const &all, SdfPath const &id,
     if (proto.HasPrefix(entry.first))
       indices.insert(indices.end(), entry.second.begin(), entry.second.end());
   std::vector<Instance> local;
-  if (d.visible)
+  if (includeHidden || d.visible)
     for (int index : indices) {
       GfMatrix4d t(1), r(1), s(1);
       t.SetTranslate(GfVec3d(
@@ -160,7 +160,7 @@ FlattenImpl(std::map<SdfPath, InstanceData> const &all, SdfPath const &id,
       local.push_back({m * s * r * t * d.matrix, int(local.size()), {index}});
     }
   if (!d.parent.IsEmpty()) {
-    auto parents = FlattenImpl(all, d.parent, id, visiting);
+    auto parents = FlattenImpl(all, d.parent, id, visiting, includeHidden);
     std::vector<Instance> result;
     for (auto const &parent : parents)
       for (auto const &child : local) {
@@ -177,9 +177,9 @@ FlattenImpl(std::map<SdfPath, InstanceData> const &all, SdfPath const &id,
   return local;
 }
 std::vector<Instance> Flatten(std::map<SdfPath, InstanceData> const &all,
-                              SdfPath const &id, SdfPath const &proto) {
+                              SdfPath const &id, SdfPath const &proto, bool includeHidden) {
   std::set<SdfPath> visiting;
-  return FlattenImpl(all, id, proto, visiting);
+  return FlattenImpl(all, id, proto, visiting, includeHidden);
 }
 Param::Param() {
   if (auto p = std::getenv("MUTRACER_HYDRA_TRACE"))
@@ -463,18 +463,21 @@ bool Param::Apply(int requestedBackend) {
       else
         Check(mt_scene_set_geometry(scene, r.geometry, &desc, e, sizeof e), e);
     }
+    // Keep complete batch membership while its instancer is hidden. Visibility
+    // never changes the SDK mesh identity or the local Hydra index mapping.
     r.instances = m.instancer.IsEmpty() ? std::vector<Instance>()
-                                        : Flatten(instancers, m.instancer, id);
+                                        : Flatten(instancers, m.instancer, id, true);
     bool visible = m.visible && (m.instancer.IsEmpty() || !r.instances.empty());
-    if (!visible) {
-      if (r.mesh) {
-        Check(mt_scene_remove_mesh(scene, r.mesh, e, sizeof e), e);
-        r.mesh = 0;
-      }
-      continue;
+    for (auto instancer = m.instancer; !instancer.IsEmpty();) {
+      auto found = instancers.find(instancer);
+      if (found == instancers.end()) { visible = false; break; }
+      visible = visible && found->second.visible;
+      instancer = found->second.parent;
     }
+    if (r.mesh) Check(mt_scene_set_mesh_visible(scene, r.mesh, visible, e, sizeof e), e);
     mt_scene_mesh_desc desc;
     mt_scene_mesh_desc_default(&desc);
+    desc.flags = visible ? 0 : MT_SCENE_MESH_HIDDEN;
     desc.geometry = r.geometry;
     desc.material = material;
     Matrix(m.matrix, desc.world_matrix);
