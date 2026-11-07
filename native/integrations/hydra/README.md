@@ -53,9 +53,14 @@ The four arbitrary geometry-vector inputs are limited to the default geometry
 frame, tangent rotation and tangent-space normal-map paths.
 
 Simple MaterialX image/texcoord/convert chains and `UsdUVTexture` are supported.
+Standard Surface constants use MaterialX's
+`standard_surface_to_open_pbr_surface` conversion. Connected constant
+convert, arithmetic, mix, clamp, power, comparison and channel-extract nodes
+are folded before conversion.
 Textures use Hio, sRGB color storage or linear float storage, connected scalar
 channels, repeat/clamp/mirror wrapping and UV scale/translation. Other graph
-nodes use constant defaults with a warning. UDIM, UV rotation, alternate UV
+nodes use the authored constant fallback or nodedef default with a warning;
+the delegate does not bake procedural graphs. UDIM, UV rotation, alternate UV
 primvars, texture-value scale/bias, border wrapping, other color spaces and
 arbitrary procedural graphs are unsupported.
 Texture references remain cached for the delegate's lifetime; repeated swaps
