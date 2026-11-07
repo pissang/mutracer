@@ -12,6 +12,7 @@
 #include "pxr/imaging/hd/meshUtil.h"
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/usd/sdf/assetPath.h"
+#include "pxr/usd/usdLux/blackbody.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -232,12 +233,6 @@ void Param::ApplyLight(SdfPath const &path, LightData const &d) {
       lightHandles.erase(i);
     }
   };
-  if (d.type == HdPrimTypeTokens->diskLight ||
-      d.type == HdPrimTypeTokens->cylinderLight) {
-    remove();
-    Warn("skipping unsupported " + d.type.GetString());
-    return;
-  }
   auto linking = LightValue(d, "lightLink");
   if (linking.IsHolding<TfToken>() && !linking.Get<TfToken>().IsEmpty()) {
     remove();
@@ -301,8 +296,13 @@ void Param::ApplyLight(SdfPath const &path, LightData const &d) {
     std::copy_n(color.Get<GfVec3f>().data(), 3, light.color);
   light.intensity = Number(LightValue(d, "intensity"), 1) *
                     std::exp2(Number(LightValue(d, "exposure"), 0));
-  if (Number(LightValue(d, "enableColorTemperature"), 0))
-    Warn("light color temperature is unsupported; using light color");
+  if (Number(LightValue(d, "enableColorTemperature"), 0)) {
+    auto temperature = UsdLuxBlackbodyTemperatureAsRgb(
+        std::clamp(Number(LightValue(d, "colorTemperature"), 6500), 1000.f,
+                   10000.f));
+    for (int i = 0; i < 3; ++i)
+      light.color[i] *= temperature[i];
+  }
   float cone = Number(LightValue(d, "shaping:cone:angle"), 180);
   if (cone < 180) {
     light.type = MT_LIGHT_TYPE_SPOT;
@@ -317,6 +317,16 @@ void Param::ApplyLight(SdfPath const &path, LightData const &d) {
   } else if (d.type == HdPrimTypeTokens->sphereLight) {
     light.type = MT_LIGHT_TYPE_SPHERE;
     light.size_or_radius = Number(LightValue(d, "radius"), .5f);
+  } else if (d.type == HdPrimTypeTokens->diskLight) {
+    light.type = MT_LIGHT_TYPE_DISK;
+    light.radius = Number(LightValue(d, "radius"), 1);
+    light.normalize = Number(LightValue(d, "normalize"), 0) != 0;
+  } else if (d.type == HdPrimTypeTokens->cylinderLight) {
+    light.type = MT_LIGHT_TYPE_CYLINDER;
+    light.radius = Number(LightValue(d, "radius"), 1);
+    light.length = Number(LightValue(d, "length"), 1);
+    light.normalize = Number(LightValue(d, "normalize"), 0) != 0;
+    light.treat_as_line = Number(LightValue(d, "treatAsLine"), 0) != 0;
   } else {
     // UsdLux gives distant lights angular radiance; the SDK takes irradiance.
     light.type = MT_LIGHT_TYPE_DIRECTIONAL;
@@ -325,6 +335,8 @@ void Param::ApplyLight(SdfPath const &path, LightData const &d) {
         Number(LightValue(d, "normalize"), 0) != 0);
   }
   if (light.type != MT_LIGHT_TYPE_DIRECTIONAL &&
+      light.type != MT_LIGHT_TYPE_DISK &&
+      light.type != MT_LIGHT_TYPE_CYLINDER &&
       Number(LightValue(d, "normalize"), 0))
     Warn("UsdLux normalize is unsupported; using SDK radiance units");
   // The SDK has no per-lobe light multipliers. Equal multipliers, such as the

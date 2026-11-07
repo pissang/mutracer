@@ -56,7 +56,13 @@ def Mesh "Mesh" (
 def CylinderLight "Light"
 {
     color3f inputs:color = (1, 1, 1)
+    float inputs:colorTemperature = 3200
+    bool inputs:enableColorTemperature = 1
     float inputs:intensity = 2
+    float inputs:length = 1.5
+    bool inputs:normalize = 1
+    float inputs:radius = 0.25
+    bool treatAsLine = 1
     double3 xformOp:translate = (0, 0, 3)
     uniform token[] xformOpOrder = ["xformOp:translate"]
 }

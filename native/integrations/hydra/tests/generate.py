@@ -59,6 +59,11 @@ for name,kind in [('rect','RectLight'),('sphere','SphereLight'),('distant','Dist
     UsdGeom.XformCommonAPI(light).SetTranslate((0,0,3))
     if kind=='RectLight': light.CreateWidthAttr(2);light.CreateHeightAttr(2)
     if kind=='SphereLight':light.CreateRadiusAttr(.2)
+    if kind=='DiskLight': light.CreateRadiusAttr(.75);light.CreateNormalizeAttr(True)
+    if kind=='CylinderLight':
+        light.CreateRadiusAttr(.25);light.CreateLengthAttr(1.5);light.CreateNormalizeAttr(True);light.CreateTreatAsLineAttr(True)
+    if name in ('disk','cylinder'):
+        light.CreateEnableColorTemperatureAttr(True);light.CreateColorTemperatureAttr(3200)
     if kind=='DistantLight':light.CreateNormalizeAttr(True)
     if name=='spot':
         shaping=UsdLux.ShapingAPI.Apply(light.GetPrim());shaping.CreateShapingConeAngleAttr(35);shaping.CreateShapingConeSoftnessAttr(.25)
