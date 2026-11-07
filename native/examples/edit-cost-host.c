@@ -27,7 +27,7 @@ static int selected(const char *filter,const char *name){
 }
 typedef struct {
   mt_scene scene;mt_engine engine;mt_render render;
-  mt_scene_geometry_id geometry;mt_scene_material_id material;
+  mt_scene_geometry_id geometry,extra_geometry;mt_scene_material_id material;
   mt_scene_mesh_id mesh,extra,batch;mt_scene_light_id light,extra_light;
   mt_scene_texture_id textures[4];
   mt_scene_geometry_desc gd;mt_scene_texture_desc td;mt_scene_mesh_desc md;
@@ -120,7 +120,7 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom","new_geometry_add"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
@@ -129,6 +129,7 @@ static void edit(Bench *b,unsigned c,int on){
   case 36:if(on)CHECK(mt_scene_remove_mesh(b->scene,b->mesh,error,sizeof error));else CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->mesh,error,sizeof error));break;
   case 37:{mt_scene_texture_desc changed=b->td;if(on){changed.width=changed.height=16;changed.pixel_bytes=sizeof b->pixels;}CHECK(mt_scene_set_texture(b->scene,b->textures[3],&changed,error,sizeof error));CHECK(mt_scene_material_set_texture(b->scene,b->material,MT_MAT_MAP,b->textures[on?3:0],error,sizeof error));break;}
   case 38:if(on)CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->extra,error,sizeof error));else CHECK(mt_scene_remove_mesh(b->scene,b->extra,error,sizeof error));break;
+  case 39:if(on){CHECK(mt_scene_add_geometry(b->scene,&b->gd,&b->extra_geometry,error,sizeof error));mt_scene_mesh_desc desc=b->md;desc.geometry=b->extra_geometry;CHECK(mt_scene_add_mesh(b->scene,&desc,&b->extra,error,sizeof error));}else{CHECK(mt_scene_remove_mesh(b->scene,b->extra,error,sizeof error));CHECK(mt_scene_remove_geometry(b->scene,b->extra_geometry,error,sizeof error));}break;
   case 0:b->camera.world_matrix[12]+=on?.01f:-.01f;CHECK(mt_scene_set_default_camera(b->scene,&b->camera,error,sizeof error));break;
   case 1:b->md.world_matrix[12]=on?.01f:0;CHECK(mt_scene_set_mesh_transform(b->scene,b->mesh,b->md.world_matrix,error,sizeof error));break;
   case 2:for(uint32_t i=0;i<b->instances.count;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;
