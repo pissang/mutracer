@@ -71,14 +71,15 @@ function compare(a: Awaited<ReturnType<typeof capture>>, b: Awaited<ReturnType<t
   for(let i=0;i<a.ids.length;i++)if(a.ids[i]!==b.ids[i])idDifferences++;
   return {differences,maxAbs,rmse:Math.sqrt(sum/a.pixels.length),idDifferences,picksEqual:a.picks===b.picks};
 }
-function parityFixture(instances:number) {
+function parityFixture(instances:number,isolated=false) {
   const f=createUpdateFixture(24,instances);f.camera.position=[3.21,4,6.3];f.camera.lookAt([0,0,0]);
   for(let i=0;i<Math.min(instances,64);i++){f.batch.transforms[i*16+12]=(i%8)-4;f.batch.transforms[i*16+13]=.3;f.batch.transforms[i*16+14]=Math.floor(i/8)-4;}
+  if(isolated)f.scene.meshes=[f.batch];
   return f;
 }
 type Fixture = ReturnType<typeof createUpdateFixture>;
 /** Large batch, mixed commits and repeated shared deformation versus full preparation. */
-export async function parity(backend:Backend,instances=16384,retainedFull=false) {
+export async function parity(backend:Backend,instances=16384,retainedFull=false,isolated=false) {
   const operations:[string,(f:Fixture)=>void][]=[
     ['one',f=>{f.batch.transforms[13]+=.2;f.batch.markTransformsUpdated(0,1);}],
     ['64',f=>{for(let i=0;i<Math.min(64,instances);i++)f.batch.transforms[i*16+13]+=.15;f.batch.markTransformsUpdated(0,Math.min(64,instances));}],
@@ -87,18 +88,20 @@ export async function parity(backend:Backend,instances=16384,retainedFull=false)
     ...Array.from({length:4},(_,step)=>['deform'+step,(f:Fixture)=>{for(let v=0;v<f.geometry.vertexCount;v++)f.geometry.position.array[v*3+1]=.01*Math.sin(v+step);f.geometry.markVerticesUpdated();}] as [string,(f:Fixture)=>void]),
     ['mixed',f=>{f.geometry.position.array[1]+=.01;f.geometry.markVerticesUpdated();f.batch.transforms[13]+=.1;f.batch.markTransformsUpdated(0,1);}],
     ['invalid',f=>{f.batch.transforms[28]=NaN;f.batch.markTransformsUpdated(1,1);}],
-    ['restore',f=>{f.batch.transforms[28]=-3;f.batch.markTransformsUpdated(1,1);}]
+    ['restore',f=>{f.batch.transforms[28]=-3;f.batch.markTransformsUpdated(1,1);}],
+    ['allInvalid',f=>{for(let i=0;i<instances;i++)f.batch.transforms[i*16+15]=NaN;f.batch.markTransformsUpdated();}],
+    ['allRestored',f=>{for(let i=0;i<instances;i++)f.batch.transforms[i*16+15]=1;f.batch.markTransformsUpdated();}]
   ];
-  const f=parityFixture(instances),c=await context(backend,f,256,144,['id']),rows=[];
-  const retained=retainedFull?parityFixture(instances):undefined,retainedContext=retained?await context(backend,retained,256,144,['id']):undefined;
+  const f=parityFixture(instances,isolated),c=await context(backend,f,256,144,['id']),rows=[];
+  const retained=retainedFull?parityFixture(instances,isolated):undefined,retainedContext=retained?await context(backend,retained,256,144,['id']):undefined;
   try {for(let step=0;step<operations.length;step++) {
     const [name,edit]=operations[step];edit(f);c.engine.update();const edited=await capture(c);
-    const full=retained??parityFixture(instances);
+    const full=retained??parityFixture(instances,isolated);
     if(retained){edit(full);full.geometry.position.array=full.geometry.position.array.slice();full.geometry.markVerticesUpdated();retainedContext!.engine.update();}
     else for(let i=0;i<=step;i++)operations[i][1](full);
     const reference=retainedContext??await context(backend,full,256,144,['id']);
     try{rows.push({name,...compare(edited,await capture(reference))});}finally{if(!retainedContext)reference.dispose();}
-  }return {backend,instances,retainedFull,rows};}finally{retainedContext?.dispose();c.dispose();}
+  }return {backend,instances,retainedFull,isolated,rows};}finally{retainedContext?.dispose();c.dispose();}
 }
 /** Equal-content refit/rebuild throughput, excluding preparation and shader warmup. */
 export async function quality(backend:Backend) {

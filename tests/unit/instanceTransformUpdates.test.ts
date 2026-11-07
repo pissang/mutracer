@@ -69,3 +69,20 @@ it.each([1, 64, 128, 512, 1024])('dense and sparse refits produce identical buff
   if (count >= 512) { expect(uploads.tlasRanges).toHaveLength(1); expect(uploads.instanceRanges).toHaveLength(1); }
   engine.dispose();
 });
+
+it.each(['webgpu', 'webgl'] as const)('%s restores a batch when all its matrices were excluded', async backend => {
+  const {default: WGPURayTracePass} = await import('../../src/renderer/WGPURayTracePass');
+  const {default: WebGLRayTracePass} = await import('../../src/renderer/WebGLRayTracePass');
+  const mesh = new InstancedMesh(createCubeGeometry(), new OpenPBRMaterial(), {count: 3});
+  const identities = mesh.transforms.slice(); mesh.transforms.fill(NaN); mesh.markTransformsUpdated();
+  const prepared = updateMeshInstances([mesh]); expect(prepared.instances.length).toBe(0);
+  const pass = Object.create((backend === 'webgpu' ? WGPURayTracePass : WebGLRayTracePass).prototype) as any;
+  const upload = vi.fn(() => false), membership = vi.fn();
+  Object.assign(pass, {_preparedMeshData: prepared, _tlas: buildWebTLAS(prepared.instances, prepared.blases),
+    _dirtyTransformMeshes: new Set([mesh]), _needsRefitTLAS: true, _bvhBuffer: {}, _instancesBuffer: {},
+    _uploadBVH: upload, _updateMeshMembership: membership, _emissiveCache: {collect: () => []},
+    _rtUniform: {views: {isEmpty: new Uint32Array([1])}}});
+  mesh.transforms.set(identities); mesh.markTransformsUpdated(); pass._refitMeshInstances();
+  expect(prepared.instances.length).toBe(3); expect(pass._needsRefitTLAS).toBe(false);
+  expect(backend === 'webgpu' ? upload : membership).toHaveBeenCalledOnce();
+});

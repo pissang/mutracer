@@ -1,4 +1,4 @@
-import {invalidateInstanceTransformRanges} from './instanceTransformChanges.js';
+import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {researchTransport} from './researchTransport.js';
@@ -883,7 +883,7 @@ class WebGLRayTracePass {
   private _refitMeshInstances() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const dirty = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
-    if (!dirty.size && this._dirtyTransformMeshes.size) {
+    if (!dirty.size && this._dirtyTransformMeshes.size && canSkipInstanceRefit(res.instances, res.instanceBindings)) {
       this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false; return;
     }
     const previousInstances = res.instances;

@@ -46,6 +46,12 @@ export function rememberInstanceTransforms(instances: MeshInstances, bindings: P
 /** Geometry edits affect bounds of every shared instance, including unmoved ones. */
 export function invalidateInstanceTransformRanges(instances: MeshInstances) { snapshots.delete(instances); }
 
+/** An empty dirty set cannot skip reselecting previously excluded instances. */
+export function canSkipInstanceRefit(instances: MeshInstances, bindings: PreparedMeshInstanceBinding[]) {
+  return !Array.isArray(instances) && instances.bindingSlots.length === bindings.length &&
+    instances.bindingSlots.every((slots, i) => slots.length === (bindings[i].mesh.instanceData?.count ?? 1));
+}
+
 /** Undefined requests the conservative whole-batch path. */
 export function changedInstanceTransformRanges(instances: MeshInstances, mesh: Mesh): Range[] | undefined {
   const batch = mesh.instanceData, previous = snapshots.get(instances)?.get(mesh);

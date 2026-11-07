@@ -1,4 +1,4 @@
-import {invalidateInstanceTransformRanges} from './instanceTransformChanges.js';
+import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
 import {causticDiagnostics} from './causticDiagnostics.js';
@@ -2726,7 +2726,7 @@ class WGPURayTracePass {
     }
 
     const dirtyIndices = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
-    if (!dirtyIndices.size && this._dirtyTransformMeshes.size) {
+    if (!dirtyIndices.size && this._dirtyTransformMeshes.size && canSkipInstanceRefit(res.instances, res.instanceBindings)) {
       this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false; return;
     }
     const incremental = dirtyIndices.size > 0;
