@@ -30,9 +30,19 @@ fn create_scene_buffer(
     data: &[u8],
     usage: wgpu::BufferUsages,
 ) -> wgpu::Buffer {
+    create_scene_buffer_reserved(device, queue, label, data, usage, data.len() as u64)
+}
+fn create_scene_buffer_reserved(
+    device: &wgpu::Device,
+    queue: &GpuQueue,
+    label: &str,
+    data: &[u8],
+    usage: wgpu::BufferUsages,
+    allocation: u64,
+) -> wgpu::Buffer {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        size: (data.len() as u64).max(4),
+        size: allocation.max(data.len() as u64).max(4),
         usage: usage | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -871,11 +881,17 @@ impl GpuScene {
         let queue = &gpu.queue;
         crate::image_limits::validate_target([scene.width, scene.height], &device.limits())?;
         for buffer in &scene.buffers {
-            if buffer.size > device.limits().max_buffer_size
+            let allocation = match (buffer.id, scene.native_layout.as_ref()) {
+                (1, Some(layout)) => layout.bvh_capacity_bytes.unwrap_or(buffer.size as usize) as u64,
+                (2, Some(layout)) => layout.instance_capacity.unwrap_or(0).saturating_mul(160).max(buffer.size as usize) as u64,
+                (3, Some(layout)) => layout.attribute_capacity_bytes.unwrap_or(buffer.size as usize) as u64,
+                _ => buffer.size,
+            };
+            if allocation > device.limits().max_buffer_size
                 || buffer.usage & wgpu::BufferUsages::STORAGE.bits() != 0
-                    && buffer.size > u64::from(device.limits().max_storage_buffer_binding_size)
+                    && allocation > u64::from(device.limits().max_storage_buffer_binding_size)
             {
-                return Err(format!("Scene buffer {} requires {} bytes; selected GPU limits: buffer {}, storage binding {}. {}", buffer.id, buffer.size, device.limits().max_buffer_size, device.limits().max_storage_buffer_binding_size,
+                return Err(format!("Scene buffer {} requires {} bytes; selected GPU limits: buffer {}, storage binding {}. {}", buffer.id, allocation, device.limits().max_buffer_size, device.limits().max_storage_buffer_binding_size,
                     if !use_hwrt && buffer.id == 1 { "Use HWRT for a scene whose software BVH exceeds this limit." } else { "Reduce scene size or select a device with larger limits." }).into());
             }
         }
@@ -913,22 +929,29 @@ impl GpuScene {
             {
                 usage |= wgpu::BufferUsages::BLAS_INPUT;
             }
-            usage |= wgpu::BufferUsages::COPY_DST;
+            usage |= wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+            let allocation = match (buffer.id, scene.native_layout.as_ref()) {
+                (1, Some(layout)) => layout.bvh_capacity_bytes.unwrap_or(data.len()) as u64,
+                (2, Some(layout)) => layout.instance_capacity.unwrap_or(0).saturating_mul(160).max(data.len()) as u64,
+                (3, Some(layout)) => layout.attribute_capacity_bytes.unwrap_or(data.len()) as u64,
+                _ => data.len() as u64,
+            };
             let existing = reusable
                 .and_then(|buffers| buffers.get(&buffer.id))
-                .filter(|b| b.size() == buffer.size && b.usage() == usage);
+                .filter(|b| b.size() == allocation && b.usage() == usage);
             let gpu_buffer = if let Some(existing) = existing {
                 write_scene_buffer(queue, existing, &data);
                 reused_bytes += buffer.size;
                 existing.clone()
             } else {
-                allocated_bytes += buffer.size;
-                create_scene_buffer(
+                allocated_bytes += allocation;
+                create_scene_buffer_reserved(
                     device,
                     queue,
                     &format!("MuTracer {:?}", buffer.resource),
                     &data,
                     usage,
+                    allocation,
                 )
             };
             buffers.insert(buffer.id, gpu_buffer);
@@ -1542,7 +1565,7 @@ impl GpuScene {
                     return Err("Missing updated scene buffer".into());
                 };
                 if *offset > size || data.len() as u64 > size - offset {
-                    return Err("Full scene commit required: scene write exceeds buffer".into());
+                    return Err(format!("Full scene commit required: scene write exceeds buffer (resource={id}, offset={offset}, bytes={}, capacity={size})", data.len()).into());
                 }
             } else {
                 let texture = self.textures.get(id).ok_or("Missing lighting texture")?;
@@ -1565,6 +1588,81 @@ impl GpuScene {
         }
         Ok(())
     }
+    /// Grows resident scene buffers before an incremental write exceeds their allocation.
+    /// The old prefix is copied on GPU and all bind groups that reference the resource are rebuilt.
+    fn grow_updated_buffers(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
+        let mut grown = Vec::new();
+        for (id, offset, _, _, data) in updates {
+            if *id >= layout::resource::ATLAS {
+                continue;
+            }
+            let Some(current) = self.buffers.get(id) else { continue; };
+            let required = offset.saturating_add(data.len() as u64);
+            if required <= current.size() { continue; }
+            let old_size = current.size();
+            let size = required.max(old_size.saturating_mul(2)).div_ceil(256) * 256;
+            if size > self.gpu.device.limits().max_buffer_size {
+                return Err(format!("Scene buffer {id} growth to {size} bytes exceeds device limit").into());
+            }
+            let usage = current.usage() | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+            let replacement = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("MuTracer grown scene buffer"), size, usage, mapped_at_creation: false,
+            });
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(current, 0, &replacement, 0, old_size);
+            self.gpu.queue.submit([encoder.finish()]);
+            self.buffers.insert(*id, replacement);
+            if let Some(record) = self.scene.buffers.iter_mut().find(|b| b.id == *id) {
+                record.size = size;
+            }
+            if let Some(layout) = &mut self.scene.native_layout {
+                match *id {
+                    1 => layout.bvh_capacity_bytes = Some(size as usize),
+                    2 => layout.instance_capacity = Some((size / 160) as usize),
+                    3 => layout.attribute_capacity_bytes = Some(size as usize),
+                    _ => {}
+                }
+            }
+            grown.push(*id);
+        }
+        if grown.is_empty() { return Ok(()); }
+        let views: HashMap<_, _> = self.textures.iter().map(|(id, texture)| (*id, scene_texture_view(&self.scene, texture, *id))).collect();
+        let independent_views: Vec<_> = (0..self.scene.textures.iter().filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE).count())
+            .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)]).collect();
+        for (index, group) in self.scene.bind_groups.iter().enumerate() {
+            if !group.entries.iter().any(|entry| matches!(entry.kind, BindingKind::Buffer) && grown.contains(&entry.id)) { continue; }
+            let mut entries: Vec<_> = group.entries.iter().map(|entry| wgpu::BindGroupEntry {
+                binding: entry.binding,
+                resource: match entry.kind {
+                    BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
+                    BindingKind::TextureArray(_) => wgpu::BindingResource::TextureViewArray(&independent_views),
+                    BindingKind::Texture => wgpu::BindingResource::TextureView(&views[&entry.id]),
+                    BindingKind::Sampler => wgpu::BindingResource::Sampler(&self.samplers[&entry.id]),
+                },
+            }).collect();
+            if index == layout::group::SCENE && self.scene.hwrt.is_some() {
+                let hardware = self.hardware.as_ref().ok_or("Missing HWRT resources during buffer growth")?;
+                entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: layout::hwrt_binding::ACCELERATION as u32,
+                        resource: hardware.tlas.as_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: layout::hwrt_binding::INDICES as u32,
+                        resource: hardware.mapping.as_entire_binding(),
+                    },
+                ]);
+            }
+            self.groups[index] = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MuTracer grown scene bindings"),
+                layout: &self.pipeline.get_bind_group_layout(index as u32), entries: &entries,
+            });
+        }
+        if profiling::enabled() {
+            native_log!("{}", json!({"nativeBufferGrowth": grown.iter().map(|id| json!({"resource":id,"bytes":self.buffers[id].size()})).collect::<Vec<_>>()}));
+        }
+        Ok(())
+    }
     fn prepare_geometry_hardware(
         &self,
         updates: &scene::LightingUpdates,
@@ -1576,18 +1674,30 @@ impl GpuScene {
             Option<wgpu::Buffer>,
         )>,
     > {
-        let Some(current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
+        let Some(_current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
             return Ok(None);
         };
         if updates.changed_blases.is_some() {
+            let (capture, assets) = self
+                .retained
+                .as_ref()
+                .ok_or("Missing retained geometry")?
+                .hardware_geometry(updates)?;
             return with_error_scopes(
                 &self.gpu.device,
                 || -> Result<_> {
+                    for (id, destination, data) in &updates.hardware_writes {
+                        if *id == 3 {
+                            self.gpu.queue.write_buffer(&self.buffers[&3], *destination, data);
+                        }
+                    }
                     let resources = self.hardware.as_ref().unwrap().rebuild_changed(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        current,
+                        &capture,
                         updates,
+                        &assets,
+                        &self.buffers,
                     )?;
                     let entries = [
                         wgpu::BindGroupEntry {
@@ -1623,7 +1733,7 @@ impl GpuScene {
                             layout: &self.pipeline.get_bind_group_layout(0),
                             entries: &entries,
                         });
-                    Ok(Some((resources, current.clone(), group, None)))
+                    Ok(Some((resources, capture, group, None)))
                 },
                 |error| {
                     format!("Full scene commit required: changed BLAS preparation: {error}").into()
@@ -1701,7 +1811,11 @@ impl GpuScene {
         target: Option<&Target>,
     ) -> Result<()> {
         if let Some(layout) = &updates.native_layout {
-            self.scene.native_layout = Some(layout.clone());
+            let mut layout = layout.clone();
+            layout.bvh_capacity_bytes = Some(layout.bvh_capacity_bytes.unwrap_or(0).max(self.buffers.get(&1).map_or(0, |b| b.size() as usize)));
+            layout.instance_capacity = Some(layout.instance_capacity.unwrap_or(0).max(self.buffers.get(&2).map_or(0, |b| (b.size() / 160) as usize)));
+            layout.attribute_capacity_bytes = Some(layout.attribute_capacity_bytes.unwrap_or(0).max(self.buffers.get(&3).map_or(0, |b| b.size() as usize)));
+            self.scene.native_layout = Some(layout);
         }
         if profiling::enabled() {
             native_log!(

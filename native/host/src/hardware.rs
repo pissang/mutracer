@@ -19,6 +19,10 @@ pub struct NativeLayout {
     pub instance_count: Option<usize>,
     #[serde(default)]
     pub instance_capacity: Option<usize>,
+    #[serde(default)]
+    pub bvh_capacity_bytes: Option<usize>,
+    #[serde(default)]
+    pub attribute_capacity_bytes: Option<usize>,
     pub bevel: bool,
     pub has_displacement: bool,
     #[serde(default)]
@@ -34,8 +38,8 @@ pub struct IndexedGeometry {
     opaque: bool,
     index_offset: u32,
     index_count: u32,
-    vertex_offset: u32,
-    vertex_count: u32,
+    pub vertex_offset: u32,
+    pub vertex_count: u32,
     procedural: bool,
     dynamic: bool,
     bounds_offset: u32,
@@ -199,6 +203,7 @@ pub fn prepare_reusing(
             &read(&AssetId::Packet(35))?,
             wgpu::BufferUsages::BLAS_INPUT
                 | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             false,
         ))
@@ -540,6 +545,8 @@ impl Resources {
         queue: &crate::GpuQueue,
         capture: &Capture,
         writes: &super::scene::LightingUpdates,
+        assets: &Assets,
+        scene_buffers: &HashMap<usize, wgpu::Buffer>,
     ) -> Result<Resources> {
         if !self.indexed || !capture.indexed {
             return Err("Partial AS rebuild requires indexed source inputs".into());
@@ -548,6 +555,29 @@ impl Resources {
             .changed_blases
             .as_ref()
             .ok_or("Missing changed BLAS list")?;
+        let old_blas_count = self._blases.len();
+        if capture.geometries.len() < old_blas_count {
+            return Err("Geometry append cannot remove resident BLASes".into());
+        }
+        let added_blases = capture.geometries.len() - old_blas_count;
+        let appended_indices = if added_blases != 0 {
+            let bytes = assets.get(&AssetId::Packet(35)).ok_or("Missing appended HWRT indices")?;
+            let old_bytes = self.mapping.size();
+            let size = old_bytes.checked_add(bytes.len() as u64).ok_or("HWRT index buffer size overflow")?;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("MuTracer grown HWRT indices"), size,
+                usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            if old_bytes != 0 {
+                encoder.copy_buffer_to_buffer(&self.mapping, 0, &buffer, 0, old_bytes);
+            }
+            queue.submit([encoder.finish()]);
+            queue.write_buffer(&buffer, old_bytes, bytes);
+            Some(buffer)
+        } else { None };
         let mut unique = std::collections::HashSet::new();
         let mut plans = Vec::new();
         let mut used_writes = std::collections::HashSet::new();
@@ -559,6 +589,7 @@ impl Resources {
                 .geometries
                 .get(index)
                 .ok_or("Changed BLAS out of bounds")?;
+            let added = index >= old_blas_count;
             if geometry.procedural {
                 // Procedural AS builds consume AABBs, while shading still
                 // uploads the changed compact vertices through resource 3.
@@ -595,6 +626,14 @@ impl Resources {
                 })
                 .ok_or("Missing exact changed geometry AS span")?;
             used_writes.insert(write_index);
+            if added {
+                let index_offset = geometry.index_offset as u64 * 4;
+                let index_length = geometry.index_count.unwrap_or(geometry.vertex_count) as usize * 4;
+                let index_write = writes.hardware_writes.iter().enumerate().find(|(_, (resource, destination, data))|
+                    *resource == 35 && *destination == index_offset && data.len() == index_length)
+                    .ok_or("Missing appended HWRT index span")?.0;
+                used_writes.insert(index_write);
+            }
             plans.push((index, geometry, data));
         }
         if used_writes.len() != writes.hardware_writes.len() {
@@ -606,7 +645,15 @@ impl Resources {
         let allow_update = false;
         let mut blases = self._blases.clone();
         let mut vertices = self._vertices.clone();
-        let indices = self._indices.clone();
+        let mut indices = self._indices.clone();
+        if added_blases != 0 {
+            let positions = scene_buffers.get(&3).ok_or("Missing appended HWRT attributes")?.clone();
+            let index_buffer = appended_indices.as_ref().unwrap().clone();
+            for _ in 0..added_blases {
+                vertices.push(positions.clone());
+                indices.push(Some(index_buffer.clone()));
+            }
+        }
         let mut sizes = Vec::new();
         for (index, geometry, data) in &plans {
             let flags = if geometry.non_opaque {
@@ -632,12 +679,14 @@ impl Resources {
                     }],
                 }
             };
-            vertices[*index] = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer changed AS input"),
-                contents: data,
-                usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
-            });
-            blases[*index] = device.create_blas(
+            if *index < old_blas_count {
+                vertices[*index] = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("MuTracer changed AS input"),
+                    contents: data,
+                    usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
+                });
+            }
+            let blas = device.create_blas(
                 &wgpu::CreateBlasDescriptor {
                     label: Some("MuTracer changed BLAS"),
                     flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
@@ -650,11 +699,16 @@ impl Resources {
                 },
                 descriptors.clone(),
             );
+            if *index < old_blas_count { blases[*index] = blas; } else { blases.push(blas); }
             sizes.push(descriptors);
+        }
+        let instance_capacity = self.tlas.get().len().max(capture.instances.len() + 2);
+        if instance_capacity > device.limits().max_tlas_instance_count as usize {
+            return Err("HWRT TLAS growth exceeds device instance limit".into());
         }
         let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("MuTracer changed geometry TLAS"),
-            max_instances: self.tlas.get().len() as u32,
+            max_instances: instance_capacity as u32,
             flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
@@ -694,7 +748,11 @@ impl Resources {
                         wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
                             size: &descriptors[0],
                             vertex_buffer: &vertices[*index],
-                            first_vertex: 0,
+                            first_vertex: if *index < old_blas_count {
+                                0
+                            } else {
+                                geometry.first_vertex
+                            },
                             vertex_stride: geometry.vertex_stride,
                             index_buffer: indices[*index].as_ref(),
                             first_index: Some(geometry.index_offset),
@@ -759,18 +817,28 @@ impl Resources {
             );
         }
         let mut updatable_blases = self.updatable_blases.clone();
+        updatable_blases.resize(blases.len(), false);
         for &index in changed {
             updatable_blases[index] = allow_update;
         }
+        let mut inputs = self.inputs.clone();
+        let mapping = if let Some(buffer) = appended_indices {
+            inputs.insert(HardwareBufferId::Packet(35), buffer.clone());
+            buffer
+        } else { self.mapping.clone() };
+        let mut raw_instances = self.raw_instances.clone().unwrap_or_default();
+        for (index, geometry) in capture.geometries.iter().enumerate() {
+            raw_instances.insert((geometry.index_offset / 3, geometry.first_vertex), (index, geometry.index_offset / 3));
+        }
         Ok(Resources {
-            inputs: self.inputs.clone(),
+            inputs,
             indexed: self.indexed,
             tlas,
-            mapping: self.mapping.clone(),
+            mapping,
             _blases: blases,
             _vertices: vertices,
             _indices: indices,
-            raw_instances: self.raw_instances.clone(),
+            raw_instances: Some(raw_instances),
             metal_refit_opt_in: self.metal_refit_opt_in,
             used_metal_refit: metal_blas_wall_ms.is_some(),
             updatable_blases,
