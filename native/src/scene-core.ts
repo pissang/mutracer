@@ -150,15 +150,15 @@ export function acceptSceneTransform(token: number): Uint8Array {
   state.instances = pending.instances; state.tlas = pending.tlas;
   if (pending.prepared) state.prepared = pending.prepared;
   state.nativeLayout.instanceCount = meshInstancesLength(pending.instances);
-  state.prepared.residentBindings = state.prepared.residentBindings.map(b => {
-    const index = previousMeshIndices.get(b.mesh) ?? -1;
-    return index < 0 || previousMeshes[index] === pending.meshes[index] ? b : {...b, mesh: pending.meshes[index]};
-  });
+  if (!pending.prepared) state.prepared.residentBindings = state.prepared.residentBindings.map(b => {
+      const index = previousMeshIndices.get(b.mesh) ?? -1;
+      return index < 0 || previousMeshes[index] === pending.meshes[index] ? b : {...b, mesh: pending.meshes[index]};
+    });
   state.prepared.instanceBindings = pending.bindings; state.prepared.instances = pending.instances;
-  state.prepared.emissiveBindings = state.prepared.emissiveBindings.map(b => {
-    const index = previousMeshIndices.get(b.mesh) ?? -1;
-    return index < 0 || previousMeshes[index] === pending.meshes[index] ? b : {...b, mesh: pending.meshes[index]};
-  });
+  if (!pending.prepared) state.prepared.emissiveBindings = state.prepared.emissiveBindings.map(b => {
+      const index = previousMeshIndices.get(b.mesh) ?? -1;
+      return index < 0 || previousMeshes[index] === pending.meshes[index] ? b : {...b, mesh: pending.meshes[index]};
+    });
   state.emissive = pending.emissive; state.rt = pending.rt;
   retainedScenes.set(token, state); pendingTransforms.delete(token);
   return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
@@ -178,7 +178,7 @@ export function acceptSceneLighting(token: number): Uint8Array {
   if (materials) {
     for (const [target, source] of materials.changes) syncNativeMaterial(target, source);
     state.emissive = materials.emissive; state.prepared.emissiveBindings = materials.bindings;
-    state.table.repackParams(state.ordered);
+    state.table.repackTextureReferences(state.ordered); state.table.repackParams(state.ordered);
   }
   if (pending.lightTextures) state.table.lightTexturesIndices = pending.lightTextures;
   const atlas = pending.atlas;
@@ -335,7 +335,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
       if (before[key] !== after[key]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
     }
     if (u[0] === 3) return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
-    state.table.repackParams(ordered); repacked = true;
+    state.table.repackTextureReferences(ordered); state.table.repackParams(ordered); repacked = true;
     const packed = new Uint8Array(state.table.getBufferArray().buffer);
     const records: number[][] = [resourceRecord(RESOURCE.MATERIALS, KIND.BUFFER, packed.length, 0, 0, 0, 0)];
     const parts = [packed];
@@ -360,7 +360,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
       materials: {changes, emissive, bindings}});
     return updatePacket(records, parts);
   } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
-  finally { if (repacked) state.table.repackParams(state.ordered); }
+  finally { if (repacked) { state.table.repackTextureReferences(state.ordered); state.table.repackParams(state.ordered); } }
 }
 
 // Versioned experimental wire protocol. The Rust boundary validates every span,
@@ -1111,17 +1111,19 @@ function prepareMembershipUpdate(bytes: Uint8Array, token: number, native: boole
     }
     meshes.push(mesh);
   }
-  const materials: MaterialState[] = [], materialIndices = new Map<MaterialState, number>();
+  const materials = state.prepared.materials;
+  const materialIndices = new Map(materials.map((material, index) => [material, index]));
   const templates = new Map(state.prepared.residentBindings.map(binding => [binding.mesh.geometry, binding]));
   const residentBindings: PreparedMeshInstanceBinding[] = [];
   for (const mesh of meshes) {
     const template = templates.get(mesh.geometry);
     if (!template) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
-    const indices = mesh.materials.map(material => {
-      let index = materialIndices.get(material);
-      if (index === undefined) { index = materials.length; materials.push(material); materialIndices.set(material, index); }
-      return index;
-    });
+    const indices: number[] = [];
+    for (const material of mesh.materials) {
+      const index = materialIndices.get(material);
+      if (index === undefined) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+      indices.push(index);
+    }
     residentBindings.push({...template, mesh, materialIndices: indices});
   }
   const prepared = selectVisibleInstances({...state.prepared, materials, residentBindings}, meshes);

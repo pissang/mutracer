@@ -1109,6 +1109,202 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
     }
 }
 
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn resident_membership_matches_fresh_hdr_id_and_picking_on_both_backends() {
+    use CommitKind::Incremental;
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let geometry = scene
+            .add_geometry(Geometry::new(
+                vec![-0.35, -0.35, 0., 0.35, -0.35, 0., 0., 0.35, 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let mut multi = Geometry::new(
+            vec![
+                -0.35, -0.35, 0., 0.35, -0.35, 0., 0., 0.35, 0., -0.3, -0.3, -0.1, 0.3, -0.3, -0.1,
+                0., 0.3, -0.1,
+            ],
+            vec![0, 1, 2, 3, 4, 5],
+        );
+        multi.material_indices = vec![0, 0, 0, 1, 1, 1].into();
+        let multi = scene.add_geometry(multi).unwrap();
+        let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        let mut emission = OpenPbrMaterial::default();
+        emission.values.emission_strength = 1.5;
+        let emission = scene.add_material(emission).unwrap();
+        let uploaded = scene
+            .add_texture(Texture::rgba8(1, 1, vec![255, 0, 0, 255]))
+            .unwrap();
+        let same_size = scene
+            .add_texture(Texture::rgba8(1, 1, vec![0, 255, 0, 255]))
+            .unwrap();
+        let larger = scene
+            .add_texture(Texture::rgba8(2, 2, [0, 0, 255, 255].repeat(4)))
+            .unwrap();
+        for texture in [uploaded, same_size, larger] {
+            let mut holder = OpenPbrMaterial::default();
+            holder.textures[0] = Some(texture);
+            let holder = scene.add_material(holder).unwrap();
+            let mut resident = Mesh::new(geometry, holder);
+            resident.visible = false;
+            scene.add_mesh(resident).unwrap();
+        }
+        let mut left = Mesh::new(geometry, material);
+        left.transform = Mat4::from_translation(Vec3::new(-0.55, 0., 0.));
+        let left = scene.add_mesh(left).unwrap();
+        let mut emitter = Mesh::new(geometry, emission);
+        emitter.transform = Mat4::from_translation(Vec3::new(0.55, 0., 0.));
+        let emitter = scene.add_mesh(emitter).unwrap();
+        let mut reserve_a = Mesh::new(geometry, material);
+        reserve_a.visible = false;
+        let reserve_a = scene.add_mesh(reserve_a).unwrap();
+        let mut reserve_b = Mesh::new(multi, material);
+        reserve_b.materials = vec![material, emission];
+        reserve_b.visible = false;
+        let reserve_b = scene.add_mesh(reserve_b).unwrap();
+        scene
+            .add_light(Light::Directional {
+                color: [1.; 3],
+                intensity: 1.,
+                transform: Mat4::IDENTITY,
+            })
+            .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let settings = RenderSettings {
+            max_samples: 4,
+            aovs: 32,
+            aov_samples: 1,
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 24,
+            },
+            ..Default::default()
+        };
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        let commit = |engine: &Engine, render: &Render, scene: &Scene, label: &str| {
+            eprintln!("MEMBERSHIP_ORACLE {backend:?} {label} begin");
+            let predicted = scene.pending_commit_kind().unwrap();
+            eprintln!("MEMBERSHIP_ORACLE {backend:?} {label} predicted={predicted:?}");
+            assert_eq!(predicted, Incremental, "{backend:?} {label} prediction");
+            engine.set_scene_object(scene).unwrap();
+            engine.update().unwrap();
+            eprintln!("MEMBERSHIP_ORACLE {backend:?} {label} updated");
+            render.converge(ConvergeOptions::new(4)).unwrap();
+            eprintln!("MEMBERSHIP_ORACLE {backend:?} {label} converged");
+            assert_eq!(
+                render.last_commit().unwrap(),
+                Some(Incremental),
+                "{backend:?} {label} actual"
+            );
+            let fresh = Engine::new(EngineOptions { backend }).unwrap();
+            let reference = Render::new(&fresh, settings.clone()).unwrap();
+            fresh.set_scene_object(scene).unwrap();
+            fresh.update().unwrap();
+            reference.converge(ConvergeOptions::new(4)).unwrap();
+            for kind in [PixelKind::Hdr, PixelKind::Id] {
+                let a = render.read_pixels(kind).unwrap();
+                let b = reference.read_pixels(kind).unwrap();
+                let differing = a
+                    .data
+                    .iter()
+                    .zip(&b.data)
+                    .filter(|(x, y)| x.to_bits() != y.to_bits())
+                    .count();
+                assert_eq!(differing, 0, "{backend:?} {label} {kind:?}");
+                assert_eq!(a.id_data, b.id_data, "{backend:?} {label} ID");
+            }
+            for x in [0.25, 0.5, 0.75] {
+                assert_eq!(
+                    format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+                    format!("{:?}", fresh.pick_surface(x, 0.5).unwrap()),
+                    "{backend:?} {label} pick {x}"
+                );
+            }
+        };
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+
+        scene.remove_mesh(left).unwrap();
+        commit(&engine, &render, &scene, "delete");
+        let mut added = Mesh::new(geometry, material);
+        added.transform = Mat4::from_translation(Vec3::new(-0.55, 0., 0.));
+        let added = scene.add_mesh(added).unwrap();
+        commit(&engine, &render, &scene, "add-resident");
+        scene.remove_mesh(emitter).unwrap();
+        commit(&engine, &render, &scene, "delete-emissive");
+        scene.remove_mesh(reserve_a).unwrap();
+        commit(&engine, &render, &scene, "release-reserved-slot");
+        let mut instances = Mesh::new(geometry, material);
+        instances.instances = Some(Instances {
+            transforms: vec![
+                Mat4::from_translation(Vec3::new(0.45, 0., 0.)),
+                Mat4::from_translation(Vec3::new(0.65, 0., 0.)),
+            ]
+            .into(),
+            colors: None,
+        });
+        let instances = scene.add_mesh(instances).unwrap();
+        commit(&engine, &render, &scene, "add-instance-batch");
+        scene.remove_mesh(instances).unwrap();
+        commit(&engine, &render, &scene, "delete-instance-batch");
+        let mut mm = Mesh::new(multi, material);
+        mm.materials = vec![material, emission];
+        let mm = scene.add_mesh(mm).unwrap();
+        commit(&engine, &render, &scene, "add-multi-material");
+        scene.remove_mesh(mm).unwrap();
+        commit(&engine, &render, &scene, "delete-multi-material");
+        scene.remove_mesh(reserve_b).unwrap();
+        commit(&engine, &render, &scene, "delete-final-reserve");
+        scene.set_mesh_visible(added, false).unwrap();
+        commit(&engine, &render, &scene, "visibility-after-membership");
+        scene.set_mesh_visible(added, true).unwrap();
+        commit(
+            &engine,
+            &render,
+            &scene,
+            "restore-visibility-after-membership",
+        );
+        scene.mesh_mut(added).unwrap().transform =
+            Mat4::from_translation(Vec3::new(-0.45, 0.1, 0.));
+        commit(&engine, &render, &scene, "transform-after-membership");
+        scene.material_mut(material).unwrap().textures[0] = Some(uploaded);
+        commit(&engine, &render, &scene, "texture-uploaded-reference");
+        scene.material_mut(material).unwrap().textures[0] = Some(same_size);
+        commit(&engine, &render, &scene, "texture-same-size-reference");
+        scene.material_mut(material).unwrap().textures[0] = Some(larger);
+        commit(&engine, &render, &scene, "texture-larger-reference");
+
+        let mut over_capacity = Mesh::new(geometry, material);
+        over_capacity.instances = Some(Instances {
+            transforms: (0..8)
+                .map(|i| Mat4::from_translation(Vec3::new(i as f32 * 0.05, 0., 0.)))
+                .collect::<Vec<_>>()
+                .into(),
+            colors: None,
+        });
+        scene.add_mesh(over_capacity).unwrap();
+        assert_eq!(
+            scene.pending_commit_kind().unwrap(),
+            Incremental,
+            "{backend:?} over-capacity descriptor prediction"
+        );
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_eq!(
+            render.last_commit().unwrap(),
+            Some(CommitKind::Full),
+            "{backend:?} over-capacity actual"
+        );
+    }
+}
+
 /// Full preparation with hidden mesh records physically removed. Retains stable
 /// ID tables and all resource records, exactly as Scene::remove_mesh does.
 fn removed_hidden_descriptor(bytes: &[u8]) -> Vec<u8> {

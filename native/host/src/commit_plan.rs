@@ -441,10 +441,15 @@ fn membership_step(a: &Words, b: &Words) -> Option<Step> {
             return None;
         }
         let (ab, bb) = (a.u(h::BATCH_OFFSET), b.u(h::BATCH_OFFSET));
-        if (ab == 0) != (bb == 0) {
-            return None;
-        }
-        if ab != 0 {
+        if ab == 0 && bb != 0 {
+            if b.u(bb + ni * bt::WORDS + bt::COUNT) != u32::MAX as usize {
+                return None;
+            }
+        } else if ab != 0 && bb == 0 {
+            if a.u(ab + oi * bt::WORDS + bt::COUNT) != u32::MAX as usize {
+                return None;
+            }
+        } else if ab != 0 {
             let (ab, bb) = (ab + oi * bt::WORDS, bb + ni * bt::WORDS);
             let count = b.u(bb + bt::COUNT);
             if a.u(ab + bt::COUNT) != count
@@ -641,7 +646,18 @@ pub(crate) fn plan_with(
             .any(|&f| b.u(f) == i + 1)
     });
     let mut steps = Vec::new();
-    if sync.meshes == 2 {
+    let membership = sync.meshes == 2;
+    let old_meshes = membership.then(|| {
+        (0..a.u(h::MESH_COUNT))
+            .map(|i| mesh_id(&a, i))
+            .collect::<std::collections::BTreeSet<_>>()
+    });
+    let retained = |index: usize| {
+        old_meshes
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&mesh_id(&b, index)))
+    };
+    if membership {
         steps.push(membership_step(&a, &b)?);
     }
     if atlas {
@@ -654,6 +670,9 @@ pub(crate) fn plan_with(
     }
     let mut transforms = Vec::new();
     for &index in &sync.transforms {
+        if !retained(index) {
+            continue;
+        }
         transform_steps(&a, &b, index, &mut transforms)?;
     }
     if transforms.len() > 1 {
@@ -661,15 +680,24 @@ pub(crate) fn plan_with(
     } else {
         steps.extend(transforms);
     }
-    if !sync.visibility.is_empty() {
-        let mut words = vec![3, sync.visibility.len() as u32, 0, 0];
-        for &i in &sync.visibility {
+    let visibility: Vec<_> = sync
+        .visibility
+        .iter()
+        .copied()
+        .filter(|&i| retained(i))
+        .collect();
+    if !visibility.is_empty() {
+        let mut words = vec![3, visibility.len() as u32, 0, 0];
+        for &i in &visibility {
             let offset = b.u(h::MESH_OFFSET) + i * m::WORDS;
             words.extend_from_slice(&[i as u32, b.u(offset + m::FLAGS) as u32]);
         }
         steps.push(Step::Visibility(record(&words)));
     }
     for &index in &sync.colors {
+        if !retained(index) {
+            continue;
+        }
         steps.push(instance_color_step(&a, &b, index)?);
     }
     if !sync.materials.is_empty() {

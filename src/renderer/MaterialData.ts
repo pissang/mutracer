@@ -59,6 +59,21 @@ export default class MaterialData {
       if (slot.define) this.defines[slot.define] = maps.indices[slot.property].filter(index => index >= 0).length;
     }
   }
+  repackTextureReferences(materials: MaterialState[]) {
+    const indices = (property: keyof MaterialState) => materials.map(material => {
+      const texture = material[property] as TextureState | undefined;
+      return texture ? this.textures.indexOf(texture) : -1;
+    });
+    this.bufferData.diffuseMapIndex = indices('map'); this.bufferData.alphaMapIndex = indices('alphaMap');
+    this.bufferData.normalMapIndex = indices('normalMap'); this.bufferData.emissiveMapIndex = indices('emissiveMap');
+    this.bufferData.metallicRoughnessMapIndex = indices('metallicRoughnessMap'); this.bufferData.roughnessMapIndex = indices('roughnessMap');
+    this.bufferData.metalnessMapIndex = indices('metalnessMap'); this.bufferData.transmissionMapIndex = indices('transmissionMap');
+    this.bufferData.thinFilmMapIndex = indices('thinFilmMap'); this.bufferData.displacementMapIndex = indices('displacementMap');
+    this.bufferData.coatWeightMapIndex = indices('coatWeightMap'); this.bufferData.coatRoughnessMapIndex = indices('coatRoughnessMap');
+    this.bufferData.fuzzColorMapIndex = indices('fuzzColorMap'); this.bufferData.fuzzRoughnessMapIndex = indices('fuzzRoughnessMap');
+    this.bufferData.specularWeightMapIndex = indices('specularWeightMap'); this.bufferData.specularColorMapIndex = indices('specularColorMap');
+    this.bufferData.anisotropyMapIndex = indices('anisotropyMap'); this.bufferData.coatNormalMapIndex = indices('coatNormalMap');
+  }
   repackParams(materials: MaterialState[]) { repackMaterialParams(this.bufferData, materials); }
   getBufferArray() { return packMaterialBuffer(this.bufferData); }
 }

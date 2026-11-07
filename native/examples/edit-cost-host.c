@@ -120,7 +120,7 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
@@ -128,6 +128,7 @@ static void edit(Bench *b,unsigned c,int on){
   case 35:CHECK(mt_scene_set_mesh_visible(b->scene,b->mesh,(uint32_t)!on,error,sizeof error));break;
   case 36:if(on)CHECK(mt_scene_remove_mesh(b->scene,b->mesh,error,sizeof error));else CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->mesh,error,sizeof error));break;
   case 37:{mt_scene_texture_desc changed=b->td;if(on){changed.width=changed.height=16;changed.pixel_bytes=sizeof b->pixels;}CHECK(mt_scene_set_texture(b->scene,b->textures[3],&changed,error,sizeof error));CHECK(mt_scene_material_set_texture(b->scene,b->material,MT_MAT_MAP,b->textures[on?3:0],error,sizeof error));break;}
+  case 38:if(on)CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->extra,error,sizeof error));else CHECK(mt_scene_remove_mesh(b->scene,b->extra,error,sizeof error));break;
   case 0:b->camera.world_matrix[12]+=on?.01f:-.01f;CHECK(mt_scene_set_default_camera(b->scene,&b->camera,error,sizeof error));break;
   case 1:b->md.world_matrix[12]=on?.01f:0;CHECK(mt_scene_set_mesh_transform(b->scene,b->mesh,b->md.world_matrix,error,sizeof error));break;
   case 2:for(uint32_t i=0;i<b->instances.count;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;
@@ -184,6 +185,7 @@ int main(int argc,char **argv){
     /* The inverse state of removal/replacement/add-environment has to exist. */
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
+    if(c==38){CHECK(mt_scene_remove_mesh(b.scene,b.meshes[b.mesh_count-1],error,sizeof error));commit(&b,"setup",-1,2);}
     /* Full above max(64, half of the batch) changed instances. */
     uint32_t limit=instances/2>64?instances/2:64;
     uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
