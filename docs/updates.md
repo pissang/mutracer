@@ -45,12 +45,14 @@ and engine.update. THREESync sends resource notifications for you. See
 ## Update costs
 
 What `engine.update()` and the next refine redo for each kind of edit, on both
-WebGPU and WebGL 2:
+WebGPU and WebGL 2. Detection visits every mesh and distinct material, even
+when only one object changed.
 
 | Edit | Work |
 | --- | --- |
 | Material parameters | Repack material parameters; emission also refreshes light sampling |
-| `mesh.transform`, instance matrices | Refit the top-level BVH over the changed instances |
+| `mesh.transform`, instance matrices | Refit the top-level BVH; small edits limit instance uploads to affected ranges |
+| Vertex attributes with unchanged storage and topology | Refit or rebuild the changed BLAS, upload that geometry, and refresh bounds of every instance sharing it |
 | `mesh.visible` | Rebuild the top-level BVH and instance data; geometry, BLASes and materials stay on the GPU |
 | Add, remove or reorder meshes whose geometry is already on the GPU | Same as visibility, plus the material table when the set of materials changes. See [adding and removing](#adding-removing-and-reassigning-meshes) |
 | Texture references, such as `material.map = other` | Rebuild the texture atlas, or with bindless bindings upload the newly referenced images; geometry and BVHs are untouched |
@@ -61,7 +63,9 @@ WebGPU and WebGL 2:
 
 Edit `mesh.transform` in place while retaining the mesh objects and the
 `scene.meshes` array. Both WebGPU and WebGL 2 refit the top-level BVH over the
-changed instances and upload only the affected ranges.
+changed instances. Small edits upload the ranges covering changed instance
+records and bounds; WebGL 2 uploads complete texture rows. Large edits can process and upload the whole top-level BVH and instance
+buffer, while geometry and BLAS data stay resident.
 
 ## Visibility
 
@@ -145,7 +149,10 @@ unnotified edits remain uncommitted even when another scene resource changes. Ca
 Caveats: individual instances have no names, transforms or materials as JS
 objects. Use separate batches for distinct material sets. Nonfinite world
 matrices are excluded, as with Mesh.
-The notification range is validated.
+The notification range is validated. Notifications still commit the whole array;
+only matrices whose values changed need new instance records. Copying and comparing
+that array costs time proportional to its capacity, even for a small edit. Many
+updates without refining can require refreshing the whole batch.
 
 ## Materials, textures and lights
 
@@ -228,8 +235,9 @@ geometry.markVerticesUpdated();
   unnecessarily.
 - Keep the attribute arrays, their lengths and item sizes. Then both backends
   update only the edited geometry's ranges and BLAS, and refit every instance
-  that shares it. Vertex, transform and material edits can be combined in one
-  frame.
+  that shares it. Deforming geometry shared by many instances can therefore cost
+  more than updating the same vertex count on a single mesh. Vertex, transform and
+  material edits can be combined in one frame.
 - Replaced arrays, changed lengths or item sizes, and displaced geometry
   require a [full mesh update](#full-mesh-updates), whichever method you call.
 
@@ -285,17 +293,3 @@ Selection and coalescing of continuous animation changes belong to the
 application. Render.refine only executes the chosen settings, and samples
 always count that render's complete samples. For fixed-quality animation, use
 converge on each frame with disjoint sequence offsets.
-
-
-## Implementation notes
-
-Material detection compares each distinct material once per engine.update,
-however many meshes share it; cost grows with the number of distinct materials.
-
-On a version or storage change, the engine copies the full transforms or colors
-array; start/count validation does not limit the copied elements. In scenes
-containing batches, a transform update regenerates all instance records and
-refits the top-level BVH. World matrices keep double precision until GPU
-packing, matching Three.js world-matrix and inverse calculations. Instances
-share BLAS and vertices unless explicit materialIndex packing or displacement
-requires a distinct vertex region.

@@ -100,6 +100,10 @@ resident BLAS data is uploaded again; this costs more for that update but does
 not rebuild the resident BLASes. Removing geometry does not immediately compact
 the buffer.
 
+For repeated deformation, use [dynamic geometry](./updates.md#dynamic-geometry).
+Large shape changes can make a refitted BVH slower to trace than a rebuilt one;
+dynamic geometry automatically rebuilds when its quality limit is exceeded.
+
 ## Layouts
 
 `engine.bvhLayout` applies to static TinyBVH BLASes, rebuilding them automatically when changed. All four
