@@ -65,13 +65,15 @@ uint32_t mt_abi_version(void);
 
 /* Context intersection backend: mt_context_create_with_backend, mt_context_backend. */
 typedef enum mt_backend { MT_BACKEND_SOFTWARE = 0, MT_BACKEND_HWRT = 1 } mt_backend;
-/* mt_context_read_pixels and mt_render_read_pixels image kind. DENOISED is
- * for renders only (mutracer-engine.h). */
+/* mt_context_read_pixels and mt_render_read_pixels image kind. CENTER_* are
+ * render-only; DENOISED is render-only (mutracer-engine.h). */
 typedef enum mt_image_kind {
   MT_IMAGE_HDR = 0, MT_IMAGE_NORMAL = 1, MT_IMAGE_ALBEDO = 2, MT_IMAGE_DENOISED = 3,
   MT_IMAGE_DEPTH = 4, MT_IMAGE_POSITION = 5, MT_IMAGE_ROUGHNESS = 6,
   MT_IMAGE_DIFFUSE_ALBEDO = 7, MT_IMAGE_SPECULAR_ALBEDO = 8,
-  MT_IMAGE_ID = 9, MT_IMAGE_MOTION = 10
+  MT_IMAGE_ID = 9, MT_IMAGE_MOTION = 10,
+  MT_IMAGE_CENTER_NORMAL = 11, MT_IMAGE_CENTER_DEPTH = 12,
+  MT_IMAGE_CENTER_POSITION = 13
 } mt_image_kind;
 /* Explicit optional primary-surface outputs; geometry uses independent samples,
  * IDs/motion use the unjittered pinhole pixel center. IDs are RGBA32UI, others
@@ -88,12 +90,21 @@ typedef enum mt_image_kind {
  * background UINT32_MAX in every channel.
  * Exact shared-edge hits may select either adjacent triangle depending on rounding.
  * MOTION: prev-current input pixels,x right,y down,z=0,alpha=3 valid or 0 invalid.
+ * CENTER_NORMAL: signed unit world shading normal xyz (including the base normal
+ * map and retaining double-sided backface orientation), alpha 1 on the ID-selected
+ * surface; misses are zero RGBA. CENTER_DEPTH: camera-forward distance,0,0,valid;
+ * CENTER_POSITION: world xyz,valid. These are RGBA32F, top-row-first in Render;
+ * Context keeps its existing row order. They use the ID pixel-center pinhole ray,
+ * one sample, alpha >= 0.5, skip shadow catchers, and stop after 32 layers.
+ * Their alpha is binary validity, not opacity. Reads require the matching AOV bit.
  * History is per-render, from its previous AOV frame. Size/projection changes,
  * missing IDs, topology/vertex edits, visibility failures and device loss invalidate
  * correspondence. Never reuse an object/material ID for a different item in live history. */
 enum { MT_AOV_DEPTH = 1u, MT_AOV_POSITION = 2u, MT_AOV_ROUGHNESS = 4u,
   MT_AOV_DIFFUSE_ALBEDO = 8u, MT_AOV_SPECULAR_ALBEDO = 16u,
-  MT_AOV_ID = 32u, MT_AOV_MOTION = 64u, MT_AOV_ALL = 127u };
+  MT_AOV_ID = 32u, MT_AOV_MOTION = 64u, MT_AOV_CENTER_NORMAL = 512u,
+  MT_AOV_CENTER_DEPTH = 1024u, MT_AOV_CENTER_POSITION = 2048u,
+  MT_AOV_ALL = 3711u };
 /* mt_context_snapshot.state. */
 typedef enum mt_context_state {
   MT_CONTEXT_EMPTY = 0, MT_CONTEXT_COMMITTED = 1, MT_CONTEXT_FAILED = 2,

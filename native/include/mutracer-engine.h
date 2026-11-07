@@ -227,8 +227,10 @@ typedef enum mt_display_channel {
   MT_CHANNEL_DIFFUSE_ALBEDO = 8, /* Supported reflectance clamped to [0,1], then sRGB encoded. */
   MT_CHANNEL_SPECULAR_ALBEDO = 9, /* Same mapping for specular reflectance. */
   MT_CHANNEL_ID = 10, /* Stable pseudocolor of id_component; palette colors can collide. */
-  MT_CHANNEL_MOTION = 11 /* Direction as hue (+x red, +y yellow-green), displacement/scale
+  MT_CHANNEL_MOTION = 11, /* Direction as hue (+x red, +y yellow-green), displacement/scale
     as brightness. Invalid history transparent; valid zero motion opaque black. */
+  MT_CHANNEL_CENTER_NORMAL = 12, MT_CHANNEL_CENTER_DEPTH = 13,
+  MT_CHANNEL_CENTER_POSITION = 14
 } mt_display_channel;
 typedef struct mt_display_settings {
   uint32_t struct_size;
@@ -387,8 +389,8 @@ typedef struct mt_render_options {
   /* Fixed size; 0x0 uses resolution_scale of the display size. Default 0x0. */
   uint32_t width, height;
   uint32_t seed; /* Default 12345. */
-  uint32_t aovs; /* MT_AOV_* mask; default 0 (no AOV resources or passes). */
-  uint32_t aov_samples; /* Independent positive AOV sample cap; 0 selects default 16. */
+  uint32_t aovs; /* MT_AOV_* mask, including center outputs; default 0. */
+  uint32_t aov_samples; /* Positive cap for averaged AOVs; 0 selects 16. Center outputs use one hit. */
   double resolution_scale; /* Positive. Default 1. */
   double clamping; /* Per-sample radiance clamp, finite, 0 disables. Default 0. */
   double transmissive_output_alpha_min; /* Finite. Default 1. */
@@ -479,8 +481,9 @@ typedef struct mt_denoise_input {
   size_t count;
   const float *color, *normal, *albedo;
   const void *cancel;
-  /* Seven optional width*height*4 arrays, ordered by MT_AOV_* bit. ID is
-   * uint32_t RGBA, all other slots float RGBA. Null for unrequested slots. */
+  /* Seven optional width*height*4 arrays for MT_AOV_DEPTH through
+   * MT_AOV_MOTION, ordered by bit. ID is uint32_t RGBA, others float RGBA.
+   * Center outputs are render readbacks and are not custom-denoiser inputs. */
   const void *aov_data[7];
 } mt_denoise_input;
 uint32_t mt_denoise_cancelled(const void *cancel);

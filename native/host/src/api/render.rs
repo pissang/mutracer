@@ -84,10 +84,11 @@ impl CausticSettings {
 pub struct RenderSettings {
     /// Caustic estimators. Default: all disabled.
     pub caustics: CausticSettings,
-    /// Optional AOV bit mask; bit 0 depth, 1 position, 2 roughness, 3 diffuse
-    /// reflectance, 4 specular reflectance, 5 ID, 6 motion. Default 0.
+    /// Optional AOV bit mask; bits 0–6 are depth, position, roughness, diffuse
+    /// reflectance, specular reflectance, ID and motion; bits 9–11 are center
+    /// normal, depth and position. Default 0.
     pub aovs: u32,
-    /// Independent AOV sample cap, positive integer. Default 16.
+    /// Positive cap for averaged AOVs. Center-surface outputs use one hit. Default 16.
     pub aov_samples: u32,
     /// AOV dimensions. Default [`AovResolution::Render`].
     pub aov_resolution: AovResolution,
@@ -218,7 +219,7 @@ impl RenderSettings {
         if !self.caustics.photon_map_radius.is_finite() || self.caustics.photon_map_radius < 0. {
             return invalid("photon_map_radius must be finite and nonnegative");
         }
-        if self.aovs & !127 != 0 || self.aov_samples == 0 {
+        if self.aovs & !3711 != 0 || self.aov_samples == 0 {
             return invalid("Invalid AOV mask or sample cap");
         }
         if self.aov_resolution == AovResolution::Display
@@ -383,6 +384,13 @@ pub enum PixelKind {
     /// from its previous AOV frame. Size/projection changes, missing IDs, topology
     /// or vertex edits and visibility failures invalidate it. Device loss clears it.
     Motion,
+    /// Signed unit world shading normal, including the base normal map, from the
+    /// same unjittered center hit as ID. Double-sided backface orientation is retained.
+    CenterNormal,
+    /// Camera-forward distance from the same unjittered center hit as ID.
+    CenterDepth,
+    /// World position from the same unjittered center hit as ID.
+    CenterPosition,
 }
 impl PixelKind {
     pub(crate) fn from_aov_index(index: u32) -> Self {
@@ -394,6 +402,9 @@ impl PixelKind {
             4 => Self::SpecularAlbedo,
             5 => Self::Id,
             6 => Self::Motion,
+            7 => Self::CenterNormal,
+            8 => Self::CenterDepth,
+            9 => Self::CenterPosition,
             _ => unreachable!(),
         }
     }
@@ -407,6 +418,9 @@ impl PixelKind {
             Self::SpecularAlbedo => 16,
             Self::Id => 32,
             Self::Motion => 64,
+            Self::CenterNormal => 512,
+            Self::CenterDepth => 1024,
+            Self::CenterPosition => 2048,
             _ => 0,
         }
     }
@@ -1566,6 +1580,7 @@ fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
         },
         display,
         compact: display && mask & !crate::aov::COMPACT_MASK == 0,
+        primary: mask & (512 | 1024 | 2048) != 0,
     }
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
@@ -3135,10 +3150,13 @@ impl Render {
                 PixelKind::SpecularAlbedo => Some(8),
                 PixelKind::Id => Some(9),
                 PixelKind::Motion => Some(10),
+                PixelKind::CenterNormal => Some(11),
+                PixelKind::CenterDepth => Some(12),
+                PixelKind::CenterPosition => Some(13),
                 _ => None,
             } {
                 let render = state.renders.get_mut(&id).unwrap();
-                if render.settings.aovs & (1 << (code - 4)) == 0 {
+                if render.settings.aovs & kind.aov_mask() == 0 {
                     return Err(error(Status::InvalidState, "Requested AOV is not enabled"));
                 }
                 update_aovs(render)?;

@@ -665,6 +665,9 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
             9 => Channel::SpecularAlbedo,
             10 => Channel::Id,
             11 => Channel::Motion,
+            12 => Channel::CenterNormal,
+            13 => Channel::CenterDepth,
+            14 => Channel::CenterPosition,
             _ => return Err(invalid("Unknown display channel")),
         },
         aov: AovDisplayOptions::default(),
@@ -2059,6 +2062,9 @@ pub unsafe extern "C" fn mt_render_read_pixels(
             8 => PixelKind::SpecularAlbedo,
             9 => PixelKind::Id,
             10 => PixelKind::Motion,
+            11 => PixelKind::CenterNormal,
+            12 => PixelKind::CenterDepth,
+            13 => PixelKind::CenterPosition,
             _ => return Err(invalid("Unknown image kind")),
         };
         if written.is_null() {
@@ -2709,10 +2715,25 @@ mod tests {
             );
         }
         assert_eq!(value("MT_IMAGE_DENOISED"), 3);
+        assert_eq!(value("MT_IMAGE_CENTER_NORMAL"), 11);
+        assert_eq!(value("MT_IMAGE_CENTER_DEPTH"), 12);
+        assert_eq!(value("MT_IMAGE_CENTER_POSITION"), 13);
+        assert_eq!(value("MT_AOV_ALL"), 3711);
+        assert_eq!(value("MT_CHANNEL_CENTER_NORMAL"), 12);
+        assert_eq!(value("MT_CHANNEL_CENTER_DEPTH"), 13);
+        assert_eq!(value("MT_CHANNEL_CENTER_POSITION"), 14);
         assert_eq!(value("MT_DISPLAY_PNG"), 1);
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
         assert_eq!(value("MT_DENOISE_OIDN_WEBGPU"), 5);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
+    }
+    #[test]
+    fn render_options_accept_center_aov_bits() {
+        let mut options = render_options(&RenderSettings::default());
+        options.aovs = 512 | 1024 | 2048;
+        assert_eq!(render_settings(&options).unwrap().aovs, 512 | 1024 | 2048);
+        options.aovs |= 128;
+        assert!(render_settings(&options).is_err());
     }
     #[test]
     fn aov_display_options_extend_channels_without_changing_the_existing_record() {

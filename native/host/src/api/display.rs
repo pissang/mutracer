@@ -41,6 +41,12 @@ pub enum Channel {
     /// Direction as hue (+x red, +y yellow-green), displacement/scale as brightness.
     /// Invalid history is transparent; valid zero motion is opaque black.
     Motion,
+    /// Signed unit world-space shading normal mapped to RGB; invalid pixels are transparent.
+    CenterNormal,
+    /// Pixel-center camera-forward distance mapped through `aov.depth_range`.
+    CenterDepth,
+    /// Pixel-center world position mapped through `aov.position_scale`.
+    CenterPosition,
 }
 impl Channel {
     pub(super) fn aov_kind(self) -> Option<super::PixelKind> {
