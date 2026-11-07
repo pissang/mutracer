@@ -94,6 +94,12 @@ five times slower.
 BLASes are cached internally by geometry: share one `Geometry`
 between meshes to share its BLAS.
 
+Adding supported new geometry builds only its missing BLAS and appends it to
+reserved GPU storage. If the reservation is exhausted, the BVH buffer grows and
+resident BLAS data is uploaded again; this costs more for that update but does
+not rebuild the resident BLASes. Removing geometry does not immediately compact
+the buffer.
+
 ## Layouts
 
 `engine.bvhLayout` applies to static TinyBVH BLASes, rebuilding them automatically when changed. All four

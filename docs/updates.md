@@ -54,7 +54,8 @@ WebGPU and WebGL 2:
 | `mesh.visible` | Rebuild the top-level BVH and instance data; geometry, BLASes and materials stay on the GPU |
 | Add, remove or reorder meshes whose geometry is already on the GPU | Same as visibility, plus the material table when the set of materials changes. See [adding and removing](#adding-removing-and-reassigning-meshes) |
 | Texture references, such as `material.map = other` | Rebuild the texture atlas, or with bindless bindings upload the newly referenced images; geometry and BVHs are untouched |
-| New geometry, displacement, array replacement | [Full mesh update](#full-mesh-updates) |
+| Add new single-material geometry without displacement or `materialIndex` | Build and append its BLAS and vertex data, then rebuild the top-level BVH; existing geometry stays resident while reserved capacity is available |
+| Displacement, array replacement, or incompatible geometry/material structure | [Full mesh update](#full-mesh-updates) |
 
 ## Transforms
 
@@ -244,12 +245,18 @@ and morph targets set `dynamic` automatically; try the
 
 ## Adding, removing and reassigning meshes
 
-Adding, removing or reordering meshes, or replacing a mesh's material, is
-cheap when every mesh uses a single material and geometry that is already on
-the GPU: the renderer rebuilds the top-level BVH and instance data and reuses
-vertex data and BLASes, and `engine.update()` copies only the added meshes.
-Otherwise, for example with new geometry, displacement or a `materialIndex`
-attribute, it needs a full mesh update. To take a mesh out temporarily, prefer
+Adding, removing or reordering meshes is cheap when every mesh uses a single
+material without displacement or `materialIndex`: the renderer rebuilds the
+top-level BVH and instance data, copies only added meshes, and builds and
+uploads only previously unseen geometry. Replacing a mesh's material or adding
+geometry with displacement, per-triangle materials, or a new material-table
+structure needs a full mesh update.
+
+Geometry and BLAS buffers reserve growth space. When an append exceeds it, the
+affected buffer grows by roughly 50% (capped at 64 MiB of spare space) and its
+resident contents are uploaded again. Removed geometry leaves reusable resident
+storage rather than triggering compaction; recreating the engine or a later
+growth allocation releases that space. To take a mesh out temporarily, prefer
 [visibility](#visibility): it stays cheap for every mesh, keeps the mesh resident
 and does not rebuild the material table.
 
@@ -261,8 +268,8 @@ the whole scene rather than with the edit. It happens when:
 - attribute or index arrays are replaced, or their lengths or item sizes change;
 - displaced geometry or its displacement settings change;
 - a rect-light texture changes;
-- a mesh gets geometry that is not yet on the GPU, or meshes with displaced
-  or multi-material geometry are added, removed or reassigned.
+- geometry with displacement or per-triangle materials is added, removed or
+  reassigned, or the edit also changes the material-table structure.
 
 Avoid these in per-frame animation.
 
