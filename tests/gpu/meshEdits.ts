@@ -11,6 +11,7 @@ import WebGLRayTracePass from '../../src/renderer/WebGLRayTracePass.js';
 type Backend = 'webgpu' | 'webgl';
 type Stage = {calls: number; ms: number};
 const stages = new Map<string, Stage>();
+const capacityEvents: {backend: Backend; before: number; after: number}[] = [];
 function wrap(prototype: object, owner: string, names: string[]) {
   for (const name of names) {
     const original = (prototype as Record<string, unknown>)[name];
@@ -26,6 +27,17 @@ function wrap(prototype: object, owner: string, names: string[]) {
 }
 wrap(WGPURayTracePass.prototype, 'wgpu', ['_updateMeshData', '_updateMeshMembership', '_updateMaterialData', '_updateTextures', '_refitMeshInstances', '_updateLightSamplingData']);
 wrap(WebGLRayTracePass.prototype, 'webgl', ['_updateMeshData', '_updateMeshMembership', '_updateMaterialData', '_refitMeshInstances']);
+function wrapCapacity(prototype: object, backend: Backend) {
+  const target = prototype as Record<string, any>, original = target._uploadBVH;
+  target._uploadBVH = function(this: any, ...args: unknown[]) {
+    const before = backend === 'webgpu' ? this._bvhBuffer?.size ?? 0 : (this._bvhData?.length ?? 0) * 4;
+    const result = original.apply(this, args);
+    const after = backend === 'webgpu' ? this._bvhBuffer?.size ?? 0 : (this._bvhData?.length ?? 0) * 4;
+    if (after !== before) capacityEvents.push({backend, before, after});
+    return result;
+  };
+}
+wrapCapacity(WGPURayTracePass.prototype, 'webgpu'); wrapCapacity(WebGLRayTracePass.prototype, 'webgl');
 
 const place = (mesh: Mesh, matrix: ArrayLike<number>) => { for (let i = 0; i < 16; i++) mesh.transform[i] = matrix[i]; };
 const hasVisibility = 'visible' in new Mesh(createPlaneGeometry(), new OpenPBRMaterial());
@@ -243,4 +255,72 @@ export async function parity(backend: Backend, count = 64, materialCount = 12, t
   return {backend, textureBinding, hasVisibility, results};
 }
 
-Object.assign(window, {meshEditTests: {measure, parity}});
+type AppendOperation = (fixture: Fixture) => void;
+function appendOperations(): [string, AppendOperation][] {
+  const add = (segments: number, id: number, emissiveMaterial = false): AppendOperation => fixture => {
+    const source = fixture.meshes[5], mesh = new Mesh(createSphereGeometry(segments, segments), emissiveMaterial ? fixture.emissive : source.materials[0]);
+    mesh.aovId = id; place(mesh, source.transform); mesh.transform[12] += (id % 7) - 3; mesh.transform[13] += 1 + (id % 3);
+    fixture.scene.meshes = [...fixture.scene.meshes, mesh];
+  };
+  return [
+    ['small', add(4, 6001)], ['mediumEmissive', add(12, 6002, true)], ['large', add(32, 6003)],
+    ['multiGeometry', fixture => { add(5, 6004)(fixture); add(7, 6005)(fixture); add(9, 6006)(fixture); }],
+    ['instanceBatch', fixture => { const mesh = new InstancedMesh(createSphereGeometry(8, 8), fixture.meshes[5].materials[0], {count: 5}); mesh.aovId = 6007;
+      for (let i = 0; i < 5; i++) mesh.transforms.set([.2,0,0,0,0,.2,0,0,0,0,.2,0,i-2,1.5,2,1], i*16); mesh.markTransformsUpdated(); fixture.scene.meshes = [...fixture.scene.meshes, mesh]; }],
+    ['deleteAfterAppend', fixture => { fixture.scene.meshes = fixture.scene.meshes.filter(mesh => mesh.aovId !== 6002); }],
+    ...Array.from({length: 8}, (_, i) => [`growth${i + 1}`, add(10 + i, 6100 + i)] as [string, AppendOperation]),
+    ...Array.from({length: 4}, (_, i) => [`churnDelete${i + 1}`, (fixture: Fixture) => {
+      const remove = 6100 + i * 2; fixture.scene.meshes = fixture.scene.meshes.filter(mesh => mesh.aovId !== remove); add(11 + i, 6200 + i)(fixture);
+    }] as [string, AppendOperation])
+  ];
+}
+
+async function renderState(context: Awaited<ReturnType<typeof createEngine>>) {
+  await context.render.converge({samples: 16, sampleSequenceOffset: 3, timeoutMs: 180000});
+  const pixels = (await context.render.readPixels('hdr')).data, ids = (await context.render.readPixels('id')).data;
+  const picks = [];
+  for (const [x, y] of [[.5,.5],[.25,.4],[.75,.6],[.5,.2]]) picks.push(await context.engine._pick(x, y));
+  return {pixels, ids, picks: JSON.stringify(picks)};
+}
+
+/** Sequential append/growth/delete/churn versus a fresh full preparation after every step. */
+export async function appendSequenceParity(backend: Backend, textureBinding: 'atlas' | 'auto' = 'atlas') {
+  const fixture = createScene(24, 8), context = await createEngine(backend, fixture, 256, 144, textureBinding, ['id']);
+  const operations = appendOperations(), results: Record<string, unknown>[] = [], persistentCapacityEvents: typeof capacityEvents = []; capacityEvents.length = 0;
+  try {
+    context.engine.update(); await context.render.converge({samples: 1, timeoutMs: 180000});
+    for (let step = 0; step < operations.length; step++) {
+      const [name, operation] = operations[step], beforeEvents = capacityEvents.length, start = performance.now();
+      operation(fixture); context.engine.update(); const updateMs = performance.now() - start;
+      const incremental = await renderState(context);
+      const incrementalCapacityEvents = capacityEvents.slice(beforeEvents); persistentCapacityEvents.push(...incrementalCapacityEvents); capacityEvents.length = 0;
+      const reference = createScene(24, 8); for (let i = 0; i <= step; i++) operations[i][1](reference);
+      // Match WebGL's known extra-update sampling lifecycle while keeping the
+      // reference geometry on the ordinary full-preparation path.
+      const fresh = await capture(backend, reference, async freshContext => { freshContext.engine.update(); }, textureBinding);
+      capacityEvents.length = 0;
+      const hdr = compare(incremental.pixels, fresh.pixels); let idDifferences = 0;
+      for (let i = 0; i < incremental.ids.length; i++) if (incremental.ids[i] !== fresh.ids[i]) idDifferences++;
+      results.push({name, updateMs, ...hdr, idDifferences, picksEqual: incremental.picks === fresh.picks,
+        activeMeshes: fixture.scene.meshes.length, capacityEvents: incrementalCapacityEvents});
+    }
+    return {backend, textureBinding, results, capacityEvents: persistentCapacityEvents};
+  } finally { context.render.dispose(); context.engine.dispose(); }
+}
+
+/** Performance dimensions requested by P0-2f; each case uses a fresh engine. */
+export async function appendPerformanceMatrix(backend: Backend, count: number, materialCount: number, textureBinding: 'atlas' | 'auto' = 'atlas') {
+  const cases: [string, AppendOperation][] = [
+    ['small', appendOperations()[0][1]], ['medium', appendOperations()[1][1]], ['large', appendOperations()[2][1]],
+    ['multiGeometry', appendOperations()[3][1]], ['instanceBatch', appendOperations()[4][1]]
+  ];
+  const rows = [];
+  for (const [name, operation] of cases) {
+    const fixture = createScene(count, materialCount), context = await createEngine(backend, fixture, 640, 360, textureBinding);
+    try { context.engine.update(); await context.render.converge({samples: 1, timeoutMs: 180000}); rows.push({name, ...await timed(context, () => operation(fixture))}); }
+    finally { context.render.dispose(); context.engine.dispose(); }
+  }
+  return {backend, count, materialCount, textureBinding, rows};
+}
+
+Object.assign(window, {meshEditTests: {measure, parity, appendSequenceParity, appendPerformanceMatrix}});
