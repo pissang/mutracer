@@ -6,6 +6,7 @@ import InstancedMesh from '../scene/InstancedMesh.js';
 import Texture from '../scene/Texture.js';
 import { copyGeometryChangeState } from '../scene/geometryChanges.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import {recordInstanceTransformChanges} from './instanceTransformChanges.js';
 import type { Scene } from '../scene/Scene.js';
 import type { SceneChanges } from './sceneChangeDetector.js';
 
@@ -55,6 +56,8 @@ export class CommittedScene {
           const priorVersion = key === 'transforms' ? previous?.transformsVersion : previous?.colorsVersion;
           const array = value[key];
           if (!previous || priorVersion !== version || previous[key] !== array) {
+            if (key === 'transforms' && array) recordInstanceTransformChanges(cloned, cloned.transforms,
+              array, previous?.transformsVersion, value.transformsVersion);
             // Each batch owns its snapshot even when callers share source storage.
             if (!array) cloned[key] = undefined;
             else if (previous?.[key] === array && cloned[key]?.length === array.length) cloned[key].set(array);

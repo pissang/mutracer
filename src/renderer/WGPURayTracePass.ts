@@ -1,3 +1,4 @@
+import {invalidateInstanceTransformRanges} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
 import {causticDiagnostics} from './causticDiagnostics.js';
@@ -2614,6 +2615,7 @@ class WGPURayTracePass {
       this._updateMeshData();
       return;
     }
+    invalidateInstanceTransformRanges(res.instances);
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
     for (const { first, count, deformationOnly } of update.vertices) {
       const geometry = res.geometries.find(g => res.geometryRegions.get(g)!.vertexOffset === first)!;
@@ -2724,6 +2726,9 @@ class WGPURayTracePass {
     }
 
     const dirtyIndices = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
+    if (!dirtyIndices.size && this._dirtyTransformMeshes.size) {
+      this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false; return;
+    }
     const incremental = dirtyIndices.size > 0;
     const previousInstances = res.instances;
     res.instances = updateMeshInstanceTransforms(

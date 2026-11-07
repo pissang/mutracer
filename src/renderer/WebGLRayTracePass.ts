@@ -1,3 +1,4 @@
+import {invalidateInstanceTransformRanges} from './instanceTransformChanges.js';
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {researchTransport} from './researchTransport.js';
@@ -837,6 +838,7 @@ class WebGLRayTracePass {
 
   private _updateGeometryData() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
+    invalidateInstanceTransformRanges(res.instances);
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
     const layout = this._vertexAttributeLayout!, attributes = this._vertexAttributeData!;
     for (const { first, count } of update.vertices) {
@@ -878,6 +880,9 @@ class WebGLRayTracePass {
   private _refitMeshInstances() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const dirty = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
+    if (!dirty.size && this._dirtyTransformMeshes.size) {
+      this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false; return;
+    }
     const previousInstances = res.instances;
     res.instances = updateMeshInstanceTransforms(res.instanceBindings, res.instances, dirty);
     if (!sameInstanceMembership(previousInstances, res.instances)) {

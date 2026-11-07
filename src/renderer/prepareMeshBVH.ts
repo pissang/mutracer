@@ -1,6 +1,7 @@
+import {rememberInstanceTransforms, changedInstanceTransformRanges} from './instanceTransformChanges.js';
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
-import { prepareSceneMeshes, computeGeometryNormals, type PreparedMeshInstanceBinding as SharedInstanceBinding } from './scenePreparation.js';
+import { prepareSceneMeshes, computeGeometryNormals, updateMeshInstanceTransforms as updateTransforms, type PreparedMeshInstanceBinding as SharedInstanceBinding } from './scenePreparation.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { meshInstanceCount, type MeshInstances } from './meshInstances.js';
 import {createCanvas} from '../util/canvas.js';
@@ -17,7 +18,7 @@ import { generateVertexTangents } from '../util/geometry.js';
 import { getBvhBounds } from './geometryBvhBounds.js';
 export { getBvhBounds } from './geometryBvhBounds.js';
 
-export { computeBounds, updateMeshInstanceTransforms } from './scenePreparation.js';
+export { computeBounds } from './scenePreparation.js';
 export type PreparedMeshInstanceBinding = SharedInstanceBinding<Mesh>;
 
 /** Returns the first material used for CPU displacement. */
@@ -265,10 +266,33 @@ function prepareMeshGeometryBvh(mesh: Mesh, displacement = true) {
 }
 
 export function updateMeshInstances(meshes: Mesh[], options: { displacement?: boolean; mergeAttributes?: boolean } = {}) {
-  return prepareSceneMeshes(meshes, mesh => prepareMeshGeometryBvh(mesh, options.displacement !== false), getBvhBounds, true, options.mergeAttributes !== false);
+  const prepared = prepareSceneMeshes(meshes, mesh => prepareMeshGeometryBvh(mesh, options.displacement !== false), getBvhBounds, true, options.mergeAttributes !== false);
+  rememberInstanceTransforms(prepared.instances, prepared.instanceBindings);
+  return prepared;
 }
 
-export {dirtyPreparedInstanceIndices as dirtyMeshInstanceIndices} from './scenePreparation.js';
+// Web snapshots retain exact changed matrix slots; native keeps its existing
+// whole-binding dirty selection in scenePreparation.
+export function dirtyMeshInstanceIndices(bindings: PreparedMeshInstanceBinding[], meshes: ReadonlySet<Mesh>, instances: MeshInstances) {
+  const dirty = new Set<number>();
+  for (let i = 0; i < bindings.length; i++) {
+    const mesh = bindings[i].mesh;
+    if (!meshes.has(mesh)) continue;
+    if (Array.isArray(instances)) { dirty.add(i); continue; }
+    const slots = instances.bindingSlots[i] ?? [];
+    const ranges = slots.length === meshInstanceCount(mesh) ? changedInstanceTransformRanges(instances, mesh) : undefined;
+    if (ranges) {
+      for (const {start, end} of ranges) for (let local = start; local < Math.min(end, slots.length); local++) dirty.add(slots[local]);
+    } else for (const slot of slots) dirty.add(slot);
+  }
+  return dirty;
+}
+
+export function updateMeshInstanceTransforms(bindings: PreparedMeshInstanceBinding[], current?: MeshInstances, dirtyIndices?: ReadonlySet<number>) {
+  const instances = updateTransforms(bindings, current, dirtyIndices);
+  rememberInstanceTransforms(instances, bindings);
+  return instances;
+}
 
 /** Refreshes color storage without computing transforms or bounds. Returns packed source slots. */
 export function updateMeshInstanceColors(bindings: PreparedMeshInstanceBinding[], instances: MeshInstances, meshes: ReadonlySet<Mesh>) {
