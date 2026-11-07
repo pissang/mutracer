@@ -14,7 +14,7 @@
 PXR_NAMESPACE_OPEN_SCOPE
 namespace mtHydra {
 struct GpuOutputTestAccess {
-  static void Run(GpuOutput &gpu, HdFormat format, float scale, bool ortho) {
+  static void Run(GpuOutput &gpu, HdFormat format, float scale, bool ortho, bool hasDepth) {
     constexpr unsigned w = 113, h = 71;
     auto rw = unsigned(w * scale), rh = unsigned(h * scale);
     gpu.Configure(rw, rh, w, h, format);
@@ -55,7 +55,7 @@ struct GpuOutputTestAccess {
       float scale[4], clear[4];
       double z[2], w[2];
     } constants{{w, h, rw, rh},
-                {scale, 0, 0, 0},
+                {scale, 0, hasDepth ? 1.f : 0.f, 0},
                 {clear[0], clear[1], clear[2], clear[3]},
                 {projection[2][2], projection[3][2]},
                 {projection[2][3], projection[3][3]}};
@@ -112,9 +112,12 @@ struct GpuOutputTestAccess {
           }
         }
         float z = 1;
-        if (distance[src][3] > 0) {
+        if (hasDepth && distance[src][3] > 0) {
           auto clip = GfVec4d(0, 0, -distance[src][0], 1) * projection;
           z = std::clamp(float((clip[2] / clip[3] + 1) * .5), 0.f, 1.f);
+          float cpu = ClipDepth(distance[src][0], projection);
+          if (std::memcmp(&cpu, &z, 4) != 0)
+            throw std::runtime_error("CPU center depth projection differs from matrix oracle");
         }
         if (std::memcmp(&depth[dst], &z, 4) != 0) {
           if (depthErrors < 3)
@@ -148,7 +151,8 @@ int main() {
       for (auto f : {HdFormatFloat32Vec4, HdFormatFloat16Vec4})
         for (auto scale : {1.f, .6f})
           for (bool ortho : {false, true})
-            mtHydra::GpuOutputTestAccess::Run(gpu, f, scale, ortho);
+            for (bool hasDepth : {false, true})
+              mtHydra::GpuOutputTestAccess::Run(gpu, f, scale, ortho, hasDepth);
     }
     mtHydra::Check(mt_engine_destroy(engine, error, sizeof error), error);
     std::cout << "GPU float32/float16 clear, scaling and double depth "

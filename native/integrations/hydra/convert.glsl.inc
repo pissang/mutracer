@@ -132,7 +132,8 @@ void main() {
   c.z=fma32(v.z,a,mul32(mul32(clearValue.z,clearValue.w),inverse));
   c.w=fma32(clearValue.w,inverse,a);
   HgiSet_color(dst,c);
-  vec4 z=HgiTexelFetch_distance(src);
+  vec4 z=vec4(0);
+  if(scaleValue.z!=0.0)z=HgiTexelFetch_distance(src);
   float depth=1.0;
   if(z.w>0.0) {
     U64 d=from32(floatBitsToUint(-z.x));

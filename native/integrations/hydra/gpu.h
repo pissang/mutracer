@@ -27,6 +27,8 @@ public:
 mt_status CreateHostEngine(Hgi *, mt_engine_options const &, mt_engine *,
                            char *, size_t);
 std::unique_ptr<GpuInterop> CreateInterop(Hgi *, mt_engine);
+// Same rounded f64 operations as convert.glsl.inc; input is camera-forward depth.
+float ClipDepth(float distance, GfMatrix4d const &projection);
 class GpuOutput {
 public:
   GpuOutput(Hgi *, mt_engine);
@@ -34,7 +36,7 @@ public:
   void Prepare(uint32_t, uint32_t, uint32_t, uint32_t, HdFormat, GfVec4f,
                std::shared_ptr<OutputResources> const &);
   bool Publish(mt_render, uint32_t, uint32_t, uint32_t, uint32_t, HdFormat,
-               float, GfVec4f, GfMatrix4d const &,
+               float, GfVec4f, GfMatrix4d const &, bool,
                std::shared_ptr<OutputResources> const &, double &, double &);
   void Drain();
   void Invalidate() { Reset(); }

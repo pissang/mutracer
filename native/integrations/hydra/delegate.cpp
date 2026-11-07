@@ -216,8 +216,8 @@ static void ReadBuffers(Param *param,
   std::map<uint32_t, std::vector<uint8_t>> images;
   for (auto const &a : bindings) {
     uint32_t kind = a.aovName == HdAovTokens->color ? MT_IMAGE_HDR
-                    : a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye
-                        ? MT_IMAGE_CENTER_POSITION
+                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_CENTER_DEPTH
+                    : a.aovName == HdAovTokens->Peye ? MT_IMAGE_CENTER_POSITION
                     : a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye
                         ? MT_IMAGE_CENTER_NORMAL
                         : MT_IMAGE_ID;
@@ -233,7 +233,7 @@ static void ReadBuffers(Param *param,
     double ms = Milliseconds(readStart);
     if (kind == MT_IMAGE_HDR)
       param->readHdrMs = ms;
-    else if (kind == MT_IMAGE_DEPTH)
+    else if (kind == MT_IMAGE_CENTER_DEPTH)
       param->readDepthMs = ms;
     else
       param->readIdMs = ms;
@@ -252,8 +252,8 @@ static void ReadBuffers(Param *param,
         (a.aovName == HdAovTokens->color && b->GetFormat() != HdFormatFloat32Vec4 && b->GetFormat() != HdFormatFloat16Vec4))
       throw std::runtime_error("unsupported AOV format");
     uint32_t kind = a.aovName == HdAovTokens->color ? MT_IMAGE_HDR
-                    : a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye
-                        ? MT_IMAGE_CENTER_POSITION
+                    : a.aovName == HdAovTokens->depth ? MT_IMAGE_CENTER_DEPTH
+                    : a.aovName == HdAovTokens->Peye ? MT_IMAGE_CENTER_POSITION
                     : a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye
                         ? MT_IMAGE_CENTER_NORMAL
                         : MT_IMAGE_ID;
@@ -289,8 +289,7 @@ static void ReadBuffers(Param *param,
         } else if (a.aovName == HdAovTokens->depth) {
           float depth = 1;
           if (floats[src + 3] > 0) {
-            auto clip = GfVec4d(floats[src], floats[src + 1], floats[src + 2], 1) * view * projection;
-            depth = std::clamp(float((clip[2] / clip[3] + 1) * .5), 0.f, 1.f);
+            depth = ClipDepth(floats[src], projection);
           }
           std::memcpy(b->pixels.data() + dst * 4, &depth, 4);
         } else if (vectorAov) {
@@ -468,7 +467,9 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
           Setting(delegate, "convergedSamplesPerPixel", 64), 1, 16384);
       options.aovs = 0;
       for (auto const &a : nextBindings) {
-        if (a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->Peye)
+        if (a.aovName == HdAovTokens->depth)
+          options.aovs |= MT_AOV_CENTER_DEPTH;
+        if (a.aovName == HdAovTokens->Peye)
           options.aovs |= MT_AOV_CENTER_POSITION;
         if (a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye)
           options.aovs |= MT_AOV_CENTER_NORMAL;
@@ -505,22 +506,23 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
       if (a.aovName == HdAovTokens->depth)
         depthBuffer = dynamic_cast<Buffer *>(a.renderBuffer);
     }
-    bool gpuBindings = colorBuffer && depthBuffer &&
+    bool gpuBindings = colorBuffer &&
                        (colorBuffer->GetFormat() == HdFormatFloat32Vec4 ||
                         colorBuffer->GetFormat() == HdFormatFloat16Vec4) &&
-                       depthBuffer->GetFormat() == HdFormatFloat32 &&
-                       colorBuffer->GetWidth() == depthBuffer->GetWidth() &&
-                       colorBuffer->GetHeight() == depthBuffer->GetHeight();
-    // The Hgi conversion shader still consumes the jitter-averaged depth
-    // texture. Center-surface AOVs use the CPU resolve until position export is
-    // available, keeping Hydra depth and IDs on the same hit.
-    bool centerAov = std::any_of(bindings.begin(), bindings.end(), [](auto const &a) {
-      return a.aovName == HdAovTokens->depth || a.aovName == HdAovTokens->normal ||
-             a.aovName == HdAovTokens->Neye || a.aovName == HdAovTokens->Peye;
-    });
-    bool gpuOutput = param->gpu && !param->forceCpu && gpuBindings && !centerAov;
-    if (param->gpu && !param->forceCpu && gpuBindings && centerAov)
-      Warn("CPU output: center-surface AOVs require CPU readback until position export is available");
+                       (!depthBuffer ||
+                        (depthBuffer->GetFormat() == HdFormatFloat32 &&
+                         colorBuffer->GetWidth() == depthBuffer->GetWidth() &&
+                         colorBuffer->GetHeight() == depthBuffer->GetHeight()));
+    std::string cpuAovs;
+    for (auto const &a : bindings)
+      if (a.aovName == HdAovTokens->normal || a.aovName == HdAovTokens->Neye ||
+          a.aovName == HdAovTokens->Peye) {
+        if (!cpuAovs.empty()) cpuAovs += ", ";
+        cpuAovs += a.aovName.GetString();
+      }
+    bool gpuOutput = param->gpu && !param->forceCpu && gpuBindings && cpuAovs.empty();
+    if (param->gpu && !param->forceCpu && !cpuAovs.empty())
+      Warn("CPU output: requested AOVs require CPU readback: " + cpuAovs);
     if (!gpuOutput) {
       if (output->color) {
         if (param->gpu)
@@ -550,7 +552,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
     if (param->forceCpu)
       Warn("CPU output: forced by forceCpuOutput");
     if (param->gpu && !param->forceCpu && !gpuBindings)
-      Warn("CPU output: compatible color/depth AOV pair is required");
+      Warn("CPU output: compatible color and optional same-size depth AOVs are required");
     for (auto const &a : bindings)
       if (auto b = dynamic_cast<Buffer *>(a.renderBuffer)) {
         b->converged = false;
@@ -609,7 +611,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
           }
         if (!param->gpu->Publish(param->render, width, height, w, h,
                                  colorBuffer->GetFormat(), scale, clear,
-                                 projection, output, param->exportMs,
+                                 projection, depthBuffer != nullptr, output, param->exportMs,
                                  param->convertMs)) {
           ready = false;
           ++param->skippedExports;

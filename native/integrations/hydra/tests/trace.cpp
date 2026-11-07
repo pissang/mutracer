@@ -71,7 +71,11 @@ int main(int argc, char **argv) {
       renderer != "HdStormRendererPlugin")
     aovs.insert(aovs.end(), {HdAovTokens->normal, HdAovTokens->Neye,
                              HdAovTokens->Peye});
-  if (!std::getenv("MUTRACER_HYDRA_ALL_AOVS") ||
+  if (auto vector = std::getenv("MUTRACER_HYDRA_VECTOR_AOV"))
+    aovs.push_back(TfToken(vector));
+  if (std::getenv("MUTRACER_HYDRA_COLOR_ONLY"))
+    engine.SetRendererAovs({HdAovTokens->color});
+  else if (!std::getenv("MUTRACER_HYDRA_ALL_AOVS") ||
       renderer == "HdStormRendererPlugin")
     engine.SetRendererAov(HdAovTokens->color);
   else
@@ -133,6 +137,18 @@ int main(int argc, char **argv) {
               << ",\"p95Ms\":" << percentile(.95) << ",\"samplesPerSecond\":"
               << (label == "warmup" ? 4 : samples) * 1000. / wallMs << "}\n";
     summaries.flush();
+    if (auto expected = std::getenv("MUTRACER_HYDRA_EXPECT_GPU")) {
+      bool gpu = std::stoi(expected) != 0 && label != "cpu";
+      for (auto token : {HdAovTokens->color, HdAovTokens->depth})
+        if (auto buffer = engine.GetAovRenderBuffer(token)) {
+          auto resource = buffer->GetResource(false);
+          bool actual = resource.IsHolding<HgiTextureHandle>() &&
+                        bool(resource.UncheckedGet<HgiTextureHandle>());
+          if (actual != gpu)
+            throw std::runtime_error("unexpected GPU resource for " + token.GetString());
+          std::cout << "RESOURCE " << label << " " << token << " GPU=" << actual << "\n";
+        }
+    }
     if (!std::getenv("MUTRACER_HYDRA_BENCH"))
       for (auto token : aovs) {
         auto b = engine.GetAovRenderBuffer(token);

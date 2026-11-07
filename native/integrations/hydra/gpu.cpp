@@ -3,6 +3,7 @@
 #include "pxr/imaging/hgi/computeCmds.h"
 #include "pxr/imaging/hgi/graphicsCmds.h"
 #include "pxr/imaging/hgi/shaderFunction.h"
+#include <algorithm>
 #include <cstring>
 #include <thread>
 PXR_NAMESPACE_OPEN_SCOPE
@@ -10,6 +11,15 @@ namespace mtHydra {
 static char const *conversionSource =
 #include "convert.glsl.inc"
     ;
+float ClipDepth(float distance, GfMatrix4d const &projection) {
+  // Volatile products enforce separate f64 rounding, preventing contraction to
+  // FMA on hosts whose compiler enables it. The GPU emulates multiply then add.
+  volatile double zProduct = -double(distance) * projection[2][2];
+  volatile double wProduct = -double(distance) * projection[2][3];
+  double z = zProduct + projection[3][2];
+  double w = wProduct + projection[3][3];
+  return std::clamp(float((z / w + 1) * .5), 0.f, 1.f);
+}
 GpuOutput::GpuOutput(Hgi *h, mt_engine e)
     : hgi(h), engine(e), native(CreateInterop(h, e)) {}
 GpuOutput::~GpuOutput() {
@@ -255,7 +265,7 @@ void GpuOutput::Prepare(uint32_t rwidth, uint32_t rheight, uint32_t w,
 }
 bool GpuOutput::Publish(mt_render render, uint32_t rwidth, uint32_t rheight,
                         uint32_t w, uint32_t h, HdFormat f, float scale,
-                        GfVec4f clear, GfMatrix4d const &projection,
+                        GfVec4f clear, GfMatrix4d const &projection, bool hasDepth,
                         std::shared_ptr<OutputResources> const &o,
                         double &exportMs, double &convertMs) {
   if (rw != rwidth || rh != rheight || width != w || height != h || format != f)
@@ -280,9 +290,9 @@ bool GpuOutput::Publish(mt_render render, uint32_t rwidth, uint32_t rheight,
   mt_gpu_export_image images[] = {
       {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_HDR, nullptr, s.hdrImport,
        MT_GPU_TOP_FIRST, 0},
-      {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_DEPTH, nullptr, s.depthImport,
+      {sizeof(mt_gpu_export_image), MT_GPU_OUTPUT_CENTER_DEPTH, nullptr, s.depthImport,
        MT_GPU_TOP_FIRST, 0}};
-  mt_gpu_export_desc request{sizeof request,  2,
+  mt_gpu_export_desc request{sizeof request,  hasDepth ? 2u : 1u,
                              nullptr,         images,
                              native->Ready(), native->ReadyValue(next),
                              native->Done(),  done + 1};
@@ -302,7 +312,7 @@ bool GpuOutput::Publish(mt_render render, uint32_t rwidth, uint32_t rheight,
     float scale[4], clear[4];
     double z[2], w[2];
   } constants{{w, h, rw, rh},
-              {scale, 0, 0, 0},
+              {scale, 0, hasDepth ? 1.f : 0.f, 0},
               {clear[0], clear[1], clear[2], clear[3]},
               {projection[2][2], projection[3][2]},
               {projection[2][3], projection[3][3]}};
