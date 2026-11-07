@@ -23,7 +23,7 @@ import depthQueryFrag from './glsl/depthQuery.frag.js';
 import { readFloatPixelsAsync } from './WebGLReadback.js';
 import { DEPTH_SAMPLE_GRID, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache, refreshMaterialKeys } from './meshMembership.js';
-import { selectVisibleInstances } from './scenePreparation.js';
+import { appendMergedGeometry, reserveMergedGeometry, selectVisibleInstances } from './scenePreparation.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import {
@@ -613,7 +613,15 @@ class WebGLRayTracePass {
 
     // GLSL intersects the original triangles, so its BVH must bound those
     // triangles rather than WebGPU's displaced height prisms.
-    const res = updateMeshInstances(this._meshes, { displacement: false });
+    let res = updateMeshInstances(this._meshes, { displacement: false, mergeAttributes: !this._appendOnly });
+    if (this._appendOnly && previousPrepared &&
+      previousPrepared.geometries.length < res.geometries.length &&
+      previousPrepared.geometries.every((geometry, i) => geometry === res.geometries[i])) {
+      const geometry = appendMergedGeometry(previousPrepared.geometry, res, previousPrepared.geometries.length);
+      if (geometry) res = {...res, geometry, mergedAttributes: true};
+      else res = updateMeshInstances(this._meshes, {displacement: false});
+    } else if (!res.mergedAttributes) res = updateMeshInstances(this._meshes, {displacement: false});
+    res = {...res, geometry: reserveMergedGeometry(res.geometry)};
     this._preparedMeshData = res;
     this._membershipCache.capture(res);
     this._pendingMembershipData = undefined;

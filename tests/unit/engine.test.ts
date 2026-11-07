@@ -21,6 +21,10 @@ describe('Engine commits inputs', () => {
     const differentMaterial = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     scene.meshes = [first, appended, differentMaterial]; engine.update();
     expect(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![1]).toBeUndefined();
+    scene.meshes = [first, appended]; engine.update();
+    first.geometry.indices.array[0] = first.geometry.indices.array[1]; first.geometry.markUpdated();
+    const withTopology = new Mesh(createCubeGeometry(), material); scene.meshes.push(withTopology); engine.update();
+    expect(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![1]).toBeUndefined();
     engine.dispose();
   });
   it('retains renderer-built BLASes across committed poses and rebuilds edited topology', () => {

@@ -12,6 +12,7 @@ import {
   meshBlasSnapshotIsCurrent,
   updateMeshInstances
 } from '../../src/renderer/prepareMeshBVH';
+import {appendMergedGeometry, reserveMergedGeometry} from '../../src/renderer/scenePreparation';
 
 describe('merged renderer geometry', () => {
   it('retains every triangle when distinct meshes are prepared together', () => {
@@ -28,6 +29,37 @@ describe('merged renderer geometry', () => {
     expect(Array.from(prepared.geometry.indices.array)).toEqual([
       0, 1, 2, 3, 4, 5
     ]);
+  });
+  it('appends WebGL geometry into reserved CPU arrays without repacking the resident prefix', () => {
+    const material = new OpenPBRMaterial();
+    const triangle = (x: number) => new Mesh(new Geometry({
+      position: new Attribute(new Float32Array([x,0,0, x+1,0,0, x,1,0]), 3),
+      normal: new Attribute(new Float32Array([0,0,1, 0,0,1, 0,0,1]), 3),
+      indices: new Attribute(new Uint32Array([0,1,2]), 1)
+    }), material);
+    const meshes = [triangle(0), triangle(2), triangle(4), triangle(6)], first = updateMeshInstances(meshes.slice(0, 3), {displacement: false});
+    const resident = reserveMergedGeometry(first.geometry), positionBuffer = resident.position.array.buffer;
+    const prepared = updateMeshInstances(meshes, {displacement: false, mergeAttributes: false});
+    const appended = appendMergedGeometry(resident, prepared, first.geometries.length)!;
+    const reference = updateMeshInstances(meshes, {displacement: false}).geometry;
+    expect(appended.position.array.buffer).toBe(positionBuffer);
+    expect(Array.from(appended.position.array)).toEqual(Array.from(reference.position.array));
+    expect(Array.from(appended.indexArray)).toEqual(Array.from(reference.indexArray));
+    expect(Array.from(appended.materialIndex!.array)).toEqual(Array.from(reference.materialIndex!.array));
+  });
+  it('grows WebGL CPU storage when an append exceeds the reservation', () => {
+    const material = new OpenPBRMaterial(), firstMesh = new Mesh(triangleGeometry(), material);
+    const first = updateMeshInstances([firstMesh], {displacement: false});
+    const resident = reserveMergedGeometry(first.geometry), previousBuffer = resident.position.array.buffer;
+    const meshes = [firstMesh, ...Array.from({length: 8}, (_, i) => {
+      const mesh = new Mesh(triangleGeometry(), material); mesh.transform[12] = i + 2; return mesh;
+    })];
+    const prepared = updateMeshInstances(meshes, {displacement: false, mergeAttributes: false});
+    const grown = appendMergedGeometry(resident, prepared, first.geometries.length)!;
+    const reference = updateMeshInstances(meshes, {displacement: false}).geometry;
+    expect(grown.position.array.buffer).not.toBe(previousBuffer);
+    expect(Array.from(grown.position.array)).toEqual(Array.from(reference.position.array));
+    expect(Array.from(grown.indexArray)).toEqual(Array.from(reference.indexArray));
   });
 });
 

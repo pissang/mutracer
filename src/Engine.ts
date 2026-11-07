@@ -231,7 +231,7 @@ export default class Engine {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
-      const appendOnly = changes.membershipOnly && changes.added.length > 0 && changes.materials.length === 0 &&
+      const appendOnly = changes.membershipOnly && changes.added.length > 0 && changes.geometries.length === 0 && changes.materials.length === 0 &&
         changes.added.every(mesh => mesh.materials.length === 1 && !mesh.geometry.materialIndex && !mesh.materials[0].displacementMap);
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
       if (changes.meshes !== 'none' || changes.lights || changes.background || this.scene !== this._sourceScene || force) {

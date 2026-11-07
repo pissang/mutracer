@@ -429,6 +429,77 @@ export function mergeGeometry(
   return mergedGeometry;
 }
 
+type MergedCapacity = {
+  vertexCapacity: number; indexCapacity: number;
+  position: Float32Array; normal: Float32Array; uv: Float32Array; uv1: Float32Array;
+  color?: Float32Array; tangent?: Float32Array; materialIndex: Int32Array; indices: Uint32Array;
+};
+const mergedCapacities = new WeakMap<Geometry, MergedCapacity>();
+const grownCapacity = (used: number) => Math.max(1, Math.ceil(used + Math.min(used >> 1, 16 * 1024 * 1024)));
+
+function geometryFromCapacity(source: Geometry, capacity: MergedCapacity, vertices: number, indices: number) {
+  const geometry = new Geometry({
+    position: new Attribute(capacity.position.subarray(0, vertices * 3), 3),
+    normal: new Attribute(capacity.normal.subarray(0, vertices * 3), 3),
+    uv: new Attribute(capacity.uv.subarray(0, vertices * 2), 2),
+    uv1: new Attribute(capacity.uv1.subarray(0, vertices * 2), 2),
+    color: capacity.color ? new Attribute(capacity.color.subarray(0, vertices * 3), 3) : undefined,
+    tangent: capacity.tangent ? new Attribute(capacity.tangent.subarray(0, vertices * source.tangent!.itemSize), source.tangent!.itemSize) : undefined,
+    materialIndex: new Attribute(capacity.materialIndex.subarray(0, vertices * source.materialIndex!.itemSize), source.materialIndex!.itemSize),
+    indices: new Attribute(capacity.indices.subarray(0, indices), 1)
+  });
+  mergedCapacities.set(geometry, capacity);
+  return geometry;
+}
+
+/** Adds CPU growth capacity to a freshly merged WebGL geometry. */
+export function reserveMergedGeometry(source: Geometry) {
+  if (mergedCapacities.has(source) || !source.vertexCount) return source;
+  const vertexCapacity = grownCapacity(source.vertexCount), indexCapacity = grownCapacity(source.indexArray.length);
+  const copy = <T extends Float32Array | Int32Array | Uint32Array>(array: T, length: number): T => {
+    const result = new (array.constructor as {new(length: number): T})(length); result.set(array); return result;
+  };
+  const capacity: MergedCapacity = {vertexCapacity, indexCapacity,
+    position: copy(source.position.array, vertexCapacity * 3), normal: copy(source.normal.array, vertexCapacity * 3),
+    uv: copy(source.uv!.array, vertexCapacity * 2), uv1: copy(source.uv1!.array, vertexCapacity * 2),
+    color: source.color ? copy(source.color.array, vertexCapacity * 3) : undefined,
+    tangent: source.tangent ? copy(source.tangent.array, vertexCapacity * source.tangent.itemSize) : undefined,
+    materialIndex: copy(source.materialIndex!.array, vertexCapacity * source.materialIndex!.itemSize),
+    indices: copy(source.indices.array as Uint32Array, indexCapacity)};
+  return geometryFromCapacity(source, capacity, source.vertexCount, source.indexArray.length);
+}
+
+/** Appends only newly prepared source geometries to WebGL's resident merged arrays. */
+export function appendMergedGeometry(
+  previous: Geometry,
+  prepared: ReturnType<typeof prepareSceneMeshes>,
+  previousGeometryCount: number
+) {
+  const added = prepared.geometries.slice(previousGeometryCount);
+  if (!added.length) return previous;
+  // WebGL's established packing selects one optional color/tangent plane from
+  // the first geometry that has either. A first optional plane changes the
+  // shader layout and therefore requires the ordinary full preparation path.
+  if (!previous.color && !previous.tangent && added.some(geometry => geometry.color || geometry.tangent)) return;
+  const regions = new Map<Geometry, {vertexOffset: number; indexOffset: number; materialIndices: number[]} >();
+  const appended = mergeGeometry(added, added.map(geometry => prepared.geometryRegions.get(geometry)!.materialIndices), regions);
+  let resident = reserveMergedGeometry(previous), capacity = mergedCapacities.get(resident)!;
+  const vertices = previous.vertexCount + appended.vertexCount, indices = previous.indexArray.length + appended.indexArray.length;
+  if (vertices > capacity.vertexCapacity || indices > capacity.indexCapacity) {
+    const expanded = reserveMergedGeometry(mergeGeometry(prepared.geometries,
+      prepared.geometries.map(geometry => prepared.geometryRegions.get(geometry)!.materialIndices), new Map()));
+    return expanded;
+  }
+  const vertexOffset = previous.vertexCount, indexOffset = previous.indexArray.length;
+  capacity.position.set(appended.position.array, vertexOffset * 3); capacity.normal.set(appended.normal.array, vertexOffset * 3);
+  capacity.uv.set(appended.uv!.array, vertexOffset * 2); capacity.uv1.set(appended.uv1!.array, vertexOffset * 2);
+  if (capacity.color) capacity.color.set(appended.color?.array ?? new Float32Array(appended.vertexCount * 3).fill(1), vertexOffset * 3);
+  if (capacity.tangent && appended.tangent) capacity.tangent.set(appended.tangent.array, vertexOffset * previous.tangent!.itemSize);
+  capacity.materialIndex.set(appended.materialIndex!.array, vertexOffset * previous.materialIndex!.itemSize);
+  for (let i = 0; i < appended.indexArray.length; i++) capacity.indices[indexOffset + i] = appended.indexArray[i] + vertexOffset;
+  return geometryFromCapacity(previous, capacity, vertices, indices);
+}
+
 export function computeGeometryNormals(geometry: Geometry) {
   const indices = geometry.indexArray;
   const positions = geometry.position.array;
