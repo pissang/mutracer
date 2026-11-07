@@ -51,6 +51,13 @@ reach a finished image alone, in random sequences and during convergence. Unit t
 cover the same orderings with a fake GPU in `unit/editLiveness.test.ts`, which cannot
 catch driver behavior or check pixels.
 
+[`gpu/meshEdits.html`](./gpu/meshEdits.html) exposes
+`meshEditTests.measure(backend, count, materials)` and
+`meshEditTests.parity(backend)`. `measure` records `engine.update()`, preparation
+stages and first-sample latency for visibility, add/remove and texture-reference
+edits on a generated scene. `parity` renders each edit incrementally and in a fresh
+engine and compares HDR pixels, ID AOVs and picks.
+
 [`gpu/subsurfaceFurnace.html`](./gpu/subsurfaceFurnace.html) exposes
 `captureSubsurfaceFurnace('webgpu')` or `captureSubsurfaceFurnace('webgl')`.
 It checks conservative and gray SSS spheres and a closed cube against independent
