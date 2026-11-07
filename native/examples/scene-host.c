@@ -37,7 +37,7 @@ static size_t make_scene(const char *variant) {
   memset(words,0,sizeof(words));used=MT_HEADER_WORDS;
   int floating=!strcmp(variant,"float-textures"),textured=!strcmp(variant,"textures")||floating,affine=!strcmp(variant,"transforms"),emissive=!strcmp(variant,"emissive");
   int displacement_or_photometric=!strncmp(variant,"v3-",3),advanced=!strncmp(variant,"v2-",3)||displacement_or_photometric;
-  uint32_t light_count=!strcmp(variant,"v3-ies-shared")?2:1;
+  uint32_t light_count=!strcmp(variant,"v3-ies-shared")?2:!strcmp(variant,"lights-1024")?1024:1;
   uint32_t texture_count=advanced?4:(uint32_t)textured;
   uint32_t geos=reserve(2*MT_GEOMETRY_WORDS),meshes=reserve(4*MT_MESH_WORDS),materials=reserve(4*MT_MATERIAL_WORDS);
   uint32_t lights=reserve(light_count*MT_LIGHT_WORDS),textures=reserve(texture_count*MT_TEXTURE_WORDS),cam=reserve(MT_CAMERA_WORDS);
@@ -99,6 +99,20 @@ static size_t make_scene(const char *variant) {
   if(!strcmp(variant,"spot-light")){
     words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_SPOT;value(lights+MT_LIGHT_SIZE,.2);value(lights+MT_LIGHT_HEIGHT_OR_INNER,20);
     value(lights+MT_LIGHT_SPREAD_OR_OUTER,35);value(lights+MT_LIGHT_INTENSITY,200);
+  }
+  if(!strcmp(variant,"disk-light")){
+    words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_DISK;value(lights+MT_LIGHT_RADIUS,.75);value(lights+MT_LIGHT_INTENSITY,3);
+    words[lights+MT_LIGHT_NORMALIZE]=1;
+  }
+  if(!strcmp(variant,"cylinder-light")){
+    words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_CYLINDER;value(lights+MT_LIGHT_RADIUS,.25);value(lights+MT_LIGHT_LENGTH,1.5);
+    value(lights+MT_LIGHT_INTENSITY,6);words[lights+MT_LIGHT_NORMALIZE]=1;words[lights+MT_LIGHT_TREAT_AS_LINE]=1;
+  }
+  if(!strcmp(variant,"lights-1024")){
+    for(uint32_t i=1;i<light_count;i++){
+      uint32_t at=lights+i*MT_LIGHT_WORDS;memcpy(words+at,words+lights,MT_LIGHT_WORDS*MT_WORD_BYTES);
+      value(at+MT_LIGHT_TRANSFORM+12,(double)(i%16)*.25);
+    }
   }
   if(!strcmp(variant,"alpha"))value(materials+MT_MATERIAL_WORDS+MT_MATERIAL_OPACITY,.4);
   words[cam+MT_CAMERA_PROJECTION]=!strcmp(variant,"orthographic")?MT_CAMERA_PROJECTION_ORTHOGRAPHIC:MT_CAMERA_PROJECTION_PERSPECTIVE;
@@ -235,7 +249,7 @@ static size_t make_scene(const char *variant) {
 int main(int argc,char **argv) {
   if(argc<3||argc>5)return 2;
   const char *variant=argc>=4?argv[3]:"baseline";
-  const char *variants[]={"baseline","textures","transforms","orthographic","emissive","missing-normals","float-textures","sphere-light","directional-light","spot-light","alpha","v2-environment","v2-environment-only","v2-background","v2-hidden-background","v2-film","v2-medium","v2-alpha","v2-bevel","v2-vertices","v2-multimaterial","v2-instances","v2-empty-batch","v3-displacement-uv","v3-displacement-triplanar","v3-displacement-spherical","v3-displacement-cylindrical","v3-displacement-negative","v3-displacement-bytes","v3-displacement-zero","v3-ies","v3-ies-shared","v3-rect-texture"};
+  const char *variants[]={"baseline","textures","transforms","orthographic","emissive","missing-normals","float-textures","sphere-light","directional-light","spot-light","disk-light","cylinder-light","lights-1024","alpha","v2-environment","v2-environment-only","v2-background","v2-hidden-background","v2-film","v2-medium","v2-alpha","v2-bevel","v2-vertices","v2-multimaterial","v2-instances","v2-empty-batch","v3-displacement-uv","v3-displacement-triplanar","v3-displacement-spherical","v3-displacement-cylindrical","v3-displacement-negative","v3-displacement-bytes","v3-displacement-zero","v3-ies","v3-ies-shared","v3-rect-texture"};
   int known=0;for(size_t i=0;i<sizeof(variants)/sizeof(variants[0]);i++)if(!strcmp(variant,variants[i]))known=1;
   if(!known)return 2;
   if(argc==5&&strcmp(argv[4],"repeat"))return 2;

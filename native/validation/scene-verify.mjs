@@ -57,13 +57,6 @@ async function verifyScene(input, directory, variant, capture = true) {
             reference = new Uint8Array(cameraBlock.buffer, 0, 144);
         }
         const native = records.get(id);
-        if (id === 8 && reference.length <= native.length) {
-            // Web sizes analytic-light storage to the light count; native keeps
-            // the fixed 64-light uniform, so the remainder must stay zero.
-            const padded = new Uint8Array(native.length);
-            padded.set(reference);
-            reference = padded;
-        }
         if (!Buffer.from(reference).equals(native)) {
             writeFileSync(resolve(directory, `reference-${id}.bin`), reference);
             const first = native.findIndex((v, i) => v !== reference[i]);
@@ -90,7 +83,7 @@ async function verifyScene(input, directory, variant, capture = true) {
     return { variant, packetBytes: packet.length, nativeJavaScriptPacketIdentical: true, resources,
         shaderPolicy: 'native retained material/light capabilities and baked environment', fullShaderIdentical: true };
 }
-for (const variant of process.argv.slice(2).length ? process.argv.slice(2) : ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']) {
+for (const variant of process.argv.slice(2).length ? process.argv.slice(2) : ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'disk-light', 'cylinder-light', 'lights-1024', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']) {
     const directory = resolve(out, variant === 'baseline' ? 'image' : variant);
     results.push(await verifyScene(readFileSync(resolve(directory, 'scene-input.bin')), directory, variant));
     console.log(`${variant}: native/JS packet, browser scene resources, independent Float64 camera and full WGSL exact`);

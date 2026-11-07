@@ -7,9 +7,9 @@ const materialProperties = JSON.parse(readFileSync(new URL('../schemas/material-
 import { CaptureDevice, installWebGPUConstants } from './resource-recorder.mjs';
 export async function referenceScene(bytes, sourceRoot) {
     const load = path => import(pathToFileURL(resolve(sourceRoot, 'src', path)).href);
-    const [{ default: Geometry, Attribute }, { default: Mesh }, { default: Material }, { default: Texture }, { default: Camera }, { default: Rect }, { default: Sphere }, { default: Directional }, { default: Spot }, { default: Pass }, { default: Environment }, { default: InstancedMesh }] = await Promise.all([
+    const [{ default: Geometry, Attribute }, { default: Mesh }, { default: Material }, { default: Texture }, { default: Camera }, { default: Rect }, { default: Sphere }, { default: Directional }, { default: Spot }, { default: Disk }, { default: Cylinder }, { default: Pass }, { default: Environment }, { default: InstancedMesh }] = await Promise.all([
         'scene/Geometry.js', 'scene/Mesh.js', 'scene/OpenPBRMaterial.js', 'scene/Texture.js', 'scene/Camera.js',
-        'scene/RectLight.js', 'scene/SphereLight.js', 'scene/DirectionalLight.js', 'scene/SpotLight.js', 'renderer/WGPURayTracePass.js', 'scene/EnvironmentLight.js', 'scene/InstancedMesh.js'
+        'scene/RectLight.js', 'scene/SphereLight.js', 'scene/DirectionalLight.js', 'scene/SpotLight.js', 'scene/DiskLight.js', 'scene/CylinderLight.js', 'renderer/WGPURayTracePass.js', 'scene/EnvironmentLight.js', 'scene/InstancedMesh.js'
     ].map(load));
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
@@ -63,8 +63,9 @@ export async function referenceScene(bytes, sourceRoot) {
         m.transform = f.slice(o + 4, o + 20);
         meshes.push(m);
     }
+    const lightStride = u[0] >= 6 ? 32 : 28;
     for (let i = 0; i < u[7]; i++) {
-        const o = u[12] + i * 28, type = u[o], light = type === 0 ? new Rect({ size: [f[o + 5], f[o + 6]], spread: f[o + 7] }) : type === 1 ? new Sphere({ radius: f[o + 5] }) : type === 2 ? new Directional() : new Spot({ radius: f[o + 5], innerAngle: f[o + 6], outerAngle: f[o + 7] });
+        const o = u[12] + i * lightStride, type = u[o], light = type === 0 ? new Rect({ size: [f[o + 5], f[o + 6]], spread: f[o + 7] }) : type === 1 ? new Sphere({ radius: f[o + 5] }) : type === 2 ? new Directional() : type === 3 ? new Spot({ radius: f[o + 5], innerAngle: f[o + 6], outerAngle: f[o + 7] }) : type === 4 ? new Disk({ radius:f[o + 28], normalize:!!u[o + 30] }) : new Cylinder({ radius:f[o + 28], length:f[o + 29], normalize:!!u[o + 30], treatAsLine:!!u[o + 31] });
         if (type === 0 && u[o + 8]) light.texture = textures[u[o + 8] - 1];
         if (type === 3 && u[o + 10]) {
             const key = `${u[o + 9]}:${u[o + 10]}`;
@@ -149,7 +150,7 @@ export async function referenceScene(bytes, sourceRoot) {
     constants.SCENE_CAPABILITIES = retainedShaderCapabilities(constants).SCENE_CAPABILITIES;
     const nativeShader = wgpuShaderSource(constants, {compactVertices:true, hasDisplacement:pass._hasDisplacement, hasAlpha:false,
         hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-        hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:1}, true);
+        hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),analyticLightStorage:true,blasLayoutMask:1}, true);
     return { device, pass, camera, nativeShader, nativeResources };
 }
 export function textureBytes(texture) {
