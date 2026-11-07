@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>Center surface AOV contracts</title></head><body><canvas></canvas><button id="run">Run</button><pre id="result"></pre><script type="module">
+import {runBenchmark} from './primarySurface.ts';
+document.querySelector('#run').onclick = async () => {
+  try {document.querySelector('#result').textContent = JSON.stringify(await runBenchmark());}
+  catch (error) {document.querySelector('#result').textContent = String(error); console.error(error);}
+};
+</script></body></html>
