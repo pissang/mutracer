@@ -83,15 +83,18 @@ The specular workflow, coat and opacity models are not lossless conversions.
 Alpha cutoff is explicitly zero unless PreviewSurface supplies `opacityThreshold`.
 OpenPBR's independent layers cannot all be expressed by PreviewSurface.
 
-Rect, sphere and distant lights are supported. Shaping cones become SDK spots;
-dome maps provide environment lighting. Disk, cylinder and linked lights are
-skipped with warnings. Distant light intensity follows UsdLux, including
-`angle` and `normalize`, and renders as a sharp directional light. Other lights
-use SDK radiance units and ignore `normalize`. Equal diffuse and specular
-multipliers scale the light; unequal ones are ignored. Color temperature, IES
-shaping and arbitrary dome tilt are not supported. There is one environment
-dome. Light textures are currently supported only through the environment, not
-rectangular emitters.
+Rect, sphere, disk, cylinder and distant lights are supported. Disk lights use
+local XY and emit toward local -Z. Cylinder lights run along local X and emit
+from the curved side without end caps. `normalize` uses the disk area or
+cylinder's lateral area; `treatAsLine` is retained but does not change area
+sampling. Shaping cones become SDK spots, and dome maps provide environment
+lighting. Distant light intensity follows UsdLux, including `angle` and
+`normalize`, and renders as a sharp directional light. Enabled color
+temperature multiplies the authored light color. Linked lights are skipped.
+Equal diffuse and specular multipliers scale the light; unequal ones are
+ignored. IES shaping and arbitrary dome tilt are unsupported. There is one
+environment dome. Light textures are supported only through the environment,
+not rectangular emitters.
 
 Perspective, orthographic and depth-of-field cameras are supported. Off-axis
 perspective frusta use a symmetric approximation with a warning. A zero focus
@@ -152,4 +155,4 @@ At 4K and full resolution, float32 color output uses about 1.30 GiB in addition
 to rendering storage. In CPU mode, each 4K RGBA32F AOV read is about 127 MiB.
 See the
 [SDK's memory and output limits](../../docs/engine.md#costs), including the
-64 analytic-light limit and the absence of tiled output.
+1,024 analytic-light limit and the absence of tiled output.

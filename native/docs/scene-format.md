@@ -1,4 +1,4 @@
-# Native scene descriptor format (v5)
+# Native scene descriptor format (v6)
 
 `mt_context_commit` and `mt_engine_set_scene` take a scene as one byte buffer:
 the raw scene descriptor. This page is the reference for its layout, values and
@@ -7,8 +7,9 @@ validation rules. The record structs are in
 [`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
 in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
-Version 5 adds a mesh flags word; version 4 descriptors are rejected. Rebuild
-consumers with the current headers. The C record type names retain their `_v4` suffix.
+Version 6 adds disk and cylinder light fields; version 5 descriptors remain
+readable with their original 28-word light records. Rebuild C consumers with the
+current headers. Record type names retain their historical `_v4` suffix.
 
 Most applications should build scenes with the [Scene API](scene.md) instead,
 which needs no offsets and can export descriptors.
@@ -82,7 +83,7 @@ the rules the validator enforces.
 
 ### Header
 
-- `version` must be `MT_VERSION_SCENE` (5); `total_words` is the descriptor
+- `version` must be `MT_VERSION_SCENE` (6); `total_words` is the descriptor
   length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
 - Environment and background maps (`*_texture_plus_one`, 0 for none) must be
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
@@ -158,6 +159,11 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
   profile: UTF-8 LM-63 Type C text with `TILT=NONE`, at most 16 KiB, without a
   terminating NUL (offset 0 and length 0 for none). Lights with the same offset
   and length share one profile.
+- Disk lights use a positive `radius`, local XY and one-sided local -Z emission.
+  Cylinder lights use positive `radius` and `length`, local X and lateral-only
+  emission; end caps do not emit. `normalize` divides intensity by the disk or
+  cylinder surface area. `treat_as_line` is retained as a hint and does not
+  change cylinder area sampling.
 
 ### Camera
 
@@ -168,7 +174,7 @@ changes only the camera is incremental.
 ## Limits
 
 - At least one geometry, mesh and material; at most 65,536 geometries, materials
-  and textures, and 64 analytic lights. Meshes and expanded instances are limited
+  and textures, and 1,024 analytic lights. Meshes and expanded instances are limited
   to 16,777,216 and the memory budget (160 bytes per instance); HWRT also checks
   the selected GPU's TLAS instance limit.
 - Emissive triangles, including every expanded instance, must fit the 4096×4096
