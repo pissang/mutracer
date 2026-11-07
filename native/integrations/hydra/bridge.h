@@ -97,8 +97,18 @@ struct TextureData {
   mt_scene_texture_desc desc{};
   std::vector<uint8_t> bytes;
   std::vector<float> floats;
+  struct Tile {
+    mt_scene_texture_tile desc{};
+    std::vector<uint8_t> bytes;
+    std::vector<float> floats;
+  };
+  std::vector<Tile> tileData;
+  std::vector<mt_scene_texture_tile> tiles;
 };
 TextureData ReadTexture(std::string const &file, bool srgb);
+std::string TextureReferenceKey(std::string const &file);
+std::string TextureAssetVersion(std::string const &file);
+std::string MaterialAssetVersion(HdMaterialNetwork2 const &network);
 struct MeshResource {
   mt_scene_geometry_id geometry = 0;
   mt_scene_mesh_id mesh = 0;
@@ -132,6 +142,8 @@ public:
   std::map<std::pair<SdfPath, bool>, mt_scene_material_id> materialHandles;
   std::map<SdfPath, mt_scene_light_id> lightHandles;
   std::map<std::string, mt_scene_texture_id> textureHandles;
+  std::map<std::string, std::string> textureVersions;
+  std::map<SdfPath, std::string> materialAssetVersions;
   std::map<uint32_t, Identity> identities;
   std::string sdkError;
   int backend = -1;

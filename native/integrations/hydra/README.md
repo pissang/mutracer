@@ -58,11 +58,16 @@ Standard Surface constants use MaterialX's
 convert, arithmetic, mix, clamp, power, comparison and channel-extract nodes
 are folded before conversion.
 Textures use Hio, sRGB color storage or linear float storage, connected scalar
-channels, repeat/clamp/mirror wrapping and UV scale/translation. Other graph
-nodes use the authored constant fallback or nodedef default with a warning;
-the delegate does not bake procedural graphs. UDIM, UV rotation, alternate UV
-primvars, texture-value scale/bias, border wrapping, other color spaces and
-arbitrary procedural graphs are unsupported.
+channels, repeat/clamp/mirror wrapping and UV scale/translation. `<UDIM>` image
+paths load existing files numbered 1001–1100; missing tiles sample transparent
+black. Tile images must be readable by Hio and are normalized to the maximum
+tile width and maximum tile height. A texture uses one color-space setting for
+all tiles. The 10×10 logical grid counts toward the texture and GPU budgets,
+including empty cells. UV rotation,
+alternate UV primvars, texture-value scale/bias, border wrapping, other color
+spaces and arbitrary procedural graphs are unsupported. Other graph nodes use the
+authored constant fallback or nodedef default with a warning; the delegate does
+not bake procedural graphs.
 Texture references remain cached for the delegate's lifetime; repeated swaps
 can increase memory use. Filters use the SDK's texture filtering.
 Changing a connection to an already retained texture is incremental when its

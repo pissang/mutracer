@@ -15,9 +15,11 @@
 #include "pxr/usd/usdShade/shader.h"
 #include "pxr/usdImaging/usdImagingGL/engine.h"
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <unistd.h>
 PXR_NAMESPACE_USING_DIRECTIVE
 using namespace mtHydra;
 void DelayHostConsumers(Hgi *);
@@ -217,7 +219,37 @@ int main(int argc, char **argv) {
       engine.SetRendererSetting(TfToken("forceCpuOutput"), VtValue(0));
       run("gpu-repeat");
     }
-    if (argc > 7) {
+    if (std::getenv("MUTRACER_HYDRA_UDIM_EDITS")) {
+      auto image = UsdShadeShader(
+          stage->GetPrimAtPath(SdfPath("/Materials/Open/Image")));
+      // Edit copies of the tiles so the checked-in fixtures stay unchanged.
+      auto fixtureDir = std::filesystem::path(argv[1]).parent_path();
+      auto tileDir = std::filesystem::temp_directory_path() /
+                     ("mutracer-hydra-udim-" + std::to_string(::getpid()));
+      std::filesystem::create_directories(tileDir);
+      for (auto tile : {"checker-update.1001.png", "checker-update.1002.png"})
+        std::filesystem::copy_file(
+            fixtureDir / tile, tileDir / tile,
+            std::filesystem::copy_options::overwrite_existing);
+      image.GetInput(TfToken("file"))
+          .Set(SdfAssetPath((tileDir / "checker-update.<UDIM>.png").string()));
+      run("udim-reference-changed");
+      std::filesystem::copy_file(
+          fixtureDir / "checker-alternate.png",
+          tileDir / "checker-update.1001.png",
+          std::filesystem::copy_options::overwrite_existing);
+      // Force the material network to be reconsidered after the asset version
+      // changes while retaining the same tile set and texture reference.
+      auto surface = UsdShadeShader(
+          stage->GetPrimAtPath(SdfPath("/Materials/Open/Surface")));
+      surface.GetInput(TfToken("coat_weight")).Set(.26f);
+      run("udim-tile-content-changed");
+      image.GetInput(TfToken("file"))
+          .Set(SdfAssetPath("checker.<UDIM>.png"));
+      run("udim-reference-reused");
+      std::filesystem::remove_all(tileDir);
+    }
+    if (argc > 7 && !std::getenv("MUTRACER_HYDRA_UDIM_EDITS")) {
       auto mesh = stage->GetPrimAtPath(SdfPath("/Mesh"));
       for (int i = 0; i < 4; ++i) {
         UsdGeomXformCommonAPI(mesh).SetTranslate(GfVec3d(.1 * i, 0, 0));

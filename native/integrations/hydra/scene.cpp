@@ -401,6 +401,12 @@ bool Param::Apply(int requestedBackend) {
     for (auto const &x : meshes)
       changedMeshes.insert(x.first);
   }
+  for (auto const &[id, network] : materials) {
+    auto version = MaterialAssetVersion(network);
+    auto previous = materialAssetVersions.find(id);
+    if (previous != materialAssetVersions.end() && previous->second != version)
+      changedMaterials.insert(id);
+  }
   bool changed = !changedMeshes.empty() || !removedMeshes.empty() ||
                  !changedMaterials.empty() || !changedLights.empty() ||
                  !removedLights.empty() || instancesDirty;

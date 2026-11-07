@@ -3,10 +3,14 @@
 #include "pxr/base/gf/half.h"
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/imaging/hio/image.h"
+#include "pxr/usd/ar/resolver.h"
 #include "pxr/usd/sdf/assetPath.h"
+#include "pxr/usd/usdShade/udimUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <optional>
 #include <stdexcept>
 PXR_NAMESPACE_OPEN_SCOPE
@@ -37,6 +41,7 @@ static VtValue Input(HdMaterialNode2 const &n, std::string const &key) {
   auto i = n.parameters.find(TfToken(key));
   return i == n.parameters.end() ? VtValue() : i->second;
 }
+static std::string String(VtValue const &v, std::string fallback = "");
 static std::optional<GfVec3f>
 Constant(HdMaterialNetwork2 const &network, HdMaterialNode2 const &node,
          std::string const &key, std::set<SdfPath> &visiting);
@@ -244,9 +249,7 @@ std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network,
          "; using OpenPBR defaults");
   return values;
 }
-TextureData ReadTexture(std::string const &file, bool srgb) {
-  if (file.find("<UDIM>") != std::string::npos)
-    throw std::runtime_error("UDIM is unsupported: " + file);
+static TextureData ReadTextureImage(std::string const &file, bool srgb) {
   auto image = HioImage::OpenForReading(file, 0, 0,
                                         srgb ? HioImage::SRGB : HioImage::Raw);
   if (!image)
@@ -302,7 +305,101 @@ TextureData ReadTexture(std::string const &file, bool srgb) {
     }
   return data;
 }
-static std::string String(VtValue const &v, std::string fallback = "") {
+static std::vector<UsdShadeUdimUtils::ResolvedPathAndTile>
+TexturePaths(std::string const &file) {
+  if (!UsdShadeUdimUtils::IsUdimIdentifier(file))
+    return {{file, ""}};
+  auto paths = UsdShadeUdimUtils::ResolveUdimTilePaths(file, {});
+  paths.erase(std::remove_if(paths.begin(), paths.end(), [](auto const &entry) {
+                try {
+                  int tile = std::stoi(entry.second);
+                  return tile < 1001 || tile > 1100;
+                } catch (...) {
+                  return true;
+                }
+              }),
+              paths.end());
+  std::sort(paths.begin(), paths.end(), [](auto const &a, auto const &b) {
+    return std::stoi(a.second) < std::stoi(b.second);
+  });
+  paths.erase(std::unique(paths.begin(), paths.end(), [](auto const &a, auto const &b) {
+                return a.second == b.second;
+              }), paths.end());
+  if (paths.empty())
+    throw std::runtime_error("no readable UDIM tiles found for " + file);
+  return paths;
+}
+std::string TextureReferenceKey(std::string const &file) {
+  std::string result = file;
+  for (auto const &[path, tile] : TexturePaths(file))
+    result += "|" + tile + "=" + path;
+  return result;
+}
+std::string TextureAssetVersion(std::string const &file) {
+  std::ostringstream result;
+  result << std::setprecision(17);
+  for (auto const &[path, tile] : TexturePaths(file)) {
+    auto resolved = ArResolvedPath(path);
+    auto timestamp = ArGetResolver().GetModificationTimestamp(path, resolved);
+    result << tile << '=' << path << ':';
+    if (timestamp.IsValid())
+      result << timestamp.GetTime();
+    else
+      result << "unknown";
+    result << ';';
+  }
+  return result.str();
+}
+TextureData ReadTexture(std::string const &file, bool srgb) {
+  auto paths = TexturePaths(file);
+  if (!UsdShadeUdimUtils::IsUdimIdentifier(file))
+    return ReadTextureImage(file, srgb);
+  TextureData result;
+  Check(mt_scene_texture_desc_default(&result.desc), "texture defaults");
+  result.tileData.reserve(paths.size());
+  result.tiles.reserve(paths.size());
+  for (auto const &[path, tile] : paths) {
+    auto image = ReadTextureImage(path, srgb);
+    TextureData::Tile data;
+    data.desc.udim = uint32_t(std::stoi(tile));
+    data.desc.storage = image.desc.storage;
+    data.desc.width = image.desc.width;
+    data.desc.height = image.desc.height;
+    data.bytes = std::move(image.bytes);
+    data.floats = std::move(image.floats);
+    result.tileData.push_back(std::move(data));
+  }
+  for (auto &tile : result.tileData) {
+    tile.desc.pixels = srgb ? static_cast<void *>(tile.bytes.data())
+                            : static_cast<void *>(tile.floats.data());
+    tile.desc.pixel_bytes = srgb ? tile.bytes.size()
+                                 : tile.floats.size() * sizeof(float);
+    result.tiles.push_back(tile.desc);
+  }
+  result.desc.tiles = result.tiles.data();
+  result.desc.tile_count = result.tiles.size();
+  return result;
+}
+std::string MaterialAssetVersion(HdMaterialNetwork2 const &network) {
+  std::string result;
+  for (auto const &[path, node] : network.nodes) {
+    auto id = node.nodeTypeId.GetString();
+    if (id != "UsdUVTexture" && id.find("ND_image_") != 0)
+      continue;
+    auto file = String(Input(node, "file"));
+    if (!file.empty()) {
+      result += path.GetString() + ":";
+      try {
+        result += TextureAssetVersion(file);
+      } catch (...) {
+        result += "missing";
+      }
+      result += '\n';
+    }
+  }
+  return result;
+}
+static std::string String(VtValue const &v, std::string fallback) {
   if (v.IsHolding<TfToken>())
     return v.UncheckedGet<TfToken>().GetString();
   if (v.IsHolding<std::string>())
@@ -492,22 +589,16 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
         }
       }
       std::string key =
-          file + ":" + std::to_string(slot.id) + ":" + std::to_string(srgb) +
+          TextureReferenceKey(file) + ":" + std::to_string(slot.id) + ":" + std::to_string(srgb) +
           ":" + std::to_string(data.desc.wrap_s) + ":" +
           std::to_string(data.desc.wrap_t) + ":" + std::to_string(channel);
-      std::error_code fileError;
-      auto modified = std::filesystem::last_write_time(file, fileError);
-      if (!fileError)
-        key += ":" + std::to_string(
-                         std::chrono::duration_cast<std::chrono::nanoseconds>(
-                             modified.time_since_epoch())
-                             .count());
       for (float f : data.desc.scale)
         key += ":" + std::to_string(f);
       for (float f : data.desc.offset)
         key += ":" + std::to_string(f);
+      auto version = TextureAssetVersion(file);
       auto &texture = textureHandles[key];
-      if (!texture) {
+      if (!texture || textureVersions[key] != version) {
         auto sampler = data.desc;
         data = ReadTexture(file, srgb);
         data.desc.flip_y = sampler.flip_y;
@@ -515,22 +606,51 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
         data.desc.wrap_t = sampler.wrap_t;
         std::copy_n(sampler.scale, 2, data.desc.scale);
         std::copy_n(sampler.offset, 2, data.desc.offset);
+        auto channelToRed = [channel](std::vector<uint8_t> &bytes,
+                                      std::vector<float> &floats) {
+          if (channel < 0)
+            return;
+          if (!bytes.empty())
+            for (size_t i = 0; i < bytes.size(); i += 4)
+              bytes[i] = bytes[i + channel];
+          if (!floats.empty())
+            for (size_t i = 0; i < floats.size(); i += 4)
+              floats[i] = floats[i + channel];
+        };
         if (!slot.color && channel >= 0) {
-          if (srgb) {
-            for (size_t i = 0; i < data.bytes.size(); i += 4)
-              data.bytes[i] = data.bytes[i + channel];
-          } else
-            for (size_t i = 0; i < data.floats.size(); i += 4)
-              data.floats[i] = data.floats[i + channel];
+          if (data.tileData.empty())
+            channelToRed(data.bytes, data.floats);
+          else
+            for (auto &tile : data.tileData)
+              channelToRed(tile.bytes, tile.floats);
         }
-        data.desc.pixels =
-            srgb ? static_cast<void *>(data.bytes.data()) : data.floats.data();
-        data.desc.pixel_bytes =
-            srgb ? data.bytes.size() : data.floats.size() * sizeof(float);
+        if (data.tileData.empty()) {
+          data.desc.pixels = srgb ? static_cast<void *>(data.bytes.data())
+                                  : static_cast<void *>(data.floats.data());
+          data.desc.pixel_bytes = srgb ? data.bytes.size()
+                                       : data.floats.size() * sizeof(float);
+        } else {
+          for (size_t i = 0; i < data.tileData.size(); ++i) {
+            auto &tile = data.tileData[i];
+            tile.desc.pixels = srgb ? static_cast<void *>(tile.bytes.data())
+                                    : static_cast<void *>(tile.floats.data());
+            tile.desc.pixel_bytes = srgb ? tile.bytes.size()
+                                         : tile.floats.size() * sizeof(float);
+            data.tiles[i] = tile.desc;
+          }
+          data.desc.tiles = data.tiles.data();
+          data.desc.tile_count = data.tiles.size();
+        }
 
-        Check(mt_scene_add_texture(scene, &data.desc, &texture, error,
-                                   sizeof error),
-              error);
+        if (texture)
+          Check(mt_scene_set_texture(scene, texture, &data.desc, error,
+                                     sizeof error),
+                error);
+        else
+          Check(mt_scene_add_texture(scene, &data.desc, &texture, error,
+                                     sizeof error),
+                error);
+        textureVersions[key] = std::move(version);
       }
       Check(mt_scene_material_set_texture(scene, handle, slot.id, texture,
                                           error, sizeof error),
@@ -572,6 +692,7 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
       Warn(e.what());
     }
   }
+  materialAssetVersions[path] = MaterialAssetVersion(network);
   if (!root)
     return;
   for (auto const &c : root->inputConnections) {

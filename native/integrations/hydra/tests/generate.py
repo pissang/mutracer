@@ -40,10 +40,13 @@ def mesh(stage,path,mat):
     UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(mat)
     return m
 
-for name,kind in [('rect','RectLight'),('sphere','SphereLight'),('distant','DistantLight'),('spot','SphereLight'),('dome','DomeLight'),('disk','DiskLight'),('cylinder','CylinderLight'),('openpbr','RectLight'),('preview','RectLight'),('textured','RectLight'),('orthographic','RectLight'),('dof','RectLight'),('instancer','RectLight'),('nested','RectLight'),('edits','RectLight'),('faces','RectLight'),('alpha-mask','RectLight')]:
+for name,kind in [('rect','RectLight'),('sphere','SphereLight'),('distant','DistantLight'),('spot','SphereLight'),('dome','DomeLight'),('disk','DiskLight'),('cylinder','CylinderLight'),('openpbr','RectLight'),('preview','RectLight'),('textured','RectLight'),('udim','RectLight'),('orthographic','RectLight'),('dof','RectLight'),('instancer','RectLight'),('nested','RectLight'),('edits','RectLight'),('faces','RectLight'),('alpha-mask','RectLight')]:
     path=ROOT/(name+'.usda')
     stage=Usd.Stage.CreateNew(str(path));UsdGeom.SetStageMetersPerUnit(stage,1);UsdGeom.SetStageUpAxis(stage,'Y')
-    mat=material(stage,'/Materials/Open',True,name in ('textured','edits')); preview=material(stage,'/Materials/Preview',False)
+    mat=material(stage,'/Materials/Open',True,name in ('textured','edits','udim')); preview=material(stage,'/Materials/Preview',False)
+    if name=='udim':
+        shader=UsdShade.Shader(stage.GetPrimAtPath('/Materials/Open/Image'))
+        shader.GetInput('file').Set(Sdf.AssetPath('checker.<UDIM>.png'))
     m=mesh(stage,'/Mesh',preview if name in ('preview','alpha-mask') else mat)
     if name=='alpha-mask':
         shader=UsdShade.Shader(stage.GetPrimAtPath('/Materials/Preview/Surface'))
@@ -83,8 +86,16 @@ for name,kind in [('rect','RectLight'),('sphere','SphereLight'),('distant','Dist
     stage.GetRootLayer().Save()
     path.write_text(path.read_text().rstrip()+"\n")
 
-for name,pixels in [('checker.png',bytes([255,20,0,0,255,20,20,0,255,255,255,255])),('checker-alternate.png',bytes([20,255,255,255,20,255,255,255,20,30,30,30]))]:
+def write_png(name,width,height,pixels):
     def chunk(kind,data): return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
-    data=b'\0'+pixels[:6]+b'\0'+pixels[6:]
-    (ROOT/name).write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>2I5B',2,2,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(data))+chunk(b'IEND',b''))
+    stride=width*3
+    data=b''.join(b'\0'+pixels[y*stride:(y+1)*stride] for y in range(height))
+    (ROOT/name).write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>2I5B',width,height,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(data))+chunk(b'IEND',b''))
+
+write_png('checker.png',2,2,bytes([255,20,0,0,255,20,20,0,255,255,255,255]))
+write_png('checker-alternate.png',2,2,bytes([20,255,255,255,20,255,255,255,20,30,30,30]))
+write_png('checker.1001.png',2,2,bytes([255,20,0,0,255,20,20,0,255,255,255,255]))
+write_png('checker.1002.png',1,1,bytes([30,200,90]))
+write_png('checker-update.1001.png',2,2,bytes([255,20,0,0,255,20,20,0,255,255,255,255]))
+write_png('checker-update.1002.png',1,1,bytes([30,200,90]))
 print('generated fixtures in',ROOT)

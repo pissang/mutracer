@@ -29,6 +29,22 @@ int main() {
   Require(linear.floats.size() == 16 && linear.floats[0] == 1 &&
               linear.floats[3] == 1,
           "Hio raw to RGBA32F conversion");
+  auto udim = ReadTexture(std::string(MT_TEST_SOURCE_DIR) +
+                              "/checker.<UDIM>.png",
+                          true);
+  Require(udim.desc.tile_count == 2 && udim.desc.width == 0 &&
+              udim.desc.height == 0 && udim.tiles[0].udim == 1001 &&
+              udim.tiles[0].width == 2 && udim.tiles[0].height == 2 &&
+              udim.tiles[1].udim == 1002 && udim.tiles[1].width == 1 &&
+              udim.tiles[1].height == 1,
+          "USD UDIM resolution loads existing Hio tiles at their native sizes");
+  Require(!TextureReferenceKey(std::string(MT_TEST_SOURCE_DIR) +
+                               "/checker.<UDIM>.png")
+               .empty() &&
+              !TextureAssetVersion(std::string(MT_TEST_SOURCE_DIR) +
+                                  "/checker.<UDIM>.png")
+                   .empty(),
+          "tile set path and resolver timestamps are available for dirty checks");
   // Hydra's default camera light: 15000 over 0.53 degrees is about unit lux.
   Require(std::abs(DistantLightIrradiance(15000, .53f, false) - 1.0081f) < 1e-4f,
           "distant radiance integrates over the angular disk");
