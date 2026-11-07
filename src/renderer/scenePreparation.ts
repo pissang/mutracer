@@ -456,16 +456,18 @@ function geometryFromCapacity(source: Geometry, capacity: MergedCapacity, vertic
 export function reserveMergedGeometry(source: Geometry) {
   if (mergedCapacities.has(source) || !source.vertexCount) return source;
   const vertexCapacity = grownCapacity(source.vertexCount), indexCapacity = grownCapacity(source.indexArray.length);
-  const copy = <T extends Float32Array | Int32Array | Uint32Array>(array: T, length: number): T => {
-    const result = new (array.constructor as {new(length: number): T})(length); result.set(array); return result;
-  };
+  // Typed copies rather than `new array.constructor`: the native AOT compiler
+  // shares this module and only constructs declared classes.
+  const floats = (array: Float32Array, length: number) => { const result = new Float32Array(length); result.set(array); return result; };
+  const ints = (array: Int32Array, length: number) => { const result = new Int32Array(length); result.set(array); return result; };
+  const uints = (array: Uint32Array, length: number) => { const result = new Uint32Array(length); result.set(array); return result; };
   const capacity: MergedCapacity = {vertexCapacity, indexCapacity,
-    position: copy(source.position.array, vertexCapacity * 3), normal: copy(source.normal.array, vertexCapacity * 3),
-    uv: copy(source.uv!.array, vertexCapacity * 2), uv1: copy(source.uv1!.array, vertexCapacity * 2),
-    color: source.color ? copy(source.color.array, vertexCapacity * 3) : undefined,
-    tangent: source.tangent ? copy(source.tangent.array, vertexCapacity * source.tangent.itemSize) : undefined,
-    materialIndex: copy(source.materialIndex!.array, vertexCapacity * source.materialIndex!.itemSize),
-    indices: copy(source.indices.array as Uint32Array, indexCapacity)};
+    position: floats(source.position.array as Float32Array, vertexCapacity * 3), normal: floats(source.normal.array as Float32Array, vertexCapacity * 3),
+    uv: floats(source.uv!.array as Float32Array, vertexCapacity * 2), uv1: floats(source.uv1!.array as Float32Array, vertexCapacity * 2),
+    color: source.color ? floats(source.color.array as Float32Array, vertexCapacity * 3) : undefined,
+    tangent: source.tangent ? floats(source.tangent.array as Float32Array, vertexCapacity * source.tangent.itemSize) : undefined,
+    materialIndex: ints(source.materialIndex!.array as Int32Array, vertexCapacity * source.materialIndex!.itemSize),
+    indices: uints(source.indices.array as Uint32Array, indexCapacity)};
   return geometryFromCapacity(source, capacity, source.vertexCount, source.indexArray.length);
 }
 
