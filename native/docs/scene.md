@@ -45,16 +45,15 @@ rotations together when the visible background should follow the lighting.
 
 Edit the scene through its `*_mut` accessors (Rust) or `mt_scene_set_*` and
 `mt_scene_remove_*` calls (C), then call `set_scene_object` and `update` again.
-Several edits can share one update. The scene records which objects were edited,
-and the engine compares those with the committed scene and reuses prepared
-resources when it can. Every commit restarts accumulation, and both paths render
-the same image.
+Several edits can share one update. The engine reuses prepared resources when it
+can. Every commit restarts accumulation.
 
 These edits commit incrementally:
 
 - Camera changes; mesh matrices; changes to at most 64, or at most half, of a
-  batch's instance matrices in one update; existing instance colors. All
-  matrices changed in one update share one acceleration-structure refit.
+  batch's instance matrices in one update; existing instance colors. Commit
+  multiple matrix edits together to reduce update cost.
+- Mesh visibility, including an entire instance batch; see [visibility](#visibility).
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
@@ -95,6 +94,20 @@ also compared in full, as are scenes that produced more than three snapshots
 since the engine's last update, for example for other engines. The first
 incremental update after a full preparation builds comparison state for every
 object and takes longer than later edits.
+
+## Visibility
+
+Use `Scene::set_mesh_visible` (Rust) or `mt_scene_set_mesh_visible` (C), then
+submit with `set_scene_object` and `update`. Meshes are visible by default;
+visibility applies to an entire instance batch.
+
+Hidden meshes behave as removed meshes for rays, emitted light, picking and
+AOVs, with the same [visibility semantics as the browser](../../docs/updates.md#visibility).
+Geometry and materials remain resident, so showing the mesh
+again does not prepare them again. Toggling visibility commits incrementally
+unless other edits in the same update require full preparation. Every commit
+restarts accumulation. Use `remove_mesh` / `mt_scene_remove_mesh` when the mesh
+is no longer needed; adding or removing a mesh still requires full preparation.
 
 ## Pick scene objects
 

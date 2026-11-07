@@ -36,6 +36,9 @@ libraries accessible at runtime. A Blender or Houdini host requires a separate
 build matching its USD namespace, headers, libraries and compiler ABI; this
 usdview binary is not a Blender add-on.
 
+Mesh and instancer visibility use [whole-mesh/batch SDK visibility](../../docs/scene.md#visibility).
+Individual-instance visibility is not supported.
+
 ## Supported inputs and settings
 
 Meshes use polygon triangulation, including face-varying normals, `st` UVs and

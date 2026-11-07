@@ -1,4 +1,4 @@
-# Native scene descriptor format (v4)
+# Native scene descriptor format (v5)
 
 `mt_context_commit` and `mt_engine_set_scene` take a scene as one byte buffer:
 the raw scene descriptor. This page is the reference for its layout, values and
@@ -6,6 +6,9 @@ validation rules. The record structs are in
 [`mutracer-scene.h`](../include/mutracer-scene.h), the word offsets in
 [`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
 in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
+
+Version 5 adds a mesh flags word; version 4 descriptors are rejected. Rebuild
+consumers with the current headers. The C record type names retain their `_v4` suffix.
 
 Most applications should build scenes with the [Scene API](scene.md) instead,
 which needs no offsets and can export descriptors.
@@ -79,7 +82,7 @@ the rules the validator enforces.
 
 ### Header
 
-- `version` must be `MT_VERSION_SCENE` (4); `total_words` is the descriptor
+- `version` must be `MT_VERSION_SCENE` (5); `total_words` is the descriptor
   length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
 - Environment and background maps (`*_texture_plus_one`, 0 for none) must be
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
@@ -107,6 +110,9 @@ the rules the validator enforces.
 - A mesh with `material_table_count` 0 uses `material_index`; otherwise the
   geometry's per-vertex material indices select entries of the mesh's table.
   Several meshes may share one geometry.
+- Mesh records contain 21 words. Word 20 is `flags`: bit 0 hides the mesh or
+  entire instance batch; default 0 is visible. Other bits must be zero. See
+  [scene visibility](scene.md#visibility) for behavior and update costs.
 
 ### Batches
 

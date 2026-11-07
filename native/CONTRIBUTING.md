@@ -310,7 +310,7 @@ updated.
 
 ### Shared source and typed resources
 
-Production rendering accepts only version-4 raw descriptors. The
+Production rendering accepts only version-5 raw descriptors. The
 validation-only Web oracle records writes through
 `validation/resource-recorder.mjs`; production never reads those captures.
 
