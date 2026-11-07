@@ -54,6 +54,9 @@ These edits commit incrementally:
   batch's instance matrices in one update; existing instance colors. Commit
   multiple matrix edits together to reduce update cost.
 - Mesh visibility, including an entire instance batch; see [visibility](#visibility).
+- Adding or removing meshes that reuse resident geometry and materials, while
+  the retained TLAS capacity is sufficient. Removing a mesh does not evict its
+  geometry; a later full preparation may reclaim it.
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
@@ -61,23 +64,26 @@ These edits commit incrementally:
   switching emission on or off is incremental.
 - Texture sampling parameters and pixels, including environment and background
   map pixels and sizes, while the texture atlas still fits.
+- Changing a material texture reference when the destination is already in the
+  retained atlas and the committed shader supports it.
 - Adding, removing and changing lights; background color; environment/background
   strength and rotation.
 
 These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):
 
-- Adding, removing or changing a material's texture references, UV projection
-  settings or displacement settings.
+- Texture-reference changes that need an atlas resize or new shader support;
+  UV projection or displacement-reference changes.
 - Parameter edits that require new shader support or change transparency, medium,
   dispersion or traversal requirements. For example, the first use of coat/fuzz,
   thin film or subsurface may need full preparation; later compatible weight and
   color edits are incremental.
 - Changes to a texture used as a displacement map.
 - Changed triangle indices, vertex or index counts, or UVs.
-- Adding, removing or reordering mesh references; changed instance counts or
-  presence of instance colors; changes to more than 64 and more than half of a
-  batch's instance matrices in one update.
+- Mesh additions that introduce geometry or materials; membership changes that
+  exceed the retained TLAS capacity; changed instance counts or presence of
+  instance colors; changes to more than 64 and more than half of a batch's
+  instance matrices in one update.
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
 
@@ -107,7 +113,8 @@ Geometry and materials remain resident, so showing the mesh
 again does not prepare them again. Toggling visibility commits incrementally
 unless other edits in the same update require full preparation. Every commit
 restarts accumulation. Use `remove_mesh` / `mt_scene_remove_mesh` when the mesh
-is no longer needed; adding or removing a mesh still requires full preparation.
+is no longer needed; removal keeps its geometry resident until a later full
+preparation.
 
 ## Pick scene objects
 

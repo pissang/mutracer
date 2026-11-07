@@ -65,6 +65,10 @@ primvars, texture-value scale/bias, border wrapping, other color spaces and
 arbitrary procedural graphs are unsupported.
 Texture references remain cached for the delegate's lifetime; repeated swaps
 can increase memory use. Filters use the SDK's texture filtering.
+Changing a connection to an already retained texture is incremental when its
+atlas placement and shader support remain compatible; otherwise the SDK prepares
+the scene again. Rprim insertion and removal likewise reuse resident geometry
+and materials until retained TLAS capacity is exceeded.
 
 UsdPreviewSurface is an approximation of the native glTF material mapping:
 
