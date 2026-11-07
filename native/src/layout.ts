@@ -107,7 +107,8 @@ export const TEXTURE = {
   "UV_OFFSET": 8,
   "WRAP_S": 10,
   "WRAP_T": 11,
-  "WORDS": 12
+  "UDIM": 12,
+  "WORDS": 13
 } as const;
 export const LIGHT = {
   "TYPE": 0,

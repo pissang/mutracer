@@ -256,9 +256,10 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     crate::memory_budget::check(bytes.len(), "Scene descriptor")?;
     let w = Words(bytes);
     let version = w.u(h::VERSION);
-    if !matches!(version, 5 | 6) || w.u(h::LENGTH) != w.len() {
+    if !matches!(version, 5..=7) || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
+    let texture_words = if version >= 7 { t::WORDS } else { t::WORDS - 1 };
     if !crate::image_limits::valid([w.u(h::WIDTH) as u32, w.u(h::HEIGHT) as u32]) {
         return Err("Scene image dimensions exceed probe limits".into());
     }
@@ -277,7 +278,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         (h::GEOMETRY_COUNT, h::GEOMETRY_OFFSET, g::WORDS),
         (h::MESH_COUNT, h::MESH_OFFSET, m::WORDS),
         (h::MATERIAL_COUNT, h::MATERIAL_OFFSET, mat::WORDS),
-        (h::TEXTURE_COUNT, h::TEXTURE_OFFSET, t::WORDS),
+        (h::TEXTURE_COUNT, h::TEXTURE_OFFSET, texture_words),
     ] {
         w.span(w.u(offset), w.u(count) * stride)?;
     }
@@ -335,7 +336,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             return Err("Environment/background texture reference is out of range".into());
         }
         if reference != 0
-            && w.u(w.u(h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS + t::STORAGE) != 1
+            && w.u(w.u(h::TEXTURE_OFFSET) + (reference - 1) * texture_words + t::STORAGE) != 1
         {
             return Err("Environment/background requires linear RGBA32F".into());
         }
@@ -523,7 +524,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             return Err("Displacement projection scale exceeds the preparation limit".into());
         }
         let geo = w.u(h::GEOMETRY_OFFSET) + w.u(mesh + m::GEOMETRY) * g::WORDS;
-        let tex = w.u(h::TEXTURE_OFFSET) + texture * t::WORDS;
+        let tex = w.u(h::TEXTURE_OFFSET) + texture * texture_words;
         let width = w.u(tex + t::WIDTH);
         if width == 0 || !width.is_power_of_two() || width != w.u(tex + t::HEIGHT) {
             return Err("Displacement requires a square power-of-two texture".into());
@@ -552,7 +553,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     let mut pixels = 0u64;
     let mut image_spans = std::collections::HashSet::new();
     for i in 0..w.u(h::TEXTURE_COUNT) {
-        let o = w.u(h::TEXTURE_OFFSET) + i * t::WORDS;
+        let o = w.u(h::TEXTURE_OFFSET) + i * texture_words;
         let width = w.u(o + t::WIDTH);
         let height = w.u(o + t::HEIGHT);
         if width == 0
@@ -564,6 +565,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             || w.u(o + t::UV_CHANNEL) > 1
             || w.u(o + t::WRAP_S) > 2
             || w.u(o + t::WRAP_T) > 2
+            || version >= 7 && w.u(o + t::UDIM) > 1
+            || version >= 7 && w.u(o + t::UDIM) == 1 && (width % 10 != 0 || height % 10 != 0)
         {
             return Err("Invalid raw texture descriptor".into());
         }
@@ -2704,6 +2707,36 @@ pub(crate) mod tests {
         assert!(validate(&cylinder).is_err());
     }
     #[test]
+    fn pre_udim_texture_records_remain_accepted() {
+        // Versions 5 and 6 use 12-word texture records without the UDIM word.
+        // Neither descriptor has lights, so the v5 light stride does not apply.
+        for version in [5, 6] {
+        let offset = input().len() / 4;
+        let record = vec![
+            1,
+            1,
+            0,
+            (offset + 12) as u32,
+            0,
+            0,
+            1f32.to_bits(),
+            1f32.to_bits(),
+            0,
+            0,
+            0,
+            0,
+        ];
+        let mut bytes = extend(input(), &record);
+        bytes = extend(bytes, &[u32::MAX]);
+        bytes = change(
+            &change(&change(&bytes, h::VERSION, version), h::TEXTURE_COUNT, 1),
+            h::TEXTURE_OFFSET,
+            offset as u32,
+        );
+        assert!(validate(&bytes).is_ok(), "version {version}");
+        }
+    }
+    #[test]
     fn bad_spans_references_numbers_and_unknown_fields_are_recoverable() {
         let bytes = input();
         for (word, value) in [
@@ -2767,7 +2800,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn texture_wrap_modes_accept_zero_defaults_and_reject_unknown_values() {
-        let bytes = input();
+        let bytes = change(&input(), h::VERSION, crate::layout::version::SCENE as u32);
         let offset = bytes.len() / 4;
         let record = [
             1,
@@ -2782,10 +2815,10 @@ pub(crate) mod tests {
             0,
             0,
             0,
-            0xffffffff,
+            0,
         ];
         let bytes = change(
-            &change(&extend(bytes, &record), h::TEXTURE_COUNT, 1),
+            &change(&extend(extend(bytes, &record), &[u32::MAX]), h::TEXTURE_COUNT, 1),
             h::TEXTURE_OFFSET,
             offset as u32,
         );

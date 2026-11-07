@@ -28,7 +28,7 @@ export function sceneRecords() { return {
     field('THIN_WALLED'), field('MAP'), field('NORMAL_MAP'), field('METALLIC_ROUGHNESS_MAP'), field('EMISSIVE_MAP'),
     field('EXTENSION_COUNT'), field('EXTENSION_OFFSET'), field('RESERVED', 3)]),
   TEXTURE: record([field('WIDTH'), field('HEIGHT'), field('STORAGE'), field('PIXELS'), field('FLIP_Y'), field('UV_CHANNEL'),
-    field('UV_SCALE', 2), field('UV_OFFSET', 2), field('WRAP_S'), field('WRAP_T')]),
+    field('UV_SCALE', 2), field('UV_OFFSET', 2), field('WRAP_S'), field('WRAP_T'), field('UDIM')]),
   LIGHT: record([field('TYPE'), field('COLOR', 3), field('INTENSITY'), field('SIZE'), field('HEIGHT_OR_INNER'),
     field('SPREAD_OR_OUTER'), field('TEXTURE'), field('IES_OFFSET'), field('IES_BYTES'), field('RESERVED'), field('TRANSFORM', 16),
     field('RADIUS'), field('LENGTH'), field('NORMALIZE'), field('TREAT_AS_LINE')]),

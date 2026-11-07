@@ -31,7 +31,7 @@ export default class TextureState {
   colorSpace?: TextureColorSpace;
   /** Geometry UV set used by this texture (Three.js Texture.channel). Default `0`. */
   uvChannel: 0 | 1 = 0;
-  constructor(image: TextureImageSize) { this.image = image; }
+  constructor(image: TextureImageSize, udim = false) { this.image = image; if (udim) this.udim = true; }
 
   /**
    * Call after editing image pixels or UV array elements in place. Increments

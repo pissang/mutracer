@@ -8,7 +8,7 @@ import {materialNeedsVertexTangents} from '../../src/renderer/tangentRequirement
 // classifies the edits exactly as engine.update() does.
 import {SceneChangeTracker, type SceneSnapshotAdapter, type SceneChangeSet} from '../../src/renderer/sceneChangeCore.js';
 import {NativeMaterialSnapshot, captureNativeMaterial, nativeMaterialMatches, syncNativeMaterial} from './material-snapshot.generated.js';
-import {decodeTexture, decodeMaterial, decodeMeshMaterials, decodeInstances, decodeLight} from './scene-records.js';
+import {decodeTexture, textureStride, decodeMaterial, decodeMeshMaterials, decodeInstances, decodeLight} from './scene-records.js';
 import {HEADER as H, TEXTURE as T, MATERIAL as MAT, GEOMETRY as G, MESH as M, BATCH as B, LIGHT as L, CAMERA as C, EXTENSION as E,
   VERSION} from './layout.js';
 import Geometry, {Attribute} from '../../src/scene/Geometry.js';
@@ -185,7 +185,7 @@ export class SyncedScene {
   sync(bytes: Uint8Array, owned = false, unchanged?: Uint8Array): NativeSceneChanges {
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-    if (u[H.VERSION] !== 5 && u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
+    if (u[H.VERSION] < 5 || u[H.VERSION] > VERSION.SCENE) throw new Error('Unsupported native scene version');
     const old = this.bytes, first = old.length === 0;
     const geometries = u[H.GEOMETRY_COUNT];
     const records = geometries + u[H.TEXTURE_COUNT], materials = u[H.MATERIAL_COUNT], meshes = u[H.MESH_COUNT];
@@ -234,14 +234,16 @@ export class SyncedScene {
     unchanged: Uint8Array | undefined, hintOffset: number): Set<number> {
     const replaced = new Set<number>(), count = u[H.TEXTURE_COUNT];
     const images = new Map<string, TextureDataSource>();
+    const stride = textureStride(u[H.VERSION]), oldStride = old.length ? textureStride(old[H.VERSION]) : stride;
     for (let i = 0; i < count; i++) {
       if (unchanged && unchanged[hintOffset + i]) continue;
-      const off = u[H.TEXTURE_OFFSET] + i * T.WORDS;
+      const off = u[H.TEXTURE_OFFSET] + i * stride;
       const pixels = u[off + T.WIDTH] * u[off + T.HEIGHT] * (u[off + T.STORAGE] === 0 ? 1 : 4);
-      if (first || i >= old[H.TEXTURE_COUNT]) { this.textures[i] = decodeTexture(bytes, u, f, off, images); replaced.add(i); continue; }
-      const prior = old[H.TEXTURE_OFFSET] + i * T.WORDS;
-      if (old[prior + T.PIXELS] === u[off + T.PIXELS] && sameRecord(old, prior, u, off, T.WORDS, [T.PIXELS], [pixels])) continue;
-      const texture = this.textures[i], fresh = decodeTexture(bytes, u, f, off, images);
+      if (first || i >= old[H.TEXTURE_COUNT]) { this.textures[i] = decodeTexture(bytes, u, f, off, images, u[H.VERSION] >= 7); replaced.add(i); continue; }
+      const prior = old[H.TEXTURE_OFFSET] + i * oldStride;
+      if (old[H.VERSION] !== u[H.VERSION]) { this.textures[i] = decodeTexture(bytes, u, f, off, images, u[H.VERSION] >= 7); replaced.add(i); continue; }
+      if (old[prior + T.PIXELS] === u[off + T.PIXELS] && sameRecord(old, prior, u, off, stride, [T.PIXELS], [pixels])) continue;
+      const texture = this.textures[i], fresh = decodeTexture(bytes, u, f, off, images, u[H.VERSION] >= 7);
       const sameShape = old[prior + T.WIDTH] === u[off + T.WIDTH] && old[prior + T.HEIGHT] === u[off + T.HEIGHT] &&
         old[prior + T.STORAGE] === u[off + T.STORAGE];
       if (!sameShape || old[prior + T.PIXELS] !== u[off + T.PIXELS] ||

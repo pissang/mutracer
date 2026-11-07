@@ -24,13 +24,13 @@ import {vec3} from '../../src/math.js';
 import {markDeformedGeometry} from '../../src/scene/geometryChanges.js';
 import {sameInstanceMembership} from '../../src/renderer/packedMeshInstances.js';
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
-import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, SETTINGS as S, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
+import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, LIGHT as L, CAMERA as C, BATCH as B, SETTINGS as S, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import {nativeFrameInputHooks} from './frame-inputs.wgsl.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
 import {releaseNativeScene} from './scene-sync.js';
-import {decodeTexture, decodeMaterial, decodeGeometry, decodeMeshMaterials, decodeInstances, decodeLight, lightFromRecord} from './scene-records.js';
+import {decodeTexture, textureStride, decodeMaterial, decodeGeometry, decodeMeshMaterials, decodeInstances, decodeLight, lightFromRecord} from './scene-records.js';
 import { envMapDistribution } from '../../src/renderer/envMapDistribution.js';
 import Geometry, { Attribute } from '../../src/scene/Geometry.js';
 import {computeGeometryBounds} from '../../src/renderer/geometryBvhBounds.js';
@@ -383,13 +383,13 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const kernelHints = takeGeometryKernelHints(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  if (u[H.VERSION] !== 5 && u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
+  if (u[H.VERSION] < 5 || u[H.VERSION] > VERSION.SCENE) throw new Error('Unsupported native scene version');
   const width = u[H.WIDTH], height = u[H.HEIGHT];
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
   const images = new Map<string, TextureDataSource>();
   for (let i = 0; i < u[H.TEXTURE_COUNT]; i++) {
-    const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS, images);
+    const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * textureStride(u[H.VERSION]), images, u[H.VERSION] >= 7);
     textures.push(texture); textureIds.set(texture, i);
   }
   const grounded = u[H.GROUNDED_BACKGROUND] ? f.slice(u[H.GROUNDED_BACKGROUND], u[H.GROUNDED_BACKGROUND] + 6) : new Float32Array(6);
@@ -1221,7 +1221,7 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     const oldSources = new Map<object, number>(), newSources = new Map<object, number>();
     for (let i = 0; i < previous.length; i++) {
       const old = previous[i];
-      let fresh = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS, images);
+      let fresh = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * textureStride(u[H.VERSION]), images, u[H.VERSION] >= 7);
       if (old instanceof PixelTexture) {
         if (!oldSources.has(old.pixels)) oldSources.set(old.pixels, i);
         if (!newSources.has(fresh.pixels)) newSources.set(fresh.pixels, i);

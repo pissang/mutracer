@@ -56,6 +56,18 @@ pub struct TextureDesc {
     offset: [f32; 2],
     pixels: *const c_void,
     pixel_bytes: usize,
+    tiles: *const TextureTileDesc,
+    tile_count: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TextureTileDesc {
+    udim: u32,
+    storage: u32,
+    width: u32,
+    height: u32,
+    pixels: *const c_void,
+    pixel_bytes: usize,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -205,7 +217,7 @@ mod picking;
 defaults! {
  mt_scene_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
  mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.,normal_scale:1.,unlit:0,reserved:0};
- mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0};
+ mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0,tiles:std::ptr::null(),tile_count:0};
  mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,flags:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
  mt_scene_instances_desc_default,InstancesDesc,InstancesDesc{struct_size:size_of::<InstancesDesc>() as u32,count:0,transforms:std::ptr::null(),colors:std::ptr::null()};
  mt_scene_light_desc_default,LightDesc,LightDesc{struct_size:size_of::<LightDesc>() as u32,kind:0,color:[1.;3],intensity:1.,size:1.,height:1.,spread:1.,reserved:0,world_matrix:Mat4::IDENTITY.to_cols_array(),texture:0,ies:std::ptr::null(),ies_bytes:0,radius:0.,length:0.,normalize:0,treat_as_line:0};
@@ -266,6 +278,131 @@ unsafe fn geometry(p: *const GeometryDesc) -> Result<Geometry> {
 }
 unsafe fn texture(p: *const TextureDesc) -> Result<Texture> {
     let d = unsafe { record(p) }?;
+    if d.storage > 1
+        || d.uv_channel > 1
+        || d.flip_y > 1
+        || d.wrap_s > 2
+        || d.wrap_t > 2
+        || d.tile_count > 100
+        || (d.tile_count > 0
+            && (d.tiles.is_null()
+                || d.width != 0
+                || d.height != 0
+                || d.pixel_bytes != 0
+                || !d.pixels.is_null()))
+    {
+        return Err(invalid("Invalid UDIM texture descriptor"));
+    }
+    if d.tile_count > 0 {
+        let tiles = unsafe { input(d.tiles, d.tile_count)? };
+        let mut seen = std::collections::HashSet::new();
+        let mut max_width = 0u32;
+        let mut max_height = 0u32;
+        let storage = tiles
+            .first()
+            .ok_or_else(|| invalid("UDIM requires at least one tile"))?
+            .storage;
+        for tile in tiles {
+            let count = u64::from(tile.width) * u64::from(tile.height);
+            if !(1001..=1100).contains(&tile.udim)
+                || !seen.insert(tile.udim)
+                || tile.width == 0
+                || tile.height == 0
+                || tile.width > 16384
+                || tile.height > 16384
+                || count > 67_108_864
+                || tile.storage > 1
+                || tile.pixel_bytes as u64 != count * if tile.storage == 0 { 4 } else { 16 }
+                || tile.storage != storage
+            {
+                return Err(invalid(
+                    "UDIM tiles must use one pixel format (RGBA8 sRGB or RGBA32F linear)",
+                ));
+            }
+            max_width = max_width.max(tile.width);
+            max_height = max_height.max(tile.height);
+        }
+        let width = max_width
+            .checked_mul(10)
+            .ok_or_else(|| invalid("UDIM dimensions overflow"))?;
+        let height = max_height
+            .checked_mul(10)
+            .ok_or_else(|| invalid("UDIM dimensions overflow"))?;
+        if width > 16384 || height > 16384 {
+            return Err(invalid("UDIM atlas dimensions exceed 16384 pixels"));
+        }
+        let count = width as usize * height as usize * 4;
+        if width as u64 * height as u64 > 67_108_864 {
+            return Err(invalid("UDIM atlas exceeds the texture pixel budget"));
+        }
+        let pixels = if storage == 1 {
+            let mut output = vec![0f32; count];
+            for tile in tiles {
+                let source_bytes = unsafe { input(tile.pixels.cast::<u8>(), tile.pixel_bytes)? };
+                let source_floats: Vec<f32> = bytemuck::pod_collect_to_vec::<u8, f32>(source_bytes);
+                let number = tile.udim - 1001;
+                for y in 0..max_height {
+                    let sy = (((y as f64 + 0.5) * tile.height as f64 / max_height as f64).floor()
+                        as u32)
+                        .min(tile.height - 1);
+                    for x in 0..max_width {
+                        let sx = (((x as f64 + 0.5) * tile.width as f64 / max_width as f64).floor()
+                            as u32)
+                            .min(tile.width - 1);
+                        let from = ((sy * tile.width + sx) * 4) as usize;
+                        let to =
+                            (((number / 10 * max_height + y) * width + number % 10 * max_width + x)
+                                * 4) as usize;
+                        output[to..to + 4].copy_from_slice(&source_floats[from..from + 4]);
+                    }
+                }
+            }
+            Texture {
+                pixels: TexturePixels::Rgba32F(output.into()),
+                width,
+                height,
+                uv: d.uv_channel,
+                scale: d.scale,
+                offset: d.offset,
+                wrap: [d.wrap_s, d.wrap_t],
+                flip_y: d.flip_y != 0,
+                udim: true,
+            }
+        } else {
+            let mut output = vec![0u8; count];
+            for tile in tiles {
+                let source = unsafe { input(tile.pixels.cast::<u8>(), tile.pixel_bytes)? };
+                let number = tile.udim - 1001;
+                for y in 0..max_height {
+                    let sy = (((y as f64 + 0.5) * tile.height as f64 / max_height as f64).floor()
+                        as u32)
+                        .min(tile.height - 1);
+                    for x in 0..max_width {
+                        let sx = (((x as f64 + 0.5) * tile.width as f64 / max_width as f64).floor()
+                            as u32)
+                            .min(tile.width - 1);
+                        let from = ((sy * tile.width + sx) * 4) as usize;
+                        let to =
+                            (((number / 10 * max_height + y) * width + number % 10 * max_width + x)
+                                * 4) as usize;
+                        output[to..to + 4].copy_from_slice(&source[from..from + 4]);
+                    }
+                }
+            }
+            Texture {
+                pixels: TexturePixels::Rgba8(output.into()),
+                width,
+                height,
+                uv: d.uv_channel,
+                scale: d.scale,
+                offset: d.offset,
+                wrap: [d.wrap_s, d.wrap_t],
+                flip_y: d.flip_y != 0,
+                udim: true,
+            }
+        };
+        return Ok(pixels);
+    }
     let pixel_count = u64::from(d.width) * u64::from(d.height);
     if pixel_count > 67_108_864
         || d.width > 16384
@@ -294,6 +431,7 @@ unsafe fn texture(p: *const TextureDesc) -> Result<Texture> {
         offset: d.offset,
         wrap: [d.wrap_s, d.wrap_t],
         flip_y: d.flip_y != 0,
+        udim: false,
     })
 }
 unsafe fn mesh(e: &Entry, p: *const MeshDesc) -> Result<Mesh> {
@@ -1070,6 +1208,104 @@ pub unsafe extern "C" fn mt_scene_find(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn udim_tiles_validate_and_resample_to_sparse_logical_grid() {
+        let rgba8 = [255u8, 64, 0, 255, 0, 128, 255, 255];
+        let rgba32 = [0.25f32, 0.5, 0.75, 1.0];
+        let rgba8_b = [128u8, 64, 255, 255];
+        let tiles = [
+            TextureTileDesc {
+                udim: 1001,
+                storage: 0,
+                width: 2,
+                height: 1,
+                pixels: rgba8.as_ptr().cast(),
+                pixel_bytes: rgba8.len(),
+            },
+            TextureTileDesc {
+                udim: 1002,
+                storage: 0,
+                width: 1,
+                height: 1,
+                pixels: rgba8_b.as_ptr().cast(),
+                pixel_bytes: rgba8_b.len(),
+            },
+        ];
+        let mut desc = TextureDesc {
+            struct_size: size_of::<TextureDesc>() as u32,
+            storage: 0,
+            width: 0,
+            height: 0,
+            uv_channel: 1,
+            flip_y: 1,
+            wrap_s: 0,
+            wrap_t: 0,
+            scale: [1.; 2],
+            offset: [0.; 2],
+            pixels: std::ptr::null(),
+            pixel_bytes: 0,
+            tiles: tiles.as_ptr(),
+            tile_count: tiles.len(),
+        };
+        let image = unsafe { texture(&desc) }.unwrap();
+        assert!(image.udim);
+        assert_eq!((image.width, image.height, image.uv), (20, 10, 1));
+        assert!(image.flip_y);
+        let TexturePixels::Rgba8(pixels) = image.pixels else {
+            panic!("same-format byte tiles remain sRGB byte storage")
+        };
+        assert_eq!(&pixels[0..4], &[255, 64, 0, 255]);
+        assert_eq!(&pixels[8..12], &[128, 64, 255, 255]);
+        assert!(pixels[16..20].iter().all(|v| *v == 0)); // Missing cell is transparent black.
+
+        let duplicate = [tiles[0], tiles[0]];
+        desc.tiles = duplicate.as_ptr();
+        desc.tile_count = duplicate.len();
+        assert!(unsafe { texture(&desc) }.is_err());
+        let invalid = [TextureTileDesc {
+            udim: 1101,
+            ..tiles[0]
+        }];
+        desc.tiles = invalid.as_ptr();
+        desc.tile_count = invalid.len();
+        assert!(unsafe { texture(&desc) }.is_err());
+        desc.tiles = tiles.as_ptr();
+        desc.tile_count = tiles.len();
+        desc.width = 1;
+        assert!(unsafe { texture(&desc) }.is_err());
+
+        let mixed = [
+            tiles[0],
+            TextureTileDesc {
+                udim: 1002,
+                storage: 1,
+                width: 1,
+                height: 1,
+                pixels: rgba32.as_ptr().cast(),
+                pixel_bytes: std::mem::size_of_val(&rgba32),
+            },
+        ];
+        desc.width = 0;
+        desc.tiles = mixed.as_ptr();
+        desc.tile_count = mixed.len();
+        assert!(unsafe { texture(&desc) }.is_err());
+
+        let floats = [TextureTileDesc {
+            udim: 1001,
+            storage: 1,
+            width: 1,
+            height: 1,
+            pixels: rgba32.as_ptr().cast(),
+            pixel_bytes: std::mem::size_of_val(&rgba32),
+        }];
+        desc.tiles = floats.as_ptr();
+        desc.tile_count = floats.len();
+        let float_image = unsafe { texture(&desc) }.unwrap();
+        let TexturePixels::Rgba32F(float_pixels) = float_image.pixels else {
+            panic!("same-format float tiles remain linear float storage")
+        };
+        assert_eq!(&float_pixels[0..4], &[0.25, 0.5, 0.75, 1.]);
+    }
     #[test]
     fn failed_scene_rejects_use_and_remains_destroyable() {
         let mut s = 0;

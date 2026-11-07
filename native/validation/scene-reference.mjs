@@ -13,11 +13,12 @@ export async function referenceScene(bytes, sourceRoot) {
     ].map(load));
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const textureWords = u[0] >= 7 ? 13 : 12;
     const {parseIESProfile} = await load('scene/IESProfile.js');
     const profiles = new Map();
     const textures = [], materials = [], geometries = [], meshes = [], lights = [];
     for (let i = 0; i < u[8]; i++) {
-        const o = u[13] + i * 12, w = u[o], h = u[o + 1], p = u[o + 3];
+        const o = u[13] + i * textureWords, w = u[o], h = u[o + 1], p = u[o + 3];
         const texture = new Texture({ width: w, height: h, data: u[o + 2] === 0
                 ? new Uint8Array(bytes.buffer, bytes.byteOffset + p * 4, w * h * 4).slice() : f.slice(p, p + w * h * 4) });
         texture.flipY = !!u[o + 4];

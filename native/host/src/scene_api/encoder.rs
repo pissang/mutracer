@@ -18,6 +18,7 @@ pub struct Texture {
     pub scale: [f32; 2],
     pub offset: [f32; 2],
     pub wrap: [u32; 2],
+    pub udim: bool,
 }
 // Allocation identity, never sampler identity or a full-image content hash.
 fn pixel_key(t: &Texture) -> (usize, usize, u32) {
@@ -250,6 +251,7 @@ impl SceneData<'_> {
             let o = w.0[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
             w.0[o + tex::WIDTH] = t.width;
             w.0[o + tex::HEIGHT] = t.height;
+            w.0[o + tex::UDIM] = u32::from(t.udim);
             w.0[o + tex::STORAGE] = t.storage;
             w.0[o + tex::FLIP_Y] = u32::from(t.flip_y);
             w.0[o + tex::PIXELS] = *pixels.entry(pixel_key(t)).or_insert_with(|| {
@@ -846,6 +848,7 @@ mod texture_reuse_tests {
             scale: [1.; 2],
             offset: [0.; 2],
             wrap: [0; 2],
+            udim: false,
         }
     }
     fn data(textures: &[Texture]) -> SceneData<'_> {

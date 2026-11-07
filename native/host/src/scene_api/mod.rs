@@ -223,6 +223,8 @@ pub struct Texture {
     /// S and T wrap modes: 0 repeat, 1 clamp to edge, 2 mirrored repeat.
     pub wrap: [u32; 2],
     pub flip_y: bool,
+    /// True when pixels contain a sparse 10×10 UDIM tile grid.
+    pub udim: bool,
 }
 /// Row-major RGBA pixel storage.
 #[derive(Clone)]
@@ -244,6 +246,7 @@ impl Texture {
             offset: [0.; 2],
             wrap: [0; 2],
             flip_y: false,
+            udim: false,
         }
     }
 }
@@ -878,6 +881,7 @@ impl Scene {
                 scale: t.scale,
                 offset: t.offset,
                 wrap: t.wrap,
+                udim: t.udim,
             });
         }
         for (_, material) in self.materials.iter() {

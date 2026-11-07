@@ -53,13 +53,31 @@ typedef struct mt_scene_material_desc {
  * metalness/transmission 0, solid, single-sided, lit. Other OpenPBR values use
  * native defaults. Use property setters for layers and map setters for textures. */
 MT_SCENE_API_LAYOUT(mt_scene_material_desc, 80);
+typedef struct mt_scene_texture_tile {
+  uint32_t udim; /* Unique tile number, 1001–1100. */
+  uint32_t storage; /* 0 = RGBA8 (sRGB color slots, linear data slots); 1 = RGBA32F linear. */
+  uint32_t width, height; /* Positive; row-major RGBA, dimensions may differ by tile. */
+  const void *pixels; /* width × height × 4 components. */
+  size_t pixel_bytes; /* Exact byte count: 4 or 16 bytes per pixel. */
+} mt_scene_texture_tile; /* A loaded tile. A descriptor accepts at most 100 unique tiles. */
+MT_SCENE_API_LAYOUT(mt_scene_texture_tile, 16 + 2 * sizeof(void *));
 typedef struct mt_scene_texture_desc {
   uint32_t struct_size, storage, width, height, uv_channel, flip_y, wrap_s, wrap_t;
   float scale[2], offset[2];
   const void *pixels; size_t pixel_bytes;
+  const mt_scene_texture_tile *tiles; size_t tile_count;
 } mt_scene_texture_desc; /* Default empty RGBA8 sRGB, UV0, no flip, repeat,
- * scale (1,1), offset (0,0). RGBA32F is linear. Row-major RGBA, exact byte count. */
-MT_SCENE_API_LAYOUT(mt_scene_texture_desc, 48 + 2 * sizeof(void *));
+ * scale (1,1), offset (0,0). RGBA8 color slots are sRGB; data slots are linear.
+ * RGBA32F is linear. Row-major RGBA, exact byte count.
+ * For UDIM, set tiles/count (1–100) and leave width/height/pixels empty.
+ * Common UV settings above apply to all tiles. The maximum tile width and
+ * height set the common dimensions. The 10×10 sparse grid must fit 16384 pixels
+ * per side and 67,108,864 pixels total. Every tile must use the same storage
+ * format: RGBA8 or RGBA32F linear. Mixed formats return INVALID_ARGUMENT;
+ * color/data map slots retain their usual per-slot interpretation. Tiles are
+ * resampled to the common dimensions with nearest-neighbor filtering; missing
+ * cells are transparent black. */
+MT_SCENE_API_LAYOUT(mt_scene_texture_desc, 48 + 4 * sizeof(void *));
 #define MT_SCENE_MESH_HIDDEN 1u
 typedef struct mt_scene_mesh_desc {
   uint32_t struct_size, flags; /* Default 0: visible; only MT_SCENE_MESH_HIDDEN is supported. */

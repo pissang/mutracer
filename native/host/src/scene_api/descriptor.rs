@@ -72,6 +72,7 @@ impl Scene {
                 offset: t.offset,
                 wrap: t.wrap,
                 flip_y: t.flip_y,
+                udim: t.udim,
             })?);
         }
         let mut materials = Vec::new();

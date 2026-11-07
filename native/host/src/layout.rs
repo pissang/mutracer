@@ -107,7 +107,8 @@ pub mod texture {
     pub const UV_OFFSET: usize = 8;
     pub const WRAP_S: usize = 10;
     pub const WRAP_T: usize = 11;
-    pub const WORDS: usize = 12;
+    pub const UDIM: usize = 12;
+    pub const WORDS: usize = 13;
 }
 pub mod light {
     pub const TYPE: usize = 0;

@@ -89,6 +89,7 @@ typedef struct mt_texture_v4 {
   uint32_t flip_y, uv_channel; /* 0 or 1. */
   float uv_scale[2], uv_offset[2];
   uint32_t wrap_s, wrap_t; /* MT_TEXTURE_WRAP_*, independently per axis; default repeat. */
+  uint32_t udim; /* v7: 0 ordinary image, 1 sparse 10×10 tile grid. */
 } mt_texture_v4;
 
 typedef struct mt_light_v4 {

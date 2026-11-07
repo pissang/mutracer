@@ -673,6 +673,7 @@ mod descriptor_tests {
             scale: [1.; 2],
             offset: [0.; 2],
             wrap: [0; 2],
+            udim: false,
         }]);
         s.model.0.materials[0].maps = [u32::MAX; 9];
         s.model.0.materials[0].maps[0] = 0;
@@ -861,6 +862,7 @@ mod descriptor_tests {
             scale: [1.; 2],
             offset: [0.; 2],
             wrap: [0; 2],
+            udim: false,
         });
         s.check();
         let allocation = s.check();

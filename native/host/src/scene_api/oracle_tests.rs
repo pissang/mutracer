@@ -1,4 +1,4 @@
-//! Independent descriptor builder oracle for every v5 record kind. This uses the
+//! Independent descriptor builder oracle for every v7 record kind. This uses the
 //! public format, not the production encoder's record writers or allocation code.
 use super::*;
 use crate::layout::{batch as b, geometry as g, material as mat, texture as t};
@@ -85,7 +85,7 @@ fn default_material(w: &mut Vec<u32>, o: usize) {
     w[o + mat::EXTENSION_OFFSET] = append(w, &ext);
 }
 #[test]
-fn every_record_matches_an_independent_v6_builder() {
+fn every_record_matches_an_independent_v7_builder() {
     let mut s = Scene::new();
     let mut geo = Geometry::new(vec![-1., 0., 0., 1., 0., 0., 0., 1., 0.], vec![0, 1, 2]);
     geo.normals = vec![0., 0., 1.].repeat(3).into();
@@ -183,7 +183,7 @@ fn every_record_matches_an_independent_v6_builder() {
     let to = mao + 2 * mat::WORDS;
     let lo = to + 3 * t::WORDS;
     for (k, v) in [
-        (h::VERSION, 6),
+        (h::VERSION, crate::layout::version::SCENE as u32),
         (h::WIDTH, 1),
         (h::HEIGHT, 1),
         (h::GEOMETRY_COUNT, 1),

@@ -17,7 +17,9 @@ import CylinderLight from '../../src/scene/CylinderLight.js';
 
 const NONE = 0xffffffff;
 
-export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array, off: number, images?: Map<string, TextureDataSource>): PixelTexture {
+export function textureStride(version: number): number { return version >= 7 ? T.WORDS : T.WORDS - 1; }
+
+export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array, off: number, images?: Map<string, TextureDataSource>, hasUdim = true): PixelTexture {
   const key = `${u[off + T.PIXELS]}:${u[off + T.WIDTH]}:${u[off + T.HEIGHT]}:${u[off + T.STORAGE]}`;
   let image = images?.get(key);
   if (!image) {
@@ -27,7 +29,7 @@ export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array
     image = {width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data};
     images?.set(key, image);
   }
-  const texture = new PixelTexture(image);
+  const texture = new PixelTexture(image, hasUdim && u[off + T.UDIM] !== 0);
   texture.flipY = !!u[off + T.FLIP_Y]; texture.uvChannel = u[off + T.UV_CHANNEL] === 1 ? 1 : 0;
   texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
   texture.wrapS = u[off + T.WRAP_S] === 1 ? 'clamp-to-edge' : u[off + T.WRAP_S] === 2 ? 'mirrored-repeat' : 'repeat';
