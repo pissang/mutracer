@@ -1690,7 +1690,11 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             if limit > data.len() {
                 return Err("Invalid geometry BLAS offset".into());
             }
-            let mut stack = if limit == 0 { vec![] } else { vec![0usize] };
+            let mut stack = if limit == 0 || layout.is_empty {
+                vec![]
+            } else {
+                vec![0usize]
+            };
             let mut visited = 0;
             let bvh = Words(data);
             while let Some(node) = stack.pop() {

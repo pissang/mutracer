@@ -1108,3 +1108,205 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
         }
     }
 }
+
+/// Full preparation with hidden mesh records physically removed. Retains stable
+/// ID tables and all resource records, exactly as Scene::remove_mesh does.
+fn removed_hidden_descriptor(bytes: &[u8]) -> Vec<u8> {
+    use crate::layout::{batch as b, mesh as m};
+    let mut words = bytemuck::pod_collect_to_vec::<u8, u32>(bytes);
+    let original = words.clone();
+    let count = words[h::MESH_COUNT] as usize;
+    let mo = words[h::MESH_OFFSET] as usize;
+    let bo = words[h::BATCH_OFFSET] as usize;
+    let ids = words[h::MESH_AOV_IDS] as usize;
+    let mut next = 0;
+    for i in 0..count {
+        if original[mo + i * m::WORDS + m::FLAGS] != 0 {
+            continue;
+        }
+        words[mo + next * m::WORDS..mo + (next + 1) * m::WORDS]
+            .copy_from_slice(&original[mo + i * m::WORDS..mo + (i + 1) * m::WORDS]);
+        if bo != 0 {
+            words[bo + next * b::WORDS..bo + (next + 1) * b::WORDS]
+                .copy_from_slice(&original[bo + i * b::WORDS..bo + (i + 1) * b::WORDS]);
+        }
+        if ids != 0 {
+            words[ids + next] = original[ids + i];
+        }
+        next += 1;
+    }
+    if next == 0 {
+        // The native descriptor requires a mesh record. An empty instance batch
+        // is the full-preparation representation of a scene with no surfaces.
+        assert_ne!(bo, 0);
+        words[mo + m::FLAGS] = 0;
+        words[bo..bo + b::WORDS].fill(0);
+        next = 1;
+    }
+    words[h::MESH_COUNT] = next as u32;
+    bytemuck::cast_slice(&words).to_vec()
+}
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn visibility_matches_removed_full_preparation_on_both_backends() {
+    crate::logging::stderr();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut s = Scene::new();
+        let geometry = s
+            .add_geometry(Geometry::new(
+                vec![-0.4, -0.4, 0., 0.4, -0.4, 0., 0., 0.4, 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let mat = s.add_material(OpenPbrMaterial::default()).unwrap();
+        let mut light = OpenPbrMaterial::default();
+        light.values.emission_strength = 2.;
+        let emitter = s.add_material(light).unwrap();
+        let mut meshes = Vec::new();
+        for i in 0..4 {
+            let mut m = Mesh::new(geometry, if i == 1 { emitter } else { mat });
+            m.transform =
+                Mat4::from_translation(Vec3::new((i as f32 - 1.5) * 0.5, 0., i as f32 * -0.1));
+            if i == 2 {
+                m.instances = Some(Instances {
+                    transforms: vec![Mat4::IDENTITY, Mat4::from_translation(Vec3::Y * 0.7)].into(),
+                    colors: None,
+                });
+            }
+            if i == 3 {
+                let mut g = Geometry::new(
+                    vec![
+                        -0.4, -0.4, 0., 0.4, -0.4, 0., 0., 0.4, 0., -0.4, 0.4, 0., 0.4, 0.4, 0.,
+                        0., 0.8, 0.,
+                    ],
+                    vec![0, 1, 2, 3, 4, 5],
+                );
+                g.material_indices = vec![0, 0, 0, 1, 1, 1].into();
+                m.geometry = s.add_geometry(g).unwrap();
+                m.materials = vec![mat, emitter];
+            }
+            meshes.push(s.add_mesh(m).unwrap());
+        }
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        s.set_default_camera(Some(camera));
+        s.add_light(Light::Directional {
+            color: [1.; 3],
+            intensity: 1.,
+            transform: Mat4::IDENTITY,
+        })
+        .unwrap();
+        let settings = RenderSettings {
+            max_samples: 8,
+            aovs: 32,
+            aov_samples: 1,
+            size: RenderSize::Fixed {
+                width: 48,
+                height: 40,
+            },
+            ..Default::default()
+        };
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&s).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        for step in 0..12 {
+            match step {
+                0..=3 => s.set_mesh_visible(meshes[step], false).unwrap(),
+                4..=7 => s.set_mesh_visible(meshes[step - 4], true).unwrap(),
+                8 => {
+                    s.set_mesh_visible(meshes[2], false).unwrap();
+                    s.mesh_mut(meshes[0]).unwrap().transform =
+                        Mat4::from_translation(Vec3::new(-0.6, 0.1, 0.));
+                    s.material_mut(mat).unwrap().values.color = [0.2, 0.5, 0.8];
+                }
+                9 => {
+                    s.mesh_mut(meshes[2]).unwrap().transform =
+                        Mat4::from_translation(Vec3::new(0.5, 0.1, 0.));
+                    s.material_mut(emitter).unwrap().values.emission_strength = 0.5;
+                }
+                10 => s.set_mesh_visible(meshes[2], true).unwrap(),
+                _ => {
+                    for &m in &meshes {
+                        s.set_mesh_visible(m, false).unwrap();
+                    }
+                }
+            }
+            engine.set_scene_object(&s).unwrap();
+            engine.update().unwrap();
+            render.converge(ConvergeOptions::new(8)).unwrap();
+            assert_eq!(
+                render.last_commit().unwrap(),
+                Some(CommitKind::Incremental),
+                "{backend:?} step {step}"
+            );
+            let full = Engine::new(EngineOptions { backend }).unwrap();
+            let reference = Render::new(&full, settings.clone()).unwrap();
+            full.set_scene(&removed_hidden_descriptor(&s.descriptor().unwrap()))
+                .unwrap();
+            full.update().unwrap();
+            reference.converge(ConvergeOptions::new(8)).unwrap();
+            for kind in [
+                PixelKind::Hdr,
+                PixelKind::Normal,
+                PixelKind::Albedo,
+                PixelKind::Id,
+            ] {
+                let a = render.read_pixels(kind).unwrap();
+                let b = reference.read_pixels(kind).unwrap();
+                if let Some(directory) = std::env::var_os("MUTRACER_TEST_CAPTURE") {
+                    let directory =
+                        std::path::PathBuf::from(directory).join(format!("{backend:?}-{step}"));
+                    std::fs::create_dir_all(&directory).unwrap();
+                    for (label, image) in [("hidden", &a), ("removed", &b)] {
+                        let bytes: &[u8] = if let Some(ids) = &image.id_data {
+                            bytemuck::cast_slice(ids)
+                        } else {
+                            bytemuck::cast_slice(&image.data)
+                        };
+                        std::fs::write(directory.join(format!("{label}-{kind:?}.bin")), bytes)
+                            .unwrap();
+                    }
+                }
+                assert_eq!(
+                    a.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    b.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    "{backend:?} step {step} {kind:?}"
+                );
+                assert_eq!(a.id_data, b.id_data, "{backend:?} step {step} ID");
+            }
+            for x in [6., 18., 30., 42.] {
+                assert_eq!(
+                    format!("{:?}", engine.pick_surface(x / 48., 0.5).unwrap()),
+                    format!("{:?}", full.pick_surface(x / 48., 0.5).unwrap()),
+                    "{backend:?} step {step} pick"
+                );
+            }
+            println!("VISIBILITY {backend:?} step {step}: HDR/normal/albedo/ID/pick exact");
+        }
+        // Start fully hidden, then show without preparing resident resources again.
+        let hidden = Engine::new(EngineOptions { backend }).unwrap();
+        let hr = Render::new(&hidden, settings.clone()).unwrap();
+        hidden.set_scene_object(&s).unwrap();
+        hidden.update().unwrap();
+        hr.converge(ConvergeOptions::new(8)).unwrap();
+        for &m in &meshes {
+            s.set_mesh_visible(m, true).unwrap();
+        }
+        hidden.set_scene_object(&s).unwrap();
+        hidden.update().unwrap();
+        hr.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(hr.last_commit().unwrap(), Some(CommitKind::Incremental));
+        engine.set_scene_object(&s).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        for kind in [PixelKind::Hdr, PixelKind::Id] {
+            assert_eq!(
+                hr.read_pixels(kind).unwrap(),
+                render.read_pixels(kind).unwrap(),
+                "{backend:?} initially hidden {kind:?}"
+            );
+        }
+    }
+}

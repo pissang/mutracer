@@ -15,6 +15,10 @@ pub struct NativeLayout {
     pub position_offset_bytes: usize,
     pub blas_offset: usize,
     pub is_empty: bool,
+    #[serde(default)]
+    pub instance_count: Option<usize>,
+    #[serde(default)]
+    pub instance_capacity: Option<usize>,
     pub bevel: bool,
     pub has_displacement: bool,
     #[serde(default)]
@@ -321,9 +325,18 @@ pub fn prepare_reusing(
         ));
         sizes.push(descriptors);
     }
+    let instance_capacity = assets
+        .get(&AssetId::Packet(31))
+        .and_then(|bytes| serde_json::from_slice::<NativeLayout>(bytes).ok())
+        .and_then(|l| l.instance_capacity)
+        .unwrap_or(capture.instances.len())
+        .max(1);
+    if instance_capacity > device.limits().max_tlas_instance_count as usize {
+        return Err("Resident HWRT instance count exceeds device limit".into());
+    }
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("MuTracer hardware TLAS"),
-        max_instances: capture.instances.len() as u32,
+        max_instances: instance_capacity as u32,
         flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
         update_mode: wgpu::AccelerationStructureUpdateMode::Build,
     });
@@ -464,7 +477,7 @@ pub fn prepare_reusing(
     }
     // Software TLAS rebuilds may reorder instances. Match BLAS root/vertex region
     // rather than the previous instance index, preserving primitive identity.
-    let raw_instances = assets.get(&AssetId::Packet(2)).map(|bytes| {
+    let mut raw_instances = assets.get(&AssetId::Packet(2)).map(|bytes| {
         bytes
             .chunks_exact(160)
             .zip(&capture.instances)
@@ -486,6 +499,16 @@ pub fn prepare_reusing(
             })
             .collect()
     });
+    if capture.indexed {
+        // Include hidden-at-creation BLASes: instance records are a visible subset.
+        let roots = raw_instances.get_or_insert_with(HashMap::new);
+        for (i, g) in capture.geometries.iter().enumerate() {
+            roots.insert(
+                (g.index_offset / 3, g.first_vertex),
+                (i, g.index_offset / 3),
+            );
+        }
+    }
     Ok(Resources {
         inputs,
         indexed: capture.indexed,
@@ -505,6 +528,7 @@ pub fn prepare_reusing(
 // A validated plan owns no GPU side effects; rejected updates preserve old ASes.
 pub struct TransformPlan {
     instances: Vec<(usize, Instance, u32)>,
+    replacement: Option<usize>,
 }
 impl Resources {
     /// Stage independent replacement BLASes; unchanged BLASes and their input
@@ -630,7 +654,7 @@ impl Resources {
         }
         let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("MuTracer changed geometry TLAS"),
-            max_instances: capture.instances.len() as u32,
+            max_instances: self.tlas.get().len() as u32,
             flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
@@ -822,18 +846,24 @@ impl Resources {
             .raw_instances
             .as_ref()
             .ok_or("Full scene commit required: no raw hardware instance metadata")?;
+        let replacement = writes.native_layout.as_ref().and_then(|l| l.instance_count);
         let mut instances = Vec::new();
         for (_, offset, _, _, bytes) in writes.iter().filter(|record| record.0 == 2) {
             let first = *offset as usize / 160;
             if *offset % 160 != 0
-                || bytes.len() % 160 != 0
-                || first + bytes.len() / 160 > capture.instances.len()
+                || replacement.is_none()
+                    && (bytes.len() % 160 != 0
+                        || first + bytes.len() / 160 > capture.instances.len())
             {
                 return Err(
                     "Full scene commit required: hardware instance membership changed".into(),
                 );
             }
-            for (local, record) in bytes.chunks_exact(160).enumerate() {
+            for (local, record) in bytes
+                .chunks_exact(160)
+                .take(replacement.unwrap_or(usize::MAX))
+                .enumerate()
+            {
                 let i = first + local;
                 let word =
                     |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
@@ -855,7 +885,15 @@ impl Resources {
                 ));
             }
         }
-        Ok(TransformPlan { instances })
+        if let Some(count) = replacement {
+            if count > self.tlas.get().len() || instances.len() != count {
+                return Err("Invalid resident instance replacement".into());
+            }
+        }
+        Ok(TransformPlan {
+            instances,
+            replacement,
+        })
     }
     pub fn update_transforms(
         &mut self,
@@ -864,8 +902,22 @@ impl Resources {
         plan: TransformPlan,
         capture: &mut Capture,
     ) -> Result<()> {
-        if plan.instances.is_empty() {
+        if plan.instances.is_empty() && plan.replacement.is_none() {
             return Ok(());
+        }
+        if let Some(count) = plan.replacement {
+            if plan.instances.len() != count {
+                return Err("Incomplete instance replacement".into());
+            }
+            // First try keeping inactive TLAS slots with mask=0. Custom indices
+            // of active slots follow the same compact order as the instance buffer.
+            for i in count..self.tlas.get().len() {
+                if let Some(mut instance) = self.tlas.get()[i].clone() {
+                    instance.mask = 0;
+                    self.tlas[i] = Some(instance);
+                }
+            }
+            capture.instances = plan.instances.iter().map(|(_, i, _)| i.clone()).collect();
         }
         // Also fence a preceding geometry edit before encoding a TLAS-only edit.
         wait_for_as(device, queue.submit([]))?;
@@ -928,13 +980,15 @@ pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Res
     }
     let stride = layout.attribute_stride_bytes / 4;
     let position = layout.position_offset_bytes / 4;
-    if !layout.is_empty && (stride == 0 || instances.len() % 40 != 0) {
+    if !layout.is_empty
+        && (stride == 0 || layout.instance_count.is_none() && instances.len() % 40 != 0)
+    {
         return Err("Invalid native HWRT layout".into());
     }
     let count = if layout.is_empty {
         0
     } else {
-        instances.len() / 40
+        layout.instance_count.unwrap_or(instances.len() / 40)
     };
     let mut mapping = vec![0u32; count];
     let mut geometries = Vec::new();
@@ -1099,6 +1153,7 @@ fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
             .get(&AssetId::Packet(2))
             .ok_or("Missing indexed instances")?
             .chunks_exact(160)
+            .take(layout.instance_count.unwrap_or(usize::MAX))
             .enumerate()
         {
             let word = |k: usize| u32::from_le_bytes(record[k * 4..k * 4 + 4].try_into().unwrap());

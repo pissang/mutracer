@@ -874,7 +874,7 @@ impl GpuScene {
             && !scene
                 .hwrt
                 .as_ref()
-                .is_some_and(|capture| capture.authoritative && capture.instances.is_empty())
+                .is_some_and(|capture| capture.authoritative && capture.geometries.is_empty())
         {
             Some(hardware::prepare_reusing(
                 &device,

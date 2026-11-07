@@ -113,11 +113,14 @@ export async function referenceScene(bytes, sourceRoot) {
     const {sceneTraversalConstants} = await load('renderer/sceneAssembly.js');
     const {packTriangleMaterials} = await load('renderer/compactVertices.js');
     const prepared = pass._preparedMeshData;
-    const nativeTlas = buildTLAS(prepared.instances, prepared.blases);
+    let nativeTlas = buildTLAS(prepared.instances, prepared.blases);
+    const capacity = prepared.residentBindings.reduce((n,b) => n + (b.mesh.instanceData?.count ?? 1), 0);
+    const padded = new Uint8Array(Math.max(nativeTlas.buffer.byteLength, Math.ceil((capacity*80+256)/256)*256));
+    padded.set(new Uint8Array(nativeTlas.buffer)); nativeTlas = {...nativeTlas, buffer:padded.buffer};
     const blas = new Uint8Array(concatBLASBuffers(prepared.blases));
     const bvh = new Uint8Array(Math.max(200, nativeTlas.buffer.byteLength + blas.byteLength));
     bvh.set(new Uint8Array(nativeTlas.buffer)); bvh.set(blas, nativeTlas.buffer.byteLength);
-    const instances = new Uint8Array(Math.max(200, nativeTlas.instancesBuffer.byteLength));
+    const instances = new Uint8Array(Math.max(200, capacity*160));
     instances.set(new Uint8Array(nativeTlas.instancesBuffer));
     const vertexWords = Number(pass._constants.MATERIALINDEX_OFF);
     const hasPlane = pass._constants.HAS_TRIANGLE_MATERIAL;
@@ -140,7 +143,7 @@ export async function referenceScene(bytes, sourceRoot) {
     if (atlasBytes.subarray(logicalBytes).some(v => v !== 0)) throw new Error('Unused browser atlas layer contains data');
     nativeResources.set(20, atlasBytes.subarray(0, logicalBytes));
     const stacks = getTraversalStackSizes(nativeTlas, prepared.blases);
-    const constants = {...pass._constants, ...sceneTraversalConstants(stacks.tlas, stacks.blas), MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
+    const constants = {...pass._constants, ...sceneTraversalConstants(Math.max(stacks.tlas,32), stacks.blas), MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
         LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};
     updateSceneShaderCapabilities(constants);
     constants.SCENE_CAPABILITIES = retainedShaderCapabilities(constants).SCENE_CAPABILITIES;
