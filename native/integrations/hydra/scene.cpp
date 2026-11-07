@@ -399,10 +399,10 @@ bool Param::Apply(int requestedBackend) {
     if (i != resources.end()) {
       if (i->second.mesh)
         Check(mt_scene_remove_mesh(scene, i->second.mesh, e, sizeof e), e);
-      if (i->second.geometry)
-        Check(mt_scene_remove_geometry(scene, i->second.geometry, e, sizeof e),
-              e);
-      resources.erase(i);
+      // A Hydra rprim may be inserted again with the same authored geometry.
+      // Keep its SDK geometry resident so that such membership edits do not
+      // manufacture a structural scene change.
+      i->second.mesh = 0;
     }
   }
   removedMeshes.clear();
@@ -449,19 +449,25 @@ bool Param::Apply(int requestedBackend) {
         }
         continue;
       }
-      mt_scene_geometry_desc desc;
-      mt_scene_geometry_desc_default(&desc);
-      desc.positions = g.points.data();
-      desc.vertex_count = g.points.size() / 3;
-      desc.indices = g.indices.data();
-      desc.index_count = g.indices.size();
-      desc.normals = g.normals.data();
-      desc.uv = g.uv.data();
-      desc.colors = g.colors.data();
-      if (!r.geometry)
-        Check(mt_scene_add_geometry(scene, &desc, &r.geometry, e, sizeof e), e);
-      else
-        Check(mt_scene_set_geometry(scene, r.geometry, &desc, e, sizeof e), e);
+      bool same = r.geometry && g.points == r.source.points &&
+                  g.normals == r.source.normals && g.uv == r.source.uv &&
+                  g.colors == r.source.colors && g.indices == r.source.indices;
+      if (!same) {
+        mt_scene_geometry_desc desc;
+        mt_scene_geometry_desc_default(&desc);
+        desc.positions = g.points.data();
+        desc.vertex_count = g.points.size() / 3;
+        desc.indices = g.indices.data();
+        desc.index_count = g.indices.size();
+        desc.normals = g.normals.data();
+        desc.uv = g.uv.data();
+        desc.colors = g.colors.data();
+        if (!r.geometry)
+          Check(mt_scene_add_geometry(scene, &desc, &r.geometry, e, sizeof e), e);
+        else
+          Check(mt_scene_set_geometry(scene, r.geometry, &desc, e, sizeof e), e);
+        r.source = g;
+      }
     }
     // Keep complete batch membership while its instancer is hidden. Visibility
     // never changes the SDK mesh identity or the local Hydra index mapping.

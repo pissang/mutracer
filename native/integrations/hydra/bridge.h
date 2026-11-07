@@ -102,6 +102,7 @@ TextureData ReadTexture(std::string const &file, bool srgb);
 struct MeshResource {
   mt_scene_geometry_id geometry = 0;
   mt_scene_mesh_id mesh = 0;
+  Geometry source;
   std::vector<int> faces;
   std::vector<Instance> instances;
   int primId = -1;
