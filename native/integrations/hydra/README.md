@@ -111,22 +111,22 @@ Hardware ray-query limitations are listed in the
 ## Outputs and limits
 
 `color` is premultiplied linear RGBA, composited over the bound AOV clear color.
-`depth` is SDK camera-forward distance converted to [0,1] clip depth; misses clear to 1. SDK depth first averages jitter
-and lens samples, then the delegate projects the mean. It can disagree with the
-pixel-center ID at edges and with depth of field, and is not a per-fragment
-center-ray depth resolve.
+`depth` is projected from the pixel-center surface position shared with IDs;
+misses clear to 1. It therefore identifies the same selected surface as
+`primId`, without jitter or depth of field. `normal` is the signed world-space
+shading normal, including the base normal map; `Neye` is that normal in view
+space, and `Peye` is view-space position. These surface outputs use the same
+alpha and shadow-catcher filtering as IDs.
 
 `primId` uses Hydra rprim IDs, `instanceId` uses prototype-local flattened
 selection indices, and `elementId` identifies the original polygon face.
-Background and non-instanced instance IDs are -1. `normal` and `Neye` are not
-provided; the SDK's denoising guide is unsuitable for these surface outputs.
+Background and non-instanced instance IDs are -1. The SDK's denoising guide is
+separate from these surface outputs.
 
-With a host HgiMetal device, color and depth use GPU textures together. Missing
-or incompatible Hgi, engine creation failure, unsupported AOV pairs or GPU
-conversion setup failure select CPU buffers and print the reason once. Hosts
-must provide matching color/depth dimensions, float32 or float16 RGBA color and
-float32 depth to use GPU output. `usdrecord --disableGpu` continues to use CPU
-buffers. GPU output does not add Blender or Vulkan host support.
+Binding any center-surface AOV uses CPU buffers so Hydra depth stays aligned
+with IDs. Each bound center source adds a full RGBA32F SDK readback: position
+for `depth` / `Peye`, normal for `normal` / `Neye`. `usdrecord --disableGpu`
+also uses CPU buffers. GPU output does not add Blender or Vulkan host support.
 OpenUSD 26.03's CPU viewport depth upload fails with Metal API Validation;
 `usdrecord --disableGpu` avoids that host upload path for offline CPU output.
 Recreate the OpenUSD 26.03 host engine when switching between viewport and
@@ -144,10 +144,8 @@ SDK on demand and blocks for CPU pixels; during progressive rendering this can
 be newer than the last viewport publication. CPU output reads all bound AOVs
 at refresh time, and Hydra can upload unchanged buffers on intervening frames.
 
-GPU output avoids per-frame CPU image transfers but adds texture memory: at 4K
-and full resolution, the default float32 color output uses about 1.30 GiB for
-the three texture sets, in addition to rendering storage. In CPU mode, one 4K
-RGBA32F read is about 127 MiB. CPU Map buffers remain allocated in GPU mode.
+At 4K and full resolution, float32 color output uses about 1.30 GiB in addition
+to rendering storage. In CPU mode, each 4K RGBA32F AOV read is about 127 MiB.
 See the
 [SDK's memory and output limits](../../docs/engine.md#costs), including the
 64 analytic-light limit and the absence of tiled output.

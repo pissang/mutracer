@@ -29,6 +29,13 @@ display size.
 
 ## AOV channels
 
+`MT_CHANNEL_CENTER_NORMAL`, `MT_CHANNEL_CENTER_DEPTH` and
+`MT_CHANNEL_CENTER_POSITION` visualize the same unjittered pixel-center hit as
+ID and motion. They need the matching `MT_AOV_CENTER_*` bit and use one
+pixel-center sample;
+requesting any of them adds 32 GPU bytes per AOV pixel. The existing averaged
+depth and position outputs keep their independent jittered-sample behavior.
+
 Enable the desired [surface outputs](denoising.md#surface-outputs) on the render,
 then select the matching `Channel` / `MT_CHANNEL_*` value. A missing render bit
 reports `InvalidState` / `MT_ERROR_INVALID_STATE` on composition, even when a
