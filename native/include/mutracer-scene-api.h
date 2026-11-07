@@ -48,7 +48,8 @@ typedef struct mt_scene_material_desc {
   float alpha_cutoff, normal_scale;
   uint32_t unlit, reserved;
 } mt_scene_material_desc; /* Default gray .8, roughness .3, IOR 1.5, opacity 1,
- * white emission with strength 0, alpha auto, cutoff .5, normal scale 1;
+ * white emission with strength 0, alpha auto, cutoff 0, normal scale 1
+ * (auto alpha-tests when cutoff > 0, as in OpenPBRMaterial);
  * metalness/transmission 0, solid, single-sided, lit. Other OpenPBR values use
  * native defaults. Use property setters for layers and map setters for textures. */
 MT_SCENE_API_LAYOUT(mt_scene_material_desc, 80);

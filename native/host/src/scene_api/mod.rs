@@ -193,7 +193,8 @@ impl Default for OpenPbrMaterial {
                 emission_strength: 0.,
                 maps: [u32::MAX; 9],
                 alpha_mode: 0,
-                alpha_cutoff: 0.5,
+                // Matches OpenPBRMaterial: auto with a positive cutoff means mask.
+                alpha_cutoff: 0.,
                 double_sided: false,
                 normal_scale: 1.,
                 unlit: false,

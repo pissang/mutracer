@@ -200,7 +200,7 @@ macro_rules! defaults {($($fn:ident,$ty:ty,$value:expr);*$(;)?)=>{$(#[unsafe(no_
 mod picking;
 defaults! {
  mt_scene_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
- mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.5,normal_scale:1.,unlit:0,reserved:0};
+ mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.,normal_scale:1.,unlit:0,reserved:0};
  mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0};
  mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,reserved:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
  mt_scene_instances_desc_default,InstancesDesc,InstancesDesc{struct_size:size_of::<InstancesDesc>() as u32,count:0,transforms:std::ptr::null(),colors:std::ptr::null()};
