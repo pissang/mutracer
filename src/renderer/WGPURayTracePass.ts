@@ -2749,7 +2749,8 @@ class WGPURayTracePass {
       tlas,
       res.instances,
       res.blases,
-      incremental ? dirtyIndices : undefined
+      incremental ? dirtyIndices : undefined,
+      true
     );
     for (const { offset, size } of ranges.tlasRanges) {
       this._device.queue.writeBuffer(

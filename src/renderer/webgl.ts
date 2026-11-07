@@ -168,6 +168,30 @@ export class Texture2D {
       source.data.subarray(first * source.width * channels, end * source.width * channels));
   }
 
+  /** Coalesce ranges whose covering texture rows overlap before enqueuing uploads. */
+  updateDataRanges(gl: WebGL2RenderingContext, data: Float32Array | Int32Array | Uint8Array,
+    ranges: Iterable<{offset: number; size: number}>) {
+    const source = this.source as TexturePixelSource;
+    if (!isPixelSource(source)) throw new RangeError('Data texture requires pixel storage');
+    const rowBytes = source.data.byteLength / source.height;
+    const sorted = [...ranges].sort((a, b) => a.offset - b.offset);
+    let first = 0, end = 0;
+    for (const range of sorted) {
+      if (range.offset < 0 || range.size < 0 || range.offset % data.BYTES_PER_ELEMENT ||
+        range.size % data.BYTES_PER_ELEMENT || range.offset + range.size > data.byteLength ||
+        range.offset + range.size > source.data.byteLength) throw new RangeError('Invalid data texture byte range');
+    }
+    for (const range of sorted) {
+      if (!range.size) continue;
+      if (end > first && Math.floor(range.offset / rowBytes) > Math.ceil(end / rowBytes)) {
+        this.updateDataRange(gl, data, first, end - first); first = end = 0;
+      }
+      if (end === first) first = range.offset;
+      end = Math.max(end, range.offset + range.size);
+    }
+    if (end > first) this.updateDataRange(gl, data, first, end - first);
+  }
+
   getWebGLTexture(gl: WebGL2RenderingContext) {
     this._ensureTexture(gl);
     return this._texture!;

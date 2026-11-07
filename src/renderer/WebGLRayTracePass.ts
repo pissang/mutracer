@@ -753,13 +753,16 @@ class WebGLRayTracePass {
     }));
   }
 
-  private _uploadInstanceRanges(ranges: Iterable<{ offset: number; size: number }>) {
+  private _uploadInstanceRanges(ranges: Iterable<{ offset: number; size: number }>, tlasRanges?: {offset: number; size: number}[]) {
     const instances = new Uint8Array(this._tlas!.instancesBuffer!), data = this._bvhData!;
     const base = this._instancesOffset * 16;
+    const uploads = tlasRanges ? tlasRanges.slice() : undefined;
     for (const { offset, size } of ranges) {
       new Uint8Array(data.buffer).set(instances.subarray(offset, offset + size), base + offset);
-      this._bvhBufferTex.updateDataRange(this._renderer.gl, data, base + offset, size);
+      if (uploads) uploads.push({offset: base + offset, size});
+      else this._bvhBufferTex.updateDataRange(this._renderer.gl, data, base + offset, size);
     }
+    if (uploads) this._bvhBufferTex.updateDataRanges(this._renderer.gl, data, uploads);
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
@@ -891,10 +894,9 @@ class WebGLRayTracePass {
       this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
       return;
     }
-    const ranges = refitTLAS(tlas, res.instances, res.blases, dirty);
-    this._bvhData!.set(new Float32Array(tlas.buffer));
-    for (const { offset, size } of ranges.tlasRanges) this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, offset, size);
-    this._uploadInstanceRanges(ranges.instanceRanges);
+    const ranges = refitTLAS(tlas, res.instances, res.blases, dirty, true);
+    for (const {offset, size} of ranges.tlasRanges) this._bvhData!.set(new Float32Array(tlas.buffer, offset, size / 4), offset / 4);
+    this._uploadInstanceRanges(ranges.instanceRanges, ranges.tlasRanges);
     this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
     this._debugBvhData = undefined;
   }

@@ -332,7 +332,8 @@ function writeInstanceRecord(
   instanceFloats: Float32Array,
   targetIndex: number,
   instance: TLASInstance,
-  placement: BlasPlacement
+  placement: BlasPlacement,
+  inverseScratch = new Float64Array(16)
 ) {
   const offset = targetIndex * INSTANCE_WORD_STRIDE;
   instanceInts[offset] = encodeBlasOffset(
@@ -344,7 +345,7 @@ function writeInstanceRecord(
   instanceFloats[offset + 3] = instance.displacementScale || 0;
   writeInstanceColor(instanceFloats, offset + 36, instance);
   instanceFloats[offset + 39] = 0;
-  const inverse = mat4.invert(new Float64Array(16), instance.transform)!;
+  const inverse = mat4.invert(inverseScratch, instance.transform)!;
   for (let i = 0; i < 16; i++) {
     instanceFloats[offset + 4 + i] = inverse[i];
     instanceFloats[offset + 20 + i] = read(instance.transform, i);
@@ -570,7 +571,8 @@ export function refitTLAS(
   flattened: FlattendBVH,
   instances: MeshInstances,
   blases: BLASInstance[],
-  dirtySourceIndices?: ReadonlySet<number>
+  dirtySourceIndices?: ReadonlySet<number>,
+  batchUploads = false
 ): TLASRefitResult {
   if (!flattened.instancesBuffer || !flattened.buffer.byteLength) {
     return { tlasRanges: [], instanceRanges: [] };
@@ -581,10 +583,13 @@ export function refitTLAS(
   const instanceInts = new Int32Array(flattened.instancesBuffer);
 
   const placement = getBlasPlacement(blases);
-  const scratch = new Float32Array(6);
+  const scratch = new Float32Array(6), inverseScratch = new Float64Array(16);
+  // Web uses bounded bulk uploads for dense edits. Native adapters retain their
+  // dirty ranges and commit policy until the web path has been reviewed.
+  const dense = batchUploads && !!dirtySourceIndices && dirtySourceIndices.size > Math.max(64, meshInstancesLength(instances) / 8);
 
   function writeInstance(targetIndex: number, sourceIndex: number) {
-    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, readMeshInstance(instances, sourceIndex), placement);
+    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, readMeshInstance(instances, sourceIndex), placement, inverseScratch);
   }
 
   function addInstanceBounds(bounds: Box3, instance: TLASInstance) {
@@ -604,7 +609,7 @@ export function refitTLAS(
     instanceBounds(instance, scratch, 0);
     floats.set(scratch.subarray(0, 3), box * 4);
     floats.set(scratch.subarray(3, 6), box * 4 + 4);
-    boxRanges.push({ offset: box * 16, size: 32 });
+    if (dirtySourceIndices && !dense) boxRanges.push({ offset: box * 16, size: 32 });
   }
 
   function writeNodeBounds(index: number, bounds: Box3) {
@@ -630,37 +635,40 @@ export function refitTLAS(
     return bounds;
   }
 
-  function refitNode(index: number): Box3 {
-    const base = index * 4;
-    const bounds = new Box3();
-    const primitiveCountOrChild = ints[base + 3];
-    if (primitiveCountOrChild >= 0) {
-      const left = refitNode(index + 2);
-      const right = refitNode(primitiveCountOrChild);
-      unionBounds(bounds, left, right);
-    } else {
-      for (let i = 0; i < -primitiveCountOrChild; i++) {
-        const primitiveOffset = base + 8 + i * 4;
-        const targetInstance = ints[primitiveOffset];
-        const sourceInstance = ints[primitiveOffset + 2];
-        const instance = readMeshInstance(instances, sourceInstance);
-        if (!instance) continue;
-        addInstanceBounds(bounds, instance);
-        writeLeafBox(primitiveOffset, instance);
-        writeInstance(targetInstance, sourceInstance);
+  function refitNode(index: number): void {
+    const base = index * 4, child = ints[base + 3];
+    if (child >= 0) {
+      refitNode(index + 2); refitNode(child);
+      const left = base + 8, right = child * 4;
+      for (let k = 0; k < 3; k++) {
+        floats[base + k] = Math.min(floats[left + k], floats[right + k]);
+        floats[base + 4 + k] = Math.max(floats[left + 4 + k], floats[right + 4 + k]);
+      }
+      return;
+    }
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < -child; i++) {
+      const record = base + 8 + i * 4, source = ints[record + 2];
+      const instance = readMeshInstance(instances, source);
+      if (!instance) continue;
+      instanceBounds(instance, scratch, 0);
+      minX = Math.min(minX, scratch[0]); minY = Math.min(minY, scratch[1]); minZ = Math.min(minZ, scratch[2]);
+      maxX = Math.max(maxX, scratch[3]); maxY = Math.max(maxY, scratch[4]); maxZ = Math.max(maxZ, scratch[5]);
+      if (!dirtySourceIndices || dirtySourceIndices.has(source)) {
+        writeLeafBox(record, instance);
+        writeInstanceRecord(instanceInts, instanceFloats, ints[record], instance, placement, inverseScratch);
       }
     }
-    writeNodeBounds(index, bounds);
-    return bounds;
+    floats[base] = minX; floats[base + 1] = minY; floats[base + 2] = minZ;
+    floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
   }
 
-  if (!dirtySourceIndices) {
+  if (!dirtySourceIndices || dense) {
     refitNode(0);
     return {
       tlasRanges: [{ offset: 0, size: flattened.buffer.byteLength }],
-      instanceRanges: [
-        { offset: 0, size: flattened.instancesBuffer.byteLength }
-      ]
+      instanceRanges: [{ offset: 0, size: flattened.instancesBuffer.byteLength }]
     };
   }
 
