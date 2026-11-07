@@ -350,7 +350,8 @@ impl Output {
         } else {
             reproject_metadata(words, previous.map(|p| p.current_words.as_slice()))
         };
-        let previous_center = buffer("Previous AOV center", center_bytes);
+        let previous_center_bytes = if layout.compact { 32 } else { pixels * 32 };
+        let previous_center = buffer("Previous AOV center", previous_center_bytes);
         if let Some(previous) = previous {
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.copy_buffer_to_buffer(&previous.center, 0, &previous_center, 0, pixels * 32);
