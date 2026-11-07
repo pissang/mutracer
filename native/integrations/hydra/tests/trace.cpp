@@ -12,6 +12,7 @@
 #include "pxr/usd/usdGeom/mesh.h"
 #include "pxr/usd/usdGeom/xformCommonAPI.h"
 #include "pxr/usd/usdShade/material.h"
+#include "pxr/usd/usdShade/materialBindingAPI.h"
 #include "pxr/usd/usdShade/shader.h"
 #include "pxr/usdImaging/usdImagingGL/engine.h"
 #include <algorithm>
@@ -283,6 +284,19 @@ int main(int argc, char **argv) {
       stage->RemovePrim(SdfPath("/Mesh"));
       layer->ImportFromString(source);
       run("remove-readd-same-frame");
+      auto appended = UsdGeomMesh::Define(stage, SdfPath("/AppendedMesh"));
+      appended.CreatePointsAttr().Set(VtVec3fArray{
+          GfVec3f(-.35f, -.35f, .1f), GfVec3f(.35f, -.35f, .1f),
+          GfVec3f(0.f, .35f, .1f)});
+      appended.CreateFaceVertexCountsAttr().Set(VtIntArray{3});
+      appended.CreateFaceVertexIndicesAttr().Set(VtIntArray{0, 1, 2});
+      appended.CreateSubdivisionSchemeAttr().Set(UsdGeomTokens->none);
+      appended.CreateDoubleSidedAttr().Set(true);
+      UsdShadeMaterialBindingAPI::Apply(appended.GetPrim())
+          .Bind(UsdShadeMaterial(stage->GetPrimAtPath(SdfPath("/Materials/Open"))));
+      run("new-rprim-appended");
+      stage->RemovePrim(SdfPath("/AppendedMesh"));
+      run("new-rprim-removed");
       stage->GetPrimAtPath(SdfPath("/Light"))
           .GetAttribute(TfToken("inputs:intensity"))
           .Set(3.f);
