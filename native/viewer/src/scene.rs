@@ -139,6 +139,7 @@ impl Model {
             bounds_min = bounds_min.min(transform.transform_point3(min));
             bounds_max = bounds_max.max(transform.transform_point3(max));
             model.0.meshes.push(Mesh {
+                visible: true,
                 name: material.name.clone(),
                 material: index,
                 geometry: 0,

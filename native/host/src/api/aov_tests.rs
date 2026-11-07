@@ -167,7 +167,7 @@ fn independent_surface_aovs(backend: Backend) {
         assert!(values.iter().all(|v| v.is_finite()));
         assert!(values.chunks_exact(4).any(|v| v[3] > 0. && v[0] > 0.));
     }
-    let mut camera = Camera::from_bytes(&descriptor[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&descriptor[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] += 0.25;
     engine.set_camera(Some(camera)).unwrap();
     engine.update().unwrap();
@@ -230,7 +230,7 @@ fn independent_surface_aovs(backend: Backend) {
         }
     }
     assert!(count > 40);
-    descriptor[192 * 4..193 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
+    descriptor[194 * 4..195 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
     engine.set_scene(&descriptor).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
@@ -496,7 +496,7 @@ fn accepted_temporal_frames(backend: Backend) {
     if backend == Backend::Hardware {
         assert_eq!(render.backend().unwrap().0, Backend::Hardware);
     }
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] += 0.25;
     engine.set_camera(Some(camera)).unwrap();
     engine.update().unwrap();
@@ -583,7 +583,7 @@ fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
         .unwrap();
     render.converge(ConvergeOptions::new(2)).unwrap();
     assert!(resets.lock().unwrap()[2].contains(&TemporalResetReason::ConsumerRejected));
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.f_stop = 2.;
     engine.set_camera(Some(camera)).unwrap();
     engine.update().unwrap();
@@ -613,10 +613,10 @@ fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
         .iter()
         .enumerate()
     {
-        words[192 + i] = v.to_bits();
+        words[194 + i] = v.to_bits();
     }
-    words[204..210].copy_from_slice(&[0, 2, 1, 2, 3, 1]);
-    words[84..89].copy_from_slice(&[
+    words[206..212].copy_from_slice(&[0, 2, 1, 2, 3, 1]);
+    words[86..91].copy_from_slice(&[
         1f32.to_bits(),
         1f32.to_bits(),
         1f32.to_bits(),
@@ -626,7 +626,7 @@ fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
     let mut camera = Camera::default();
     camera.far_clip = 100.;
     camera.world_matrix[14] = 4.;
-    words[160..192].copy_from_slice(
+    words[162..194].copy_from_slice(
         &camera
             .to_bytes()
             .chunks_exact(4)

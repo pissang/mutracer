@@ -11,11 +11,11 @@ fn display_effects_real_catcher_tracks_shared_targets_and_scene_edits() {
         let set = |scene: &mut Vec<u8>, word: usize, value: u32| {
             scene[word * 4..word * 4 + 4].copy_from_slice(&value.to_le_bytes())
         };
-        set(&mut scene, 1, 136);
-        set(&mut scene, 83, 1);
-        set(&mut scene, 84, 132);
-        set(&mut scene, 118, 3f32.to_bits());
-        set(&mut scene, 117, 0.5f32.to_bits());
+        set(&mut scene, 1, 137);
+        set(&mut scene, 84, 1);
+        set(&mut scene, 85, 133);
+        set(&mut scene, 119, 3f32.to_bits());
+        set(&mut scene, 118, 0.5f32.to_bits());
         let engine = Engine::new(EngineOptions { backend }).unwrap();
         let display = engine.display();
         display.set_size(8, 8).unwrap();
@@ -122,7 +122,7 @@ fn display_effects_real_catcher_tracks_shared_targets_and_scene_edits() {
             }
         }
         // Disabling the receiver may be incremental; its old stable mask must disappear.
-        set(&mut scene, 133, 0);
+        set(&mut scene, 134, 0);
         engine.set_scene(&scene).unwrap();
         engine.update().unwrap();
         a.converge(ConvergeOptions::new(8)).unwrap();

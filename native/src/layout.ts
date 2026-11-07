@@ -72,7 +72,8 @@ export const MESH = {
   "MATERIAL_TABLE": 2,
   "MATERIAL_COUNT": 3,
   "TRANSFORM": 4,
-  "WORDS": 20
+  "FLAGS": 20,
+  "WORDS": 21
 } as const;
 export const MATERIAL = {
   "BASE_COLOR": 0,
@@ -219,7 +220,7 @@ export const PACKET_ENTRY = {
   "WORDS": 8
 } as const;
 export const VERSION = {
-  "SCENE": 4,
+  "SCENE": 5,
   "RESOURCE_PACKET": 1,
   "RESOURCE_WRITES": 3,
   "TARGET_PACKET": 4,

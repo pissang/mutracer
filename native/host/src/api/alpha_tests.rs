@@ -19,7 +19,7 @@ fn properties(bytes: &mut Vec<u8>, material: usize, entries: &[[u32; 4]]) {
 fn scene(spectral: bool) -> Vec<u8> {
     let mut bytes = lit_scene();
     // Two large quads: an opaque back at z=0 and a .25-coverage front at z=1.
-    for (mesh, z) in [(44, 0f32), (64, 1.)] {
+    for (mesh, z) in [(44, 0f32), (65, 1.)] {
         for k in [0, 5] {
             set(&mut bytes, mesh + 4 + k, 20f32.to_bits());
         }
@@ -28,17 +28,17 @@ fn scene(spectral: bool) -> Vec<u8> {
         set(&mut bytes, mesh + 4 + 13, 0);
         set(&mut bytes, mesh + 4 + 14, z.to_bits());
     }
-    for (material, color) in [(84, [0.1f32, 0.3, 0.8]), (108, [0.8, 0.2, 0.1])] {
+    for (material, color) in [(86, [0.1f32, 0.3, 0.8]), (110, [0.8, 0.2, 0.1])] {
         for (i, v) in color.into_iter().enumerate() {
             set(&mut bytes, material + i, v.to_bits());
             set(&mut bytes, material + 7 + i, v.to_bits());
         }
         set(&mut bytes, material + 10, 1f32.to_bits());
     }
-    set(&mut bytes, 121, 0.25f32.to_bits());
+    set(&mut bytes, 123, 0.25f32.to_bits());
     properties(
         &mut bytes,
-        84,
+        86,
         &[
             [52, 1, 0, 0],
             [15, f32::from(spectral).to_bits(), 0, 0],
@@ -47,7 +47,7 @@ fn scene(spectral: bool) -> Vec<u8> {
     );
     properties(
         &mut bytes,
-        108,
+        110,
         &[[52, 1, 0, 0], [41, 3, 0, 0], [42, 0.5f32.to_bits(), 0, 0]],
     );
     bytes
@@ -74,7 +74,7 @@ fn fresh(
     gpu: crate::GpuDevice,
 ) -> [Vec<f32>; 3] {
     let input = expected_descriptor(scene, [8, 6], settings.quality(), None);
-    let camera = &input[160 * 4..192 * 4].try_into().unwrap();
+    let camera = &input[162 * 4..194 * 4].try_into().unwrap();
     let owner = crate::context::create_with_gpu(gpu.clone(), 0).unwrap();
     let target = crate::context::create_with_gpu(gpu, 0).unwrap();
     let l0settings = settings.l0(settings.sample_cap(samples), 0);
@@ -232,17 +232,17 @@ fn alpha_strategies_split_primary_coverage_and_keep_shared_targets_independent()
         }
         blended.set_settings(deterministic.clone()).unwrap();
         for (coverage, expected) in [(0f32, back), (1., front)] {
-            set(&mut input, 121, coverage.to_bits());
+            set(&mut input, 123, coverage.to_bits());
             engine.set_scene(&input).unwrap();
             engine.update().unwrap();
             blended.converge(ConvergeOptions::new(1)).unwrap();
             color(&blended, expected);
         }
         // Explicit opaque and mask modes do not become blend coverage.
-        set(&mut input, 121, 0.25f32.to_bits());
+        set(&mut input, 123, 0.25f32.to_bits());
         for (mode, expected) in [(1u32, front), (2, back)] {
             let properties =
-                u32::from_le_bytes(input[128 * 4..129 * 4].try_into().unwrap()) as usize;
+                u32::from_le_bytes(input[130 * 4..131 * 4].try_into().unwrap()) as usize;
             set(&mut input, properties + 5, mode);
             engine.set_scene(&input).unwrap();
             engine.update().unwrap();

@@ -65,6 +65,7 @@ pub struct Material {
 pub(super) use super::types::{Geometry, MaterialLayers};
 #[derive(Clone, PartialEq)]
 pub struct Mesh {
+    pub visible: bool,
     pub materials: Vec<usize>,
     pub instances: Option<super::Instances>,
     pub name: String,
@@ -330,6 +331,7 @@ fn write_texture_sampling(words: &mut [u32], offset: usize, texture: &Texture) {
 
 const MATERIAL_EXTENSIONS: usize = 36;
 fn write_mesh(w: &mut [u32], o: usize, m: &Mesh) {
+    w[o + wire_mesh::FLAGS] = u32::from(!m.visible);
     w[o + wire_mesh::GEOMETRY] = m.geometry as u32;
     w[o + wire_mesh::MATERIAL] = m.material as u32;
     for (k, v) in m.transform.to_cols_array().iter().enumerate() {

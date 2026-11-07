@@ -72,7 +72,8 @@ pub mod mesh {
     pub const MATERIAL_TABLE: usize = 2;
     pub const MATERIAL_COUNT: usize = 3;
     pub const TRANSFORM: usize = 4;
-    pub const WORDS: usize = 20;
+    pub const FLAGS: usize = 20;
+    pub const WORDS: usize = 21;
 }
 pub mod material {
     pub const BASE_COLOR: usize = 0;
@@ -219,7 +220,7 @@ pub mod packet_entry {
     pub const WORDS: usize = 8;
 }
 pub mod version {
-    pub const SCENE: usize = 4;
+    pub const SCENE: usize = 5;
     pub const RESOURCE_PACKET: usize = 1;
     pub const RESOURCE_WRITES: usize = 3;
     pub const TARGET_PACKET: usize = 4;

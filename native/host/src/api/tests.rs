@@ -163,7 +163,7 @@ fn set_word(bytes: &mut [u8], index: usize, value: u32) {
 #[test]
 fn scene_header_checks_reject_malformed_descriptors() {
     let scene = lit_scene();
-    assert_eq!(camera_offset(&scene).unwrap(), 160 * 4);
+    assert_eq!(camera_offset(&scene).unwrap(), 162 * 4);
     assert!(camera_offset(&scene[..64]).is_err());
     assert!(camera_offset(&scene[..scene.len() - 2]).is_err());
     let mut version = scene.clone();
@@ -289,11 +289,11 @@ fn display_settings_map_to_the_shared_composition() {
 /// 16×12 lit scene: a diffuse quad, a small emissive quad and a directional light,
 /// seen by an off-axis camera so rows and columns differ.
 pub(super) fn lit_scene() -> Vec<u8> {
-    let mut w = vec![0u32; 210];
+    let mut w = vec![0u32; 212];
     let f = |x: f32| x.to_bits();
-    w[..15].copy_from_slice(&[4, 210, 16, 12, 1, 2, 2, 1, 0, 32, 44, 84, 132, 160, 160]);
+    w[..15].copy_from_slice(&[5, 212, 16, 12, 1, 2, 2, 1, 0, 32, 44, 86, 134, 162, 162]);
     w[16..20].copy_from_slice(&[f(0.05), f(0.07), f(0.1), f(1.)]);
-    w[32..36].copy_from_slice(&[4, 6, 192, 204]);
+    w[32..36].copy_from_slice(&[4, 6, 194, 206]);
     for (mesh, material, transform) in [
         (
             44,
@@ -303,7 +303,7 @@ pub(super) fn lit_scene() -> Vec<u8> {
             ],
         ),
         (
-            64,
+            65,
             1,
             [
                 0.3, 0., 0., 0., 0., 0.3, 0., 0., 0., 0., 0.3, 0., 0.5, 0.4, 0.6, 1.,
@@ -316,8 +316,8 @@ pub(super) fn lit_scene() -> Vec<u8> {
         }
     }
     for (material, base, emission, luminance) in [
-        (84, [0.8, 0.6, 0.4], [0., 0., 0.], 0.),
-        (108, [1., 1., 1.], [1., 0.9, 0.7], 4.),
+        (86, [0.8, 0.6, 0.4], [0., 0., 0.], 0.),
+        (110, [1., 1., 1.], [1., 0.9, 0.7], 4.),
     ] {
         for k in 0..3 {
             w[material + k] = f(base[k]);
@@ -331,10 +331,10 @@ pub(super) fn lit_scene() -> Vec<u8> {
             w[material + k] = u32::MAX;
         }
     }
-    w[132] = 2;
-    w[133..137].copy_from_slice(&[f(1.), f(1.), f(1.), f(3.)]);
+    w[134] = 2;
+    w[135..139].copy_from_slice(&[f(1.), f(1.), f(1.), f(3.)]);
     for k in [0, 5, 10, 15] {
-        w[144 + k] = f(1.);
+        w[146 + k] = f(1.);
     }
     for (k, x) in [
         (1, 45.),
@@ -349,21 +349,21 @@ pub(super) fn lit_scene() -> Vec<u8> {
         (11, 24.),
         (12, 1.),
     ] {
-        w[160 + k] = f(x);
+        w[162 + k] = f(x);
     }
     for k in [0, 5, 10, 15] {
-        w[176 + k] = f(1.);
+        w[178 + k] = f(1.);
     }
-    w[176 + 12] = f(0.2);
-    w[176 + 13] = f(0.1);
-    w[176 + 14] = f(4.);
+    w[178 + 12] = f(0.2);
+    w[178 + 13] = f(0.1);
+    w[178 + 14] = f(4.);
     for (k, x) in [-1., -1., 0., 1., -1., 0., 1., 1., 0., -1., 1., 0.]
         .into_iter()
         .enumerate()
     {
-        w[192 + k] = f(x);
+        w[194 + k] = f(x);
     }
-    w[204..210].copy_from_slice(&[0, 1, 2, 0, 2, 3]);
+    w[206..212].copy_from_slice(&[0, 1, 2, 0, 2, 3]);
     w.into_iter().flat_map(u32::to_le_bytes).collect()
 }
 
@@ -761,7 +761,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
 
     // Incremental material edit: synchronous in update, then exact.
     let mut edited = scene.clone();
-    set_word(&mut edited, 84 + 1, 0.2f32.to_bits());
+    set_word(&mut edited, 86 + 1, 0.2f32.to_bits());
     engine.set_scene(&edited).unwrap();
     assert!(engine.update().unwrap());
     assert_eq!(last_commit(&a), context::COMMIT_INCREMENTAL);
@@ -791,7 +791,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
         "render B after material edit",
     );
     // Engine camera: incremental camera record replacement in every render.
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] = -0.3;
     camera.fov = 40.;
     engine.set_camera(Some(camera)).unwrap();
@@ -1000,16 +1000,16 @@ fn shared_scene_oracle(backend: Backend) -> Option<Vec<String>> {
     notes.push("4 renders (sizes, bounces, bevel, dispersion, candidates, clamping, seed, alpha, Random/ZSobol, bevel samples 3/12): one preparation, exact".into());
 
     // Incremental edits of every kind reach every target.
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] = -0.25;
     camera.fov = 38.;
     let edits: [(&str, fn(&mut Vec<u8>)); 5] = [
-        ("material", |s| set_word(s, 84 + 1, 0.3f32.to_bits())),
-        ("light", |s| set_word(s, 136, 5f32.to_bits())),
+        ("material", |s| set_word(s, 86 + 1, 0.3f32.to_bits())),
+        ("light", |s| set_word(s, 138, 5f32.to_bits())),
         ("environment", |s| set_word(s, 16, 0.3f32.to_bits())),
-        ("transform", |s| set_word(s, 64 + 4 + 12, 0.2f32.to_bits())),
+        ("transform", |s| set_word(s, 65 + 4 + 12, 0.2f32.to_bits())),
         ("descriptor camera", |s| {
-            set_word(s, 160 + 1, 50f32.to_bits())
+            set_word(s, 162 + 1, 50f32.to_bits())
         }),
     ];
     let all = || renders.iter().map(images).collect::<Vec<_>>();
@@ -1191,7 +1191,7 @@ fn adaptive_moving_preview(backend: Backend) {
         },
     )
     .unwrap();
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     // Viewer holds each pose until collect/present completes, then commits the
     // next camera before calling refine again. No idle refine consumes timing.
@@ -1487,7 +1487,7 @@ fn converge_matches_l0_and_reports_progress_and_cancellation() {
     let scene = lit_scene();
     engine.set_scene(&scene).unwrap();
     engine.update().unwrap();
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[13] = 0.4;
     let progress = Arc::new(Mutex::new(Vec::new()));
     let recorded = progress.clone();

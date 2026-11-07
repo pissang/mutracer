@@ -256,6 +256,8 @@ pub struct Instances {
 /// Geometry placed with a material and a world matrix, optionally instanced.
 #[derive(Clone)]
 pub struct Mesh {
+    /// Default true. False hides the entire batch from rays, lighting, picking and AOVs.
+    pub visible: bool,
     pub geometry: GeometryId,
     /// Material used when `materials` is empty.
     pub material: MaterialId,
@@ -267,9 +269,10 @@ pub struct Mesh {
     pub instances: Option<Instances>,
 }
 impl Mesh {
-    /// One ordinary mesh, identity world matrix, no per-vertex material table.
+    /// One visible ordinary mesh, identity world matrix, no per-vertex material table.
     pub fn new(geometry: GeometryId, material: MaterialId) -> Self {
         Self {
+            visible: true,
             geometry,
             material,
             materials: vec![],
@@ -663,6 +666,16 @@ struct Resolved {
     background_index: u32,
 }
 impl Scene {
+    /// Sets visibility without removing resources or changing the mesh identity.
+    /// Default true; false hides the entire instance batch. Invalid/stale handles
+    /// return InvalidHandle without editing the scene. Commit the next snapshot
+    /// with Engine::set_scene_object and Engine::update. Requires exclusive scene access.
+    pub fn set_mesh_visible(&mut self, id: MeshId, visible: bool) -> Result<()> {
+        if self.mesh(id)?.visible != visible {
+            self.mesh_mut(id)?.visible = visible;
+        }
+        Ok(())
+    }
     fn dense(&self) -> Dense {
         Dense {
             geometries: dense(&self.geometries),
@@ -701,6 +714,7 @@ impl Scene {
     }
     fn resolve_mesh(&self, d: &Dense, mesh: &Mesh) -> Result<encoder::Mesh> {
         Ok(encoder::Mesh {
+            visible: mesh.visible,
             name: String::new(),
             geometry: lookup(&self.geometries, &d.geometries, mesh.geometry.0)?,
             material: lookup(&self.materials, &d.materials, mesh.material.0)?,

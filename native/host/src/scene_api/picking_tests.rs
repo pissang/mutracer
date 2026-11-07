@@ -350,3 +350,35 @@ fn scene_picker_hierarchy_matches_brute_force_world_triangles() {
     }
     assert!(hits > 100);
 }
+
+#[test]
+fn hidden_meshes_are_excluded_from_new_pick_snapshots() {
+    let (mut s, _, _, mesh) = triangle();
+    let ray = Ray {
+        origin: [0.; 3],
+        direction: [0., 0., -1.],
+    };
+    assert!(
+        s.picker()
+            .unwrap()
+            .raycast(ray, Default::default())
+            .unwrap()
+            .is_some()
+    );
+    s.set_mesh_visible(mesh, false).unwrap();
+    assert!(
+        s.picker()
+            .unwrap()
+            .raycast(ray, Default::default())
+            .unwrap()
+            .is_none()
+    );
+    s.set_mesh_visible(mesh, true).unwrap();
+    assert!(
+        s.picker()
+            .unwrap()
+            .raycast(ray, Default::default())
+            .unwrap()
+            .is_some()
+    );
+}

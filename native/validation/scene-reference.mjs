@@ -54,11 +54,12 @@ export async function referenceScene(bytes, sourceRoot) {
         geometries.push(g);
     }
     for (let i = 0; i < u[5]; i++) {
-        const o = u[10] + i * 20;
+        const o = u[10] + i * 21;
         const material = u[o + 3] ? Array.from(u.slice(u[o + 2], u[o + 2] + u[o + 3]), id => materials[id]) : materials[u[o + 1]];
         const io = u[23] ? u[23] + i * 4 : 0;
         const m = io && u[io] !== 0xffffffff ? new InstancedMesh(geometries[u[o]], material, {count:u[io],
             transforms:f.slice(u[io + 1],u[io + 1]+u[io]*16),colors:u[io+2]?f.slice(u[io+2],u[io+2]+u[io]*3):undefined}) : new Mesh(geometries[u[o]], material);
+        m.visible = (u[o + 20] & 1) === 0;
         m.transform = f.slice(o + 4, o + 20);
         meshes.push(m);
     }

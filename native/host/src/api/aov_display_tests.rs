@@ -10,16 +10,16 @@ pub(super) fn plane() -> Vec<u8> {
         .iter()
         .enumerate()
     {
-        w[192 + i] = v.to_bits();
+        w[194 + i] = v.to_bits();
     }
-    w[204..210].copy_from_slice(&[0, 2, 1, 2, 3, 1]);
+    w[206..212].copy_from_slice(&[0, 2, 1, 2, 3, 1]);
     for (i, v) in [1f32, 1., 1., 0.4, 0.2].iter().enumerate() {
-        w[84 + i] = v.to_bits();
+        w[86 + i] = v.to_bits();
     }
     let mut camera = Camera::default();
     camera.world_matrix[14] = 4.;
     camera.far_clip = 100.;
-    w[160..192].copy_from_slice(
+    w[162..194].copy_from_slice(
         &camera
             .to_bytes()
             .chunks_exact(4)

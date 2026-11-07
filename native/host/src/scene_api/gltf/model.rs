@@ -1102,6 +1102,7 @@ impl Model {
                     self.node_names.push(node.name().unwrap_or("").into());
                     self.mesh_names.push(mesh.name().unwrap_or("").into());
                     self.meshes.push(Mesh {
+                        visible: true,
                         materials: vec![],
                         instances: None,
                         name: format!(

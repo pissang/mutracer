@@ -39,13 +39,13 @@ fn fixture(wrap: [u32; 2], float: bool) -> Vec<u8> {
     words[texture + t::WORDS + t::WIDTH] = 2;
     words[texture + t::WORDS + t::HEIGHT] = 1;
     words[texture + t::WORDS + t::PIXELS] = second_pixels as u32;
-    words[64 + m::MAP] = 0;
-    words[64 + m::EMISSIVE_MAP] = 1;
-    words[64 + m::EMISSION_COLOR..64 + m::EMISSION_COLOR + 3].fill(1f32.to_bits());
-    words[64 + m::EMISSION_LUMINANCE] = 1f32.to_bits();
+    words[65 + m::MAP] = 0;
+    words[65 + m::EMISSIVE_MAP] = 1;
+    words[65 + m::EMISSION_COLOR..65 + m::EMISSION_COLOR + 3].fill(1f32.to_bits());
+    words[65 + m::EMISSION_LUMINANCE] = 1f32.to_bits();
     words[104 + 14] = 3f32.to_bits();
     // Cover the image and exercise UVs outside the texture boundary.
-    words[120..129].copy_from_slice(&[-2f32, -1., 0., 2., -1., 0., 0., 2., 0.].map(f32::to_bits));
+    words[121..130].copy_from_slice(&[-2f32, -1., 0., 2., -1., 0., 0., 2., 0.].map(f32::to_bits));
     words[h::LENGTH] = words.len() as u32;
     bytemuck::cast_slice(&words).to_vec()
 }

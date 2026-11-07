@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
-/* Raw scene descriptor v4 records. The format, validation rules and limits are
- * in native/docs/scene-format.md; mt_context_commit (mutracer-context.h)
- * consumes the descriptor. Every record is a run of little-endian 32-bit words:
+/* Raw scene descriptor v5 records (historical _v4 C type names). The format,
+ * validation rules and limits are in native/docs/scene-format.md.
+ * mt_context_commit (mutracer-context.h) consumes the descriptor. Every record is a run of little-endian 32-bit words:
  * uint32_t fields, float fields as IEEE binary32. Offsets are word offsets from
  * the start of the descriptor, and offset 0 omits an optional array. Reserved
  * fields must be zero. The descriptor defaults to an 8192 MiB admission budget
@@ -64,6 +64,7 @@ typedef struct mt_mesh_v4 {
   uint32_t geometry_index, material_index;
   uint32_t material_table_offset, material_table_count; /* 0 count uses material_index. */
   float world_matrix[16]; /* Column-major affine local-to-world. */
+  uint32_t flags; /* Bit 0 hides the entire mesh/batch; other bits must be zero. */
 } mt_mesh_v4;
 
 typedef struct mt_material_v4 {
@@ -133,6 +134,7 @@ MT_SCENE_ASSERT(header_batch, MT_SCENE_FIELD(mt_scene_header_v4, batch_offset, M
 MT_SCENE_ASSERT(geometry_size, sizeof(mt_geometry_v4) == MT_GEOMETRY_WORDS * MT_WORD_BYTES);
 MT_SCENE_ASSERT(geometry_material_index, MT_SCENE_FIELD(mt_geometry_v4, material_index_offset, MT_GEOMETRY_MATERIAL_INDEX));
 MT_SCENE_ASSERT(mesh_size, sizeof(mt_mesh_v4) == MT_MESH_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(mesh_flags, MT_SCENE_FIELD(mt_mesh_v4, flags, MT_MESH_FLAGS));
 MT_SCENE_ASSERT(mesh_transform, MT_SCENE_FIELD(mt_mesh_v4, world_matrix, MT_MESH_TRANSFORM));
 MT_SCENE_ASSERT(material_size, sizeof(mt_material_v4) == MT_MATERIAL_WORDS * MT_WORD_BYTES);
 MT_SCENE_ASSERT(material_thin_walled, MT_SCENE_FIELD(mt_material_v4, thin_walled, MT_MATERIAL_THIN_WALLED));

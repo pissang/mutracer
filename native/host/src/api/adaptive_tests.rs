@@ -72,7 +72,7 @@ fn adaptive_preview_includes_filter_latency_before_the_next_camera() {
     assert!(render.denoise_current().unwrap());
     assert_eq!(render.denoise_report().unwrap().samples, 1);
     engine.display().present(&render).unwrap().unwrap();
-    let mut camera = super::super::Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = super::super::Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] += 0.1;
     engine.set_camera(Some(camera)).unwrap();
     engine.update().unwrap();

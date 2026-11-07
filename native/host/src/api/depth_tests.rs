@@ -75,10 +75,10 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
             set(&mut scene, 48 + axis, 10f32.to_bits());
         }
         // Foreground is x=.2.. .8, y=.1.. .7 at z=1; background is z=0.
-        set(&mut scene, 82, 1f32.to_bits());
-        set(&mut scene, 118, 0f32.to_bits());
-        set(&mut scene, 188, 0.5f32.to_bits());
-        set(&mut scene, 189, 0.4f32.to_bits());
+        set(&mut scene, 83, 1f32.to_bits());
+        set(&mut scene, 120, 0f32.to_bits());
+        set(&mut scene, 190, 0.5f32.to_bits());
+        set(&mut scene, 191, 0.4f32.to_bits());
         engine.set_scene(&scene).unwrap();
         let mut camera = Camera::default();
         camera.world_matrix[14] = 4.;
@@ -194,7 +194,7 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
         near(&query(&engine, center), 4.);
 
         // Transform edit is committed without requiring a beauty sample.
-        set(&mut scene, 82, 2f32.to_bits());
+        set(&mut scene, 83, 2f32.to_bits());
         engine.set_scene(&scene).unwrap();
         engine.update().unwrap();
         near(&query(&engine, center), 3.);
@@ -205,7 +205,7 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
                 1u32,
                 1,
                 0,
-                222,
+                224,
                 0,
                 0,
                 1f32.to_bits(),
@@ -229,21 +229,21 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
                 .into_iter()
                 .flat_map(f32::to_le_bytes),
         );
-        set(&mut cutout, 1, 243);
-        set(&mut cutout, 37, 235);
-        set(&mut cutout, 127, 3);
-        set(&mut cutout, 128, 223);
+        set(&mut cutout, 1, 245);
+        set(&mut cutout, 37, 237);
+        set(&mut cutout, 129, 3);
+        set(&mut cutout, 130, 225);
         set(&mut cutout, 8, 1);
-        set(&mut cutout, 13, 210);
-        set(&mut cutout, 123, 0);
+        set(&mut cutout, 13, 212);
+        set(&mut cutout, 125, 0);
         engine.set_scene(&cutout).unwrap();
         engine.update().unwrap();
         near(&query(&engine, center), 5.);
         let mut catcher = scene.clone();
         catcher.extend([51u32, 1, 0, 0].into_iter().flat_map(u32::to_le_bytes));
-        set(&mut catcher, 1, 214);
-        set(&mut catcher, 127, 1);
-        set(&mut catcher, 128, 210);
+        set(&mut catcher, 1, 216);
+        set(&mut catcher, 129, 1);
+        set(&mut catcher, 130, 212);
         engine.set_scene(&catcher).unwrap();
         engine.update().unwrap();
         near(&query(&engine, center), 5.);
@@ -254,7 +254,7 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
         near(&query(&engine, center), 2.); // descriptor eye (.5,.4,4), foreground z=2.
         let mut offscreen = scene.clone();
         set(&mut offscreen, 60, 100f32.to_bits());
-        set(&mut offscreen, 80, 100f32.to_bits());
+        set(&mut offscreen, 81, 100f32.to_bits());
         engine.set_scene(&offscreen).unwrap();
         engine.update().unwrap();
         near(&query(&engine, center), 0.); // Ready geometry with 49 misses is not None.
@@ -363,7 +363,7 @@ fn surface_picking_uses_source_ids_alpha_and_discards_stale_camera_queries() {
         );
         assert_eq!(pick(0., 0.), SurfacePick::Background);
         let mut transparent = scene.clone();
-        set(&mut transparent, 108 + 13, 0f32.to_bits());
+        set(&mut transparent, 110 + 13, 0f32.to_bits());
         engine.set_scene(&transparent).unwrap();
         engine.update().unwrap();
         assert_eq!(

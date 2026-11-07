@@ -13,7 +13,7 @@ function record(fields: Field[]): Record<string, number> {
 // One source for native wire records, resource identities and shared WebGPU
 // bindings. Descriptor offsets are u32 words; uniform offsets are bytes.
 export const WORD_BYTES = 4;
-export const protocolVersions = {SCENE: 4, RESOURCE_PACKET: 1, RESOURCE_WRITES: 3,TARGET_PACKET:4, GEOMETRY_KERNELS: 1};
+export const protocolVersions = {SCENE: 5, RESOURCE_PACKET: 1, RESOURCE_WRITES: 3,TARGET_PACKET:4, GEOMETRY_KERNELS: 1};
 export function sceneRecords() { return {
   HEADER: record([field('VERSION'), field('LENGTH'), field('WIDTH'), field('HEIGHT'),
     field('GEOMETRY_COUNT'), field('MESH_COUNT'), field('MATERIAL_COUNT'), field('LIGHT_COUNT'), field('TEXTURE_COUNT'),
@@ -22,7 +22,7 @@ export function sceneRecords() { return {
     field('BACKGROUND_TEXTURE'), field('QUALITY_FLAGS'), field('BATCH_OFFSET'), field('MESH_AOV_IDS'), field('MATERIAL_AOV_IDS'), field('ENVIRONMENT_SETTINGS'), field('GROUNDED_BACKGROUND'), field('RESERVED_END', 4)]),
   GEOMETRY: record([field('VERTEX_COUNT'), field('INDEX_COUNT'), field('POSITION'), field('INDICES'), field('NORMAL'),
     field('UV'), field('UV1'), field('COLOR'), field('TANGENT'), field('MATERIAL_INDEX'), field('RESERVED', 2)]),
-  MESH: record([field('GEOMETRY'), field('MATERIAL'), field('MATERIAL_TABLE'), field('MATERIAL_COUNT'), field('TRANSFORM', 16)]),
+  MESH: record([field('GEOMETRY'), field('MATERIAL'), field('MATERIAL_TABLE'), field('MATERIAL_COUNT'), field('TRANSFORM', 16), field('FLAGS')]),
   MATERIAL: record([field('BASE_COLOR', 3), field('ROUGHNESS'), field('METALNESS'), field('TRANSMISSION'), field('IOR'),
     field('EMISSION_COLOR', 3), field('EMISSION_LUMINANCE'), field('COAT_WEIGHT'), field('COAT_ROUGHNESS'), field('OPACITY'),
     field('THIN_WALLED'), field('MAP'), field('NORMAL_MAP'), field('METALLIC_ROUGHNESS_MAP'), field('EMISSIVE_MAP'),

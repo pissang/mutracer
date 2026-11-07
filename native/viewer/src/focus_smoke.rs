@@ -155,6 +155,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 tangents: vec![].into(),
             });
             model.0.meshes.push(Mesh {
+                visible: true,
                 materials: vec![],
                 instances: None,
                 name: "plane".into(),

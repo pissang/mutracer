@@ -121,7 +121,7 @@ fn coalesced_preview_collects_async_denoising_before_committing_motion() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let before = render_loop.presentations();
-    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    let mut camera = Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap();
     camera.world_matrix[12] += 0.1;
     engine.set_camera(Some(camera)).unwrap();
     for _ in 0..3 {
@@ -377,7 +377,7 @@ fn camera_sync(engine: &Engine) -> Arc<Mutex<CameraSync>> {
         activity: SyncActivity::default(),
         moving: false,
         step: 0,
-        base: Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap(),
+        base: Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap(),
     }))
 }
 fn tick_until(

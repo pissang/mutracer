@@ -405,6 +405,9 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         if expanded_instances > instance_limit() {
             return Err(format!("Expanded scene requires {expanded_instances} instances; memory/24-bit instance limit is {}", instance_limit()).into());
         }
+        if w.u(o + m::FLAGS) & !1 != 0 {
+            return Err("Unknown mesh flags".into());
+        }
         w.affine(o + m::TRANSFORM)?;
     }
     let mut displacement = Vec::new();
@@ -2293,10 +2296,10 @@ pub unsafe extern "C" fn mt_probe_render_scene(
 
 #[cfg(test)]
 pub(super) fn small_fixture() -> Vec<u8> {
-    let mut words = vec![0u32; 132];
+    let mut words = vec![0u32; 133];
     words[..15].copy_from_slice(&[
         layout::version::SCENE as u32,
-        132,
+        133,
         8,
         8,
         1,
@@ -2306,23 +2309,23 @@ pub(super) fn small_fixture() -> Vec<u8> {
         0,
         32,
         44,
-        64,
-        88,
-        88,
-        88,
+        65,
+        89,
+        89,
+        89,
     ]);
     words[16..20].copy_from_slice(&[0, 0, 0, 1f32.to_bits()]);
-    words[32..36].copy_from_slice(&[3, 3, 120, 129]);
-    for off in [48, 104] {
+    words[32..36].copy_from_slice(&[3, 3, 121, 130]);
+    for off in [48, 105] {
         for k in [0, 5, 10, 15] {
             words[off + k] = 1f32.to_bits();
         }
     }
     for (k, x) in [(0, 0.8), (1, 0.8), (2, 0.8), (3, 0.3), (6, 1.5), (13, 1.)] {
-        words[64 + k] = (x as f32).to_bits();
+        words[65 + k] = (x as f32).to_bits();
     }
     for k in 15..19 {
-        words[64 + k] = u32::MAX;
+        words[65 + k] = u32::MAX;
     }
     for (k, x) in [
         (1, 45.),
@@ -2333,12 +2336,12 @@ pub(super) fn small_fixture() -> Vec<u8> {
         (11, 24.),
         (12, 1.),
     ] {
-        words[88 + k] = (x as f32).to_bits();
+        words[89 + k] = (x as f32).to_bits();
     }
     for (k, x) in [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.].iter().enumerate() {
-        words[120 + k] = x.to_bits();
+        words[121 + k] = x.to_bits();
     }
-    words[129..].copy_from_slice(&[0, 1, 2]);
+    words[130..].copy_from_slice(&[0, 1, 2]);
     words.into_iter().flat_map(u32::to_le_bytes).collect()
 }
 #[cfg(test)]
@@ -2565,7 +2568,7 @@ pub(crate) mod tests {
         let _entry = ENTRY_LOCK.lock().unwrap();
         runtime::init();
         let scene = input();
-        let camera = &scene[88 * 4..120 * 4];
+        let camera = &scene[89 * 4..121 * 4];
         let expected = prepare_camera(camera, 8, 8).unwrap();
         let mut extreme = camera.to_vec();
         extreme[28 * 4..29 * 4].copy_from_slice(&f32::MAX.to_le_bytes());
@@ -2592,7 +2595,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn retired_scene_versions_are_rejected() {
-        for version in [1, 2, 3] {
+        for version in [1, 2, 3, 4] {
             assert!(validate(&change(&input(), h::VERSION, version)).is_err());
         }
     }
@@ -2606,20 +2609,20 @@ pub(crate) mod tests {
             (4, 0),
             (7, 65),
             (9, u32::MAX),
-            (34, 131),
-            (35, 131),
+            (34, 132),
+            (35, 132),
             (44, 1),
             (45, 1),
             (46, 1),
             (48, 0),
-            (79, 0),
-            (88, 2),
-            (89, 0),
+            (80, 0),
+            (89, 2),
             (90, 0),
-            (96, 0),
-            (101, 1),
-            (120, f32::NAN.to_bits()),
-            (129, 3),
+            (91, 0),
+            (97, 0),
+            (102, 1),
+            (121, f32::NAN.to_bits()),
+            (130, 3),
             (20, 1),
         ] {
             assert!(
@@ -2641,16 +2644,16 @@ pub(crate) mod tests {
     #[test]
     fn environment_roles_validate_encoding_references_and_flags() {
         let mut descriptor = vec![0u32; 16];
-        descriptor[..4].copy_from_slice(&[1, 1, 1, 144]);
+        descriptor[..4].copy_from_slice(&[1, 1, 1, 145]);
         descriptor[6] = 1f32.to_bits();
         descriptor[7] = 1f32.to_bits();
         descriptor[15] = 1f32.to_bits();
         let mut bytes = extend(input(), &descriptor);
-        for (word, value) in [(8, 1), (13, 132), (20, 1), (21, 1)] {
+        for (word, value) in [(8, 1), (13, 133), (20, 1), (21, 1)] {
             bytes = change(&bytes, word, value);
         }
         assert!(validate(&bytes).is_ok());
-        for (word, value) in [(20, 2), (21, 2), (22, 8), (22, 4), (134, 0), (135, 147)] {
+        for (word, value) in [(20, 2), (21, 2), (22, 8), (22, 4), (135, 0), (136, 148)] {
             assert!(
                 validate(&change(&bytes, word, value)).is_err(),
                 "word {word}"
@@ -2703,26 +2706,26 @@ pub(crate) mod tests {
     #[test]
     fn material_extensions_validate_types_uniqueness_and_support() {
         let mut bytes = extend(input(), &[5, 0.6f32.to_bits(), 0, 0]);
-        bytes = change(&bytes, 83, 1);
-        bytes = change(&bytes, 84, 132);
+        bytes = change(&bytes, 84, 1);
+        bytes = change(&bytes, 85, 133);
         assert!(validate(&bytes).is_ok());
-        assert!(validate(&change(&change(&bytes, 132, 76), 133, (-0.2f32).to_bits())).is_ok());
+        assert!(validate(&change(&change(&bytes, 133, 76), 134, (-0.2f32).to_bits())).is_ok());
         for (word, value) in [
-            (132, 0),
-            (132, 59),
-            (132, 77),
-            (133, f32::NAN.to_bits()),
-            (134, 1),
-            (83, 77),
-            (84, 135),
+            (133, 0),
+            (133, 59),
+            (133, 77),
+            (134, f32::NAN.to_bits()),
+            (135, 1),
+            (84, 77),
+            (85, 136),
         ] {
             assert!(validate(&change(&bytes, word, value)).is_err());
         }
         for (id, payload) in [(37, 2), (41, 4), (39, 0)] {
-            assert!(validate(&change(&change(&bytes, 132, id), 133, payload)).is_err());
+            assert!(validate(&change(&change(&bytes, 133, id), 134, payload)).is_err());
         }
-        assert!(validate(&change(&change(&bytes, 132, 39), 133, u32::MAX)).is_ok());
-        let duplicate = change(&extend(bytes, &[5, 0.2f32.to_bits(), 0, 0]), 83, 2);
+        assert!(validate(&change(&change(&bytes, 133, 39), 134, u32::MAX)).is_ok());
+        let duplicate = change(&extend(bytes, &[5, 0.2f32.to_bits(), 0, 0]), 84, 2);
         assert!(validate(&duplicate).is_err());
     }
     #[test]
@@ -2734,19 +2737,19 @@ pub(crate) mod tests {
             payload[12 + i * 4] = 1f32.to_bits();
         }
         let mut bytes = extend(input(), &payload);
-        for (word, value) in [(39, 132), (40, 141), (41, 153), (46, 156), (47, 1)] {
+        for (word, value) in [(39, 133), (40, 142), (41, 154), (46, 157), (47, 1)] {
             bytes = change(&bytes, word, value);
         }
         assert!(validate(&bytes).is_ok());
         for (word, value) in [
-            (39, 156),
-            (40, 156),
-            (41, 156),
-            (153, 1),
-            (156, 1),
+            (39, 157),
+            (40, 157),
+            (41, 157),
+            (154, 1),
+            (157, 1),
             (47, 0),
-            (132, f32::NAN.to_bits()),
-            (144, f32::INFINITY.to_bits()),
+            (133, f32::NAN.to_bits()),
+            (145, f32::INFINITY.to_bits()),
         ] {
             assert!(
                 validate(&change(&bytes, word, value)).is_err(),
@@ -2757,36 +2760,36 @@ pub(crate) mod tests {
     #[test]
     fn batches_validate_transforms_colors_empty_and_ordinary_meshes() {
         let mut payload = vec![0u32; 23];
-        payload[..4].copy_from_slice(&[1, 136, 152, 0]);
+        payload[..4].copy_from_slice(&[1, 137, 153, 0]);
         for k in [0, 5, 10, 15] {
             payload[4 + k] = 1f32.to_bits();
         }
         payload[20..].fill(1f32.to_bits());
-        let bytes = change(&extend(input(), &payload), 23, 132);
+        let bytes = change(&extend(input(), &payload), 23, 133);
         assert!(validate(&bytes).is_ok());
         for (word, value) in [
-            (132, 65537),
-            (133, 154),
-            (134, 154),
-            (135, 1),
-            (136, 0),
-            (139, 1f32.to_bits()),
-            (152, f32::NAN.to_bits()),
-            (132, 0),
-            (132, u32::MAX),
+            (133, 65537),
+            (134, 155),
+            (135, 155),
+            (136, 1),
+            (137, 0),
+            (140, 1f32.to_bits()),
+            (153, f32::NAN.to_bits()),
+            (133, 0),
+            (133, u32::MAX),
         ] {
             assert!(
                 validate(&change(&bytes, word, value)).is_err(),
                 "word {word}"
             );
         }
-        let no_arrays = change(&change(&bytes, 133, 0), 134, 0);
-        assert!(validate(&change(&no_arrays, 132, 0)).is_ok());
-        assert!(validate(&change(&no_arrays, 132, u32::MAX)).is_ok());
+        let no_arrays = change(&change(&bytes, 134, 0), 135, 0);
+        assert!(validate(&change(&no_arrays, 133, 0)).is_ok());
+        assert!(validate(&change(&no_arrays, 133, u32::MAX)).is_ok());
     }
     fn displacement_input() -> Vec<u8> {
         let mut payload = vec![0u32; 54];
-        payload[6..10].copy_from_slice(&[2, 2, 1, 150]);
+        payload[6..10].copy_from_slice(&[2, 2, 1, 151]);
         payload[12] = 1f32.to_bits();
         payload[13] = 1f32.to_bits();
         payload[34..].copy_from_slice(&[
@@ -2812,7 +2815,7 @@ pub(crate) mod tests {
             0,
         ]);
         let mut bytes = extend(input(), &payload);
-        for (word, value) in [(8, 1), (13, 138), (37, 132), (83, 5), (84, 166)] {
+        for (word, value) in [(8, 1), (13, 139), (37, 133), (84, 5), (85, 167)] {
             bytes = change(&bytes, word, value);
         }
         bytes
@@ -2825,26 +2828,26 @@ pub(crate) mod tests {
         for (word, value) in [
             (0, 2),
             (37, 0),
-            (138, 3),
-            (139, 1),
-            (175, 0),
-            (179, 4),
-            (183, 1e30f32.to_bits()),
-            (120, 1e30f32.to_bits()),
+            (139, 3),
+            (140, 1),
+            (176, 0),
+            (180, 4),
+            (184, 1e30f32.to_bits()),
+            (121, 1e30f32.to_bits()),
         ] {
             assert!(
                 validate(&change(&bytes, word, value)).is_err(),
                 "word {word}"
             );
         }
-        assert!(validate(&change(&change(&bytes, 37, 0), 179, 1)).is_ok());
+        assert!(validate(&change(&change(&bytes, 37, 0), 180, 1)).is_ok());
         let mut zero_coordinates = bytes.clone();
-        for word in 120..129 {
+        for word in 121..130 {
             zero_coordinates = change(&zero_coordinates, word, 0);
         }
-        assert!(validate(&change(&zero_coordinates, 183, 1e30f32.to_bits())).is_err());
+        assert!(validate(&change(&zero_coordinates, 184, 1e30f32.to_bits())).is_err());
         // Zero amplitude does not require UVs or a square texture.
-        assert!(validate(&change(&change(&change(&bytes, 37, 0), 171, 0), 139, 1)).is_ok());
+        assert!(validate(&change(&change(&change(&bytes, 37, 0), 172, 0), 140, 1)).is_ok());
     }
     #[test]
     fn light_extensions_validate_roles_utf8_and_byte_spans() {
@@ -2855,23 +2858,23 @@ pub(crate) mod tests {
         }
         light[6] = 20f32.to_bits();
         light[7] = 40f32.to_bits();
-        light[9] = 160;
+        light[9] = 161;
         light[10] = 4;
         for k in [0, 5, 10, 15] {
             light[12 + k] = 1f32.to_bits();
         }
         light.push(u32::from_le_bytes(*b"test"));
         let mut bytes = extend(input(), &light);
-        bytes = change(&change(&bytes, 7, 1), 12, 132);
+        bytes = change(&change(&bytes, 7, 1), 12, 133);
         assert!(validate(&bytes).is_ok()); // Syntax is checked by the original AOT IES parser.
         for (word, value) in [
             (0, 2),
-            (140, 1),
-            (141, 161),
-            (142, 0),
-            (142, 16385),
-            (143, 1),
-            (160, u32::MAX),
+            (141, 1),
+            (142, 162),
+            (143, 0),
+            (143, 16385),
+            (144, 1),
+            (161, u32::MAX),
         ] {
             assert!(
                 validate(&change(&bytes, word, value)).is_err(),

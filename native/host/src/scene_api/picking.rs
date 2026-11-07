@@ -149,6 +149,9 @@ impl ScenePicker {
         };
         for (key, mesh) in scene.meshes.iter() {
             mesh.validate_references(scene)?;
+            if !mesh.visible {
+                continue;
+            }
             let geometry = mesh.geometry;
             if let std::collections::btree_map::Entry::Vacant(entry) =
                 out.geometries.entry(geometry)

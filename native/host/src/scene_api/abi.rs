@@ -61,7 +61,7 @@ pub struct TextureDesc {
 #[derive(Clone, Copy)]
 pub struct MeshDesc {
     struct_size: u32,
-    reserved: u32,
+    flags: u32,
     geometry: u64,
     material: u64,
     world_matrix: [f32; 16],
@@ -202,7 +202,7 @@ defaults! {
  mt_scene_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
  mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.,normal_scale:1.,unlit:0,reserved:0};
  mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0};
- mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,reserved:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
+ mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,flags:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
  mt_scene_instances_desc_default,InstancesDesc,InstancesDesc{struct_size:size_of::<InstancesDesc>() as u32,count:0,transforms:std::ptr::null(),colors:std::ptr::null()};
  mt_scene_light_desc_default,LightDesc,LightDesc{struct_size:size_of::<LightDesc>() as u32,kind:0,color:[1.;3],intensity:1.,size:1.,height:1.,spread:1.,reserved:0,world_matrix:Mat4::IDENTITY.to_cols_array(),texture:0,ies:std::ptr::null(),ies_bytes:0};
  mt_scene_environment_settings_default,EnvironmentSettingsDesc,EnvironmentSettingsDesc{struct_size:24,reserved:0,intensity:1.,rotation:0.,background_intensity:1.,background_rotation:0.};
@@ -294,10 +294,11 @@ unsafe fn texture(p: *const TextureDesc) -> Result<Texture> {
 }
 unsafe fn mesh(e: &Entry, p: *const MeshDesc) -> Result<Mesh> {
     let d = unsafe { record(p) }?;
-    if d.reserved != 0 || d.material_count > 16_777_216 {
+    if d.flags & !1 != 0 || d.material_count > 16_777_216 {
         return Err(invalid("Invalid mesh description"));
     }
     let mut m = Mesh::new(e.geometry(d.geometry)?, e.material(d.material)?);
+    m.visible = d.flags & 1 == 0;
     m.transform = Mat4::from_cols_array(&d.world_matrix);
     m.materials = unsafe { input(d.materials, d.material_count) }?
         .iter()
@@ -597,6 +598,24 @@ pub unsafe extern "C" fn mt_scene_set_instances(
             let id = e.mesh(id)?;
             e.scene.mesh_mut(id)?.instances = inst;
             Ok(())
+        })
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_scene_set_mesh_visible(
+    scene: u64,
+    id: u64,
+    visible: u32,
+    error: *mut c_char,
+    cap: usize,
+) -> i32 {
+    call(error, cap, || {
+        if visible > 1 {
+            return Err(invalid("Visibility must be 0 or 1"));
+        }
+        with_scene(scene, |e| {
+            let id = e.mesh(id)?;
+            e.scene.set_mesh_visible(id, visible != 0)
         })
     })
 }
@@ -1053,6 +1072,58 @@ mod tests {
             mt_scene_destroy(s, std::ptr::null_mut(), 0),
             Status::InvalidHandle as i32
         );
+    }
+    #[test]
+    fn mesh_visibility_defaults_flags_and_errors() {
+        unsafe {
+            let mut d = std::mem::MaybeUninit::<MeshDesc>::uninit();
+            assert_eq!(mt_scene_mesh_desc_default(d.as_mut_ptr()), 0);
+            let mut d = d.assume_init();
+            assert_eq!(d.flags, 0);
+            assert_eq!(std::mem::offset_of!(MeshDesc, flags), 4);
+            assert_eq!(size_of::<MeshDesc>(), 88 + 2 * size_of::<usize>());
+            let mut e = Entry {
+                scene: Scene::new(),
+                resources: HashMap::new(),
+                names: HashMap::new(),
+            };
+            let g = e
+                .scene
+                .add_geometry(Geometry::new(
+                    vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                    vec![0, 1, 2],
+                ))
+                .unwrap();
+            let m = e.scene.add_material(OpenPbrMaterial::default()).unwrap();
+            d.geometry = e.insert(Resource::Geometry(g));
+            d.material = e.insert(Resource::Material(m));
+            assert!(mesh(&e, &d).unwrap().visible);
+            d.flags = 1;
+            assert!(!mesh(&e, &d).unwrap().visible);
+            d.flags = 2;
+            assert!(mesh(&e, &d).is_err());
+            let id = e.scene.add_mesh(Mesh::new(g, m)).unwrap();
+            let handle = e.insert(Resource::Mesh(id));
+            let scene = register(e);
+            assert_eq!(
+                mt_scene_set_mesh_visible(scene, handle, 0, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(!with_scene(scene, |e| Ok(e.scene.mesh(id)?.visible)).unwrap());
+            assert_eq!(
+                mt_scene_set_mesh_visible(scene, handle, 2, std::ptr::null_mut(), 0),
+                Status::InvalidArgument as i32
+            );
+            assert_eq!(
+                mt_scene_set_mesh_visible(scene, 0, 1, std::ptr::null_mut(), 0),
+                Status::InvalidHandle as i32
+            );
+            mt_scene_destroy(scene, std::ptr::null_mut(), 0);
+            assert_eq!(
+                mt_scene_set_mesh_visible(scene, handle, 1, std::ptr::null_mut(), 0),
+                Status::InvalidHandle as i32
+            );
+        }
     }
     #[test]
     fn c_defaults_records_and_handle_lifetimes() {

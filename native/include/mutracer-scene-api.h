@@ -60,8 +60,9 @@ typedef struct mt_scene_texture_desc {
 } mt_scene_texture_desc; /* Default empty RGBA8 sRGB, UV0, no flip, repeat,
  * scale (1,1), offset (0,0). RGBA32F is linear. Row-major RGBA, exact byte count. */
 MT_SCENE_API_LAYOUT(mt_scene_texture_desc, 48 + 2 * sizeof(void *));
+#define MT_SCENE_MESH_HIDDEN 1u
 typedef struct mt_scene_mesh_desc {
-  uint32_t struct_size, reserved;
+  uint32_t struct_size, flags; /* Default 0: visible; only MT_SCENE_MESH_HIDDEN is supported. */
   mt_scene_geometry_id geometry; mt_scene_material_id material;
   float world_matrix[16];
   const mt_scene_material_id *materials; size_t material_count;
@@ -111,6 +112,13 @@ int32_t mt_scene_set_mesh(mt_scene scene, mt_scene_mesh_id id, const mt_scene_me
 int32_t mt_scene_add_instances(mt_scene scene, const mt_scene_mesh_desc *mesh, const mt_scene_instances_desc *instances, mt_scene_mesh_id *out, char *error, size_t capacity);
 /* NULL instances restores an ordinary mesh. */
 int32_t mt_scene_set_instances(mt_scene scene, mt_scene_mesh_id id, const mt_scene_instances_desc *instances, char *error, size_t capacity);
+/* Sets whole-mesh/batch visibility (0 hidden, 1 visible; default visible).
+ * Hidden meshes do not intersect rays, emit light, or appear in picking/AOVs;
+ * geometry and materials remain resident. Commit with mt_engine_set_scene_object
+ * and mt_engine_update. Invalid boolean returns INVALID_ARGUMENT; stale/wrong-
+ * scene handles return INVALID_HANDLE, without changing the scene. Calls on one
+ * scene must not overlap; sequential calls may come from different threads. */
+int32_t mt_scene_set_mesh_visible(mt_scene scene, mt_scene_mesh_id id, uint32_t visible, char *error, size_t capacity);
 int32_t mt_scene_set_mesh_transform(mt_scene scene, mt_scene_mesh_id id, const float world_matrix[16], char *error, size_t capacity);
 int32_t mt_scene_add_light(mt_scene scene, const mt_scene_light_desc *desc, mt_scene_light_id *out, char *error, size_t capacity);
 int32_t mt_scene_set_light(mt_scene scene, mt_scene_light_id id, const mt_scene_light_desc *desc, char *error, size_t capacity);
