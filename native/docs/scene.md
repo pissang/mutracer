@@ -54,9 +54,12 @@ These edits commit incrementally:
   batch's instance matrices in one update; existing instance colors. Commit
   multiple matrix edits together to reduce update cost.
 - Mesh visibility, including an entire instance batch; see [visibility](#visibility).
-- Adding or removing meshes that reuse resident geometry and materials, while
+- Adding or removing meshes that reuse resident geometry and materials while
   the retained TLAS capacity is sufficient. Removing a mesh does not evict its
   geometry; a later full preparation may reclaim it.
+- Appending static, single-material geometry without displacement or triangle
+  material indices when its shader and buffer layout remain compatible. This
+  path can grow retained buffers, using more memory and update work.
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
@@ -81,10 +84,11 @@ previous image stays visible ([engine updates](engine.md#updates)):
   color edits are incremental.
 - Changes to a texture used as a displacement map.
 - Changed triangle indices, vertex or index counts, or UVs.
-- Mesh additions that introduce geometry or materials; membership changes that
-  exceed the retained TLAS capacity; changed instance counts or presence of
-  instance colors; changes to more than 64 and more than half of a batch's
-  instance matrices in one update.
+- Mesh additions that introduce a material, require new shader support, or add
+  displaced, indexed-material or otherwise incompatible geometry; membership
+  changes that exceed the retained TLAS capacity; changed instance counts or
+  presence of instance colors; changes to more than 64 and more than half of a
+  batch's instance matrices in one update.
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
 
