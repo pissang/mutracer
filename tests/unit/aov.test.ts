@@ -3,13 +3,19 @@ import {aovInstanceOrder, packAovScene} from '../../src/renderer/aovScene.js';
 import {CommittedScene} from '../../src/renderer/committedScene.js';
 import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
 import {describe, expect, it} from 'vitest';
-import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, validateAovId, type AovFrameSnapshot} from '../../src/renderer/aov.js';
+import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, aovLaneKind, isCenterAov, validateAovId, type AovFrameSnapshot} from '../../src/renderer/aov.js';
 import Mesh from '../../src/scene/Mesh.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 import {createPlaneGeometry} from '../../src/util/commonGeometry.js';
 import {HEADER} from '../../native/src/layout.js';
 
 describe('AOV contract', () => {
+  it('appends signed center outputs without changing existing masks or resolve lanes', () => {
+    expect(AOV_KINDS).toEqual(['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion', 'diffuseColor', 'specularColor', 'centerNormal', 'centerDepth', 'centerPosition']);
+    expect(aovMask(['centerNormal', 'centerDepth', 'centerPosition'])).toBe(3584);
+    expect(['centerNormal', 'centerDepth', 'centerPosition'].map(kind => aovLaneKind(kind as never))).toEqual([9, 10, 11]);
+    expect(AOV_KINDS.filter(isCenterAov)).toEqual(['id', 'motion', 'centerNormal', 'centerDepth', 'centerPosition']);
+  });
   it('uses disjoint flags, bounded packed records and descriptor extension words', () => {
     expect(aovMask(AOV_KINDS.slice(0, 7))).toBe(127);
     expect(aovMask(['diffuseColor', 'specularColor'])).toBe(384);

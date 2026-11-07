@@ -5,6 +5,7 @@ export default new FragmentShader({
     geometry: Shader.uniform('sampler2D'), position: Shader.uniform('sampler2D'),
     diffuse: Shader.uniform('sampler2D'), specular: Shader.uniform('sampler2D'),
     identity: Shader.uniform('usampler2D'), motion: Shader.uniform('sampler2D'),
+    normalDepth: Shader.uniform('sampler2D'), centerPosition: Shader.uniform('sampler2D'),
     kind: Shader.uniform('int'), samples: Shader.uniform('float'),
     mapping: Shader.uniform('vec4'), idComponent: Shader.uniform('int')
   },
@@ -39,6 +40,12 @@ void main() {
     uint h = displayHash(ids[idComponent]);
     color = .2 + .8 * vec3(float(h & 255u), float((h >> 8u) & 255u),
       float((h >> 16u) & 255u)) / 255.0;
+  } else if (kind >= 9) {
+    vec4 nd = texelFetch(normalDepth, p, 0), cp = texelFetch(centerPosition, p, 0);
+    alpha = cp.w;
+    if (kind == 9) color = clamp(nd.xyz * .5 + .5, 0.0, 1.0);
+    else if (kind == 10) color = vec3(clamp((nd.w - mapping.x) / (mapping.y - mapping.x), 0.0, 1.0));
+    else color = clamp(cp.xyz / mapping.z * .5 + .5, 0.0, 1.0);
   } else {
     vec4 m = texelFetch(motion, p, 0);
     alpha = m.w == 3.0 ? 1.0 : 0.0;

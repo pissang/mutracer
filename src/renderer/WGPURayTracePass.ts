@@ -16,7 +16,7 @@ import {
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {WGPUAov} from './WGPUAov.js';
 import {packAovScene} from './aovScene.js';
-import {aovMask, AOV_ACCUMULATED_MASK, AOV_REFLECTANCE_MASK, COMPACT_AOV_KINDS, type AovKind} from './aov.js';
+import {aovMask, AOV_PRIMARY_MASK, AOV_ACCUMULATED_MASK, AOV_REFLECTANCE_MASK, COMPACT_AOV_KINDS, type AovKind} from './aov.js';
 import {proceduralEnvironmentPower} from './proceduralEnvironmentPower.js';
 import {WGPUSkyBaker} from './WGPUSkyBaker.js';
 import {
@@ -1246,7 +1246,8 @@ class WGPURayTracePass {
     const reflectance = (aovMask(kinds) & AOV_REFLECTANCE_MASK) !== 0;
     let variants = this._aovPipelines.get(trace);
     if (!variants) { variants = new Map(); this._aovPipelines.set(trace, variants); }
-    const key = Number(reflectance) + Number(compact)*2;
+    const primary = (aovMask(kinds) & AOV_PRIMARY_MASK) !== 0;
+    const key = Number(reflectance) + Number(compact)*2 + Number(primary)*4;
     let pipelines = variants.get(key);
     if (!pipelines) {
       pipelines = {};
@@ -1262,7 +1263,7 @@ class WGPURayTracePass {
       ]});
       const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
       const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
-      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0, AOV_COMPACT: compact ? 1 : 0}};
+      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0, AOV_COMPACT: compact ? 1 : 0, AOV_PRIMARY: primary ? 1 : 0}};
       // Keep the UI responsive during first use, and reuse both variants across
       // preview/final target changes rather than recreating synchronous pipelines.
       void Promise.all([
@@ -1286,7 +1287,7 @@ class WGPURayTracePass {
     const compact = !!resolution && kinds.every(kind => COMPACT_AOV_KINDS.includes(kind));
     const pipelines = this._prepareAovPipelines(kinds, compact);
     if (!pipelines?.accumulation || !pipelines.center) return false;
-    state.resize(resolution?.width ?? this._width, resolution?.height ?? this._height, compact);
+    state.resize(resolution?.width ?? this._width, resolution?.height ?? this._height, compact, (aovMask(kinds) & AOV_PRIMARY_MASK) !== 0);
     const textures = this._bindless, groupIndex = textures ? 2 : 3;
     const target = Math.min(samples, cap);
     if (state.centerReady && state.samples >= target) return true;

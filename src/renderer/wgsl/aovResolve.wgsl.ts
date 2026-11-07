@@ -1,5 +1,5 @@
 /** Shared normalization for readback and GPU denoiser snapshots. */
-export const aovResolveCommon = /* wgsl */ `
+function resolveCommon(primary: boolean) { return /* wgsl */ `
 struct AovResolvedAccumulation { geometry: vec4f, position: vec4f, diffuse: vec4f, specular: vec4f, }
 struct AovResolvedCenter { identity: vec4u, motion: vec4f, }
 @group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;
@@ -9,7 +9,14 @@ fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
   if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,motion.w);}
-  else{
+${primary ? /* wgsl */ `  else if(kind>=9u){
+    let primary=center[source+parameters.x*parameters.y];
+    let normalDepth=bitcast<vec4f>(primary.identity);
+    if(kind==9u){value=vec4f(normalDepth.xyz,primary.motion.w);}
+    else if(kind==10u){value=vec4f(normalDepth.w,0.0,0.0,primary.motion.w);}
+    else{value=primary.motion;}
+  }
+` : ''}  else{
     let pixel=accumulation[source];let hits=pixel.position.w;
     let scale=select(0.0,1.0/max(hits,1.0),hits>0.0);let coverage=hits/f32(max(parameters.z,1u));
     if(kind==0u){value=vec4f(pixel.geometry.x*scale,0.0,0.0,coverage);}
@@ -22,9 +29,11 @@ fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   }
   return bitcast<vec4u>(value);
 }
-`;
+`; }
+export const aovResolveCommon = resolveCommon(true);
+// The native single-output and borrowed shaders keep their existing layout until the native port.
 /** Bit 8 of kind requests top row first. Kept for the native single-output pass. */
-export default aovResolveCommon + /* wgsl */ `
+export default resolveCommon(false) + /* wgsl */ `
 @group(0) @binding(2) var<storage,read_write> output: array<vec4u>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -37,7 +46,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 `;
 
 /** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
-export const aovBorrowDepthShader = aovResolveCommon + /* wgsl */ `
+export const aovBorrowDepthShader = resolveCommon(false) + /* wgsl */ `
 @group(0) @binding(2) var image: texture_storage_2d<rg32float,write>;
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {
   if(any(id.xy>=parameters.xy)){return;}
@@ -46,7 +55,7 @@ export const aovBorrowDepthShader = aovResolveCommon + /* wgsl */ `
   textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
 }`;
 /** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
-export const aovBorrowReflectanceShader = aovResolveCommon + /* wgsl */ `
+export const aovBorrowReflectanceShader = resolveCommon(false) + /* wgsl */ `
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
   let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
 }

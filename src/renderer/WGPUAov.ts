@@ -4,13 +4,13 @@ import {aovBorrowDepthShader, aovBorrowReflectanceShader} from './wgsl/aovResolv
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
-import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovLaneKind, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
+import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovLaneKind, aovMask, isCenterAov, type AovKind, type AovFrameSnapshot} from './aov.js';
 /** @internal Content revision of each borrowed AOV texture; changes whenever it is re-resolved. */
 export const borrowedAovRevision = new WeakMap<GPUTexture, number>();
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
   readonly history = new AovHistory();
-  width = 0; height = 0; samples = 0; centerReady = false; compact = false;
+  width = 0; height = 0; samples = 0; centerReady = false; compact = false; primary = false;
   private revision = 0;
   private readonly borrowed = new Map<AovKind, {image: GPUTexture; pipeline: GPUComputePipeline | GPURenderPipeline; samples: number; revision: number}>();
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
@@ -31,18 +31,31 @@ export class WGPUAov {
   reset() {
     this.revision++;
     if (!this.compact && this.centerReady && this.center && this.previousCenter) {
-      const encoder=this.device.createCommandEncoder();encoder.copyBufferToBuffer(this.center,0,this.previousCenter,0,this.center.size);this.device.queue.submit([encoder.finish()]);
+      const encoder=this.device.createCommandEncoder();encoder.copyBufferToBuffer(this.center,0,this.previousCenter,0,this.previousCenter.size);this.device.queue.submit([encoder.finish()]);
     }
     this.samples = 0; this.centerReady = false; this.frame = undefined; }
-  resize(width: number, height: number, compact = false) {
-    if (width === this.width && height === this.height && compact === this.compact) return;
-    const stride = compact ? 24 : AOV_LAYOUT.accumulatedBytes;
+  resize(width: number, height: number, compact = false, primary = false) {
+    if (width === this.width && height === this.height && compact === this.compact) {
+      if (primary === this.primary) return;
+      // A selection change keeps the same view and motion correspondence.
+      this.reset();
+      const oldCenter = this.center!;
+      this.center = this.device.createBuffer({label: 'AOV center', size: width * height * (AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0)),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
+      const encoder = this.device.createCommandEncoder();
+      encoder.copyBufferToBuffer(oldCenter, 0, this.center, 0, width * height * AOV_LAYOUT.centerBytes);
+      this.device.queue.submit([encoder.finish()]);
+      void this.device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => oldCenter.destroy());
+      this.primary = primary; this.displayPipeline = undefined;
+      return;
+    }
+    const stride = compact ? 24 : Math.max(AOV_LAYOUT.accumulatedBytes, AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0));
     if (width*height*stride>this.device.limits.maxStorageBufferBindingSize || width*height*stride>this.device.limits.maxBufferSize) throw new RangeError('AOV accumulation exceeds device buffer limits');
-    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height; this.compact = compact; this.displayPipeline = undefined;
+    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height; this.compact = compact; this.primary = primary; this.displayPipeline = undefined;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.accumulation = this.device.createBuffer({label: 'AOV accumulation', size: width * height * stride, usage});
     this.previousCenter = this.device.createBuffer({label: 'Previous AOV center', size: compact ? 32 : width*height*AOV_LAYOUT.centerBytes, usage});
-    this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * AOV_LAYOUT.centerBytes, usage});
+    this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * (AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0)), usage});
   }
   setScene(words: Uint32Array, primitiveIds?: Uint32Array) {
     const bytes = words.byteLength + (primitiveIds?.byteLength ?? 0);
@@ -131,7 +144,7 @@ export class WGPUAov {
   visualize(kind: AovKind, options: AovDisplayOptions, linear: boolean): GPUTexture {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
     const device=this.device;
-    this.displayPipeline ??= device.createComputePipeline({label:'AOV visualization',layout:'auto',compute:{module:device.createShaderModule({code:this.resolveCode(aovDisplayShader('rgba16float'))}),entryPoint:'main',...(this.compact ? {constants:{AOV_COMPACT:1}} : {})}});
+    this.displayPipeline ??= device.createComputePipeline({label:'AOV visualization',layout:'auto',compute:{module:device.createShaderModule({code:this.resolveCode(aovDisplayShader('rgba16float', this.primary))}),entryPoint:'main',...(this.compact ? {constants:{AOV_COMPACT:1}} : {})}});
     if(!this.displayTexture || this.displayTexture.width!==this.width || this.displayTexture.height!==this.height){
       this.displayTexture?.destroy();
       this.displayTexture=device.createTexture({label:'AOV display image',size:[this.width,this.height],format:'rgba16float',usage:GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
@@ -198,7 +211,7 @@ export class WGPUAov {
         this.snapshotLeases.delete(source);this.snapshotBuffers.delete(source);source.destroy();
       }
     }
-    const center = kind === 'id' || kind === 'motion';
+    const center = isCenterAov(kind);
     const source = center ? this.center! : this.accumulation!;
     const staging = this.device.createBuffer({size: source.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
     try {
@@ -212,6 +225,12 @@ export class WGPUAov {
         const pixel = ((this.height-1-y)*this.width+x), o = pixel * (center ? 8 : 16);
         if (kind === 'id') data.set(u.subarray(o, o+4), target);
         else if (kind === 'motion') data.set([f[o+4],f[o+5],0,f[o+7]], target);
+        else if (center) {
+          const tail = o + this.width*this.height*8, alpha = f[tail+7];
+          if (kind === 'centerDepth') data.set([f[tail+3],0,0,alpha], target);
+          else { const lane = tail + (kind === 'centerPosition' ? 4 : 0);
+            data.set([f[lane],f[lane+1],f[lane+2],alpha], target); }
+        }
         else {
           const hits = f[o+7], coverage = hits / Math.max(1, this.samples), inv = hits > 0 ? 1 / hits : 0;
           if (kind === 'depth') data.set([f[o]*inv, 0, 0, coverage], target);

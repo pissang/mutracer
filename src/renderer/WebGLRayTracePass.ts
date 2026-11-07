@@ -7,7 +7,7 @@ import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
 import {packAovScene} from './aovScene.js';
-import {aovMask, AOV_ACCUMULATED_MASK, AOV_REFLECTANCE_MASK, type AovKind} from './aov.js';
+import {aovMask, AOV_PRIMARY_MASK, AOV_ACCUMULATED_MASK, AOV_REFLECTANCE_MASK, type AovKind} from './aov.js';
 import { WebGLSkySource } from './WebGLSkySource.js';
 import { normalizeBounces, MAX_PATH_EVENTS_WEBGL } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
@@ -258,7 +258,8 @@ class WebGLRayTracePass {
   private _focusDistance = 10;
 
   private _aovPass: WebGLFullQuadPass<string, 'geometry' | 'position' | 'diffuse' | 'specular'>;
-  private _aovCenter: WebGLFullQuadPass<string, 'id' | 'motion'>;
+  private _aovCenter: WebGLFullQuadPass<string, 'id' | 'motion' | 'normalDepth' | 'centerPosition'>;
+  private _aovPrimary = false;
   private _tracePasses: WebGLFullQuadPass<any, any>[];
   private readonly _depthPass: WebGLFullQuadPass<never, 'depth'>;
   private readonly _depthAbort = new AbortController();
@@ -316,7 +317,7 @@ class WebGLRayTracePass {
       outputParams: { depth: commonNearestFloatProps }
     });
     this._aovPass = new WebGLFullQuadPass('AOV accumulation', renderer, {shader:aovTraceFragment(false), outputs:['geometry','position','diffuse','specular'], outputParams: Object.fromEntries(['geometry','position','diffuse','specular'].map(name=>[name,commonNearestFloatProps]))});
-    this._aovCenter = new WebGLFullQuadPass('AOV center',renderer,{shader:aovTraceFragment(true),outputs:['id','motion'],outputParams:{id:{...commonNearestFloatProps,type:5125},motion:commonNearestFloatProps}});
+    this._aovCenter = new WebGLFullQuadPass<string, 'id' | 'motion' | 'normalDepth' | 'centerPosition'>('AOV center',renderer,{shader:aovTraceFragment(true),outputs:['id','motion'],outputParams:{id:{...commonNearestFloatProps,type:5125},motion:commonNearestFloatProps,normalDepth:commonNearestFloatProps,centerPosition:commonNearestFloatProps}});
     this._tracePasses = [this._aovPass, this._aovCenter, this._mainPass, this._shadowCatcherPass, this._depthPass];
     this._tracePasses.forEach((pass) => {
       pass.setDefines({
@@ -1166,7 +1167,13 @@ class WebGLRayTracePass {
     if (!this._preparedMeshData || !this._tlas) return true;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
-    state.resize(width,height);
+    const primary = (aovMask(kinds) & AOV_PRIMARY_MASK) !== 0;
+    if (primary !== this._aovPrimary) {
+      this._aovCenter.setShader(aovTraceFragment(true, primary));
+      this._aovCenter.setOutputs(primary ? ['id','motion','normalDepth','centerPosition'] : ['id','motion']);
+      this._aovPrimary = primary;
+    }
+    state.resize(width,height,primary);
     this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & AOV_REFLECTANCE_MASK) !== 0});
     if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas,this._blasBase/4)); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
@@ -1180,7 +1187,7 @@ class WebGLRayTracePass {
   renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
     if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
     if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
-    if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
+    if (!state.centerReady) {this._aovCenter.createPass({}, {...state.center!, ...state.primary});state.centerReady=true;state.history.accept(state.frame!);}
     const target=Math.min(samples,cap);
     if ((aovMask(kinds) & AOV_ACCUMULATED_MASK) === 0) state.samples = target;
     while(state.samples<target){

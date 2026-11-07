@@ -1,4 +1,4 @@
-import {AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP, type AovKind} from './renderer/aov.js';
+import {AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP, isCenterAov, type AovKind} from './renderer/aov.js';
 import {aovMask} from './renderer/aov.js';
 import {displayAovKind} from './renderer/aovDisplay.js';
 import type {DisplayChannel} from './renderer/RenderingPipeline.js';
@@ -109,7 +109,7 @@ export interface CausticSettings {
 export interface RenderSettings {
   /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
   /** AOV dimensions. Default render; display traces AOVs at the canvas size with at most 4 samples (aovSamples above 4 have no effect) on WebGPU, falls back with one warning on WebGL, and rejects fixed-size renders. Output definitions do not depend on this setting. */ aovResolution?: 'render' | 'display';
-  /** Independent AOV sample cap, positive integer. Default 16; display-resolution AOVs stop at 4. */ aovSamples?: number;
+  /** Independent accumulated AOV sample cap, positive integer. Default 16; display-resolution accumulation stops at 4. Center outputs use one sample. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
@@ -235,7 +235,7 @@ export default class Render {
   /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
   /** AOV dimensions. Default render; display traces AOVs at the canvas size with at most 4 samples on WebGPU, falls back on WebGL, and rejects fixed-size renders. Output definitions do not depend on this setting. */ aovResolution: 'render' | 'display' = 'render';
   private _warnedAovResolution = false;
-  /** Independent AOV sample cap. Default 16; display-resolution AOVs stop at 4. */ aovSamples = 16;
+  /** Independent accumulated AOV sample cap. Default 16; display-resolution accumulation stops at 4. Center outputs use one sample. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 50] on WebGPU or
@@ -421,7 +421,7 @@ export default class Render {
     const target = this._synchronize();
     if (!target) return this._status = 'preparing';
     const before = target.getAovSamples?.() ?? 0;
-    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples, this.aovResolution === 'display' && this._engine.backend === 'webgpu' ? DISPLAY_AOV_SAMPLE_CAP : Infinity);
+    const limit = isCenterAov(kind) ? 1 : Math.min(this.maxSamples, this.aovSamples, this.aovResolution === 'display' && this._engine.backend === 'webgpu' ? DISPLAY_AOV_SAMPLE_CAP : Infinity);
     if (!target.refineAovs?.(this._targetCamera(this._engine._inputs.value!), Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
     if ((target.getAovSamples?.() ?? 0) > before) {
       this._frameTime = Math.max(.001, performance.now() - started);

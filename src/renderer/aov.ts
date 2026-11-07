@@ -1,6 +1,14 @@
-/** Optional primary-surface outputs, separate from beauty and OIDN guides. */
-export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion' | 'diffuseColor' | 'specularColor';
-export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion', 'diffuseColor', 'specularColor'];
+/**
+ * Optional surface outputs, separate from beauty and OIDN guides. Default selection [].
+ * centerNormal/centerDepth/centerPosition use the ID pixel-center pinhole hit once,
+ * skipping alpha < .5 and shadow catchers (up to 32 layers). Their alpha is 1 on
+ * hit, otherwise zero RGBA. centerNormal is signed unit world shading normal including
+ * the base normal map, without camera-facing flips, including on double-sided
+ * backfaces; centerDepth is nonnegative camera-forward distance, centerPosition
+ * is world xyz. Depth, position, roughness, reflectance and color retain jitter/DOF averaging.
+ */
+export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion' | 'diffuseColor' | 'specularColor' | 'centerNormal' | 'centerDepth' | 'centerPosition';
+export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion', 'diffuseColor', 'specularColor', 'centerNormal', 'centerDepth', 'centerPosition'];
 export const AOV_BACKGROUND_ID = 0xffffffff;
 /** Display-resolution AOVs only guide texture detail; 4 jittered samples match 16 within measurement noise. */
 export const DISPLAY_AOV_SAMPLE_CAP = 4;
@@ -8,6 +16,12 @@ export const DISPLAY_AOV_SAMPLE_CAP = 4;
 export const AOV_REFLECTANCE_MASK = 24;
 /** Mask bits of resolved texture colors (diffuseColor, specularColor). */
 export const AOV_COLOR_MASK = 384;
+/** Mask bits of optional pixel-center shading normal, depth and position. */
+export const AOV_PRIMARY_MASK = 3584;
+/** Whether a kind uses one unjittered pinhole sample. */
+export function isCenterAov(kind: AovKind): boolean {
+  return kind === 'id' || kind === 'motion' || kind === 'centerNormal' || kind === 'centerDepth' || kind === 'centerPosition';
+}
 /** Mask bits of kinds accumulated over jittered samples. */
 export const AOV_ACCUMULATED_MASK = 31 | AOV_COLOR_MASK;
 /** Kinds that fit the compact display-resolution storage. */
@@ -15,7 +29,7 @@ export const COMPACT_AOV_KINDS: readonly AovKind[] = ['depth', 'diffuseColor', '
 // Four vec4 lanes for accumulated geometry/reflectance; two for center ID/motion.
 // Depth and roughness share a lane; coverage is position.w. A lobe's albedo and
 // color share its reflectance lane, so a render requests at most one of them.
-export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32,
+export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32, primaryBytes: 32,
   depthRoughness: 0, position: 4, diffuseAlbedo: 8, specularAlbedo: 12,
   id: 0, motion: 4} as const;
 /** Kind index read by resolve and display shaders; colors resolve like the albedo sharing their lane. */

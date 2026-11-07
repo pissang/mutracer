@@ -5,6 +5,12 @@ import { renderFixture } from '../helpers/renderPipeline.js';
 import { AOV_KINDS } from '../../src/renderer/aov.js';
 import { DEFAULT_AOV_DISPLAY, packAovDisplay, validateAovDisplay } from '../../src/renderer/aovDisplay.js';
 describe('AOV display channels', () => {
+  it.each(['centerNormal', 'centerDepth', 'centerPosition'] as const)('rejects direct reads of disabled %s', async kind => {
+    const {engine} = renderFixture();
+    const render = new Render(engine);
+    await expect(render.readPixels(kind)).rejects.toThrow(`AOV ${kind} is not enabled`);
+    engine.dispose();
+  });
   // A lobe's albedo and color share storage, so each render requests one of them.
   it.each([[AOV_KINDS.filter(kind => !kind.endsWith('Color'))], [AOV_KINDS.filter(kind => !kind.endsWith('Albedo'))]])('selects declared outputs without restarting sampling or invalidating denoising (%#)', kinds => {
     const { engine, targets } = renderFixture();
@@ -72,14 +78,14 @@ describe('AOV display channels', () => {
     const loop = new RenderLoop(engine, {preview: false, final: {aovs: [channel], maxSamples: 4, aovSamples: 2, denoiser: {type: 'jnlm'}}});
     await new Promise(resolve => setTimeout(resolve, 0));
     engine.display.channel = channel;
-    expect(loop.tick()).toBe(channel === 'id' || channel === 'motion' ? 'finished' : 'converging');
+    expect(loop.tick()).toBe(['id', 'motion', 'centerNormal', 'centerDepth', 'centerPosition'].includes(channel) ? 'finished' : 'converging');
     for (let i = 0; i < 3; i++) loop.tick();
     const target = targets[0];
     expect(loop.status).toBe('finished'); expect(loop.samples).toBe(0);
     expect(loop.final.samples).toBe(0); expect(loop.final.converged).toBe(false);
     expect(target.trace).not.toHaveBeenCalled(); expect(target.performDenoise).not.toHaveBeenCalled();
     expect(target.present).toHaveBeenCalled(); expect(target.isFirstFrame()).toBe(true);
-    expect(loop.final.aovSamplesRendered).toBe(channel === 'id' || channel === 'motion' ? 1 : 2);
+    expect(loop.final.aovSamplesRendered).toBe(['id', 'motion', 'centerNormal', 'centerDepth', 'centerPosition'].includes(channel) ? 1 : 2);
     expect((await loop.final.readPixels('hdr')).data).toHaveLength(0);
     camera.position = [1, 0, 0]; engine.update(); loop.tick();
     expect(loop.final.samples).toBe(0); expect(target.trace).not.toHaveBeenCalled();

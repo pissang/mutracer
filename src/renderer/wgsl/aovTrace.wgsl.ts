@@ -2,6 +2,7 @@
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
 export default /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
+override AOV_PRIMARY: bool = false;
 struct AovAccumulation {
   depthRoughness: vec4f,
   position: vec4f,
@@ -88,10 +89,17 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   if (any(id.xy >= size)) { return; }
   let index = id.x + id.y * size.x;
   aovCenter[index] = AovCenter(vec4u(0xffffffffu), vec4f(0.0));
+  // Optional tail shares the binding without changing identity/history layout.
+  let primaryIndex = index + size.x * size.y;
+  if (AOV_PRIMARY) { aovCenter[primaryIndex] = AovCenter(vec4u(0u), vec4f(0.0)); }
   let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
   let ray = initCameraRay(uv);
   var si: SurfaceInteraction; var material: OpenPbrResolvedMaterial;
   if (!aovSurface(ray, &si, &material)) { return; }
+  if (AOV_PRIMARY) {
+    let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
+    aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, 1.0));
+  }
   let offset = 52u + u32(si.instanceIndex) * 24u;
   let materialOffset = aovScene[16u];
   let primitiveOffset = aovScene[17u];

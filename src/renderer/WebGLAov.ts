@@ -9,20 +9,28 @@ const names = ['geometry','position','diffuse','specular'] as const;
 export class WebGLAov {
   private displayPass?: WebGLFullQuadPass<string,'color'>;
   readonly history=new AovHistory();
-  width=0; height=0; samples=0; centerReady=false; frame?: AovFrameSnapshot;
+  width=0; height=0; samples=0; centerReady=false; primary?: {normalDepth:Texture2D; centerPosition:Texture2D}; frame?: AovFrameSnapshot;
   readonly accumulation: Record<typeof names[number],Texture2D>[]=[];
   previousCenter: {id:Texture2D; motion:Texture2D} | undefined;
   center: {id:Texture2D; motion:Texture2D} | undefined;
   scene = new Texture2D({type: 5125, minFilter:9728,magFilter:9728});
   constructor(readonly renderer: WebGLDevice) {}
   reset(){if(this.centerReady){const swap=this.previousCenter;this.previousCenter=this.center;this.center=swap;}this.samples=0;this.centerReady=false;this.frame=undefined;}
-  resize(width:number,height:number){
-    if(width===this.width && height===this.height)return;
+  resize(width:number,height:number,primary=false){
+    if(width===this.width && height===this.height){
+      if(primary===!!this.primary)return;
+      this.reset();
+      if(primary){const options={width,height,type:5126,minFilter:9728,magFilter:9728};
+        this.primary={normalDepth:new Texture2D(options),centerPosition:new Texture2D(options)};
+      }else{const gl=this.renderer.gl;this.primary?.normalDepth.dispose(gl);this.primary?.centerPosition.dispose(gl);this.primary=undefined;}
+      return;
+    }
     this.dispose();this.history.clear();this.reset();this.width=width;this.height=height;
     const options={width,height,type:5126,minFilter:9728,magFilter:9728};
     for(let i=0;i<2;i++)this.accumulation.push(Object.fromEntries(names.map(n=>[n,new Texture2D(options)])) as Record<typeof names[number],Texture2D>);
     this.previousCenter={id:new Texture2D({...options,type:5125}),motion:new Texture2D(options)};
     this.center={id:new Texture2D({...options,type:5125}),motion:new Texture2D(options)};
+    if(primary)this.primary={normalDepth:new Texture2D(options),centerPosition:new Texture2D(options)};
   }
   setScene(words:Uint32Array){
     const width=Math.min(1024,Math.max(1,Math.ceil(words.length/4))),height=Math.ceil(words.length/(width*4));
@@ -34,14 +42,14 @@ export class WebGLAov {
     validateAovDisplay(options);
     this.displayPass??=new WebGLFullQuadPass('AOV display',this.renderer,{shader:displayShader,outputs:['color']});
     const pass=this.displayPass;pass.setSize(this.width,this.height);pass.setUniforms({kind:aovLaneKind(kind),samples:this.samples,mapping:[...options.depthRange,options.positionScale,options.motionScale],idComponent:AOV_ID_COMPONENTS.indexOf(options.idComponent)});
-    pass.createPass({...this.accumulation[(this.samples-1)%2],identity:this.center.id,motion:this.center.motion});return pass.getOutput('color');
+    pass.createPass({...this.accumulation[(this.samples-1)%2],identity:this.center.id,motion:this.center.motion,normalDepth:this.primary?.normalDepth??this.center.motion,centerPosition:this.primary?.centerPosition??this.center.motion});return pass.getOutput('color');
   }
   async read(kind:AovKind){
     const gl=this.renderer.gl, framebuffer=new FrameBuffer(), width=this.width,height=this.height;
     try{
       const accumulated=this.accumulation[(this.samples-1)%2];
       const name=kind==='depth'||kind==='roughness'?'geometry':aovLaneKind(kind)===3?'diffuse':aovLaneKind(kind)===4?'specular':'position';
-      framebuffer.bind(this.renderer,[kind==='id'?this.center!.id:kind==='motion'?this.center!.motion:accumulated[name]]);
+      framebuffer.bind(this.renderer,[kind==='id'?this.center!.id:kind==='motion'?this.center!.motion:kind==='centerPosition'?this.primary!.centerPosition:kind==='centerNormal'||kind==='centerDepth'?this.primary!.normalDepth:accumulated[name]]);
       if(kind==='id'){
         const source=new Uint32Array(width*height*4),data=new Uint32Array(source.length);
         gl.readPixels(0,0,width,height,gl.RGBA_INTEGER,gl.UNSIGNED_INT,source);
@@ -49,6 +57,15 @@ export class WebGLAov {
         return {width,height,data};
       }
       const data=readRgbaPixels(gl,width,height,false);
+      if(kind==='centerPosition')return {width,height,data};
+      if(kind==='centerNormal'||kind==='centerDepth'){
+        framebuffer.bind(this.renderer,[this.primary!.centerPosition]);const validity=readRgbaPixels(gl,width,height,false);
+        for(let o=0;o<data.length;o+=4){
+          if(kind==='centerDepth')data.set([data[o+3],0,0,validity[o+3]],o);
+          else data[o+3]=validity[o+3];
+        }
+        return {width,height,data};
+      }
       if(kind==='motion'){for(let o=2;o<data.length;o+=4)data[o]=0;return {width,height,data};}
       framebuffer.bind(this.renderer,[accumulated.position]);const coverage=readRgbaPixels(gl,width,height,false);
       for(let p=0;p<width*height;p++){
@@ -61,6 +78,6 @@ export class WebGLAov {
       return {width,height,data};
     }finally{framebuffer.dispose(this.renderer);}
   }
-  get bytes(){return this.width*this.height*(2*64+64+(this.displayPass?4:0))+this.scene.width*this.scene.height*16;}
-  dispose(){this.displayPass?.dispose();this.displayPass=undefined;const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.previousCenter?.id.dispose(gl);this.previousCenter?.motion.dispose(gl);this.previousCenter=undefined;this.scene.dispose(gl);}
+  get bytes(){return this.width*this.height*(2*64+64+(this.primary?32:0)+(this.displayPass?4:0))+this.scene.width*this.scene.height*16;}
+  dispose(){this.displayPass?.dispose();this.displayPass=undefined;const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.primary?.normalDepth.dispose(gl);this.primary?.centerPosition.dispose(gl);this.primary=undefined;this.previousCenter?.id.dispose(gl);this.previousCenter?.motion.dispose(gl);this.previousCenter=undefined;this.scene.dispose(gl);}
 }

@@ -1,5 +1,5 @@
 // Independent of beauty composition and denoising; shared by WebGPU and native.
-export function aovDisplayShader(format: 'rgba16float' | 'rgba8unorm') {
+export function aovDisplayShader(format: 'rgba16float' | 'rgba8unorm', primary = false) {
   return /* wgsl */ `
 struct DisplayAovAccum { geometry: vec4f, position: vec4f, diffuse: vec4f, specular: vec4f, }
 struct DisplayAovCenter { identity: vec4u, motion: vec4f, }
@@ -52,7 +52,14 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let hash = displayAovHash(identity[params.flags.x]);
     color = 0.2 + 0.8 * vec3f(f32(hash & 255u), f32((hash >> 8u) & 255u),
       f32((hash >> 16u) & 255u)) / 255.0;
-  } else {
+  }${primary ? /* wgsl */ ` else if (kind >= 9u) {
+    let primary = center[index + size.x * size.y];
+    let normalDepth = bitcast<vec4f>(primary.identity);
+    alpha = primary.motion.w;
+    if (kind == 9u) { color = clamp(normalDepth.xyz * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
+    else if (kind == 10u) { color = vec3f(clamp((normalDepth.w - params.mapping.x) / (params.mapping.y - params.mapping.x), 0.0, 1.0)); }
+    else { color = clamp(primary.motion.xyz / params.mapping.z * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
+  }` : ''} else {
     let m = center[index].motion;
     alpha = select(0.0, 1.0, m.w == 3.0);
     let magnitude = length(m.xy);

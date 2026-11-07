@@ -23,6 +23,7 @@ function fixture() {
     },
     createComputePipeline: pipeline, createRenderPipeline: pipeline, createBindGroup: bind,
     createCommandEncoder: () => ({
+      copyBufferToBuffer: vi.fn(),
       beginComputePass: () => ({setPipeline() {}, setBindGroup() {}, dispatchWorkgroups: dispatch, end() {}}),
       beginRenderPass: () => ({setPipeline() {}, setBindGroup() {}, draw: dispatch, end() {}}), finish: () => ({})
     }),
@@ -39,6 +40,19 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('GPU AOV snapshots', () => {
+  it('allocates primary storage only on request and preserves the history record size', () => {
+    const {state} = fixture();
+    expect(state.bytes).toBe(7*5*128);
+    const previous = state.previousCenter, accumulation = state.accumulation;
+    state.resize(7, 5, false, true);
+    expect(state.previousCenter).toBe(previous);
+    expect(state.accumulation).toBe(accumulation);
+    expect(state.bytes).toBe(7*5*160);
+    expect(state.center!.size).toBe(7*5*64);
+    expect(state.previousCenter!.size).toBe(7*5*32);
+    state.resize(7, 5);
+    expect(state.bytes).toBe(7*5*128);
+  });
   it('borrows raw AOV textures at their own dimensions and invalidates on restart/resize', async () => {
     const {state, dispatch} = fixture();
     const first = state.texture('depth')!;

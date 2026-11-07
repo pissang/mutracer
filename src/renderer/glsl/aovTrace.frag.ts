@@ -28,9 +28,9 @@ bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMate
   return false;
 }
 `;
-export function aovTraceFragment(center: boolean) {
+export function aovTraceFragment(center: boolean, primary = false) {
   const shader = new FragmentShader({name: center ? 'AOV center' : 'AOV accumulation',
-    outputs: center ? ['id','motion'] : ['geometry','position','diffuse','specular'],
+    outputs: center ? (primary ? ['id','motion','normalDepth','centerPosition'] : ['id','motion']) : ['geometry','position','diffuse','specular'],
     outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true},
     includes: [core,materials,intersect,random],
     uniforms: {viewProjectionInv: Shader.uniform('mat4'), projectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
@@ -55,9 +55,12 @@ ${surface}
 void main() {
   ${center ? /* glsl */ `
   out_id=uvec4(0xffffffffu); out_motion=vec4(0.0);
+  ${primary ? 'out_normalDepth=vec4(0.0); out_centerPosition=vec4(0.0);' : ''}
   Ray ray=aovRay((floor(gl_FragCoord.xy)+0.5)/viewportSize);
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
+  ${primary ? `out_normalDepth=vec4(si.normal,max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0));
+  out_centerPosition=vec4(si.position,1.0);` : ''}
   int offset=52+si.instanceIndex*24;
   out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
   out_motion.z=dot(si.position-aovVector(36),aovVector(40));
