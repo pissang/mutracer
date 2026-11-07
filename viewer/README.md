@@ -9,9 +9,8 @@ PBRT scenes can be opened from a `.pbrt` URL, by dropping a folder, or by
 selecting the scene together with its assets. Relative paths follow the main
 scene's directory. Scene cameras and lighting load with the
 model; aspect ratio, bounce limit and sample target start from the scene and remain
-editable. The Lighting panel expands import warnings. Downloads of 1 GB or more
-require confirmation, and scenes above the browser import memory budget are
-rejected before binary downloads. See [supported features and limits](../tools/pbrt/README.md).
+editable. The Lighting panel expands import warnings. Large imports may require
+confirmation; see [supported features and limits](../tools/pbrt/README.md).
 
 Drag a numeric input left or right to adjust its value, or click it to type.
 Enter or clicking elsewhere commits typed edits; Escape cancels them. While

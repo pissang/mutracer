@@ -6,28 +6,9 @@ import { SCENES_BASE, type Inspection, type Warning } from '../../../tools/pbrt/
 import type { Scene } from '../../../tools/pbrt/scene';
 import type { ModelSource, LoadedModel, LoadProgress, ModelBackend } from './loadModel';
 import { fetchWithProgress } from './fetchWithProgress';
-import { showToast, useViewer } from '../store';
 import catalog from './pbrt-catalog.json';
+import { confirmPbrtImport } from './pbrtBudget';
 export const isPBRT = (path: string) => /\.pbrt(?:\.gz)?(?:[?#].*)?$/i.test(path);
-const CONFIRM_BYTES = 1_000_000_000;
-import { checkPbrtMemory } from './pbrtBudget';
-async function confirmDownload(bytes: number, signal?: AbortSignal) {
-  if (bytes < CONFIRM_BYTES) return;
-  await new Promise<void>((resolve, reject) => {
-    let settled = false, unsubscribe = () => {};
-    const finish = (accepted: boolean) => {
-      if (settled) return; settled = true; unsubscribe(); signal?.removeEventListener('abort', cancel);
-      accepted ? resolve() : reject(new Error('Scene download cancelled'));
-    };
-    const cancel = () => finish(false);
-    showToast(`This scene downloads ${(bytes / 1e9).toFixed(2)} GB and needs several times that in memory.`, 'warning', [
-      { label: 'Load scene', onClick: () => finish(true) }, { label: 'Cancel', onClick: cancel }
-    ]);
-    const id = useViewer.getState().toast?.id;
-    unsubscribe = useViewer.subscribe(state => { if (state.toast?.id !== id) cancel(); });
-    signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
-  });
-}
 export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal, backend: ModelBackend = 'webgpu', downloadedMain?: ArrayBuffer): Promise<LoadedModel> {
   const worker = new Worker(new URL('./pbrt.worker.ts', import.meta.url), { type: 'module' });
   let nextId = 0;
@@ -46,8 +27,8 @@ export async function loadPBRT(source: ModelSource, onProgress: LoadProgress, si
     signal?.throwIfAborted(); onProgress('parse');
     const sizes = Object.fromEntries(Object.entries(catalog.sizes).map(([path, size]) => [new URL(path, SCENES_BASE).href, size]));
     const report = await call<Inspection>('inspect', { source, sizes, mainBytes: downloadedMain }, downloadedMain ? [downloadedMain] : []);
-    checkPbrtMemory(report); onProgress('download', 0, report.totalBytes);
-    await confirmDownload(report.totalBytes, signal); signal?.throwIfAborted();
+    await confirmPbrtImport(report, !!source.base, signal); signal?.throwIfAborted();
+    onProgress('download', 0, report.totalBytes);
     const built = await call<{ scene: Scene; files: ModelSource['files'] }>('build');
     const files = new Map([...source.files, ...built.files].map(item => [item.path, item]));
     let loaded = [...files.values()].reduce((sum, item) => sum + item.file.size, 0);
