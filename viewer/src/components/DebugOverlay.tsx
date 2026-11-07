@@ -6,6 +6,7 @@ import { getEngine, type ViewerEngine } from '../engine/ViewerEngine';
 import { Field, Hint, Scrub, Select, Switch } from './ui/controls';
 
 const AOV_LABELS: Record<(typeof VIEWER_AOVS)[number], string> = {
+  centerNormal: 'Center normal', centerDepth: 'Center depth', centerPosition: 'Center position',
   depth: 'Depth', position: 'Position', roughness: 'Roughness', diffuseAlbedo: 'Diffuse reflectance',
   specularAlbedo: 'Specular reflectance', diffuseColor: 'Diffuse color', specularColor: 'Specular color', id: 'ID', motion: 'Motion'
 };
