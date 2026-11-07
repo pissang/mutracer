@@ -29,11 +29,11 @@ typedef struct {
   mt_scene scene;mt_engine engine;mt_render render;
   mt_scene_geometry_id geometry;mt_scene_material_id material;
   mt_scene_mesh_id mesh,extra,batch;mt_scene_light_id light,extra_light;
-  mt_scene_texture_id textures[3];
+  mt_scene_texture_id textures[4];
   mt_scene_geometry_desc gd;mt_scene_texture_desc td;mt_scene_mesh_desc md;
   mt_scene_light_desc ld;mt_scene_instances_desc instances;
   mt_scene_environment_desc environment;mt_scene_environment_settings env_settings;
-  mt_camera_v4 camera;float *positions,*uv,*matrices;uint32_t *indices;unsigned char pixels[256];
+  mt_camera_v4 camera;float *positions,*uv,*matrices;uint32_t *indices;unsigned char pixels[1024];
   mt_scene_mesh_id *meshes;mt_scene_material_id *materials;uint32_t mesh_count,material_count;
   double compilation_start,preparation_start,preparation_ms,compile_ms[64];unsigned compile_count,progress_seen;
 } Bench;
@@ -79,8 +79,9 @@ static void build(Bench *b,uint32_t backend,uint32_t meshes,uint32_t materials,u
   for(uint32_t y=0;y<grid;y++)for(uint32_t x=0;x<grid;x++){uint32_t v=y*(grid+1)+x,k=(y*grid+x)*6;uint32_t ids[]={v,v+grid+1,v+1,v+1,v+grid+1,v+grid+2};memcpy(b->indices+k,ids,sizeof ids);}
   CHECK(mt_scene_geometry_desc_default(&b->gd));b->gd.vertex_count=vertices;b->gd.index_count=index_count;b->gd.positions=b->positions;b->gd.indices=b->indices;b->gd.uv=b->uv;
   for(unsigned i=0;i<sizeof b->pixels;i++)b->pixels[i]=(i%4==3)?255:128;
-  CHECK(mt_scene_texture_desc_default(&b->td));b->td.width=b->td.height=8;b->td.pixels=b->pixels;b->td.pixel_bytes=sizeof b->pixels;
+  CHECK(mt_scene_texture_desc_default(&b->td));b->td.width=b->td.height=8;b->td.pixels=b->pixels;b->td.pixel_bytes=256;
   for(unsigned i=0;i<2;i++)CHECK(mt_scene_add_texture(b->scene,&b->td,&b->textures[i],error,sizeof error));
+  CHECK(mt_scene_add_texture(b->scene,&b->td,&b->textures[3],error,sizeof error));
   float hdr[128];for(unsigned i=0;i<128;i++)hdr[i]=i%4==3?1:.1f;
   mt_scene_texture_desc hd;CHECK(mt_scene_texture_desc_default(&hd));hd.storage=MT_TEXTURE_STORAGE_RGBA32F;hd.width=8;hd.height=4;hd.pixels=hdr;hd.pixel_bytes=sizeof hdr;
   CHECK(mt_scene_add_texture(b->scene,&hd,&b->textures[2],error,sizeof error));
@@ -119,13 +120,14 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
   switch(c){
   case 35:CHECK(mt_scene_set_mesh_visible(b->scene,b->mesh,(uint32_t)!on,error,sizeof error));break;
   case 36:if(on)CHECK(mt_scene_remove_mesh(b->scene,b->mesh,error,sizeof error));else CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->mesh,error,sizeof error));break;
+  case 37:{mt_scene_texture_desc changed=b->td;if(on){changed.width=changed.height=16;changed.pixel_bytes=sizeof b->pixels;}CHECK(mt_scene_set_texture(b->scene,b->textures[3],&changed,error,sizeof error));CHECK(mt_scene_material_set_texture(b->scene,b->material,MT_MAT_MAP,b->textures[on?3:0],error,sizeof error));break;}
   case 0:b->camera.world_matrix[12]+=on?.01f:-.01f;CHECK(mt_scene_set_default_camera(b->scene,&b->camera,error,sizeof error));break;
   case 1:b->md.world_matrix[12]=on?.01f:0;CHECK(mt_scene_set_mesh_transform(b->scene,b->mesh,b->md.world_matrix,error,sizeof error));break;
   case 2:for(uint32_t i=0;i<b->instances.count;i++)b->matrices[i*16+12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;
@@ -184,7 +186,7 @@ int main(int argc,char **argv){
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
     /* Full above max(64, half of the batch) changed instances. */
     uint32_t limit=instances/2>64?instances/2:64;
-    uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=5&&c<=7)||(c>=9&&c<=13)||c==19||c==20||c==36)?1:2;
+    uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
     for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
