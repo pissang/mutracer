@@ -24,6 +24,8 @@ pub(crate) enum Step {
     Atlas(Vec<u8>),
     /// Mesh membership update; version word followed by the full descriptor.
     Membership(Vec<u8>),
+    /// Appended geometry plus mesh membership; version word followed by descriptor.
+    GeometryAppend(Vec<u8>),
 }
 
 struct Words<'a>(&'a [u8]);
@@ -184,6 +186,9 @@ fn geometry_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
         }
     }
     Some(true)
+}
+pub(crate) fn geometry_unchanged_payload(previous: &[u8], next: &[u8], index: usize) -> Option<bool> {
+    geometry_unchanged(&Words(previous), &Words(next), index)
 }
 
 /// One byte per geometry, then per texture: 1 when its record and data are
@@ -420,7 +425,8 @@ fn mesh_id(w: &Words, index: usize) -> usize {
 /// Membership-only changes retain every surviving mesh byte-for-byte. New
 /// meshes may only refer to already resident geometry and material records.
 fn membership_step(a: &Words, b: &Words) -> Option<Step> {
-    if a.u(h::GEOMETRY_COUNT) != b.u(h::GEOMETRY_COUNT)
+    let appended_geometry = b.u(h::GEOMETRY_COUNT) > a.u(h::GEOMETRY_COUNT);
+    if b.u(h::GEOMETRY_COUNT) < a.u(h::GEOMETRY_COUNT)
         || a.u(h::MATERIAL_COUNT) != b.u(h::MATERIAL_COUNT)
         || a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT)
     {
@@ -483,9 +489,23 @@ fn membership_step(a: &Words, b: &Words) -> Option<Step> {
             }
         }
     }
-    let mut bytes = record(&[4, 0, 0, 0]);
+    if appended_geometry {
+        if old.keys().any(|id| !(0..b.u(h::MESH_COUNT)).any(|i| mesh_id(b, i) == *id)) {
+            return None;
+        }
+        for i in a.u(h::GEOMETRY_COUNT)..b.u(h::GEOMETRY_COUNT) {
+            let o = b.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
+            // Appends currently support the same simple geometry contract as the
+            // browser path. Structural material indices and displacement are rejected
+            // by the caller's compatibility check.
+            if b.u(o + g::MATERIAL_INDEX) != 0 {
+                return None;
+            }
+        }
+    }
+    let mut bytes = record(&[if appended_geometry { 5 } else { 4 }, 0, 0, 0]);
     bytes.extend_from_slice(b.0);
-    Some(Step::Membership(bytes))
+    Some(if appended_geometry { Step::GeometryAppend(bytes) } else { Step::Membership(bytes) })
 }
 
 /// Sparse changed materials for the cheap shader/transport preflight. Both
@@ -678,12 +698,16 @@ pub(crate) fn plan_with(
             .is_none_or(|ids| ids.contains(&mesh_id(&b, index)))
     };
     if membership {
-        steps.push(membership_step(&a, &b)?);
+        let Some(step) = membership_step(&a, &b) else { return None; };
+        steps.push(step);
     }
     if atlas {
         steps.push(Step::Atlas(next.to_vec()));
     }
     for &index in &sync.geometries {
+        if index >= a.u(h::GEOMETRY_COUNT) && index < b.u(h::GEOMETRY_COUNT) {
+            continue;
+        }
         if !geometry_unchanged(&a, &b, index)? {
             steps.push(geometry_step(&a, &b, index)?);
         }

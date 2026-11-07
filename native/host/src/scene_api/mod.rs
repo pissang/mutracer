@@ -1298,11 +1298,95 @@ pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Change
     }
     let a = aligned(previous);
     let b = aligned(next);
-    if [h::GEOMETRY_COUNT, h::MATERIAL_COUNT]
-        .iter()
-        .any(|&i| a[i] != b[i])
+    if a[h::MATERIAL_COUNT] != b[h::MATERIAL_COUNT]
+        || a[h::GEOMETRY_COUNT] > b[h::GEOMETRY_COUNT]
     {
         return CommitKind::Full;
+    }
+    let geometry_append = b[h::GEOMETRY_COUNT] > a[h::GEOMETRY_COUNT];
+    if geometry_append {
+        let old_geometry_count = a[h::GEOMETRY_COUNT] as usize;
+        let old_mesh_count = a[h::MESH_COUNT] as usize;
+        let new_mesh_count = b[h::MESH_COUNT] as usize;
+        if new_mesh_count <= old_mesh_count || a[h::TEXTURE_COUNT] != b[h::TEXTURE_COUNT] {
+            return CommitKind::Full;
+        }
+        if let Some(changes) = changes {
+            if !changes.materials.is_empty()
+                || changes.geometries.iter().any(|&i| i < old_geometry_count)
+                || changes.meshes.iter().any(|&i| i < old_mesh_count)
+            {
+                return CommitKind::Full;
+            }
+        }
+        // Existing geometry and mesh records must remain semantically identical.
+        for i in 0..old_geometry_count {
+            if crate::commit_plan::geometry_unchanged_payload(
+                bytemuck::cast_slice(&a), bytemuck::cast_slice(&b), i,
+            ) != Some(true) {
+                return CommitKind::Full;
+            }
+        }
+        let mut referenced_append = false;
+        let mut referenced_geometries = vec![false; b[h::GEOMETRY_COUNT] as usize - old_geometry_count];
+        for i in 0..new_mesh_count {
+            let mo = b[h::MESH_OFFSET] as usize + i * m::WORDS;
+            let geometry = b[mo + m::GEOMETRY] as usize;
+            if geometry >= old_geometry_count {
+                referenced_append = true;
+                referenced_geometries[geometry - old_geometry_count] = true;
+                let material_count = b[mo + m::MATERIAL_COUNT];
+                if i < old_mesh_count || material_count > 1 {
+                    return CommitKind::Full;
+                }
+                let material_index = if material_count == 0 {
+                    b[mo + crate::layout::mesh::MATERIAL] as usize
+                } else {
+                    let table = b[mo + m::MATERIAL_TABLE] as usize;
+                    b[table] as usize
+                };
+                let material = b[h::MATERIAL_OFFSET] as usize + material_index * crate::layout::material::WORDS;
+                let ext = b[material + crate::layout::material::EXTENSION_OFFSET] as usize;
+                let ext_count = b[material + crate::layout::material::EXTENSION_COUNT] as usize;
+                for e in 0..ext_count {
+                    let x = ext + e * crate::layout::extension::WORDS;
+                    if b[x + crate::layout::extension::ID] == 59 {
+                        if b[x + crate::layout::extension::X] != u32::MAX {
+                            return CommitKind::Full;
+                        }
+                    }
+                }
+            } else if i >= old_mesh_count {
+                return CommitKind::Full;
+            }
+        }
+        for i in old_geometry_count..b[h::GEOMETRY_COUNT] as usize {
+            let go = b[h::GEOMETRY_OFFSET] as usize + i * crate::layout::geometry::WORDS;
+            if b[go + crate::layout::geometry::MATERIAL_INDEX] != 0 {
+                return CommitKind::Full;
+            }
+        }
+        if !referenced_append || referenced_geometries.iter().any(|used| !used) {
+            return CommitKind::Full;
+        }
+        let sync = crate::scene::SceneSync {
+            meshes: 2,
+            lights: true,
+            background: true,
+            camera: true,
+            resolution: false,
+            quality: false,
+            visibility: vec![],
+            transforms: vec![],
+            colors: vec![],
+            geometries: (old_geometry_count..b[h::GEOMETRY_COUNT] as usize).collect(),
+            materials: vec![],
+        };
+        return if crate::commit_plan::plan_with(previous, next, &sync, true, changes.is_some()).is_some() {
+            CommitKind::Incremental
+        } else {
+            CommitKind::Full
+        };
     }
     if a[h::MESH_COUNT] != b[h::MESH_COUNT] {
         return CommitKind::Incremental;
@@ -1475,6 +1559,29 @@ mod tests {
         s.descriptor().unwrap();
         let g = s.geometry_mut(g).unwrap();
         g.indices = vec![2, 1, 0].into();
+        assert_eq!(s.pending_commit_kind().unwrap(), CommitKind::Full);
+    }
+    #[test]
+    fn appending_simple_geometry_is_incremental_but_structure_is_full() {
+        let (mut s, mesh) = triangle();
+        s.descriptor().unwrap();
+        let material = s.mesh(mesh).unwrap().material;
+        let geometry = s.add_geometry(Geometry::new(
+            vec![-0.5, 0., 0., 0.5, 0., 0., 0., 0.5, 0.],
+            vec![0, 1, 2],
+        )).unwrap();
+        s.add_mesh(Mesh::new(geometry, material)).unwrap();
+        assert_eq!(s.pending_commit_kind().unwrap(), CommitKind::Incremental);
+        let appended = s.descriptor().unwrap();
+        let full = s.next_words(None).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<_>>();
+        assert_eq!(*appended, full);
+
+        let geometry = s.add_geometry(Geometry::new(
+            vec![-0.25, 0., 0., 0.25, 0., 0., 0., 0.25, 0.],
+            vec![0, 1, 2],
+        )).unwrap();
+        let second = s.add_material(OpenPbrMaterial::default()).unwrap();
+        s.add_mesh(Mesh::new(geometry, second)).unwrap();
         assert_eq!(s.pending_commit_kind().unwrap(), CommitKind::Full);
     }
     #[test]
