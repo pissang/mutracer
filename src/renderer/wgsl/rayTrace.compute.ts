@@ -56,6 +56,8 @@ export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;
+  /** Browser analytic lights use a dynamically sized storage buffer. Default false preserves native. */
+  analyticLightStorage?: boolean;
   compactVertices?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
@@ -178,7 +180,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 

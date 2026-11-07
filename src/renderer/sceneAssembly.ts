@@ -1,5 +1,5 @@
 import type Geometry from '../scene/Geometry.js';
-import type {AnalyticLightState} from '../scene/lightState.js';
+import type {AnalyticLightState} from './analyticLightState.js';
 import {retainedShaderCapacity} from './shaderCapacity.js';
 import {makeRayTraceUniform, packWgpuAnalyticLights} from './wgpuSceneUniform.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WEBGL} from './pathLimits.js';

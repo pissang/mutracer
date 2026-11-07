@@ -1,4 +1,4 @@
-import type {AnalyticLightState} from '../scene/lightState.js';
+import type {AnalyticLightState} from './analyticLightState.js';
 import {buildLightAliasTable,colorLuminance,estimateAnalyticLightPower,type EmissiveTriangle} from './lightSampling.js';
 import {getSpotLightArea,getSpotLightRadiance} from './lightsData.js';
 

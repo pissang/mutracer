@@ -1,6 +1,8 @@
 import type { ColorRGBA, Mat4 } from '../types.js';
 import AmbientLight from './AmbientLight.js';
 import DirectionalLight from './DirectionalLight.js';
+import DiskLight from './DiskLight.js';
+import CylinderLight from './CylinderLight.js';
 import EnvironmentLight from './EnvironmentLight.js';
 import Mesh from './Mesh.js';
 import InstancedMesh from './InstancedMesh.js';
@@ -10,7 +12,7 @@ import SpotLight from './SpotLight.js';
 import Texture from './Texture.js';
 
 /** Lights with an analytic shape. */
-export type AnalyticLight = RectLight | SphereLight | SpotLight | DirectionalLight;
+export type AnalyticLight = RectLight | SphereLight | SpotLight | DirectionalLight | DiskLight | CylinderLight;
 /** Any light that can be placed in {@link Scene.lights}. */
 export type SceneLight = AmbientLight | EnvironmentLight | AnalyticLight;
 

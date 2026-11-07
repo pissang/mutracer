@@ -165,6 +165,29 @@ void light_sample_directional(
   result.isDelta = true;
 }
 
+void light_sample_disk(in Light light, in vec3 shadingPoint, in vec2 samplePoint, inout LightSampleRec result) {
+  float r = sqrt(samplePoint.x), phi = TWOPI * samplePoint.y;
+  vec3 surfacePoint = light.position + light.u * (r * cos(phi)) + light.v * (r * sin(phi));
+  vec3 normal = normalize(cross(light.u, light.v));
+  vec3 offset = surfacePoint - shadingPoint;
+  float distanceSquared = dot(offset, offset);
+  result.dist = sqrt(distanceSquared); result.direction = offset / max(result.dist, 1e-8); result.normal = normal;
+  float emitterCosine = dot(-result.direction, normal);
+  if (emitterCosine <= 0.0) { result.emission=vec3(0.0); result.pdf=0.0; return; }
+  result.emission=light.emission; result.pdf=distanceSquared/max(light.area*emitterCosine,1e-8);
+}
+
+void light_sample_cylinder(in Light light, in vec3 shadingPoint, in vec2 samplePoint, inout LightSampleRec result) {
+  vec3 axis=normalize(light.u), radial0=normalize(light.v), radial1=normalize(cross(axis,radial0));
+  float phi=TWOPI*samplePoint.y; vec3 normal=radial0*cos(phi)+radial1*sin(phi);
+  vec3 surfacePoint=light.position+light.u*(samplePoint.x-.5)+normal*light.radius;
+  vec3 offset=surfacePoint-shadingPoint; float distanceSquared=dot(offset,offset);
+  result.dist=sqrt(distanceSquared); result.direction=offset/max(result.dist,1e-8); result.normal=normal;
+  float emitterCosine=dot(-result.direction,normal);
+  if(emitterCosine<=0.0){result.emission=vec3(0.0);result.pdf=0.0;return;}
+  result.emission=light.emission;result.pdf=distanceSquared/max(light.area*emitterCosine,1e-8);
+}
+
 void light_sample_spot(
   in Light light,
   in vec3 shadingPoint,
@@ -208,6 +231,12 @@ void sampleAnalyticLight(
   if (lightType == DIRECTIONAL_LIGHT) {
     light_sample_directional(light, shadingPoint, result);
   }
+#endif
+#ifdef HAS_DISK_LIGHTS
+  if (lightType == 5) { light_sample_disk(light, shadingPoint, samplePoint, result); return; }
+#endif
+#ifdef HAS_CYLINDER_LIGHTS
+  if (lightType == 6) { light_sample_cylinder(light, shadingPoint, samplePoint, result); return; }
 #endif
 }
 #endif

@@ -1,6 +1,6 @@
 import {prepareSceneLightSampling} from './sceneAssembly.js';
 import type {EmissiveTriangle} from './lightSampling.js';
-import type {AnalyticLightState} from '../scene/lightState.js';
+import type {AnalyticLightState} from './analyticLightState.js';
 /** Alias probabilities are stored as numeric texels; indices retain their bit representation. */
 export function prepareWebGLLightSampling(lights: AnalyticLightState[], triangles: EmissiveTriangle[], environmentPower: number) {
   const lighting=prepareSceneLightSampling(lights,triangles,environmentPower,4096);

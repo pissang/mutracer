@@ -36,7 +36,8 @@ export function causticLightCompute(
   fullEmissionRandom = true,
   perInstanceBounds = false,
   compactVertices = false,
-  independentTextures = false
+  independentTextures = false,
+  analyticLightStorage = false
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
@@ -47,7 +48,7 @@ ${Object.keys(WGPU_SCENE_FEATURE_BITS)
   .map((name) => `const ${name} = ${!!constants[name]};`)
   .join('\n')}
 ${common}
-${core({independentTextures, compactVertices, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
+${core({independentTextures, compactVertices, analyticLightStorage, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${uv}
 ${createMaterialBufferWgsl({independentTextures, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${intersect({

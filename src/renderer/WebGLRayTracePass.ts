@@ -66,7 +66,10 @@ import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
+import DiskLight from '../scene/DiskLight.js';
+import CylinderLight from '../scene/CylinderLight.js';
 import type { SceneBackground, SceneLight } from '../scene/Scene.js';
+import {MAX_ANALYTIC_LIGHTS} from './lightConstants.js';
 import { isIntelMac, numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
@@ -101,7 +104,7 @@ import {
   OPENPBR_ENERGY_LUT_WIDTH
 } from './openPbrEnergyLut.js';
 
-type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
+type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight | DiskLight | CylinderLight;
 // A defensive mixture keeps weak-but-wide lights from being starved by an
 // imperfect scalar power estimate while still favoring dominant emitters.
 const POWER_WEIGHTED_LIGHT_MIX = 0.25;
@@ -921,8 +924,11 @@ class WebGLRayTracePass {
         light.type === 'DirectionalLight' ||
         light.type === 'SphereLight' ||
         light.type === 'SpotLight' ||
-        light.type === 'RectLight'
+        light.type === 'RectLight' ||
+        light.type === 'DiskLight' ||
+        light.type === 'CylinderLight'
     ) as AnalyticLight[];
+    if (analyticLights.length > MAX_ANALYTIC_LIGHTS) throw new RangeError(`At most ${MAX_ANALYTIC_LIGHTS} analytic lights are supported.`);
     const numAnalyticLights = analyticLights.length;
 
     const envImage = this._skySource.resolve(this._sceneEnvironment.update(lights));
@@ -979,7 +985,9 @@ class WebGLRayTracePass {
         ),
         HAS_DIRECTIONAL_LIGHTS: !!analyticLights.find(
           (light) => light.type === 'DirectionalLight'
-        )
+        ),
+        HAS_DISK_LIGHTS: !!analyticLights.find((light) => light.type === 'DiskLight'),
+        HAS_CYLINDER_LIGHTS: !!analyticLights.find((light) => light.type === 'CylinderLight')
       });
     });
 

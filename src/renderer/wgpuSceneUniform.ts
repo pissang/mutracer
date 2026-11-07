@@ -1,11 +1,13 @@
 import {matrixStorage} from '../math/storage.js';
 import type {ReadonlyMathArray} from '../math/types.js';
-import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsData.js';
-import { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT } from './lightConstants.js';
-import type { AnalyticLightState as AnalyticLight } from '../scene/lightState.js';
+import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights, getDiskLightArea, getCylinderLightArea, getAreaLightRadiance } from './lightsData.js';
+import { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT, CONSTANT_DISK_LIGHT, CONSTANT_CYLINDER_LIGHT } from './lightConstants.js';
+import type { AnalyticLightState as NativeAnalyticLight } from '../scene/lightState.js';
+import type DiskLight from '../scene/DiskLight.js';
+import type CylinderLight from '../scene/CylinderLight.js';
+type AnalyticLight = NativeAnalyticLight | DiskLight | CylinderLight;
 import { read } from '../math/access.js';
 export const WGPU_SCENE_BUFFER_MIN_BYTES = 200;
-const FIXED_LIGHT_COUNT = 64;
 const PIXELS_PER_LIGHT = 6;
 
 function makeRayTraceUniformCore(RayTraceUniformValues: ArrayBuffer) {
@@ -70,11 +72,6 @@ export function packWgpuAnalyticLights(
 ) {
   validateSceneLights(lights);
   const numLights = lights.length;
-  if (numLights > FIXED_LIGHT_COUNT) {
-    console.warn(
-      `Too many lights, only the first ${FIXED_LIGHT_COUNT} lights will be used.`
-    );
-  }
   const data = new Float32Array(numLights * PIXELS_PER_LIGHT * 4);
 
   function packVec3<T extends ReadonlyMathArray>(idx: number, v: T) {
@@ -87,7 +84,9 @@ export function packWgpuAnalyticLights(
     DirectionalLight: CONSTANT_DIRECTIONAL_LIGHT,
     SphereLight: CONSTANT_SPHERE_LIGHT,
     RectLight: CONSTANT_RECT_LIGHT,
-    SpotLight: CONSTANT_SPOT_LIGHT
+    SpotLight: CONSTANT_SPOT_LIGHT,
+    DiskLight: CONSTANT_DISK_LIGHT,
+    CylinderLight: CONSTANT_CYLINDER_LIGHT
   };
 
   for (let i = 0; i < numLights; i++) {
@@ -102,8 +101,10 @@ export function packWgpuAnalyticLights(
     );
     data[off * 4 + 3] = lightTypeConstants[light.type];
     // emission
-    const emissionScale =
-      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
+    const emissionScale = light.type === 'SpotLight' ? getSpotLightRadiance(light)
+      : light.type === 'DiskLight' ? getAreaLightRadiance(intensity, getDiskLightArea(light), light.normalize)
+      : light.type === 'CylinderLight' ? getAreaLightRadiance(intensity, getCylinderLightArea(light), light.normalize)
+      : intensity;
     packVec3(off + 1, [
       color[0] * emissionScale,
       color[1] * emissionScale,
@@ -117,6 +118,18 @@ export function packWgpuAnalyticLights(
     } else if (light.type === 'SphereLight') {
       data[(off + 1) * 4 + 3] = getSphereLightArea(light);
       data[(off + 2) * 4 + 3] = light.radius;
+    } else if (light.type === 'DiskLight') {
+      const frame = getRigidLightFrame(light);
+      data[(off + 1) * 4 + 3] = getDiskLightArea(light);
+      packVec3(off + 2, frame.x.map(value => value * light.radius));
+      data[(off + 2) * 4 + 3] = light.radius;
+      packVec3(off + 3, frame.y.map(value => value * -light.radius));
+    } else if (light.type === 'CylinderLight') {
+      const frame = getRigidLightFrame(light);
+      data[(off + 1) * 4 + 3] = getCylinderLightArea(light);
+      packVec3(off + 2, frame.x.map(value => value * light.length));
+      data[(off + 2) * 4 + 3] = light.radius;
+      packVec3(off + 3, frame.y.map(value => value * light.radius));
     } else if (light.type === 'SpotLight') {
       data[(off + 1) * 4 + 3] = getSpotLightArea(light);
       packVec3(off + 2, getLightDirection(light));

@@ -19,6 +19,8 @@ export interface WGPUShaderFeatures {
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;
+  /** Browser analytic lights use a dynamically sized storage buffer. Default false preserves native generation. */
+  analyticLightStorage?: boolean;
   compactVertices?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */

@@ -56,6 +56,7 @@ import {getGeometryBvh, setGeometryBvh} from './geometryBvh.js';
 import {packCameraUniform} from './cameraUniform.js';
 import {SHADOW_CATCHER_ACCUMULATION_BYTES} from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import type {SamplingPattern} from './sampling.js';
+import {MAX_ANALYTIC_LIGHTS} from './lightConstants.js';
 import {
   DEPTH_SAMPLE_COUNT,
   packDepthSampleArea,
@@ -85,6 +86,8 @@ import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
+import DiskLight from '../scene/DiskLight.js';
+import CylinderLight from '../scene/CylinderLight.js';
 import MaterialTable, {DEFAULT_MAX_TEXTURE_ARRAY_BYTES} from './MaterialTable.js';
 import type {SceneBackground, SceneLight} from '../scene/Scene.js';
 import {numberArraysEqual} from './util.js';
@@ -141,10 +144,9 @@ import {
   type OfflineAdaptiveSamplingResult,
   type OfflineVarianceHistory
 } from './OfflineAdaptiveSampling.js';
-type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
+type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight | DiskLight | CylinderLight;
 const F32 = Float32Array;
 
-const FIXED_LIGHT_COUNT = 64;
 const PIXELS_PER_LIGHT = 6;
 
 export interface WGPURayTraceTimingCapture {
@@ -473,9 +475,7 @@ class WGPURayTracePass {
     this._uniforms = {
       cameraUniform: this._uniformBuffer(52 * 4),
       rtUniform: this._uniformBuffer(this._rtUniform.buffer.byteLength),
-      analyticLights: this._uniformBuffer(
-        FIXED_LIGHT_COUNT * PIXELS_PER_LIGHT * 4 * 4
-      )
+      analyticLights: this._storageBuffer(PIXELS_PER_LIGHT * 4 * 4)
     };
     this._mapInfoUniform = this._uniformBuffer(4 * 4);
 
@@ -787,6 +787,12 @@ class WGPURayTracePass {
       label: 'Ray Trace Pipeline Layout',
       bindGroupLayouts: (bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(
         (layout, index) => {
+          if (index === (bindless ? 1 : 2)) layout = {
+            ...layout,
+            entries: Array.from(layout.entries, entry => entry.binding === 2
+              ? {...entry, buffer: {type: 'read-only-storage' as const}}
+              : entry)
+          };
           if (photonMapping && index === (bindless ? 0 : 1))
             layout = {
               ...layout,
@@ -855,6 +861,11 @@ class WGPURayTracePass {
       size,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
+  }
+
+  private _storageBuffer(size: number) {
+    this._needsUpdateBindGroups = true;
+    return this._device.createBuffer({size: Math.max(16, size), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
   }
 
   private _preparePhotonTarget() {
@@ -1046,7 +1057,7 @@ class WGPURayTracePass {
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
       const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
-        causticDiagnostics.fullEmissionRandom !== false, true, true);
+        causticDiagnostics.fullEmissionRandom !== false, true, true, false, true);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1099,6 +1110,7 @@ class WGPURayTracePass {
             compactVertices: true,
             dynamicEnvironment: true,
             displayAovStorage: true
+            ,analyticLightStorage: true
           },
           bake
         );
@@ -2882,19 +2894,21 @@ class WGPURayTracePass {
   }
 
   setLights(lights: SceneLight[]) {
-    const allAnalyticLights = lights.filter(
+    const analyticLights = lights.filter(
       (light) =>
         light.type === 'DirectionalLight' ||
         light.type === 'SphereLight' ||
         light.type === 'SpotLight' ||
-        light.type === 'RectLight'
-    );
-    if (allAnalyticLights.length > FIXED_LIGHT_COUNT) {
-      console.warn(
-        `Too many lights, only the first ${FIXED_LIGHT_COUNT} lights will be used.`
-      );
+        light.type === 'RectLight' ||
+        light.type === 'DiskLight' ||
+        light.type === 'CylinderLight'
+    ) as AnalyticLight[];
+    if (analyticLights.length > MAX_ANALYTIC_LIGHTS) throw new RangeError(`At most ${MAX_ANALYTIC_LIGHTS} analytic lights are supported.`);
+    const requiredLightBytes = Math.max(16, analyticLights.length * PIXELS_PER_LIGHT * 16);
+    if (this._uniforms.analyticLights.size < requiredLightBytes) {
+      this._uniforms.analyticLights.destroy();
+      this._uniforms.analyticLights = this._storageBuffer(requiredLightBytes);
     }
-    const analyticLights = allAnalyticLights.slice(0, FIXED_LIGHT_COUNT);
     const numAnalyticLights = analyticLights.length;
 
     const envImage = this._sceneEnvironment.update(lights);

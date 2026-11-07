@@ -1,16 +1,20 @@
 import {matrixStorage} from '../math/storage.js';
-import type { SceneLightState as SceneLight, AnalyticLightState as AnalyticLight } from '../scene/lightState.js';
+import type { SceneLightState as NativeSceneLight, AnalyticLightState as NativeAnalyticLight } from '../scene/lightState.js';
 import { read, write } from '../math/access.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import type RectLight from '../scene/RectLightState.js';
 import SpotLight from '../scene/SpotLight.js';
+import DiskLight from '../scene/DiskLight.js';
+import CylinderLight from '../scene/CylinderLight.js';
+type AnalyticLight = NativeAnalyticLight | DiskLight | CylinderLight;
+type SceneLight = NativeSceneLight | DiskLight | CylinderLight;
 
-export { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT } from './lightConstants.js';
-import { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT } from './lightConstants.js';
+export { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT, CONSTANT_DISK_LIGHT, CONSTANT_CYLINDER_LIGHT } from './lightConstants.js';
+import { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT, CONSTANT_DISK_LIGHT, CONSTANT_CYLINDER_LIGHT } from './lightConstants.js';
 
 export function packLightsData(
-  lights: (DirectionalLight | RectLight | SphereLight | SpotLight)[],
+  lights: (DirectionalLight | RectLight | SphereLight | SpotLight | DiskLight | CylinderLight)[],
   texturesIndices: number[],
   selectionPmf: (index: number) => number | undefined,
   selectionCdf: (index: number) => number | undefined,
@@ -38,8 +42,10 @@ export function packLightsData(
     );
     data[off * 4 + 3] = selectionPmf(i) ?? 1 / Math.max(numLights, 1);
     // emission
-    const emissionScale =
-      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
+    const emissionScale = light.type === 'SpotLight' ? getSpotLightRadiance(light)
+      : light.type === 'DiskLight' ? getAreaLightRadiance(intensity, getDiskLightArea(light), light.normalize)
+      : light.type === 'CylinderLight' ? getAreaLightRadiance(intensity, getCylinderLightArea(light), light.normalize)
+      : intensity;
     packVec3(off + 1, [
       color[0] * emissionScale,
       color[1] * emissionScale,
@@ -62,6 +68,16 @@ export function packLightsData(
         getSphereLightArea(light),
         CONSTANT_SPHERE_LIGHT
       ]);
+    } else if (light.type === 'DiskLight') {
+      const frame = getRigidLightFrame(light);
+      packVec3(off + 2, frame.x.map(value => value * light.radius));
+      packVec3(off + 3, frame.y.map(value => value * -light.radius));
+      packVec3(off + 4, [light.radius, getDiskLightArea(light), CONSTANT_DISK_LIGHT]);
+    } else if (light.type === 'CylinderLight') {
+      const frame = getRigidLightFrame(light);
+      packVec3(off + 2, frame.x.map(value => value * light.length));
+      packVec3(off + 3, frame.y.map(value => value * light.radius));
+      packVec3(off + 4, [light.radius, getCylinderLightArea(light), CONSTANT_CYLINDER_LIGHT]);
     } else if (light.type === 'SpotLight') {
       packVec3(off + 2, getLightDirection(light));
       packVec3(off + 3, [
@@ -120,6 +136,12 @@ export function getSpotLightArea(light: SpotLight) {
     return 4 * Math.PI * light.radius ** 2;
 }
 
+export function getDiskLightArea(light: DiskLight) { return Math.PI * light.radius ** 2; }
+export function getCylinderLightArea(light: CylinderLight) { return 2 * Math.PI * light.radius * light.length; }
+export function getAreaLightRadiance(intensity: number, area: number, normalize: boolean) {
+  return normalize ? intensity / Math.max(area, 1e-8) : intensity;
+}
+
 export function getSpotLightRadiance(light: SpotLight) {
     // A zero-radius spot is a point emitter. Its stored emission is luminous
     // intensity (cd), and the shader applies inverse-square attenuation.
@@ -150,6 +172,8 @@ export function validateSceneLights(lights: readonly SceneLight[], onError?: (er
       case 'RectLight': sanitizeIntensity(light, clamp); break;
       case 'SphereLight': sanitizeIntensity(light, clamp); break;
       case 'SpotLight': sanitizeIntensity(light, clamp); break;
+      case 'DiskLight': sanitizeIntensity(light, clamp); break;
+      case 'CylinderLight': sanitizeIntensity(light, clamp); break;
     }
     if (light.type !== 'AmbientLight') {
       const matrix = light.transform;
@@ -169,6 +193,14 @@ export function validateSceneLights(lights: readonly SceneLight[], onError?: (er
       light.spread = clamp(light.spread,0,1,1);
     }
     if (light.type === 'SphereLight') light.radius = clamp(light.radius,0,Number.MAX_VALUE,1);
+    if (light.type === 'DiskLight') light.radius = clamp(light.radius,Number.EPSILON,Number.MAX_VALUE,.5);
+    if (light.type === 'CylinderLight') {
+      light.radius = clamp(light.radius,Number.EPSILON,Number.MAX_VALUE,.5);
+      light.length = clamp(light.length,Number.EPSILON,Number.MAX_VALUE,1);
+      light.normalize = !!light.normalize;
+      light.treatAsLine = !!light.treatAsLine;
+    }
+    if (light.type === 'DiskLight') light.normalize = !!light.normalize;
     if (light.type === 'SpotLight') light.radius = clamp(light.radius,0,Number.MAX_VALUE,.01);
     if (light.type === 'SpotLight') {
       light.outerAngle = clamp(light.outerAngle,Number.EPSILON,180,45);

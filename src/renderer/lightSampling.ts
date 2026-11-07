@@ -2,7 +2,7 @@ import {matrixStorage} from '../math/storage.js';
 import { pixelLength, pixelValue } from '../scene/texturePixels.js';
 import { materialEmission } from './materialEmission.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
-import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsData.js';
+import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor, getDiskLightArea, getCylinderLightArea, getAreaLightRadiance } from './lightsData.js';
 import { localMaterialIndex } from './materialIndices.js';
 import { attributeLength, attributeValue } from '../scene/attributeData.js';
 import { type TexturePixelSource, vec3 } from '../math.js';
@@ -12,12 +12,14 @@ import type Mesh from '../scene/MeshState.js';
 import type RectLight from '../scene/RectLightState.js';
 import SphereLight from '../scene/SphereLight.js';
 import SpotLight from '../scene/SpotLight.js';
+import DiskLight from '../scene/DiskLight.js';
+import CylinderLight from '../scene/CylinderLight.js';
 import IESProfile from '../scene/IESProfile.js';
 import type OpenPBRMaterial from '../scene/MaterialState.js';
 
 import { LIGHT_CHOICE_EMISSIVE_TRIANGLE } from './lightConstants.js';
 export * from './lightConstants.js';
-type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
+type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight | DiskLight | CylinderLight;
 
 export interface EmissiveTriangle {
   p0: Float32Array;
@@ -69,6 +71,12 @@ export function estimateAnalyticLightPower(light: AnalyticLight) {
   if (!(emittedLuminance > 0)) return 0;
   if (light.type === 'RectLight') {
     return emittedLuminance * Math.PI * Math.max(getRectLightArea(light), 0);
+  }
+  if (light.type === 'DiskLight') {
+    return colorLuminance(light.color) * getAreaLightRadiance(light.intensity, getDiskLightArea(light), light.normalize) * Math.PI * getDiskLightArea(light);
+  }
+  if (light.type === 'CylinderLight') {
+    return colorLuminance(light.color) * getAreaLightRadiance(light.intensity, getCylinderLightArea(light), light.normalize) * Math.PI * getCylinderLightArea(light);
   }
   if (light.type === 'SphereLight') {
     if (light.radius === 0) return emittedLuminance * 4 * Math.PI;

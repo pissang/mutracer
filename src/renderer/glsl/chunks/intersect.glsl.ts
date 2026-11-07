@@ -423,6 +423,19 @@ float intersectLight(Ray r, Light light, out LightSampleRec lightSample) {
     }
   }
 #endif
+#ifdef HAS_DISK_LIGHTS
+  if(type==5){vec3 normal=normalize(cross(u,v));if(dot(normal,r.d)>=0.0)return INF;
+    d=dot(light.position-r.o,normal)/dot(normal,r.d);vec3 hit=r.o+r.d*d-light.position;float radius=max(length(u),1e-8);
+    if(d<=EPS||dot(hit,hit)>radius*radius)return INF;float cosine=dot(-r.d,normal);
+    lightSample.direction=r.d;lightSample.normal=normal;lightSample.dist=d;lightSample.pdf=d*d/max(light.area*cosine,1e-8);lightSample.emission=light.emission;}
+#endif
+#ifdef HAS_CYLINDER_LIGHTS
+  if(type==6){vec3 axis=normalize(u),oc=r.o-light.position,rd=r.d-axis*dot(r.d,axis),od=oc-axis*dot(oc,axis);
+    float a=dot(rd,rd),b=dot(od,rd),c=dot(od,od)-light.radius*light.radius,disc=b*b-a*c;if(a<=1e-12||disc<0.0)return INF;
+    float root=sqrt(disc),near=(-b-root)/a,far=(-b+root)/a;d=near>EPS?near:far;float axial=dot(oc+r.d*d,axis);
+    if(d<=EPS||abs(axial)>.5*length(u))return INF;vec3 hit=r.o+r.d*d,normal=normalize(hit-light.position-axis*axial);float cosine=dot(-r.d,normal);
+    if(cosine<=0.0)return INF;lightSample.direction=r.d;lightSample.normal=normal;lightSample.dist=d;lightSample.pdf=d*d/max(light.area*cosine,1e-8);lightSample.emission=light.emission;}
+#endif
 #ifdef HAS_SPHERE_LIGHTS
   if (type == SPHERE_LIGHT) {
     if (light.radius <= 0.0) {

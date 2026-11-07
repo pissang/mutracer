@@ -59,6 +59,8 @@ export type { ColorRGB, ColorRGBA, Vec2, Vec3, Mat4 } from './types.js';
 // Lights
 export { default as AmbientLight } from './scene/AmbientLight.js';
 export { default as DirectionalLight } from './scene/DirectionalLight.js';
+export { default as DiskLight } from './scene/DiskLight.js';
+export { default as CylinderLight } from './scene/CylinderLight.js';
 export { default as RectLight } from './scene/RectLight.js';
 export { default as SphereLight } from './scene/SphereLight.js';
 export { default as SpotLight } from './scene/SpotLight.js';

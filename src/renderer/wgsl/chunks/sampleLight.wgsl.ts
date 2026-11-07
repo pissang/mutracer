@@ -158,6 +158,40 @@ fn light_sample_rect(
   light_apply_rect_texture(light, surfacePoint, lowerLeft, result);
 }
 
+fn light_sample_disk(light: Light, shadingPoint: vec3f, samplePoint: vec2f, result: ptr<function, LightSampleRec>) {
+  let r = sqrt(samplePoint.x);
+  let phi = TWOPI * samplePoint.y;
+  let surfacePoint = light.position + light.u * (r * cos(phi)) + light.v * (r * sin(phi));
+  let normal = normalize(cross(light.u, light.v));
+  let offset = surfacePoint - shadingPoint;
+  let distanceSquared = dot(offset, offset);
+  (*result).dist = sqrt(distanceSquared);
+  (*result).direction = offset / max((*result).dist, 1e-8);
+  (*result).normal = normal;
+  let emitterCosine = dot(-(*result).direction, normal);
+  if (emitterCosine <= 0.0) { (*result).emission = vec3f(0.0); (*result).pdf = 0.0; return; }
+  (*result).emission = light.emission;
+  (*result).pdf = distanceSquared / max(light.area * emitterCosine, 1e-8);
+}
+
+fn light_sample_cylinder(light: Light, shadingPoint: vec3f, samplePoint: vec2f, result: ptr<function, LightSampleRec>) {
+  let axis = normalize(light.u);
+  let radial0 = normalize(light.v);
+  let radial1 = normalize(cross(axis, radial0));
+  let phi = TWOPI * samplePoint.y;
+  let normal = radial0 * cos(phi) + radial1 * sin(phi);
+  let surfacePoint = light.position + light.u * (samplePoint.x - 0.5) + normal * light.radiusOrSpread;
+  let offset = surfacePoint - shadingPoint;
+  let distanceSquared = dot(offset, offset);
+  (*result).dist = sqrt(distanceSquared);
+  (*result).direction = offset / max((*result).dist, 1e-8);
+  (*result).normal = normal;
+  let emitterCosine = dot(-(*result).direction, normal);
+  if (emitterCosine <= 0.0) { (*result).emission = vec3f(0.0); (*result).pdf = 0.0; return; }
+  (*result).emission = light.emission;
+  (*result).pdf = distanceSquared / max(light.area * emitterCosine, 1e-8);
+}
+
 fn light_sample_directional(
   light: Light,
   result: ptr<function, LightSampleRec>
@@ -203,6 +237,14 @@ fn sampleAnalyticLight(
   }
   if (HAS_SCENE_DIRECTIONAL_LIGHT && lightType == DIRECTIONAL_LIGHT) {
     light_sample_directional(light, result);
+    return;
+  }
+  if (HAS_SCENE_DISK_LIGHT && lightType == DISK_LIGHT) {
+    light_sample_disk(light, shadingPoint, samplePoint, result);
+    return;
+  }
+  if (HAS_SCENE_CYLINDER_LIGHT && lightType == CYLINDER_LIGHT) {
+    light_sample_cylinder(light, shadingPoint, samplePoint, result);
   }
 }
 

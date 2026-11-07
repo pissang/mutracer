@@ -1,4 +1,5 @@
-import { getRectLightArea, getSphereLightArea } from '../../src/renderer/lightsUtil.js';
+import { getRectLightArea, getSphereLightArea, getDiskLightArea, getCylinderLightArea } from '../../src/renderer/lightsUtil.js';
+import {DiskLight, CylinderLight} from '../../src/main.js';
 import { mat4 } from '../../src/math';
 import { describe, expect, it } from 'vitest';
 import DirectionalLight from '../../src/scene/DirectionalLight';
@@ -12,6 +13,18 @@ describe('analytic lights', () => {
     expect(
       getSphereLightArea(Object.assign(new SphereLight({color: undefined, intensity: undefined, radius: 2}), {position: [0, 0, 0]}))
     ).toBeCloseTo(16 * Math.PI);
+  });
+
+  it('packs UsdLux-shaped disk and cylinder geometry and normalization', () => {
+    const disk = new DiskLight({radius: 2, intensity: 8, normalize: true});
+    const cylinder = new CylinderLight({radius: 2, length: 3, intensity: 12, normalize: true, treatAsLine: true});
+    expect(getDiskLightArea(disk)).toBeCloseTo(4 * Math.PI);
+    expect(getCylinderLightArea(cylinder)).toBeCloseTo(12 * Math.PI);
+    const packed = packLightsToBuffer([disk, cylinder], [-1, -1]);
+    expect(packed[4]).toBeCloseTo(8 / (4 * Math.PI));
+    expect(packed[24 + 4]).toBeCloseTo(12 / (12 * Math.PI));
+    expect(packed[18]).toBe(5);
+    expect(packed[24 + 18]).toBe(6);
   });
 
   it('packs position, emission and type for the renderer', () => {

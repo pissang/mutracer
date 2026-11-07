@@ -982,6 +982,28 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     }
   }
 
+  else if (HAS_SCENE_DISK_LIGHT && lightType == DISK_LIGHT) {
+    let normal = normalize(cross(u, v));
+    if (dot(normal, r.d) >= 0.0) { return INF; }
+    d = dot(light.position-r.o,normal)/dot(normal,r.d);
+    let hit=r.o+r.d*d-light.position; let radius=max(length(u),1e-8);
+    if(d<=EPS||dot(hit,hit)>radius*radius){return INF;}
+    let cosine=dot(-r.d,normal);(*lightSample).direction=r.d;(*lightSample).normal=normal;(*lightSample).dist=d;
+    (*lightSample).pdf=d*d/max(light.area*cosine,1e-8);(*lightSample).emission=light.emission;
+  }
+
+  else if (HAS_SCENE_CYLINDER_LIGHT && lightType == CYLINDER_LIGHT) {
+    let axis=normalize(u);let halfLength=.5*length(u);let oc=r.o-light.position;
+    let rd=r.d-axis*dot(r.d,axis);let od=oc-axis*dot(oc,axis);
+    let a=dot(rd,rd);let b=dot(od,rd);let c=dot(od,od)-light.radiusOrSpread*light.radiusOrSpread;
+    let discriminant=b*b-a*c;if(a<=1e-12||discriminant<0.0){return INF;}
+    let root=sqrt(discriminant);let near=(-b-root)/a;let far=(-b+root)/a;d=select(far,near,near>EPS);
+    let axial=dot(oc+r.d*d,axis);if(d<=EPS||abs(axial)>halfLength){return INF;}
+    let hit=r.o+r.d*d;let normal=normalize(hit-light.position-axis*axial);let cosine=dot(-r.d,normal);
+    if(cosine<=0.0){return INF;}(*lightSample).direction=r.d;(*lightSample).normal=normal;(*lightSample).dist=d;
+    (*lightSample).pdf=d*d/max(light.area*cosine,1e-8);(*lightSample).emission=light.emission;
+  }
+
   else if (HAS_SCENE_SPHERE_LIGHT && lightType == SPHERE_LIGHT) {
     if (light.radiusOrSpread <= 0.0) {
       let toPoint = light.position - r.o;

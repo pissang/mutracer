@@ -2,10 +2,10 @@ import {wgpuSceneFeatureFlags, WGPU_SCENE_FEATURE_BITS} from './WGPUSceneFeature
 
 export const MATERIAL_SHADER_CAPABILITIES = {transmission: 1, metal: 2} as const;
 export const LIGHT_SHADER_CAPABILITIES = {
-  SphereLight: 1, RectLight: 2, SpotLight: 4, DirectionalLight: 8, emissive: 16
+  SphereLight: 1, RectLight: 2, SpotLight: 4, DirectionalLight: 8, emissive: 16, DiskLight: 32, CylinderLight: 64
 } as const;
 export const ALL_MATERIAL_SHADER_CAPABILITIES = 3;
-export const ALL_LIGHT_SHADER_CAPABILITIES = 31;
+export const ALL_LIGHT_SHADER_CAPABILITIES = 127;
 
 export function lightShaderCapabilities(types: readonly string[], emissiveCount: number) {
   let mask = emissiveCount > 0 ? LIGHT_SHADER_CAPABILITIES.emissive : 0;
@@ -15,6 +15,8 @@ export function lightShaderCapabilities(types: readonly string[], emissiveCount:
       case 'RectLight': mask |= LIGHT_SHADER_CAPABILITIES.RectLight; break;
       case 'SpotLight': mask |= LIGHT_SHADER_CAPABILITIES.SpotLight; break;
       case 'DirectionalLight': mask |= LIGHT_SHADER_CAPABILITIES.DirectionalLight; break;
+      case 'DiskLight': mask |= LIGHT_SHADER_CAPABILITIES.DiskLight; break;
+      case 'CylinderLight': mask |= LIGHT_SHADER_CAPABILITIES.CylinderLight; break;
     }
   }
   return mask;

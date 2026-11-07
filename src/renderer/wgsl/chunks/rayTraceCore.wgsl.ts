@@ -6,7 +6,9 @@ import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
-  CONSTANT_SPOT_LIGHT
+  CONSTANT_SPOT_LIGHT,
+  CONSTANT_DISK_LIGHT,
+  CONSTANT_CYLINDER_LIGHT
 } from '../../lightConstants.js';
 
 export default function rayTraceCore({
@@ -17,6 +19,7 @@ export default function rayTraceCore({
   hasCoatNormals = false,
   hasSceneAlpha = true,
   cameraProjectionInverse = false,
+  analyticLightStorage = false,
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
@@ -26,6 +29,7 @@ export default function rayTraceCore({
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
   cameraProjectionInverse?: boolean;
+  analyticLightStorage?: boolean;
   caustics?: boolean;
   lightCapabilities?: number;
 }) {
@@ -42,10 +46,14 @@ const RECT_LIGHT = ${CONSTANT_RECT_LIGHT};
 const SPHERE_LIGHT = ${CONSTANT_SPHERE_LIGHT};
 const DIRECTIONAL_LIGHT = ${CONSTANT_DIRECTIONAL_LIGHT};
 const SPOT_LIGHT = ${CONSTANT_SPOT_LIGHT};
+const DISK_LIGHT = ${CONSTANT_DISK_LIGHT};
+const CYLINDER_LIGHT = ${CONSTANT_CYLINDER_LIGHT};
 const HAS_SCENE_SPHERE_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.SphereLight) !== 0};
 const HAS_SCENE_RECT_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.RectLight) !== 0};
 const HAS_SCENE_SPOT_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.SpotLight) !== 0};
 const HAS_SCENE_DIRECTIONAL_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.DirectionalLight) !== 0};
+const HAS_SCENE_DISK_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.DiskLight) !== 0};
+const HAS_SCENE_CYLINDER_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.CylinderLight) !== 0};
 const HAS_SCENE_EMISSIVE_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.emissive) !== 0};
 
 struct Ray {
@@ -368,7 +376,7 @@ fn evaluateSpotEmissionMultiplier(light: Light, lightToSurface: vec3f) -> f32 {
 @group(2) @binding(0) var<uniform> cameraUniform: CameraUniform;
 @group(2) @binding(1) var<uniform> rtUniform: RayTraceUniform;
 
-@group(2) @binding(2) var<uniform> analyticLights: array<Light, NUM_UNIFORM_LIGHTS>;
+@group(2) @binding(2) var<${analyticLightStorage ? 'storage, read' : 'uniform'}> analyticLights: array<Light${analyticLightStorage ? '' : ', NUM_UNIFORM_LIGHTS'}>;
 // TODO uniform must be aligned to 16 bytes.
 
 fn initRay(ray: ptr<function, Ray>, origin: vec3f, direction: vec3f) {
