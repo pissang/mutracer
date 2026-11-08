@@ -16,7 +16,8 @@ export function materialGraphShader(source: string, plan: GraphPlan, backend: Ba
     const wg = backend === 'webgpu', v = (n: number) => `vec${n}${wg ? 'f' : ''}`;
     const mat = wg ? '(*ma)' : 'mat', p = (field: string) => `${mat}.${fields[field] ?? field}`;
     source=source.replace('struct OpenPbrResolvedMaterial {',`struct OpenPbrResolvedMaterial {\n  ${wg?'mxGraphFrame: bool,':'bool mxGraphFrame;'}`);
-    const basisAnchor='    prepared.coatBasis = prepared.basis;';
+    // Production shader templates strip indentation and comments before interpolation.
+    const basisAnchor='prepared.coatBasis = prepared.basis;';
     if(!source.includes(basisAnchor))throw new Error('Material graph BSDF frame anchor changed');
     source=source.replace(basisAnchor,`    if(material.mxGraphFrame && max(material.specularAnisotropy,material.coatAnisotropy)>0.0) {
       prepared.basis = openpbr_direction_basis(prepared.basis, material.geometryTangent, material.geometryBitangent, ${v(2)}(1.0,0.0));
@@ -110,10 +111,10 @@ vec3 mx_rgbtohsv(vec3 value) {
     else
         source = source.replace('if (directionMaterial.x >= 0.0', 'if (fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_ALPHA).x > 0.0 || directionMaterial.x >= 0.0');
     // The context travels with each getMaterial call, never mutable shader globals.
-    const signature = wg ? '  vertexColor: vec3f\n) {' : '  vec3 vertexColor\n) {';
+    const signature = wg ? 'vertexColor: vec3f\n) {' : 'vec3 vertexColor\n) {';
     if (!source.includes(signature))
         throw new Error('Material graph getMaterial signature anchor changed');
-    source = source.replace(signature, wg ? '  vertexColor: vec3f, mx_si: ptr<function, SurfaceInteraction>\n) {' : '  vec3 vertexColor, inout SurfaceInteraction mx_si\n) {');
+    source = source.replace(signature, wg ? 'vertexColor: vec3f, mx_si: ptr<function, SurfaceInteraction>\n) {' : 'vec3 vertexColor, inout SurfaceInteraction mx_si\n) {');
     source = source.replace(/getMaterial\(([^;\n]+)\.vertexColor\);/g, (_match, args: string) => {
         const si = args.slice(args.lastIndexOf(',') + 1).trim();
         return `getMaterial(${args}.vertexColor, ${wg ? (si === '(*si)' ? 'si' : `&${si}`) : si});`;
@@ -149,7 +150,7 @@ vec3 mx_rgbtohsv(vec3 value) {
         body += '    }\n';
     });
     body += `  }\n`;
-    const anchor = '  // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.';
+    const anchor = `if (${mat}.coatWeight > 0.0 && ${mat}.coatRoughness > 0.0) {`;
     if (!source.includes(anchor))
         throw new Error('Material graph evaluation anchor changed');
     source = source.replace(anchor, body + anchor);
@@ -164,16 +165,16 @@ vec3 mx_rgbtohsv(vec3 value) {
         const uv=(secondary:boolean)=>wg?`(bary.x * ${secondary?'vertexUv1':'vertexUv'}(index.x) + bary.y * ${secondary?'vertexUv1':'vertexUv'}(index.y) + bary.z * ${secondary?'vertexUv1':'vertexUv'}(index.z)) * materialsBuffer[materialIndex].uvScale`:`(bary.x * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.x) + bary.y * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.y) + bary.z * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.z)) * fetchMatData(materialIndex * MAT_DATA_SIZE + MAT_ROW_UV).zw`;
         helper+=wg?`fn mx_shadow_opacity(materialIndex:i32,index:vec3i,bary:vec3f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4f(position,1.0)).xyz,instanceIndex,fallback); }\n`:`vec2 fetchVertexUv(int i);vec2 fetchVertexUv1(int i);\nfloat mx_shadow_opacity(int materialIndex,ivec3 index,vec3 bary,vec3 position,int instanceIndex,float fallback) { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4(position,1.0)).xyz,instanceIndex,fallback); }\n`;
         declarations+=helper;
-        const alpha=wg?'  (*ma).alpha = matData.alpha;':'  mat.alpha = alphaAndThinFilm.r;';
+        const alpha=wg?'(*ma).alpha = matData.alpha;':'mat.alpha = alphaAndThinFilm.r;';
         // Replace raw opacity before ordinary texture multiplication and alpha-mode resolution.
         if(!source.includes(alpha))throw new Error('Material graph raw opacity anchor changed');
         source=source.replace(alpha,`${wg?'  (*ma).alpha':'  mat.alpha'} = mx_opacity(materialIndex,uv,uv1,${si}.position,instanceIndex,${wg?'matData.alpha':'alphaAndThinFilm.r'});`);
         if(wg){
             source=source.replace(/hitNormal: vec3f(, record: i32)?\n\) -> bool/, 'hitNormal: vec3f$1, mx_instance: i32\n) -> bool');
-            source=source.replace(/(hitNormal(?:, triangleIndex)?)(\s*\n    \)\))/, '$1, insIdx$2');
-            source=source.replace('  var alpha = ma.alpha;', '  var alpha = mx_shadow_opacity(materialIndex,index,hitBarycentric,hitPosition,mx_instance,ma.alpha);');
+            source=source.replace(/(hitNormal(?:, triangleIndex)?)(\s*\n[ \t]*\)\))/, '$1, insIdx$2');
+            source=source.replace('var alpha = ma.alpha;', '  var alpha = mx_shadow_opacity(materialIndex,index,hitBarycentric,hitPosition,mx_instance,ma.alpha);');
         }else{
-            source=source.replace('    float alpha = fetchMatData(ii + MAT_ROW_ALPHA_FILM).r;', '    float alpha = mx_shadow_opacity(materialIndex,index,barycentric,position,insIdx,fetchMatData(ii + MAT_ROW_ALPHA_FILM).r);');
+            source=source.replace('float alpha = fetchMatData(ii + MAT_ROW_ALPHA_FILM).r;', '    float alpha = mx_shadow_opacity(materialIndex,index,barycentric,position,insIdx,fetchMatData(ii + MAT_ROW_ALPHA_FILM).r);');
         }
     }
     // Emissive triangle sampling only needs emission. Preserve the six-argument
