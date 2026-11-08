@@ -133,6 +133,11 @@ fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
                 render.read_pixels(PixelKind::Hdr).unwrap().data
             };
             let actual = settle(&scene);
+            assert_eq!(
+                render.backend().unwrap().0,
+                backend,
+                "{label}: traversal backend"
+            );
             assert!(
                 engine.diagnostics().material_graphs.is_empty(),
                 "{label}: {:?}",
@@ -222,9 +227,33 @@ fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
             );
             scene.material_mut(blocker).unwrap().graph = None;
             let reference = settle(&scene);
+            let differences = lit
+                .iter()
+                .zip(&reference)
+                .filter(|(a, b)| a.to_bits() != b.to_bits())
+                .count();
+            let lit_error = lit
+                .iter()
+                .zip(&reference)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            if differences > 0 {
+                if let Some(path) = &destination {
+                    for (side, image) in [("graph", &lit), ("constant", &reference)] {
+                        std::fs::write(
+                            path.join(format!("{backend:?}-{name}-lit-{side}.f32")),
+                            image
+                                .iter()
+                                .flat_map(|v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
             assert_eq!(
-                lit.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                reference.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                differences, 0,
+                "{backend:?}/{name} lit fallback: {differences} components, max error {lit_error}"
             );
         }
         if let Some(path) = &destination {
@@ -337,5 +366,174 @@ fn material_graph_gpu_transport_fallback_matches_constant_material() {
             );
             eprintln!("GRAPH_TRANSPORT {backend:?}/photon={photons}: {max_error}");
         }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn material_graph_surface_normal_and_bsdf_parameters_match_fresh() {
+    use crate::api::{
+        Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
+        RenderSize,
+    };
+    let _lock = crate::abi_test_lock();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let geometry = scene.add_geometry(graph_plane(1, true)).unwrap();
+        let mut material = OpenPbrMaterial::default();
+        let mut graph = MaterialGraph::default();
+        for (i, (kind, target, value)) in [
+            (port_type::COLOR3, terminal::BASE_COLOR, [0.2, 0.4, 0.6, 0.]),
+            (
+                port_type::FLOAT,
+                terminal::SPECULAR_ROUGHNESS,
+                [0.25, 0., 0., 0.],
+            ),
+            (port_type::VECTOR3, terminal::NORMAL, [0., 0., 1., 0.]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            graph.nodes.push(GraphNode {
+                category: category::CONSTANT,
+                implementation: 1,
+                port_type: kind,
+                first_input: i as u32,
+                input_count: 1,
+            });
+            graph.inputs.push(GraphInput {
+                port: port::VALUE,
+                port_type: kind,
+                source_kind: source::PARAMETER,
+                source: i as u32,
+                output: output::OUT,
+            });
+            graph.terminals.push(GraphTerminal {
+                port: target,
+                node: i as u32,
+                output: output::OUT,
+            });
+            graph.parameters.push(value);
+            graph.author_ids.push(format!("/Surface/parameter{i}"));
+        }
+        material.graph = Some(graph);
+        let material = scene.add_material(material).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        scene
+            .add_light(crate::scene_api::Light::Sphere {
+                color: [1.; 3],
+                intensity: 8.,
+                radius: 0.,
+                transform: glam::Mat4::from_translation(glam::Vec3::new(1.5, 1., 2.)),
+            })
+            .unwrap();
+        let settings = RenderSettings {
+            seed: 0,
+            bounces: 1,
+            max_samples: 8,
+            aovs: 32,
+            aov_samples: 1,
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 32,
+            },
+            ..Default::default()
+        };
+        let mut camera = Camera {
+            projection: 1,
+            ..Default::default()
+        };
+        camera.world_matrix[14] = 3.;
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        engine.set_camera(Some(camera)).unwrap();
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        finish(&engine, &render);
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(render.backend().unwrap().0, backend);
+        let before = render.read_pixels(PixelKind::Hdr).unwrap().data;
+        let compiled = engine.diagnostics().compilations_started;
+        scene
+            .material_mut(material)
+            .unwrap()
+            .graph
+            .as_mut()
+            .unwrap()
+            .parameters[2] = [0.6, 0., 0.8, 0.];
+        assert_eq!(
+            scene.pending_commit_kind().unwrap(),
+            CommitKind::Incremental
+        );
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        finish(&engine, &render);
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+        assert_eq!(engine.diagnostics().compilations_started, compiled);
+        let normals = render.read_pixels(PixelKind::Normal).unwrap();
+        let normal = &normals.data[(16 * 32 + 16) * 4..(16 * 32 + 16) * 4 + 3];
+        for (actual, expected) in normal.iter().zip([0.6, 0., 0.8]) {
+            assert!((actual - expected).abs() < 0.001, "{backend:?}: {normal:?}");
+        }
+        let after = render.read_pixels(PixelKind::Hdr).unwrap().data;
+        assert!(
+            before
+                .iter()
+                .zip(&after)
+                .any(|(a, b)| (a - b).abs() > 0.001)
+        );
+        let fresh = Engine::new(EngineOptions { backend }).unwrap();
+        fresh.set_camera(Some(camera)).unwrap();
+        let reference = Render::new(&fresh, settings).unwrap();
+        fresh.set_scene_object(&scene).unwrap();
+        fresh.update().unwrap();
+        finish(&fresh, &reference);
+        reference.converge(ConvergeOptions::new(8)).unwrap();
+        for kind in [
+            PixelKind::Hdr,
+            PixelKind::Normal,
+            PixelKind::Albedo,
+            PixelKind::Id,
+        ] {
+            let a = render.read_pixels(kind).unwrap();
+            let b = reference.read_pixels(kind).unwrap();
+            let different = a
+                .data
+                .iter()
+                .zip(&b.data)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count();
+            let max_error = a
+                .data
+                .iter()
+                .zip(&b.data)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max);
+            if different > 0 {
+                if let Some(path) = std::env::var_os("MUTRACER_GRAPH_MATRIX_OUTPUT") {
+                    let path = std::path::PathBuf::from(path);
+                    std::fs::create_dir_all(&path).unwrap();
+                    for (label, values) in [("retained", &a.data), ("fresh", &b.data)] {
+                        std::fs::write(
+                            path.join(format!("{backend:?}-normal-{kind:?}-{label}.f32")),
+                            values
+                                .iter()
+                                .flat_map(|v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            assert_eq!(
+                different, 0,
+                "{backend:?}/{kind:?}: {different} components, max error {max_error}"
+            );
+            assert_eq!(a.id_data, b.id_data);
+        }
+        eprintln!(
+            "GRAPH_SURFACE {backend:?}: normal={normal:?}, Incremental, HDR/guides/ID exact to fresh"
+        );
     }
 }

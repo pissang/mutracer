@@ -420,3 +420,56 @@ fn raw_graph_validation_rejects_out_of_bounds_spans_and_legacy_graph_records() {
         assert!(crate::scene::validate(&corrupt).is_err(), "{at}");
     }
 }
+#[test]
+fn lit_graph_fallback_has_identical_shader_and_gpu_resources_to_constants() {
+    let (mut scene, material) = scene();
+    {
+        let m = scene.material_mut(material).unwrap();
+        m.values.emission_strength = 1.;
+        m.values.emission = [0.2; 3];
+        m.graph = Some(emission_graph(0.9, false));
+    }
+    scene
+        .add_light(crate::scene_api::Light::Sphere {
+            color: [1.; 3],
+            intensity: 8.,
+            radius: 0.,
+            transform: glam::Mat4::from_translation(glam::Vec3::new(1.5, 1., 2.)),
+        })
+        .unwrap();
+    let with_graph = scene.descriptor().unwrap();
+    scene.material_mut(material).unwrap().graph = None;
+    let constants = scene.descriptor().unwrap();
+    for hardware in [false, true] {
+        let (a, assets_a, _keep_a) = crate::scene::prepare_retained(&with_graph, hardware).unwrap();
+        let (b, assets_b, _keep_b) = crate::scene::prepare_retained(&constants, hardware).unwrap();
+        assert!(
+            a.native_layout
+                .as_ref()
+                .unwrap()
+                .material_graphs
+                .iter()
+                .any(|d| d.code == "unsupported-emission-graph")
+        );
+        assert!(b.native_layout.as_ref().unwrap().material_graphs.is_empty());
+        assert_eq!(assets_a[&a.shader], assets_b[&b.shader]);
+        let mut layout_a = a.native_layout.clone().unwrap();
+        let mut layout_b = b.native_layout.clone().unwrap();
+        layout_a.material_graphs.clear();
+        layout_b.material_graphs.clear();
+        assert_eq!(
+            serde_json::to_value(layout_a).unwrap(),
+            serde_json::to_value(layout_b).unwrap(),
+            "hardware={hardware}: only located diagnostics may differ"
+        );
+        for (id, data) in &assets_a {
+            if *id != crate::AssetId::Packet(31) {
+                assert_eq!(
+                    Some(data),
+                    assets_b.get(id),
+                    "hardware={hardware}, resource={id:?}"
+                );
+            }
+        }
+    }
+}

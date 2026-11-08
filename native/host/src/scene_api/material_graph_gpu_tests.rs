@@ -337,6 +337,11 @@ fn material_graph_gpu_node_matrix_matches_cpu_and_constant_material() {
                 "{name}: {:?}",
                 engine.diagnostics().material_graphs
             );
+            assert_eq!(
+                render.backend().unwrap().0,
+                backend,
+                "{name}: traversal backend"
+            );
             let actual = render.read_pixels(PixelKind::Hdr).unwrap();
             let ids = render.read_pixels(PixelKind::Id).unwrap();
             if let Some(path) = &destination {
@@ -505,3 +510,5 @@ fn material_graph_gpu_pipeline_failure_keeps_installed_graph_or_first_constants(
     }
 }
 include!("material_graph_surfaces.rs");
+#[path = "material_graph_texture_tests.rs"]
+mod textures;
