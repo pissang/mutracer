@@ -449,8 +449,8 @@ The viewer maps `open_pbr_surface`, `standard_surface`, `gltf_pbr` and
 conversion, including its coat tint, metallic specular and sheen roughness rules;
 this does not make OpenPBR identical to the source renderer's BSDF. Uniform
 networks become material values. Varying networks use `MaterialGraph`; the
-material panel shows the compilation status and the number of unsupported parts,
-and the browser console lists each one with its node and port. Inputs that have
+material panel notes while a graph compiles or falls back, and the browser console
+lists each unsupported part with its node and port. Inputs that have
 no effect, such as unsupported controls left at zero or image frame inputs at
 their defaults, are ignored. Other unsupported graph inputs use the library's
 fallback behavior. When a network

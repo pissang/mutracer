@@ -48,13 +48,12 @@ export function MaterialPanel() {
         <i className="mat-ball" style={{ '--c': linearToHex(base) } as React.CSSProperties} />
         <div>
           <strong>{material.name}</strong>
-          <small>{material.meshName || 'Mesh'}{material.users > 1 ? ` · shared by ${material.users} meshes` : ''}</small>
+          <small>{material.meshName || 'Mesh'}{material.users > 1 ? ` · shared by ${material.users} meshes` : ''}<MaterialGraphStatus /></small>
         </div>
         <button className="icon-btn sm" title="Reset to loaded values" aria-label="Reset material" onClick={() => getEngine()?.resetMaterial(material.id)}>
           <RotateCcw size={13} />
         </button>
       </div>
-      <MaterialGraphStatus />
       <div className="mat-presets">
         <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
@@ -274,8 +273,8 @@ function MaterialGraphStatus(){
   const graph=state?.materialGraphs;
   const details=graph?.diagnostics.map(d=>`${d.node}${d.port?`.${d.port}`:''}: ${d.message}`).join('\n')??'';
   useEffect(()=>{if(details)console.warn(`Material graph diagnostics\n${details}`);},[details]);
-  if(!graph||graph.status==='idle')return null;
-  const label=graph.status==='compiling'?'Compiling material graph':graph.status==='ready'?'Material graph ready':'Material graph fallback';
-  const count=graph.diagnostics.length;
-  return <div role="status"><p>{label}{count?` · ${count} unsupported ${count===1?'part':'parts'} (see console)`:''}</p></div>;
+  // Ready graphs need no notice; compiling and fallback read as a quiet status.
+  if(!graph||(graph.status!=='compiling'&&graph.status!=='failed'))return null;
+  const label=graph.status==='compiling'?'compiling graph…':'graph fallback';
+  return <span role="status" title={details?`${details}\n(also in the console)`:undefined}>{` · ${label}`}</span>;
 }
