@@ -86,7 +86,7 @@
     "typecheck:viewer": "tsc --noEmit -p viewer/tsconfig.json",
     "site": "vite --config site/vite.config.ts",
     "build:site": "node scripts/build-site.mjs",
-    "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
+    "typecheck:site": "tsc --noEmit -p site/tsconfig.json && tsc --noEmit -p site/tsconfig.worker.json",
     "deploy": "wrangler deploy",
     "deploy:dev": "wrangler deploy --env dev",
     "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs",
@@ -135,6 +135,7 @@
     }
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
