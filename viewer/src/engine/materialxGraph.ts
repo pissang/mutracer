@@ -77,7 +77,14 @@ class Reader {
         let type=e.attrs.type as Type;
         if(type as string==='multioutput')type=e.tag==='gltf_colorimage'?'color4':inputs.in?.type??'vector3';
         const category=e.tag==='absval'?'abs':e.tag;
-        if(category==='swizzle'){
+        // MaterialX 1.39.4 Version.cpp, upgrade 1.38 -> 1.39. Object normals
+        // decode/normalize without the tangent frame; tangent mode loses space.
+        // https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/source/MaterialXCore/Version.cpp
+        const legacy=Number(this.root.attrs.version?.split('.')[1]??39)<39;
+        if(legacy&&category==='atan2')for(const [old,name] of [['in1','iny'],['in2','inx']])if(inputs[old]){inputs[name]=inputs[old];delete inputs[old];}
+        if(legacy&&category==='normalmap'){
+            this.nodes.push(...upgradeNormalmap({id,category,type,inputs}));
+        }else if(category==='swizzle'){
             this.swizzle(id,type,inputs.in,String(inputs.channels?.value??''));
         }else{
             this.nodes.push({id,category,type,inputs});
@@ -213,10 +220,27 @@ function inactive(nodes:Node[],port:string,edge:Edge){
 const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
     for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
 };
+function upgradeNormalmap(node:Node):Node[]{
+    const inputs={...node.inputs},space=inputs.space;
+    delete inputs.space;
+    if(!space?.connection&&space?.value==='object'){
+        const decode=`${node.id}/decode`,bias=`${node.id}/bias`;
+        return [{id:decode,category:'multiply',type:'vector3',inputs:{...(inputs.in?{in1:inputs.in}:{}),in2:literal('float',2)}},
+            {id:bias,category:'subtract',type:'vector3',inputs:{in1:{type:'vector3',connection:{node:decode}},in2:literal('float',1)}},
+            {...node,category:'normalize',inputs:{in:{type:'vector3',connection:{node:bias}}}}];
+    }
+    if((inputs.normal||inputs.tangent)&&!inputs.bitangent){
+        const cross=`${node.id}/cross`,unit=`${node.id}/bitangent`;
+        inputs.bitangent={type:'vector3',connection:{node:unit}};
+        return [{id:cross,category:'crossproduct',type:'vector3',inputs:{...(inputs.normal?{in1:inputs.normal}:{}),...(inputs.tangent?{in2:inputs.tangent}:{})}},
+            {id:unit,category:'normalize',type:'vector3',inputs:{in:{type:'vector3',connection:{node:cross}}}}, {...node,inputs}];
+    }
+    return [{...node,inputs}];
+}
 /** Removes inputs that have no effect from a graph saved by an earlier
  * importer, so restored materials match a fresh import. */
 export function pruneInactiveInputs(nodes:Node[],terminal:Record<string,Edge>){
-    const pruned=nodes.map(n=>{if(!n.inputs)return n;const inputs={...n.inputs};dropInactiveImageInputs(inputs);return {...n,inputs};});
+    const pruned=nodes.flatMap(n=>{if(!n.inputs)return [n];const inputs={...n.inputs};dropInactiveImageInputs(inputs);return n.category==='normalmap'&&inputs.space?upgradeNormalmap({...n,inputs}):[{...n,inputs}];});
     return {nodes:pruned,terminal:Object.fromEntries(Object.entries(terminal).filter(([port,edge])=>!inactive(pruned,port,edge)))};
 }
 /** Parses one material; resource loading remains owned by the viewer package loader. */
