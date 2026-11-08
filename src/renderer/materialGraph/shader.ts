@@ -5,6 +5,7 @@ import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import { generateGraph, type Backend } from './codegen.js';
 import type { GraphPlan } from './state.js';
+import type {NormalizedGraph} from './normalize.js';
 const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness', opacity:'alpha' };
 /** Browser-only specialization leaves the native/shared generators byte-identical.
  * Explicit anchors fail closed if a generator's material boundary changes. */
@@ -30,15 +31,6 @@ export function materialGraphShader(source: string, plan: GraphPlan, backend: Ba
   if(index < 0) { return fallback; } var texel = sampleMap(index, uv);
   if(color) { texel = vec4f(decodeMapColor(index,texel.rgb),texel.a); } return texel;
 }
-fn mx_rotate(p: vec2f, degrees: f32) -> vec2f { let a=degrees*0.017453292519943295; return vec2f(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
-fn mx_place2d(uv:vec2f,pivot:vec2f,scale:vec2f,angle:f32,offset:vec2f,order:f32) -> vec2f {
-  if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
-  return mx_rotate(uv-pivot-offset,angle)/scale+pivot;
-}
-fn mx_normalmap(value:vec3f,scale:vec2f,n:vec3f,t:vec3f,b:vec3f) -> vec3f {
-  var d=value*2.0-1.0; if(dot(value,value)==0.0){d=vec3f(0.0,0.0,1.0);}
-  return normalize(t*d.x*scale.x+b*d.y*scale.y+n*d.z);
-}
 ` : `vec4 mx_image(int index,vec2 uv,vec4 fallback,bool color) {
 #ifdef NUM_MAPS
   if(index < 0) { return fallback; } vec4 texel = sampleMap(index,uv);
@@ -47,59 +39,8 @@ fn mx_normalmap(value:vec3f,scale:vec2f,n:vec3f,t:vec3f,b:vec3f) -> vec3f {
   return fallback;
 #endif
 }
-vec2 mx_rotate(vec2 p,float degrees) { float a=degrees*0.017453292519943295; return vec2(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
-vec2 mx_place2d(vec2 uv,vec2 pivot,vec2 scale,float angle,vec2 offset,float order) {
-  if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
-  return mx_rotate(uv-pivot-offset,angle)/scale+pivot;
-}
-vec3 mx_normalmap(vec3 value,vec2 scale,vec3 n,vec3 t,vec3 b) {
-  vec3 d=value*2.0-1.0;if(dot(value,value)==0.0){d=vec3(0.0,0.0,1.0);}
-  return normalize(t*d.x*scale.x+b*d.y*scale.y+n*d.z);
-}
 `;
-    // HSV thresholds follow MaterialX 1.39.4's OSL-derived operators. See
-    // LICENSES/MaterialX-OSL-BSD-3-Clause.txt and THIRD_PARTY_NOTICES.md.
-    if (plan.structures.some(g => g.nodes.some(n => n.category === 'rgbtohsv' || n.category === 'hsvtorgb' || n.category === 'hsvadjust'))) {
-        declarations += wg ? `fn mx_hsvtorgb(value:vec3f) -> vec3f {
-  if(value.y<0.0001){return vec3f(value.z);}
-  let h=fract(value.x)*6.0;
-  let wave=abs((vec3f(h)+vec3f(0.0,4.0,2.0))-6.0*floor((vec3f(h)+vec3f(0.0,4.0,2.0))/6.0)-3.0)-1.0;
-  return value.z*mix(vec3f(1.0),clamp(wave,vec3f(0.0),vec3f(1.0)),vec3f(value.y));
-}
-fn mx_rgbtohsv(value:vec3f) -> vec3f {
-  let high=max(value.x,max(value.y,value.z));let low=min(value.x,min(value.y,value.z));let delta=high-low;
-  var saturation=0.0;if(high>0.0){saturation=delta/high;}if(saturation<=0.0){return vec3f(0.0,saturation,high);}
-  var hue=(value.y-value.z)/delta;
-  if(value.x<high){if(value.y>=high){hue=2.0+(value.z-value.x)/delta;}else{hue=4.0+(value.x-value.y)/delta;}}
-  hue/=6.0;if(hue<0.0){hue+=1.0;}return vec3f(hue,saturation,high);
-}
-` : `vec3 mx_hsvtorgb(vec3 value) {
-  if(value.y<0.0001){return vec3(value.z);}
-  float h=fract(value.x)*6.0;
-  vec3 wave=abs(mod(vec3(h)+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0;
-  return value.z*mix(vec3(1.0),clamp(wave,0.0,1.0),value.y);
-}
-vec3 mx_rgbtohsv(vec3 value) {
-  float high=max(value.x,max(value.y,value.z)),low=min(value.x,min(value.y,value.z)),delta=high-low;
-  float saturation=high>0.0?delta/high:0.0;if(saturation<=0.0){return vec3(0.0,saturation,high);}
-  float hue=(value.y-value.z)/delta;
-  if(value.x<high){if(value.y>=high){hue=2.0+(value.z-value.x)/delta;}else{hue=4.0+(value.x-value.y)/delta;}}
-  hue/=6.0;if(hue<0.0){hue+=1.0;}return vec3(hue,saturation,high);
-}
-`;
-    }
-    if(plan.structures.some(g=>g.nodes.some(n=>/^(noise|fractal|cellnoise|worleynoise)/.test(n.category)))) declarations += noiseShader(backend);
-    if(plan.structures.some(g => g.nodes.some(n => n.category === 'rotate3d'))) {
-        declarations += wg ? `fn mx_rotate3d(p:vec3f,degrees:f32,axis:vec3f) -> vec3f {
-  let n=normalize(axis);let a=degrees*0.017453292519943295;let c=cos(a);let s=sin(a);
-  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
-}
-` : `vec3 mx_rotate3d(vec3 p,float degrees,vec3 axis) {
-  vec3 n=normalize(axis);float a=degrees*0.017453292519943295;float c=cos(a),s=sin(a);
-  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
-}
-`;
-    }
+    declarations += graphMathShader(plan.structures,backend);
     plan.structures.forEach((g, index) => declarations += generateGraph(g, backend, `mx_eval_${index + 1}`).source + '\n');
     const matrix = (inverse: boolean) => {
         const columns = Array.from({ length: 4 }, (_, c) => wg ? `instancesBuffer[index * ${INSTANCE_VEC4_STRIDE} + ${c + (inverse ? 1 : 5)}]` : `fetchIns(index * ${INSTANCE_VEC4_STRIDE} + ${c + (inverse ? 1 : 5)})`);
@@ -195,4 +136,72 @@ void getMaterial(inout OpenPbrResolvedMaterial mat,int materialIndex,vec2 uv,vec
     // Declarations follow sampleMap and precede getMaterial for GLSL declaration order.
     const declaration = wg ? 'fn getMaterial(\n' : 'void getMaterial(\n';
     return source.replace(declaration, declarations + '\n' + declaration);
+}
+
+/** Pure MaterialX helpers shared by surface rendering and UV height baking. */
+export function graphMathShader(structures:readonly NormalizedGraph[],backend:Backend) {
+    const wg=backend==='webgpu';
+    let declarations=wg ? `fn mx_rotate(p: vec2f, degrees: f32) -> vec2f { let a=degrees*0.017453292519943295; return vec2f(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
+fn mx_place2d(uv:vec2f,pivot:vec2f,scale:vec2f,angle:f32,offset:vec2f,order:f32) -> vec2f {
+  if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
+  return mx_rotate(uv-pivot-offset,angle)/scale+pivot;
+}
+fn mx_normalmap(value:vec3f,scale:vec2f,n:vec3f,t:vec3f,b:vec3f) -> vec3f {
+  var d=value*2.0-1.0; if(dot(value,value)==0.0){d=vec3f(0.0,0.0,1.0);}
+  return normalize(t*d.x*scale.x+b*d.y*scale.y+n*d.z);
+}
+` : `vec2 mx_rotate(vec2 p,float degrees) { float a=degrees*0.017453292519943295; return vec2(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
+vec2 mx_place2d(vec2 uv,vec2 pivot,vec2 scale,float angle,vec2 offset,float order) {
+  if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
+  return mx_rotate(uv-pivot-offset,angle)/scale+pivot;
+}
+vec3 mx_normalmap(vec3 value,vec2 scale,vec3 n,vec3 t,vec3 b) {
+  vec3 d=value*2.0-1.0;if(dot(value,value)==0.0){d=vec3(0.0,0.0,1.0);}
+  return normalize(t*d.x*scale.x+b*d.y*scale.y+n*d.z);
+}
+`;
+    // HSV thresholds follow MaterialX 1.39.4's OSL-derived operators. See
+    // LICENSES/MaterialX-OSL-BSD-3-Clause.txt and THIRD_PARTY_NOTICES.md.
+    if (structures.some(g => g.nodes.some(n => n.category === 'rgbtohsv' || n.category === 'hsvtorgb' || n.category === 'hsvadjust'))) {
+        declarations += wg ? `fn mx_hsvtorgb(value:vec3f) -> vec3f {
+  if(value.y<0.0001){return vec3f(value.z);}
+  let h=fract(value.x)*6.0;
+  let wave=abs((vec3f(h)+vec3f(0.0,4.0,2.0))-6.0*floor((vec3f(h)+vec3f(0.0,4.0,2.0))/6.0)-3.0)-1.0;
+  return value.z*mix(vec3f(1.0),clamp(wave,vec3f(0.0),vec3f(1.0)),vec3f(value.y));
+}
+fn mx_rgbtohsv(value:vec3f) -> vec3f {
+  let high=max(value.x,max(value.y,value.z));let low=min(value.x,min(value.y,value.z));let delta=high-low;
+  var saturation=0.0;if(high>0.0){saturation=delta/high;}if(saturation<=0.0){return vec3f(0.0,saturation,high);}
+  var hue=(value.y-value.z)/delta;
+  if(value.x<high){if(value.y>=high){hue=2.0+(value.z-value.x)/delta;}else{hue=4.0+(value.x-value.y)/delta;}}
+  hue/=6.0;if(hue<0.0){hue+=1.0;}return vec3f(hue,saturation,high);
+}
+` : `vec3 mx_hsvtorgb(vec3 value) {
+  if(value.y<0.0001){return vec3(value.z);}
+  float h=fract(value.x)*6.0;
+  vec3 wave=abs(mod(vec3(h)+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0;
+  return value.z*mix(vec3(1.0),clamp(wave,0.0,1.0),value.y);
+}
+vec3 mx_rgbtohsv(vec3 value) {
+  float high=max(value.x,max(value.y,value.z)),low=min(value.x,min(value.y,value.z)),delta=high-low;
+  float saturation=high>0.0?delta/high:0.0;if(saturation<=0.0){return vec3(0.0,saturation,high);}
+  float hue=(value.y-value.z)/delta;
+  if(value.x<high){if(value.y>=high){hue=2.0+(value.z-value.x)/delta;}else{hue=4.0+(value.x-value.y)/delta;}}
+  hue/=6.0;if(hue<0.0){hue+=1.0;}return vec3(hue,saturation,high);
+}
+`;
+    }
+    if(structures.some(g=>g.nodes.some(n=>/^(noise|fractal|cellnoise|worleynoise)/.test(n.category)))) declarations += noiseShader(backend);
+    if(structures.some(g => g.nodes.some(n => n.category === 'rotate3d'))) {
+        declarations += wg ? `fn mx_rotate3d(p:vec3f,degrees:f32,axis:vec3f) -> vec3f {
+  let n=normalize(axis);let a=degrees*0.017453292519943295;let c=cos(a);let s=sin(a);
+  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
+}
+` : `vec3 mx_rotate3d(vec3 p,float degrees,vec3 axis) {
+  vec3 n=normalize(axis);float a=degrees*0.017453292519943295;float c=cos(a),s=sin(a);
+  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
+}
+`;
+    }
+    return declarations;
 }

@@ -210,7 +210,8 @@ export class MaterialEditor {
    */
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
-    merge?: { key: string; ms?: number }, transform?: TextureTransform, graph?: MaterialGraph | null
+    merge?: { key: string; ms?: number }, transform?: TextureTransform, graph?: MaterialGraph | null,
+    transforms?:Partial<Record<TextureKey,TextureTransform>>
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
@@ -226,7 +227,7 @@ export class MaterialEditor {
         textures[slot] = null;
         return;
       }
-      textures[slot] = this.upload(image, file, material, slot, transform);
+      textures[slot] = this.upload(image, file, material, slot, transforms?.[slot]??transform);
     });
     // Newly uploaded heights also work on meshes that had no textures or UVs when converted.
     if (textures.displacementMap && entry.needsDisplacementProjection &&
@@ -306,8 +307,11 @@ export class MaterialEditor {
     const texture = createTexture(image, material, slot);
     if (transform) {
       texture.uvScale = [...transform.uvScale];
-      texture.uvOffset = [0, 0];
+      texture.uvOffset = [...(transform.uvOffset??[0,0])];
       texture.flipY = transform.flipY;
+      if(transform.uvChannel!==undefined)texture.uvChannel=transform.uvChannel;
+      if(transform.wrapS)texture.wrapS=transform.wrapS;
+      if(transform.wrapT)texture.wrapT=transform.wrapT;
       this.transforms.set(texture, transform);
     }
     this.uploads.set(texture, file);

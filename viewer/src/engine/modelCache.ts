@@ -128,13 +128,21 @@ export interface TextureSampling {
 export interface TextureTransform {
   uvScale: [number, number];
   flipY: boolean;
+  uvOffset?:[number,number];
+  uvChannel?:0|1;
+  wrapS?:TextureWrapMode;
+  wrapT?:TextureWrapMode;
 }
 
 function readTransform(value: unknown): TextureTransform | undefined {
   const t = value as Partial<TextureTransform> | undefined;
   if (!t || !Array.isArray(t.uvScale) || t.uvScale.length !== 2 || !t.uvScale.every(Number.isFinite) ||
     typeof t.flipY !== 'boolean') return undefined;
-  return { uvScale: [t.uvScale[0], t.uvScale[1]], flipY: t.flipY };
+  const wraps:TextureWrapMode[]=['repeat','clamp-to-edge','mirrored-repeat'];
+  return { uvScale: [t.uvScale[0], t.uvScale[1]], flipY: t.flipY,
+    ...(Array.isArray(t.uvOffset)&&t.uvOffset.length===2&&t.uvOffset.every(Number.isFinite)?{uvOffset:[...t.uvOffset] as [number,number]}:{}),
+    ...(t.uvChannel===0||t.uvChannel===1?{uvChannel:t.uvChannel}:{}),
+    ...(t.wrapS&&wraps.includes(t.wrapS)?{wrapS:t.wrapS}:{}),...(t.wrapT&&wraps.includes(t.wrapT)?{wrapT:t.wrapT}:{}) };
 }
 
 function readSampling(value: unknown): MaterialEdit['sampling'] {

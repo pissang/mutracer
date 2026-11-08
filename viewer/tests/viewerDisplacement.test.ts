@@ -38,6 +38,18 @@ afterEach(() => {
 });
 
 describe('viewer displacement edits', () => {
+  it('keeps an imported height transform separate and persists it through reload and history',async()=>{
+    const {source,mesh,material}=setup();editor.modelId='model';
+    const file=new Blob(['baked PNG'],{type:'image/png'});
+    await editor.setTextures(source.uuid,{map:new Blob(['base']),displacementMap:file},{displacementScale:.2,displacementBias:-.1},'MaterialX',undefined,undefined,null,{displacementMap:{uvScale:[2,3],uvOffset:[.1,-.2],flipY:true,uvChannel:1,wrapS:'mirrored-repeat',wrapT:'clamp-to-edge'}});
+    expect(material.map!.uvScale).toEqual([1,1]);expect(material.displacementMap!.uvScale).toEqual([2,3]);expect(material.displacementMap!.uvOffset).toEqual([.1,-.2]);
+    editor.flush();const saved=vi.mocked(saveMaterialEdits).mock.calls[0][0];
+    vi.mocked(readMaterialEdits).mockResolvedValue(saved);editor.setModel(mesh,await readPendingEdits('model'));
+    const restored=new OpenPBRMaterial();editor.onConverted(source,restored,mesh.uuid);
+    expect(restored.displacementMap!.uvOffset).toEqual([.1,-.2]);expect(restored.displacementMap!.uvChannel).toBe(1);
+    expect(restored.displacementMap!.wrapS).toBe('mirrored-repeat');expect(restored.displacementBias).toBe(-.1);
+    editor.reset(source.uuid);expect(restored.displacementMap).toBeUndefined();undo();expect(restored.displacementMap).toBeDefined();redo();expect(restored.displacementMap).toBeUndefined();
+  });
   it('uploads a linear height texture with the existing UV transform and supports undo, redo and reset', async () => {
     const { source, material } = setup();
     material.map = new Texture({ data: new Uint8Array(4), width: 1, height: 1 });

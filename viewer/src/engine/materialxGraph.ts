@@ -6,6 +6,7 @@ import {terminalTypes,terminalAliases,width} from '../../../src/renderer/materia
 import {parseXml,type XmlElement as Element} from './materialx';
 import standardSurface from './materialxStandardSurface';
 import type {MaterialValues} from './materialParams';
+import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
 const literal=(type:Type,value:Input['value']):Input=>({type,value});
 const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled:'thinWalled',geometryNormal:'normal',specularRoughnessAnisotropy:'specularAnisotropy',coatRoughnessAnisotropy:'coatAnisotropy',subsurfaceScatterAnisotropy:'subsurfaceAnisotropy'};
@@ -27,6 +28,21 @@ class Reader {
     constructor(readonly root:Element){}
     find(e:Element,name:string):Element|undefined {
         for(let scope:Element|null=e;scope;scope=scope.parent){const found=child(scope,name);if(found)return found;}
+    }
+    source(e:Element|undefined):Element|undefined {
+        if(e?.attrs.nodename)return this.find(e.parent??this.root,e.attrs.nodename);
+        if(e?.attrs.nodegraph){const graph=child(this.root,e.attrs.nodegraph);return this.source(graph?.children.find(c=>c.tag==='output'&&(!e.attrs.output||c.attrs.name===e.attrs.output)));}
+    }
+    displacement(material:Element,shader:Element):DisplacementPlan|undefined {
+        const port=input(material,'displacementshader'),node=this.source(port);
+        if(port&&node?.tag!=='displacement')return {graph:new MaterialGraph(),mode:'fallback',uvChannel:0,reason:`${path(material)}.displacementshader: unsupported displacement shader ${node?.tag??'missing node'}`};
+        const height=node?input(node,'displacement'):shader.tag==='UsdPreviewSurface'?input(shader,'displacement'):undefined;
+        if(!height)return;
+        const value=this.resolve(height,literal('float',0));
+        if(value.type!=='float')return {graph:new MaterialGraph(),mode:'fallback',uvChannel:0,reason:`${path(height)}: only scalar height displacement is supported`};
+        const scale=node?this.resolve(input(node,'scale'),literal('float',1)):literal('float',1);
+        const result=this.add('float','multiply',{in1:value,in2:scale},'displacement');
+        return planDisplacement(new MaterialGraph({nodes:this.nodes,terminal:{specularRoughness:result.connection!}}));
     }
     resolve(e:Element|undefined,fallback:Input,ctx=this.context):Input {
         if(!e)return fallback;
@@ -176,7 +192,7 @@ class Reader {
             else if(thickness)result.volumeThickness=this.resolve(thickness,{type:'float'});
             for(const name of ['alpha_mode','alpha_cutoff','attenuation_color','attenuation_distance','thickness','emissive_strength','iridescence_thickness'])handled.add(name);
         }else{
-            result.alphaCutoff=this.resolve(input(shader,'opacityThreshold'),literal('float',0));handled.add('opacityThreshold');
+            result.alphaCutoff=this.resolve(input(shader,'opacityThreshold'),literal('float',0));handled.add('opacityThreshold');handled.add('displacement');
             for(const name of ['useSpecularWorkflow','opacityMode']){
                 const e=input(shader,name);if(e&&e.attrs.value!=='0')result[name]=this.resolve(e,{type:'integer'});handled.add(name);
             }
@@ -199,6 +215,7 @@ export interface MaterialXGraphImport {
     images:Map<string,{file:string;srgb:boolean;wrapS?:'repeat'|'clamp-to-edge'|'mirrored-repeat';wrapT?:'repeat'|'clamp-to-edge'|'mirrored-repeat'}>;
     warnings:string[];
     coverage:'complete'|'partial'|'fallback';
+    displacement?:DisplacementPlan;
 }
 const dynamicCategories=['image','tiledimage','gltf_image','gltf_colorimage','gltf_normalmap','texcoord','position','normal','tangent','bitangent','transformpoint','transformvector','transformnormal'];
 const isDynamic=(normalized:ReturnType<typeof normalizeGraph>)=>normalized.nodes.some(n=>Object.values(n.inputs).some(i=>i.geometry)||dynamicCategories.includes(n.category));
@@ -280,5 +297,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         if(!state.unlit && (['emissionColor','emissionLuminance'].some(p=>p in normalized.terminal)||state.emissionLuminance>0&&['coatColor','coatWeight'].some(p=>p in normalized.terminal)))warnings.push('Lit emission graphs use the constant material fallback.');
         if(!normalized.diagnostics.length)generateGraph(normalized,'webgpu');
     }
-    return {name:material.attrs.name??'MaterialX',shader:shader.tag,values,graph,images:r.images,warnings,coverage:warnings.length?(Object.keys(values).length?'partial':'fallback'):'complete'};
+    const displacement=r.displacement(material,shader);
+    if(displacement?.reason)warnings.push(displacement.reason);
+    return {name:material.attrs.name??'MaterialX',shader:shader.tag,values,graph,images:r.images,warnings,displacement,coverage:warnings.length?(Object.keys(values).length?'partial':'fallback'):'complete'};
 }

@@ -105,8 +105,30 @@ export async function loadGraphImages(material: import('./materialxGraph').Mater
       texture.colorSpace=plan.srgb?'srgb':'linear';texture.flipY=true;
       if(plan.wrapS)texture.wrapS=plan.wrapS;if(plan.wrapT)texture.wrapT=plan.wrapT;
       rememberGraphImage(texture,blob);
-      material.graph?.setInput(node,'file',{type:'filename',value:texture});
+      for(const graph of [material.graph,material.displacement?.graph])if(graph?.nodes.some(n=>n.id===node))graph.setInput(node,'file',{type:'filename',value:texture});
     }catch(error){warnings.push(`${node}.file: ${(error as Error).message}; using the image default`);}
   }));
   return warnings;
+}
+
+/** Produces an ordinary cached/undoable height upload. No graph is evaluated
+ * during traversal; the imported scalar height is frozen in UV space. */
+export async function loadMaterialXDisplacement(material:import('./materialxGraph').MaterialXGraphImport,pkg:MaterialXPackage) {
+  const plan=material.displacement;
+  if(!plan)return;
+  if(plan.mode==='fallback')return {file:null,values:{displacementScale:0,displacementBias:0},warnings:[plan.reason!]};
+  if(plan.direct) {
+    const image=material.images.get(plan.direct.node),file=image&&pkg.resolve(image.file);
+    if(!file)return {file:null,values:{displacementScale:0,displacementBias:0},warnings:[`${plan.direct.node}.file: missing displacement image`]};
+    return {file,values:{displacementScale:plan.direct.scale,displacementBias:plan.direct.bias},transform:{uvScale:plan.direct.uvScale,uvOffset:plan.direct.uvOffset,flipY:true,uvChannel:plan.uvChannel,wrapS:image.wrapS,wrapT:image.wrapT},warnings:[]};
+  }
+  const {bakeDisplacement}=await import('./materialxBakeClient');
+  const reachable=new Set((await import('../../../src/renderer/materialGraph/normalize')).normalizeGraph(plan.graph).nodes.map(n=>n.id));
+  const images=[...material.images].filter(([node])=>reachable.has(node)).flatMap(([node,image])=>{
+    const file=pkg.resolve(image.file);return file?[{...image,node,file}]:[];
+  });
+  const graph={nodes:plan.graph.nodes.map(n=>({...n,inputs:Object.fromEntries(Object.entries(n.inputs??{}).map(([port,i])=>[port,i.type==='filename'?{...i,value:undefined}:i]))})),terminal:plan.graph.terminal};
+  const result=await bakeDisplacement({graph,images});
+  console.debug('MaterialX displacement bake',{material:material.name,backend:result.backend,width:result.width,height:result.height,maxQuantizationError:result.maxError,...result.timings});
+  return {file:result.file,values:{displacementScale:result.scale,displacementBias:result.bias},transform:{uvScale:[1,1] as [number,number],flipY:true,uvChannel:plan.uvChannel,wrapS:'repeat' as const,wrapT:'repeat' as const},warnings:[]};
 }
