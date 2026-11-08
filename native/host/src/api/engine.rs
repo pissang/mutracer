@@ -599,7 +599,8 @@ impl Engine {
     }
     /// The sole commit point. Returns whether the scene or camera changed.
     /// The scene is prepared once for all renders. Incremental edits are applied
-    /// on this thread; full preparation runs on a library thread and renders report
+    /// on this thread, except new geometry appends, which use the same library
+    /// thread as full preparation. Renders report
     /// [`super::RenderStatus::Preparing`] until it is published.
     pub fn update(&self) -> Result<bool> {
         self.poll_device();

@@ -1451,6 +1451,98 @@ fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
 }
 
 #[test]
+#[ignore = "requires a real GPU; run separately"]
+fn geometry_append_prepares_without_blocking_old_render_and_cancels_atomically() {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene};
+    let _test = crate::abi_test_lock();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 1,
+                size: RenderSize::Fixed {
+                    width: 16,
+                    height: 12,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut scene = Scene::new();
+        let geometry = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., -3., 1., -1., -3., 0., 1., -3.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let mut material = OpenPbrMaterial::default();
+        material.values.emission_strength = 2.;
+        let material = scene.add_material(material).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        assert_eq!(finish(&render), RenderStatus::Finished);
+        let before = images(&render);
+        let original = scene.descriptor().unwrap();
+        let target = render.engine().lock().renders[&render.id()].context();
+        let added = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., -2., 1., -1., -2., 0., 1., -2.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        scene.add_mesh(Mesh::new(added, material)).unwrap();
+        let resume = hold_preparation();
+        engine.set_scene_object(&scene).unwrap();
+        let started = Instant::now();
+        engine.update().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "update waited for append preparation"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while context::PREPARATION_GATE.lock().unwrap().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "append did not reach preparation"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(render.refine().unwrap(), RenderStatus::Preparing);
+        assert_bytes(
+            &images(&render),
+            &before,
+            "old image while append is preparing",
+        );
+        // The old linked target can still submit and complete actual GPU work.
+        let job = context::submit(target, 1).unwrap();
+        loop {
+            context::poll_job(job, 1).unwrap();
+            if context::job_info(job).unwrap().completed_samples == 1 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "old render blocked by append");
+        }
+        assert_eq!(context::info(target).unwrap().samples, 2);
+        // Superseding the append cancels its candidate before it touches buffers.
+        engine.set_scene_shared(original).unwrap();
+        engine.update().unwrap();
+        resume.send(()).unwrap();
+        assert_eq!(finish(&render), RenderStatus::Finished);
+        assert_bytes(
+            &images(&render),
+            &before,
+            "cancelled append preserves old scene",
+        );
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        assert_eq!(finish(&render), RenderStatus::Finished);
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+    }
+}
+
+#[test]
 fn converge_matches_l0_and_reports_progress_and_cancellation() {
     let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {

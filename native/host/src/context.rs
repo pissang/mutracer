@@ -795,6 +795,8 @@ pub(crate) enum CommitOutcome {
     NeedsFull,
     /// Another context is preparing, so the incremental path was not attempted.
     Blocked,
+    /// Geometry append uses the existing preparation worker, retaining incremental classification.
+    Deferred,
 }
 /// L1 entry point: a shared descriptor, which the context keeps without copying,
 /// and borrowed settings, with an explicit commit path.
@@ -833,6 +835,7 @@ fn commit_inner(
     let mut candidate = None;
     let mut blocked = false;
     let mut scene_only = false;
+    let mut deferred = false;
     with_registry(|registry| {
         let preparing = registry.contexts.values().any(|c| c.commit.is_some());
         let context = context(registry, handle)?;
@@ -852,12 +855,30 @@ fn commit_inner(
         scene_only = context.scene_only;
         if !preparing && path != CommitPath::FullOnly {
             candidate = incremental_candidate(context, bytes, &settings);
+            if path == CommitPath::IncrementalOnly {
+                deferred = candidate.as_ref().is_some_and(|(_, previous)| {
+                    let offset = layout::header::GEOMETRY_COUNT * 4;
+                    bytes
+                        .get(offset..offset + 4)
+                        .zip(previous.get(offset..offset + 4))
+                        .is_some_and(|(next, old)| {
+                            u32::from_le_bytes(next.try_into().unwrap())
+                                > u32::from_le_bytes(old.try_into().unwrap())
+                        })
+                });
+                if deferred {
+                    candidate = None;
+                }
+            }
             if candidate.is_some() {
                 context.commit = Some(cancel.clone());
             }
         }
         Ok(())
     })?;
+    if deferred {
+        return Ok(CommitOutcome::Deferred);
+    }
     if let Some((retained, previous)) = candidate {
         // The TS core trusts validated descriptors only. Validation and sync
         // failures fall through to full preparation, which reports them.
@@ -898,10 +919,45 @@ fn commit_inner(
             })
             .flatten();
         let synced = started.elapsed();
-        let steps = sync.and_then(|sync| {
+        let mut steps = sync.and_then(|sync| {
             commit_plan::plan_with(&previous, bytes, &sync, scene_only, changes.is_some())
         });
         let planned = started.elapsed();
+        // Build the candidate's CPU packets outside the registry. The old scene
+        // and its GPU buffers stay usable until publication below.
+        let append_bytes = steps.as_ref().and_then(|steps| {
+            steps.iter().find_map(|step| match step {
+                commit_plan::Step::GeometryAppend(bytes) => Some(bytes),
+                _ => None,
+            })
+        });
+        let append = match append_bytes {
+            Some(bytes) => {
+                #[cfg(test)]
+                {
+                    let gate = PREPARATION_GATE.lock().unwrap().take();
+                    if let Some(gate) = gate {
+                        let _ = gate.recv_timeout(Duration::from_secs(60));
+                    }
+                }
+                match retained.transform(bytes) {
+                    Ok(packed) => Some(packed),
+                    Err(error) => {
+                        if profiling::enabled() {
+                            native_log!(
+                                "{}",
+                                serde_json::json!({"nativeIncrementalFallback": {"step": "GeometryAppend", "reason": error.to_string()}})
+                            );
+                        }
+                        retained.reset_sync()?;
+                        steps = None;
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        let packed = started.elapsed();
         let mut finished = false;
         with_registry(|registry| {
             let context = context(registry, handle).or_else(|error| {
@@ -917,7 +973,7 @@ fn commit_inner(
                 Some(steps) => {
                     retire_targets(registry, handle)?;
                     let context = registry.contexts.get_mut(&handle).unwrap();
-                    finished = apply_incremental(context, &retained, &next, steps)?
+                    finished = apply_incremental(context, &retained, &next, steps, append.as_ref())?
                 }
                 None if compatible => retained.reset_sync()?,
                 None => {}
@@ -928,7 +984,7 @@ fn commit_inner(
                     "{}",
                     serde_json::json!({"nativeCommitProfile": {"bytes": bytes.len(),
                     "hintMs": ms(hinted), "validateMs": ms(validated - hinted), "copyMs": ms(copied - validated), "preflightMs": ms(structural - copied), "materialCheckMs": ms(preflighted - structural), "syncMs": ms(synced - preflighted),
-                    "planMs": ms(planned - synced), "applyMs": ms(started.elapsed() - planned),
+                    "planMs": ms(planned - synced), "packMs": ms(packed - planned), "applyMs": ms(started.elapsed() - packed),
                     "steps": steps.as_ref().map(Vec::len), "incremental": finished, "delta": changes.is_some()}})
                 );
             }
@@ -1223,6 +1279,7 @@ fn apply_incremental(
     retained: &scene::PreparedState,
     descriptor: &Arc<Vec<u8>>,
     steps: &[commit_plan::Step],
+    append: Option<&scene::LightingUpdates>,
 ) -> Result<bool> {
     // As with full publication, an unfinished job is cancelled and drained first.
     if let Some(job) = context.job.as_mut() {
@@ -1254,6 +1311,9 @@ fn apply_incremental(
             match step {
                 commit_plan::Step::Geometry(_) => update_geometry_in(context, input, length),
                 commit_plan::Step::Visibility(_) => update_transform_in(context, input, length),
+                commit_plan::Step::GeometryAppend(_) if append.is_some() => {
+                    apply_instance_writes(context, append.unwrap())
+                }
                 commit_plan::Step::Membership(_) | commit_plan::Step::GeometryAppend(_) => {
                     update_transform_in(context, input, length)
                 }
@@ -2535,7 +2595,8 @@ mod tests {
                 state.reset_target(&mut state_target).unwrap();
                 state.retained.as_ref().unwrap().accept_transform().unwrap();
                 let geometry = u32::from_le_bytes(
-                    input[layout::header::GEOMETRY_OFFSET * 4..layout::header::GEOMETRY_OFFSET * 4 + 4]
+                    input[layout::header::GEOMETRY_OFFSET * 4
+                        ..layout::header::GEOMETRY_OFFSET * 4 + 4]
                         .try_into()
                         .unwrap(),
                 ) as usize;
@@ -2560,9 +2621,7 @@ mod tests {
                         .iter()
                         .flat_map(|v| v.to_le_bytes())
                         .collect();
-                    bytes.extend_from_slice(
-                        &input[position_word * 4..(position_word + 9) * 4],
-                    );
+                    bytes.extend_from_slice(&input[position_word * 4..(position_word + 9) * 4]);
                     let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
                     assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
                     let (resources, capture, group, attributes) =
@@ -2574,7 +2633,12 @@ mod tests {
                     state.groups[0] = group;
                     state.update_lighting(&writes, Some(&state_target)).unwrap();
                     state.reset_target(&mut state_target).unwrap();
-                    state.retained.as_ref().unwrap().accept_geometry(&writes).unwrap();
+                    state
+                        .retained
+                        .as_ref()
+                        .unwrap()
+                        .accept_geometry(&writes)
+                        .unwrap();
                     let (expected, mut expected_target) = make(&input);
                     for (current, target) in
                         [(&state, &state_target), (&expected, &expected_target)]

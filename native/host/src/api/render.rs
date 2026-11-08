@@ -1264,6 +1264,7 @@ pub(super) fn scene_step(
     // camera are packed separately when creating each Target.
     let bytes = state.scene.clone().expect("committed scene");
     let settings = scene_settings();
+    let mut preparation_path = CommitPath::FullOnly;
     match context_result(context::commit_path(
         context,
         &bytes,
@@ -1278,6 +1279,7 @@ pub(super) fn scene_step(
                 refresh_targets(state, events);
                 return Ok(SceneStep::Published);
             }
+            CommitOutcome::Deferred => preparation_path = CommitPath::Any,
             CommitOutcome::NeedsFull => {}
             // Another engine is preparing; try incrementally after it publishes.
             CommitOutcome::Blocked if !blocking => return Ok(SceneStep::Waiting),
@@ -1294,6 +1296,7 @@ pub(super) fn scene_step(
     }
     let (send, result) = mpsc::channel();
     let gpu = state.gpu.clone();
+    let delta = state.scene_delta.clone();
     let thread = std::thread::Builder::new()
         .name("MuTracer scene preparation".into())
         .spawn(move || {
@@ -1302,7 +1305,13 @@ pub(super) fn scene_step(
                     break Err(error(Status::Unavailable, e.to_string()));
                 }
                 let result = crate::runtime::with_loss(&gpu, || {
-                    context::commit_path(context, &bytes, &settings, CommitPath::FullOnly, None)
+                    context::commit_path(
+                        context,
+                        &bytes,
+                        &settings,
+                        preparation_path,
+                        delta.as_deref(),
+                    )
                 });
                 match context_result(result.map(|_| ())) {
                     Err(e) if e.status == Status::Busy => {
