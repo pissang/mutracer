@@ -27,6 +27,33 @@ function cases() {
         add(c, c, { in1: dynamic, in2: f(c === 'subtract' ? 0.1 : c === 'modulo' ? 0.25 : 0.8) });
     for (const c of ['abs', 'floor', 'ceil', 'round', 'sin', 'cos', 'sqrt', 'exp', 'ln', 'sign'])
         add(c, c, { in: dynamic });
+    for(const category of ['ramplr','ramptb','ramp4','splitlr','splittb'])add(category,category,{...((category==='ramplr'||category==='splitlr')?{valuel:f(0.2),valuer:f(0.9)}:(category==='ramptb'||category==='splittb')?{valuet:f(0.2),valueb:f(0.9)}:{valuetl:f(0.1),valuetr:f(0.4),valuebl:f(0.8),valuebr:f(0.2)}),texcoord:edge('uv','vector2')});
+    for(const c of ['burn','dodge','screen','overlay','difference','plus','minus'])add(c,c,{fg:dynamic,bg:f(0.7),mix:f(0.8)});
+    for(const category of ['noise2d','noise3d','fractal3d','cellnoise2d','cellnoise3d','worleynoise2d','worleynoise3d']){
+        const types:Type[]=category.startsWith('cell')?['float']:category.startsWith('worley')?['float','vector2','vector3']:['float','vector2','vector3','vector4'];
+        for(const type of types){
+            const graph=testGraph(category,category.endsWith('2d')?{texcoord:edge('uv','vector2')}:{position:edge('pos','vector3')},type);
+            graph.setNode({id:'pos',category:'convert',type:'vector3',inputs:{in:edge('uv','vector2')}});
+            if(!category.startsWith('cell')&&!category.startsWith('worley'))graph.setInput('node','pivot',f(0.5));
+            if(category==='fractal3d')graph.setNode({...graph.nodes.find(n=>n.id==='node')!,inputs:{position:edge('pos','vector3'),octaves:{type:'integer',value:3}}});
+            rows.push({name:category+'-'+type,graph});
+        }
+    }
+    add('dot','dot',{in:dynamic,note:{type:'string',value:'annotation'}});
+    add('extract','extract',{in:edge('uv','vector2'),index:{type:'integer',value:1}});
+    add('invert','invert',{in:dynamic});
+    add('remap','remap',{in:dynamic,inlow:f(0.1),inhigh:f(0.8),outlow:f(0.2),outhigh:f(0.9)});
+    add('range','range',{in:dynamic,gamma:f(2),doclamp:{type:'boolean',value:true}});
+    add('smoothstep','smoothstep',{in:dynamic,low:f(0.1),high:f(0.8)});
+    add('contrast','contrast',{in:dynamic,amount:f(1.3),pivot:f(0.2)});
+    add('atan2','atan2',{iny:dynamic,inx:f(0.8)});
+    for(const c of ['tan','asin','acos'])add(c,c,{in:dynamic});
+    add('rotate2d','rotate2d',{in:edge('uv','vector2'),amount:f(25)},'vector2');
+    for(const c of ['rotate3d','transformpoint','transformvector','transformnormal','luminance']){
+        const graph=testGraph(c,{in:edge('color',c==='luminance'?'color3':'vector3'),...(c==='rotate3d'?{amount:f(25),axis:v([0,0,2])}:{})},c==='luminance'?'color3':'vector3');
+        graph.setNode({id:'color',category:'convert',type:c==='luminance'?'color3':'vector3',inputs:{in:edge('uv','vector2')}});
+        rows.push({name:c,graph});
+    }
     add('mix', 'mix', { bg: dynamic, fg: f(0.8), mix: f(0.4) });
     add('clamp', 'clamp', { in: dynamic, low: f(0.1), high: f(0.3) });
     for (const c of ['ifgreater', 'ifequal'])
@@ -65,16 +92,18 @@ function cases() {
     const image = { width: 2, height: 2, data: new Float32Array([0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1]) };
     const texture = new Texture(image);
     texture.colorSpace = 'linear';
-    for (const category of ['image', 'tiledimage'])
-        rows.push({ name: category, graph: testGraph(category, { file: { type: 'filename', value: texture } }, 'color3'), sample: () => [0.2, 0.4, 0.6, 1] });
+    for (const category of ['image', 'tiledimage','gltf_image','gltf_normalmap'])
+        rows.push({ name: category, graph: testGraph(category, { file: { type: 'filename', value: texture } }, category==='gltf_normalmap'?'vector3':'color3'), sample: () => [0.2, 0.4, 0.6, 1] });
+    const gltfColor=testGraph('gltf_colorimage',{file:{type:'filename',value:texture}},'color4');gltfColor.setNode({id:'out',category:'convert',type:'color3',inputs:{in:edge('node','color3','outcolor')}});rows.push({name:'gltf_colorimage',graph:gltfColor,sample:()=>[0.2,0.4,0.6,1]});
     const udim = new UdimTexture([{ udim: 1001, image }, { udim: 1002, image: { ...image, data: image.data.map((v, i) => i % 4 === 0 ? 0.8 : v) } }]);
     udim.colorSpace = 'linear';
     rows.push({ name: 'tiledimage-UDIM', graph: testGraph('tiledimage', { file: { type: 'filename', value: udim }, uvoffset: v([-1, 0]) }, 'color3'), sample: () => [0.8, 0.4, 0.6, 1] });
     const nodes: Node[] = [{ id: 'uv', category: 'texcoord', type: 'vector2' }, { id: 's', category: 'separate2', type: 'vector2', inputs: { in: edge('uv', 'vector2') } }];
-    for (let i = 0; i < 26; i++)
+    const count=Number(new URLSearchParams(location.search).get('chain')??26);
+    for (let i = 0; i < count; i++)
         nodes.push({ id: `n${i}`, category: i % 2 ? 'multiply' : 'add', type: 'float', inputs: { in1: edge(i ? `n${i - 1}` : 's', 'float', i ? 'out' : 'outx'), in2: f(i % 2 ? 0.95 : 0.02) } });
-    nodes.push({ id: 'out', category: 'convert', type: 'color3', inputs: { in: edge('n25') } });
-    rows.push({ name: '29-node-chain', graph: new MaterialGraph({ nodes, terminal: { emissionColor: { node: 'out' } } }) });
+    nodes.push({ id: 'out', category: 'convert', type: 'color3', inputs: { in: edge(`n${count-1}`) } });
+    rows.push({ name: `${count+3}-node-chain`, graph: new MaterialGraph({ nodes, terminal: { emissionColor: { node: 'out' } } }) });
     return rows;
 }
 async function run() {

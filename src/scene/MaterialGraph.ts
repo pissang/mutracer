@@ -4,7 +4,7 @@ export type MaterialGraphType = 'float' | 'integer' | 'boolean' | 'color3' | 'co
 /** A source output. The default output name is `out`. */
 export interface MaterialGraphConnection {
     /** Stable source node ID. */ node: string;
-    /** Source port. Default `out`; separate nodes also expose `outx/outy/outz/outw`. */ output?: string;
+    /** Source port. Default `out`; separate nodes expose component ports and gltf_colorimage exposes `outcolor`/`outa`. */ output?: string;
 }
 /** One typed input, either a parameter or a connection. */
 export interface MaterialGraphInput {
@@ -16,7 +16,7 @@ export interface MaterialGraphInput {
 export interface MaterialGraphNode {
     /** Stable, unique ID used in connections and diagnostics. */ id: string;
     /** MaterialX category, for example `multiply` or `image`. */ category: string;
-    /** Output type (the source vector type for separate2/3/4). */ type: MaterialGraphType;
+    /** Output type (source type for separate2/3/4; color4 for gltf_colorimage). */ type: MaterialGraphType;
     /** Authored inputs. Omitted inputs use node defaults. Default empty. */ inputs?: Readonly<Record<string, MaterialGraphInput>>;
 }
 /** OpenPBR camelCase surface inputs. Unconnected inputs retain the material's constants/maps. */

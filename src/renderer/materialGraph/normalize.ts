@@ -26,7 +26,7 @@ export interface NormalizedGraph {
     parameters: Input['value'][];
     diagnostics: Diagnostic[];
 }
-export const GRAPH_IMPLEMENTATION_VERSION = 'mx-1.39.4-web-1';
+export const GRAPH_IMPLEMENTATION_VERSION = 'mx-1.39.4-web-2';
 export function graphHash(key: string) {
     let hash = 2166136261;
     for (let i = 0; i < key.length; i++)
@@ -63,6 +63,7 @@ export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl'
         if (node.category === 'convert' && node.inputs?.in && ((width(node.inputs.in.type) > 1 && width(node.type) === 1) || ['filename', 'string'].includes(node.inputs.in.type)))
             report('unsupported-conversion', `Unsupported convert ${node.inputs.in.type} to ${node.type}`, id, 'in');
         if(node.category==='dotproduct' && !['vector2','vector3','vector4'].includes(node.inputs?.in1?.type ?? 'vector3'))report('unsupported-type','dotproduct requires vector inputs',id,'in1');
+        if (node.category === 'extract' && !['color3','color4','vector2','vector3','vector4'].includes(node.inputs?.in?.type ?? 'color3')) report('unsupported-type','extract requires a color or vector',id,'in');
         if (!validNodeType(node))
             report('unsupported-type', `Unsupported ${node.category}/${node.type}`, id);
         const inputs: Record<string, GraphInput> = {};
@@ -81,7 +82,7 @@ export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl'
                 inputs[port] = { type: value.type, node: index, output };
             }
             else if (!authored && expected.value === undefined && expected.type !== 'filename') {
-                inputs[port] = { type: expected.type, geometry: port };
+                inputs[port] = { type: expected.type, geometry: port === 'position' ? 'objectPosition' : port };
             }
             else {
                 const parameter = value.value ?? expected.value;
@@ -90,10 +91,11 @@ export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl'
                         report('parameter-type', 'Image file must be a loaded Texture', id, port);
                 }
                 else if (value.type === 'string') {
-                    if (port === 'space') {
-                        if (!['world', 'object'].includes(String(parameter)))
+                    if (['space', 'fromspace', 'tospace'].includes(port)) {
+                        if (!(port === 'space' ? ['world', 'object'] : ['', 'world', 'object']).includes(String(parameter)))
                             report('unsupported-space', 'Only object/world geometry spaces are supported', id, port);
                     }
+                    else if (node.category === 'dot' && port === 'note') { /* Author annotation, no rendering effect. */ }
                     else if (parameter !== expected.value)
                         report('unsupported-sampling', `Only ${expected.value} is supported for ${port}; use Texture sampling options`, id, port);
                 }
@@ -104,6 +106,7 @@ export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl'
                     if (value.type === 'boolean' && typeof parameter !== 'boolean')
                         report('parameter-value', 'Expected boolean parameter', id, port);
                     if(value.type==='integer' && Math.abs(Number(parameter))>16777216)report('unsupported-integer-range','Integer parameters must be exactly representable in Float32',id,port);
+                    if (node.category === 'extract' && port === 'index' && (Number(parameter) < 0 || Number(parameter) >= width(node.inputs?.in?.type ?? 'color3'))) report('parameter-value', 'extract index is outside the input vector', id, port);
                     if (value.type === 'integer' && !Number.isInteger(parameter))
                         report('parameter-value', 'Expected integer parameter', id, port);
                     if (['tangent', 'bitangent'].includes(node.category) && port === 'index' && parameter !== 0)

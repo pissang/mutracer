@@ -97,7 +97,7 @@ describe('MaterialX numeric semantics', () => {
     });
     it('installs valid materials even when another material graph is unsupported',()=>{
         const valid=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
-        const invalid=new MaterialGraph({nodes:[{id:'bad',category:'noise3d',type:'float'}],terminal:{specularRoughness:{node:'bad'}}});
+        const invalid=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node',type:'float'}],terminal:{specularRoughness:{node:'bad'}}});
         const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph:valid}),new OpenPBRMaterial({graph:invalid})]);
         expect(state.status).toBe('compiling');expect(state.requested.structures).toHaveLength(1);
         expect(state.install(state.requested,state.revision)).toBe(true);expect(state.active.graphs[0]).toBeDefined();expect(state.active.graphs[1]).toBeUndefined();expect(state.status).toBe('failed');
@@ -106,7 +106,7 @@ describe('MaterialX numeric semantics', () => {
         const graph=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
         const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState('webgpu');
         state.request([material]);state.install(state.requested,state.revision);const installed=state.installedRevision;
-        graph.setNode({id:'a',category:'noise3d',type:'float'});state.request([material]);
+        graph.setNode({id:'a',category:'unknown_node',type:'float'});state.request([material]);
         expect(state.status).toBe('failed');expect(state.installedRevision).toBe(installed);expect(state.revision).toBeGreaterThan(installed);expect(state.diagnostics[0].materialId).toBe(material.aovId);
     });
     it('uses constants when a previously valid graph enters an unsupported material context',()=>{

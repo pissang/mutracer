@@ -23,7 +23,7 @@ describe('MaterialGraph',()=>{
   expect(normalizeGraph(a).diagnostics).toContainEqual(expect.objectContaining({code:'cycle',node:'b'}));
  });
  it('reports unsupported graphs and type mismatches without dropping terminal connections',()=>{
-  const graph=new MaterialGraph({nodes:[{id:'bad',category:'noise3d',type:'float'}],terminal:{baseColor:{node:'bad'}}});
+  const graph=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node',type:'float'}],terminal:{baseColor:{node:'bad'}}});
   expect(normalizeGraph(graph).diagnostics.map(d=>d.code)).toEqual(['unsupported-node','terminal-type']);
  });
  it('commits graph edits as incremental material changes',()=>{

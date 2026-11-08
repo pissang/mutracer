@@ -1,5 +1,6 @@
 // MaterialX 1.39.4 operator semantics: https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.4/libraries/stdlib
 // See THIRD_PARTY_NOTICES.md and LICENSES/MaterialX-*.txt.
+import {noiseShader} from './noiseShader.js';
 import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import { generateGraph, type Backend } from './codegen.js';
@@ -83,6 +84,18 @@ vec3 mx_rgbtohsv(vec3 value) {
   float hue=(value.y-value.z)/delta;
   if(value.x<high){if(value.y>=high){hue=2.0+(value.z-value.x)/delta;}else{hue=4.0+(value.x-value.y)/delta;}}
   hue/=6.0;if(hue<0.0){hue+=1.0;}return vec3(hue,saturation,high);
+}
+`;
+    }
+    if(plan.structures.some(g=>g.nodes.some(n=>/^(noise|fractal|cellnoise|worleynoise)/.test(n.category)))) declarations += noiseShader(backend);
+    if(plan.structures.some(g => g.nodes.some(n => n.category === 'rotate3d'))) {
+        declarations += wg ? `fn mx_rotate3d(p:vec3f,degrees:f32,axis:vec3f) -> vec3f {
+  let n=normalize(axis);let a=degrees*0.017453292519943295;let c=cos(a);let s=sin(a);
+  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
+}
+` : `vec3 mx_rotate3d(vec3 p,float degrees,vec3 axis) {
+  vec3 n=normalize(axis);float a=degrees*0.017453292519943295;float c=cos(a),s=sin(a);
+  return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);
 }
 `;
     }

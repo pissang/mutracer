@@ -116,7 +116,7 @@ async function run() {
         }
         const structureMs = performance.now() - started, structureCompiles = compiles - beforeStructure, structurePixel = await pixel(), installed = state()!.installedRevision;
         const stable = structurePixel;
-        graph.setNode({ id: 'color', category: 'noise3d', type: 'color3' });
+        graph.setNode({ id: 'color', category: 'unknown_node', type: 'color3' });
         engine.update();
         render.refine();
         await pause();

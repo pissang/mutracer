@@ -201,8 +201,11 @@ Modified for MuTracer renderer features, texture exports and batched timelines.
 
 ## MaterialX node operators
 
-The browser material graph's node defaults, placement, normal-map and HSV
+The browser material graph's node defaults, placement, normal-map, adjustment, compositing, ramp and noise
 operators follow MaterialX 1.39.4's standard library definitions and implementations.
-Its HSV operators derive from Sony Pictures Imageworks' Open Shading Language color operators (Copyright 2009–2010 Sony Pictures Imageworks
+The viewer also includes the official Standard Surface to OpenPBR translation:
+https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/bxdf/translation/standard_surface_to_open_pbr.mtlx.
+Its HSV and noise operators derive from Sony Pictures Imageworks' Open Shading Language color operators (Copyright 2009–2010 Sony Pictures Imageworks
 Inc., et al.). Source: https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_hsv.glsl.
+Noise source: https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_noise.glsl.
 See `LICENSES/MaterialX-Apache-2.0.txt` and `LICENSES/MaterialX-OSL-BSD-3-Clause.txt`.
