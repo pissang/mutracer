@@ -1,11 +1,27 @@
 import MaterialState from './MaterialState.js';
 import type Texture from './Texture.js';
 import type MaterialGraph from './MaterialGraph.js';
+import type MaterialStateType from './MaterialState.js';
+import {getMaterialHashKey as baseMaterialHashKey} from './openPbrSchema.js';
 export type { UVProjection, MaterialAlphaMode, ResolvedMaterialAlphaMode } from './MaterialState.js';
 export type { MaterialTextureName } from './materialTextureNames.js';
 export { materialAlphaModeConstants, resolveMaterialAlphaMode } from './MaterialState.js';
 export { materialKeys, materialTextureKeys, materialGeometryKeys, materialParamKeys,
-  getMaterialHashKey, resetMaterialTextureId } from './openPbrSchema.js';
+  resetMaterialTextureId } from './openPbrSchema.js';
+
+const graphMaterialIds = new WeakMap<object, number>();
+let nextGraphMaterialId = 0;
+/** @internal Browser graph materials must not deduplicate their independent parameter slots. */
+export function getMaterialHashKey(material: MaterialStateType) {
+  const graph = (material as OpenPBRMaterial).graph;
+  const key = baseMaterialHashKey(material);
+  if(!graph)return key;
+  let id = graphMaterialIds.get(material);
+  if(id===undefined){id=++nextGraphMaterialId;graphMaterialIds.set(material,id);}
+  return `${key}_graph${id}@${graph.revision}`;
+}
+
+const graphs = new WeakMap<OpenPBRMaterial, MaterialGraph>();
 
 /**
  * OpenPBR 1.1 surface material.
@@ -28,7 +44,8 @@ export default class OpenPBRMaterial extends MaterialState {
   constructor(params: OpenPBRMaterialParams = {}) { super(params); this.graph = params.graph; }
 
   /** Optional MaterialX surface graph. Default undefined retains the constant material path. */
-  graph?: MaterialGraph;
+  get graph(): MaterialGraph | undefined { return graphs.get(this); }
+  set graph(value: MaterialGraph | undefined) { if(value) graphs.set(this,value); else graphs.delete(this); }
 
   /** Base color texture, multiplied with `baseColor` using Texture color encoding. Default `undefined`. */
   declare map?: Texture;

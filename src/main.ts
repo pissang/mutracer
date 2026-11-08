@@ -10,6 +10,7 @@
  *
  * @packageDocumentation
  */
+export type {MaterialGraphCompilationState} from './renderer/materialGraph/state.js';
 export { VERSION } from './version.js';
 
 export type {

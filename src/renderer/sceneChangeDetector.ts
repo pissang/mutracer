@@ -84,7 +84,7 @@ export function snapshotMaterialParameters(material: OpenPBRMaterial, previous?:
   });
 }
 
-interface MaterialSnapshot { graph?: OpenPBRMaterial['graph']; graphRevision?: number; aovId: number; values: readonly unknown[]; textures: unknown[]; }
+interface MaterialSnapshot { graph?: OpenPBRMaterial['graph']; graphRevision?: number; graphTextures?: unknown[]; aovId: number; values: readonly unknown[]; textures: unknown[]; }
 
 // Web values may be loosely typed JS; the generated comparisons keep their
 // Object.is and array semantics. Detection rules live in sceneChangeCore.
@@ -95,10 +95,11 @@ const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnap
     item.aovId = material.aovId;
     item.graph = (material as OpenPBRMaterial).graph; item.graphRevision = item.graph?.revision;
     item.values = snapshotMaterialParameters(material as OpenPBRMaterial, previous?.values);
+    item.graphTextures = item.graph?.nodes.flatMap(node => Object.values(node.inputs ?? {}).flatMap(input => input.value instanceof Texture ? snapshotTexture(input.value) : []));
     captureMaterialTextures(material as OpenPBRMaterial, item.textures);
     return item;
   },
-  materialMatches: (material, snapshot) => (material as OpenPBRMaterial).graph === snapshot.graph && (material as OpenPBRMaterial).graph?.revision === snapshot.graphRevision && material.aovId === snapshot.aovId && materialParametersEqual(material as OpenPBRMaterial, snapshot.values) &&
+  materialMatches: (material, snapshot) => (material as OpenPBRMaterial).graph === snapshot.graph && (material as OpenPBRMaterial).graph?.revision === snapshot.graphRevision && snapshotsEqual((material as OpenPBRMaterial).graph?.nodes.flatMap(node => Object.values(node.inputs ?? {}).flatMap(input => input.value instanceof Texture ? snapshotTexture(input.value) : [])) ?? [], snapshot.graphTextures ?? []) && material.aovId === snapshot.aovId && materialParametersEqual(material as OpenPBRMaterial, snapshot.values) &&
     !materialTexturesChanged(material as OpenPBRMaterial, snapshot.textures),
   captureLight: light => snapshotFields(light),
   lightsEqual: snapshotsEqual,

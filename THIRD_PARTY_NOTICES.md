@@ -198,3 +198,11 @@ Device import and timeline staging in `native/host/src/api/metal.rs` adapt
 Copyright (c) 2024 pissang. MIT License
 ([LICENSES/OIDNWebNative-MIT.txt](LICENSES/OIDNWebNative-MIT.txt)).
 Modified for MuTracer renderer features, texture exports and batched timelines.
+
+## MaterialX HSV operators
+
+The browser material graph's HSV conversion helpers are adapted from the semantics
+of MaterialX 1.39.4, whose HSV operators derive from Sony Pictures Imageworks'
+Open Shading Language color operators (Copyright 2009–2010 Sony Pictures Imageworks
+Inc., et al.). Source: https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_hsv.glsl.
+See `LICENSES/MaterialX-Apache-2.0.txt` and `LICENSES/MaterialX-OSL-BSD-3-Clause.txt`.
