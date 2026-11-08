@@ -1689,29 +1689,33 @@ function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Arr
   const state = retainedScenes.get(token);
   if (!state) throw new Error('Missing retained append state');
   preparationMark('append.begin');
-  let input: ReturnType<typeof decodeScene>;
   const descriptor = bytes.subarray(16);
-  try { input = decodeScene(descriptor, token); }
-  catch (error) { throw new Error(`append decodeScene: ${String(error)}`); }
   const u = new Uint32Array(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength / 4);
+  const f = new Float32Array(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength / 4);
   const oldGeometryCount = state.geometries.length, oldMeshCount = state.meshes.length;
-  if (u[H.GEOMETRY_COUNT] <= oldGeometryCount || input.meshes.length <= oldMeshCount)
+  if (u[H.GEOMETRY_COUNT] <= oldGeometryCount || u[H.MESH_COUNT] <= oldMeshCount)
     throw new Error('Invalid geometry append counts');
+  // Compatibility was checked by the descriptor sync. Decode only the appended
+  // sources, retaining authoritative normals/tangents and textures of old objects.
+  const requirements = nativeTangentRequirements(u, state.source);
+  const geometries = state.geometries.slice();
+  for (let i = oldGeometryCount; i < u[H.GEOMETRY_COUNT]; i++)
+    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, undefined, true, requirements[i]));
   const meshes: MeshState[] = [];
-  for (let i = oldMeshCount; i < input.meshes.length; i++) {
+  for (let i = oldMeshCount; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS, geometryIndex = u[off + M.GEOMETRY];
     if (geometryIndex < oldGeometryCount || u[off + M.MATERIAL_COUNT] > 1)
       throw new Error('Full commit required: append requires a new single-material geometry');
     const materialIndex = u[off + M.MATERIAL_COUNT] === 0 ? u[off + M.MATERIAL] : u[u[off + M.MATERIAL_TABLE]];
-    const geometry = input.geometries[geometryIndex], material = state.source[materialIndex];
+    const geometry = geometries[geometryIndex], material = state.source[materialIndex];
     if (!material) throw new Error(`Full commit required: append material ${materialIndex} outside retained table ${state.source.length}`);
     if (!geometry || geometry.materialIndex || !material || material.displacementMap)
       throw new Error('Full commit required: append geometry/material layout is incompatible');
     const mesh = new MeshState(geometry, decodeMeshMaterials(u, off, state.source));
     mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
     mesh.visible = (u[off + M.FLAGS] & 1) === 0;
-    mesh.transform = input.meshes[i].transform;
-    const instances = input.meshes[i].instanceData;
+    mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
+    const instances = u[H.BATCH_OFFSET] ? decodeInstances(u, f, u[H.BATCH_OFFSET] + i * B.WORDS) : undefined;
     if (instances) mesh.setInstanceState(new InstanceState({count: instances.count, transforms: instances.transforms, colors: instances.colors}));
     meshes.push(mesh);
   }
@@ -1722,8 +1726,8 @@ function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Arr
   if (build.jobs.length === 0 || build.jobs.some(job => job.ranges || job.displacementBias !== 0))
     throw new Error('Full commit required: append requires static non-displaced geometry');
   preparationMark('append.sources.end');
-  if (state.hardware) return prepareNativeHardwareAppend(state, meshes, input.geometries, build, token);
-  pendingGeometryAppends.set(token, {phase: 0, meshes, inputGeometries: state.geometries.concat(input.geometries.slice(oldGeometryCount)), build});
+  if (state.hardware) return prepareNativeHardwareAppend(state, meshes, geometries, build, token);
+  pendingGeometryAppends.set(token, {phase: 0, meshes, inputGeometries: geometries, build});
   return nativeGeometryJobsPacket(build);
 }
 function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retainedScenes.get>>, newMeshes: MeshState[],
