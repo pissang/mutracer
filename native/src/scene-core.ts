@@ -582,9 +582,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings, grounded} = input;
   const capacity = prepared.residentBindings.reduce((n, b) => n + (b.mesh.instanceData?.count ?? 1), 0);
   if (!hardware) {
-    const bytes = tlas.buffer.byteLength;
-    const tlasCapacity = Math.ceil((bytes + Math.min(bytes >> 2, 1 << 20) + 256) / 256) * 256;
-    const padded = new Uint8Array(Math.max(bytes, tlasCapacity));
+    // Preserve the established TLAS span for initial commits. Its 80-byte
+    // per-instance bound covers the worst-case BVH2 nodes and leaves; deriving
+    // this from the current compact tree can shift every following BLAS.
+    const tlasCapacity = Math.ceil((capacity * 80 + 256) / 256) * 256;
+    const padded = new Uint8Array(Math.max(tlas.buffer.byteLength, tlasCapacity));
     padded.set(new Uint8Array(tlas.buffer)); tlas = {...tlas, buffer: padded.buffer};
   }
   const blases = prepared.blases;
