@@ -27,7 +27,7 @@ try{
  if(process.env.MUTRACER_OIDN_DISPLAY_INPUT){
   const capture=resolve(out,'frozen-native');
   run('native frozen highlight', 'cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--lib',
-   'viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr','--','--ignored','--nocapture'],{MUTRACER_TEST_CAPTURE:capture});
+   'viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr','--','--ignored','--test-threads=1','--nocapture'],{MUTRACER_TEST_CAPTURE:capture});
   run('frozen browser/native comparison',process.execPath,['scripts/display-frozen.mjs'],
    {MUTRACER_PARITY_OUTPUT:resolve(out,'frozen'),MUTRACER_NATIVE_DISPLAY_PNG:resolve(capture,'after-display-oidn.png')});
   frozen={status:'passed'};
