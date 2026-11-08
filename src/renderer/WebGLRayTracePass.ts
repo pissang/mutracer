@@ -814,7 +814,7 @@ class WebGLRayTracePass {
         m.mapAlphaUsage === "transmission"
     );
     this._hasAlpha = materials.some(
-      (m) => resolveMaterialAlphaMode(m) !== 'opaque'
+      (m) => resolveMaterialAlphaMode(m) !== 'opaque' || !!m.graph?.terminal.opacity || !!m.graph?.terminal.geometryOpacity
     );
     const spectral = materials.some((m) => m.transmissionDispersionScale > 0);
     if (spectral !== !!this._spectral) {

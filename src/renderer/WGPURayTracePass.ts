@@ -964,6 +964,7 @@ class WGPURayTracePass {
         if(graphPlan.structures.some(g => 'normal' in g.terminal))graphConstants.USE_COAT_NORMAL_FRAMES = true;
         graphConstants.USE_TANGENT = this._preparedMeshData?.geometry.tangent != null;
         graphConstants.USE_UV1 = this._preparedMeshData?.geometry.uv1 != null;
+        if(graphPlan.structures.some(g => 'opacity' in g.terminal)){graphConstants.HAS_ALPHA=true;graphConstants.HAS_ALPHA_MASK=true;graphConstants.HAS_ALPHA_BLEND=true;}
         graphConstants.HAS_COAT = true; graphConstants.HAS_FUZZ = true; graphConstants.HAS_THIN_FILM = true;
         graphConstants.MATERIAL_CAPABILITIES = Number(graphConstants.MATERIAL_CAPABILITIES) | 3;
       }

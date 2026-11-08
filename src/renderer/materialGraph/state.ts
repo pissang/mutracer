@@ -4,6 +4,7 @@ import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
 import { normalizeGraph, type NormalizedGraph } from './normalize.js';
 import { generateGraph, type Backend } from './codegen.js';
 import { MATERIAL_FLOAT_COUNT, materialLayoutFields } from '../materialLayoutSchema.js';
+const alphaModeOffset = materialLayoutFields().find(field => field.name === 'alphaMode')!.offset / 4;
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
 export interface GraphPlan {
     key: string;
@@ -59,10 +60,19 @@ export class MaterialGraphState {
                 return undefined;
             const graph = normalizeGraph(material.graph, this.backend, this.capabilities);
             if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal))) {
-                graph.diagnostics.push({ code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
+                const port=['emissionColor','emissionLuminance','coatColor','coatWeight'].find(p=>p in graph.terminal)!;
+                graph.diagnostics.push({ node:graph.nodes[graph.terminal[port].node]?.id, port, code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
                 // A formerly valid unlit graph cannot remain installed after
                 // switching to an unsupported lit-emitter context.
                 this.constantFallback.add(material);
+            }
+            if ('opacity' in graph.terminal) {
+                const seen=new Set<number>();
+                const check=(index:number) => { if(seen.has(index)||index<0)return;seen.add(index);const node=graph.nodes[index];
+                    if(['normal','tangent','bitangent','normalmap','gltf_normalmap','transformnormal'].includes(node.category)||Object.values(node.inputs).some(i=>i.geometry&&i.geometry!=='texcoord'&&i.geometry!=='objectPosition'))graph.diagnostics.push({code:'unsupported-opacity-context',message:'Opacity graphs support UV and position inputs; shading-frame inputs are not available to shadow traversal.',node:node.id,port:'opacity'});
+                    for(const i of Object.values(node.inputs))if(i.node!==undefined)check(i.node);
+                };
+                check(graph.terminal.opacity.node);
             }
             diagnostics.push(...graph.diagnostics.map(d => ({...d,materialId:material.aovId})));
             // Preserve the successful graph for this slot after validation failure.
@@ -128,6 +138,7 @@ export class MaterialGraphState {
             const graph = this.active.materials ? activeGraphs.get(this.materials[i]) : this.active.graphs[i];
             if (!graph)
                 continue;
+            if ('opacity' in graph.terminal && this.materials[i].alphaMode === 'auto' && this.materials[i].alphaCutoff <= 0) buffer[i * MATERIAL_FLOAT_COUNT + alphaModeOffset] = 2;
             const generated = generateGraph(graph, this.backend);
             const params: [
                 unknown,

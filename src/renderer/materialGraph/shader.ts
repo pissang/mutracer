@@ -5,7 +5,7 @@ import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import { generateGraph, type Backend } from './codegen.js';
 import type { GraphPlan } from './state.js';
-const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness' };
+const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness', opacity:'alpha' };
 /** Browser-only specialization leaves the native/shared generators byte-identical.
  * Explicit anchors fail closed if a generator's material boundary changes. */
 export function materialGraphShader(source: string, plan: GraphPlan, backend: Backend) {
@@ -140,7 +140,7 @@ vec3 mx_rgbtohsv(vec3 value) {
     plan.structures.forEach((g, index) => {
         body += `    if(mx_id == ${index + 1}) {\n      mx_result = mx_eval_${index + 1}(mx_base + 2, uv, uv1, ${si}.position, ${si}.vertexNormal, normalize(${si}.geometryTangent), normalize(${si}.geometryBitangent), mx_w2l(${si}.instanceIndex), mx_l2w(${si}.instanceIndex), mx_result);\n`;
         for (const field of Object.keys(g.terminal))
-            if (!['normal', 'emissionColor', 'emissionLuminance'].includes(field))
+            if (!['normal', 'opacity', 'emissionColor', 'emissionLuminance'].includes(field))
                 body += assignment(field);
         if ('normal' in g.terminal)
             body += `      ${si}.normal = mx_result.normal;\n${wg ? '' : '#ifdef USE_COAT_NORMAL_FRAMES\n'}      ${mat}.coatNormalEnabled = ${mat}.coatWeight > 0.0;\n${wg ? '' : '#endif\n'}`;
@@ -153,6 +153,29 @@ vec3 mx_rgbtohsv(vec3 value) {
     if (!source.includes(anchor))
         throw new Error('Material graph evaluation anchor changed');
     source = source.replace(anchor, body + anchor);
+    if(plan.structures.some(g=>'opacity' in g.terminal)) {
+        const zero=(type:string)=>width(terminalTypes[type])===1?'0.0':`${v(width(terminalTypes[type]))}(0.0)`;
+        const init=Object.keys(terminalTypes).map(field=>`  result.${field} = ${field==='opacity'?'fallback':zero(field)};`).join('\n');
+        const materialId=wg?'i32(materialsBuffer[materialIndex]._padding1)':'int(fetchMatData(materialIndex * MAT_DATA_SIZE + MAT_ROW_ALPHA).x)';
+        const parameterBase=wg?'i32(materialsBuffer[materialIndex]._padding2)':'int(fetchMatData(materialIndex * MAT_DATA_SIZE + MAT_ROW_ALPHA).y)';
+        let helper=wg?`fn mx_opacity(materialIndex:i32,uv:vec2f,uv1:vec2f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 {\n  var result:MXResult;\n${init}\n`:`float mx_opacity(int materialIndex,vec2 uv,vec2 uv1,vec3 position,int instanceIndex,float fallback) {\n  MXResult result;\n${init}\n`;
+        plan.structures.forEach((g,i)=>{if('opacity' in g.terminal)helper+=`  if(${materialId} == ${i+1}) { result=mx_eval_${i+1}(${parameterBase}+2,uv,uv1,position,${v(3)}(0.0,0.0,1.0),${v(3)}(1.0,0.0,0.0),${v(3)}(0.0,1.0,0.0),mx_w2l(instanceIndex),mx_l2w(instanceIndex),result); }\n`;});
+        helper+='  return clamp(result.opacity,0.0,1.0);\n}\n';
+        const uv=(secondary:boolean)=>wg?`bary.x * ${secondary?'vertexUv1':'vertexUv'}(index.x) + bary.y * ${secondary?'vertexUv1':'vertexUv'}(index.y) + bary.z * ${secondary?'vertexUv1':'vertexUv'}(index.z)`:`bary.x * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.x) + bary.y * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.y) + bary.z * ${secondary?'fetchVertexUv1':'fetchVertexUv'}(index.z)`;
+        helper+=wg?`fn mx_shadow_opacity(materialIndex:i32,index:vec3i,bary:vec3f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4f(position,1.0)).xyz,instanceIndex,fallback); }\n`:`vec2 fetchVertexUv(int i);vec2 fetchVertexUv1(int i);\nfloat mx_shadow_opacity(int materialIndex,ivec3 index,vec3 bary,vec3 position,int instanceIndex,float fallback) { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4(position,1.0)).xyz,instanceIndex,fallback); }\n`;
+        declarations+=helper;
+        const alpha=wg?'  (*ma).alpha = matData.alpha;':'  mat.alpha = alphaAndThinFilm.r;';
+        // Replace raw opacity before ordinary texture multiplication and alpha-mode resolution.
+        if(!source.includes(alpha))throw new Error('Material graph raw opacity anchor changed');
+        source=source.replace(alpha,`${wg?'  (*ma).alpha':'  mat.alpha'} = mx_opacity(materialIndex,uv,uv1,${si}.position,instanceIndex,${wg?'matData.alpha':'alphaAndThinFilm.r'});`);
+        if(wg){
+            source=source.replace(/hitNormal: vec3f(, record: i32)?\n\) -> bool/, 'hitNormal: vec3f$1, mx_instance: i32\n) -> bool');
+            source=source.replace(/(hitNormal(?:, triangleIndex)?)(\s*\n    \)\))/, '$1, insIdx$2');
+            source=source.replace('  var alpha = ma.alpha;', '  var alpha = mx_shadow_opacity(materialIndex,index,hitBarycentric,hitPosition,mx_instance,ma.alpha);');
+        }else{
+            source=source.replace('    float alpha = fetchMatData(ii + MAT_ROW_ALPHA_FILM).r;', '    float alpha = mx_shadow_opacity(materialIndex,index,barycentric,position,insIdx,fetchMatData(ii + MAT_ROW_ALPHA_FILM).r);');
+        }
+    }
     // Emissive triangle sampling only needs emission. Preserve the six-argument
     // GLSL overload for constant emitters in scenes containing graph materials.
     if (!wg) {

@@ -2,7 +2,7 @@ import type { MaterialGraphInput as Input, MaterialGraphNode as Node, MaterialGr
 export const width = (type: Type) => type === 'vector2' ? 2 : type === 'vector3' || type === 'color3' ? 3 : type === 'vector4' || type === 'color4' ? 4 : 1;
 const input = (type: Type, value?: Input['value']): Input => ({ type, value: type === 'boolean' ? Boolean(value) : type === 'filename' || type === 'string' ? value : value ?? (width(type) === 1 ? 0 : Array(width(type)).fill(0)) });
 const same = (node: Node, value = 0) => input(node.type, width(node.type) === 1 ? value : Array(width(node.type)).fill(value));
-export const terminalAliases: Record<string, string> = { geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' };
+export const terminalAliases: Record<string, string> = { geometryOpacity: 'opacity', geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' };
 export const terminalTypes: Record<string, Type> = {
     baseWeight: 'float', baseColor: 'color3', baseDiffuseRoughness: 'float', baseMetalness: 'float',
     specularWeight: 'float', specularColor: 'color3', specularRoughness: 'float', specularIor: 'float', specularAnisotropy: 'float',
@@ -10,7 +10,7 @@ export const terminalTypes: Record<string, Type> = {
     fuzzWeight: 'float', fuzzColor: 'color3', fuzzRoughness: 'float', coatWeight: 'float', coatColor: 'color3',
     coatRoughness: 'float', coatAnisotropy: 'float', coatIor: 'float', coatDarkening: 'float',
     thinFilmWeight: 'float', thinFilmThickness: 'float', thinFilmIor: 'float',
-    emissionColor: 'color3', emissionLuminance: 'float', normal: 'vector3'
+    opacity: 'float', emissionColor: 'color3', emissionLuminance: 'float', normal: 'vector3'
 };
 /** Definitions are authored against MaterialX v1.39.4 stdlib_defs.mtlx/stdlib_ng.mtlx.
  * Parameters remain runtime data even for conditional controls and UV transforms. */
