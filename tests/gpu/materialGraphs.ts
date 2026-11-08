@@ -83,6 +83,16 @@ function cases() {
         graph.setNode({id:'color',category:'combine3',type:'color3',inputs:{in1:edge('separate','float','outx'),in2:edge('separate','float','outy'),in3:f(0.8)}});
         rows.push({name:category,graph});
     }
+    for(const type of ['color3','color4'] as Type[])for(const category of ['rgbtohsv','hsvtorgb','hsvadjust']){
+        const graph=testGraph(category,{in:edge('color',type),...(category==='hsvadjust'?{amount:edge('amount','vector3')}:{})},type);
+        graph.setNode({id:'color',category:'convert',type,inputs:{in:edge('uv','vector2')}});
+        graph.setNode({id:'amount',category:'combine3',type:'vector3',inputs:{in1:dynamic,in2:f(0.8),in3:f(1.1)}});
+        rows.push({name:`${category}-${type}`,graph});
+    }
+    const hsvAlpha=testGraph('extract',{in:edge('adjusted','color4'),index:{type:'integer',value:3}});
+    hsvAlpha.setNode({id:'color',category:'combine4',type:'color4',inputs:{in1:f(.2),in2:f(.4),in3:f(.6),in4:dynamic}});
+    hsvAlpha.setNode({id:'adjusted',category:'hsvadjust',type:'color4',inputs:{in:edge('color','color4')}});
+    rows.push({name:'hsvadjust-alpha',graph:hsvAlpha});
     for (const n of [3,4]) {
         const graph = testGraph(`separate${n}`, {in:edge('color',`color${n}` as Type)}, `color${n}` as Type);
         graph.setNode({id:'color',category:'convert',type:`color${n}` as Type,inputs:{in:edge('uv','vector2')}});

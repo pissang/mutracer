@@ -59,7 +59,7 @@ vec3 mx_normalmap(vec3 value,vec2 scale,vec3 n,vec3 t,vec3 b) {
 `;
     // HSV thresholds follow MaterialX 1.39.4's OSL-derived operators. See
     // LICENSES/MaterialX-OSL-BSD-3-Clause.txt and THIRD_PARTY_NOTICES.md.
-    if (plan.structures.some(g => g.nodes.some(n => n.category === 'rgbtohsv' || n.category === 'hsvtorgb'))) {
+    if (plan.structures.some(g => g.nodes.some(n => n.category === 'rgbtohsv' || n.category === 'hsvtorgb' || n.category === 'hsvadjust'))) {
         declarations += wg ? `fn mx_hsvtorgb(value:vec3f) -> vec3f {
   if(value.y<0.0001){return vec3f(value.z);}
   let h=fract(value.x)*6.0;

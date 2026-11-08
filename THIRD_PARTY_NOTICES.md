@@ -205,6 +205,10 @@ The browser material graph's node defaults, placement, normal-map, adjustment, c
 operators follow MaterialX 1.39.4's standard library definitions and implementations.
 The viewer also includes the official Standard Surface to OpenPBR translation:
 https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/bxdf/translation/standard_surface_to_open_pbr.mtlx.
+The viewer's legacy normal-map and atan2 upgrades follow
+https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/source/MaterialXCore/Version.cpp.
+HSV adjustment follows the `NG_hsvadjust_color3/4` definitions in
+https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/stdlib_ng.mtlx.
 Its HSV and noise operators derive from Sony Pictures Imageworks' Open Shading Language color operators (Copyright 2009–2010 Sony Pictures Imageworks
 Inc., et al.). Source: https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_hsv.glsl.
 Noise source: https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_noise.glsl.

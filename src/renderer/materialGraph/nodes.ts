@@ -100,6 +100,7 @@ export function nodeInputs(node: Node): Record<string, Input> | undefined {
         case 'crossproduct': return { in1: input('vector3'), in2: input('vector3') };
         case 'rgbtohsv':
         case 'hsvtorgb': return { in: same(node) };
+        case 'hsvadjust': return {in:same(node),amount:input('vector3',[0,1,1])};
         case 'abs':
         case 'floor':
         case 'ceil':
@@ -132,8 +133,8 @@ export function validNodeType(node: Node) {
         return t === 'vector2';
     if (['normalmap', 'position', 'normal', 'tangent', 'bitangent', 'crossproduct', 'rotate3d', 'transformpoint', 'transformvector', 'transformnormal'].includes(c))
         return t === 'vector3';
-    if (c === 'rgbtohsv' || c === 'hsvtorgb')
-        return t === 'color3';
+    if (c === 'rgbtohsv' || c === 'hsvtorgb' || c === 'hsvadjust')
+        return t === 'color3' || t === 'color4';
     if (c === 'normalize') return t.startsWith('vector');
     if (['tan','asin','acos','atan2'].includes(c)) return t === 'float' || t.startsWith('vector');
     if (c.startsWith('cellnoise')) return t === 'float';

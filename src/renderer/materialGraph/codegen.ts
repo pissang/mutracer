@@ -183,8 +183,15 @@ export function generateGraph(graph: NormalizedGraph, backend: Backend, name = '
                 break;
             case 'rgbtohsv':
             case 'hsvtorgb':
-                expr = `mx_${c}(${a.in})`;
+                expr = `mx_${c}(${width(node.type)===4?`(${a.in}).rgb`:a.in})`;
+                if(width(node.type)===4)expr=vec(4,`${expr}, (${a.in}).a`);
                 break;
+            case 'hsvadjust': {
+                const hsv=`(mx_rgbtohsv((${a.in}).rgb) + ${vec(3,`(${a.amount}).x, 0.0, 0.0`)}) * ${vec(3,`1.0, (${a.amount}).y, (${a.amount}).z`)}`;
+                expr=`mx_hsvtorgb(${hsv})`;
+                if(width(node.type)===4)expr=vec(4,`${expr}, (${a.in}).a`);
+                break;
+            }
             case 'dotproduct':
                 expr = `dot(${a.in1}, ${a.in2})`;
                 break;

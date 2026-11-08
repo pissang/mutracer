@@ -143,22 +143,31 @@ export function evaluateNode(node: GraphNode, a: Record<string, Numeric>, contex
         case 'combine4': return Array.from({ length: width(node.type) }, (_, i) => a[`in${i + 1}`][0]);
         case 'dotproduct': return [zip(first, second, (x, y) => x * y).reduce((s, x) => s + x, 0)];
         case 'crossproduct': return [first[1] * second[2] - first[2] * second[1], first[2] * second[0] - first[0] * second[2], first[0] * second[1] - first[1] * second[0]];
+        // MaterialX 1.39.4 stdlib_ng.mtlx NG_hsvadjust_color3/4:
+        // add hue, scale saturation/value, and retain alpha unchanged.
+        case 'hsvadjust': {
+            const hsv=evaluateNode({...node,category:'rgbtohsv'},{in:v});
+            hsv[0]+=a.amount[0];hsv[1]*=a.amount[1];hsv[2]*=a.amount[2];
+            return evaluateNode({...node,category:'hsvtorgb'},{in:hsv});
+        }
         case 'hsvtorgb': {
+            const alpha=width(node.type)===4?[v[3]]:[];
             if (v[1] < 0.0001)
-                return [v[2], v[2], v[2]];
+                return [v[2], v[2], v[2],...alpha];
             const hue = v[0] - Math.floor(v[0]);
             return [0, 4, 2].map(offset => {
                 const wave = Math.abs(((hue * 6 + offset) % 6) - 3) - 1;
                 return v[2] * (1 - v[1] + v[1] * Math.max(0, Math.min(1, wave)));
-            });
+            }).concat(alpha);
         }
         case 'rgbtohsv': {
-            const high = Math.max(...v), low = Math.min(...v), delta = high - low, saturation = high > 0 ? delta / high : 0;
+            const alpha=width(node.type)===4?[v[3]]:[];
+            const high = Math.max(...v.slice(0,3)), low = Math.min(...v.slice(0,3)), delta = high - low, saturation = high > 0 ? delta / high : 0;
             if (saturation <= 0)
-                return [0, saturation, high];
+                return [0, saturation, high,...alpha];
             const index = v.indexOf(high), channels = [(v[1] - v[2]) / delta, 2 + (v[2] - v[0]) / delta, 4 + (v[0] - v[1]) / delta];
             const hue = channels[index] / 6;
-            return [hue < 0 ? hue + 1 : hue, saturation, high];
+            return [hue < 0 ? hue + 1 : hue, saturation, high,...alpha];
         }
         case 'normalize': return normalize(v);
         default: {

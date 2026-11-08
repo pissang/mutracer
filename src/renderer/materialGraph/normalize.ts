@@ -26,7 +26,7 @@ export interface NormalizedGraph {
     parameters: Input['value'][];
     diagnostics: Diagnostic[];
 }
-export const GRAPH_IMPLEMENTATION_VERSION = 'mx-1.39.4-web-2';
+export const GRAPH_IMPLEMENTATION_VERSION = 'mx-1.39.4-web-3';
 export function graphHash(key: string) {
     let hash = 2166136261;
     for (let i = 0; i < key.length; i++)
