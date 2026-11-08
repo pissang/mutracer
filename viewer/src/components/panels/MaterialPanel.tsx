@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
@@ -20,6 +20,7 @@ export function MaterialPanel() {
   const [presetCategory, setPresetCategory] = useState(lastPresetCategory);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
+  const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
 
@@ -86,10 +87,16 @@ export function MaterialPanel() {
       </div>
       <div className="tex-browse hide-m">
         <button className="btn btn--wide" aria-pressed={browsing} data-on={browsing || undefined}
-          onClick={() => setUi({ textureBrowser: !browsing })}>
+          onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false })}>
           <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
         </button>
-        {MATERIALX_IMPORT && <MaterialXImport materialId={material.id} />}
+        {MATERIALX_IMPORT && <>
+          <button className="btn btn--wide" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
+            onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false })}>
+            <Download size={14} />{materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen materials'}
+          </button>
+          <MaterialXImport materialId={material.id} />
+        </>}
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;

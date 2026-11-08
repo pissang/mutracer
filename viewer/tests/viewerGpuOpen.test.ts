@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { gpuOpenUpstream, gpuOpenRedirect, proxyGpuOpen } from '../../site/src/gpuopenProxy';
+import { defaultGpuOpenPackage, parseGpuOpenMaterial, parseGpuOpenPackage, parseGpuOpenPage, filterGpuOpenMaterials } from '../src/engine/gpuOpen';
 const id = 'cda6c347-8e03-4658-8382-dda9522dbf47';
 const local = (path: string) => new URL(`https://viewer.test/api/gpuopen/${path}`);
+const pkg = (label = '1k 8b', size = '6.2 MB') => ({ id, label, size, file_url: `https://api.matlib.gpuopen.com/api/packages/${id}/download/` });
 
 describe('GPUOpen gateway', () => {
   it('allows only named read endpoints and bounded pagination', () => {
@@ -51,5 +53,23 @@ describe('GPUOpen gateway', () => {
     fetcher.mockResolvedValueOnce(new Response(new ReadableStream({ cancel })));
     const download = await proxyGpuOpen(new Request(local(`packages/${id}/download/`)), fetcher);
     await download.body!.cancel(); expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+describe('GPUOpen catalog', () => {
+  it('resolves category and tag IDs, render order, authors and licenses', () => {
+    const material = parseGpuOpenMaterial({ id, title: 'Brushed metal', category: id, tags: [id], renders_order: [id], packages: [id], author: 'AMD', license: 'MIT Public Domain', created_date: '2023-08-07' }, new Map([[id, 'Metal']]), new Map([[id, 'brushed']]));
+    expect(material).toMatchObject({ name: 'Brushed metal', author: 'AMD', year: '2023', categories: ['Metal'], tags: ['brushed'], render: id });
+    expect(filterGpuOpenMaterials([material], 'brushed metal', 'Metal')).toEqual([material]);
+    expect(filterGpuOpenMaterials([material], '', 'Wood')).toEqual([]);
+    expect(() => parseGpuOpenPage({ count: 1, results: 'invalid' })).toThrow();
+    expect(() => parseGpuOpenMaterial({ id: '../evil', title: 'Bad' }, new Map(), new Map())).toThrow();
+  });
+  it('parses formatted sizes, defaults to 1k 8b and rejects external file URLs', () => {
+    const packages = [parseGpuOpenPackage(pkg('2k 16b', '47.89 MB')), parseGpuOpenPackage(pkg())];
+    expect(defaultGpuOpenPackage(packages)).toBe(packages[1]);
+    expect(packages[1].bytes).toBeCloseTo(6.2 * 1048576);
+    expect(packages[1].url).toBe(`/api/gpuopen/packages/${id}/download/`);
+    expect(() => parseGpuOpenPackage({ ...pkg(), file_url: 'https://example.com/material.zip' })).toThrow();
+    expect(defaultGpuOpenPackage([parseGpuOpenPackage(pkg('8k 16b', '1 GB'))])).toBeUndefined();
   });
 });

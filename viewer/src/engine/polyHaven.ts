@@ -46,7 +46,7 @@ export function listPolyHavenTextures(): Promise<PolyHavenTexture[]> {
 }
 
 /** Matches every word of the query against the name, categories and tags. */
-export function filterTextures(textures: PolyHavenTexture[], query: string, category: string | null) {
+export function filterTextures<T extends PolyHavenTexture>(textures: T[], query: string, category: string | null) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   return textures.filter((t) => {
     if (category && !t.categories.includes(category)) return false;

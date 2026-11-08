@@ -908,3 +908,12 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .tex-slot__wrap .select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .material-panel[data-drop] { outline: 2px dashed var(--cv-accent); outline-offset: -2px; background: var(--cv-accent-surface); }
+
+.gpuopen-browser { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+.gpuopen-browser > .ph-grid { grid-row: 4; }
+.gpuopen-detail { grid-row: 5; display: grid; gap: 7px; max-height: 40vh; overflow: auto; padding: 10px 12px; border-top: 1px solid var(--cv-divider-subtle); font-size: 11px; }
+.gpuopen-detail > a { display: flex; align-items: center; gap: 5px; color: var(--cv-text); }
+.gpuopen-detail > span, .gpuopen-detail summary { color: var(--cv-text-3); }
+.gpuopen-detail pre { white-space: pre-wrap; font: inherit; line-height: 1.5; }
+.gpuopen-detail [role=status] > .hint__link { float: right; }
+.gpuopen-detail .progress { margin-top: 6px; }

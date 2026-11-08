@@ -1339,7 +1339,8 @@ export class ViewerEngine {
    * material as one undo step. The import replaces the whole material: every
    * value starts from the neutral base and every texture slot is set or cleared.
    */
-  async importMaterialX(materialId: string, files: PathedFile[]) {
+  async importMaterialX(materialId: string, files: PathedFile[], signal?: AbortSignal) {
+    const token = this.loadToken;
     let name = files[0]?.file.name ?? 'MaterialX';
     try {
       const [{parseMaterialXGraph},{loadGraphImages,loadMapImage,readMaterialXPackage},{parseMaterialX}]=await Promise.all([import('./materialxGraph'),import('./materialxFiles'),import('./materialx')]);
@@ -1357,12 +1358,16 @@ export class ViewerEngine {
           try{maps[slot as TextureKey]=await loadMapImage(plan!,pkg);}catch(error){warnings.push(`texture ${(error as Error).message}`);}
         }));
       } catch { /* Unsupported surface families retain the neutral material. */ }
-      await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null);
+      signal?.throwIfAborted();
+      if (token !== this.loadToken) return false;
+      const applied = await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null,signal);
+      if (!applied || signal?.aborted) return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
       showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
+      if (signal?.aborted) return false;
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
       return false;
     }

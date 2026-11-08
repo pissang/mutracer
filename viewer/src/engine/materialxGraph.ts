@@ -73,7 +73,7 @@ class Reader {
         for(const port of e.children.filter(c=>c.tag==='input'))inputs[port.attrs.name]=this.resolve(port,{type:port.attrs.type as Type},ctx);
         // Exporters write image inputs the graph does not implement; at their
         // stdlib defaults they change nothing, so drop them instead of failing.
-        dropInactiveImageInputs(inputs);
+        dropInactiveInputs(e.tag,inputs);
         let type=e.attrs.type as Type;
         if(type as string==='multioutput')type=e.tag==='gltf_colorimage'?'color4':inputs.in?.type??'vector3';
         const category=e.tag==='absval'?'abs':e.tag;
@@ -210,13 +210,16 @@ function inactive(nodes:Node[],port:string,edge:Edge){
     const normalized=normalizeGraph(new MaterialGraph({nodes,terminal:{[probe]:edge}}));
     return !normalized.diagnostics.length&&!isDynamic(normalized)&&evaluateGraph(normalized)[probe].every(v=>v===0);
 }
-const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
+const dropInactiveInputs=(category:string,inputs:Record<string,Input>)=>{
+    // MaterialX 1.38 normalmap defaults to tangent space, which is the
+    // library node's implicit behavior. Object space remains unsupported.
+    if(category==='normalmap'&&inputs.space&&!inputs.space.connection&&inputs.space.value==='tangent')delete inputs.space;
     for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
 };
 /** Removes inputs that have no effect from a graph saved by an earlier
  * importer, so restored materials match a fresh import. */
 export function pruneInactiveInputs(nodes:Node[],terminal:Record<string,Edge>){
-    const pruned=nodes.map(n=>{if(!n.inputs)return n;const inputs={...n.inputs};dropInactiveImageInputs(inputs);return {...n,inputs};});
+    const pruned=nodes.map(n=>{if(!n.inputs)return n;const inputs={...n.inputs};dropInactiveInputs(n.category,inputs);return {...n,inputs};});
     return {nodes:pruned,terminal:Object.fromEntries(Object.entries(terminal).filter(([port,edge])=>!inactive(pruned,port,edge)))};
 }
 /** Parses one material; resource loading remains owned by the viewer package loader. */

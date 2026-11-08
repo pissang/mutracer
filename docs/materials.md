@@ -438,11 +438,30 @@ structures are tried; disposing the engine releases them.
 
 ### MaterialX in the viewer
 
-Select a material and import a `.mtlx` file with its textures, or a ZIP containing
-them. Dropping a package onto the viewer replaces the selected material. The first
-material in the shallowest `.mtlx` document is used. Missing images use the node's
-default and produce a warning. Imported graphs, images and fallback maps are saved
-with the viewer's cached model and participate in undo/reset.
+Import a `.mtlx` file with its textures, a ZIP containing them, or a folder.
+Drop the package on an object to replace its material and select it. Over empty
+space, the drop uses the selected material; without either target it shows a
+prompt. Dropping on the material panel replaces the material shown there.
+The drop overlay names the viewport target, and the panel highlights while a
+file is over it. To replace an individual texture, drop one PNG, JPEG, WebP or
+AVIF image directly on its slot, or click the slot to choose a file. Images
+dropped elsewhere on the panel are not assigned to a slot.
+
+Choose **Browse GPUOpen materials** in the material panel to search the
+[GPUOpen MaterialX Library](https://matlib.gpuopen.com/main/materials/all), filter
+by category and select a package. The default is **1k 8b** when available.
+The browser shows the material's name, author, source and license; use its
+license terms when sharing downloaded content. MIT and CC0 packages download
+through the site's proxy; other licenses link to GPUOpen for download. Packages
+over 128 MiB cannot be applied through the browser; larger packages also cost
+more download time and texture memory. Cancel, closing the browser,
+or selecting another target stops the pending import and keeps the existing
+material. Download or import failures also keep the existing material.
+
+The first material in the shallowest `.mtlx` document is used. Missing images
+use the node's default and produce a warning. Imported graphs, images and
+fallback maps are saved with the viewer's cached model and participate in
+undo/reset.
 
 The viewer maps `open_pbr_surface`, `standard_surface`, `gltf_pbr` and
 `UsdPreviewSurface` to OpenPBR. Standard Surface uses MaterialX's official
