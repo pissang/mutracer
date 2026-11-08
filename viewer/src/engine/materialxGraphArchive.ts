@@ -21,7 +21,9 @@ export function archiveGraph(graph:MaterialGraph|undefined):GraphArchive|null {
 }
 export async function restoreGraph(archive:GraphArchive|null|undefined):Promise<MaterialGraph|null> {
   if(!archive)return null;
-  const graph=new MaterialGraph(archive);
+  const {pruneInactiveInputs}=await import('./materialxGraph');
+  const graph=new MaterialGraph(pruneInactiveInputs(archive.nodes,archive.terminal));
+  if(!Object.keys(graph.terminal).length)return null;
   await Promise.all(archive.images.map(async image=>{
     const bitmap=await createImageBitmap(image.file,{premultiplyAlpha:'none',colorSpaceConversion:'none'});
     const texture=new Texture(bitmap);Object.assign(texture,image.options);rememberGraphImage(texture,image.file);

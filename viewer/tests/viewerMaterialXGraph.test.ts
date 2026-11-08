@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
-import {parseMaterialXGraph} from '../src/engine/materialxGraph';
+import {parseMaterialXGraph,pruneInactiveInputs} from '../src/engine/materialxGraph';
+import {MaterialGraph} from '@meimu/mutracer';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate';
 const doc=(body:string,category='open_pbr_surface',inputs='')=>`<materialx version="1.39">${body}<${category} name="S" type="surfaceshader">${inputs}</${category}><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>`;
@@ -62,5 +63,16 @@ describe('MaterialX graph import',()=>{
   expect(quiet.warnings).toEqual([]);expect(Object.keys(quiet.graph!.terminal)).toEqual(['specularRoughness']);
   const active=parseMaterialXGraph(doc(image('<input name="frameoffset" type="integer" value="2"/>'),'standard_surface',inputs('0.3')));
   expect(active.warnings).toEqual(expect.arrayContaining([expect.stringContaining('frameoffset'),expect.stringContaining('specularRotation')]));
+ });
+ it('prunes inactive inputs from graphs saved by an earlier importer',()=>{
+  const nodes=[{id:'uv',category:'texcoord',type:'vector2' as const},
+   {id:'rough',category:'image',type:'float' as const,inputs:{texcoord:{type:'vector2' as const,connection:{node:'uv'}},layer:{type:'string' as const,value:''},frameoffset:{type:'integer' as const,value:0}}},
+   {id:'n',category:'normal',type:'vector3' as const,inputs:{space:{type:'string' as const,value:'world'}}},
+   {id:'rotation',category:'constant',type:'float' as const,inputs:{value:{type:'float' as const,value:0}}},
+   {id:'tilt',category:'constant',type:'float' as const,inputs:{value:{type:'float' as const,value:0.5}}}];
+  const pruned=pruneInactiveInputs(nodes,{specularRoughness:{node:'rough'},coatNormal:{node:'n'},specularRotation:{node:'rotation'},coatRotation:{node:'tilt'}});
+  expect(Object.keys(pruned.terminal)).toEqual(['specularRoughness','coatRotation']);
+  expect(Object.keys(pruned.nodes[1].inputs!)).toEqual(['texcoord']);
+  expect(normalizeGraph(new MaterialGraph({nodes:pruned.nodes,terminal:{specularRoughness:{node:'rough'}}})).diagnostics).toEqual([]);
  });
 });

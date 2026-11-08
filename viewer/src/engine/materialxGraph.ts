@@ -73,7 +73,7 @@ class Reader {
         for(const port of e.children.filter(c=>c.tag==='input'))inputs[port.attrs.name]=this.resolve(port,{type:port.attrs.type as Type},ctx);
         // Exporters write image inputs the graph does not implement; at their
         // stdlib defaults they change nothing, so drop them instead of failing.
-        for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
+        dropInactiveImageInputs(inputs);
         let type=e.attrs.type as Type;
         if(type as string==='multioutput')type=e.tag==='gltf_colorimage'?'color4':inputs.in?.type??'vector3';
         const category=e.tag==='absval'?'abs':e.tag;
@@ -193,13 +193,31 @@ export interface MaterialXGraphImport {
     warnings:string[];
     coverage:'complete'|'partial'|'fallback';
 }
-function inactive(nodes:Node[],port:string,edge:Edge,normalized:ReturnType<typeof normalizeGraph>,dynamic:boolean,probe:string){
+const dynamicCategories=['image','tiledimage','gltf_image','gltf_colorimage','gltf_normalmap','texcoord','position','normal','tangent','bitangent','transformpoint','transformvector','transformnormal'];
+const isDynamic=(normalized:ReturnType<typeof normalizeGraph>)=>normalized.nodes.some(n=>Object.values(n.inputs).some(i=>i.geometry)||dynamicCategories.includes(n.category));
+/** True for an unsupported terminal input that cannot change the result:
+ * a uniform zero, or the default world-space shading frame. */
+function inactive(nodes:Node[],port:string,edge:Edge){
+    if(port in terminalTypes)return false;
     const source=nodes.find(n=>n.id===edge.node);
-    if(source&&source.category===defaultFrame[port]){
+    if(!source)return false;
+    if(source.category===defaultFrame[port]){
         const space=source.inputs?.space;
         return !!space&&!space.connection&&space.value==='world';
     }
-    return !normalized.diagnostics.length&&!dynamic&&evaluateGraph(normalized)[probe].every(v=>v===0);
+    const probe=Object.keys(terminalTypes).find(k=>terminalTypes[k]===source.type);
+    if(!probe)return false;
+    const normalized=normalizeGraph(new MaterialGraph({nodes,terminal:{[probe]:edge}}));
+    return !normalized.diagnostics.length&&!isDynamic(normalized)&&evaluateGraph(normalized)[probe].every(v=>v===0);
+}
+const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
+    for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
+};
+/** Removes inputs that have no effect from a graph saved by an earlier
+ * importer, so restored materials match a fresh import. */
+export function pruneInactiveInputs(nodes:Node[],terminal:Record<string,Edge>){
+    const pruned=nodes.map(n=>{if(!n.inputs)return n;const inputs={...n.inputs};dropInactiveImageInputs(inputs);return {...n,inputs};});
+    return {nodes:pruned,terminal:Object.fromEntries(Object.entries(terminal).filter(([port,edge])=>!inactive(pruned,port,edge)))};
 }
 /** Parses one material; resource loading remains owned by the viewer package loader. */
 export function parseMaterialXGraph(text:string,materialName?:string):MaterialXGraphImport {
@@ -217,13 +235,13 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         let probe=Object.keys(terminalTypes).find(k=>terminalTypes[k]===type);
         if(type==='boolean'||type==='integer'){const id=`surface/fold/${name}`;r.nodes.push({id,category:'convert',type:'float',inputs:{in:{type,connection:edge}}});edge={node:id};probe='specularRoughness';}
         const normalized=normalizeGraph(new MaterialGraph({nodes:r.nodes,terminal:{[probe??port]:edge}}));
-        const dynamic=normalized.nodes.some(n=>Object.values(n.inputs).some(i=>i.geometry)||['image','tiledimage','gltf_image','gltf_colorimage','gltf_normalmap','texcoord','position','normal','tangent','bitangent','transformpoint','transformvector','transformnormal'].includes(n.category));
+        const dynamic=isDynamic(normalized);
         const property=fields[name]??name, defaultValue=(defaults as unknown as Record<string,unknown>)[property];
         const canStore=['number','boolean'].includes(typeof defaultValue)||Array.isArray(defaultValue);
         if(!normalized.diagnostics.length&&!dynamic&&canStore&&port!=='normal'){
             const folded=evaluateGraph(normalized)[probe??port];
             (values as Record<string,unknown>)[property]=a.type==='boolean'?Boolean(folded[0]):width(a.type)===1?folded[0]:folded;
-        }else if(!(port in terminalTypes)&&inactive(r.nodes,port,edge,normalized,dynamic,probe??port)){
+        }else if(inactive(r.nodes,port,edge)){
             // An unsupported input left at zero, or at the default frame, has no effect.
         }else terminal[port]=edge;
     }
