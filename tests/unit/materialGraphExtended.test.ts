@@ -61,8 +61,8 @@ describe('MaterialX adjustment and geometry nodes',()=>{
     });
     it('uses ACEScg luminance and preserves alpha',()=>{
         expect(run('luminance',{in:v([1,0,0],'color3')},'color3')).toEqual(Array(3).fill(0.2722287));
-        const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'l',category:'luminance',type:'color4',inputs:{in:v([0,1,0,0.2],'color4')}}],terminal:{baseColor:{node:'l'}}}));
-        expect(graph.diagnostics[0].code).toBe('terminal-type');
+        const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'l',category:'luminance',type:'color4',inputs:{in:v([0,1,0,0.2],'color4')}},{id:'alpha',category:'extract',type:'float',inputs:{in:{type:'color4',connection:{node:'l'}},index:{type:'integer',value:3}}}],terminal:{opacity:{node:'alpha'}}}));
+        expect(graph.diagnostics).toEqual([]);expect(evaluateGraph(graph).opacity).toEqual([0.2]);
     });
     it('rotates in degrees about a normalized axis',()=>{
         const x=run('rotate2d',{in:v([1,0],'vector2'),amount:f(90)},'vector2');

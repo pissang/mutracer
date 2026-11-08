@@ -54,6 +54,9 @@ function cases() {
         graph.setNode({id:'color',category:'convert',type:c==='luminance'?'color3':'vector3',inputs:{in:edge('uv','vector2')}});
         rows.push({name:c,graph});
     }
+    const lumaAlpha=testGraph('extract',{in:edge('luma','color4'),index:{type:'integer',value:3}});
+    lumaAlpha.setNode({id:'luma',category:'luminance',type:'color4',inputs:{in:edge('rgba','color4')}}).setNode({id:'rgba',category:'combine4',type:'color4',inputs:{in1:f(0.2),in2:f(0.4),in3:f(0.6),in4:dynamic}});
+    rows.push({name:'luminance-alpha',graph:lumaAlpha});
     add('mix', 'mix', { bg: dynamic, fg: f(0.8), mix: f(0.4) });
     add('clamp', 'clamp', { in: dynamic, low: f(0.1), high: f(0.3) });
     for (const c of ['ifgreater', 'ifequal'])
