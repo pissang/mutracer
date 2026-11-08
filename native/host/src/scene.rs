@@ -1110,6 +1110,12 @@ impl PreparedState {
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
+        if layout.indexed && updates.changed_blases.is_some() {
+            let instances = assets
+                .get(&AssetId::Packet(2))
+                .ok_or("Missing updated indexed instances")?;
+            return Ok((hardware::indexed_capture(layout, instances)?, assets));
+        }
         let mut indices = self
             .authoritative_indices
             .lock()

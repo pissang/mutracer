@@ -545,7 +545,6 @@ impl Resources {
         queue: &crate::GpuQueue,
         capture: &Capture,
         writes: &super::scene::LightingUpdates,
-        assets: &Assets,
         scene_buffers: &HashMap<usize, wgpu::Buffer>,
     ) -> Result<Resources> {
         if !self.indexed || !capture.indexed {
@@ -561,23 +560,65 @@ impl Resources {
         }
         let added_blases = capture.geometries.len() - old_blas_count;
         let appended_indices = if added_blases != 0 {
-            let bytes = assets.get(&AssetId::Packet(35)).ok_or("Missing appended HWRT indices")?;
+            let started = std::time::Instant::now();
+            let required = capture
+                .geometries
+                .iter()
+                .map(|g| {
+                    (g.index_offset as u64 + g.index_count.unwrap_or(g.vertex_count) as u64) * 4
+                })
+                .max()
+                .unwrap_or(0);
             let old_bytes = self.mapping.size();
-            let size = old_bytes.checked_add(bytes.len() as u64).ok_or("HWRT index buffer size overflow")?;
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("MuTracer grown HWRT indices"), size,
-                usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let mut encoder = device.create_command_encoder(&Default::default());
-            if old_bytes != 0 {
+            let buffer = if required > old_bytes {
+                let size = required
+                    .max(old_bytes + (old_bytes / 2).min(64 * 1024 * 1024))
+                    .div_ceil(256)
+                    * 256;
+                if size > device.limits().max_buffer_size {
+                    return Err("HWRT index buffer growth exceeds device limit".into());
+                }
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("MuTracer grown HWRT indices"),
+                    size,
+                    usage: self.mapping.usage(),
+                    mapped_at_creation: false,
+                });
+                let mut encoder = device.create_command_encoder(&Default::default());
                 encoder.copy_buffer_to_buffer(&self.mapping, 0, &buffer, 0, old_bytes);
+                queue.submit([encoder.finish()]);
+                buffer
+            } else {
+                self.mapping.clone()
+            };
+            // Destinations are source index offsets, never the buffer capacity.
+            // Old BLASes keep their old buffer; new BLASes and shading share the
+            // retained prefix copied above plus only the appended index spans.
+            for (id, destination, bytes) in &writes.hardware_writes {
+                if *id != 35 {
+                    continue;
+                }
+                if destination
+                    .checked_add(bytes.len() as u64)
+                    .is_none_or(|end| end > buffer.size())
+                {
+                    return Err("HWRT index append exceeds buffer capacity".into());
+                }
+                queue.write_buffer(&buffer, *destination, bytes);
             }
-            queue.submit([encoder.finish()]);
-            queue.write_buffer(&buffer, old_bytes, bytes);
+            if super::profiling::enabled() {
+                native_log!(
+                    "{}",
+                    serde_json::json!({"nativeIndexAppendProfile": {
+                    "uploadBytes": writes.hardware_writes.iter().filter(|(id,_,_)| *id == 35).map(|(_,_,bytes)| bytes.len()).sum::<usize>(),
+                    "copyBytes": if required > old_bytes {old_bytes} else {0}, "capacityBytes": buffer.size(),
+                    "ms": started.elapsed().as_secs_f64()*1000.}})
+                );
+            }
             Some(buffer)
-        } else { None };
+        } else {
+            None
+        };
         let mut unique = std::collections::HashSet::new();
         let mut plans = Vec::new();
         let mut used_writes = std::collections::HashSet::new();
@@ -628,10 +669,19 @@ impl Resources {
             used_writes.insert(write_index);
             if added {
                 let index_offset = geometry.index_offset as u64 * 4;
-                let index_length = geometry.index_count.unwrap_or(geometry.vertex_count) as usize * 4;
-                let index_write = writes.hardware_writes.iter().enumerate().find(|(_, (resource, destination, data))|
-                    *resource == 35 && *destination == index_offset && data.len() == index_length)
-                    .ok_or("Missing appended HWRT index span")?.0;
+                let index_length =
+                    geometry.index_count.unwrap_or(geometry.vertex_count) as usize * 4;
+                let index_write = writes
+                    .hardware_writes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (resource, destination, data))| {
+                        *resource == 35
+                            && *destination == index_offset
+                            && data.len() == index_length
+                    })
+                    .ok_or("Missing appended HWRT index span")?
+                    .0;
                 used_writes.insert(index_write);
             }
             plans.push((index, geometry, data));
@@ -647,7 +697,10 @@ impl Resources {
         let mut vertices = self._vertices.clone();
         let mut indices = self._indices.clone();
         if added_blases != 0 {
-            let positions = scene_buffers.get(&3).ok_or("Missing appended HWRT attributes")?.clone();
+            let positions = scene_buffers
+                .get(&3)
+                .ok_or("Missing appended HWRT attributes")?
+                .clone();
             let index_buffer = appended_indices.as_ref().unwrap().clone();
             for _ in 0..added_blases {
                 vertices.push(positions.clone());
@@ -699,7 +752,11 @@ impl Resources {
                 },
                 descriptors.clone(),
             );
-            if *index < old_blas_count { blases[*index] = blas; } else { blases.push(blas); }
+            if *index < old_blas_count {
+                blases[*index] = blas;
+            } else {
+                blases.push(blas);
+            }
             sizes.push(descriptors);
         }
         let instance_capacity = self.tlas.get().len().max(capture.instances.len() + 2);
@@ -825,10 +882,15 @@ impl Resources {
         let mapping = if let Some(buffer) = appended_indices {
             inputs.insert(HardwareBufferId::Packet(35), buffer.clone());
             buffer
-        } else { self.mapping.clone() };
+        } else {
+            self.mapping.clone()
+        };
         let mut raw_instances = self.raw_instances.clone().unwrap_or_default();
         for (index, geometry) in capture.geometries.iter().enumerate() {
-            raw_instances.insert((geometry.index_offset / 3, geometry.first_vertex), (index, geometry.index_offset / 3));
+            raw_instances.insert(
+                (geometry.index_offset / 3, geometry.first_vertex),
+                (index, geometry.index_offset / 3),
+            );
         }
         Ok(Resources {
             inputs,
@@ -1191,6 +1253,17 @@ fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
     if attributes.len() < layout.attribute_stride_bytes && !layout.is_empty {
         return Err("Missing indexed attributes".into());
     }
+    indexed_capture(
+        layout,
+        assets
+            .get(&AssetId::Packet(2))
+            .ok_or("Missing indexed instances")?,
+    )
+}
+
+// Retained geometry edits need only layout and instance metadata. Their source
+// spans are validated by the update packet and never reconstructed as full CPU arrays.
+pub(super) fn indexed_capture(layout: &NativeLayout, instance_bytes: &[u8]) -> Result<Capture> {
     let geometries = layout
         .hardware_geometries
         .iter()
@@ -1217,9 +1290,7 @@ fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
         .collect();
     let mut instances = Vec::new();
     if !layout.is_empty {
-        for (i, record) in assets
-            .get(&AssetId::Packet(2))
-            .ok_or("Missing indexed instances")?
+        for (i, record) in instance_bytes
             .chunks_exact(160)
             .take(layout.instance_count.unwrap_or(usize::MAX))
             .enumerate()

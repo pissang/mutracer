@@ -1751,7 +1751,7 @@ impl GpuScene {
             hardware_updates.native_layout = self.scene.native_layout.clone();
         }
         if updates.changed_blases.is_some() {
-            let (capture, assets) = self
+            let (capture, _assets) = self
                 .retained
                 .as_ref()
                 .ok_or("Missing retained geometry")?
@@ -1771,7 +1771,6 @@ impl GpuScene {
                         &self.gpu.queue,
                         &capture,
                         updates,
-                        &assets,
                         &self.buffers,
                     )?;
                     let entries = [

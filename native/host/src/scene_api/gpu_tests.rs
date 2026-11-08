@@ -52,8 +52,13 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
 
     let appended_geometry = scene
         .add_geometry(Geometry::new(
-            vec![-0.3, -0.3, -0.1, 0.3, -0.3, -0.1, 0., 0.3, -0.1],
-            vec![0, 1, 2],
+            vec![
+                -0.3, -0.3, -0.1, 0.3, -0.3, -0.1, 0., 0.3, -0.1, -0.2, -0.2, 0.2, 0.2, -0.2, 0.2,
+                0., 0.2, 0.2,
+            ],
+            // Different source counts and order expose an accidental upload of
+            // the old index prefix at the new geometry's destination.
+            vec![3, 4, 5, 0, 1, 2],
         ))
         .unwrap();
     let mut appended = Mesh::new(appended_geometry, material);
