@@ -1,6 +1,9 @@
 //! Scene construction with checked, generational handles. Arrays are shared; edits
 //! take effect when the scene is passed to `Engine::set_scene_object` and updated.
 mod encoder;
+mod material_graph;
+pub use material_graph::schema as graph_schema;
+pub use material_graph::{GraphInput, GraphNode, GraphTerminal, MaterialGraph};
 mod picking;
 mod types;
 pub use picking::{Ray, RaycastHit, RaycastOptions, ScenePicker};
@@ -174,6 +177,8 @@ pub struct OpenPbrMaterial {
     /// metalness, transmission, thin film and displacement. [`OpenPbrMaterial::set_texture`]
     /// with those property IDs writes the same slots.
     pub textures: [Option<TextureId>; 9],
+    /// Optional normalized MaterialX graph; default None uses constants and maps.
+    pub graph: Option<MaterialGraph>,
     /// Frozen material property IDs; values are three raw words (unused words zero).
     pub(crate) properties: BTreeMap<u32, [u32; 3]>,
     pub(crate) texture_properties: BTreeMap<u32, Option<TextureId>>,
@@ -204,6 +209,7 @@ impl Default for OpenPbrMaterial {
                 },
             },
             textures: [None; 9],
+            graph: None,
             properties: BTreeMap::from([(73, [0; 3])]),
             texture_properties: BTreeMap::new(),
         }
@@ -975,7 +981,7 @@ impl Scene {
             .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
         // Camera/environment settings and stable identity tables are appended below.
         let total = count
-            .checked_add(r.meshes.len() + r.materials.len() + 22)
+            .checked_add(r.meshes.len() + r.materials.len() + 22 + self.graph_word_count()?)
             .filter(|n| *n <= u32::MAX as usize)
             .ok_or_else(|| {
                 api::error(
@@ -985,8 +991,11 @@ impl Scene {
             })?;
         crate::memory_budget::check(total * 4, "Scene descriptor")
             .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
-        if !data.patch_selected(words, &camera, [1, 1], &env, previous) {
+        if !self.graphs_fit(words) || !data.patch_selected(words, &camera, [1, 1], &env, previous) {
             *words = data.encode(&camera, [1, 1], &env);
+        }
+        if self.materials.iter().any(|(_,m)|m.graph.is_some()) {
+            self.write_graphs(words, &self.dense())?;
         }
         words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         words[h::BACKGROUND_TEXTURE] = r.background_index;
@@ -1023,6 +1032,19 @@ impl Scene {
         for &k in &dirty.material {
             let i = lookup(&self.materials, &d.materials, k).ok()?;
             let (m, properties) = self.resolve_material(d, self.materials.get(k).ok()?).ok()?;
+            let graph_at = words[words[h::MATERIAL_OFFSET] as usize
+                + i * crate::layout::material::WORDS
+                + crate::layout::material::GRAPH] as usize;
+            let material = self.materials.get(k).ok()?;
+            material.validate_references(self).ok()?;
+            if let Some(graph) = &material.graph { graph.word_count().ok()?; }
+            let graph = &material.graph;
+            if !graph
+                .as_ref()
+                .map_or(graph_at == 0, |g| g.fits(words, graph_at))
+            {
+                return None;
+            }
             if !encoder::material_fits(words, i, Some(&properties)) {
                 return None;
             }
@@ -1064,6 +1086,9 @@ impl Scene {
         }
         for (i, m, properties) in &materials {
             encoder::write_material_records(words, *i, m, Some(properties));
+        }
+        if !materials.is_empty() {
+            self.write_graphs(words, d).ok()?;
         }
         for (i, record, ies) in &lights {
             encoder::write_light_records(words, *i, record, Some(ies));
@@ -1782,11 +1807,13 @@ impl References for Texture {
 }
 impl References for OpenPbrMaterial {
     fn validate_references(&self, s: &Scene) -> Result<()> {
+        if let Some(graph) = &self.graph { graph.word_count()?; }
         for id in self
             .textures
             .iter()
             .copied()
             .chain(self.texture_properties.values().copied())
+            .chain(self.graph.iter().flat_map(|g| g.textures.iter().copied()))
             .flatten()
         {
             s.textures.get(id.0)?;

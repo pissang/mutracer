@@ -1,6 +1,7 @@
 #ifndef MT_SCENE_API_H
 #define MT_SCENE_API_H
 #include "mutracer-engine.h"
+#include "mutracer-material-graph.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,6 +54,34 @@ typedef struct mt_scene_material_desc {
  * metalness/transmission 0, solid, single-sided, lit. Other OpenPBR values use
  * native defaults. Use property setters for layers and map setters for textures. */
 MT_SCENE_API_LAYOUT(mt_scene_material_desc, 80);
+/* Owned graph input for mt_scene_material_set_graph. Defaults: IR version 1,
+ * empty arrays and no overrides. Parameter arrays contain four floats per slot;
+ * unused components are zero. Filename values index textures (-1 uses the image
+ * default); texture handles use 0 for a missing image. Integer parameters are
+ * exact float32 values within +/-16777216; booleans use 0/1. Space strings encode
+ * object/world as 0/1, and unspecified transform spaces as -1. See the canonical
+ * node/port contract in mutracer-material-graph.h. author_ids is NULL or one
+ * NUL-terminated UTF-8 diagnostic location per node (individual NULLs omit it).
+ * All input arrays/strings are copied; they can be freed after the call. */
+typedef struct mt_scene_material_graph_desc {
+  uint32_t struct_size, version;
+  const mt_graph_node *nodes; size_t node_count;
+  const mt_graph_input *inputs; size_t input_count;
+  const mt_graph_terminal *terminals; size_t terminal_count;
+  const float *parameters; size_t parameter_count;
+  const mt_scene_texture_id *textures; size_t texture_count;
+  const char *const *author_ids;
+} mt_scene_material_graph_desc;
+MT_SCENE_API_LAYOUT(mt_scene_material_graph_desc, 8 + 11 * sizeof(void *));
+mt_status mt_scene_material_graph_desc_default(mt_scene_material_graph_desc *out);
+/* Replace a material graph, or pass NULL to clear it. Requires exclusive scene
+ * access. Invalid sizes, non-finite values, array lengths or texture handles
+ * return INVALID_ARGUMENT/INVALID_HANDLE without changing the material. Node,
+ * type and terminal support is diagnosed when the scene prepares; unsupported
+ * graphs use the material fallback. Submit and update to apply an edit. */
+mt_status mt_scene_material_set_graph(mt_scene scene, mt_scene_material_id material,
+  const mt_scene_material_graph_desc *graph, char *error, size_t capacity);
+
 typedef struct mt_scene_texture_tile {
   uint32_t udim; /* Unique tile number, 1001–1100. */
   uint32_t storage; /* 0 = RGBA8 (sRGB color slots, linear data slots); 1 = RGBA32F linear. */

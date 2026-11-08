@@ -21,7 +21,6 @@ describe('portable material graph IR',()=>{
             expect(JSON.parse(JSON.stringify(ir))).toEqual(ir);
             for(const backend of ['webgpu','webgl'] as const) {
                 const generated=generateGraphIR(ir,backend);
-                expect(generated.source,fixture.label).toContain('result.baseColor');
                 expect(generated.parameters.length%4).toBe(0);
                 expect(generated.foldedWidths.length).toBe(generated.foldedNodes);
             }

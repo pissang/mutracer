@@ -94,6 +94,16 @@ fn atlas_texture(w: &Words, index: usize) -> Option<bool> {
         if (mat::MAP..=mat::EMISSIVE_MAP).any(|k| w.u(o + k) == index) {
             return Some(true);
         }
+        let graph = w.u(o + mat::GRAPH);
+        if graph != 0 {
+            let (count, offset) = (
+                w.u(graph + crate::layout::graph::TEXTURE_COUNT),
+                w.u(graph + crate::layout::graph::TEXTURES),
+            );
+            if (0..count).any(|i| w.u(offset + i) == index) {
+                return Some(true);
+            }
+        }
         let extensions = w.u(o + mat::EXTENSION_OFFSET);
         for e in 0..w.u(o + mat::EXTENSION_COUNT) {
             let at = extensions + e * crate::layout::extension::WORDS;
@@ -408,7 +418,15 @@ fn material_compatible(a: &Words, b: &Words, index: usize) -> Option<bool> {
         }
         Some(entries)
     };
-    Some(extensions(a, ao)? == extensions(b, bo)?)
+    Some(
+        extensions(a, ao)? == extensions(b, bo)?
+            && crate::scene::material_graph::same_topology(
+                a.0,
+                a.u(ao + mat::GRAPH),
+                b.0,
+                b.u(bo + mat::GRAPH),
+            ),
+    )
 }
 
 fn material_steps(a: &Words, b: &Words, indices: &[usize]) -> Option<Step> {
@@ -425,6 +443,9 @@ fn material_steps(a: &Words, b: &Words, indices: &[usize]) -> Option<Step> {
         bytes[(4 + i * 2) * 4..(6 + i * 2) * 4]
             .copy_from_slice(&record(&[index as u32, offset as u32]));
         bytes.extend_from_slice(b.span(bo, mat::WORDS)?);
+        let graph = crate::scene::material_graph::append(&mut bytes, b.0, b.u(bo + mat::GRAPH))?;
+        bytes[(offset + mat::GRAPH) * 4..(offset + mat::GRAPH + 1) * 4]
+            .copy_from_slice(&(graph as u32).to_le_bytes());
         let count = b.u(bo + mat::EXTENSION_COUNT) * crate::layout::extension::WORDS;
         let ext = if count == 0 { 0 } else { bytes.len() / 4 };
         bytes[(offset + mat::EXTENSION_OFFSET) * 4..(offset + mat::EXTENSION_OFFSET + 1) * 4]
@@ -557,9 +578,15 @@ pub(crate) fn changed_materials_with(
             a.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
             b.u(h::MATERIAL_OFFSET) + index * mat::WORDS,
         );
-        let same =
-            (0..mat::WORDS).all(|k| k == mat::EXTENSION_OFFSET || a.u(ao + k) == b.u(bo + k));
+        let same = (0..mat::WORDS)
+            .all(|k| k == mat::EXTENSION_OFFSET || k == mat::GRAPH || a.u(ao + k) == b.u(bo + k));
         if !same
+            || !crate::scene::material_graph::same_data(
+                a.0,
+                a.u(ao + mat::GRAPH),
+                b.0,
+                b.u(bo + mat::GRAPH),
+            )
             || !same_span(
                 &a,
                 a.u(ao + mat::EXTENSION_OFFSET),

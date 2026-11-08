@@ -62,7 +62,7 @@ save('native/host/src/layout.rs',`// ${banner}\npub const WORD_BYTES: usize = ${
 // Callers build scene descriptors with the public header; host protocol records,
 // resource IDs and shader layouts stay in the internal header.
 const records=schema.sceneRecords();
-const publicGroups={...Object.fromEntries(['HEADER','GEOMETRY','MESH','MATERIAL','TEXTURE','LIGHT','CAMERA','BATCH','EXTENSION'].map(n=>[n,records[n]])),
+const publicGroups={...Object.fromEntries(['HEADER','GEOMETRY','MESH','MATERIAL','TEXTURE','LIGHT','CAMERA','BATCH','EXTENSION','GRAPH'].map(n=>[n,records[n]])),
   VERSION:{SCENE:schema.protocolVersions.SCENE}};
 const defines=g=>Object.entries(g).map(([name,fields])=>Object.entries(fields).map(([field,value])=>`#define MT_${name}_${field} ${value}u`).join('\n')).join('\n');
 const internalGroups=Object.fromEntries(Object.entries(groups).map(([name,fields])=>[name,Object.fromEntries(Object.entries(fields)

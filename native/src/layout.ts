@@ -93,8 +93,25 @@ export const MATERIAL = {
   "EMISSIVE_MAP": 18,
   "EXTENSION_COUNT": 19,
   "EXTENSION_OFFSET": 20,
-  "RESERVED": 21,
+  "GRAPH": 21,
+  "RESERVED": 22,
   "WORDS": 24
+} as const;
+export const GRAPH = {
+  "VERSION": 0,
+  "NODE_COUNT": 1,
+  "NODES": 2,
+  "INPUT_COUNT": 3,
+  "INPUTS": 4,
+  "TERMINAL_COUNT": 5,
+  "TERMINALS": 6,
+  "PARAMETER_COUNT": 7,
+  "PARAMETERS": 8,
+  "TEXTURE_COUNT": 9,
+  "TEXTURES": 10,
+  "AUTHOR_IDS": 11,
+  "RESERVED": 12,
+  "WORDS": 16
 } as const;
 export const TEXTURE = {
   "WIDTH": 0,

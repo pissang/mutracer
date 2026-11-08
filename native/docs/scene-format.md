@@ -143,6 +143,35 @@ When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
   mesh-local units. The absolute projection scale, and each position or UV
   component multiplied by it, must not exceed 1,000,000.
 
+### Material graphs (v8)
+
+`mt_material_v4.graph_offset` is 0 for constants/maps or points to one
+`mt_material_graph_v8`. The material record remains 24 words. In v5–v7 that
+word is reserved and must be 0. Graph records and IDs are declared in
+[mutracer-material-graph.h](../include/mutracer-material-graph.h) and
+[the graph schema](../include/mutracer-material-graph-schema.h).
+
+The graph header contains an IR version and five count/offset pairs: nodes
+(5 words each), inputs (5), terminals (3), parameters (4) and texture references
+(1). Counts address records; offsets address descriptor words. An empty table
+has count and offset 0. Parameters are finite float32 values, padded with zero
+to four components. A filename parameter is a graph texture-slot index or -1
+for the node's default; each texture-slot entry is a scene texture index or
+`MT_NO_TEXTURE`.
+
+Nodes appear before their consumers. Each node declares its category,
+implementation version, output type and contiguous input range. Inputs declare
+port/type, source kind, source index and output selection. Parameter and geometry
+sources use output 0. Terminals declare the OpenPBR port and a typed node output.
+Every input, including its default, is explicit in this normalized representation.
+
+`author_ids_offset` is 0 or addresses one `(word offset, byte length)` pair per
+node. Each referenced diagnostic location is UTF-8 without a terminating NUL,
+padded to complete words with zero. Author IDs do not change graph structure.
+Out-of-bounds spans, invalid texture references, non-finite parameters and nonzero
+reserved fields or UTF-8 padding reject the descriptor.
+
+
 ### Textures
 
 - RGBA8 uses one packed word per pixel; color slots decode it as sRGB and data

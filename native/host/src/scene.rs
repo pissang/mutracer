@@ -3,6 +3,7 @@ use super::*;
 mod compact_kernel;
 mod geometry_kernels;
 mod geometry_validation;
+pub(crate) mod material_graph;
 use crate::layout::{
     WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
     light as l, material as mat, mesh as m, packet_entry as pe, packet_header as ph,
@@ -452,7 +453,12 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             }
         }
 
-        w.reserved(o + mat::RESERVED, 3)?;
+        if version >= 8 {
+            material_graph::validate(&w, w.u(o + mat::GRAPH), w.u(h::TEXTURE_COUNT))?;
+        } else {
+            w.reserved(o + mat::GRAPH, 1)?;
+        }
+        w.reserved(o + mat::RESERVED, 2)?;
         let count = w.u(o + mat::EXTENSION_COUNT);
         let offset = w.u(o + mat::EXTENSION_OFFSET);
         if count >= material_properties::MATERIAL_PROPERTIES.len() || count == 0 && offset != 0 {

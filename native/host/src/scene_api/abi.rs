@@ -212,6 +212,8 @@ unsafe fn text<'a>(p: *const c_char) -> Result<&'a str> {
         .map_err(|_| invalid("Expected UTF-8"))
 }
 macro_rules! defaults {($($fn:ident,$ty:ty,$value:expr);*$(;)?)=>{$(#[unsafe(no_mangle)]pub unsafe extern "C" fn $fn(out:*mut $ty)->i32 {call(std::ptr::null_mut(),0,||unsafe{output(out,$value)})})*};}
+#[path = "abi_material_graph.rs"]
+mod material_graph_abi;
 #[path = "abi_picking.rs"]
 mod picking;
 defaults! {

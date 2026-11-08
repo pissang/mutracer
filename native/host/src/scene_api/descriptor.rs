@@ -86,6 +86,7 @@ impl Scene {
             let mut material = OpenPbrMaterial {
                 values: m.clone(),
                 textures: maps,
+                graph: None,
                 properties: BTreeMap::new(),
                 texture_properties: BTreeMap::new(),
             };
@@ -268,7 +269,7 @@ impl Scene {
             .word_count(&env)
             .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
         let total = words
-            .checked_add(data.meshes.len() + data.materials.len() + 22)
+            .checked_add(data.meshes.len() + data.materials.len() + 22 + self.graph_word_count()?)
             .filter(|n| *n <= u32::MAX as usize)
             .ok_or_else(|| {
                 api::error(
@@ -278,8 +279,14 @@ impl Scene {
             })?;
         crate::memory_budget::check(total * 4, "Scene descriptor")
             .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
+        if cached.as_ref().is_some_and(|d| !self.graphs_fit(&d.words)) {
+            *cached = None;
+        }
         Descriptor::update(cached, &data, camera, size, &env);
         let d = cached.as_mut().unwrap();
+        if self.materials.iter().any(|(_,m)|m.graph.is_some()) {
+            self.write_graphs(&mut d.words, &self.dense())?;
+        }
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
         self.environment_settings.encode(&mut d.words);

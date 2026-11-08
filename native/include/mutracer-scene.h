@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
+#include "mutracer-material-graph.h"
 /* Raw scene descriptor v8 records (historical _v4 C type names). The format,
  * validation rules and limits are in native/docs/scene-format.md.
  * mt_context_commit (mutracer-context.h) consumes the descriptor. Every record is a run of little-endian 32-bit words:
@@ -74,7 +75,8 @@ typedef struct mt_material_v4 {
   uint32_t thin_walled; /* 0 or 1. */
   uint32_t base_texture, normal_texture, metallic_roughness_texture, emissive_texture;
   uint32_t extension_count, extension_offset; /* mt_material_extension_v4 array. */
-  uint32_t reserved[3];
+  uint32_t graph_offset; /* v8: optional mt_material_graph_v8; 0 uses constants/maps. Must be 0 in v5–v7. */
+  uint32_t reserved[2];
 } mt_material_v4;
 
 typedef struct mt_material_extension_v4 {

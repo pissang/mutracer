@@ -93,8 +93,25 @@ pub mod material {
     pub const EMISSIVE_MAP: usize = 18;
     pub const EXTENSION_COUNT: usize = 19;
     pub const EXTENSION_OFFSET: usize = 20;
-    pub const RESERVED: usize = 21;
+    pub const GRAPH: usize = 21;
+    pub const RESERVED: usize = 22;
     pub const WORDS: usize = 24;
+}
+pub mod graph {
+    pub const VERSION: usize = 0;
+    pub const NODE_COUNT: usize = 1;
+    pub const NODES: usize = 2;
+    pub const INPUT_COUNT: usize = 3;
+    pub const INPUTS: usize = 4;
+    pub const TERMINAL_COUNT: usize = 5;
+    pub const TERMINALS: usize = 6;
+    pub const PARAMETER_COUNT: usize = 7;
+    pub const PARAMETERS: usize = 8;
+    pub const TEXTURE_COUNT: usize = 9;
+    pub const TEXTURES: usize = 10;
+    pub const AUTHOR_IDS: usize = 11;
+    pub const RESERVED: usize = 12;
+    pub const WORDS: usize = 16;
 }
 pub mod texture {
     pub const WIDTH: usize = 0;
