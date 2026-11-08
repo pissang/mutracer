@@ -74,8 +74,10 @@ Changing a connection to an already retained texture is incremental when its
 atlas placement and shader support remain compatible; otherwise the SDK prepares
 the scene again. Rprim insertion reuses resident materials and can append static,
 single-material geometry when the SDK's
-[scene update rules](../../docs/scene.md#edit-a-scene) permit it. Appending can
-grow scene buffers, using more memory and update work.
+[scene update rules](../../docs/scene.md#edit-a-scene) permit it, including after
+rprim deletion. New geometry prepares in the background while the previous
+image remains available; appending can grow scene buffers and increase memory
+use.
 
 UsdPreviewSurface is an approximation of the native glTF material mapping:
 

@@ -72,11 +72,11 @@ and presents it.
 inputs; `update` commits them once for all renders.
 
 - Incremental edits ([which ones](scene.md#edit-a-scene)) finish during
-  `update`.
-- Full preparation runs on a library thread. Previous images stay readable and
-  presentable, and renders report `Preparing` or `Compiling` until the new
-  scene is published. A converge interrupted by a scene change returns an
-  error.
+  `update`, except new geometry appends.
+- New geometry appends and full preparation run on a library thread. Previous
+  render pixels stay readable, and the last presented image stays visible.
+  Renders report `Preparing` or `Compiling` until the new scene is published. A
+  converge interrupted by a scene change returns an error.
 - Each render uses its own size, bevel and dispersion settings, and the engine
   camera when one is set. Changing one render's options restarts only that
   render.

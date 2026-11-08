@@ -151,10 +151,11 @@ int32_t mt_engine_diagnostics(mt_engine engine, mt_engine_diagnostics_info *outp
  * Takes effect at the next mt_engine_update. Default NULL. */
 int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char *error, size_t capacity);
 /* The sole commit point. changed (optional) receives 1 when the scene or camera
- * changed. Incremental edits are applied to every render on this thread; a render
- * that needs full preparation starts it on a library thread and reports
- * MT_RENDER_PREPARING or MT_RENDER_COMPILING until it is published. A failing
- * render reports an error event and does not stop the others. */
+ * changed. Incremental edits are applied to every render on this thread, except
+ * new geometry appends. New geometry and full preparation run on a library
+ * thread; affected renders report MT_RENDER_PREPARING or MT_RENDER_COMPILING
+ * until the scene is published. A failing render reports an error event and
+ * does not stop the others. */
 int32_t mt_engine_update(mt_engine engine, uint32_t *changed, char *error, size_t capacity);
 
 enum { MT_DEPTH_SAMPLE_GRID = 7, MT_DEPTH_SAMPLE_COUNT = 49 };

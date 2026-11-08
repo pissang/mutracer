@@ -59,8 +59,9 @@ These edits commit incrementally:
   geometry; a later full preparation may reclaim it.
 - Appending static, single-material geometry without displacement or triangle
   material indices when its shader and buffer layout remain compatible. This
-  path can grow retained buffers, using more memory and update work. After a
-  mesh is removed, a later geometry append may need full preparation.
+  path prepares new geometry in the background and can grow retained buffers,
+  using more memory and preparation work. Compatible appends remain incremental
+  after mesh removal.
 - Vertex positions, normals and tangents when the topology and the presence of
   normal and tangent arrays stay the same.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
