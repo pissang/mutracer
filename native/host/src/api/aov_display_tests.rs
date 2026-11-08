@@ -58,7 +58,7 @@ fn aov_display_options_validate_ranges_without_a_device() {
     assert_eq!(defaults.aov.depth_range, [0., 10.]);
 }
 fn display_channels(backend: Backend) {
-    let _lock = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _lock = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(backend);
     engine.display().set_size(48, 32).unwrap();
     engine.set_scene(&plane()).unwrap();

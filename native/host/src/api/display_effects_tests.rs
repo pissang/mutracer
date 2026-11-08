@@ -2,9 +2,7 @@ use super::*;
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn display_effects_real_catcher_tracks_shared_targets_and_scene_edits() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let mut scene = crate::scene::tests::input();
         scene.extend([51u32, 1, 0, 0].into_iter().flat_map(u32::to_le_bytes));

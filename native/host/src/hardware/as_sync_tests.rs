@@ -6,7 +6,7 @@ use super::*;
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn large_and_small_blas_complete_before_tlas_encoding() {
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let gpu = crate::GpuDevice::with_backend(1).expect("GPU validation requires a working device");
     assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
     let triangles = 512 * 512;

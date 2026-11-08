@@ -43,9 +43,7 @@ impl Drop for EarlyFailure {
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_early_failure_keeps_filter_until_retirement_without_future_ticks() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let caller = std::thread::current().id();
     let (engine, render) =
         super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
@@ -147,9 +145,7 @@ impl CustomDenoiser for Failing {
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_failures_reject_frames_and_keep_original_images() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) =
         super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
     render.converge(ConvergeOptions::new(2)).unwrap();
@@ -185,9 +181,7 @@ fn resident_custom_failures_reject_frames_and_keep_original_images() {
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_shared_filter_has_isolated_target_ids_and_resize_generations() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, a) = super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
     let b = Render::new(
         &engine,

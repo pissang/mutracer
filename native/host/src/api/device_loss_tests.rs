@@ -5,9 +5,7 @@ use std::time::Duration;
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn device_loss_shared_host_callback_fails_all_engines_without_recovery() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -146,9 +144,7 @@ fn device_loss_shared_host_callback_fails_all_engines_without_recovery() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn device_loss_interrupts_converge_and_target_aot_waits_before_the_worker_finishes() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     for retarget in [false, true] {
         let engine = Engine::new(EngineOptions {
             backend: Backend::Software,

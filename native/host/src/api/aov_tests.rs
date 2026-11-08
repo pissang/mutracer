@@ -24,7 +24,7 @@ fn temporal_camera_orbits_with_extreme_clip_ranges_preserve_history() {
             frame.submit([], output).map(DenoiseOutput::Resident)
         }
     }
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
@@ -115,7 +115,7 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
     independent_surface_aovs(aov_test_backend());
 }
 fn independent_surface_aovs(backend: Backend) {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(backend);
     let mut descriptor = tests::lit_scene();
     let mut words: Vec<_> = descriptor
@@ -393,7 +393,7 @@ impl CustomDenoiser for AovFilter {
 #[test]
 #[ignore = "requires real GPU"]
 fn custom_filters_receive_only_declared_aovs_in_cpu_and_resident_modes() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
@@ -541,7 +541,7 @@ fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_moti
     accepted_temporal_frames(aov_test_backend());
 }
 fn accepted_temporal_frames(backend: Backend) {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(backend);
     let mut scene = tests::lit_scene();
     engine.display().set_size(16, 12).unwrap();
@@ -625,7 +625,7 @@ impl CustomDenoiser for RejectTemporal {
 #[test]
 #[ignore = "requires real GPU"]
 fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     let scene = tests::lit_scene();
     engine.display().set_size(16, 12).unwrap();
@@ -667,7 +667,7 @@ fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
 #[test]
 #[ignore = "requires real GPU"]
 fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     let mut words: Vec<_> = tests::lit_scene()
         .chunks_exact(4)
@@ -855,7 +855,7 @@ impl CustomDenoiser for HeldTemporal {
 fn temporal_cancel_replace_and_failure_keep_the_last_accepted_history() {
     use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
     use std::time::Duration;
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     for action in 0..3 {
         let engine = aov_engine(aov_test_backend());
         engine.display().set_size(16, 12).unwrap();
@@ -930,7 +930,7 @@ fn temporal_cancel_replace_and_failure_keep_the_last_accepted_history() {
 #[test]
 #[ignore = "requires real GPU"]
 fn temporal_record_binding_limit_rejects_before_allocation_and_preserves_beauty() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let adapters = Engine::adapters();
     let index = std::env::var("MUTRACER_TEST_ADAPTER")
         .map(|s| s.parse::<usize>().unwrap())
@@ -1049,7 +1049,7 @@ fn full_plane_scene() -> (
 #[test]
 #[ignore = "requires real GPU with a 256 MiB storage binding"]
 fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     let (scene, object, material) = full_plane_scene();
     let (object, material) = (object.aov_id(), material.aov_id());
@@ -1097,7 +1097,7 @@ fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
 #[ignore = "requires real GPU"]
 fn unsupported_reflectance_layers_report_invalid_coverage() {
     use crate::scene_api::OpenPbrMaterial;
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     let (mut scene, _, material) = full_plane_scene();
     let schema: serde_json::Value =
@@ -1197,7 +1197,7 @@ fn unsupported_reflectance_layers_report_invalid_coverage() {
 #[test]
 #[ignore = "requires a real GPU; optional driver pipeline-error reproduction"]
 fn aov_pipeline_failure_returns_an_error_and_preserves_beauty() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(Backend::Software);
     engine.display().set_size(48, 32).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
@@ -1246,7 +1246,7 @@ fn aov_pipeline_failure_returns_an_error_and_preserves_beauty() {
 #[test]
 #[ignore = "requires real GPU"]
 fn display_only_aovs_preserve_beauty_and_filter_and_export_without_beauty() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(24, 16).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
@@ -1388,7 +1388,7 @@ fn display_motion_settles_without_a_final_input_edit_or_beauty_sample() {
             &mut self.0
         }
     }
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(24, 16).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
@@ -1489,7 +1489,7 @@ fn display_motion_settles_without_a_final_input_edit_or_beauty_sample() {
 #[test]
 #[ignore = "requires real GPU"]
 fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let backend = aov_test_backend();
     let descriptor = tests::lit_scene();
     let camera_offset = u32::from_le_bytes(
@@ -1608,7 +1608,7 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
 fn primary_surface_semantics_web_fixture() {
     use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene, Texture};
     use glam::{Mat4, Vec3};
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let backend = aov_test_backend();
     let mut scene = Scene::new();
     let native_positions = vec![

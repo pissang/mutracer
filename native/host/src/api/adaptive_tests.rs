@@ -4,9 +4,7 @@ use crate::api::{Backend, PixelKind, tests::*};
 #[test]
 #[ignore = "requires real GPU"]
 fn adaptive_preview_includes_filter_latency_before_the_next_camera() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let engine = super::super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(64, 48).unwrap();
     let scene = lit_scene();
@@ -86,9 +84,7 @@ fn adaptive_preview_includes_filter_latency_before_the_next_camera() {
 #[test]
 #[ignore = "requires real GPU"]
 fn adaptive_oidn_feedback_waits_for_gpu_completion_and_excludes_later_idle() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let engine = super::super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(512, 384).unwrap();
     engine.set_scene(&lit_scene()).unwrap();

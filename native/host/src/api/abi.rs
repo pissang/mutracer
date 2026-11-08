@@ -2505,9 +2505,7 @@ mod tests {
     }
     #[test]
     fn render_backend_selection_keeps_the_standalone_oidn_contract() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let Some(engine) = super::super::tests::software_engine(Backend::Software) else {
             return;
         };
@@ -2560,9 +2558,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn device_loss_owned_device_delivers_c_event_once_and_keeps_failure_sticky() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         struct Events {
             engine: u64,
             loss: u32,

@@ -20,9 +20,7 @@ mod parity_schedule_tests {
     #[test]
     #[ignore = "real GPU schedule event table"]
     fn display_schedule_event_table() {
-        let _guard = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::abi_test_lock();
         let table: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../tests/fixtures/display-schedule.json"
         ))

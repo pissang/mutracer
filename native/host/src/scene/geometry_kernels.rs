@@ -396,8 +396,8 @@ mod tests {
     }
     #[test]
     fn geometry_kernels_preserve_production_assets() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         runtime::run(|| {
             init_core();
             let mut inputs = vec![super::super::tests::input()];
@@ -445,8 +445,8 @@ mod tests {
     }
     #[test]
     fn geometry_kernels_match_shared_ts_bytes() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         runtime::run(|| {
             init_core();
             let base = super::super::tests::input();

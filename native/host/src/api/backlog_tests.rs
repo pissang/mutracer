@@ -52,9 +52,7 @@ fn custom_output_rejects_bad_lengths_and_nonfinite_values() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn backlog_custom_cpu_and_gpu_outputs() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     engine.set_scene(&crate::scene::tests::input()).unwrap();
     engine.update().unwrap();
@@ -92,9 +90,7 @@ impl CustomDenoiser for Held {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn backlog_custom_cancel_clear_and_dispose_do_not_join_callbacks() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for action in [0, 1, 2, 3, 4] {
         let (engine, render) = fixture();
         engine.set_scene(&crate::scene::tests::input()).unwrap();
@@ -186,9 +182,7 @@ impl CustomDenoiser for Bad {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn backlog_filter_failures_and_finished_loop_replacement() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     engine.set_scene(&crate::scene::tests::input()).unwrap();
     engine.update().unwrap();

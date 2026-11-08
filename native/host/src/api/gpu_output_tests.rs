@@ -41,9 +41,7 @@ fn color_pass(context: PostProcessContext<'_>, color: wgpu::Color) -> Result<()>
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     assert!(
         render
@@ -272,9 +270,7 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn gpu_output_pass_failure_discards_commands_and_allows_callback_reentry() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     render.converge(ConvergeOptions::new(2)).unwrap();
     let display = engine.display();
@@ -363,9 +359,7 @@ fn gpu_output_pass_failure_discards_commands_and_allows_callback_reentry() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn hdr_passes_keep_extended_pixels_order_failure_and_sdr_exports_independent() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     render.converge(ConvergeOptions::new(2)).unwrap();
     let display = engine.display();

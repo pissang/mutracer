@@ -23,9 +23,7 @@ pub(super) fn fixture() -> (Engine, Arc<Render>) {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn backlog_compile_status_is_observable_on_actual_miss() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     let (entered, receive) = mpsc::channel();
     let (resume, resumed) = mpsc::channel();
@@ -47,9 +45,7 @@ fn backlog_compile_status_is_observable_on_actual_miss() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn clear_scene_diagnostics_and_cache_reuse() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture();
     assert_eq!(render.status(), RenderStatus::Idle);
     assert!(!engine.diagnostics().has_scene);
@@ -105,9 +101,7 @@ fn clear_scene_diagnostics_and_cache_reuse() {
 #[test]
 #[ignore = "requires a real GPU; device and scene diagnostics only"]
 fn material_texture_diagnostics_report_enabled_device_and_committed_scene() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let engine = Engine::new(EngineOptions {
         backend: Backend::Software,
     })

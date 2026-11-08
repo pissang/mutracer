@@ -113,9 +113,7 @@ fn finish_filter(render: &Render) {
 #[test]
 #[ignore = "requires real GPU inference with oidn-webgpu-native"]
 fn viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let (size, images, center) = fixture();
     let engine = Engine::new(EngineOptions {
         backend: Backend::Software,
@@ -241,9 +239,7 @@ fn viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr() {
 #[test]
 #[ignore = "requires real GPU inference with oidn-webgpu-native"]
 fn viewer_display_oidn_models_keep_alpha_and_reject_stale_color_settings() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let size = [65, 33];
     let images: [Vec<f32>; 3] = std::array::from_fn(|kind| {
         (0..size[0] * size[1])

@@ -433,9 +433,7 @@ mod tests {
     #[test]
     #[ignore = "requires native OIDN on a real GPU"]
     fn accumulated_inputs_match_the_documented_rust_api_and_retained_outputs() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let gpu = GpuDevice::with_backend(0).unwrap();
         let size = [17, 13];
         let samples = 4;

@@ -5,7 +5,7 @@ use crate::*;
 #[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() {
-    let _lock = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
         let Some(gpu) = test_gpu(backend) else {
             continue;

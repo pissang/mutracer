@@ -58,9 +58,7 @@ fn near(values: &[f32], expected: f32) {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchanged() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let engine = Engine::new(EngineOptions { backend }).unwrap();
         let center = DepthSampleArea {
@@ -310,9 +308,7 @@ fn depth_samples_follow_committed_scene_camera_and_leave_render_outputs_unchange
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn surface_picking_uses_source_ids_alpha_and_discards_stale_camera_queries() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let engine = Engine::new(EngineOptions { backend }).unwrap();
         assert_eq!(

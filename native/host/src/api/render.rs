@@ -3625,9 +3625,7 @@ mod cancellation_tests {
 
     #[test]
     fn rejected_targets_retain_only_completed_cancelled_samples() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let Some(engine) = software_engine(Backend::Software) else {
             return;
         };
@@ -3703,9 +3701,7 @@ mod cancellation_tests {
     }
     #[test]
     fn rejected_scenes_keep_previous_batch_capture_and_events() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let Some(engine) = software_engine(Backend::Software) else {
             return;
         };
@@ -3751,9 +3747,7 @@ mod cancellation_tests {
 
     #[test]
     fn converge_target_failure_captures_retained_samples_once() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let Some(engine) = software_engine(Backend::Software) else {
             return;
         };
@@ -3795,9 +3789,7 @@ mod oidn_webgpu_tests {
     #[test]
     #[ignore = "requires real GPU inference with oidn-webgpu-native"]
     fn gpu_schedules_reuse_program_resize_and_discard_lost_device_results() {
-        let _test = crate::ABI_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _test = crate::abi_test_lock();
         let engine = Engine::new(super::super::EngineOptions {
             backend: Backend::Software,
         })

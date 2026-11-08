@@ -48,9 +48,7 @@ extern "C" fn clear_pass(context: *const PassContext, user: *mut c_void) -> i32 
 #[test]
 #[ignore = "requires a real Vulkan GPU (macOS: vulkan-interop feature + MUTRACER_TEST_VULKAN_LIBRARY)"]
 fn external_vulkan_device_images_and_native_post_process() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let instance_retired = Box::new(AtomicU32::new(0));
     let device_retired = Box::new(AtomicU32::new(0));
     let entry = unsafe {

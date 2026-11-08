@@ -42,7 +42,7 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
     Ok(())
 }
 fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
-    let _entry = ENTRY_LOCK.try_lock().map_err(|_| "Native core is active")?;
+    let _entry = crate::try_entry_lock().map_err(|_| "Native core is active")?;
     let (mut scene, mut assets) = if hardware {
         scene::prepare_hardware(input)?
     } else {
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     #[ignore = "requires real hardware ray queries"]
     fn hardware_shadow_excludes_only_the_origin_primitive() {
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _entry = crate::entry_lock();
         let gpu = GpuDevice::with_backend(1).unwrap();
         assert!(gpu.hardware_ray_query);
         // Exercise opaque closest-hit specialization and candidate-filtered

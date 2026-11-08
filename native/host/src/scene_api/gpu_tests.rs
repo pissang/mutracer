@@ -804,7 +804,7 @@ fn selected_adapter_renders_4k_and_environment_controls() {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn openpbr_parameter_commits_match_full_on_both_backends() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let mut scene = Scene::new();
         let mut geometry =
@@ -944,7 +944,7 @@ fn openpbr_parameter_commits_match_full_on_both_backends() {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn openpbr_first_use_and_transport_changes_keep_full_fallback() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let mut scene = Scene::new();
         let g = scene
@@ -1113,7 +1113,7 @@ fn assert_material_hdr(retained: &Render, full: &Render, a: &[f32], b: &[f32], l
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn recreated_mesh_identity_commit_matches_fresh_on_both_backends() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         let mut scene = Scene::new();
         let g = scene

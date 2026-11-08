@@ -25,9 +25,7 @@ impl CustomDenoiser for ResidentCpuOutput {
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_cpu_output_publishes_the_same_frame_acceptance() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture(native_backend());
     let (send, receive) = mpsc::channel();
     render
@@ -55,9 +53,7 @@ fn resident_custom_cpu_output_publishes_the_same_frame_acceptance() {
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_snapshot_covers_images_larger_than_one_dispatch_dimension() {
     use wgpu::util::DeviceExt;
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, _) = fixture(native_backend());
     let gpu = &engine.inner.gpu;
     // The old 64-lane 1D dispatch exceeded the 65535-workgroup limit here.
@@ -308,9 +304,7 @@ pub(super) fn fixture(backend: wgpu::Backends) -> (Engine, Render) {
 #[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn resident_custom_identity_and_transform_use_registration_and_display_without_readbacks() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
         if cfg!(target_os = "macos")
             || (cfg!(target_os = "linux") && backend == wgpu::Backends::DX12)
@@ -401,9 +395,7 @@ impl CustomDenoiser for Held {
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_cancel_replace_and_dispose_reject_without_joining_submitted_work() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for action in 0..3 {
         let (engine, render) = fixture(native_backend());
         let render = Arc::new(render);
@@ -444,9 +436,7 @@ fn resident_custom_cancel_replace_and_dispose_reject_without_joining_submitted_w
 #[test]
 #[ignore = "requires real GPU; run npm run native:ci:gpu"]
 fn resident_custom_device_loss_rejects_a_submitted_unpublished_result() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let (engine, render) = fixture(native_backend());
     let loss = engine.device_loss_notifier();
     engine

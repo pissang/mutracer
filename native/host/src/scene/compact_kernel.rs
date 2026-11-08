@@ -399,8 +399,8 @@ mod tests {
     }
     #[test]
     fn compact_records_match_compiled_shared_ts_bytes() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         runtime::run(|| {
             init_core();
             for case in 0..64 {
@@ -486,8 +486,8 @@ mod tests {
             println!("SKIP compact large-scene oracle: set MUTRACER_COMPACT_MODEL");
             return;
         };
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         let imported = crate::scene_api::Scene::import_gltf(path).unwrap();
         let input = imported.scene.descriptor().unwrap();
         drop(imported);

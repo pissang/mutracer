@@ -149,9 +149,7 @@ fn fresh(
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn alpha_strategies_split_primary_coverage_and_keep_shared_targets_independent() {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let front = [0.8f32, 0.2, 0.1, 1.];
     let back = [0.1f32, 0.3, 0.8, 1.];
     let mixed = std::array::from_fn(|i| back[i] * 0.75 + front[i] * 0.25);

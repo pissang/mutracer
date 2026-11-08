@@ -879,9 +879,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
 
 #[test]
 fn renders_match_fresh_l0_contexts_across_edits_settings_and_sizes() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     if let Some(notes) = primary_oracle(Backend::Software) {
         for note in notes {
             println!("software oracle: {note}");
@@ -893,9 +891,7 @@ fn renders_match_fresh_l0_contexts_across_edits_settings_and_sizes() {
 #[test]
 #[ignore]
 fn hardware_renders_match_fresh_l0_contexts() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let engine = software_engine(Backend::Hardware).unwrap();
     assert!(engine.info().hardware_ray_query, "no hardware ray queries");
     drop(engine);
@@ -1116,9 +1112,7 @@ fn shared_scene_oracle(backend: Backend) -> Option<Vec<String>> {
 
 #[test]
 fn shared_scene_renders_match_fresh_l0_contexts() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     if let Some(notes) = shared_scene_oracle(Backend::Software) {
         for note in notes {
             println!("software S2 oracle: {note}");
@@ -1130,9 +1124,7 @@ fn shared_scene_renders_match_fresh_l0_contexts() {
 #[test]
 #[ignore]
 fn hardware_shared_scene_renders_match_fresh_l0_contexts() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     for note in shared_scene_oracle(Backend::Hardware).unwrap() {
         println!("hardware S2 oracle: {note}");
     }
@@ -1162,9 +1154,7 @@ fn next_preview_scale_matches_the_browser_rule() {
 
 #[test]
 fn adaptive_preview_uses_collected_frame_before_the_next_camera_commit() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
         adaptive_moving_preview(backend);
     }
@@ -1260,9 +1250,7 @@ fn adaptive_moving_preview(backend: Backend) {
 
 #[test]
 fn adaptive_resolution_follows_frame_time_without_preparation() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1375,9 +1363,7 @@ fn adaptive_resolution_follows_frame_time_without_preparation() {
 
 #[test]
 fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1466,9 +1452,7 @@ fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
 
 #[test]
 fn converge_matches_l0_and_reports_progress_and_cancellation() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1566,9 +1550,7 @@ fn converge_matches_l0_and_reports_progress_and_cancellation() {
 
 #[test]
 fn fallback_is_presented_until_the_render_is_complete() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1669,9 +1651,7 @@ fn fallback_is_presented_until_the_render_is_complete() {
 
 #[test]
 fn invalid_scenes_report_errors_without_stopping_other_renders() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1719,9 +1699,7 @@ fn invalid_scenes_report_errors_without_stopping_other_renders() {
 /// Needs `MUTRACER_OIDN_LIBRARY`; uses CPU OIDN so the direct filter is a byte oracle.
 #[test]
 fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(library) = std::env::var_os("MUTRACER_OIDN_LIBRARY") else {
         return;
     };
@@ -1821,9 +1799,7 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
 
 #[test]
 fn sample_cap_changes_images_only_for_zsobol() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     if software_engine(Backend::Software).is_none() {
         return;
     }
@@ -1897,9 +1873,7 @@ fn refine_until_in_flight(render: &Render) {
 
 #[test]
 fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -1974,9 +1948,7 @@ fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context(
 
 #[test]
 fn callbacks_may_call_back_into_the_api() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -2029,9 +2001,7 @@ fn callbacks_may_call_back_into_the_api() {
 
 #[test]
 fn raising_max_samples_continues_except_for_zsobol() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -2123,9 +2093,7 @@ fn denoise_schedules_choose_the_browser_sample_targets() {
 /// Needs `MUTRACER_OIDN_LIBRARY`; CPU OIDN makes direct filtering a byte oracle.
 #[test]
 fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(library) = std::env::var_os("MUTRACER_OIDN_LIBRARY") else {
         return;
     };
@@ -2225,9 +2193,7 @@ fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
 /// stay presented through later captures.
 #[test]
 fn denoise_current_filters_paused_samples_and_progressive_resumes() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(library) = std::env::var_os("MUTRACER_OIDN_LIBRARY") else {
         return;
     };
@@ -2356,9 +2322,7 @@ fn denoise_current_filters_paused_samples_and_progressive_resumes() {
 /// Arc as a change without comparing bytes.
 #[test]
 fn shared_scenes_are_committed_without_copies() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -2412,9 +2376,7 @@ fn shared_scenes_are_committed_without_copies() {
 #[test]
 #[ignore]
 fn hardware_loop_against_fresh_l0_contexts() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let iterations: usize = std::env::var("MT_LOOP_ITERATIONS")
         .ok()
         .and_then(|v| v.parse().ok())

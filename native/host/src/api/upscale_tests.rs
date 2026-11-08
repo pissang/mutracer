@@ -18,9 +18,7 @@ fn channel_range(pixels: &[u8]) -> [[u8; 2]; 4] {
 }
 
 fn display_aovs_and_upscale(backend: Backend) {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let engine = engine(backend, [48, 32]);
     let fixed = Render::new(
         &engine,
@@ -153,9 +151,7 @@ fn display_aovs_and_upscale(backend: Backend) {
 
 /// Larger inputs are area averaged and same-size inputs copied.
 fn downsample_and_copy(backend: Backend) {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let engine = engine(backend, [24, 16]);
     let render = Render::new(
         &engine,
@@ -248,9 +244,7 @@ fn upscale_downsamples_and_copies() {
 /// While display AOV pipelines compile, sampling skips them and the upscale
 /// shows EASU alone; a finished render keeps refining until they are ready.
 fn display_aovs_compile_off_thread(backend: Backend) {
-    let _lock = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     let engine = engine(backend, [48, 32]);
     let render = Render::new(
         &engine,

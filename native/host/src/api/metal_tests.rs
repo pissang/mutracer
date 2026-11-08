@@ -86,7 +86,7 @@ mod arithmetic_tests {
     #[test]
     #[ignore = "requires a real Metal GPU; run npm run native:ci:gpu"]
     fn metal_hdr_transport_arithmetic_matches_ieee_f32() {
-        let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+        let _guard = crate::abi_test_lock();
         let gpu = crate::GpuDevice::with_backend(0).unwrap();
         assert_eq!(gpu.info.backend, wgpu::Backend::Metal);
         let mut pairs = Vec::<[u32; 2]>::new();
@@ -189,7 +189,7 @@ mod lifecycle_tests {
     #[test]
     #[ignore = "requires a real Metal GPU; run npm run native:ci:gpu"]
     fn metal_imports_reject_stale_state_and_device_loss_is_terminal() {
-        let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+        let _guard = crate::abi_test_lock();
         let raw = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
         let engine = unsafe {
             Engine::on_metal(
@@ -243,7 +243,7 @@ mod lifecycle_tests {
 #[test]
 #[ignore = "requires a real Metal GPU; run npm run native:ci:gpu"]
 fn completed_without_external_signal_reports_terminal_failure() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
     let engine = unsafe {
         Engine::on_metal(
@@ -289,7 +289,7 @@ fn completed_without_external_signal_reports_terminal_failure() {
 fn background_submissions_cannot_bypass_a_delayed_ready_signal() {
     use objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
     use std::time::{Duration, Instant};
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
     let engine = unsafe {
         Engine::on_metal(

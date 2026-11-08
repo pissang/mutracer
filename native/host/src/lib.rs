@@ -158,9 +158,35 @@ fn init_core() {
 // Diagnostic and blocking raw-scene operations serialize their probe state. The AOT heap
 // itself is confined to runtime.rs, independently of context/GPU operations.
 static ENTRY_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) fn entry_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENTRY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+pub(crate) fn try_entry_lock(
+) -> std::result::Result<
+    std::sync::MutexGuard<'static, ()>,
+    std::sync::TryLockError<std::sync::MutexGuard<'static, ()>>,
+> {
+    match ENTRY_LOCK.try_lock() {
+        Err(std::sync::TryLockError::Poisoned(error)) => Ok(error.into_inner()),
+        result => result,
+    }
+}
 // ABI tests share process-global AOT/registry state even on Rust's test workers.
 #[cfg(test)]
 static ABI_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialize tests that access process-global ABI state. The guard only protects
+/// ordering; GPU devices, engines and contexts belong to each test and are
+/// dropped with it. Recovering a poisoned guard therefore permits later tests
+/// to run while preserving the original failing test as a visible failure.
+#[cfg(test)]
+pub(crate) fn abi_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Textures a retained lighting update may recreate at a new shape.
 const RESIZABLE_TEXTURES: [usize; 4] = [
