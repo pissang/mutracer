@@ -55,4 +55,12 @@ describe('MaterialX graph import',()=>{
   const m=parseMaterialXGraph(doc('<image name="image" type="color3"><input name="file" type="filename" value="textures/light.png"/></image>','open_pbr_surface','<input name="emission_color" type="color3" nodename="image"/><input name="emission_luminance" type="float" value="2"/>'));
   expect(m.images.get('image')?.file).toBe('textures/light.png');expect(m.warnings.some(s=>s.includes('Lit emission'))).toBe(true);
  });
+ it('ignores exporter inputs that have no effect and still reports active ones',()=>{
+  const image=(extra:string)=>`<texcoord name="uv" type="vector2"/><image name="rough" type="float"><input name="texcoord" type="vector2" nodename="uv"/><input name="file" type="filename" value="r.png"/>${extra}</image><normal name="n" type="vector3"><input name="space" type="string" value="world"/></normal>`;
+  const inputs=(rotation:string)=>`<input name="specular_roughness" type="float" nodename="rough"/><input name="specular_rotation" type="float" value="${rotation}"/><input name="coat_normal" type="vector3" nodename="n"/>`;
+  const quiet=parseMaterialXGraph(doc(image('<input name="layer" type="string" value=""/><input name="frameoffset" type="integer" value="0"/><input name="frameendaction" type="string" value="constant"/>'),'standard_surface',inputs('0')));
+  expect(quiet.warnings).toEqual([]);expect(Object.keys(quiet.graph!.terminal)).toEqual(['specularRoughness']);
+  const active=parseMaterialXGraph(doc(image('<input name="frameoffset" type="integer" value="2"/>'),'standard_surface',inputs('0.3')));
+  expect(active.warnings).toEqual(expect.arrayContaining([expect.stringContaining('frameoffset'),expect.stringContaining('specularRotation')]));
+ });
 });

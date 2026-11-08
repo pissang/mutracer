@@ -272,7 +272,10 @@ function MaterialGraphStatus(){
   const [state,setState]=useState<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>();
   useEffect(()=>{const read=()=>setState(getEngine()?.engine.getDiagnostics());read();const timer=setInterval(read,250);return()=>clearInterval(timer);},[]);
   const graph=state?.materialGraphs;
+  const details=graph?.diagnostics.map(d=>`${d.node}${d.port?`.${d.port}`:''}: ${d.message}`).join('\n')??'';
+  useEffect(()=>{if(details)console.warn(`Material graph diagnostics\n${details}`);},[details]);
   if(!graph||graph.status==='idle')return null;
   const label=graph.status==='compiling'?'Compiling material graph':graph.status==='ready'?'Material graph ready':'Material graph fallback';
-  return <div role="status"><p>{label}</p>{graph.diagnostics.map((d,i)=><p key={i}>{d.node}{d.port?`.${d.port}`:''}: {d.message}</p>)}</div>;
+  const count=graph.diagnostics.length;
+  return <div role="status"><p>{label}{count?` · ${count} unsupported ${count===1?'part':'parts'} (see console)`:''}</p></div>;
 }

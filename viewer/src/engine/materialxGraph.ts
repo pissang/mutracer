@@ -12,6 +12,9 @@ const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled
 const camel=(s:string)=>s.toLowerCase().replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase());
 const input=(e:Element,name:string)=>e.children.find(c=>c.tag==='input'&&c.attrs.name===name);
 const child=(e:Element,name:string)=>e.children.find(c=>c.attrs.name===name && !['input','output'].includes(c.tag));
+const inactiveImageInputs:Record<string,Input['value']>={layer:'',framerange:'',frameoffset:0,frameendaction:'constant'};
+// Unsupported surface inputs that match the default shading frame.
+const defaultFrame:Record<string,string>={coatNormal:'normal',tangent:'tangent'};
 const path=(e:Element):string=>e.parent&&e.parent.tag!=='materialx'?`${path(e.parent)}/${e.attrs.name??e.tag}`:e.attrs.name??e.tag;
 interface Context {prefix?:string;interfaces?:Record<string,Input>;cache:Map<Element,string>}
 /** Viewer-only XML adapter. Unknown graph nodes remain authored nodes so the
@@ -68,6 +71,9 @@ class Reader {
         const id=(ctx.prefix??'')+path(e);ctx.cache.set(e,id);
         const inputs:Record<string,Input>={};
         for(const port of e.children.filter(c=>c.tag==='input'))inputs[port.attrs.name]=this.resolve(port,{type:port.attrs.type as Type},ctx);
+        // Exporters write image inputs the graph does not implement; at their
+        // stdlib defaults they change nothing, so drop them instead of failing.
+        for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
         let type=e.attrs.type as Type;
         if(type as string==='multioutput')type=e.tag==='gltf_colorimage'?'color4':inputs.in?.type??'vector3';
         const category=e.tag==='absval'?'abs':e.tag;
@@ -187,6 +193,14 @@ export interface MaterialXGraphImport {
     warnings:string[];
     coverage:'complete'|'partial'|'fallback';
 }
+function inactive(nodes:Node[],port:string,edge:Edge,normalized:ReturnType<typeof normalizeGraph>,dynamic:boolean,probe:string){
+    const source=nodes.find(n=>n.id===edge.node);
+    if(source&&source.category===defaultFrame[port]){
+        const space=source.inputs?.space;
+        return !!space&&!space.connection&&space.value==='world';
+    }
+    return !normalized.diagnostics.length&&!dynamic&&evaluateGraph(normalized)[probe].every(v=>v===0);
+}
 /** Parses one material; resource loading remains owned by the viewer package loader. */
 export function parseMaterialXGraph(text:string,materialName?:string):MaterialXGraphImport {
     const root=parseXml(text);if(root.tag!=='materialx')throw Error('Not a MaterialX document');
@@ -209,6 +223,8 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         if(!normalized.diagnostics.length&&!dynamic&&canStore&&port!=='normal'){
             const folded=evaluateGraph(normalized)[probe??port];
             (values as Record<string,unknown>)[property]=a.type==='boolean'?Boolean(folded[0]):width(a.type)===1?folded[0]:folded;
+        }else if(!(port in terminalTypes)&&inactive(r.nodes,port,edge,normalized,dynamic,probe??port)){
+            // An unsupported input left at zero, or at the default frame, has no effect.
         }else terminal[port]=edge;
     }
     const graph=Object.keys(terminal).length?new MaterialGraph({nodes:r.nodes,terminal}):undefined;

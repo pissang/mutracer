@@ -1335,7 +1335,9 @@ export class ViewerEngine {
         }));
       } catch { /* Unsupported surface families retain the neutral material. */ }
       await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null);
-      showToast(warnings.length?`Imported ${name}. ${warnings.join('; ')}`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
+      const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
+      if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
+      showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
