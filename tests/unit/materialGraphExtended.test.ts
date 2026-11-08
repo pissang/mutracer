@@ -114,10 +114,15 @@ describe('opacity graph commits',()=>{
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])[offset]).toBe(0);
         const key=normalizeGraph(graph).key;graph.setInput('a','value',f(0.9));expect(normalizeGraph(graph).key).toBe(key);
     });
+    it('rejects unsupported material projection for UV-dependent opacity',()=>{
+        const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}],terminal:{opacity:{node:'a'}}});
+        const state=new MaterialGraphState('webgpu'),material=new OpenPBRMaterial({graph});state.request([material]);state.install(state.requested,state.revision);material.uvProjection='triplanar';state.request([material]);expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-projection',port:'opacity'}));expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
+    });
     it('locates frame-dependent shadow coverage rather than accepting inconsistent shadows',()=>{
         const graph=new MaterialGraph({nodes:[{id:'n',category:'normal',type:'vector3'},{id:'a',category:'extract',type:'float',inputs:{in:{type:'vector3',connection:{node:'n'}}}}],terminal:{opacity:{node:'a'}}});
         const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph})]);
         expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-context',node:'n',port:'opacity'}));
+        state.request([new OpenPBRMaterial({graph,alphaMode:'opaque'})]);expect(state.diagnostics).toEqual([]);
     });
 });
 

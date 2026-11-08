@@ -66,13 +66,15 @@ export class MaterialGraphState {
                 // switching to an unsupported lit-emitter context.
                 this.constantFallback.add(material);
             }
-            if ('opacity' in graph.terminal) {
-                const seen=new Set<number>();
+            if ('opacity' in graph.terminal && material.alphaMode !== 'opaque') {
+                const seen=new Set<number>();let usesUv=false;
                 const check=(index:number) => { if(seen.has(index)||index<0)return;seen.add(index);const node=graph.nodes[index];
+                    if(node.category==='texcoord'||Object.values(node.inputs).some(i=>i.geometry==='texcoord'))usesUv=true;
                     if(['normal','tangent','bitangent','normalmap','gltf_normalmap','transformnormal'].includes(node.category)||Object.values(node.inputs).some(i=>i.geometry&&i.geometry!=='texcoord'&&i.geometry!=='objectPosition'))graph.diagnostics.push({code:'unsupported-opacity-context',message:'Opacity graphs support UV and position inputs; shading-frame inputs are not available to shadow traversal.',node:node.id,port:'opacity'});
                     for(const i of Object.values(node.inputs))if(i.node!==undefined)check(i.node);
                 };
                 check(graph.terminal.opacity.node);
+                if(usesUv&&material.uvProjection!=='none'){this.constantFallback.add(material);graph.diagnostics.push({code:'unsupported-opacity-projection',message:'UV-dependent opacity graphs require material uvProjection none; use graph coordinates for procedural coverage.',node:graph.nodes[graph.terminal.opacity.node]?.id,port:'opacity'});}
             }
             diagnostics.push(...graph.diagnostics.map(d => ({...d,materialId:material.aovId})));
             // Preserve the successful graph for this slot after validation failure.
