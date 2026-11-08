@@ -256,7 +256,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     crate::memory_budget::check(bytes.len(), "Scene descriptor")?;
     let w = Words(bytes);
     let version = w.u(h::VERSION);
-    if !matches!(version, 5..=7) || w.u(h::LENGTH) != w.len() {
+    if !(5..=crate::layout::version::SCENE).contains(&version) || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
     let texture_words = if version >= 7 { t::WORDS } else { t::WORDS - 1 };
@@ -2783,6 +2783,9 @@ pub(crate) mod tests {
     #[test]
     fn raw_descriptor_validation_preserves_supported_input() {
         assert!(validate(&input()).is_ok());
+        for version in [7, 8] {
+            assert!(validate(&change(&input(), h::VERSION, version)).is_ok());
+        }
     }
     #[test]
     fn retired_scene_versions_are_rejected() {

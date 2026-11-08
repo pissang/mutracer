@@ -1,4 +1,4 @@
-# Native scene descriptor format (v7)
+# Native scene descriptor format (v8)
 
 `mt_context_commit` and `mt_engine_set_scene` take a scene as one byte buffer:
 the raw scene descriptor. This page is the reference for its layout, values and
@@ -81,8 +81,8 @@ the rules the validator enforces.
 
 ### Header
 
-- The encoder writes `MT_VERSION_SCENE` (7); the validator accepts versions 5
-  to 7. Version 5 uses 28-word analytic-light records; versions 6 and 7 use
+- The encoder writes `MT_VERSION_SCENE` (8); the validator accepts versions 5
+  to 8. Version 5 uses 28-word analytic-light records; versions 6–8 use
   32-word records. Versions 5 and 6 use 12-word texture records; version 7 adds
   the texture `udim` word for 13-word records. `total_words` is the descriptor
   length. `quality_flags` accepts only the `MT_QUALITY_*` bits.

@@ -122,5 +122,5 @@
 #define MT_EXTENSION_Y 2u
 #define MT_EXTENSION_Z 3u
 #define MT_EXTENSION_WORDS 4u
-#define MT_VERSION_SCENE 7u
+#define MT_VERSION_SCENE 8u
 #endif

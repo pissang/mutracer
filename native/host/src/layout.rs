@@ -225,7 +225,7 @@ pub mod packet_entry {
     pub const WORDS: usize = 8;
 }
 pub mod version {
-    pub const SCENE: usize = 7;
+    pub const SCENE: usize = 8;
     pub const RESOURCE_PACKET: usize = 1;
     pub const RESOURCE_WRITES: usize = 3;
     pub const TARGET_PACKET: usize = 4;

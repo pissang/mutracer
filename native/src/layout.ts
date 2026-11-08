@@ -225,7 +225,7 @@ export const PACKET_ENTRY = {
   "WORDS": 8
 } as const;
 export const VERSION = {
-  "SCENE": 7,
+  "SCENE": 8,
   "RESOURCE_PACKET": 1,
   "RESOURCE_WRITES": 3,
   "TARGET_PACKET": 4,
