@@ -474,8 +474,9 @@ no effect, such as unsupported controls left at zero or image frame inputs at
 their defaults, are ignored. Other unsupported graph inputs use the library's
 fallback behavior. When a network
 can also be baked into ordinary material maps, those maps remain the
-fallback during compilation or rejection. Disney Principled and Simple Hair
-surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
+fallback during compilation or rejection. If WebGL 2 remains on “compiling graph”
+after convergence, increase the sample target to resume installation.
+Disney Principled and Simple Hair surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
 Subsurface, displacement and tangent graph inputs and lit emission graphs retain
 the limits described above. To load `.mtlx` files, use the viewer; the library's
