@@ -10,7 +10,7 @@ import {
 import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
 import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
-import { isMaterialXDrop, materialDropTarget } from '../../engine/materialDrop';
+import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -201,7 +201,8 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
   const upload = (slot: TextureKey, file: File | undefined) => {
     if (slot === 'displacementMap' && webgl) return;
     if (!file) return;
-    if (!file.type.startsWith('image/')) return showToast(`${file.name} is not an image`, 'error');
+    const error = textureDropError([file]);
+    if (error) return showToast(error, 'error');
     void getEngine()?.setMaterialTexture(material.id, slot, file, `${label(slot)} texture`);
   };
   return (
@@ -220,16 +221,19 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
             onDragOver={(e) => {
               if (!e.dataTransfer.types.includes('Files')) return;
               e.preventDefault();
-              e.stopPropagation();
-              setDropTarget(key);
+              if (!disabled) setDropTarget(key);
             }}
-            onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTarget((t) => (t === key ? null : t)); }}
             onDrop={(e) => {
               setDropTarget(null);
+              // MaterialX packages (including texture sidecars) belong to the panel.
               if (isMaterialXDrop(toPathedFiles(e.dataTransfer.files)) || Array.from(e.dataTransfer.items).some(i => i.webkitGetAsEntry?.()?.isDirectory)) return;
               e.preventDefault();
               e.stopPropagation();
               setDropTarget(null);
+              if (disabled) return showToast('Displacement requires WebGPU', 'error');
+              const error = textureDropError(Array.from(e.dataTransfer.files));
+              if (error) return showToast(error, 'error');
               upload(key, e.dataTransfer.files[0]);
             }}
           >
@@ -273,7 +277,7 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
           </div>
         );
       })}
-      <input ref={input} type="file" hidden accept="image/png,image/jpeg,image/webp,image/avif"
+      <input ref={input} type="file" hidden accept={TEXTURE_ACCEPT}
         onChange={(e) => {
           if (target.current) upload(target.current, e.currentTarget.files?.[0]);
           e.currentTarget.value = '';

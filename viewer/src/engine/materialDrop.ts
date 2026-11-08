@@ -16,3 +16,15 @@ export function materialDropTarget(
   return surface === 'viewport' ? hit ?? selected : selected;
 }
 
+export const TEXTURE_ACCEPT = 'image/png,image/jpeg,image/webp,image/avif';
+const imageTypes = new Set(TEXTURE_ACCEPT.split(','));
+
+/** The file picker and drops accept the same browser-decodable image formats. */
+export function textureDropError(files: File[]): string | null {
+  if (files.length !== 1) return 'Drop one image on a texture slot';
+  const file = files[0];
+  if (!imageTypes.has(file.type.toLowerCase()) || !/\.(png|jpe?g|webp|avif)$/i.test(file.name)) {
+    return 'Use a PNG, JPEG, WebP or AVIF image';
+  }
+  return null;
+}

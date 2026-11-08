@@ -7,7 +7,7 @@ vi.hoisted(() => {
 });
 import { ViewerEngine } from '../src/engine/ViewerEngine';
 import { useViewer } from '../src/store';
-import { isMaterialXDrop, materialDropTarget } from '../src/engine/materialDrop';
+import { isMaterialXDrop, materialDropTarget, textureDropError } from '../src/engine/materialDrop';
 
 const hit = { objectId: 'other-object', materialId: 'other', name: 'Other material' };
 const selected = { objectId: 'selected-object', materialId: 'selected', name: 'Selected material' };
@@ -49,4 +49,14 @@ it('reads GPU identities without changing selection and discards a replaced scen
   expect(engine.select).not.toHaveBeenCalled();
   engine.engine._pick.mockImplementation(async () => { engine.loadToken++; return { object: 42, material: 84 }; });
   expect(await engine.pickMaterialTarget(35, 120)).toBeNull();
+});
+it('accepts only one image in the same formats as the texture picker', () => {
+  for (const [extension, type] of [['png', 'image/png'], ['jpg', 'image/jpeg'], ['webp', 'image/webp'], ['avif', 'image/avif']]) {
+    expect(textureDropError([new File([], `texture.${extension}`, { type })])).toBeNull();
+  }
+  expect(textureDropError([new File([], 'shader.mtlx')])).toMatch(/PNG/);
+  expect(textureDropError([new File([], 'texture.svg', { type: 'image/svg+xml' })])).toMatch(/PNG/);
+  expect(textureDropError([new File([], 'fake.exe', { type: 'image/png' })])).toMatch(/PNG/);
+  expect(textureDropError([])).toMatch(/one image/);
+  expect(textureDropError([new File([], 'a.png'), new File([], 'b.png')])).toMatch(/one image/);
 });
