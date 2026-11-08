@@ -1603,10 +1603,12 @@ fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates)
 /// Validated light update on an idle context; used by incremental commit.
 unsafe fn update_light_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
-    if input.is_null() || length != 128 {
+    // Four record words precede one current-version light record.
+    let expected = (4 + layout::light::WORDS) * layout::WORD_BYTES;
+    if input.is_null() || length != expected {
         return Err(fail(
             Status::InvalidArgument,
-            "Light descriptor must contain exactly 128 bytes",
+            format!("Light descriptor must contain exactly {expected} bytes"),
         ));
     }
     let bytes = unsafe { std::slice::from_raw_parts(input, length) };

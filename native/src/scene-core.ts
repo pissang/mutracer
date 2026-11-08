@@ -870,7 +870,9 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
 
 function prepareNativeLightSampling(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[], environmentPower: number) {
   const lighting = prepareSceneLightSampling(lights, emissive, environmentPower, 4096);
-  const lightUniform = new Float32Array(Math.max(1, lights.length) * 24);
+  // Reserve 64 lights so adding or removing lights below that count keeps the
+  // resource size and stays an incremental light-list update.
+  const lightUniform = new Float32Array(Math.max(64, lights.length) * 24);
   lightUniform.set(packSceneAnalyticLights(lights, table.lightTexturesIndices, lighting.analyticPmfs, i => lighting.profiles.offsets[i]));
   return {...lighting, lightUniform};
 }

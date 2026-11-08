@@ -57,6 +57,13 @@ async function verifyScene(input, directory, variant, capture = true) {
             reference = new Uint8Array(cameraBlock.buffer, 0, 144);
         }
         const native = records.get(id);
+        if (id === 8 && reference.length <= native.length) {
+            // Web sizes analytic-light storage to the light count; native reserves
+            // 64 lights for incremental light-list edits, so the rest stays zero.
+            const padded = new Uint8Array(native.length);
+            padded.set(reference);
+            reference = padded;
+        }
         if (!Buffer.from(reference).equals(native)) {
             writeFileSync(resolve(directory, `reference-${id}.bin`), reference);
             const first = native.findIndex((v, i) => v !== reference[i]);

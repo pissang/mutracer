@@ -525,17 +525,24 @@ fn light_steps(a: &Words, b: &Words, next: &[u8], steps: &mut Vec<Step>) -> Opti
     if a.u(h::ENVIRONMENT_TEXTURE) != b.u(h::ENVIRONMENT_TEXTURE) {
         return None;
     }
-    let mut list = a.u(h::LIGHT_COUNT) != b.u(h::LIGHT_COUNT);
+    // Scene v5 light records are 28 words; later versions append extension words.
+    let stride = |w: &Words| if w.u(h::VERSION) < 6 { 28 } else { l::WORDS };
+    let words = stride(b);
+    let mut list =
+        a.u(h::LIGHT_COUNT) != b.u(h::LIGHT_COUNT) || stride(a) != words && b.u(h::LIGHT_COUNT) > 0;
     let mut single = Vec::new();
     for i in 0..b.u(h::LIGHT_COUNT).min(a.u(h::LIGHT_COUNT)) {
+        if list {
+            break;
+        }
         let (ao, bo) = (
-            a.u(h::LIGHT_OFFSET) + i * l::WORDS,
-            b.u(h::LIGHT_OFFSET) + i * l::WORDS,
+            a.u(h::LIGHT_OFFSET) + i * words,
+            b.u(h::LIGHT_OFFSET) + i * words,
         );
         let ies = b.u(bo + l::IES_BYTES).div_ceil(4);
         let same_ies = a.u(ao + l::IES_BYTES) == b.u(bo + l::IES_BYTES)
             && same_span(a, a.u(ao + l::IES_OFFSET), b, b.u(bo + l::IES_OFFSET), ies)?;
-        if same_ies && (0..l::WORDS).all(|k| k == l::IES_OFFSET || a.u(ao + k) == b.u(bo + k)) {
+        if same_ies && (0..words).all(|k| k == l::IES_OFFSET || a.u(ao + k) == b.u(bo + k)) {
             continue;
         }
         // Type and attachment changes rebuild the list; the single-light path keeps them.
@@ -546,10 +553,13 @@ fn light_steps(a: &Words, b: &Words, next: &[u8], steps: &mut Vec<Step>) -> Opti
             list = true;
             continue;
         }
-        let mut words: Vec<u8> = b.span(bo, l::WORDS)?.to_vec();
-        words[l::TEXTURE * 4..(l::RESERVED + 1) * 4].fill(0);
+        // The single-light update always carries a current-size record; v5
+        // records leave the zeroed extension words at their defaults.
+        let mut light: Vec<u8> = b.span(bo, words)?.to_vec();
+        light.resize(l::WORDS * 4, 0);
+        light[l::TEXTURE * 4..(l::RESERVED + 1) * 4].fill(0);
         let mut bytes = record(&[1, i as u32, 0, 0]);
-        bytes.extend_from_slice(&words);
+        bytes.extend_from_slice(&light);
         single.push(Step::Light(bytes));
     }
     if list {
