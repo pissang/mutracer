@@ -627,6 +627,8 @@ export class WebGLDevice {
   private _viewport: [number, number, number, number] = [0, 0, 1, 1];
   private _viewportStack: Array<[number, number, number, number]> = [];
   private _programs = new Set<WebGLProgram>();
+  private _backgroundPrograms = new Set<WebGLProgram>();
+  private _backgroundSources = new Map<string, WebGLProgram>();
   private _parallel?: KHR_parallel_shader_compile;
   private _pendingPrograms = new Map<WebGLProgram, {shader: FragmentShader; shaders: WebGLShader[]}>();
   private _programErrors = new Map<WebGLProgram, Error>();
@@ -659,6 +661,7 @@ export class WebGLDevice {
     const fragment = composeFragment(shader, defines);
     const generationMs = performance.now() - startedAt;
     const source = fullscreenVertex + fragment;
+    if(shader.backgroundCompile) { const cached=this._backgroundSources.get(source); if(cached)return cached; }
     let hash = 2166136261;
     for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
     const creationStart = performance.now();
@@ -690,6 +693,7 @@ export class WebGLDevice {
       );
     }
     this._programs.add(program);
+    if(shader.backgroundCompile) { this._backgroundPrograms.add(program); this._backgroundSources.set(source,program); }
     this._compilationRecords.push({program, label: shader.name || 'WebGL program',
       bytes: new TextEncoder().encode(source).byteLength, lines: source.split('\n').length,
       fingerprint: (hash >>> 0).toString(16).padStart(8, '0'), startedAt,
@@ -712,6 +716,7 @@ export class WebGLDevice {
           .map(s => `${gl.getShaderInfoLog(s)}\n${gl.getShaderSource(s)}`).join('\n');
         const failure = new Error(`${pending.shader.name || 'WebGL program'}: ${gl.getProgramInfoLog(program)}${details ? '\n' + details : ''}`);
         this._programErrors.set(program, failure);
+        for(const [source,cached] of this._backgroundSources) if(cached===program)this._backgroundSources.delete(source);
         throw failure;
       }
     } finally {
@@ -724,7 +729,7 @@ export class WebGLDevice {
 
   /** Cumulative program compilation measurements used by preparation progress. */
   getShaderCompilationDiagnostics(): ShaderCompilationDiagnostics {
-    const now = performance.now(), records = this._compilationRecords;
+    const now = performance.now(), records = this._compilationRecords.filter(record=>!this._backgroundPrograms.has(record.program));
     for (const record of records) {
       if (record.completedAt === undefined && this.isProgramCompiled(record.program)) record.completedAt = now;
     }
@@ -756,8 +761,16 @@ export class WebGLDevice {
     };
   }
 
+  getProgramCompilationDiagnostics(program: WebGLProgram) {
+    const record=this._compilationRecords.find(item=>item.program===program);
+    if(!record)return;
+    return {sourceBytes:record.bytes,sourceGenerationTimeMs:record.generationMs,moduleCreationTimeMs:record.creationMs,
+      totalTimeMs:record.completedAt===undefined?undefined:record.completedAt-record.startedAt};
+  }
+
   isAllProgramCompiled() {
     for (const program of this._programs) {
+      if (this._backgroundPrograms.has(program)) continue;
       if (!this.isProgramCompiled(program)) {
         return false;
       }
@@ -795,6 +808,7 @@ export class WebGLDevice {
     this._programErrors.clear();
     this._programs.forEach((program) => this.gl.deleteProgram(program));
     this._programs.clear();
+    this._backgroundPrograms.clear(); this._backgroundSources.clear();
     this._compilationRecords = [];
     this.emptyTexture.dispose(this.gl);
   }

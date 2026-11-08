@@ -26,6 +26,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
   private readonly _renderer: WebGLDevice;
   private _bindings: WebGLProgramBindings;
   private _sourceShader: FragmentShader;
+  private _staged?: {shader: FragmentShader; bindings: WebGLProgramBindings};
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
   private _outputTextures = {} as Record<O, Texture2D>;
@@ -78,6 +79,16 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     ));
   }
 
+  stageShader(shader: FragmentShader) {
+    const sampled = this._samplingShader(shader, this._reserveCapacity,
+      {...shader.uniforms, ...this._bindings.uniforms}, {...shader.defines, ...this._bindings.defines});
+    this._staged = {shader, bindings: new WebGLProgramBindings(sampled)};
+  }
+  stagedReady() { return !!this._staged && this._renderer.isProgramCompiled(this._staged.bindings.getProgram(this._renderer)); }
+  stagedDiagnostics() { return this._staged && this._renderer.getProgramCompilationDiagnostics(this._staged.bindings.getProgram(this._renderer)); }
+  installStaged() { if(!this._staged)return; this._sourceShader=this._staged.shader; this._bindings=this._staged.bindings; this._staged=undefined; }
+  discardStaged() { this._staged=undefined; }
+
   reserveCapacity() {
     if (this._reserveCapacity) return;
     this._reserveCapacity = true;
@@ -99,6 +110,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures, scratch), ...shader.functions]}],
       main: shader.main});
     sampled.parallelCompile = shader.parallelCompile;
+    sampled.backgroundCompile = shader.backgroundCompile;
     return sampled;
   }
 
@@ -126,10 +138,12 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
   }
 
   setUniform(label: string, data: unknown) {
+    this._staged?.bindings.set(label, data);
     return this._bindings.set(label, data);
   }
 
   setUniforms(values: Record<string, unknown>) {
+    this._staged?.bindings.setUniforms(values);
     this._bindings.setUniforms(values);
   }
 
@@ -149,10 +163,12 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       if (!value) {
         if (name in this._bindings.defines) {
           this._bindings.deleteDefine(name);
+          this._staged?.bindings.deleteDefine(name);
           changed = true;
         }
       } else if (oldValue !== value) {
         this._bindings.setDefine(name, value);
+        this._staged?.bindings.setDefine(name, value);
         changed = true;
       }
     }

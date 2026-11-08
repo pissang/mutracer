@@ -1,3 +1,6 @@
+import {MaterialGraphState} from './materialGraph/state.js';
+import {materialGraphShader} from './materialGraph/shader.js';
+import {FragmentShader} from './shader.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
@@ -162,6 +165,10 @@ class WebGLRayTracePass {
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _membershipCache = new MeshMembershipCache();
   private _pendingMembershipData?: ReturnType<typeof updateMeshInstances>;
+  private _graphs?: MaterialGraphState;
+  get graphs() { return this._graphs ??= new MaterialGraphState('webgl'); }
+  private _graphProgramKey = '';
+  private _stagedGraphKey?: string;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _pendingGeometryUpdates = new Set<Geometry>();
@@ -338,9 +345,37 @@ class WebGLRayTracePass {
 
   preparePrograms() {
     this.prepare();
+    this._prepareGraphs();
     const main = this._mainPass.isProgramReady();
     const shadow = !this._hasShadowCatcher || this._shadowCatcherPass.isProgramReady();
     return main && shadow;
+  }
+
+  private _graphShader(shader: FragmentShader, plan = this.graphs.active) {
+    if(!plan.key)return shader;
+    const patched = new FragmentShader({...shader,
+      includes:[{defines:{},uniforms:{},main:'',functions:shader.functions}],
+      main:materialGraphShader(shader.main,plan,'webgl')});
+    patched.parallelCompile = true; patched.backgroundCompile = true; return patched;
+  }
+  private _prepareGraphs() {
+    if(!this.graphs.requested.key && !this.graphs.active.key)return;
+    const plan=this.graphs.candidate(this._mainPass.isProgramReady());
+    const key=plan.key;
+    if(key===this._graphProgramKey)return;
+    if(this._stagedGraphKey!==key){
+      if(this.graphs.status==='failed')return;
+      const shader=createRayTraceFragmentShader({channelIndependentLight:this._spectral,shareSpectralPrefix:this._spectral&&this._shareSpectralPrefix});
+      shader.parallelCompile=true; shader.backgroundCompile=true;
+      this._mainPass.stageShader(this._graphShader(shader,plan));this._stagedGraphKey=key;
+    }
+    try {
+      if(!this._mainPass.stagedReady())return;
+      if(key!==this.graphs.requested.key){this._mainPass.discardStaged();this._stagedGraphKey=undefined;return;}
+      this.graphs.compilation=this._mainPass.stagedDiagnostics();
+      this._mainPass.installStaged();this.graphs.install(plan,this.graphs.revision);this._graphProgramKey=key;this._stagedGraphKey=undefined;
+      this._materialData?.refreshGraphParameters();this._materialData?.setToPass(this._mainPass);
+    } catch(error) {this._mainPass.discardStaged();this._stagedGraphKey=undefined;this.graphs.fail(this.graphs.revision,error);}
   }
 
   createPass(
@@ -605,7 +640,7 @@ class WebGLRayTracePass {
   }
 
   getDiagnostics() {
-    return { textureAtlas: this._materialData?.textureAtlasStats };
+    return { textureAtlas: this._materialData?.textureAtlasStats, materialGraphs:this.graphs.diagnosticsState };
   }
 
   private _updateMeshData() {
@@ -680,7 +715,7 @@ class WebGLRayTracePass {
         maxTextureDimension2D: this._renderer.gl.getParameter(
           this._renderer.gl.MAX_TEXTURE_SIZE
         )
-      });
+      },this.graphs);
     this._materialData = materialData;
 
     this._tracePasses.forEach((pass) => {
@@ -789,7 +824,7 @@ class WebGLRayTracePass {
       });
       if (!researchTransport()?.configure(this, 'webgl')?.enabled) {
         shader.parallelCompile = true;
-        this._mainPass.setShader(shader);
+        this._mainPass.setShader(this._graphShader(shader));
       }
     }
 
@@ -800,10 +835,10 @@ class WebGLRayTracePass {
 
         STACK_SIZE,
         USE_VERTEX_COLOR: mergedGeometry.color != null,
-        USE_TANGENT: mergedGeometry.tangent != null && materials.some(materialNeedsVertexTangents),
+        USE_TANGENT: mergedGeometry.tangent != null && materials.some(m => !!m.graph || materialNeedsVertexTangents(m)),
         ...vertexAttributeDefines(vertexAttributeLayout(mergedGeometry)),
-        USE_COAT_NORMAL_FRAMES: materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap)),
-        HAS_TRANSMISSION: this._hasTransmission,
+        USE_COAT_NORMAL_FRAMES: materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap)) || [this.graphs.active,this.graphs.requested].some(plan => plan.structures.some(g => 'normal' in g.terminal)),
+        HAS_TRANSMISSION: this._hasTransmission || materials.some(m=>!!m.graph),
         HAS_GLTF_ANISOTROPY: materials.some(m => m.specularAnisotropyModel === 'gltf' && m.specularAnisotropy > 0),
         HAS_BEVEL,
         HAS_MEDIUM,
@@ -911,7 +946,7 @@ class WebGLRayTracePass {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._renderer.gl.getParameter(this._renderer.gl.MAX_ARRAY_TEXTURE_LAYERS),
         maxTextureDimension2D: this._renderer.gl.getParameter(this._renderer.gl.MAX_TEXTURE_SIZE)
-      });
+      },this.graphs);
       this._needsUpdateAnalyticLightsBuffer = true;
     } else data.repackParams(res.materials);
     this._updateMaterialConstants(res.materials, data, res.geometry);
@@ -1080,7 +1115,7 @@ class WebGLRayTracePass {
       const shader = createRayTraceFragmentShader({
         channelIndependentLight: true, shareSpectralPrefix: share
       });
-      shader.parallelCompile = true; this._mainPass.setShader(shader);
+      shader.parallelCompile = true; this._mainPass.setShader(this._graphShader(shader));
     }
     this._shareSpectralPrefix = share;
     this._tracePasses.forEach(pass => {
