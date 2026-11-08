@@ -804,7 +804,7 @@ fn selected_adapter_renders_4k_and_environment_controls() {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn dispatch_audit_tail_marker_preserves_hdr_and_counts_each_sample() {
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let key = "MUTRACER_NATIVE_DISPATCH_AUDIT";
     let previous = std::env::var_os(key);
     let render = |audit: bool| {
