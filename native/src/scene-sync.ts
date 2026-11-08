@@ -189,7 +189,7 @@ export class SyncedScene {
     const old = this.bytes, first = old.length === 0;
     const geometries = u[H.GEOMETRY_COUNT];
     const records = geometries + u[H.TEXTURE_COUNT], materials = u[H.MATERIAL_COUNT], meshes = u[H.MESH_COUNT];
-    const hints = !first && unchanged && old[H.GEOMETRY_COUNT] === geometries && old[H.TEXTURE_COUNT] === u[H.TEXTURE_COUNT] &&
+    const hints = !first && unchanged && old[H.GEOMETRY_COUNT] <= geometries && old[H.TEXTURE_COUNT] === u[H.TEXTURE_COUNT] &&
       (unchanged.length === records || old[H.MATERIAL_COUNT] === materials && old[H.MESH_COUNT] === meshes &&
         unchanged.length === records + materials + meshes) ? unchanged : undefined;
     const objects = hints && hints.length > records ? hints : undefined;

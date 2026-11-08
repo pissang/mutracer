@@ -56,12 +56,20 @@ fn same_span(a: &Words, ao: usize, b: &Words, bo: usize, count: usize) -> Option
 
 /// Texture record stride: scene versions before 7 lack the trailing UDIM word.
 fn texture_words(w: &Words) -> usize {
-    if w.u(h::VERSION) < 7 { t::WORDS - 1 } else { t::WORDS }
+    if w.u(h::VERSION) < 7 {
+        t::WORDS - 1
+    } else {
+        t::WORDS
+    }
 }
 
 /// Texture record word `k`, reading the UDIM word of older records as 0.
 fn texture_word(w: &Words, offset: usize, k: usize) -> usize {
-    if k < texture_words(w) { w.u(offset + k) } else { 0 }
+    if k < texture_words(w) {
+        w.u(offset + k)
+    } else {
+        0
+    }
 }
 
 /// Whether texture `index` has the same record and pixels in both descriptors.
@@ -187,22 +195,33 @@ fn geometry_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
     }
     Some(true)
 }
-pub(crate) fn geometry_unchanged_payload(previous: &[u8], next: &[u8], index: usize) -> Option<bool> {
+pub(crate) fn geometry_unchanged_payload(
+    previous: &[u8],
+    next: &[u8],
+    index: usize,
+) -> Option<bool> {
     geometry_unchanged(&Words(previous), &Words(next), index)
 }
 
 /// One byte per geometry, then per texture: 1 when its record and data are
-/// unchanged. Empty when the counts differ (no hints apply).
+/// unchanged. Growing geometry counts keep prefix hints; shrinkage or changed
+/// texture counts discard them.
 pub(crate) fn unchanged_records(previous: &[u8], next: &[u8]) -> Vec<u8> {
     let (a, b) = (Words(previous), Words(next));
     if a.len() < h::WORDS
         || b.len() < h::WORDS
-        || a.u(h::GEOMETRY_COUNT) != b.u(h::GEOMETRY_COUNT)
+        || a.u(h::GEOMETRY_COUNT) > b.u(h::GEOMETRY_COUNT)
         || a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT)
     {
         return Vec::new();
     }
-    let geometries = (0..b.u(h::GEOMETRY_COUNT)).map(|i| geometry_unchanged(&a, &b, i));
+    let geometries = (0..b.u(h::GEOMETRY_COUNT)).map(|i| {
+        if i < a.u(h::GEOMETRY_COUNT) {
+            geometry_unchanged(&a, &b, i)
+        } else {
+            Some(false)
+        }
+    });
     let textures = (0..b.u(h::TEXTURE_COUNT)).map(|i| texture_unchanged(&a, &b, i));
     geometries
         .chain(textures)
@@ -490,7 +509,10 @@ fn membership_step(a: &Words, b: &Words) -> Option<Step> {
         }
     }
     if appended_geometry {
-        if old.keys().any(|id| !(0..b.u(h::MESH_COUNT)).any(|i| mesh_id(b, i) == *id)) {
+        if old
+            .keys()
+            .any(|id| !(0..b.u(h::MESH_COUNT)).any(|i| mesh_id(b, i) == *id))
+        {
             return None;
         }
         for i in a.u(h::GEOMETRY_COUNT)..b.u(h::GEOMETRY_COUNT) {
@@ -505,7 +527,11 @@ fn membership_step(a: &Words, b: &Words) -> Option<Step> {
     }
     let mut bytes = record(&[if appended_geometry { 5 } else { 4 }, 0, 0, 0]);
     bytes.extend_from_slice(b.0);
-    Some(if appended_geometry { Step::GeometryAppend(bytes) } else { Step::Membership(bytes) })
+    Some(if appended_geometry {
+        Step::GeometryAppend(bytes)
+    } else {
+        Step::Membership(bytes)
+    })
 }
 
 /// Sparse changed materials for the cheap shader/transport preflight. Both
@@ -698,7 +724,9 @@ pub(crate) fn plan_with(
             .is_none_or(|ids| ids.contains(&mesh_id(&b, index)))
     };
     if membership {
-        let Some(step) = membership_step(&a, &b) else { return None; };
+        let Some(step) = membership_step(&a, &b) else {
+            return None;
+        };
         steps.push(step);
     }
     if atlas {
@@ -798,6 +826,28 @@ mod tests {
     }
 
     #[test]
+    fn appended_geometry_hints_preserve_only_the_identical_prefix() {
+        use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene};
+        let mut scene = Scene::new();
+        let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        let triangle = || Geometry::new(vec![0., 0., 0., 1., 0., 0., 0., 1., 0.], vec![0, 1, 2]);
+        let old = scene.add_geometry(triangle()).unwrap();
+        scene.add_mesh(Mesh::new(old, material)).unwrap();
+        let before = scene.descriptor().unwrap();
+        let added = scene.add_geometry(triangle()).unwrap();
+        scene.add_mesh(Mesh::new(added, material)).unwrap();
+        let after = scene.descriptor().unwrap();
+        let hints = unchanged_records(&before, &after);
+        assert_eq!(hints, vec![1, 0]);
+        assert!(validate_changed(&after, &hints).is_ok());
+        let mut invalid = after.as_ref().clone();
+        let record = word(&invalid, h::GEOMETRY_OFFSET) + g::WORDS;
+        let position = word(&invalid, record + g::POSITION);
+        set(&mut invalid, position, f32::NAN.to_bits());
+        assert!(validate_changed(&invalid, &hints).is_err());
+    }
+
+    #[test]
     fn validation_scans_every_geometry_not_marked_unchanged() {
         let base = input();
         let mut invalid = base.clone();
@@ -836,6 +886,9 @@ mod tests {
         let (v6, v7, udim) = (scene(6, 0), scene(7, 0), scene(7, 1));
         assert_eq!(texture_unchanged(&Words(&v6), &Words(&v7), 0), Some(true));
         assert_eq!(texture_unchanged(&Words(&v7), &Words(&v6), 0), Some(true));
-        assert_eq!(texture_unchanged(&Words(&v6), &Words(&udim), 0), Some(false));
+        assert_eq!(
+            texture_unchanged(&Words(&v6), &Words(&udim), 0),
+            Some(false)
+        );
     }
 }
