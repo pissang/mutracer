@@ -53,7 +53,7 @@ enum {
  * can have fewer denoising blotches and more raw noise. Receivers seen through
  * reflection or refraction are unchanged. */
 #define MT_CAUSTIC_PHOTON_MAPPING 4u
-#define MT_ABI_VERSION 12u
+#define MT_ABI_VERSION 13u
 uint32_t mt_abi_version(void);
 
 /* Every struct passed to or filled by the library starts with uint32_t

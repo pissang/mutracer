@@ -1553,7 +1553,7 @@ mod tests {
             .chunks_exact(4)
             .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert_eq!(words[h::VERSION], 6);
+        assert_eq!(words[h::VERSION], crate::layout::version::SCENE as u32);
         assert_eq!(words[h::LIGHT_COUNT], 6);
         let lights = words[h::LIGHT_OFFSET] as usize;
         assert_eq!(words[lights + 4 * l::WORDS + l::TYPE], 4);
