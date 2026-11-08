@@ -16,7 +16,9 @@ import {
   Texture2D,
   type TexturePixelSource
 } from './webgl.js';
-import type OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import type {MaterialGraphState} from './materialGraph/state.js';
+import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import { isTextureDataSource } from '../scene/Texture.js';
 import type Texture from '../scene/Texture.js';
 import { commonNearestFloatProps, setDataTexture } from './dataTextureUtil.js';
@@ -148,6 +150,8 @@ class MaterialTable {
 
   private _matBufferTex = new Texture2D(commonNearestFloatProps);
   private _materialBufferColumnsLog: number = 0;
+  private _graphTextures: Texture[] = [];
+  private _materialCount = 0;
 
   private _displacementMaps: Texture[] = [];
   private _lightTexturesIndices: number[] = [];
@@ -155,10 +159,14 @@ class MaterialTable {
   constructor(
     materials: OpenPBRMaterial[],
     lights: SceneLight[],
-    options: MaterialTableOptions = {}
+    options: MaterialTableOptions = {},
+    private readonly graphs?: MaterialGraphState
   ) {
     const packStart = performance.now();
-    const data = new MaterialData(materials,
+    this._materialCount = materials.length;
+    graphs?.request(materials);
+    const graphTextures = graphs?.textures() ?? [];
+    const data = new MaterialData(graphTextures.length ? [...materials, ...graphTextures.map(map => new OpenPBRMaterial({map}))] : materials,
       lights.map(light => light.type === 'RectLight' ? light.texture : undefined),
       texture => {
         const image = (texture as Texture).image;
@@ -171,6 +179,7 @@ class MaterialTable {
     const {texture, stats} = makeTextureArray(data.textures as Texture[], data.atlas);
     this.texture = texture;
     this.textureAtlasStats = {...stats, packTimeMs: performance.now() - packStart};
+    this._graphTextures = data.textures as Texture[];
     this.bufferData = data.bufferData;
     this.defines = data.defines;
     this._displacementMaps = data.displacementMaps as Texture[];
@@ -182,13 +191,18 @@ class MaterialTable {
 
   /** Repack parameters with the same material slots and unchanged texture metadata. */
   repackParams(materials: OpenPBRMaterial[]) {
+    this.graphs?.request(materials);
     repackMaterialParams(this.bufferData, materials);
     this._updateBuffer();
   }
 
   getBufferArray() {
-    return packMaterialBuffer(this.bufferData);
+    const packed = packMaterialBuffer(this.bufferData);
+    const base = packed.length > this._materialCount * MATERIAL_FLOAT_COUNT ? packed.slice(0, this._materialCount * MATERIAL_FLOAT_COUNT) : packed;
+    return this.graphs?.pack(base, this._graphTextures) ?? base;
   }
+
+  refreshGraphParameters() { this._updateBuffer(); }
 
   getDisplacementMaps() {
     return this._displacementMaps;

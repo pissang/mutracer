@@ -1,3 +1,5 @@
+import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
+import {materialGraphShader} from './materialGraph/shader.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
@@ -182,6 +184,9 @@ function joinWebGPUErrors(...errors: unknown[]) {
 
 /** One compiled shader configuration. Its compilation task owns all of these fields. */
 interface TraceVariant {
+  graphKey: string;
+  graphRevision: number;
+  baseSignature: string;
   status: 'pending' | 'ready' | 'failed';
   settled: Promise<void>;
   capabilities: ShaderCapabilities;
@@ -258,6 +263,9 @@ class WGPURayTracePass {
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
+  private _graphs?: MaterialGraphState;
+  get graphs() { return this._graphs ??= new MaterialGraphState('webgpu'); }
+  private _canTraceOldGraph = false;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _materialData: MaterialTable | WGPUBindlessMaterialData | undefined;
@@ -921,7 +929,9 @@ class WGPURayTracePass {
       if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._visibleMeshes());
       this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
+      const graphPlan = this.graphs.candidate(!!this._rayTracePipeline);
       const pipelineInputs = JSON.stringify([
+        graphPlan.key,
         this._constants,
         Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
         this._hasDisplacement,
@@ -948,8 +958,18 @@ class WGPURayTracePass {
         return;
       }
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
-      const requiredCapabilities = retainedShaderCapabilities(this._constants);
-      const constants: Record<string, boolean | number> = {...this._constants, ...requiredCapabilities};
+      const graphConstants = {...this._constants};
+      if(graphPlan.key) {
+        graphConstants.USE_ANISOTROPY_DIRECTIONS = true;
+        if(graphPlan.structures.some(g => 'normal' in g.terminal))graphConstants.USE_COAT_NORMAL_FRAMES = true;
+        graphConstants.USE_TANGENT = this._preparedMeshData?.geometry.tangent != null;
+        graphConstants.USE_UV1 = this._preparedMeshData?.geometry.uv1 != null;
+        graphConstants.HAS_COAT = true; graphConstants.HAS_FUZZ = true; graphConstants.HAS_THIN_FILM = true;
+        graphConstants.MATERIAL_CAPABILITIES = Number(graphConstants.MATERIAL_CAPABILITIES) | 3;
+      }
+      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(graphConstants);
+      const requiredCapabilities = retainedShaderCapabilities(graphConstants);
+      const constants: Record<string, boolean | number> = {...graphConstants, ...requiredCapabilities};
       const hasAlpha =
         Boolean(constants.HAS_ALPHA_BLEND) && this._alphaBlendStrategy === 'deterministic-source-over';
       const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
@@ -968,6 +988,7 @@ class WGPURayTracePass {
         bakePipelineConstants: this._bakePipelineConstants
       };
       const structureKey = JSON.stringify({
+        graph: graphPlan.key,
         ...structure,
         defineCode,
         constants: pipelineConstantsKeys
@@ -980,25 +1001,34 @@ class WGPURayTracePass {
       const capabilities =
         this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
         retainedShaderCapabilities(
-          this._constants,
+          graphConstants,
           structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
         );
       Object.assign(constants, capabilities);
       // Runtime feature values live in uniforms, so edits can share a pipeline
       // as long as its compiled defines and overrides are the same.
-      const signature = JSON.stringify({
+      const baseSignature = JSON.stringify({
         ...structure,
         defineCode,
         constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
       });
+      const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
+      const signature = graphPlan.key ? baseSignature + '\n' + graphPlan.key : baseSignature;
+      const previousVariant = this._traceVariants.get(signature);
+      if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
-        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities});
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature});
       this._requestedVariant = variant;
+      this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
       if (variant.status === 'pending') {
         this._requestQueuedCompile(variant);
+        if (this._canTraceOldGraph) {
+          if(this._needsUpdateBindGroups) { this._updateBindGroups(); this._needsUpdateBindGroups = false; }
+          return;
+        }
         return variant.settled;
       }
-      if (variant.status === 'failed') return;
+      if (variant.status === 'failed') { if (graphPlan.key) this.graphs.fail(this.graphs.revision,variant.error); return; }
       this._installTraceVariant(variant, pipelineInputs);
     } catch (error) {
       this._resourceError = error;
@@ -1009,6 +1039,13 @@ class WGPURayTracePass {
 
   /** Runs only for a ready variant, without yielding, so tracing can start in this call. */
   private _installTraceVariant(variant: TraceVariant, pipelineInputs: string) {
+    if (variant.graphKey === this.graphs.requested.key && this.graphs.active.key !== variant.graphKey) {
+      this.graphs.compilation={sourceBytes:variant.diagnostics.sourceBytes,sourceGenerationTimeMs:variant.diagnostics.sourceGenerationTimeMs,moduleCreationTimeMs:variant.diagnostics.moduleCreationTimeMs,totalTimeMs:variant.diagnostics.totalTimeMs};
+      this.graphs.install(this.graphs.requested,this.graphs.revision);
+      this._materialsBuffer = this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData!.getBufferArray(),MATERIAL_FLOAT_COUNT * 4);
+      this._needsUpdateBindGroups = true;
+    }
+    this._canTraceOldGraph = false;
     if (this._activeVariant !== variant) {
       this._activeVariant = variant;
       this._rayTracePipeline = variant.pipeline;
@@ -1048,7 +1085,7 @@ class WGPURayTracePass {
   /** Snapshots everything compilation needs. The task must not read mutable pass state afterwards. */
   private _startTraceVariant(signature: string, constants: Record<string, boolean | number>, shader: {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
-    structureKey: string; capabilities: ShaderCapabilities;
+    structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string;
   }) {
     const shareSpectralPrefix = Boolean(constants.SPECTRAL) && this._shareSpectralPrefix;
     const bake = this._bakePipelineConstants, bindless = this._bindless;
@@ -1068,6 +1105,7 @@ class WGPURayTracePass {
       startedAtMs: 0, concurrentCompilationCount: 1
     };
     const variant: TraceVariant = {
+      graphKey: shader.graphPlan.key, graphRevision: this.graphs.revision, baseSignature: shader.baseSignature,
       status: 'pending', capabilities: shader.capabilities, structureKey: shader.structureKey,
       settled: undefined!,
       diagnostics: {
@@ -1082,7 +1120,7 @@ class WGPURayTracePass {
       startedAt = shaderCompilationNow();
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
-      const moduleKey = JSON.stringify([causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
+      const moduleKey = JSON.stringify([shader.graphPlan.key, causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
         bake && pipelineConstantsKeys.map((key) => constants[key])]);
       let source = this._traceModules.get(moduleKey);
@@ -1115,6 +1153,7 @@ class WGPURayTracePass {
           },
           bake
         );
+        code = materialGraphShader(code,shader.graphPlan,'webgpu');
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
         const moduleStartedAt = shaderCompilationNow();
@@ -1414,7 +1453,7 @@ class WGPURayTracePass {
 
   /** Whether the latest request waits on GPU work that will settle on its own. */
   isCompilingShader() {
-    return !!this._awaitingRetirement || this._requestedVariant?.status === 'pending';
+    return !!this._awaitingRetirement || (!this._canTraceOldGraph && this._requestedVariant?.status === 'pending');
   }
 
   isPipelineReady() {
@@ -1426,7 +1465,7 @@ class WGPURayTracePass {
 
   /** Failure of the latest request. A failed variant does not affect other renders. */
   getPipelineError() {
-    return this._resourceError ?? this._requestedVariant?.error;
+    return this._resourceError ?? (this._canTraceOldGraph ? undefined : this._requestedVariant?.error);
   }
 
   private _updateBindGroups() {
@@ -1724,6 +1763,7 @@ class WGPURayTracePass {
         })
       },
       shaderCompilation: this._requestedVariant?.diagnostics,
+      materialGraphs: this.graphs.diagnosticsState,
       lightSampling: {
         emissiveTriangles: this._emissiveTriangles.length,
         activeChoices: this._rtUniform.views.lightChoiceCount[0],
@@ -2788,8 +2828,9 @@ class WGPURayTracePass {
   }
 
   private _createMaterialData(...args: ConstructorParameters<typeof MaterialTable>): MaterialTable | WGPUBindlessMaterialData {
+    this.graphs.capabilities = this._bindless ? 'bindless' : 'atlas';
     if (this._bindless) {
-      const data = new WGPUBindlessMaterialData(args[0], args[1]);
+      const data = new WGPUBindlessMaterialData(args[0], args[1], this.graphs);
       const reason = bindlessLimitReason(this._device, data.textures.length);
       if (!reason) return data;
       this._textureSelection.fallbackReason = reason;
@@ -2798,7 +2839,7 @@ class WGPURayTracePass {
       void this._device.queue.onSubmittedWorkDone().catch(() => {}).then(() => {retired.dispose(); this._retiredBindless.delete(retired);});
       this._bindless = undefined;
     }
-    return new MaterialTable(...args);
+    return new MaterialTable(args[0], args[1], args[2], this.graphs);
   }
 
   private _updateTextures(materialData: MaterialTable | WGPUBindlessMaterialData) {

@@ -155,6 +155,8 @@ export interface RenderingDiagnostics {
   };
   /** Shader compilation measurements: current WebGPU batch or cumulative WebGL programs. */
   shaderCompilation?: ShaderCompilationDiagnostics;
+  /** Material graph compilation, fallback and located diagnostics. Undefined when unavailable. */
+  materialGraphs?: import('./materialGraph/state.js').MaterialGraphCompilationState;
   /** Light-selection table summary (WebGPU). */
   lightSampling?: {
     emissiveTriangles: number;

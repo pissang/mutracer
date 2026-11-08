@@ -174,6 +174,7 @@ function makeWGPUAccumulationTarget(
   let diagnosticsReadbackPromise: Promise<void> = Promise.resolve();
 
   let isFirstFrame = true;
+  let graphGeneration = 0;
   let disposed = false;
 
   let needsUpdatePredicting = true;
@@ -859,6 +860,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     rayTracePass.setCamera(camera);
     aovCamera = camera;
     rayTracePass.updatePipeline();
+    if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) { graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; }
     const pipelineError = rayTracePass.getPipelineError();
     if (pipelineError) throw pipelineError;
 
@@ -1673,6 +1675,15 @@ width: renderWidth, height: renderHeight,
     getAovSamples() { return aov.samples; },
     restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
+      // Completed beauty targets still poll deferred graph compilation. A late
+      // installation invalidates this target before its next capped sample.
+      if (rayTracePass.graphs?.status === 'compiling' || graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
+        applyTraceQuality(); rayTracePass.setCamera(camera); rayTracePass.updatePipeline();
+        if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
+          graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; sampleCount = 0; cancelDenoise(); return false;
+        }
+        if(rayTracePass.graphs?.status === 'compiling')return false;
+      }
       if (samples < 1 || !execution?.aovs?.length) return true;
       applyTraceQuality();
       rayTracePass.setCamera(camera); aovCamera = camera;

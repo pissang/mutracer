@@ -1,4 +1,4 @@
-import type OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import type {SceneLight} from '../scene/Scene.js';
 import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';
@@ -7,7 +7,8 @@ import {isUdimTexture} from '../scene/UdimTexture.js';
 import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureSlots.js';
 import {mergeTexturesFromMaterials} from './materialTextures.js';
 import {createMaterialBufferData, repackMaterialParams} from './materialParams.js';
-import {packMaterialBuffer} from './materialLayout.js';
+import {packMaterialBuffer, MATERIAL_FLOAT_COUNT} from './materialLayout.js';
+import type {MaterialGraphState} from './materialGraph/state.js';
 
 // Browser adapter intentionally keeps the shared/native MaterialData entry intact.
 export class WGPUBindlessMaterialData {
@@ -16,7 +17,11 @@ export class WGPUBindlessMaterialData {
   readonly defines: Record<string, number>;
   private readonly lightIndices: number[] = [];
   private readonly displacementMaps: Texture[];
-  constructor(materials: OpenPBRMaterial[], lights: SceneLight[]) {
+  private materialCount: number;
+  constructor(materials: OpenPBRMaterial[], lights: SceneLight[], private readonly graphs?: MaterialGraphState) {
+    this.materialCount = materials.length; graphs?.request(materials);
+    const extra = graphs?.textures() ?? [];
+    if(extra.length) materials = [...materials, ...extra.map(map => new OpenPBRMaterial({map}))];
     const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
     this.textures = maps.textures.slice();
     this.displacementMaps = maps.indices.displacementMap.map(index => maps.textures[index]).filter(Boolean);
@@ -36,8 +41,8 @@ export class WGPUBindlessMaterialData {
     this.bufferData.mapTransform = this.textures.flatMap(t => [...t.uvScale, ...t.uvOffset]);
     this.bufferData.mapWrap = this.textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]);
   }
-  repackParams(materials: OpenPBRMaterial[]) { repackMaterialParams(this.bufferData, materials); }
-  getBufferArray() { return packMaterialBuffer(this.bufferData); }
+  repackParams(materials: OpenPBRMaterial[]) { this.graphs?.request(materials); repackMaterialParams(this.bufferData, materials); }
+  getBufferArray() { const packed = packMaterialBuffer(this.bufferData); const buffer = packed.length > this.materialCount * MATERIAL_FLOAT_COUNT ? packed.slice(0, this.materialCount * MATERIAL_FLOAT_COUNT) : packed; return this.graphs?.pack(buffer,this.textures) ?? buffer; }
   getLightTexturesIndices() { return this.lightIndices; }
   getDisplacementMaps() { return this.displacementMaps; }
 }
