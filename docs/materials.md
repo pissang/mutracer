@@ -385,9 +385,8 @@ For `place2d`, `operationorder` defaults to `0` (SRT); `1` selects TRS.
 `luminance` returns a gray color with ACEScg coefficients by default and preserves
 alpha for `color4`. `range` preserves the sign when applying gamma, then optionally
 clamps to its output range. Extract indices must lie within the input's components.
-Noise uses MaterialX's OSL noise functions; increasing fractal octaves increases
-per-hit work. Split nodes use point samples rather than screen-derivative filtering,
-so thin boundaries can alias. `gltf_colorimage` exposes `outcolor` and `outa`;
+Increasing fractal octaves increases per-hit work. Split nodes use point samples
+rather than screen-derivative filtering, so thin boundaries can alias. `gltf_colorimage` exposes `outcolor` and `outa`;
 its type is `color4`. The viewer upgrades deprecated `swizzle` nodes to
 `extract`/`combine` when importing; authored graphs should use those nodes directly.
 
@@ -457,4 +456,5 @@ fallback during compilation or rejection. Disney Principled and Simple Hair
 surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
 Subsurface, displacement and tangent graph inputs and lit emission graphs retain
-the limits described above. XML parsing belongs to the viewer; the library's graph API accepts typed nodes and loaded textures.
+the limits described above. To load `.mtlx` files, use the viewer; the library's
+graph API accepts typed nodes and loaded textures.
