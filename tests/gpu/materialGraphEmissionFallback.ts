@@ -18,8 +18,8 @@ async function run(){
    const image=await settle(),diagnostics=engine.getDiagnostics();material.graph=undefined;const reference=await settle();let maxError=0;for(let i=0;i<image.length;i++)maxError=Math.max(maxError,Math.abs(image[i]-reference[i]));
    const fallback=diagnostics?.materialGraphs?.diagnostics.some(d=>d.code==='unsupported-emission-graph'&&d.port===port),emissiveTriangles=collectEmissiveTriangles([{mesh:emitter,geometry:emitter.geometry,materialIndices:[0]}],[material]).length,nonblack=image.some((x,i)=>i%4<3&&x>0.02);
    await fetch(`/evidence/${backend}-lit-fallback-${name}.f32`,{method:'POST',body:image});await fetch(`/evidence/${backend}-lit-fallback-${name}-reference.f32`,{method:'POST',body:reference});
-   material.emissionLuminance=0;const dark=await settle();let emissionDifference=0;for(let i=0;i<reference.length;i++)emissionDifference=Math.max(emissionDifference,Math.abs(reference[i]-dark[i]));
-   rows.push({name,port,emissionDifference,maxError,fallback,emissiveTriangles,nonblack,diagnostics:diagnostics?.materialGraphs,passed:!!fallback&&emissiveTriangles>0&&emissionDifference>0.01&&nonblack&&maxError<0.003});
+   material.emissionLuminance=0;const dark=await settle();let emissionDifference=0,receiverEmissionDifference=0;for(let i=0;i<reference.length;i++){const delta=Math.abs(reference[i]-dark[i]);emissionDifference=Math.max(emissionDifference,delta);if(Math.floor(i/4)%48>=36&&i%4<3)receiverEmissionDifference=Math.max(receiverEmissionDifference,delta);}
+   rows.push({name,port,emissionDifference,receiverEmissionDifference,lightSampling:diagnostics?.lightSampling,maxError,fallback,emissiveTriangles,nonblack,diagnostics:diagnostics?.materialGraphs,passed:!!fallback&&emissiveTriangles>0&&(backend!=='webgpu'||(diagnostics?.lightSampling?.emissiveTriangles??0)>0)&&receiverEmissionDifference>0.01&&nonblack&&maxError<0.003});
   }finally{render.dispose();engine.dispose();}
  }
  return{backend,rows,passed:rows.every(r=>r.passed)};

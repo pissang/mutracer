@@ -16,10 +16,10 @@ async function run(){
   const settle=async()=>{engine.update();const start=performance.now();for(;;){render.refine();await pause();const d=engine.getDiagnostics()?.materialGraphs;if(d?.status==='failed')throw Error(JSON.stringify(d));if(d?.status!=='compiling'&&render.samples)break;if(performance.now()-start>90000)throw Error('timeout');}render.restart();await render.converge({samples:32,sampleSequenceOffset:0,timeoutMs:90000});return (await render.readPixels('hdr')).data.slice();};
   try{
    const pixels=await settle();material.graph=undefined;material.opacity=0.37*uvScale;const reference=await settle();let maxError=0;for(let i=0;i<pixels.length;i++)maxError=Math.max(maxError,Math.abs(pixels[i]-reference[i]));
-   material.alphaMode='opaque';material.opacity=1;const solid=await settle();material.alphaMode='blend';material.opacity=0;const clear=await settle();let coverageDifference=0;for(let i=0;i<solid.length;i++)coverageDifference=Math.max(coverageDifference,Math.abs(solid[i]-clear[i]));
+   material.alphaMode='opaque';material.opacity=1;const solid=await settle();material.alphaMode='blend';material.opacity=0;const clear=await settle();let coverageDifference=0,shadowDifference=0;for(let i=0;i<solid.length;i++){const delta=Math.abs(solid[i]-clear[i]);coverageDifference=Math.max(coverageDifference,delta);if(Math.floor(i/4)%48<=10&&i%4<3)shadowDifference=Math.max(shadowDifference,delta);}
    const nonblack=pixels.some((v,i)=>i%4<3&&v>0.05);const name=`opacity-${mode}-${cutoff}-${uvScale}${mapped?'-map':''}`;
    await fetch(`/evidence/${backend}-${name}.f32`,{method:'POST',body:pixels});await fetch(`/evidence/${backend}-${name}-reference.f32`,{method:'POST',body:reference});
-   rows.push({name,maxError,coverageDifference,nonblack,passed:coverageDifference>0.01&&nonblack&&maxError<0.003});
+   rows.push({name,maxError,coverageDifference,shadowDifference,nonblack,passed:coverageDifference>0.01&&shadowDifference>0.01&&nonblack&&maxError<0.003});
   }finally{render.dispose();engine.dispose();}
  }
  return {backend,rows,passed:rows.every(r=>r.passed)};
