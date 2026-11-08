@@ -1649,10 +1649,13 @@ fn update_instance_colors_in(context: &mut Context, bytes: &[u8]) -> Result<()> 
 }
 /// Applies prepared TLAS, instance and lighting writes, then accepts the transform stage.
 fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates) -> Result<()> {
+    let started = Instant::now();
     ready(context)?;
     let scene = context.scene.as_mut().unwrap();
     scene.grow_updated_buffers(packed)?;
+    let grown = started.elapsed();
     scene.validate_lighting(packed, context.target.as_ref())?;
+    let validated = started.elapsed();
     let geometry_hardware = if packed.changed_blases.is_some() {
         scene.prepare_geometry_hardware(packed)?
     } else {
@@ -1667,6 +1670,7 @@ fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates)
     } else {
         None
     };
+    let hardware_prepared = started.elapsed();
     context.failed = true;
     let scene = context.scene.as_mut().unwrap();
     if let Some((resources, capture, group, attributes)) = geometry_hardware {
@@ -1684,11 +1688,24 @@ fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates)
             scene.scene.hwrt.as_mut().unwrap(),
         )?;
     }
+    let hardware_applied = started.elapsed();
     scene.update_lighting(packed, context.target.as_ref())?;
+    let uploaded = started.elapsed();
     if packed.changed_blases.is_some() {
         scene.retained.as_ref().unwrap().accept_geometry(packed)?;
     } else {
         scene.retained.as_ref().unwrap().accept_transform()?;
+    }
+    if profiling::enabled() {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.;
+        native_log!(
+            "{}",
+            serde_json::json!({"nativeInstanceApplyProfile": {
+            "backend": if scene.hardware.is_some() {"HWRT"} else {"Software"},
+            "growthMs": ms(grown), "validateMs": ms(validated-grown),
+            "hardwarePrepareMs": ms(hardware_prepared-validated), "hardwareApplyMs": ms(hardware_applied-hardware_prepared),
+            "uploadMs": ms(uploaded-hardware_applied), "acceptMs": ms(started.elapsed()-uploaded)}})
+        );
     }
     context.finish_update()
 }
