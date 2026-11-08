@@ -1,3 +1,5 @@
+import {GRAPH} from '../../native/src/layout';
+import {NativeMaterial} from '../../native/src/material-graph';
 import {configureSceneParameters, retainedSceneParameters, releaseSceneParameters, sceneAtlasParameters} from '../../native/src/scene-core';
 import {SETTINGS as S, RESOURCE as R, PACKET_HEADER as PH, PACKET_ENTRY as PE} from '../../native/src/layout';
 import { describe, expect, it } from 'vitest';
@@ -324,4 +326,17 @@ it('emits one bindless GPU image for logical samplers sharing pixels, and rebuil
     const detached = encode(spec); // Equal pixels with distinct ownership still detach.
     expect([...new Uint32Array(sceneAtlasParameters(detached, token).buffer)]).toEqual([2, 2, 0, 0]);
   } finally {releaseSceneParameters(token);}
+});
+
+it('detects graph texture-reference swaps independently from graph parameters and ordinary maps',()=>{
+  const spec=base();spec.textures.push({...spec.textures[0],pixels:[255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255]});
+  const descriptor=(references:number[])=>{
+    const words=Array.from(new Uint32Array(encode(spec).buffer));const graph=words.length;words.push(...Array<number>(GRAPH.WORDS).fill(0));
+    words[graph+GRAPH.VERSION]=1;words[graph+GRAPH.TEXTURE_COUNT]=references.length;words[graph+GRAPH.TEXTURES]=words.length;words.push(...references);
+    words[words[H.MATERIAL_OFFSET]+MAT.GRAPH]=graph;words[H.LENGTH]=words.length;return new Uint8Array(new Uint32Array(words).buffer);
+  };
+  const scene=new SyncedScene();scene.sync(descriptor([0,1]));scene.accept();const material=scene.materials[0] as NativeMaterial;
+  const changes=scene.sync(descriptor([1,0]));expect(changes.scene.materials).toContain(material);
+  expect(material.graph!.textures).toEqual([scene.textures[1],scene.textures[0]]);
+  scene.accept();expect(scene.sync(descriptor([1,0])).scene.materials).toEqual([]);
 });

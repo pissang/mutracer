@@ -275,7 +275,8 @@ export class SyncedScene {
       if(old[prior+MAT.GRAPH]||u[off+MAT.GRAPH]) {
       const oldGraph=decodeNativeGraph(old,new Float32Array(old.buffer,old.byteOffset,old.length),old[prior+MAT.GRAPH],this.textures);
       const graph=decodeNativeGraph(u,f,u[off+MAT.GRAPH],this.textures);
-      sameGraph=(oldGraph?JSON.stringify([oldGraph.ir,oldGraph.authorIds]):'')===(graph?JSON.stringify([graph.ir,graph.authorIds]):'');
+      sameGraph=(oldGraph?JSON.stringify([oldGraph.ir,oldGraph.authorIds]):'')===(graph?JSON.stringify([graph.ir,graph.authorIds]):'') &&
+        (oldGraph?.textures.length??0)===(graph?.textures.length??0) && (oldGraph?.textures??[]).every((texture,index)=>texture===graph?.textures[index]);
       }
       if (replaced.size === 0 && sameGraph && sameRecord(old, prior, u, off, MAT.WORDS, [MAT.EXTENSION_OFFSET], [u[off + MAT.EXTENSION_COUNT] * E.WORDS])) continue;
       const next=decodeMaterial(u,f,off,this.textures);next.aovId=this.materials[i].aovId;inheritNativeGraph(next,this.materials[i]);
