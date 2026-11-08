@@ -355,8 +355,10 @@ layout entries and pipeline keys.
 ### Engine API
 
 The Rust `api` module commits each engine's scene once to a scene-only L0
-context through the crate-internal `CommitPath`: incremental on the calling
-thread, full preparation on a library thread. Each render's context owns a
+context through the crate-internal `CommitPath`: compatible retained edits run
+on the calling thread; new geometry appends share the existing library thread
+with full preparation. Append CPU packets are prepared outside the context
+registry. Each render's context owns a
 `Target` linked to that scene (`context::set_target`), with camera and trace
 uniforms from `sceneTargetParameters`, its own accumulation and, for another
 sampling pattern or bevel sample count, its own shader variant. Standalone L0
@@ -632,8 +634,10 @@ and Linux handle paths; keep its report separate from the Rust surface gate.
 
 `MUTRACER_NATIVE_PROFILE=1` reports validation, source preparation, BLAS/TLAS,
 composition, GPU setup and pipeline time (a subset of setup). Full-commit wall
-time also includes flush, publication and retirement. Timestamp profiling is
-separate from formal timing:
+time also includes flush, publication and retirement. Retained append profiles
+separate sync, CPU packet preparation, buffer upload/growth and HWRT BLAS/TLAS
+completion and submission times. Timestamp profiling is separate from formal
+timing:
 
 - Metal pass timestamps measure kernels. Acceleration-structure
   `completedWallMs` is wall time after earlier uploads drain, not a GPU
