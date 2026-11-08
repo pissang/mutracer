@@ -73,11 +73,9 @@ can increase memory use. Filters use the SDK's texture filtering.
 Changing a connection to an already retained texture is incremental when its
 atlas placement and shader support remain compatible; otherwise the SDK prepares
 the scene again. Rprim insertion reuses resident materials and can append static,
-single-material geometry without displacement or triangle material indices when
-the shader layout is compatible. Appending new geometry can grow scene buffers,
-using more memory and update work. Insertion that only reuses resident geometry
-needs sufficient retained TLAS capacity; otherwise the SDK prepares the scene
-again. Removal keeps geometry resident until a later full preparation.
+single-material geometry when the SDK's
+[scene update rules](../../docs/scene.md#edit-a-scene) permit it. Appending can
+grow scene buffers, using more memory and update work.
 
 UsdPreviewSurface is an approximation of the native glTF material mapping:
 

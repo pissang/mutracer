@@ -19,10 +19,12 @@ fn hardware_new_geometry_append_matches_fresh_scene() {
 fn new_geometry_append_matches_fresh_scene(backend: Backend) {
     crate::logging::stderr();
     let mut scene = Scene::new();
-    let geometry = scene.add_geometry(Geometry::new(
-        vec![-0.4, -0.4, 0., 0.4, -0.4, 0., 0., 0.4, 0.],
-        vec![0, 1, 2],
-    )).unwrap();
+    let geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-0.4, -0.4, 0., 0.4, -0.4, 0., 0., 0.4, 0.],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
     let mut material = OpenPbrMaterial::default();
     material.values.emission_strength = 2.;
     let material = scene.add_material(material).unwrap();
@@ -34,106 +36,305 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
         max_samples: 4,
         aovs: 32,
         aov_samples: 1,
-        size: RenderSize::Fixed { width: 32, height: 24 },
+        size: RenderSize::Fixed {
+            width: 32,
+            height: 24,
+        },
         ..Default::default()
     };
     let engine = Engine::new(EngineOptions { backend }).unwrap();
     let render = Render::new(&engine, settings.clone()).unwrap();
     engine.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE retained initial full update");
     engine.update().unwrap();
+    wait_for_commit(&render);
     render.converge(ConvergeOptions::new(4)).unwrap();
 
-    let appended_geometry = scene.add_geometry(Geometry::new(
-        vec![-0.3, -0.3, -0.1, 0.3, -0.3, -0.1, 0., 0.3, -0.1],
-        vec![0, 1, 2],
-    )).unwrap();
+    let appended_geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-0.3, -0.3, -0.1, 0.3, -0.3, -0.1, 0., 0.3, -0.1],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
     let mut appended = Mesh::new(appended_geometry, material);
     appended.instances = Some(Instances {
-        transforms: vec![Mat4::from_translation(Vec3::new(-0.4, 0., 0.)),
-            Mat4::from_translation(Vec3::new(0.4, 0., 0.))].into(),
+        transforms: vec![
+            Mat4::from_translation(Vec3::new(-0.4, 0., 0.)),
+            Mat4::from_translation(Vec3::new(0.4, 0., 0.)),
+        ]
+        .into(),
         colors: None,
     });
     let appended_mesh = scene.add_mesh(appended).unwrap();
-    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    assert_eq!(
+        scene.pending_commit_kind().unwrap(),
+        CommitKind::Incremental
+    );
     engine.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE retained small append update");
     engine.update().unwrap();
+    wait_for_commit(&render);
     render.converge(ConvergeOptions::new(4)).unwrap();
     assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
 
     let fresh = Engine::new(EngineOptions { backend }).unwrap();
     let reference = Render::new(&fresh, settings.clone()).unwrap();
     fresh.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE fresh reference after first append full update");
     fresh.update().unwrap();
+    wait_for_commit(&reference);
     reference.converge(ConvergeOptions::new(4)).unwrap();
     for kind in [PixelKind::Hdr, PixelKind::Id] {
         let actual = render.read_pixels(kind).unwrap();
         let expected = reference.read_pixels(kind).unwrap();
-        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "{kind:?}");
+        assert_eq!(
+            actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected
+                .data
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "{kind:?}"
+        );
         assert_eq!(actual.id_data, expected.id_data, "{kind:?} ID");
     }
     for x in [0.25, 0.5, 0.75] {
-        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
-            format!("{:?}", fresh.pick_surface(x, 0.5).unwrap()), "pick {x}");
+        assert_eq!(
+            format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", fresh.pick_surface(x, 0.5).unwrap()),
+            "pick {x}"
+        );
     }
 
-    let second_geometry = scene.add_geometry(Geometry::new(
-        vec![-0.2, -0.2, 0.1, 0.2, -0.2, 0.1, 0., 0.2, 0.1],
-        vec![0, 1, 2],
-    )).unwrap();
+    let second_geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-0.2, -0.2, 0.1, 0.2, -0.2, 0.1, 0., 0.2, 0.1],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
     let mut second = Mesh::new(second_geometry, material);
     second.instances = Some(Instances {
-        transforms: vec![Mat4::from_translation(Vec3::new(-0.7, 0.4, 0.)),
-            Mat4::from_translation(Vec3::new(0.7, 0.4, 0.))].into(),
+        transforms: vec![
+            Mat4::from_translation(Vec3::new(-0.7, 0.4, 0.)),
+            Mat4::from_translation(Vec3::new(0.7, 0.4, 0.)),
+        ]
+        .into(),
         colors: None,
     });
-    scene.add_mesh(second).unwrap();
-    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    let second_mesh = scene.add_mesh(second).unwrap();
+    assert_eq!(
+        scene.pending_commit_kind().unwrap(),
+        CommitKind::Incremental
+    );
     engine.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE retained second append update");
     engine.update().unwrap();
+    wait_for_commit(&render);
     assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
     render.converge(ConvergeOptions::new(4)).unwrap();
 
     let grown = Engine::new(EngineOptions { backend }).unwrap();
     let grown_reference = Render::new(&grown, settings.clone()).unwrap();
     grown.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE fresh reference after second append full update");
     grown.update().unwrap();
+    wait_for_commit(&grown_reference);
     grown_reference.converge(ConvergeOptions::new(4)).unwrap();
     for kind in [PixelKind::Hdr, PixelKind::Id] {
         let actual = render.read_pixels(kind).unwrap();
         let expected = grown_reference.read_pixels(kind).unwrap();
-        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "grown {kind:?}");
+        assert_eq!(
+            actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected
+                .data
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "grown {kind:?}"
+        );
         assert_eq!(actual.id_data, expected.id_data, "grown {kind:?} ID");
     }
     for x in [0.25, 0.5, 0.75] {
-        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
-            format!("{:?}", grown.pick_surface(x, 0.5).unwrap()), "grown pick {x}");
+        assert_eq!(
+            format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", grown.pick_surface(x, 0.5).unwrap()),
+            "grown pick {x}"
+        );
     }
 
     scene.remove_mesh(appended_mesh).unwrap();
-    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    assert_eq!(
+        scene.pending_commit_kind().unwrap(),
+        CommitKind::Incremental
+    );
     engine.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE retained first delete update");
     engine.update().unwrap();
+    wait_for_commit(&render);
     assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
     render.converge(ConvergeOptions::new(4)).unwrap();
 
     let deleted = Engine::new(EngineOptions { backend }).unwrap();
-    let deleted_reference = Render::new(&deleted, settings).unwrap();
+    let deleted_reference = Render::new(&deleted, settings.clone()).unwrap();
     deleted.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE fresh reference after delete full update");
     deleted.update().unwrap();
+    wait_for_commit(&deleted_reference);
     deleted_reference.converge(ConvergeOptions::new(4)).unwrap();
     for kind in [PixelKind::Hdr, PixelKind::Id] {
         let actual = render.read_pixels(kind).unwrap();
         let expected = deleted_reference.read_pixels(kind).unwrap();
-        assert_eq!(actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-            expected.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "deleted {kind:?}");
+        assert_eq!(
+            actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected
+                .data
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "deleted {kind:?}"
+        );
         assert_eq!(actual.id_data, expected.id_data, "deleted {kind:?} ID");
     }
     for x in [0.25, 0.5, 0.75] {
-        assert_eq!(format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
-            format!("{:?}", deleted.pick_surface(x, 0.5).unwrap()), "deleted pick {x}");
+        assert_eq!(
+            format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", deleted.pick_surface(x, 0.5).unwrap()),
+            "deleted pick {x}"
+        );
     }
+
+    // Remove the remaining appended mesh so the next addition reuses the tail
+    // mesh slot. Geometry and append buffers remain resident after removal.
+    scene.remove_mesh(second_mesh).unwrap();
+    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    engine.set_scene_object(&scene).unwrap();
+    eprintln!("APPEND_STAGE retained second delete update");
+    engine.update().unwrap();
+    wait_for_commit(&render);
+    render.converge(ConvergeOptions::new(4)).unwrap();
+
+    // Reappend after deletion and then append repeated geometry batches large
+    // enough to exceed the buffers' retained reserve on each round.
+    for round in 0..2 {
+        let triangle_count = [6000, 12000][round];
+        let z = -0.15 - round as f32 * 0.03;
+        let mut positions = Vec::with_capacity(triangle_count * 9);
+        let mut indices = Vec::with_capacity(triangle_count * 3);
+        for triangle in 0..triangle_count {
+            let x = (triangle % 32) as f32 * 0.01 - 0.16;
+            let y = (triangle / 32) as f32 * 0.01 - 0.16;
+            let base = (positions.len() / 3) as u32;
+            positions.extend_from_slice(&[x - 0.003, y - 0.003, z, x + 0.003, y - 0.003, z, x, y + 0.003, z]);
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
+        let geometry = scene.add_geometry(Geometry::new(positions, indices)).unwrap();
+        let appended = Mesh::new(geometry, material);
+        scene.add_mesh(appended).unwrap();
+        assert_eq!(
+            scene.pending_commit_kind().unwrap(),
+            CommitKind::Incremental,
+            "round {round}"
+        );
+        engine.set_scene_object(&scene).unwrap();
+        eprintln!("APPEND_STAGE retained large append round {round} update");
+        engine.update().unwrap();
+        wait_for_commit(&render);
+        assert_eq!(
+            render.last_commit().unwrap(),
+            Some(if round == 0 {
+                CommitKind::Full
+            } else {
+                CommitKind::Incremental
+            }),
+            "round {round}"
+        );
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_append_render_matches_fresh(&scene, &render, &engine, &settings, backend, round);
+    }
+
+    // After the deletion fallback, continuous appends (without further mesh
+    // removal) each cross the retained buffers' current capacity.
+    for (round, triangle_count) in [12_000, 30_000].into_iter().enumerate() {
+        let z = -0.25 - round as f32 * 0.03;
+        let mut positions = Vec::with_capacity(triangle_count * 9);
+        let mut indices = Vec::with_capacity(triangle_count * 3);
+        for triangle in 0..triangle_count {
+            let x = (triangle % 32) as f32 * 0.01 - 0.16;
+            let y = (triangle / 32) as f32 * 0.01 - 0.16;
+            let base = (positions.len() / 3) as u32;
+            positions.extend_from_slice(&[
+                x - 0.003, y - 0.003, z, x + 0.003, y - 0.003, z, x, y + 0.003, z,
+            ]);
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
+        let geometry = scene.add_geometry(Geometry::new(positions, indices)).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+        engine.set_scene_object(&scene).unwrap();
+        eprintln!("APPEND_STAGE retained continuous round {round} update");
+        engine.update().unwrap();
+        wait_for_commit(&render);
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_append_render_matches_fresh(&scene, &render, &engine, &settings, backend, round + 10);
+    }
+}
+
+fn assert_append_render_matches_fresh(
+    scene: &Scene,
+    render: &Render,
+    engine: &Engine,
+    settings: &RenderSettings,
+    backend: Backend,
+    round: usize,
+) {
+    let fresh = Engine::new(EngineOptions { backend }).unwrap();
+    let reference = Render::new(&fresh, settings.clone()).unwrap();
+    fresh.set_scene_object(scene).unwrap();
+    eprintln!("APPEND_STAGE fresh reference round {round} full update");
+    fresh.update().unwrap();
+    wait_for_commit(&reference);
+    reference.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [PixelKind::Hdr, PixelKind::Id] {
+        let actual = render.read_pixels(kind).unwrap();
+        let expected = reference.read_pixels(kind).unwrap();
+        assert_eq!(
+            actual.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected
+                .data
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "round {round} {kind:?}"
+        );
+        assert_eq!(
+            actual.id_data, expected.id_data,
+            "round {round} {kind:?} ID"
+        );
+    }
+    for x in [0.25, 0.5, 0.75] {
+        assert_eq!(
+            format!("{:?}", engine.pick_surface(x, 0.5).unwrap()),
+            format!("{:?}", fresh.pick_surface(x, 0.5).unwrap()),
+            "round {round} pick {x}"
+        );
+    }
+}
+
+fn wait_for_commit(render: &Render) {
+    let started = std::time::Instant::now();
+    loop {
+        assert!(started.elapsed().as_secs() < 60, "scene commit did not finish");
+        let status = render.refine().unwrap();
+        if !matches!(
+            status,
+            crate::api::RenderStatus::Preparing | crate::api::RenderStatus::Compiling
+        ) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_ne!(render.status(), crate::api::RenderStatus::Error);
 }
 #[test]
 #[ignore = "requires a real GPU; run separately"]
@@ -750,6 +951,7 @@ fn software_displacement_map_edits_match_prediction() {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn hardware_displaced_geometry_updates_match_full_commit() {
+    crate::logging::stderr();
     let mut scene = Scene::new();
     let geometry = scene
         .add_geometry(Geometry::new(
@@ -791,6 +993,7 @@ fn hardware_displaced_geometry_updates_match_full_commit() {
     let render = Render::new(&engine, settings.clone()).unwrap();
     engine.set_scene_object(&scene).unwrap();
     engine.update().unwrap();
+    wait_for_commit(&render);
     render.converge(ConvergeOptions::new(4)).unwrap();
     Arc::make_mut(&mut scene.geometry_mut(geometry).unwrap().positions)[0] -= 0.2;
     assert_eq!(
@@ -799,6 +1002,7 @@ fn hardware_displaced_geometry_updates_match_full_commit() {
     );
     engine.set_scene_object(&scene).unwrap();
     engine.update().unwrap();
+    wait_for_commit(&render);
     render.converge(ConvergeOptions::new(4)).unwrap();
     assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
     let fresh = Engine::new(EngineOptions {
@@ -1488,6 +1692,7 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
         );
         let commit = |e: &Engine, r: &Render| {
             e.update().unwrap();
+            wait_for_commit(r);
             r.converge(ConvergeOptions::new(8)).unwrap();
             r.last_commit().unwrap()
         };
@@ -1881,19 +2086,7 @@ fn resident_membership_matches_fresh_hdr_id_and_picking_on_both_backends() {
             colors: None,
         });
         scene.add_mesh(over_capacity).unwrap();
-        assert_eq!(
-            scene.pending_commit_kind().unwrap(),
-            Incremental,
-            "{backend:?} over-capacity descriptor prediction"
-        );
-        engine.set_scene_object(&scene).unwrap();
-        engine.update().unwrap();
-        render.converge(ConvergeOptions::new(4)).unwrap();
-        assert_eq!(
-            render.last_commit().unwrap(),
-            Some(CommitKind::Full),
-            "{backend:?} over-capacity actual"
-        );
+        commit(&engine, &render, &scene, "over-capacity-instance-batch");
     }
 }
 
