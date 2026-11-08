@@ -7,7 +7,7 @@ import {archiveName} from '../native/scripts/platform.mjs';
 const out=resolve(process.env.MUTRACER_PARITY_OUTPUT??'.cache/display-parity');
 const native=resolve(out,'native');mkdirSync(native,{recursive:true});
 const env={...process.env,MUTRACER_PARITY_OUTPUT:out,MUTRACER_NATIVE_OUTPUT:native,
- MUTRACER_AOT_ARCHIVE:resolve(process.env.MUTRACER_AOT_ARCHIVE??resolve(native,archiveName('render-core'))),
+ MUTRACER_AOT_ARCHIVE:resolve(process.env.MUTRACER_AOT_PREBUILT??process.env.MUTRACER_AOT_ARCHIVE??resolve(native,archiveName('render-core'))),
  CARGO_TARGET_DIR:resolve(process.env.CARGO_TARGET_DIR??resolve(native,'host-target'))};
 const stages=[];
 function run(name,command,args,extra={}){
@@ -19,7 +19,7 @@ function run(name,command,args,extra={}){
 let frozen={status:'skipped',reason:'MUTRACER_OIDN_DISPLAY_INPUT is not set'};
 try{
  run('browser WebGPU and WebGL',process.execPath,['scripts/display-parity.mjs','--browser-only']);
- run('native parity and schedule',process.execPath,['native/scripts/ci.mjs','--only','aot-build,host-tests',
+ run('native parity and schedule',process.execPath,['native/scripts/ci.mjs','--only',process.env.MUTRACER_AOT_PREBUILT?'host-tests':'aot-build,host-tests',
   '--gpu-tests','display_parity|display_schedule_event_table','--batch-gpu-tests']);
  run('cross-backend images and traces',process.execPath,['scripts/display-parity.mjs','--compare-only']);
  run('browser schedule',process.execPath,[process.env.npm_execpath??'node_modules/vitest/vitest.mjs',
