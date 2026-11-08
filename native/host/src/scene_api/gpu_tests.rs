@@ -803,6 +803,86 @@ fn selected_adapter_renders_4k_and_environment_controls() {
 
 #[test]
 #[ignore = "requires a real GPU; run separately"]
+fn dispatch_audit_tail_marker_preserves_hdr_and_counts_each_sample() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let key = "MUTRACER_NATIVE_DISPATCH_AUDIT";
+    let previous = std::env::var_os(key);
+    let render = |audit: bool| {
+        unsafe {
+            if audit {
+                std::env::set_var(key, "1");
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+        let mut scene = Scene::new();
+        let geometry = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let mut material = OpenPbrMaterial::default();
+        material.values.emission_strength = 1.;
+        let material = scene.add_material(material).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions {
+            backend: Backend::Hardware,
+        })
+        .unwrap();
+        assert!(engine.info().hardware_ray_query, "no hardware ray queries");
+        let settings = RenderSettings {
+            max_samples: 4,
+            size: RenderSize::Fixed {
+                width: 16,
+                height: 12,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        render.read_pixels(PixelKind::Hdr).unwrap().data
+    };
+    let ordinary = render(false);
+    let audited = render(true);
+    match previous {
+        Some(value) => unsafe { std::env::set_var(key, value) },
+        None => unsafe { std::env::remove_var(key) },
+    }
+    if let Some(path) = std::env::var_os("MUTRACER_TEST_CAPTURE") {
+        let path = std::path::PathBuf::from(path);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("dispatch-audit-off.rgba32f"),
+            bytemuck::cast_slice(&ordinary),
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("dispatch-audit-on.rgba32f"),
+            bytemuck::cast_slice(&audited),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        ordinary
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        audited
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        "the diagnostic tail pass must not change HDR output"
+    );
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
 fn openpbr_parameter_commits_match_full_on_both_backends() {
     let _guard = crate::abi_test_lock();
     for backend in [Backend::Software, Backend::Hardware] {
@@ -1269,6 +1349,11 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
             Render::new(&dirty, settings.clone()).unwrap(),
             Render::new(&whole, settings.clone()).unwrap(),
         );
+        eprintln!(
+            "DIRTY_AUDIT_TARGETS backend={backend:?} dirty_context={:?} whole_context={:?}",
+            dirty_render.audit_context_id(),
+            whole_render.audit_context_id()
+        );
         let commit = |e: &Engine, r: &Render| {
             e.update().unwrap();
             r.converge(ConvergeOptions::new(8)).unwrap();
@@ -1420,6 +1505,10 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
             );
             let fresh = engine();
             let reference = Render::new(&fresh, settings.clone()).unwrap();
+            eprintln!(
+                "DIRTY_AUDIT_TARGETS backend={backend:?} step={step} fresh_full_context={:?}",
+                reference.audit_context_id()
+            );
             fresh.set_scene_object(&s).unwrap();
             commit(&fresh, &reference);
             for kind in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo] {
@@ -1435,6 +1524,40 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
                     let differing = (a.data.iter().zip(&b.data))
                         .filter(|(x, y)| x.to_bits() != y.to_bits())
                         .count();
+                    if differing != 0 {
+                        if let Some(root) = std::env::var_os("MUTRACER_TEST_CAPTURE") {
+                            let root = std::path::PathBuf::from(root);
+                            std::fs::create_dir_all(&root).unwrap();
+                            let label = format!("{backend:?}-step{step}-{kind:?}-vs-{name}");
+                            std::fs::write(
+                                root.join(format!("{label}-dirty.rgba32f")),
+                                bytemuck::cast_slice(&a.data),
+                            )
+                            .unwrap();
+                            std::fs::write(
+                                root.join(format!("{label}-other.rgba32f")),
+                                bytemuck::cast_slice(&b.data),
+                            )
+                            .unwrap();
+                            std::fs::write(
+                                root.join(format!("{label}.json")),
+                                serde_json::to_vec_pretty(&serde_json::json!({
+                                    "backend": format!("{backend:?}"),
+                                    "step": step,
+                                    "pixelKind": format!("{kind:?}"),
+                                    "comparison": name,
+                                    "differentValues": differing,
+                                    "dirtyContext": dirty_render.audit_context_id(),
+                                    "otherContext": other.audit_context_id(),
+                                    "wholeContext": whole_render.audit_context_id(),
+                                    "freshFullContext": (committed == Some(Full))
+                                        .then(|| reference.audit_context_id()),
+                                }))
+                                .unwrap(),
+                            )
+                            .unwrap();
+                        }
+                    }
                     assert_eq!(
                         differing, 0,
                         "{backend:?} step {step} {kind:?}: {differing} values differ from {name}"

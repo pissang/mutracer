@@ -713,6 +713,14 @@ cargo test --manifest-path native/host/Cargo.toml --lib \
 It prints AOV and primary-hit coverage classifications and reports a mismatch
 separately from the other checks.
 
+For `api::Render` command-buffer diagnostics, set
+`MUTRACER_NATIVE_DISPATCH_AUDIT=1` when running a `cfg(test)` GPU test. Each
+sample submission then appends a one-thread GPU marker in the same command
+buffer; after its completion callback, the test logs the marker count beside
+the flight range and CPU sample credits. A count of one proves the buffer
+reached that marker, not that every path-tracing invocation or pixel finished.
+The option is absent from non-test builds and unset by default.
+
 To reproduce repeated full-preparation failures, run the ignored loop with the
 archive and a separate host Cargo target:
 

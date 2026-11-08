@@ -9,6 +9,8 @@ use std::{
 };
 
 struct Context {
+    #[cfg(test)]
+    id: u64,
     gpu: GpuDevice,
     backend: u32,
     fallback_reason: String,
@@ -74,6 +76,8 @@ enum JobState {
     Cancelling = 5,
 }
 struct Flight {
+    #[cfg(test)]
+    start: u32,
     end: u32,
     done: Arc<AtomicBool>,
     timer: Option<(
@@ -568,6 +572,8 @@ fn create_in(
     registry.contexts.insert(
         handle,
         Context {
+            #[cfg(test)]
+            id: handle,
             gpu,
             backend,
             fallback_reason: String::new(),
@@ -1915,6 +1921,8 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         }
         return Err(error);
     }
+    #[cfg(test)]
+    let context_id = context.id;
     let Context {
         scene: own,
         job,
@@ -1946,6 +1954,36 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
             .timer
             .and_then(|(timer, _)| timer.mapped_milliseconds(&gpu.queue));
         job.gpu_ms = job.gpu_ms.zip(measured).map(|(sum, ms)| sum + ms);
+        #[cfg(test)]
+        if std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            if let Some(scene) = owner.or(own.as_ref()) {
+                if let Some(target) = target.as_ref().filter(|t| t.dispatch_audit.is_some()) {
+                    let counts = scene.read_dispatch_audit(target, flight.start, flight.end)?;
+                    eprintln!(
+                        "NATIVE_DISPATCH_AUDIT {}",
+                        serde_json::json!({
+                            "contextId": context_id,
+                            "jobId": job.id,
+                            "flightStart": flight.start,
+                            "flightEnd": flight.end,
+                            "cpuTargetSamplesBefore": target.samples,
+                            "cpuTargetSamplesAfter": flight.end,
+                            "cpuJobCompletedBefore": job.completed,
+                            "cpuJobCompletedAfter": flight.end - job.base,
+                            "submissionCallback": "completed",
+                            "gpuTailCounts": counts,
+                        })
+                    );
+                    assert_eq!(
+                        counts,
+                        vec![1; (flight.end - flight.start) as usize],
+                        "GPU did not execute exactly one tail marker per submitted dispatch"
+                    );
+                }
+            }
+        }
         target.as_mut().ok_or("No render target")?.samples = flight.end;
         job.completed = flight.end - job.base;
     }
@@ -1989,6 +2027,8 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .on_submitted_work_done(move || signal.store(true, Ordering::Release));
     job.submitted += count;
     job.flight = Some(Flight {
+        #[cfg(test)]
+        start,
         end: job.base + job.submitted,
         done,
         timer: timer.map(|timer| {

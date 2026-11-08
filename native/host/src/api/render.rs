@@ -2298,6 +2298,10 @@ impl Render {
     pub(super) fn id(&self) -> u64 {
         self.id
     }
+    #[cfg(test)]
+    pub(crate) fn audit_context_id(&self) -> Option<u64> {
+        self.get(|_, render| render.context())
+    }
     pub(super) fn engine(&self) -> &Engine {
         &self.engine
     }

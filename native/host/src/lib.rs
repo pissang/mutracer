@@ -665,6 +665,92 @@ struct Target {
     frames: Vec<[u8; 16]>,
     /// Disabled targets allocate no frame guides or geometry history.
     frame_inputs: Option<Box<denoiser_inputs::GpuFrameHistory>>,
+    /// Test-only marker proving a render command buffer reached its final GPU pass.
+    #[cfg(test)]
+    dispatch_audit: Option<DispatchAudit>,
+}
+#[cfg(test)]
+struct DispatchAudit {
+    counts: wgpu::Buffer,
+    sample: wgpu::Buffer,
+    pipeline: wgpu::ComputePipeline,
+    group: wgpu::BindGroup,
+}
+#[cfg(test)]
+impl DispatchAudit {
+    const SAMPLES: u64 = 16384;
+
+    fn new(device: &wgpu::Device) -> Self {
+        let counts = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test-only completed render dispatch counts"),
+            size: Self::SAMPLES * 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sample = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test-only dispatch sample index"),
+            size: 4,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("test-only dispatch audit layout"),
+            entries: &[
+                storage_layout(0, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("test-only render dispatch tail marker"),
+            source: wgpu::ShaderSource::Wgsl(
+                "struct Counts { values: array<atomic<u32>> };\n@group(0) @binding(0) var<storage, read_write> counts: Counts;\n@group(0) @binding(1) var<uniform> sampleIndex: u32;\n@compute @workgroup_size(1) fn main() { atomicAdd(&counts.values[sampleIndex], 1u); }".into(),
+            ),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("test-only dispatch audit pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("test-only dispatch audit pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("test-only dispatch audit bindings"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sample.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            counts,
+            sample,
+            pipeline,
+            group,
+        }
+    }
 }
 impl Target {
     #[allow(dead_code)]
@@ -1025,6 +1111,10 @@ impl GpuScene {
                 samples: 0,
                 frames: runtime::frames(options.bounces, options.seed)?,
                 frame_inputs: None,
+                #[cfg(test)]
+                dispatch_audit: (std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
+                    == Some(std::ffi::OsStr::new("1")))
+                .then(|| DispatchAudit::new(device)),
             })
         } else {
             None
@@ -1262,6 +1352,10 @@ impl GpuScene {
             samples: 0,
             frames: packet.frames,
             frame_inputs,
+            #[cfg(test)]
+            dispatch_audit: (std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
+                == Some(std::ffi::OsStr::new("1")))
+            .then(|| DispatchAudit::new(device)),
         })
     }
     /// Submits samples `start..start + additional` of a target without waiting.
@@ -1306,6 +1400,10 @@ impl GpuScene {
                 layout::ray_uniform::SEQUENCE_SEED as u64,
                 &frame[8..12],
             );
+            #[cfg(test)]
+            if let Some(audit) = &target.dispatch_audit {
+                queue.write_buffer(&audit.sample, 0, &sample.to_le_bytes());
+            }
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("MuTracer path trace sample"),
             });
@@ -1351,6 +1449,16 @@ impl GpuScene {
                     pt_pair + 1,
                 );
             }
+            #[cfg(test)]
+            if let Some(audit) = &target.dispatch_audit {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("test-only command buffer completion marker"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&audit.pipeline);
+                pass.set_bind_group(0, &audit.group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
             if sample + 1 == end {
                 if let Some(t) = timer {
                     t.resolve(&mut encoder);
@@ -1373,10 +1481,34 @@ impl GpuScene {
             target.samples,
         )
     }
+    #[cfg(test)]
+    pub(crate) fn read_dispatch_audit(
+        &self,
+        target: &Target,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<u32>> {
+        let audit = target
+            .dispatch_audit
+            .as_ref()
+            .ok_or("Dispatch audit is not enabled")?;
+        if start > end || u64::from(end) > DispatchAudit::SAMPLES {
+            return Err("Dispatch audit sample range is invalid".into());
+        }
+        let bytes = self.gpu.queue.read_buffer(
+            &self.gpu.device,
+            audit.counts.slice(u64::from(start) * 4..u64::from(end) * 4),
+        )?;
+        Ok(bytemuck::pod_collect_to_vec(&bytes))
+    }
     fn reset_target(&self, target: &mut Target) -> Result<()> {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
             encoder.clear_buffer(&target.buffers[&id], 0, None);
+        }
+        #[cfg(test)]
+        if let Some(audit) = &target.dispatch_audit {
+            encoder.clear_buffer(&audit.counts, 0, None);
         }
         self.gpu.queue.submit([encoder.finish()]);
         crate::GpuDevice::wait(&self.gpu.device)?;
