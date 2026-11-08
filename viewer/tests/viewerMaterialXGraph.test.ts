@@ -40,6 +40,9 @@ describe('MaterialX graph import',()=>{
   const literal=parseMaterialXGraph(doc('<swizzle name="s" type="color3"><input name="in" type="vector2" value="0.2,0.8"/><input name="channels" type="string" value="y"/></swizzle>','open_pbr_surface','<input name="base_color" type="color3" nodename="s"/>'));
   expect(literal.values.baseColor).toEqual([0.8,0.2,0.2]);
  });
+ it('diagnoses Standard Surface inputs outside the official conversion subset',()=>{
+  const m=parseMaterialXGraph(doc('','standard_surface','<input name="coat_normal" type="vector3" value="0,1,0"/>'));expect(m.warnings.some(w=>w.includes('coatNormal'))).toBe(true);
+ });
  it('maps glTF coverage controls and reports unhandled surface inputs',()=>{
   const m=parseMaterialXGraph(doc('','gltf_pbr','<input name="alpha_mode" type="integer" value="1"/><input name="alpha_cutoff" type="float" value="0.4"/><input name="alpha" type="float" value="0.2"/><input name="custom_port" type="float" value="0.8"/>'));
   expect(m.values.alphaMode).toBe('mask');expect(m.values.alphaCutoff).toBe(0.4);expect(m.values.opacity).toBe(0.2);expect(m.warnings.some(w=>w.includes('custom_port'))).toBe(true);

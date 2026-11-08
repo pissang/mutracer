@@ -126,6 +126,8 @@ class Reader {
                 const name=camel(e.attrs.name.replace(/_out$/,''));return [fields[name]??name,this.resolve(e,{type:e.attrs.type as Type},ctx)];
             }));
             const normal=input(shader,'normal');if(normal)terminals.normal=this.resolve(normal,{type:'vector3'});
+            const handled=new Set([...def.children.filter(e=>e.tag==='input').map(e=>e.attrs.name),'normal']);
+            for(const e of shader.children.filter(e=>e.tag==='input'&&!handled.has(e.attrs.name))){const name=camel(e.attrs.name);terminals[fields[name]??name]=this.resolve(e,{type:e.attrs.type as Type});}
             return terminals;
         }
         if(shader.tag==='open_pbr_surface'){

@@ -4,7 +4,7 @@ import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../pr
 import * as THREE from 'three';
 import { ViewerOrbitControls } from './orbitControls';
 import {
-  Engine, Render, RenderLoop, Sync, ProceduralSky, createEasuPass,
+  Engine, Render, RenderLoop, Sync, ProceduralSky, OpenPBRMaterial, createEasuPass,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
@@ -15,10 +15,9 @@ import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
-import { MATERIAL_BASE, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
+import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
 import { isMaterialXFile } from './droppedFiles';
 
-/** MaterialX import is still experimental: only development builds offer it. */
 export const MATERIALX_IMPORT = true;
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
@@ -1335,7 +1334,7 @@ export class ViewerEngine {
           try{maps[slot as TextureKey]=await loadMapImage(plan!,pkg);}catch(error){warnings.push(`texture ${(error as Error).message}`);}
         }));
       } catch { /* Unsupported surface families retain the neutral material. */ }
-      await this.materials.setTextures(materialId,maps,{...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null);
+      await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null);
       showToast(warnings.length?`Imported ${name}. ${warnings.join('; ')}`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
