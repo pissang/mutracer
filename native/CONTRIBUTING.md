@@ -350,7 +350,7 @@ layout entries and pipeline keys.
   on complex scenes and the same concrete specialization, not only procedural
   fixtures.
 - The optional MaterialTable whole-module probe has known compiler blockers;
-  all 14 required modules must build and verify.
+  all 15 required modules must build and verify.
 
 ### Engine API
 

@@ -21,7 +21,13 @@ image sampling and hit-context queries remain outside that numeric evaluator.
 The required native AOT material-graph module executes these functions through
 the byte ABI, checking all supported category/type combinations and complete
 surface/shadow specialization on both shader languages. Browser adapters restore
-resource identities and the original parameter value shapes after generation.
+resource identities and the original parameter value shapes after generation. Native and
+Hydra uniform ingestion also call `foldGraphTerminal` through the serialized AOT
+runtime. It validates each reachable terminal independently and delegates numeric
+operations to `evaluateNumericNode`; the C++ adapter does no new node arithmetic.
+Hydra ingestion schemas/default variants are generated from `nodeInputs`, and its
+Standard Surface translation and glTF/PreviewSurface boundary defaults share the
+viewer's source data.
 
 ## Structure and parameters
 
@@ -50,6 +56,23 @@ set of functions remains one megakernel variant, rather than one pipeline per
 material or per topology.
 
 ## Compilation and installation
+
+Native raw descriptors preserve authored IDs separately from the exact structural
+key. Parameters, texture references and IDs do not alter generated source. The
+existing scene-preparation thread seeds fallback graphs from the installed scene,
+prepares a candidate and publishes through the existing cancellation boundary.
+No frame planner or second scheduler is introduced. Native material buffers use
+the same parameter packing as the browser. Sparse material packets include graph
+metadata so incremental edits update diagnostics without rebuilding pipelines.
+
+The native pipeline cache admits a candidate only after its GPU error scopes
+succeed. A failed graph compilation keeps the old scene and target accumulation;
+a first failure prepares the authored constants through the same scene path.
+An installed target can continue dispatching while a graph candidate is pending,
+provided its other inputs match. Publication may retire that target between the
+readiness check and dispatch; that single stale-target status retries on the next
+tick. Metal uses process-local source/pipeline caches. The pre-existing optional
+wgpu cache is Vulkan-only; this change adds no disk-cache format.
 
 `MaterialGraphState` snapshots requested and installed plans. Backend caches
 still own scheduling. Parameter/assignment changes covered by the installed

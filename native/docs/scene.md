@@ -108,6 +108,41 @@ since the engine's last update, for example for other engines. The first
 incremental update after a full preparation builds comparison state for every
 object and takes longer than later edits.
 
+## Material graphs
+
+Assign a normalized `MaterialGraph` with `OpenPbrMaterial::set_graph` (Rust) or
+`mt_scene_material_set_graph` (C), then submit and update the scene. `None` / a
+null graph restores the material's constants and maps. Graphs use the browser's
+[MaterialX node and terminal subset](../../docs/materials.md#material-graphs)
+on both Software and HWRT, including surface and shadow opacity. The
+[C graph declarations](../include/mutracer-material-graph.h) and
+[scene format](scene-format.md#material-graphs-v8) describe the normalized input; this API
+does not read XML. `fold_constants` / `mt_material_graph_fold` can resolve
+uniform terminal values without a GPU.
+
+Numeric and retained-texture edits can commit incrementally. Node, connection,
+type or terminal changes require full preparation. A new shader can take much
+longer than a parameter edit; unchanged camera, size and render settings let the
+installed graph keep sampling while it prepares. Only the latest request
+installs, and installation restarts accumulation for every affected render.
+Invalid graphs retain the installed graph, or use constants and maps when no
+graph has installed. A compilation failure keeps the installed scene. If the
+first scene's graph fails to compile, it prepares constants and maps. Removing
+the graph or using an unsupported lit-emission or opacity-projection combination
+selects the constant fallback directly.
+
+Read located errors from `Engine::diagnostics().material_graphs` or
+`mt_engine_material_graph_diagnostics`. Per-render diagnostics also report
+transport restrictions: light tracing and photon mapping use constant material
+fallbacks for graphs. These restrictions match the browser's documented graph
+limits. Author IDs provide diagnostic locations; graph-wide compilation errors
+have an empty node and port.
+
+Graph parameters and generated shaders add memory and compilation cost. Graph
+textures share the ordinary texture limits and budget, including the full UDIM
+grid. Reusing one structure with different parameter values avoids shader
+compilation. Restarting the application can require compilation again.
+
 ## Visibility
 
 Use `Scene::set_mesh_visible` (Rust) or `mt_scene_set_mesh_visible` (C), then

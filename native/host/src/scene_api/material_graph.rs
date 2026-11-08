@@ -1,4 +1,4 @@
-//! Owned canonical graph records; node semantics live in the shared AOT generator.
+//! Owned canonical material graphs for scene materials.
 use super::{Dense, OpenPbrMaterial, Result, Scene, TextureId, invalid};
 use crate::layout::{graph as g, header as h, material as m};
 
@@ -6,7 +6,7 @@ use crate::layout::{graph as g, header as h, material as m};
 #[path = "material_graph_schema.rs"]
 pub mod schema;
 
-/// One canonical node. Inputs must precede dependent nodes; implementation is 1.
+/// One canonical node. Source nodes precede consumers; implementation is 1.
 /// `first_input`/`input_count` address records in [`MaterialGraph::inputs`].
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,8 +82,8 @@ impl MaterialGraph {
     /// rounding after each node. Invalid reachable IR/non-finite folded values
     /// return InvalidArgument. Unreachable author errors do not affect another
     /// terminal. Texture handles and author labels are not dereferenced. This
-    /// borrows the graph for the call and may run on any thread through the
-    /// SDK's serialized CPU runtime.
+    /// borrows the graph for the call. It may run on any thread; simultaneous
+    /// calls are serialized.
     pub fn fold_constants(&self) -> Result<Vec<Option<Vec<f32>>>> {
         self.word_count()?;
         let graph = serde_json::json!({

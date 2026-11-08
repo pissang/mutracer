@@ -57,7 +57,8 @@ MT_SCENE_API_LAYOUT(mt_scene_material_desc, 80);
 /* Owned graph input for mt_scene_material_set_graph. Defaults: IR version 1,
  * empty arrays and no overrides. Parameter arrays contain four floats per slot;
  * unused components are zero. Filename values index textures (-1 uses the image
- * default); texture handles use 0 for a missing image. Integer parameters are
+ * default); texture handles use 0 for a missing image. Every listed texture
+ * remains retained, including slots not currently selected. Integer parameters are
  * exact float32 values within +/-16777216; booleans use 0/1. Space strings encode
  * object/world as 0/1, and unspecified transform spaces as -1. See the canonical
  * node/port contract in mutracer-material-graph.h. author_ids is NULL or one
@@ -88,8 +89,8 @@ mt_status mt_scene_material_set_graph(mt_scene scene, mt_scene_material_id mater
  * otherwise 1..4 components are written, with unused values zero. Texture
  * handles/author_ids are ignored. Arrays stay owned by the caller and are only
  * borrowed for this call. Invalid IR/non-finite results return INVALID_ARGUMENT;
- * outputs are unchanged on invalid IR. This call may run on any thread, using
- * the SDK's serialized CPU runtime. */
+ * outputs are unchanged on invalid IR. This call may run on any thread;
+ * simultaneous calls are serialized. */
 mt_status mt_material_graph_fold(const mt_scene_material_graph_desc *graph,
   float *values, uint32_t *widths, size_t capacity, char *error, size_t error_capacity);
 

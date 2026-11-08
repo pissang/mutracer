@@ -84,7 +84,7 @@ the rules the validator enforces.
 - The encoder writes `MT_VERSION_SCENE` (8); the validator accepts versions 5
   to 8. Version 5 uses 28-word analytic-light records; versions 6–8 use
   32-word records. Versions 5 and 6 use 12-word texture records; version 7 adds
-  the texture `udim` word for 13-word records. `total_words` is the descriptor
+  the texture `udim` word; versions 7 and 8 use 13-word records. `total_words` is the descriptor
   length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
 - Environment and background maps (`*_texture_plus_one`, 0 for none) must be
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
@@ -170,7 +170,6 @@ node. Each referenced diagnostic location is UTF-8 without a terminating NUL,
 padded to complete words with zero. Author IDs do not change graph structure.
 Out-of-bounds spans, invalid texture references, non-finite parameters and nonzero
 reserved fields or UTF-8 padding reject the descriptor.
-
 
 ### Textures
 

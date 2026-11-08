@@ -46,33 +46,41 @@ Meshes use polygon triangulation, including face-varying normals, `st` UVs and
 Point/native instances and nested instancers are flattened. Material subsets,
 curves, points, motion blur and alternate representations are not supported.
 
-MaterialX `ND_open_pbr_surface_surfaceshader` maps all 37 constant inputs to
-OpenPBR parameters, using nodedef defaults for unassigned inputs. This preserves
-the parameter contract; it does not promise pixel equality with another BSDF.
-The four arbitrary geometry-vector inputs are limited to the default geometry
-frame, tangent rotation and tangent-space normal-map paths.
+MaterialX OpenPBR, Standard Surface, glTF PBR and UsdPreviewSurface materials
+use the [native material graph subset](../../docs/scene.md#material-graphs).
+Material and NodeGraph interface inputs, connected outputs, math, procedural
+noise and image nodes retain their typed connections. Uniform values are folded
+into material constants. Standard Surface uses MaterialX's official OpenPBR
+translation; glTF and PreviewSurface use the same boundary conversion as the
+viewer. These mappings do not promise pixel equality with another renderer's
+BSDF. The default shading frame is supported; arbitrary coat-normal and tangent
+networks outside that subset fall back.
 
-Simple MaterialX image/texcoord/convert chains and `UsdUVTexture` are supported.
-Standard Surface constants use MaterialX's
-`standard_surface_to_open_pbr_surface` conversion. Connected constant
-convert, arithmetic, mix, clamp, power, comparison and channel-extract nodes
-are folded before conversion.
-Textures use Hio, sRGB color storage or linear float storage, connected scalar
-channels, repeat/clamp/mirror wrapping and UV scale/translation. `<UDIM>` image
-paths load existing files numbered 1001–1100; missing tiles sample transparent
-black. Tile images must be readable by Hio and are normalized to the maximum
-tile width and maximum tile height. A texture uses one color-space setting for
-all tiles. The 10×10 logical grid counts toward the texture and GPU budgets,
-including empty cells. UV rotation,
-alternate UV primvars, texture-value scale/bias, border wrapping, other color
-spaces and arbitrary procedural graphs are unsupported. Other graph nodes use the
-authored constant fallback or nodedef default with a warning; the delegate does
-not bake procedural graphs.
+Unsupported inputs report their USD path and port and use the authored constant
+or existing material conversion. Default image-frame controls, uniform zero
+inputs with no effect and default world-space frame inputs do not force a
+fallback. Lit emission, opacity projection and light-tracing/photon-mapping
+restrictions follow the native graph limits. The delegate does not bake graphs.
+
+Textures use Hio, sRGB color storage or linear float storage. MaterialX image
+nodes support repeat/clamp/mirror wrapping and graph UV transforms.
+`UsdUVTexture` retains its direct-map path, including connected scalar channels
+and UV scale/translation; its rotation, texture-value scale/bias, border wrapping
+and alternate UV primvars remain unsupported. `<UDIM>` paths load readable
+files numbered 1001–1100; missing tiles sample transparent black. Tiles are
+normalized to the maximum tile width and height, with one color-space setting
+for all tiles. The full 10×10 logical grid counts toward texture and GPU budgets,
+including empty cells.
+
 Texture references remain cached for the delegate's lifetime; repeated swaps
 can increase memory use. Filters use the SDK's texture filtering.
-Changing a connection to an already retained texture is incremental when its
-atlas placement and shader support remain compatible; otherwise the SDK prepares
-the scene again. Rprim insertion reuses resident materials and can append static,
+Time-varying numeric values and retained-texture replacements commit
+incrementally when atlas placement and shader support remain compatible.
+Changing a node, typed connection or terminal prepares a new graph; the installed
+graph keeps sampling when camera and render settings are unchanged. The newest
+request replaces it when ready, and failures retain the previous graph.
+
+Rprim insertion reuses resident materials and can append static,
 single-material geometry when the SDK's
 [scene update rules](../../docs/scene.md#edit-a-scene) permit it, including after
 rprim deletion. New geometry prepares in the background while the previous
