@@ -56,6 +56,18 @@ describe('MaterialX numeric semantics', () => {
         expect(normal[0]).toBeCloseTo(2 / Math.sqrt(5));
         expect(normal[2]).toBeCloseTo(1 / Math.sqrt(5));
     });
+    it('matches stdlib HSV primaries, gray and roundtrips', () => {
+        for (const [rgb, expected] of [
+            [[1,0,0],[0,1,1]], [[0,1,0],[1/3,1,1]],
+            [[0,0,1],[2/3,1,1]], [[0.25,0.25,0.25],[0,0,0.25]]
+        ]) {
+            const graph = new MaterialGraph({nodes:[{id:'hsv',category:'rgbtohsv',type:'color3',inputs:{in:{type:'color3',value:rgb}}}],terminal:{baseColor:{node:'hsv'}}});
+            const hsv = evaluateGraph(normalizeGraph(graph)).baseColor;
+            hsv.forEach((value,i)=>expect(value).toBeCloseTo(expected[i],6));
+            graph.setNode({id:'rgb',category:'hsvtorgb',type:'color3',inputs:{in:{type:'color3',connection:{node:'hsv'}}}}).setTerminal({baseColor:{node:'rgb'}});
+            evaluateGraph(normalizeGraph(graph)).baseColor.forEach((value,i)=>expect(value).toBeCloseTo(rgb[i],6));
+        }
+    });
     it('emits deterministic sources independent of parameter values', () => {
         const graph = run('multiply', { in1: f(0.4), in2: f(0.5) });
         const changed = { ...graph, parameters: [2, 3] };
