@@ -317,3 +317,90 @@ Set `specularAnisotropyRotation` or provide `anisotropyMap` to orient the base s
 Provided tangent XYZ and optional W handedness are preserved. Missing tangents are generated from primary UVs only when a material using the geometry needs anisotropy or an active coat normal map; adding such a material prepares them automatically. For XYZ tangents the sign comes from triangle UV derivatives. Missing UVs or degenerate tangents use UV derivatives where available and then a stable orthonormal fallback. The direction texture's selected UV set is used for derivative fallback, including UV1. A provided XYZW tangent remains authoritative. Directions are reorthogonalized against the final shading normal, including normal maps and back faces, and instance transforms preserve mirrored handedness. UV scale, offset and flipY affect texel lookup; they do not rotate the encoded direction.
 
 The direction and strength inputs use native OpenPBR semantics by default. For imported glTF/Three.js strength, select `specularAnisotropyModel: 'gltf'`; the same roughness and strength properties then retain source values. Source scalar inputs are clamped to [0, 1] before texture factors; non-finite source roughness/strength fall back to 0.3/0. Native scalar handling is unchanged. Zero source strength preserves the original roughness path. The conversion matches the GGX alpha axes before existing minimum-alpha clamping; Fresnel, masking, multiple scattering and OpenPBR coating remain the library's model. See [the conversion rules](./threejs.md#anisotropy-source-conversion).
+
+## Material graphs
+
+Attach a `MaterialGraph` to an `OpenPBRMaterial`. Terminal names use the material's
+camelCase inputs; inputs without a terminal connection retain the material's
+constants and maps. Use `setNode`, `removeNode`, `setInput` and `setTerminal` to
+edit a graph, then call `engine.update()`:
+
+```ts
+import {MaterialGraph, OpenPBRMaterial} from '@meimu/mutracer';
+
+const graph = new MaterialGraph({
+  nodes: [{
+    id: 'roughness', category: 'constant', type: 'float',
+    inputs: {value: {type: 'float', value: 0.4}}
+  }],
+  terminal: {specularRoughness: {node: 'roughness'}}
+});
+const material = new OpenPBRMaterial({graph, baseColor: [0.8, 0.2, 0.1]});
+
+graph.setInput('roughness', 'value', {type: 'float', value: 0.6});
+engine.update();
+```
+
+Nodes have stable IDs and typed inputs. Connect an input with
+`{type: 'float', connection: {node: 'roughness'}}`; the output defaults to `out`.
+`separate2/3/4` use `outx/outy/outz/outw` for vectors and
+`outr/outg/outb/outa` for colors. Node declarations, input values and terminal
+connections are immutable snapshots; edit them through the graph's methods.
+Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
+
+Both WebGPU and WebGL 2 support these MaterialX 1.39 categories:
+
+- `constant`, `image`, `tiledimage`, `texcoord`, `place2d`, `convert`, `normalmap`;
+- `position`, `normal`, `tangent`, `bitangent`, `normalize`, `dotproduct`, `crossproduct`;
+- `add`, `subtract`, `multiply`, `divide`, `modulo`, `min`, `max`, `mix`, `clamp`, `power`;
+- `abs`, `floor`, `ceil`, `round`, `sin`, `cos`, `sqrt`, `exp`, `ln`, `sign`;
+- `separate2/3/4`, `combine2/3/4`, `ifgreater`, `ifequal`, `rgbtohsv`, `hsvtorgb`.
+
+Numeric types are `float`, `integer`, `boolean`, `color3/4` and `vector2/3/4`;
+not every node supports every type. Integer parameters are limited to ±16,777,216.
+Undefined arithmetic domains, such as division
+by zero or normalizing a zero vector, can produce non-finite pixels. Image `file` inputs hold a loaded `Texture`
+or `UdimTexture`. Images use its color space, UV transform and wrapping options.
+MaterialX filter/address inputs currently accept only `linear`/`periodic`;
+other values produce diagnostics. Texture options provide the other wrapping
+choices. `tiledimage` applies tiling, subtracts its offset, then applies its
+real-world size ratio. UDIM selection and missing tiles follow [UDIM textures](#udim-textures).
+`texcoord.index` selects UV0 or UV1; missing UV sets are zero. Graph images use
+this input rather than `Texture.uvChannel`. Geometry nodes
+support `space: {type: 'string', value: 'object' | 'world'}`, default `object`;
+normalmap's implicit normal/tangent/bitangent use the world frame. Only the
+primary tangent frame is supported. `place2d.rotate` is in degrees and
+`operationorder` defaults to `0` (SRT); `1` selects TRS.
+
+Terminals support base weight/color/diffuse roughness/metalness, specular
+weight/color/roughness/IOR/anisotropy, transmission weight/color, fuzz and coat
+inputs, thin-film weight/thickness/IOR, and `geometryNormal` (`normal` is an
+alias). The material's anisotropy aliases also work here. Emission color and
+luminance graphs currently require `unlit: true`; graph coat absorption on an
+emissive surface has the same restriction. These unsupported material contexts
+use the constant fallback. Opacity, displacement, volume,
+subsurface and tangent terminals are not supported. With WebGPU light tracing or photon mapping, graph materials use their constant
+fallback and report `unsupported-transport`. This API takes an authored
+graph; it does not load `.mtlx`/USD files or convert other surface models.
+
+Parameter values, including texture references and UV transforms, update without
+compiling a shader when their types and connections stay the same. New structures
+compile after a short debounce. During compilation, rendering uses the previous
+successful graph and its parameters; the first graph uses the material's constants
+and maps. A successful installation restarts accumulation. Compilation can take
+hundreds of milliseconds or longer and becomes more expensive as a scene uses
+more distinct structures. WebGL's background compilation depends on
+`KHR_parallel_shader_compile`. Driver work on the first draw can still pause
+a frame, including when that extension is available. Changes that also require
+new resource/layout support may keep the last image until that support is ready.
+Each material retains its own parameters even when it shares graph code; parameter
+memory grows with its reachable inputs and folded values.
+
+Read `engine.getDiagnostics()?.materialGraphs` for `status` (`idle`, `compiling`,
+`ready`, `failed`), requested/installed revisions, topology count, compilation
+measurements and located diagnostics (`code`, `message`, `materialId`, `node`, `port`).
+Node and port validation errors keep the last successful graph for that material;
+valid graphs on other materials can still install. The fallback is the constant
+material if no successful graph exists. Shader failures do the same. Keep calling `refine()` or use
+RenderLoop while a graph compiles. Shader/program caches consume memory as new
+structures are tried; disposing the engine releases them.

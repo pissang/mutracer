@@ -1,3 +1,5 @@
+// MaterialX 1.39.4 operator semantics: https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.4/libraries/stdlib
+// See THIRD_PARTY_NOTICES.md and LICENSES/MaterialX-*.txt.
 import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import { generateGraph, type Backend } from './codegen.js';

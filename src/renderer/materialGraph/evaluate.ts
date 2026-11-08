@@ -1,3 +1,5 @@
+// MaterialX 1.39.4 stdlib semantics: https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.4/libraries/stdlib
+// See THIRD_PARTY_NOTICES.md and LICENSES/MaterialX-*.txt for node/HSV attributions.
 import type { GraphNode, NormalizedGraph } from './normalize.js';
 import { width } from './nodes.js';
 import Texture from '../../scene/Texture.js';

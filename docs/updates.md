@@ -293,3 +293,13 @@ Selection and coalescing of continuous animation changes belong to the
 application. Render.refine only executes the chosen settings, and samples
 always count that render's complete samples. For fixed-quality animation, use
 converge on each frame with disjoint sequence offsets.
+
+### Material graph edits
+
+For [material graphs](./materials.md#material-graphs), changing a typed input's
+value updates parameters without compiling a shader. Texture references and pixel
+edits still incur the texture upload costs above. Changing categories, types,
+connections or terminal inputs can require compilation; materials with the same
+reachable structure share code. Rendering keeps the previous graph and parameters
+until the new structure is ready, then restarts accumulation. Inspect
+`engine.getDiagnostics()?.materialGraphs` for progress or a located failure.

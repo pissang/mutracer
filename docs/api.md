@@ -652,3 +652,21 @@ include extra pixels around a fixed render's requested image. See
 Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.
 
 `specularAnisotropyModel` defaults to `'openpbr'`. Selecting `'gltf'` keeps `specularRoughness` as source perceptual roughness and `specularRoughnessAnisotropy` (or its compatibility name) as source strength. The renderer converts both after their texture factors and before coat roughening. See [source conversion](./threejs.md#anisotropy-source-conversion) for the equations and metadata precedence.
+
+## MaterialGraph
+
+`new MaterialGraph({nodes: [], terminal: {}})` creates an empty graph. Attach it as
+`material.graph` (default `undefined`). Nodes have `id`, MaterialX `category`,
+output `type`, and optional typed `inputs`; connections use `{node, output?}`,
+with `output: 'out'` by default. Omitted inputs use node defaults.
+
+Use `setNode(node)`, `removeNode(id)`, `setInput(id, port, input?)` and
+`setTerminal(connections)` to edit; each returns the graph and advances its
+read-only `revision` from zero. `setInput(..., undefined)` restores the node
+default. A missing ID passed to `setInput` throws. Call `engine.update()` after
+edits. Node and terminal snapshots cannot be edited in place.
+
+See [material graphs](./materials.md#material-graphs) for an example, supported
+nodes, terminal inputs, compilation/fallback behavior and limits. Compilation
+state and located diagnostics are available on
+`engine.getDiagnostics()?.materialGraphs`.

@@ -1,0 +1,74 @@
+# Browser material graph specialization
+
+`MaterialGraph` is a web facade; shared `MaterialState`, native descriptors and
+AOT shader generators retain their constant-material contract. Browser source
+specialization happens after the shared generator returns. Empty graph plans
+return that source unchanged. Explicit boundary anchors fail compilation if the
+shared material evaluator changes shape.
+
+## Structure and parameters
+
+`normalizeGraph` walks terminal inputs and node ports in canonical order,
+retains only reachable nodes, assigns topological indices and removes author IDs.
+Its exact key includes the implementation version, backend, texture binding
+capability and typed edges/parameter slots. A short FNV fingerprint is for
+reporting; caches retain the exact key. Numeric values, booleans, strings from the
+supported enums, and texture identities are data. Backend pipeline keys also
+include the existing transport, vertex/BVH and resource layout features.
+
+Uniform subtrees are evaluated on the CPU into parameter slots, rounding each
+folded node to Float32. Their values never appear in shader literals. Dynamic
+expressions reuse previous expressions only when their typed source references
+are identical; equal values in independently editable slots are not aliases.
+Helper order and generated names depend on canonical indices. Separate node
+outputs retain their declared scalar ports.
+
+Browser packing uses the existing two reserved ALPHA components for topology ID
+and graph-parameter record offset. Additional records use their first vec4 for
+one parameter, preserving every existing material record and the native layout.
+This intentionally spends one material record per parameter; measure that cost
+before introducing a different browser binding layout. Source functions dispatch
+by topology, so many materials using one structure emit one function. A scene's
+set of functions remains one megakernel variant, rather than one pipeline per
+material or per topology.
+
+## Compilation and installation
+
+`MaterialGraphState` snapshots requested and installed plans. Backend caches
+still own scheduling. Parameter/assignment changes covered by the installed
+structure set can install without compiling. A different set waits for a short
+debounce. WebGPU queues a normal async trace variant. When layout-compatible,
+the old variant and its parameter records continue tracing; installation uploads
+new records and binds the new variant together. WebGL stages separate program
+bindings and polls KHR completion while the active bindings remain usable.
+Background programs do not enter the foreground program-readiness barrier.
+
+Only a plan matching the current request can install. Validation/compile failures
+retain the successful plan and appear in the existing engine diagnostics. A
+successful structural installation advances a generation observed independently
+by each render target, restarting its accumulation without changing the shared
+display schedule. WebGL caches background programs by exact composed source;
+WebGPU uses the existing bounded variant and shader caches.
+
+Geometry inputs use the hit's local/world transforms and primary tangent frame.
+The browser specialization enables frame construction for graph materials even
+without anisotropy maps. MaterialX normalmap defaults use world-space geometry;
+explicit geometry nodes default to object space. Image nodes reuse the existing
+texture decoding, filtering and UDIM path.
+
+## Current boundaries
+
+This is an authored typed graph API, not a MaterialX XML/USD importer. Unknown
+categories, unsupported input variants and unsupported terminal semantics fail
+as whole graphs. In particular, arbitrary graph emission on lit materials needs
+matching emissive-light and caustic-emitter evaluation before it can be enabled;
+it currently produces a located diagnostic and forces constant fallback, even
+when a formerly valid unlit graph is present. Emission graphs on unlit materials
+exercise the same arithmetic/image code without entering light proposals.
+Subsurface/volume, opacity, displacement and tangent terminals are not included.
+Light-tracing and photon-mapping variants retain the constant material evaluator
+and expose an unsupported-transport diagnostic until their emitter/material
+evaluation is ported together; the algorithms themselves remain available.
+
+Keep official numerical-reference files and experiment data outside the source
+tree. Tests compare behavior and GPU HDR output, not snapshots of template text.

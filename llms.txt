@@ -67,3 +67,5 @@
 - [BVH](docs/bvh.md): automatic and up-front preparation, builders, layouts
 - [Performance](docs/performance.md): tuning checklist; resident target dimensions/bytes and complete-image presentation diagnostics
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
+
+- [Material graphs](docs/materials.md#material-graphs): attach MaterialGraph to material.graph; edit typed values or connections, then engine.update(). Supported nodes, async fallback, diagnostics and [update costs](docs/updates.md#material-graph-edits).
