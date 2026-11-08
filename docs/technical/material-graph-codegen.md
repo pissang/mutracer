@@ -1,10 +1,27 @@
-# Browser material graph specialization
+# Shared material graph specialization
 
-`MaterialGraph` is a web facade; shared `MaterialState`, native descriptors and
-AOT shader generators retain their constant-material contract. Browser source
-specialization happens after the shared generator returns. Empty graph plans
-return that source unchanged. Explicit boundary anchors fail compilation if the
-shared material evaluator changes shape.
+`MaterialGraph` is the browser authoring facade. Its validated canonical graph
+lowers to the portable `GraphIR` before expression generation and shader
+specialization. Empty structure sets return the input source unchanged. Explicit
+boundary anchors fail compilation if the material evaluator changes shape.
+
+The IR has a format version and append-only integer IDs for categories, types,
+ports, outputs, geometry inputs and OpenPBR terminals. Node records contain the
+category, implementation version, type and input range; input records contain the
+port/type, source kind, source index and selected output. Terminal records
+reference topologically ordered nodes. Parameters use four numeric components
+per slot; filename parameters refer to texture slots, with -1 for no image.
+Author IDs and resource objects stay at the host boundary. Validation checks
+record spans, typed edges, required/defaulted ports and supported controls before
+source generation.
+
+`generateGraphIR` and `materialGraphShaderIR` are pure shared emitters; numeric
+folding uses the same `evaluateNumericNode` as the browser CPU evaluator. Browser
+image sampling and hit-context queries remain outside that numeric evaluator.
+The required native AOT material-graph module executes these functions through
+the byte ABI, checking all supported category/type combinations and complete
+surface/shadow specialization on both shader languages. Browser adapters restore
+resource identities and the original parameter value shapes after generation.
 
 ## Structure and parameters
 

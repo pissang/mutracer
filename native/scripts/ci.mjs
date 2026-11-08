@@ -91,11 +91,11 @@ const modulesLane=lane(async()=>{
  if(enabled('modules-build')){
  const matrix=JSON.parse(readFileSync(resolve(out,'modules/summary.json'),'utf8'));
  const required=matrix.results.filter(r=>r.name!=='materials');
- if(required.length!==14||required.some(r=>r.status!=='archive-built'))throw Error('Required AOT module failed.');
+ if(required.length!==15||required.some(r=>r.status!=='archive-built'))throw Error('Required AOT module failed.');
  }
  await run('modules-verify','npm',['run','native:modules:verify']);
  await run('storage-verify','npm',['run','native:storage:verify'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'storage')});
- return 14;
+ return 15;
 });
 // The release viewer has its own target dir, so it never waits on the test builds' lock.
 const viewerLane=gpuValidation&&lane(()=>run('viewer-build','npm',['run','native:viewer:build'],
@@ -152,7 +152,7 @@ const totalSeconds=seconds(ciStarted);
 console.log(`Native CI: ${totalSeconds} s`);
 const completed=new Set(checks.map(check=>check.name));
 const skippedSteps=[...steps].filter(name=>!completed.has(name));
-writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,validated:!subset&&gpu.validated,subset,skippedSteps,gpuTestsSkipped:hostGpuTests?.skipped??[],scriptc:'0.4.4',gpu,hostGpuTests,requiredModules:14,totalSeconds,checks},null,2)+'\n');
+writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,validated:!subset&&gpu.validated,subset,skippedSteps,gpuTestsSkipped:hostGpuTests?.skipped??[],scriptc:'0.4.4',gpu,hostGpuTests,requiredModules:15,totalSeconds,checks},null,2)+'\n');
 
 // Each ignored test runs in its own process, so a panic cannot poison the shared
 // test lock for the rest. The HWRT loop runs fewer iterations than its default.

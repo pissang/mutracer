@@ -49,7 +49,7 @@ export function evaluateNoise(category:string,p:number[],n:number,a:Record<strin
             const off=[x,y,z].slice(0,p.length), cp=cellVector(base.map((x,i)=>x+off[i])).slice(0,p.length).map((x,i)=>off[i]+(x-0.5)*a.jitter[0]+0.5-local[i]);
             const d=cp.reduce((s,x)=>s+x*x,0);
             if(d<nearest[0])minpos=cp;
-            for(let i=0;i<n;i++)if(d<nearest[i]){nearest.splice(i,0,d);nearest.length=n;break;}
+            for(let i=0;i<n;i++)if(d<nearest[i]){nearest.splice(i,0,d);nearest.pop();break;}
         }
         if(a.style[0]===1){const pos=p.map((x,i)=>x+minpos[i]);return n===1?[cell(pos)]:cellVector(pos).slice(0,n);}
         return nearest.map(Math.sqrt);

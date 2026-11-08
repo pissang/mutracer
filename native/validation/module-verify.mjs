@@ -26,8 +26,8 @@ const sourceOracleRoot = resolve(output, 'javascript-source');
 const sourceConfig = ts.readConfigFile(resolve(root, 'tsconfig.json'), ts.sys.readFile);
 const sourceOptions = ts.parseJsonConfigFileContent(sourceConfig.config, ts.sys, root).options;
 const sourceModules = ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-facade',
-  'material-packing', 'material-data', 'lights', 'shader-generation', 'displacement', 'ies'];
-const sourceProgram = ts.createProgram(sourceModules.map(name => resolve(root, `native/tests/modules/${name}.ts`)), { ...sourceOptions, rootDir: root,
+  'material-graph', 'material-packing', 'material-data', 'lights', 'shader-generation', 'displacement', 'ies'];
+const sourceProgram = ts.createProgram([...sourceModules.map(name => resolve(root, `native/tests/modules/${name}.ts`)), resolve(root,'native/validation/material-graph-fixtures.ts')], { ...sourceOptions, rootDir: root,
   outDir: sourceOracleRoot, declaration: false, sourceMap: false, inlineSources: false });
 const sourceDiagnostics = [...ts.getPreEmitDiagnostics(sourceProgram), ...sourceProgram.emit().diagnostics];
 if (sourceDiagnostics.some(item => item.category === ts.DiagnosticCategory.Error)) {
@@ -40,7 +40,7 @@ function writeState(complete) {
     success: complete && results.every(result => result.passedCases === result.cases), results }, null, 2) + '\n');
 }
 writeState(false);
-for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling', 'displacement', 'ies']) {
+for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-graph', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling', 'displacement', 'ies']) {
   const module = matrix.results.find(item => item.name === name);
   if (module?.status !== 'archive-built') throw new Error(`Required composition module blocked: ${name}`);
   const host = resolve(output, executable(`${name}-host`));
@@ -48,7 +48,11 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
   const fixtures = [];
   if (name !== 'bvh-core' && name !== 'sampling') {
     const oracle = await import(pathToFileURL(resolve(sourceOracleRoot, `native/tests/modules/${name}.js`)).href);
-    if (name === 'math') for (const [i, values] of [[0, 0, 0], [1, 2, 3], [-1.25, .3, 4], [.3, -.7, 1.2], [1e-6, 2e-6, -3e-6], [100, -50, .125]].entries()) {
+    if (name === 'material-graph') {
+      const {materialGraphRequests}=await import(pathToFileURL(resolve(sourceOracleRoot,'native/validation/material-graph-fixtures.js')).href);
+      for(const {label,input} of materialGraphRequests()) fixtures.push({label,input,expected:oracle.materialGraphParameters(input)});
+    }
+    else if (name === 'math') for (const [i, values] of [[0, 0, 0], [1, 2, 3], [-1.25, .3, 4], [.3, -.7, 1.2], [1e-6, 2e-6, -3e-6], [100, -50, .125]].entries()) {
       const input = new Uint8Array(new Float32Array(values).buffer);
       fixtures.push({ label: `numeric-${i}`, input, expected: oracle.mathParameters(input) });
     }

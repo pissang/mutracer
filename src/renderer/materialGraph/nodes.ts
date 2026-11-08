@@ -1,7 +1,18 @@
-import type { MaterialGraphInput as Input, MaterialGraphNode as Node, MaterialGraphType as Type } from '../../scene/MaterialGraph.js';
-export const width = (type: Type) => type === 'vector2' ? 2 : type === 'vector3' || type === 'color3' ? 3 : type === 'vector4' || type === 'color4' ? 4 : 1;
-const input = (type: Type, value?: Input['value']): Input => ({ type, value: type === 'boolean' ? Boolean(value) : type === 'filename' || type === 'string' ? value : value ?? (width(type) === 1 ? 0 : Array(width(type)).fill(0)) });
-const same = (node: Node, value = 0) => input(node.type, width(node.type) === 1 ? value : Array(width(node.type)).fill(value));
+import type {GraphType as Type} from './types.js';
+interface Input {
+    type: Type;
+    value?: number | number[] | string | boolean;
+    connection?: {node: string; output?: string};
+}
+interface Node {
+    category: string;
+    type: Type;
+    inputs?: Record<string, {type: Type}>;
+}
+import {width} from './types.js';
+export {width} from './types.js';
+const input = (type: Type, value?: Input['value']): Input => ({ type, value: type === 'boolean' ? Boolean(value) : type === 'filename' || type === 'string' ? value : value ?? (width(type) === 1 ? 0 : Array<number>(width(type)).fill(0)) });
+const same = (node: Node, value = 0) => input(node.type, width(node.type) === 1 ? value : Array<number>(width(node.type)).fill(value));
 export const terminalAliases: Record<string, string> = { geometryOpacity: 'opacity', geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' };
 export const terminalTypes: Record<string, Type> = {
     baseWeight: 'float', baseColor: 'color3', baseDiffuseRoughness: 'float', baseMetalness: 'float',
@@ -23,11 +34,19 @@ export function nodeInputs(node: Node): Record<string, Input> | undefined {
         case 'cellnoise2d':
         case 'cellnoise3d':
         case 'worleynoise2d':
-        case 'worleynoise3d': return {
-            ...(node.category.endsWith('2d') ? {texcoord:{type:'vector2' as Type}} : {position:{type:'vector3' as Type}}),
-            ...(/^(noise|fractal)/.test(node.category) ? {amplitude:a.amplitude?.type === 'float' ? input('float',1) : same(node,1), ...(node.category === 'fractal3d' ? {octaves:input('integer',3),lacunarity:input('float',2),diminish:input('float',0.5)} : {pivot:scalar})} : {}),
-            ...(node.category.startsWith('worley') ? {jitter:input('float',1),style:input('integer',0)} : {})
-        };
+        case 'worleynoise3d': {
+            const result: Record<string,Input> = {};
+            if(node.category.endsWith('2d')) result.texcoord={type:'vector2'};
+            else result.position={type:'vector3'};
+            if(/^(noise|fractal)/.test(node.category)) {
+                result.amplitude=a.amplitude?.type === 'float' ? input('float',1) : same(node,1);
+                if(node.category==='fractal3d') {
+                    result.octaves=input('integer',3); result.lacunarity=input('float',2); result.diminish=input('float',0.5);
+                } else result.pivot=scalar;
+            }
+            if(node.category.startsWith('worley')) {result.jitter=input('float',1); result.style=input('integer',0);}
+            return result;
+        }
         case 'splitlr': return {valuel:same(node),valuer:same(node),center:input('float',0.5),texcoord:{type:'vector2'}};
         case 'splittb': return {valuet:same(node),valueb:same(node),center:input('float',0.5),texcoord:{type:'vector2'}};
         case 'ramplr': return {valuel:same(node),valuer:same(node),texcoord:{type:'vector2'}};
@@ -44,7 +63,12 @@ export function nodeInputs(node: Node): Record<string, Input> | undefined {
         case 'extract': return { in: input(a.in?.type ?? 'color3'), index: input('integer') };
         case 'invert': return { in: same(node), amount: a.amount?.type === 'float' ? input('float', 1) : same(node, 1) };
         case 'remap':
-        case 'range': return { in: same(node), ...Object.fromEntries(['inlow', 'inhigh', 'outlow', 'outhigh'].map((p, i) => [p, a[p]?.type === 'float' ? input('float', i % 2) : same(node, i % 2)])), ...(node.category === 'range' ? {gamma: a.gamma?.type === 'float' ? input('float', 1) : same(node, 1), doclamp: input('boolean', false)} : {}) };
+        case 'range': {
+            const result: Record<string,Input>={in:same(node)};
+            for(const [i,p] of ['inlow','inhigh','outlow','outhigh'].entries()) result[p]=a[p]?.type==='float' ? input('float',i%2) : same(node,i%2);
+            if(node.category==='range') {result.gamma=a.gamma?.type==='float'?input('float',1):same(node,1);result.doclamp=input('boolean',false);}
+            return result;
+        }
         case 'contrast': return { in: same(node), amount: a.amount?.type === 'float' ? input('float', 1) : same(node, 1), pivot: a.pivot?.type === 'float' ? input('float', 0.5) : same(node, 0.5) };
         case 'luminance': return { in: same(node), lumacoeffs: input('color3', [0.2722287, 0.6740818, 0.0536895]) };
         case 'rotate2d': return { in: input('vector2'), amount: scalar };
@@ -61,18 +85,23 @@ export function nodeInputs(node: Node): Record<string, Input> | undefined {
         case 'bitangent': return { space: input('string', 'object'), index: input('integer', 0) };
         case 'gltf_image':
         case 'gltf_colorimage':
-        case 'gltf_normalmap': return {
-            file:input('filename'),default:node.category==='gltf_normalmap'?input('vector3',[0.5,0.5,1]):same(node),texcoord:{type:'vector2'},
-            pivot:input('vector2',[0,1]),scale:input('vector2',[1,1]),rotate:scalar,offset:input('vector2'),operationorder:input('integer',t==='color4'?1:0),
-            uaddressmode:input('string','periodic'),vaddressmode:input('string','periodic'),filtertype:input('string','linear'),
-            ...(node.category==='gltf_colorimage'?{color:input('color4',[1,1,1,1]),geomcolor:input('color4',[1,1,1,1])}:node.category==='gltf_image'&&t!=='vector3'?{factor:same(node,1)}:{})
-        };
+        case 'gltf_normalmap': {
+            const result: Record<string,Input>={
+                file:input('filename'),default:node.category==='gltf_normalmap'?input('vector3',[0.5,0.5,1]):same(node),texcoord:{type:'vector2'},
+                pivot:input('vector2',[0,1]),scale:input('vector2',[1,1]),rotate:scalar,offset:input('vector2'),operationorder:input('integer',t==='color4'?1:0),
+                uaddressmode:input('string','periodic'),vaddressmode:input('string','periodic'),filtertype:input('string','linear')
+            };
+            if(node.category==='gltf_colorimage') {result.color=input('color4',[1,1,1,1]);result.geomcolor=input('color4',[1,1,1,1]);}
+            else if(node.category==='gltf_image' && t!=='vector3') result.factor=same(node,1);
+            return result;
+        }
         case 'image':
-        case 'tiledimage': return {
-            file: input('filename'), default: same(node), texcoord: { type: 'vector2' }, filtertype: input('string', 'linear'),
-            ...(node.category === 'image' ? { uaddressmode: input('string', 'periodic'), vaddressmode: input('string', 'periodic') } : {}),
-            ...(node.category === 'tiledimage' ? { uvtiling: input('vector2', [1, 1]), uvoffset: input('vector2', [0, 0]), realworldimagesize: input('vector2', [1, 1]), realworldtilesize: input('vector2', [1, 1]) } : {})
-        };
+        case 'tiledimage': {
+            const result: Record<string,Input>={file:input('filename'),default:same(node),texcoord:{type:'vector2'},filtertype:input('string','linear')};
+            if(node.category==='image') {result.uaddressmode=input('string','periodic');result.vaddressmode=input('string','periodic');}
+            else {result.uvtiling=input('vector2',[1,1]);result.uvoffset=input('vector2',[0,0]);result.realworldimagesize=input('vector2',[1,1]);result.realworldtilesize=input('vector2',[1,1]);}
+            return result;
+        }
         case 'place2d': return { texcoord: input('vector2'), pivot: input('vector2'), scale: input('vector2', [1, 1]), rotate: scalar, offset: input('vector2'), operationorder: input('integer') };
         case 'convert': return { in: input(a.in?.type ?? 'float') };
         case 'normalmap': return { in: input('vector3', [0.5, 0.5, 1]), scale: input(a.scale?.type === 'vector2' ? 'vector2' : 'float', a.scale?.type === 'vector2' ? [1, 1] : 1), normal: { type: 'vector3' }, tangent: { type: 'vector3' }, bitangent: { type: 'vector3' } };

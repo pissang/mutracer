@@ -25,6 +25,7 @@ const modules = [
   ['materials', 'src/renderer/MaterialTable.ts', `import MaterialTable from '${importRoot}/src/renderer/MaterialTable.js';
 import Material from '${importRoot}/src/scene/OpenPBRMaterial.js';
 export function run(bytes: Uint8Array): Uint8Array { return new Uint8Array(new MaterialTable([new Material()], []).getBufferArray().buffer); }`],
+  ['material-graph', 'src/renderer/materialGraph/generate.ts', null, 'native/tests/modules/material-graph.ts', 'materialGraphParameters'],
   ['material-packing', 'src/renderer/materialLayout.ts', null, 'native/tests/modules/material-packing.ts', 'materialParameters'],
   ['material-data', 'src/renderer/materialCore.ts', null, 'native/tests/modules/material-data.ts', 'materialDataParameters'],
   // The native light entry includes the portable model constructors: scriptc
