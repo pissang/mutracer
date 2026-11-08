@@ -206,7 +206,10 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
     // Remove the remaining appended mesh so the next addition reuses the tail
     // mesh slot. Geometry and append buffers remain resident after removal.
     scene.remove_mesh(second_mesh).unwrap();
-    assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+    assert_eq!(
+        scene.pending_commit_kind().unwrap(),
+        CommitKind::Incremental
+    );
     engine.set_scene_object(&scene).unwrap();
     eprintln!("APPEND_STAGE retained second delete update");
     engine.update().unwrap();
@@ -224,10 +227,22 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
             let x = (triangle % 32) as f32 * 0.01 - 0.16;
             let y = (triangle / 32) as f32 * 0.01 - 0.16;
             let base = (positions.len() / 3) as u32;
-            positions.extend_from_slice(&[x - 0.003, y - 0.003, z, x + 0.003, y - 0.003, z, x, y + 0.003, z]);
+            positions.extend_from_slice(&[
+                x - 0.003,
+                y - 0.003,
+                z,
+                x + 0.003,
+                y - 0.003,
+                z,
+                x,
+                y + 0.003,
+                z,
+            ]);
             indices.extend_from_slice(&[base, base + 1, base + 2]);
         }
-        let geometry = scene.add_geometry(Geometry::new(positions, indices)).unwrap();
+        let geometry = scene
+            .add_geometry(Geometry::new(positions, indices))
+            .unwrap();
         let appended = Mesh::new(geometry, material);
         scene.add_mesh(appended).unwrap();
         assert_eq!(
@@ -241,19 +256,14 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
         wait_for_commit(&render);
         assert_eq!(
             render.last_commit().unwrap(),
-            Some(if round == 0 {
-                CommitKind::Full
-            } else {
-                CommitKind::Incremental
-            }),
+            Some(CommitKind::Incremental),
             "round {round}"
         );
         render.converge(ConvergeOptions::new(4)).unwrap();
         assert_append_render_matches_fresh(&scene, &render, &engine, &settings, backend, round);
     }
 
-    // After the deletion fallback, continuous appends (without further mesh
-    // removal) each cross the retained buffers' current capacity.
+    // Continuous appends also cross the retained buffers' current capacity.
     for (round, triangle_count) in [12_000, 30_000].into_iter().enumerate() {
         let z = -0.25 - round as f32 * 0.03;
         let mut positions = Vec::with_capacity(triangle_count * 9);
@@ -263,20 +273,40 @@ fn new_geometry_append_matches_fresh_scene(backend: Backend) {
             let y = (triangle / 32) as f32 * 0.01 - 0.16;
             let base = (positions.len() / 3) as u32;
             positions.extend_from_slice(&[
-                x - 0.003, y - 0.003, z, x + 0.003, y - 0.003, z, x, y + 0.003, z,
+                x - 0.003,
+                y - 0.003,
+                z,
+                x + 0.003,
+                y - 0.003,
+                z,
+                x,
+                y + 0.003,
+                z,
             ]);
             indices.extend_from_slice(&[base, base + 1, base + 2]);
         }
-        let geometry = scene.add_geometry(Geometry::new(positions, indices)).unwrap();
+        let geometry = scene
+            .add_geometry(Geometry::new(positions, indices))
+            .unwrap();
         scene.add_mesh(Mesh::new(geometry, material)).unwrap();
-        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Incremental);
+        assert_eq!(
+            scene.pending_commit_kind().unwrap(),
+            CommitKind::Incremental
+        );
         engine.set_scene_object(&scene).unwrap();
         eprintln!("APPEND_STAGE retained continuous round {round} update");
         engine.update().unwrap();
         wait_for_commit(&render);
         assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
         render.converge(ConvergeOptions::new(4)).unwrap();
-        assert_append_render_matches_fresh(&scene, &render, &engine, &settings, backend, round + 10);
+        assert_append_render_matches_fresh(
+            &scene,
+            &render,
+            &engine,
+            &settings,
+            backend,
+            round + 10,
+        );
     }
 }
 
@@ -324,7 +354,10 @@ fn assert_append_render_matches_fresh(
 fn wait_for_commit(render: &Render) {
     let started = std::time::Instant::now();
     loop {
-        assert!(started.elapsed().as_secs() < 60, "scene commit did not finish");
+        assert!(
+            started.elapsed().as_secs() < 60,
+            "scene commit did not finish"
+        );
         let status = render.refine().unwrap();
         if !matches!(
             status,

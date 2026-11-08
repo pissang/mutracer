@@ -1730,21 +1730,42 @@ function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Arr
   pendingGeometryAppends.set(token, {phase: 0, meshes, inputGeometries: geometries, build});
   return nativeGeometryJobsPacket(build);
 }
+// Preserve resident geometry/BLAS and material slots even when a deleted mesh
+// no longer references them. Only new meshes need bounds and region preparation.
+function appendPreparedMeshes(state: NonNullable<ReturnType<typeof retainedScenes.get>>,
+  meshes: MeshState[], build: SceneSources): PreparedScene {
+  const added = prepareSceneMeshes(meshes, mesh => build.sources.get(mesh)!,
+    state.hardware ? computeGeometryBounds : undefined, !state.hardware, false);
+  const materialSlots = new Map(state.ordered.map((material, index) => [material, index]));
+  const materials = added.materials.map(material => {
+    const slot = materialSlots.get(material);
+    if (slot === undefined) throw new Error('Full commit required: appended material is not resident');
+    return slot;
+  });
+  const geometryOffset = state.prepared.geometries.length;
+  const bindings = added.residentBindings.map(binding => ({...binding, blasIndex: binding.blasIndex + geometryOffset,
+    materialIndices: binding.materialIndices.map(index => materials[index])}));
+  const regions = new Map(state.prepared.geometryRegions);
+  let vertices = state.prepared.geometries.reduce((sum, geometry) => sum + geometry.vertexCount, 0);
+  let indices = state.prepared.geometries.reduce((sum, geometry) => sum + geometry.indexArray.length, 0);
+  for (const geometry of added.geometries) {
+    const region = added.geometryRegions.get(geometry)!;
+    regions.set(geometry, {vertexOffset: vertices, indexOffset: indices, materialIndices: region.materialIndices.map(index => materials[index])});
+    vertices += geometry.vertexCount; indices += geometry.indexArray.length;
+  }
+  const states = new Map(state.prepared.geometryStates);
+  for (const [geometry, version] of added.geometryStates) states.set(geometry, version);
+  return selectVisibleInstances({...state.prepared, geometries: state.prepared.geometries.concat(added.geometries),
+    geometryRegions: regions, geometryStates: states, materials: state.ordered,
+    residentBindings: state.prepared.residentBindings.concat(bindings), blases: state.blases.concat(added.blases)},
+  state.meshes.concat(meshes));
+}
 function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retainedScenes.get>>, newMeshes: MeshState[],
   inputGeometries: Geometry[], build: SceneSources, token: number): Uint8Array {
   const oldGeometryCount = state.prepared.geometries.length, allMeshes = state.meshes.concat(newMeshes);
   let phase = 'prepareSceneMeshes';
   try {
-  const resident = new Map(state.prepared.residentBindings.map(binding => [binding.mesh, binding]));
-  const prepared = prepareSceneMeshes(allMeshes, mesh => {
-    const previous = resident.get(mesh);
-    if (previous) return {geometry: previous.geometry, displacementScale: previous.displacementScale ?? 0};
-    const source = build.sources.get(mesh);
-    if (!source) throw new Error('Missing appended HWRT geometry source');
-    return source;
-  }, computeGeometryBounds, false, false);
-  if (prepared.geometries.length <= oldGeometryCount || prepared.geometries.some((g, i) => i < oldGeometryCount && g !== state.prepared.geometries[i]))
-    throw new Error('Full commit required: appended geometry changes resident HWRT order');
+  const prepared = appendPreparedMeshes(state, newMeshes, build);
   preparationMark('append.mesh.end');
   phase = 'compactVertexLayout';
   const layout = compactVertexLayout(prepared.geometries, false);
@@ -1829,20 +1850,7 @@ export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Ar
         for (let i = 0; i < bvhs.length; i++) setGeometryBvh(append.build.jobs[i].geometry, bvhs[i]);
         const state = retainedScenes.get(token)!;
         const allMeshes = state.meshes.concat(append.meshes);
-        const bindings = new Map(state.prepared.residentBindings.map(binding => [binding.mesh, binding]));
-        const prepared = prepareSceneMeshes(allMeshes, mesh => {
-          const resident = bindings.get(mesh);
-          if (resident) return {geometry: resident.geometry, displacementScale: resident.displacementScale ?? 0};
-          return append.build.sources.get(mesh)!;
-        }, undefined, true, false);
-        if (prepared.geometries.length <= state.prepared.geometries.length
-          || prepared.geometries.some((g, i) => i < state.prepared.geometries.length && g !== state.prepared.geometries[i]))
-          throw new Error('Full commit required: appended geometry changes resident BLAS order');
-        for (let i = 0; i < state.prepared.geometries.length; i++) {
-          const before = state.prepared.geometryRegions.get(state.prepared.geometries[i])!, after = prepared.geometryRegions.get(prepared.geometries[i])!;
-          if (before.vertexOffset !== after.vertexOffset || before.indexOffset !== after.indexOffset)
-            throw new Error('Full commit required: appended geometry changes resident regions');
-        }
+        const prepared = appendPreparedMeshes(state, append.meshes, append.build);
         const stage: GeometryAppendStage = {
           meshes: allMeshes, prepared, bindings: prepared.instanceBindings, instances: prepared.instances,
           newMeshes: append.meshes, inputGeometries: append.inputGeometries,
