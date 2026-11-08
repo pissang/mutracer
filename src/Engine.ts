@@ -136,6 +136,7 @@ export default class Engine {
   private _recoverWebGL = false;
   private _contextRestore?: {promise: Promise<void>; resolve: () => void; reject: (error: Error) => void};
   private _gpuAdapterInfo?: GPUAdapterInfo;
+  private _webglAdapterName?: string;
   private _backendChoice: NonNullable<EngineParams['backend']>;
   private readonly _textureBinding: 'atlas' | 'auto';
   private _initPromise?: Promise<EngineInfo>;
@@ -409,6 +410,9 @@ export default class Engine {
           powerPreference: 'high-performance'
         });
 
+        // Query before compiling programs: getParameter may flush pending driver work.
+        this._webglAdapterName = undefined;
+        this._adapterName();
         this._pipeline = makeWebGLRenderTargets(this._webglRenderer);
         if (!this._webglListening) {
           this._webglListening = true;
@@ -501,8 +505,10 @@ export default class Engine {
 
   private _adapterName() {
     if (this._gpuAdapterInfo) return this._gpuAdapterInfo.description || this._gpuAdapterInfo.vendor || 'WebGPU';
+    if (this._webglAdapterName !== undefined) return this._webglAdapterName;
     const gl = this._webglRenderer?.gl, extension = gl?.getExtension('WEBGL_debug_renderer_info');
-    return extension && gl ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : this._webglRenderer ? 'WebGL 2' : this._gpuDevice ? 'WebGPU' : '';
+    if (gl) return this._webglAdapterName = extension ? String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)) : 'WebGL 2';
+    return this._gpuDevice ? 'WebGPU' : '';
   }
   /** @internal */ _reportShaderProgress() {
     const compilation = this._pipeline?.getDiagnostics().shaderCompilation;

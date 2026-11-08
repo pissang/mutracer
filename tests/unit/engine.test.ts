@@ -150,3 +150,14 @@ describe('Engine validation', () => {
     expect(engine.lastError).toBeUndefined(); engine.dispose();
   });
 });
+
+it('keeps WebGL diagnostics from flushing pending driver work for the adapter name',()=>{
+  const {engine}=renderFixture({backend:'webgl'});
+  const getParameter=vi.fn(()=> 'fixture GPU'),getExtension=vi.fn(()=>({UNMASKED_RENDERER_WEBGL:1}));
+  const state=engine as unknown as {_webglRenderer:{gl:unknown;dispose:()=>void}};
+  state._webglRenderer={gl:{getParameter,getExtension},dispose:()=>{}};
+  expect(engine.getDiagnostics()?.adapterName).toBe('fixture GPU');
+  getParameter.mockImplementation(()=>{throw Error('synchronous driver flush during compilation');});
+  expect(engine.getDiagnostics()?.adapterName).toBe('fixture GPU');
+  expect(getParameter).toHaveBeenCalledOnce();expect(getExtension).toHaveBeenCalledOnce();engine.dispose();
+});
