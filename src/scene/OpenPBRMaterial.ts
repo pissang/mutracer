@@ -1,5 +1,6 @@
 import MaterialState from './MaterialState.js';
 import type Texture from './Texture.js';
+import type MaterialGraph from './MaterialGraph.js';
 export type { UVProjection, MaterialAlphaMode, ResolvedMaterialAlphaMode } from './MaterialState.js';
 export type { MaterialTextureName } from './materialTextureNames.js';
 export { materialAlphaModeConstants, resolveMaterialAlphaMode } from './MaterialState.js';
@@ -24,7 +25,10 @@ export { materialKeys, materialTextureKeys, materialGeometryKeys, materialParamK
  */
 export default class OpenPBRMaterial extends MaterialState {
   /** Creates a material. Omitted properties use their documented defaults. */
-  constructor(params: OpenPBRMaterialParams = {}) { super(params); }
+  constructor(params: OpenPBRMaterialParams = {}) { super(params); this.graph = params.graph; }
+
+  /** Optional MaterialX surface graph. Default undefined retains the constant material path. */
+  graph?: MaterialGraph;
 
   /** Base color texture, multiplied with `baseColor` using Texture color encoding. Default `undefined`. */
   declare map?: Texture;

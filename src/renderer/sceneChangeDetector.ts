@@ -84,7 +84,7 @@ export function snapshotMaterialParameters(material: OpenPBRMaterial, previous?:
   });
 }
 
-interface MaterialSnapshot { aovId: number; values: readonly unknown[]; textures: unknown[]; }
+interface MaterialSnapshot { graph?: OpenPBRMaterial['graph']; graphRevision?: number; aovId: number; values: readonly unknown[]; textures: unknown[]; }
 
 // Web values may be loosely typed JS; the generated comparisons keep their
 // Object.is and array semantics. Detection rules live in sceneChangeCore.
@@ -93,11 +93,12 @@ const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnap
   captureMaterial: (material, previous, retired) => {
     const item = retired ?? { aovId: material.aovId, values: [], textures: [] };
     item.aovId = material.aovId;
+    item.graph = (material as OpenPBRMaterial).graph; item.graphRevision = item.graph?.revision;
     item.values = snapshotMaterialParameters(material as OpenPBRMaterial, previous?.values);
     captureMaterialTextures(material as OpenPBRMaterial, item.textures);
     return item;
   },
-  materialMatches: (material, snapshot) => material.aovId === snapshot.aovId && materialParametersEqual(material as OpenPBRMaterial, snapshot.values) &&
+  materialMatches: (material, snapshot) => (material as OpenPBRMaterial).graph === snapshot.graph && (material as OpenPBRMaterial).graph?.revision === snapshot.graphRevision && material.aovId === snapshot.aovId && materialParametersEqual(material as OpenPBRMaterial, snapshot.values) &&
     !materialTexturesChanged(material as OpenPBRMaterial, snapshot.textures),
   captureLight: light => snapshotFields(light),
   lightsEqual: snapshotsEqual,
