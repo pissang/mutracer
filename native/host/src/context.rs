@@ -176,11 +176,26 @@ pub struct ContextInfo {
 // failure-classification boundary. Catch while the guard is alive so a panic
 // never poisons the registry.
 fn with_registry<T>(operation: impl FnOnce(&mut Registry) -> Result<T>) -> Result<T> {
+    with_registry_mode(false, operation)
+}
+fn with_registry_mode<T>(
+    wait: bool,
+    operation: impl FnOnce(&mut Registry) -> Result<T>,
+) -> Result<T> {
     platform_scope(|| -> Result<T> {
-        let mut slot = REGISTRY.try_lock().map_err(|error| match error {
-            std::sync::TryLockError::WouldBlock => fail(Status::Busy, "Context registry is active"),
-            std::sync::TryLockError::Poisoned(_) => "Context registry is poisoned".into(),
-        })?;
+        let locked: Result<_> = if wait {
+            REGISTRY
+                .lock()
+                .map_err(|_| "Context registry is poisoned".into())
+        } else {
+            REGISTRY.try_lock().map_err(|error| match error {
+                std::sync::TryLockError::WouldBlock => {
+                    fail(Status::Busy, "Context registry is active")
+                }
+                std::sync::TryLockError::Poisoned(_) => "Context registry is poisoned".into(),
+            })
+        };
+        let mut slot = locked?;
         let registry = &mut *slot;
         // Catch while guards remain in scope, avoiding mutex poisoning.
         TOUCHED.set(None);
@@ -959,7 +974,10 @@ fn commit_inner(
         };
         let packed = started.elapsed();
         let mut finished = false;
-        with_registry(|registry| {
+        // Once the worker has a candidate, publication waits like a full commit.
+        // Returning Busy here would leave `commit` registered and make the worker's
+        // retry fail as an already-preparing transaction.
+        with_registry_mode(path != CommitPath::IncrementalOnly, |registry| {
             let context = context(registry, handle).or_else(|error| {
                 cancelled(&cancel)?;
                 Err(error)
@@ -2249,6 +2267,98 @@ mod target_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires a real GPU; run separately"]
+    fn geometry_append_publication_waits_for_registry_ownership() {
+        use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene};
+        let _test = crate::abi_test_lock();
+        for backend in [0, 1] {
+            let mut scene = Scene::new();
+            let geometry = scene
+                .add_geometry(Geometry::new(
+                    vec![-1., -1., -3., 1., -1., -3., 0., 1., -3.],
+                    vec![0, 1, 2],
+                ))
+                .unwrap();
+            let mut material = OpenPbrMaterial::default();
+            material.values.emission_strength = 2.;
+            let material = scene.add_material(material).unwrap();
+            scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+            let settings = settings::RenderSettings::default();
+            let handle =
+                create_scene_with_gpu(GpuDevice::with_backend(backend).unwrap(), backend).unwrap();
+            assert_eq!(
+                commit_path(
+                    handle,
+                    &scene.descriptor().unwrap(),
+                    &settings,
+                    CommitPath::Any,
+                    None
+                )
+                .unwrap(),
+                CommitOutcome::Done
+            );
+            let geometry = scene
+                .add_geometry(Geometry::new(
+                    vec![-1., -1., -2., 1., -1., -2., 0., 1., -2.],
+                    vec![0, 1, 2],
+                ))
+                .unwrap();
+            scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+            let next = scene.descriptor().unwrap();
+            let (resume, paused) = mpsc::sync_channel(1);
+            *PREPARATION_GATE.lock().unwrap() = Some(paused);
+            let (send, result) = mpsc::sync_channel(1);
+            let committing = std::thread::spawn(move || {
+                let outcome = commit_path(handle, &next, &settings, CommitPath::Any, None);
+                send.send(outcome.map_err(|error| error.to_string()))
+                    .unwrap();
+            });
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while PREPARATION_GATE.lock().unwrap().is_some() {
+                assert!(
+                    Instant::now() < deadline,
+                    "append did not reach packet preparation"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let registry = REGISTRY.lock().unwrap();
+            assert!(registry.contexts[&handle].commit.is_some());
+            resume.send(()).unwrap();
+            // Hold an ABI operation across the end of CPU preparation. An accepted
+            // candidate must wait here, rather than return Busy and strand preparing.
+            let early = result.recv_timeout(Duration::from_secs(1));
+            let waited = matches!(early, Err(mpsc::RecvTimeoutError::Timeout));
+            drop(registry);
+            let outcome = match early {
+                Ok(outcome) => outcome,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    result.recv_timeout(Duration::from_secs(10)).unwrap()
+                }
+                Err(error) => panic!("preparation worker stopped: {error}"),
+            };
+            committing.join().unwrap();
+            let (kind, hardware, preparing) = {
+                let registry = REGISTRY.lock().unwrap();
+                let state = &registry.contexts[&handle];
+                (
+                    state.last_commit,
+                    state.scene.as_ref().unwrap().hardware.is_some(),
+                    state.commit.is_some(),
+                )
+            };
+            destroy(handle).unwrap();
+            assert!(
+                waited,
+                "accepted append returned before registry publication: {outcome:?}"
+            );
+            assert_eq!(outcome.unwrap(), CommitOutcome::Done);
+            assert_eq!(kind, COMMIT_INCREMENTAL);
+            assert_eq!(hardware, backend == 1);
+            assert!(!preparing);
+        }
+    }
+
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn preparation_does_not_block_render_and_cancellation_preserves_old_scene() {

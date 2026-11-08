@@ -369,8 +369,10 @@ Rust context operations and C wrappers share `with_registry`: `try_lock` reports
 Busy and platform-scoped panic handling keeps the guard alive. An unclassified
 execution error that newly fails a touched context reports ContextFailed;
 explicit error statuses remain unchanged. Only C wrappers encode
-statuses and bounded error strings. Full commit publication retains its blocking
-lock after preparation, so publication and cancellation keep their ordering.
+statuses and bounded error strings. Full commits and background incremental
+candidates use a blocking publication lock after preparation, so a short ABI
+operation cannot strand an accepted candidate as preparing. Publication and
+cancellation keep their ordering.
 
 Tests compare every render's HDR, normal and albedo with a fresh L0 context
 given the same overridden descriptor, settings and sample count, byte for byte
