@@ -1,5 +1,6 @@
+import {archiveGraph,restoreGraph} from './materialxGraphArchive';
 import * as THREE from 'three';
-import { Texture, type OpenPBRMaterial } from '@meimu/mutracer';
+import { Texture, type MaterialGraph, type OpenPBRMaterial } from '@meimu/mutracer';
 import { useViewer } from '../store';
 import {
   TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
@@ -10,6 +11,7 @@ import { discardHistory, pushHistory, type HistoryItem } from '../history';
 
 /** Values and textures to set; `null` empties a texture slot. */
 export interface MaterialPatch {
+  graph?: MaterialGraph | null;
   values: MaterialValues;
   textures: Partial<Record<TextureKey, Texture | null>>;
 }
@@ -44,6 +46,7 @@ class MaterialEdit implements HistoryItem {
 
 /** A stored edit with its textures decoded, waiting for its material to be converted. */
 interface PendingEdit {
+  graph?:MaterialGraph|null;
   name: string;
   values: MaterialValues;
   sampling?: StoredEdit['sampling'];
@@ -76,7 +79,8 @@ export async function readPendingEdits(modelId: string): Promise<PendingEdits | 
         // An unreadable image drops only that slot.
       }
     }));
-    pending.set(edit.index, { name: edit.name, values: edit.values, textures, sampling:edit.sampling });
+    const graph=edit.graph?await restoreGraph(edit.graph):undefined;
+    pending.set(edit.index, { graph, name: edit.name, values: edit.values, textures, sampling:edit.sampling });
   }));
   return pending;
 }
@@ -206,7 +210,7 @@ export class MaterialEditor {
    */
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
-    merge?: { key: string; ms?: number }, transform?: TextureTransform
+    merge?: { key: string; ms?: number }, transform?: TextureTransform, graph?: MaterialGraph | null
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
@@ -229,7 +233,7 @@ export class MaterialEditor {
       (values.displacementUvProjection ?? material.displacementUvProjection) === 'none') {
       values = { ...values, displacementUvProjection: 'triplanar' };
     }
-    this.commit(materialId, { values, textures }, label, merge?.key, merge?.ms);
+    this.commit(materialId, { values, textures, ...(graph !== undefined ? {graph} : {}) }, label, merge?.key, merge?.ms);
   }
 
   reset(materialId: string) {
@@ -277,6 +281,7 @@ export class MaterialEditor {
     for (const material of targets) {
       const record = material as unknown as Record<string, unknown>;
       for (const [key, texture] of Object.entries(patch.textures)) record[key] = texture ?? undefined;
+      if ('graph' in patch) material.graph = patch.graph ?? undefined;
       writeMaterial(material, patch.values);
     }
   }
@@ -294,7 +299,7 @@ export class MaterialEditor {
       const texture = textures[slot] === null ? undefined : textures[slot] ?? material[slot];
       if (texture) textures[slot] = this.withSampling(texture, sampling);
     }
-    return { values: edit.values, textures };
+    return { values: edit.values, textures, ...(edit.graph?{graph:edit.graph}:{}) };
   }
 
   private upload(image: ImageBitmap, file: Blob, material: OpenPBRMaterial, slot: TextureKey, transform?: TextureTransform) {
@@ -347,13 +352,13 @@ export class MaterialEditor {
         const texture = material[slot], original = entry.initial.textures[slot];
         if (texture && (!original || !sameSampling(texture, original))) sampling[slot] = textureSampling(texture);
       }
-      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures,
+      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures, ...('graph' in changes?{graph:archiveGraph(changes.graph??undefined)}:{}),
         ...(Object.keys(sampling).length ? {sampling} : {}) });
     }
     // Keep stored edits of materials that have not been converted yet.
     for (const [index, edit] of this.pending) {
       materials.push({
-        index, name: edit.name, values: edit.values, sampling:edit.sampling,
+        index, name: edit.name, values: edit.values, sampling:edit.sampling, ...(edit.graph?{graph:archiveGraph(edit.graph)}:{}),
         textures: Object.entries(edit.textures).map(([slot, upload]) =>
           ({ slot: slot as TextureKey, file: upload?.file ?? null, transform: upload?.transform }))
       });
@@ -384,7 +389,7 @@ function readState(material: OpenPBRMaterial): MaterialPatch {
   const record = material as unknown as Record<string, Texture | undefined>;
   const textures: MaterialPatch['textures'] = {};
   for (const key of TEXTURE_KEYS) textures[key] = record[key] ?? null;
-  return { values: readMaterial(material), textures };
+  return { values: readMaterial(material), textures, graph:material.graph??null };
 }
 
 /** The parts of `next` that differ from `base`. */
@@ -396,6 +401,7 @@ function diff(base: MaterialPatch, next: MaterialPatch): MaterialPatch {
   for (const [key, texture] of Object.entries(next.textures) as [TextureKey, Texture | null][]) {
     if ((base.textures[key] ?? null) !== (texture ?? null)) out.textures[key] = texture ?? null;
   }
+  if ('graph' in next && next.graph !== base.graph) out.graph=next.graph;
   return out;
 }
 
@@ -407,15 +413,16 @@ function pick(state: MaterialPatch, keys: MaterialPatch): MaterialPatch {
     out.values[key] = Array.isArray(value) ? [...value] as [number, number, number] : value;
   }
   for (const key of Object.keys(keys.textures) as TextureKey[]) out.textures[key] = state.textures[key] ?? null;
+  if ('graph' in keys) out.graph=state.graph??null;
   return out;
 }
 
 function merge(a: MaterialPatch, b: MaterialPatch): MaterialPatch {
-  return { values: { ...a.values, ...b.values }, textures: { ...a.textures, ...b.textures } };
+  return { values: { ...a.values, ...b.values }, textures: { ...a.textures, ...b.textures }, ...('graph' in b?{graph:b.graph}:'graph' in a?{graph:a.graph}:{}) };
 }
 
 function isEmpty(patch: MaterialPatch) {
-  return !Object.keys(patch.values).length && !Object.keys(patch.textures).length;
+  return !('graph' in patch) && !Object.keys(patch.values).length && !Object.keys(patch.textures).length;
 }
 
 /** glTF orientation; keeps the UV transform of the texture it replaces, or of the base color map. */

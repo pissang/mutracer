@@ -142,10 +142,12 @@ function Diagnostics() {
   }, []);
   if (!diagnostics) return null;
   const shader = diagnostics.shaderCompilation;
+  const graphs = diagnostics.materialGraphs;
   const rows: [string, string][] = [
     ['Backend', `${diagnostics.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2'} · ${diagnostics.adapterName || 'unknown'}`],
     ['Drawing buffer', `${diagnostics.width} × ${diagnostics.height}`],
     ['Shader compile', shader ? `${Math.round(shader.totalTimeMs ?? 0)} ms · ${shader.sourceLines ?? '?'} lines` : '–'],
+    ...(graphs && graphs.status !== 'idle' ? [['Material graphs', `${graphs.status} · ${graphs.topologyCount} structures`] as [string,string], ...graphs.diagnostics.map(d=>[`${d.materialId??''} ${d.node??''}${d.port?'.'+d.port:''}`,d.message] as [string,string])] : []),
     ['Trace time', diagnostics.gpuTraceTiming ? `${diagnostics.gpuTraceTiming.estimatedFullFrameTimeMs?.toFixed(1)} ms / frame` : '–'],
     ['Texture atlas', diagnostics.textureAtlas ? `${diagnostics.textureAtlas.textureCount} textures · ${(diagnostics.textureAtlas.estimatedBytes / 2 ** 20).toFixed(1)} MiB` : '–'],
     ['Emissive triangles', String(diagnostics.lightSampling?.emissiveTriangles ?? 0)]

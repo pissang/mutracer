@@ -1,3 +1,4 @@
+import type {GraphArchive} from './materialxGraphArchive';
 import type { TextureWrapMode } from '@meimu/mutracer';
 import type { ModelSource } from './loadModel';
 import { DISPLACEMENT_PROJECTIONS, MATERIAL_KEYS, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
@@ -107,6 +108,7 @@ export function clearModelCache(): Promise<void> {
 
 /** Material edits of the cached model; uploaded textures keep their original files. */
 export interface MaterialEdit {
+  graph?:GraphArchive|null;
   /** Position of the material in the model's traversal order. */
   index: number;
   name: string;
@@ -169,8 +171,9 @@ export function saveMaterialEdits(edits: MaterialEdits): Promise<void> {
       const blobs: Blob[] = [];
       const header = new TextEncoder().encode(JSON.stringify({
         version: 1, modelId: edits.modelId,
-        materials: edits.materials.map(({ index, name, values, textures, sampling }) => ({
+        materials: edits.materials.map(({ index, name, values, textures, sampling, graph }) => ({
           index, name, values, sampling,
+          graph:graph&&{nodes:graph.nodes,terminal:graph.terminal,images:graph.images.map(image=>{blobs.push(image.file);return {...image,file:{type:image.file.type,size:image.file.size}};})},
           textures: textures.map(({ slot, file, transform }) => {
             if (file) blobs.push(file);
             return { slot, file: file && { type: file.type, size: file.size }, transform };
@@ -207,9 +210,20 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
         const values: MaterialValues = {};
         for (const key of MATERIAL_KEYS) {
           const value = entry.values?.[key];
-          if ((key === 'displacementUvProjection' && DISPLACEMENT_PROJECTIONS.some((p) => p === value)) ||
+          if ((key === 'alphaMode' && ['auto','opaque','mask','blend'].includes(value)) || (key === 'displacementUvProjection' && DISPLACEMENT_PROJECTIONS.some((p) => p === value)) ||
             typeof value === 'number' || typeof value === 'boolean' ||
             (Array.isArray(value) && value.length === 3 && value.every((c) => typeof c === 'number'))) values[key] = value as MaterialValues[typeof key];
+        }
+        let graph:GraphArchive|undefined;
+        if(entry.graph){
+          if(!Array.isArray(entry.graph.nodes)||!entry.graph.terminal||!Array.isArray(entry.graph.images))return null;
+          const images:GraphArchive['images']=[];
+          for(const image of entry.graph.images){
+            const {size,type}=image.file??{};
+            if(!Number.isSafeInteger(size)||size<0||offset+size>file.size||typeof type!=='string'||typeof image.node!=='string'||typeof image.port!=='string')return null;
+            images.push({...image,file:new Blob([await file.slice(offset,offset+size).arrayBuffer()],{type})});offset+=size;
+          }
+          graph={nodes:entry.graph.nodes,terminal:entry.graph.terminal,images};
         }
         const textures: MaterialEdit['textures'] = [];
         for (const texture of entry.textures) {
@@ -228,7 +242,7 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
           offset += size;
         }
         const sampling = readSampling(entry.sampling);
-        materials.push({ index: entry.index, name: entry.name, values, textures, ...(sampling ? {sampling} : {}) });
+        materials.push({ index: entry.index, name: entry.name, values, textures, ...(graph?{graph}:{}), ...(sampling ? {sampling} : {}) });
       }
       if (offset !== file.size) return null;
       return { modelId: header.modelId, materials };

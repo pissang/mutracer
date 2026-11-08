@@ -1,5 +1,6 @@
 // Reads MaterialX packages: a .mtlx with its texture files, or a .zip of them
 // (the MatLib download format), and turns texture plans into image blobs.
+import {rememberGraphImage} from './materialxGraphArchive';
 import { unzipSync } from 'fflate';
 import type { PathedFile } from './droppedFiles';
 import { bakeChannels, type MapPlan } from './materialx';
@@ -90,4 +91,22 @@ export async function loadMapImage(plan: MapPlan, pkg: MaterialXPackage): Promis
   const pixels = bakeChannels(plan.bake, sources, width * height);
   context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
   return canvas.convertToBlob({ type: 'image/png' });
+}
+
+/** Loads graph images without baking the connected network into texture slots. */
+export async function loadGraphImages(material: import('./materialxGraph').MaterialXGraphImport, pkg:MaterialXPackage):Promise<string[]> {
+  const {Texture}=await import('@meimu/mutracer');
+  const warnings:string[]=[];
+  await Promise.all([...material.images].map(async ([node,plan])=>{
+    const blob=pkg.resolve(plan.file);
+    if(!blob){warnings.push(`${node}.file: missing ${plan.file}; using the image default`);return;}
+    try{
+      const bitmap=await decode(blob),texture=new Texture(bitmap as unknown as HTMLCanvasElement);
+      texture.colorSpace=plan.srgb?'srgb':'linear';texture.flipY=true;
+      if(plan.wrapS)texture.wrapS=plan.wrapS;if(plan.wrapT)texture.wrapT=plan.wrapT;
+      rememberGraphImage(texture,blob);
+      material.graph?.setInput(node,'file',{type:'filename',value:texture});
+    }catch(error){warnings.push(`${node}.file: ${(error as Error).message}; using the image default`);}
+  }));
+  return warnings;
 }

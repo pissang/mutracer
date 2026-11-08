@@ -16,11 +16,10 @@ import {
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
-import type { MapPlan } from './materialx';
 import { isMaterialXFile } from './droppedFiles';
 
 /** MaterialX import is still experimental: only development builds offer it. */
-export const MATERIALX_IMPORT = import.meta.env.DEV;
+export const MATERIALX_IMPORT = true;
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import type { TextureSampling } from './modelCache';
@@ -1321,24 +1320,23 @@ export class ViewerEngine {
   async importMaterialX(materialId: string, files: PathedFile[]) {
     let name = files[0]?.file.name ?? 'MaterialX';
     try {
-      // Loaded on demand, so production bundles leave the importer and fflate out.
-      const [{ parseMaterialX }, { loadMapImage, readMaterialXPackage }] = await Promise.all([import('./materialx'), import('./materialxFiles')]);
-      const pkg = await readMaterialXPackage(files);
-      const material = parseMaterialX(pkg.text);
-      name = material.name;
-      const warnings = [...material.warnings];
-      const maps: Partial<Record<TextureKey, Blob | null>> = Object.fromEntries(TEXTURE_KEYS.map((key) => [key, null]));
-      await Promise.all((Object.entries(material.maps) as [TextureKey, MapPlan][]).map(async ([slot, plan]) => {
-        try {
-          maps[slot] = await loadMapImage(plan, pkg);
-        } catch (error) {
-          warnings.push(`texture ${(error as Error).message}`);
-        }
-      }));
-      // MaterialX images have their origin at the bottom left.
-      await this.materials.setTextures(materialId, maps, { ...MATERIAL_BASE, ...material.values }, `${name} MaterialX`,
-        undefined, { uvScale: material.uvScale, flipY: true });
-      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`, warnings.length ? 'warning' : 'success');
+      const [{parseMaterialXGraph},{loadGraphImages,loadMapImage,readMaterialXPackage},{parseMaterialX}]=await Promise.all([import('./materialxGraph'),import('./materialxFiles'),import('./materialx')]);
+      const pkg=await readMaterialXPackage(files), material=parseMaterialXGraph(pkg.text);
+      name=material.name;
+      const warnings=[...material.warnings];
+      if(material.graph)warnings.push(...await loadGraphImages(material,pkg));
+      const maps:Partial<Record<TextureKey,Blob|null>>=Object.fromEntries(TEXTURE_KEYS.map(key=>[key,null]));
+      let fallbackValues:MaterialValues={};
+      // Keep the previous importer's values/maps as the explicit fallback while
+      // a graph compiles or when the library rejects an unsupported context.
+      try {
+        const fallback=parseMaterialX(pkg.text);fallbackValues=fallback.values;
+        await Promise.all(Object.entries(fallback.maps).map(async ([slot,plan])=>{
+          try{maps[slot as TextureKey]=await loadMapImage(plan!,pkg);}catch(error){warnings.push(`texture ${(error as Error).message}`);}
+        }));
+      } catch { /* Unsupported surface families retain the neutral material. */ }
+      await this.materials.setTextures(materialId,maps,{...MATERIAL_BASE,...fallbackValues,...material.values},`${name} MaterialX`,undefined,undefined,material.graph??null);
+      showToast(warnings.length?`Imported ${name}. ${warnings.join('; ')}`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');

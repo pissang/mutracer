@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -54,6 +54,7 @@ export function MaterialPanel() {
           <RotateCcw size={13} />
         </button>
       </div>
+      <MaterialGraphStatus />
       <div className="mat-presets">
         <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
@@ -266,3 +267,12 @@ const paramLabel = (group: MaterialGroup, param: MaterialParam) =>
   group.id === 'base' || group.id === 'advanced' ? param.label : `${group.label} ${param.label.toLowerCase()}`;
 
 const formatWeight = (w: number) => (w === 0 ? '0' : w.toFixed(2));
+
+function MaterialGraphStatus(){
+  const [state,setState]=useState<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>();
+  useEffect(()=>{const read=()=>setState(getEngine()?.engine.getDiagnostics());read();const timer=setInterval(read,250);return()=>clearInterval(timer);},[]);
+  const graph=state?.materialGraphs;
+  if(!graph||graph.status==='idle')return null;
+  const label=graph.status==='compiling'?'Compiling material graph':graph.status==='ready'?'Material graph ready':'Material graph fallback';
+  return <div role="status"><p>{label}</p>{graph.diagnostics.map((d,i)=><p key={i}>{d.node}{d.port?`.${d.port}`:''}: {d.message}</p>)}</div>;
+}

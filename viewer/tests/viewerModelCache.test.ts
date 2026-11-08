@@ -1,4 +1,6 @@
 /// <reference lib="dom" />
+import {MaterialGraph,Texture} from '@meimu/mutracer';
+import {archiveGraph,restoreGraph,rememberGraphImage} from '../src/engine/materialxGraphArchive';
 import { File } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -143,4 +145,16 @@ describe('current model OPFS cache', () => {
     await saveMaterialEdits({ modelId: 'first', materials: [] });
     expect(fs.files.size).toBe(1);
   });
+  it('roundtrips graph parameters and image files together with fallback maps',async()=>{
+    filesystem();vi.stubGlobal('createImageBitmap',vi.fn(async()=>({width:1,height:1})));
+    const file=new Blob(['graph pixels'],{type:'image/png'}),texture=new Texture({width:1,height:1,data:new Uint8Array([1,2,3,255])});
+    texture.wrapS='clamp-to-edge';texture.uvOffset=[0.1,0.2];rememberGraphImage(texture,file);
+    const graph=new MaterialGraph({nodes:[{id:'image',category:'image',type:'color3',inputs:{file:{type:'filename',value:texture}}}],terminal:{baseColor:{node:'image'}}});
+    await saveMaterialEdits({modelId:'m',materials:[{index:0,name:'Graph',values:{baseWeight:0.7},graph:archiveGraph(graph),textures:[{slot:'map',file:new Blob(['fallback'])}]}]});
+    const edits=(await readMaterialEdits())!,archive=edits.materials[0].graph!;
+    expect(archive.nodes[0].inputs!.file.value).toBeUndefined();expect(await archive.images[0].file.text()).toBe('graph pixels');expect(await edits.materials[0].textures[0].file!.text()).toBe('fallback');
+    const restored=await restoreGraph(archive),image=restored!.nodes[0].inputs!.file.value as Texture;
+    expect(image.wrapS).toBe('clamp-to-edge');expect(image.uvOffset).toEqual([0.1,0.2]);expect(restored!.terminal).toEqual(graph.terminal);expect(edits.materials[0].values.baseWeight).toBe(0.7);
+  });
+
 });
