@@ -42,6 +42,18 @@ pub struct EngineInfo {
     /// Whether the device has hardware ray queries enabled.
     pub hardware_ray_query: bool,
 }
+/// Located material graph fallback or validation error. Empty node/port means a
+/// graph-wide error. Locations are authored IDs when supplied, otherwise node indices.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialGraphDiagnostic {
+    pub code: String,
+    pub message: String,
+    /// Stable material AOV ID, or 0 for a scene/transport-wide error.
+    pub material_id: u32,
+    pub node: String,
+    pub port: String,
+}
 /// CPU-only engine snapshot. No GPU polling, readback or memory estimation.
 #[derive(Clone, Debug)]
 pub struct Diagnostics {
@@ -65,6 +77,9 @@ pub struct Diagnostics {
     pub cached_pipelines: usize,
     pub renders: Vec<RenderDiagnostics>,
     pub last_error: Option<String>,
+    /// Scene graph validation/fallback errors; empty when no graph has failed.
+    /// Per-render transport restrictions are reported in `renders`.
+    pub material_graphs: Vec<MaterialGraphDiagnostic>,
 }
 /// Per-render CPU counters. Captured samples may describe a retained old image.
 #[derive(Clone, Debug)]
@@ -75,6 +90,8 @@ pub struct RenderDiagnostics {
     pub denoised_samples: u32,
     pub sampling: bool,
     pub denoising: bool,
+    /// Graph diagnostics for this render, including unsupported caustic transport.
+    pub material_graphs: Vec<MaterialGraphDiagnostic>,
 }
 /// Progress stage reported by [`EngineEvent::Progress`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -676,6 +693,14 @@ impl Engine {
                 .map(|(&id, r)| r.diagnostics(id, state.scene_revision, state.camera_revision))
                 .collect(),
             last_error: state.last_error.clone(),
+            material_graphs: state
+                .shared
+                .context()
+                .and_then(|c| crate::context::material_graph_diagnostics(c).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(state.shared.graph_failures.iter().cloned())
+                .collect(),
         }
     }
     /// Adapter name, requested backend and hardware ray-query support.

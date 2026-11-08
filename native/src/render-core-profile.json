@@ -219,6 +219,8 @@
     {
       "export": "compactKernelReference", "symbol": "mt_core_compact_reference",
       "params": ["bytes", "u32"], "returns": "bytes"
-    }
+    },
+    {"export": "seedMaterialGraphFallbacks", "symbol": "mt_core_graph_fallback", "params": ["u32", "u32"], "returns": "bytes"},
+    {"export": "materialGraphFold", "symbol": "mt_core_graph_fold", "params": ["bytes"], "returns": "bytes"}
   ]
 }

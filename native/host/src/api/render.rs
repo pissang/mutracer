@@ -607,13 +607,16 @@ pub(super) struct TargetKey {
 /// Full preparation of the shared scene on a library thread.
 struct Pending {
     revision: u64,
-    result: mpsc::Receiver<Result<()>>,
+    material_graphs: bool,
+    result: mpsc::Receiver<Result<Option<String>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 // The engine's scene-only context holds no frame/accumulation resources.
 // Each render's context owns a Target linked to this scene.
 #[derive(Default)]
 pub(super) struct SharedScene {
+    material_graphs: bool,
+    pub(super) graph_failures: Vec<super::MaterialGraphDiagnostic>,
     context: Option<u64>,
     /// Scene revision of the published scene.
     published: Option<u64>,
@@ -838,6 +841,7 @@ impl RenderState {
             denoised_samples: denoised_samples(self),
             sampling: self.job.is_some(),
             denoising: self.denoise.worker.is_some(),
+            material_graphs: context::material_graph_diagnostics(self.context).unwrap_or_default(),
         }
     }
 
@@ -1223,7 +1227,31 @@ pub(super) fn scene_step(
             let _ = thread.join();
         }
         match outcome {
-            Ok(()) => {
+            Ok(graph_error) => {
+                shared.graph_failures = graph_error
+                    .as_ref()
+                    .map(|message| {
+                        vec![super::MaterialGraphDiagnostic {
+                            code: "shader-compilation".into(),
+                            message: message.clone(),
+                            material_id: 0,
+                            node: String::new(),
+                            port: String::new(),
+                        }]
+                    })
+                    .unwrap_or_default();
+                let retained_previous = graph_error.is_some() && shared.published.is_some();
+                if retained_previous {
+                    shared.published = Some(pending.revision);
+                    shared.failed = None;
+                    for render in state.renders.values_mut() {
+                        if let Some(key) = render.published.as_mut() {
+                            key.scene = pending.revision;
+                        }
+                    }
+                    return Ok(SceneStep::Published);
+                }
+                shared.material_graphs = pending.material_graphs;
                 shared.published = Some(pending.revision);
                 shared.failed = None;
                 shared.generation += 1;
@@ -1274,6 +1302,8 @@ pub(super) fn scene_step(
     )) {
         Ok(outcome) => match outcome {
             CommitOutcome::Done => {
+                state.shared.material_graphs = crate::scene::has_material_graphs(&bytes);
+                state.shared.graph_failures.clear();
                 state.shared.published = Some(revision);
                 state.shared.failed = None;
                 refresh_targets(state, events);
@@ -1294,9 +1324,11 @@ pub(super) fn scene_step(
             return Ok(SceneStep::Failed(e.message));
         }
     }
+    let material_graphs = crate::scene::has_material_graphs(&bytes);
     let (send, result) = mpsc::channel();
     let gpu = state.gpu.clone();
     let delta = state.scene_delta.clone();
+    let has_previous = state.shared.published.is_some();
     let thread = std::thread::Builder::new()
         .name("MuTracer scene preparation".into())
         .spawn(move || {
@@ -1317,7 +1349,44 @@ pub(super) fn scene_step(
                     Err(e) if e.status == Status::Busy => {
                         std::thread::sleep(Duration::from_micros(200))
                     }
-                    result => break result,
+                    Err(e)
+                        if material_graphs
+                            && e.message.to_ascii_lowercase().contains("pipeline")
+                            && loss.reason().is_none() =>
+                    {
+                        if has_previous {
+                            break Ok(Some(e.message));
+                        }
+                        // First compilation has no installed image: prepare the
+                        // authored constants through the ordinary scene path.
+                        let mut fallback = bytes.as_ref().clone();
+                        let u = |at: usize| {
+                            u32::from_le_bytes(bytes[at * 4..at * 4 + 4].try_into().unwrap())
+                                as usize
+                        };
+                        let material = u(crate::layout::header::MATERIAL_OFFSET);
+                        let count = u(crate::layout::header::MATERIAL_COUNT);
+                        for i in 0..count {
+                            let at = (material
+                                + i * crate::layout::material::WORDS
+                                + crate::layout::material::GRAPH)
+                                * 4;
+                            fallback[at..at + 4].fill(0);
+                        }
+                        let fallback = Arc::new(fallback);
+                        let recovery = context_result(crate::runtime::with_loss(&gpu, || {
+                            context::commit_path(
+                                context,
+                                &fallback,
+                                &settings,
+                                CommitPath::FullOnly,
+                                None,
+                            )
+                            .map(|_| ())
+                        }));
+                        break recovery.map(|_| Some(e.message));
+                    }
+                    result => break result.map(|_| None),
                 }
             };
             let _ = send.send(outcome);
@@ -1325,6 +1394,7 @@ pub(super) fn scene_step(
         .map_err(|e| error(Status::Error, format!("Starting scene preparation: {e}")))?;
     state.shared.pending = Some(Pending {
         revision,
+        material_graphs,
         result,
         thread: Some(thread),
     });
@@ -3512,7 +3582,7 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
         state.renders.get_mut(&id).unwrap().status = RenderStatus::Idle;
         return Ok(RenderStatus::Idle);
     };
-    let ready = commit(state, id, key, false)?;
+    let ready = commit(state, id, key.clone(), false)?;
     // The fallback is refined while this render has no complete sample, including
     // while this render prepares.
     let render = &state.renders[&id];
@@ -3534,6 +3604,37 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
         }
     }
     if !ready {
+        // Graph preparation keeps the already linked target sampling. Target
+        // settings/camera/size edits still use their ordinary stale-image path.
+        let retained_graph = state.shared.is_pending()
+            && (state.shared.material_graphs
+                || state
+                    .scene
+                    .as_ref()
+                    .is_some_and(|s| crate::scene::has_material_graphs(s)))
+            && !state.renders[&id].error
+            && state.renders[&id]
+                .published
+                .as_ref()
+                .is_some_and(|published| {
+                    published.camera == key.camera
+                        && published.size == key.size
+                        && published.quality == key.quality
+                        && published.alpha_blend_strategy == key.alpha_blend_strategy
+                        && published.settings == key.settings
+                });
+        if retained_graph {
+            let limit = next_target(&state.renders[&id]);
+            if let Err(error) = advance(state, id, limit) {
+                // Publication can retire the old target between readiness and
+                // dispatch. The next tick links the newly installed scene.
+                if error.status != Status::InvalidState
+                    || error.message != "The scene was committed again; set the render target first"
+                {
+                    return Err(error);
+                }
+            }
+        }
         // A failed commit preserves the previous accumulation. Keep its completed
         // batch, capture and sample events in sync even while the new inputs fail.
         if state.renders[&id].error {

@@ -10,6 +10,13 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_graph_fold(
+        input: *const u8,
+        length: usize,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_graph_fallback(previous: u32, token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_compact_kernel(
         input: *const u8,
         length: usize,
@@ -180,6 +187,32 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+}
+/// Header-only graph presence query for retained interactive sampling. Invalid
+/// spans return false; the ordinary preparation validator reports their errors.
+pub(crate) fn has_material_graphs(bytes: &[u8]) -> bool {
+    let word = |i: usize| {
+        bytes
+            .get(i * 4..i * 4 + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+    };
+    let Some(version) = word(h::VERSION) else {
+        return false;
+    };
+    if version < 8 {
+        return false;
+    }
+    let (Some(count), Some(offset)) = (word(h::MATERIAL_COUNT), word(h::MATERIAL_OFFSET)) else {
+        return false;
+    };
+    if count
+        .checked_mul(mat::WORDS)
+        .and_then(|n| offset.checked_add(n))
+        .is_none_or(|end| end > bytes.len() / 4)
+    {
+        return false;
+    }
+    (0..count).any(|i| word(offset + i * mat::WORDS + mat::GRAPH).is_some_and(|at| at != 0))
 }
 pub(crate) const MAX_BYTES: usize = crate::memory_budget::SCENE_WIRE_BYTES;
 const MAX_PREPARED_BYTES: usize = crate::memory_budget::RESOURCE_WIRE_BYTES;
@@ -1619,7 +1652,7 @@ impl PreparedState {
                     &mut size,
                 );
             }
-            lighting_result(pointer, size, &[4, 7, 8, 24])
+            lighting_result(pointer, size, &[4, 7, 8, 24, 31])
         })
     }
     #[cfg(test)]
@@ -1912,6 +1945,7 @@ pub(super) fn prepare_retained_with_settings(
         [16384, 0],
     )
 }
+#[cfg(test)]
 pub(super) fn prepare_retained_shared_with_settings(
     bytes: Arc<Vec<u8>>,
     hardware: bool,
@@ -1919,9 +1953,33 @@ pub(super) fn prepare_retained_shared_with_settings(
     settings: &settings::RenderSettings,
     texture_limits: [u32; 2],
 ) -> Result<(Scene, Assets, PreparedState)> {
+    prepare_retained_shared_with_graph_fallback(
+        bytes,
+        hardware,
+        backend,
+        settings,
+        texture_limits,
+        None,
+    )
+}
+pub(super) fn prepare_retained_shared_with_graph_fallback(
+    bytes: Arc<Vec<u8>>,
+    hardware: bool,
+    backend: u32,
+    settings: &settings::RenderSettings,
+    texture_limits: [u32; 2],
+    previous: Option<PreparedState>,
+) -> Result<(Scene, Assets, PreparedState)> {
     let settings = *settings;
     runtime::call(move || {
-        prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings, texture_limits)
+        prepare_retained_with_settings_inner(
+            &bytes,
+            hardware,
+            backend,
+            &settings,
+            texture_limits,
+            previous.as_ref().map(|p| p.token),
+        )
     })
 }
 fn prepare_retained_with_settings_inner(
@@ -1930,6 +1988,7 @@ fn prepare_retained_with_settings_inner(
     backend: u32,
     settings: &settings::RenderSettings,
     texture_limits: [u32; 2],
+    previous: Option<u32>,
 ) -> Result<(Scene, Assets, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
@@ -1960,6 +2019,15 @@ fn prepare_retained_with_settings_inner(
             0
         },
     };
+    if let Some(previous) = previous {
+        init_core();
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_graph_fallback(previous, token, &mut pointer, &mut size);
+        }
+        let _ = unsafe { copy_core_result(pointer, size, 16) }?;
+    }
     let (scene, assets) = prepare_impl_with_kernels_inner(
         bytes,
         token,
@@ -3190,4 +3258,20 @@ mod affine_scale_tests {
         matrix[3] = 0.1;
         assert!(!super::invertible_affine(&matrix));
     }
+}
+
+/// Serialized AOT call used by CPU material importers; no device is created.
+pub(crate) fn fold_material_graph(bytes: Vec<u8>) -> Result<Vec<u8>> {
+    runtime::call(move || {
+        init_core();
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_graph_fold(bytes.as_ptr(), bytes.len(), &mut pointer, &mut size);
+            let result = copy_core_result(pointer, size, size);
+            mt_core_reset();
+            mt_core_collect();
+            result
+        }
+    })
 }

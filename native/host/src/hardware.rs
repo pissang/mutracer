@@ -10,6 +10,8 @@ mod metal_refit;
 #[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeLayout {
+    #[serde(default)]
+    pub material_graphs: Vec<crate::api::MaterialGraphDiagnostic>,
     pub has_alpha: bool,
     pub attribute_stride_bytes: usize,
     pub position_offset_bytes: usize,

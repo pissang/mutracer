@@ -150,3 +150,15 @@ import {compactKernelParameters as compactCommand} from './compact-kernel.js';
 export function compactKernelParameters(bytes: Uint8Array, token: number): Uint8Array { return compactCommand(bytes, token); }
 import {compactKernelReference as compactReference} from './compact-kernel-reference.js';
 export function compactKernelReference(bytes: Uint8Array, normalFloat: number): Uint8Array { return compactReference(bytes, normalFloat); }
+
+import {seedMaterialGraphFallbacks as seedGraphs} from './scene-core.js';
+export function seedMaterialGraphFallbacks(previous:number,token:number):Uint8Array {return seedGraphs(previous,token);}
+
+import {foldGraphTerminal} from '../../src/renderer/materialGraph/fold.js';
+import type {GraphIR} from '../../src/renderer/materialGraph/ir.js';
+/** CPU ingestion helper; no device or scene state is required. */
+export function materialGraphFold(bytes:Uint8Array):Uint8Array {
+ const graph=JSON.parse(new TextDecoder().decode(bytes)) as GraphIR;
+ const results=[];for(let i=0;i<graph.terminal.length/3;i++)results.push(foldGraphTerminal(graph,i));
+ return new TextEncoder().encode(JSON.stringify(results));
+}

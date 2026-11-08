@@ -57,6 +57,8 @@ pub struct MaterialGraph {
     pub inputs: Vec<GraphInput>,
     pub terminals: Vec<GraphTerminal>,
     pub parameters: Vec<[f32; 4]>,
+    /// Retained texture slots; default empty. Every listed entry is retained,
+    /// including slots not currently selected by a filename parameter.
     pub textures: Vec<Option<TextureId>>,
     pub author_ids: Vec<String>,
 }
@@ -74,6 +76,62 @@ impl Default for MaterialGraph {
     }
 }
 impl MaterialGraph {
+    /// Fold each terminal without creating a scene or GPU. None means the
+    /// terminal depends on textures or a shading context; Some contains 1..4
+    /// finite components. Uses the browser's numeric evaluator and float32
+    /// rounding after each node. Invalid reachable IR/non-finite folded values
+    /// return InvalidArgument. Unreachable author errors do not affect another
+    /// terminal. Texture handles and author labels are not dereferenced. This
+    /// borrows the graph for the call and may run on any thread through the
+    /// SDK's serialized CPU runtime.
+    pub fn fold_constants(&self) -> Result<Vec<Option<Vec<f32>>>> {
+        self.word_count()?;
+        let graph = serde_json::json!({
+            "version": self.version,
+            "nodes": self.nodes.iter().flat_map(|n| [n.category, n.implementation, n.port_type, n.first_input, n.input_count]).collect::<Vec<_>>(),
+            "inputs": self.inputs.iter().flat_map(|i| [i.port, i.port_type, i.source_kind, i.source, i.output]).collect::<Vec<_>>(),
+            "terminal": self.terminals.iter().flat_map(|t| [t.port, t.node, t.output]).collect::<Vec<_>>(),
+            "parameters": self.parameters.iter().flatten().copied().collect::<Vec<_>>()
+        });
+        let bytes = crate::scene::fold_material_graph(
+            serde_json::to_vec(&graph).map_err(|e| invalid(&e.to_string()))?,
+        )
+        .map_err(|e| invalid(&e.to_string()))?;
+        let rows: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| invalid(&e.to_string()))?;
+        let rows = rows
+            .as_array()
+            .ok_or_else(|| invalid("Invalid graph fold result"))?;
+        if rows.len() != self.terminals.len() {
+            return Err(invalid("Invalid graph fold result length"));
+        }
+        rows.iter()
+            .map(|row| {
+                if row["diagnostics"].as_array().is_none_or(|a| !a.is_empty()) {
+                    return Err(invalid(&row["diagnostics"].to_string()));
+                }
+                let value = row["value"]
+                    .as_array()
+                    .ok_or_else(|| invalid("Invalid graph fold value"))?;
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                if value.len() > 4 {
+                    return Err(invalid("Invalid graph fold width"));
+                }
+                let value = value
+                    .iter()
+                    .map(|v| {
+                        v.as_f64()
+                            .map(|v| v as f32)
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(|| invalid("Non-finite folded graph value"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some(value))
+            })
+            .collect()
+    }
     pub(super) fn word_count(&self) -> Result<usize> {
         if !self.author_ids.is_empty() && self.author_ids.len() != self.nodes.len() {
             return Err(invalid(
@@ -278,8 +336,9 @@ impl Scene {
 
 impl OpenPbrMaterial {
     /// Replace the normalized graph; None restores constants/maps. Arrays and
-    /// strings move into the material. Rejects invalid array lengths/non-finite
+    /// strings move into the material. Rejects an author-ID count mismatch or non-finite
     /// parameters with InvalidArgument, leaving the previous graph unchanged.
+    /// Node, type and terminal support is diagnosed during scene preparation.
     /// Texture handles are checked by the containing Scene when submitted.
     pub fn set_graph(&mut self, graph: Option<MaterialGraph>) -> Result<()> {
         if let Some(g) = &graph {
@@ -291,207 +350,5 @@ impl OpenPbrMaterial {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::schema::{category, output, port, port_type, source, terminal};
-    use super::*;
-    use crate::api::CommitKind;
-    use crate::scene_api::{Geometry, Mesh};
-    fn graph() -> MaterialGraph {
-        MaterialGraph {
-            nodes: vec![GraphNode {
-                category: category::CONSTANT,
-                implementation: 1,
-                port_type: port_type::FLOAT,
-                first_input: 0,
-                input_count: 1,
-            }],
-            inputs: vec![GraphInput {
-                port: port::VALUE,
-                port_type: port_type::FLOAT,
-                source_kind: source::PARAMETER,
-                source: 0,
-                output: output::OUT,
-            }],
-            terminals: vec![GraphTerminal {
-                port: terminal::SPECULAR_ROUGHNESS,
-                node: 0,
-                output: output::OUT,
-            }],
-            parameters: vec![[0.25, 0., 0., 0.]],
-            author_ids: vec!["/Material/value".into()],
-            ..Default::default()
-        }
-    }
-    fn scene() -> (Scene, super::super::MaterialId) {
-        let mut scene = Scene::new();
-        let geometry = scene
-            .add_geometry(Geometry::new(
-                vec![-1., -1., -3., 1., -1., -3., 0., 1., -3.],
-                vec![0, 1, 2],
-            ))
-            .unwrap();
-        let material = scene
-            .add_material(OpenPbrMaterial {
-                graph: Some(graph()),
-                ..Default::default()
-            })
-            .unwrap();
-        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
-        (scene, material)
-    }
-    fn words(bytes: &[u8]) -> Vec<u32> {
-        bytes
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-            .collect()
-    }
-    #[test]
-    fn graph_parameters_are_incremental_but_terminals_are_structural() {
-        let (mut scene, material) = scene();
-        let before = scene.descriptor().unwrap();
-        crate::scene::validate(&before).unwrap();
-        let a = words(&before);
-        let ma = a[h::MATERIAL_OFFSET] as usize;
-        let ga = a[ma + m::GRAPH] as usize;
-        assert_eq!(a[ga + g::VERSION], schema::IR_VERSION);
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .parameters[0][0] = 0.75;
-        assert_eq!(
-            scene.pending_commit_kind().unwrap(),
-            CommitKind::Incremental
-        );
-        let after = scene.descriptor().unwrap();
-        let b = words(&after);
-        let gb = b[b[h::MATERIAL_OFFSET] as usize + m::GRAPH] as usize;
-        assert_eq!(before.len(), after.len());
-        assert_eq!(ga, gb);
-        assert_eq!(f32::from_bits(b[b[gb + g::PARAMETERS] as usize]), 0.75);
-        assert!(crate::scene::material_graph::same_topology(
-            &before, ga, &after, gb
-        ));
-        assert!(!crate::scene::material_graph::same_data(
-            &before, ga, &after, gb
-        ));
-        let packet = crate::commit_plan::changed_materials_with(&before, &after, None).unwrap();
-        let p = words(&packet);
-        assert_eq!(p[1], 1);
-        let graph = p[p[5] as usize + m::GRAPH] as usize;
-        assert!(graph > 0);
-        assert_eq!(p[graph + g::NODE_COUNT], 1);
-        assert_eq!(f32::from_bits(p[p[graph + g::PARAMETERS] as usize]), 0.75);
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .terminals[0]
-            .port = terminal::COAT_ROUGHNESS;
-        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Full);
-        scene.material_mut(material).unwrap().graph = None;
-        assert_eq!(scene.pending_commit_kind().unwrap(), CommitKind::Full);
-        let cleared = scene.descriptor().unwrap();
-        let c = words(&cleared);
-        assert_eq!(c[c[h::MATERIAL_OFFSET] as usize + m::GRAPH], 0);
-    }
-    #[test]
-    fn graph_texture_reference_edits_preserve_topology_and_handle_ownership() {
-        let (mut scene, material) = scene();
-        let a = scene
-            .add_texture(super::super::Texture::rgba8(1, 1, vec![255, 0, 0, 255]))
-            .unwrap();
-        let b = scene
-            .add_texture(super::super::Texture::rgba8(1, 1, vec![0, 255, 0, 255]))
-            .unwrap();
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .textures = vec![Some(a)];
-        let before = scene.descriptor().unwrap();
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .textures[0] = Some(b);
-        assert_eq!(
-            scene.pending_commit_kind().unwrap(),
-            CommitKind::Incremental
-        );
-        let after = scene.descriptor().unwrap();
-        let wa = words(&before);
-        let wb = words(&after);
-        let ga = wa[wa[h::MATERIAL_OFFSET] as usize + m::GRAPH] as usize;
-        let gb = wb[wb[h::MATERIAL_OFFSET] as usize + m::GRAPH] as usize;
-        assert!(crate::scene::material_graph::same_topology(
-            &before, ga, &after, gb
-        ));
-        assert!(!crate::scene::material_graph::same_data(
-            &before, ga, &after, gb
-        ));
-        scene.remove_texture(b).unwrap();
-        assert!(scene.descriptor().is_err());
-    }
-    #[test]
-    fn graph_labels_are_utf8_owned_and_relocated_without_affecting_topology() {
-        let (mut scene, material) = scene();
-        let before = scene.descriptor().unwrap();
-        let a = words(&before);
-        let ga = a[a[h::MATERIAL_OFFSET] as usize + m::GRAPH] as usize;
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .author_ids = vec!["/材质/颜色".into()];
-        assert_eq!(
-            scene.pending_commit_kind().unwrap(),
-            CommitKind::Incremental
-        );
-        let after = scene.descriptor().unwrap();
-        crate::scene::validate(&after).unwrap();
-        let b = words(&after);
-        let gb = b[b[h::MATERIAL_OFFSET] as usize + m::GRAPH] as usize;
-        assert!(crate::scene::material_graph::same_topology(
-            &before, ga, &after, gb
-        ));
-        let packet = crate::commit_plan::changed_materials_with(&before, &after, None).unwrap();
-        let p = words(&packet);
-        let pg = p[p[5] as usize + m::GRAPH] as usize;
-        let ids = p[pg + g::AUTHOR_IDS] as usize;
-        let (at, len) = (p[ids] as usize * 4, p[ids + 1] as usize);
-        assert_eq!(
-            std::str::from_utf8(&packet[at..at + len]).unwrap(),
-            "/材质/颜色"
-        );
-    }
-    #[test]
-    fn raw_graph_validation_rejects_out_of_bounds_spans_and_legacy_graph_records() {
-        let (scene, _) = scene();
-        let bytes = scene.descriptor().unwrap();
-        let a = words(&bytes);
-        let ma = a[h::MATERIAL_OFFSET] as usize;
-        let ga = a[ma + m::GRAPH] as usize;
-        for (at, value) in [
-            (ma + m::GRAPH, u32::MAX),
-            (ga + g::NODES, u32::MAX),
-            (ga + g::PARAMETERS, u32::MAX),
-            (ga + g::RESERVED, 1),
-            (h::VERSION, 7),
-        ] {
-            let mut corrupt = bytes.as_ref().clone();
-            corrupt[at * 4..at * 4 + 4].copy_from_slice(&value.to_le_bytes());
-            assert!(crate::scene::validate(&corrupt).is_err(), "{at}");
-        }
-    }
-}
+#[path = "material_graph_tests.rs"]
+mod tests;

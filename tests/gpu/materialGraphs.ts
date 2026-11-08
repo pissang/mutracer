@@ -15,7 +15,7 @@ function testGraph(category: string, inputs: Record<string, Input> = {}, type: T
     return new MaterialGraph({ nodes, terminal: { emissionColor: { node: 'out' } } });
 }
 const dynamic = edge('separate', 'float', 'outx');
-function cases() {
+export function materialGraphCases() {
     const rows: {
         name: string;
         graph: MaterialGraph;
@@ -112,7 +112,7 @@ function cases() {
     udim.colorSpace = 'linear';
     rows.push({ name: 'tiledimage-UDIM', graph: testGraph('tiledimage', { file: { type: 'filename', value: udim }, uvoffset: v([-1, 0]) }, 'color3'), sample: () => [0.8, 0.4, 0.6, 1] });
     const nodes: Node[] = [{ id: 'uv', category: 'texcoord', type: 'vector2' }, { id: 's', category: 'separate2', type: 'vector2', inputs: { in: edge('uv', 'vector2') } }];
-    const count=Number(new URLSearchParams(location.search).get('chain')??26);
+    const count=Number(new URLSearchParams(typeof location === 'undefined' ? '' : location.search).get('chain')??26);
     for (let i = 0; i < count; i++)
         nodes.push({ id: `n${i}`, category: i % 2 ? 'multiply' : 'add', type: 'float', inputs: { in1: edge(i ? `n${i - 1}` : 's', 'float', i ? 'out' : 'outx'), in2: f(i % 2 ? 0.95 : 0.02) } });
     nodes.push({ id: 'out', category: 'convert', type: 'color3', inputs: { in: edge(`n${count-1}`) } });
@@ -126,12 +126,14 @@ async function run() {
     const geometry = createPlaneGeometry(1, 1, 'vertical');
     for (let i = 0; i < geometry.uv!.array.length; i += 2)
         geometry.uv!.array.set(uv, i);
+    material.aovId = 2;
     const mesh = new Mesh(geometry, material), camera = new Camera({ projection: 'orthographic', left: -1, right: 1, top: 1, bottom: -1 });
+    mesh.aovId = 1;
     camera.position = [0, 0, 3];
     camera.lookAt([0, 0, 0]);
     engine.scene = { meshes: [mesh], lights: [] };
     engine.camera = camera;
-    const render = new Render(engine, { bounces: 1, samplingPattern: 'sobol' });
+    const render = new Render(engine, { bounces: 1, samplingPattern: 'sobol', aovs: ['id'] });
     const rows: unknown[] = [];
     const settle = async (graph: boolean) => {
         const start = performance.now();
@@ -151,7 +153,7 @@ async function run() {
     };
     try {
         await settle(false);
-        const selected = cases();
+        const selected = materialGraphCases();
         const assetsUrl=new URLSearchParams(location.search).get('assets');
         if (assetsUrl) {
             const assets = await (await fetch(assetsUrl)).json();
@@ -170,6 +172,10 @@ async function run() {
         }
         const filter = new URLSearchParams(location.search).get('filter');
         for (const test of selected.filter(test => !filter || new RegExp(filter).test(test.name))) {
+            if (new URLSearchParams(location.search).has('positive')) {
+                test.graph.setNode({ id: 'positive-output', category: 'add', type: 'color3', inputs: { in1: { type: 'color3', connection: test.graph.terminal.emissionColor! }, in2: { type: 'color3', value: [2, 2, 2] } } });
+                test.graph.setTerminal({ emissionColor: { node: 'positive-output' } });
+            }
             const graph = normalizeGraph(test.graph, backend);
             if (graph.diagnostics.length)
                 throw new Error(test.name + JSON.stringify(graph.diagnostics));
@@ -180,6 +186,8 @@ async function run() {
             const firstMs = await settle(true);maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);const maxCompileEventLoopGapMs=maxEventLoopGapMs;
             const diagnostics = engine.getDiagnostics(), pixels = (await render.readPixels('hdr')).data.slice();
             maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);clearInterval(heartbeat);
+            const ids = await render.readPixels('id');
+            await fetch(`/evidence/${backend}-${test.name}-id.json`, { method: 'POST', body: JSON.stringify(Array.from(ids.data)) });
             material.graph = undefined;
             material.emissionColor = expected as [
                 number,
@@ -206,4 +214,4 @@ async function run() {
         engine.dispose();
     }
 }
-Object.assign(window, { runBenchmark: run });
+if (typeof window !== 'undefined') Object.assign(window, { runBenchmark: run });

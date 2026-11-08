@@ -109,6 +109,61 @@ pub unsafe extern "C" fn mt_scene_material_set_graph(
     })
 }
 
+/// Uses the same pure evaluator as browser code generation. Arrays are copied
+/// before crossing the AOT runtime; handles and author strings are not read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_material_graph_fold(
+    graph: *const MaterialGraphDesc,
+    values: *mut f32,
+    widths: *mut u32,
+    capacity: usize,
+    error: *mut c_char,
+    cap: usize,
+) -> i32 {
+    call(error, cap, || {
+        let d = unsafe { record(graph) }?;
+        if capacity < d.terminal_count
+            || d.terminal_count > 0 && (values.is_null() || widths.is_null())
+        {
+            return Err(invalid("Graph fold output capacity is too small"));
+        }
+        let counts = [
+            (d.node_count, 20usize),
+            (d.input_count, 20),
+            (d.terminal_count, 12),
+            (d.parameter_count, 16),
+        ];
+        let bytes = counts
+            .iter()
+            .try_fold(0usize, |sum, (count, stride)| {
+                sum.checked_add(count.checked_mul(*stride)?)
+            })
+            .ok_or_else(|| invalid("Graph arrays overflow"))?;
+        crate::memory_budget::check(bytes, "Material graph fold")
+            .map_err(|e| invalid(&e.to_string()))?;
+        let graph = MaterialGraph {
+            version: d.version,
+            nodes: unsafe { input(d.nodes, d.node_count) }?.to_vec(),
+            inputs: unsafe { input(d.inputs, d.input_count) }?.to_vec(),
+            terminals: unsafe { input(d.terminals, d.terminal_count) }?.to_vec(),
+            parameters: unsafe { input(d.parameters, d.parameter_count) }?.to_vec(),
+            ..Default::default()
+        };
+        let results = graph.fold_constants()?;
+        for (i, result) in results.into_iter().enumerate() {
+            let value = result.unwrap_or_default();
+            let mut out = [0f32; 4];
+            out[..value.len()].copy_from_slice(&value);
+            unsafe {
+                widths.add(i).write(value.len() as u32);
+                std::ptr::copy_nonoverlapping(out.as_ptr(), values.add(i * 4), 4);
+            }
+        }
+
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

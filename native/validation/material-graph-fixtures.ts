@@ -40,6 +40,11 @@ export function materialGraphFixtures() {
 export function materialGraphRequests() {
     const fixtures=materialGraphFixtures();
     const requests=fixtures.flatMap(({label,graph}) => ['webgpu','webgl'].map(backend => ({label:`${label}-${backend}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),backend,name:'mx_eval'}))})));
+    for(const {label,graph} of fixtures) requests.push({label:`fold-${label}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),fold:true}))});
+    for(const table of ['nodes','inputs','terminal'] as const)for(let offset=0;offset<(table==='terminal'?3:5);offset++) {
+        const graph=flattenGraph(fixtures[0].graph);graph[table][offset]=0xffffffff;
+        requests.push({label:`invalid-${table}-${offset}`,input:new TextEncoder().encode(JSON.stringify({graph,validate:true}))});
+    }
     for(const backend of ['webgpu','webgl'] as const) for(const compactVertices of [false,true]) {
         const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
         const source=backend==='webgpu'?rayTraceCompute(options):rayTraceFragment(options).main;

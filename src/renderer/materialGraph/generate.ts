@@ -1,4 +1,5 @@
 // MaterialX 1.39.4 stdlib semantics; see THIRD_PARTY_NOTICES.md and LICENSES/MaterialX-*.txt.
+import {varyingCategory} from './fold.js';
 import {validateGraphIR} from './validate.js';
 import {width} from './types.js';
 import type {GraphType as Type} from './types.js';
@@ -31,7 +32,7 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
         const at=i*5;
         const node = {category: graphCategories[graph.nodes[at]], type: graphTypes[graph.nodes[at+2]], inputs: {} as Record<string, {type: Type}>};
         const a: Record<string, string> = {}, u: Record<string, Numeric> = {};
-        let isUniform = !['gltf_image','gltf_colorimage','gltf_normalmap','image', 'tiledimage', 'texcoord', 'position', 'normal', 'tangent', 'bitangent', 'transformpoint', 'transformvector', 'transformnormal'].includes(node.category);
+        let isUniform = !varyingCategory(node.category);
         for (let j=graph.nodes[at+3]; j<graph.nodes[at+3]+graph.nodes[at+4]; j++) {
             const input=j*5, port=graphPorts[graph.inputs[input]], type=graphTypes[graph.inputs[input+1]], kind=graph.inputs[input+2], source=graph.inputs[input+3], output=graphOutputs[graph.inputs[input+4]];
             node.inputs[port]={type};

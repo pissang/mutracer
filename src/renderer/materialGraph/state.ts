@@ -1,3 +1,6 @@
+import {flattenGraphUnchecked} from './flatten.js';
+import {graphContextDiagnostics} from './context.js';
+import {graphTerminals} from './ir.js';
 import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
 import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
@@ -61,22 +64,11 @@ export class MaterialGraphState {
             const graph = normalizeGraph(material.graph, this.backend, this.capabilities);
             const validateContext=(graph:NormalizedGraph,retained=false)=>{
                 const before=graph.diagnostics.length;
-                if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal))) {
-                    const port=['emissionColor','emissionLuminance','coatColor','coatWeight'].find(p=>p in graph.terminal)!;
-                    graph.diagnostics.push({ node:graph.nodes[graph.terminal[port].node]?.id, port, code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
-                    // A formerly valid unlit graph cannot remain installed after
-                    // switching to an unsupported lit-emitter context.
-                    this.constantFallback.add(material);
-                }
-                if ('opacity' in graph.terminal && material.alphaMode !== 'opaque') {
-                    const seen=new Set<number>();let usesUv=false;
-                    const check=(index:number) => { if(seen.has(index)||index<0)return;seen.add(index);const node=graph.nodes[index];
-                        if(node.category==='texcoord'||Object.values(node.inputs).some(i=>i.geometry==='texcoord'))usesUv=true;
-                        if(['normal','tangent','bitangent','normalmap','gltf_normalmap','transformnormal'].includes(node.category)||Object.values(node.inputs).some(i=>i.geometry&&i.geometry!=='texcoord'&&i.geometry!=='objectPosition'))graph.diagnostics.push({code:'unsupported-opacity-context',message:'Opacity graphs support UV and position inputs; shading-frame inputs are not available to shadow traversal.',node:node.id,port:'opacity'});
-                        for(const i of Object.values(node.inputs))if(i.node!==undefined)check(i.node);
-                    };
-                    check(graph.terminal.opacity.node);
-                    if(usesUv&&material.uvProjection!=='none'){this.constantFallback.add(material);graph.diagnostics.push({code:'unsupported-opacity-projection',message:'UV-dependent opacity graphs require material uvProjection none; use graph coordinates for procedural coverage.',node:graph.nodes[graph.terminal.opacity.node]?.id,port:'opacity'});}
+                const context=graphContextDiagnostics(flattenGraphUnchecked(graph),material.unlit,material.emissionLuminance>0,material.alphaMode==='opaque',material.uvProjection!=='none');
+                for(const d of context) {
+                    const port=graphTerminals[d.port];
+                    graph.diagnostics.push({code:d.code,message:d.message,node:graph.nodes[d.node]?.id,port});
+                    if(d.code==='unsupported-emission-graph'||d.code==='unsupported-opacity-projection')this.constantFallback.add(material);
                 }
                 if(retained&&graph.diagnostics.length>before)this.constantFallback.add(material);
             };

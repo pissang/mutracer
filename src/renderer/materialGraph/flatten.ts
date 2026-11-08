@@ -5,6 +5,10 @@ import {emptyGraphIR, graphCategories, graphPorts, graphTerminals, graphTypes, g
 /** Lower a validated canonical graph without retaining browser objects in the IR. */
 export function flattenGraph(graph: NormalizedGraph) {
     if (graph.diagnostics.length) throw new Error(graph.diagnostics.map(d => d.message).join('\n'));
+    return flattenGraphUnchecked(graph);
+}
+/** Context validation can inspect reachable inputs even after author validation fails. */
+export function flattenGraphUnchecked(graph: NormalizedGraph) {
     const ir = emptyGraphIR();
     for (const value of graph.parameters) {
         const n = typeof value === 'object' && !Array.isArray(value) ? [-1] : numeric(value);
@@ -14,6 +18,7 @@ export function flattenGraph(graph: NormalizedGraph) {
         const first = ir.inputs.length / 5;
         for (const [port, input] of Object.entries(node.inputs)) {
             const kind = input.node !== undefined ? GraphSource.Node : input.geometry ? GraphSource.Geometry : GraphSource.Parameter;
+            if(input.type==='filename' && input.slot!==undefined && graph.parameters[input.slot]===undefined)ir.parameters[input.slot*4]=-1;
             ir.inputs.push(graphPorts.indexOf(port), graphTypes.indexOf(input.type), kind,
                 input.node ?? (input.geometry ? graphGeometry.indexOf(input.geometry) : input.slot!), graphOutputs.indexOf(input.output ?? 'out'));
         }

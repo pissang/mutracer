@@ -2,6 +2,9 @@ import {describe,expect,it} from 'vitest';
 import MaterialGraph from '../../src/scene/MaterialGraph.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {flattenGraph} from '../../src/renderer/materialGraph/flatten.js';
+import {foldGraphTerminal} from '../../src/renderer/materialGraph/fold.js';
+import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
+import {graphTerminals} from '../../src/renderer/materialGraph/ir.js';
 import {generateGraphIR} from '../../src/renderer/materialGraph/generate.js';
 import {validateGraphIR} from '../../src/renderer/materialGraph/validate.js';
 import {GraphSource, graphPorts} from '../../src/renderer/materialGraph/ir.js';
@@ -25,6 +28,28 @@ describe('portable material graph IR',()=>{
                 expect(generated.foldedWidths.length).toBe(generated.foldedNodes);
             }
         }
+    });
+    it('folds terminal constants through the shared numeric semantics',()=>{
+        let folded=0,varying=0;
+        for(const fixture of materialGraphFixtures()) {
+            const ir=flattenGraph(fixture.graph),expected=evaluateGraph(fixture.graph);
+            for(let terminal=0;terminal<ir.terminal.length/3;terminal++) {
+                const result=foldGraphTerminal(ir,terminal);expect(result.diagnostics,fixture.label).toEqual([]);
+                if(!result.value.length){varying++;continue;}folded++;
+                const reference=expected[graphTerminals[ir.terminal[terminal*3]]];
+                for(let i=0;i<result.value.length;i++) {
+                    if(!Number.isFinite(reference[i]))expect(result.value[i]).toBe(reference[i]);
+                    else expect(result.value[i],fixture.label).toBeCloseTo(reference[i],5);
+                }
+            }
+        }
+        expect(folded).toBeGreaterThan(200);expect(varying).toBeGreaterThan(200);
+    });
+    it('folds a valid terminal independently from unreachable invalid author data',()=>{
+        const ir=flattenGraph(normalizeGraph(new MaterialGraph({nodes:[{id:'n',category:'constant',type:'color3',inputs:{value:{type:'color3',value:[.2,.3,.4]}}}],terminal:{baseColor:{node:'n'}}})));
+        ir.nodes.push(999,1,0,ir.inputs.length/5,0);
+        expect(foldGraphTerminal(ir,0).diagnostics).toEqual([]);
+        expect(foldGraphTerminal(ir,0).value).toEqual([Math.fround(.2),Math.fround(.3),Math.fround(.4)]);
     });
     it('keeps parameter edits out of structure and code',()=>{
         const a=graph(),b=structuredClone(a);

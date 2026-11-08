@@ -1,3 +1,4 @@
+import {nativeGraphOpacity} from './material-graph.js';
 import type MaterialState from '../../src/scene/MaterialState.js';
 import {resolveMaterialAlphaMode} from '../../src/scene/MaterialState.js';
 
@@ -12,7 +13,7 @@ export function hardwareOpaqueGeometryFlags(materials: MaterialState[], bindings
     seen[binding.blasIndex] = true;
     for (const index of binding.materialIndices) {
       const material = materials[index];
-      if (!material || !material.doubleSided || resolveMaterialAlphaMode(material) !== 'opaque' || material.displacementMap) {
+      if (!material || !material.doubleSided || nativeGraphOpacity(material) && material.alphaMode!=='opaque' || resolveMaterialAlphaMode(material) !== 'opaque' || material.displacementMap) {
         flags[binding.blasIndex] = false;
         break;
       }

@@ -1,3 +1,5 @@
+import {attachGraphFallbacks,seedGraphFallbacks,releaseGraphFallbacks,nativeGraphPlan,nativeGraphTextures,graphHasTerminal,packNativeGraphs,inheritNativeGraph,swapNativeGraphTextures,type NativeGraphPlan} from './material-graph.js';
+import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize.js';
 import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
 import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
 import {nativeTangentRequirements} from './scene-tangents.js';
@@ -55,7 +57,7 @@ import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.j
 import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../../src/util/geometry.js';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
-import {syncNativeMaterial} from './material-snapshot.generated.js';
+import {syncNativeMaterial} from './material-graph.js';
 import {materialEmission} from '../../src/renderer/materialEmission.js';
 import {colorLuminance} from '../../src/renderer/lightSampling.js';
 import {WGPU_SCENE_FEATURE_BITS} from '../../src/renderer/WGPUSceneFeatures.js';
@@ -75,6 +77,7 @@ interface NativeLayout {
   indexed?: boolean; hardwareGeometries?: HardwareGeometry[];
   instanceCount?: number; instanceCapacity?: number;
   bvhCapacityBytes?: number; tlasCapacityBytes?: number; attributeCapacityBytes?: number;
+  materialGraphs?: NativeGraphPlan['diagnostics'];
 }
 function nativeLayoutBytes(layout: NativeLayout, blasOffset: number, isEmpty: boolean, instanceCount = layout.instanceCount): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({...layout, blasOffset, isEmpty, instanceCount}));
@@ -100,6 +103,7 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   shader: SceneShader}>();
 /** Inputs of the production shader, retained so targets can request pattern/bevel-sample variants. */
 interface SceneShader {
+  graphs?: NativeGraphPlan;
   constants: Record<string, boolean | number>; features: Parameters<typeof wgpuShaderSource>[1];
   variantFlags: number; isEmpty: boolean; hardware: boolean; opaqueClosest: boolean;
 }
@@ -116,10 +120,39 @@ function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views']
 /** Production WGSL: the software shader, or the ray-query shader for hardware scenes. */
 function productionShader(id: number, shader: SceneShader): Uint8Array {
   const {constants, features, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
-  return nativeShaderVariant(id, constants, features, variantFlags, id === RESOURCE.HWRT_SHADER
-    ? () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-      nativeIntersections(features, isEmpty, false, false, hardware, opaqueClosest))
-    : () => wgpuShaderSource(constants, features, true));
+  const plan=shader.graphs;
+  return nativeShaderVariant(id, constants, features, variantFlags, () => {
+    const source=id===RESOURCE.HWRT_SHADER
+      ? 'enable wgpu_ray_query;\n'+wgpuShaderSource(constants,features,true,nativeIntersections(features,isEmpty,false,false,hardware,opaqueClosest))
+      : wgpuShaderSource(constants,features,true);
+    return specializeNativeGraphs(source,plan,!!features.lightTracing||!!features.photonMapping);
+  },plan?.key??'');
+}
+function specializeNativeGraphs(source:string,plan:NativeGraphPlan|undefined,unsupportedTransport:boolean):string {
+  if(!plan?.key || unsupportedTransport)return source;
+  source=materialGraphShaderIR(source,plan.structures,'webgpu');
+  if(plan.structures.some(g=>graphHasTerminal(g,'opacity'))) {
+    // HWRT carries the local candidate's instance separately from the software BLAS loop.
+    source=source.replace('o + t * d, normal, record))','o + t * d, normal, record, instance))')
+      .replace('o + t * d, normal))','o + t * d, normal, instance))');
+  }
+  return source;
+}
+function nativeMaterialConstants(materials:MaterialState[],table:MaterialData,geometry:Geometry,bevel:number):Record<string,boolean|number> {
+  const constants=wgpuMaterialConstants(materials,table,geometry,bevel),plan=nativeGraphPlan(materials);
+  if(plan.key) {
+    constants.USE_ANISOTROPY_DIRECTIONS=true;
+    if(plan.structures.some(g=>graphHasTerminal(g,'normal')))constants.USE_COAT_NORMAL_FRAMES=true;
+    constants.USE_TANGENT=geometry.tangent!=null;constants.USE_UV1=geometry.uv1!=null;
+    if(plan.structures.some(g=>graphHasTerminal(g,'opacity'))){constants.HAS_ALPHA=true;constants.HAS_ALPHA_MASK=true;constants.HAS_ALPHA_BLEND=true;}
+    constants.HAS_COAT=true;constants.HAS_FUZZ=true;constants.HAS_THIN_FILM=true;
+    constants.MATERIAL_CAPABILITIES=Number(constants.MATERIAL_CAPABILITIES)|3;
+  }
+  return constants;
+}
+export function seedMaterialGraphFallbacks(previous:number,token:number):Uint8Array {
+  const state=retainedScenes.get(previous);if(state)seedGraphFallbacks(token,state.ordered);
+  return new Uint8Array(new Uint32Array([1,0,0,0]).buffer);
 }
 type FloatGeometryPatch = {target: Float32Array; offset: number; data: Float32Array};
 type UintGeometryPatch = {target: Uint32Array; offset: number; data: Uint32Array};
@@ -194,6 +227,8 @@ export function acceptSceneLighting(token: number): Uint8Array {
     for (const [target, source] of materials.changes) syncNativeMaterial(target, source);
     state.emissive = materials.emissive; state.prepared.emissiveBindings = materials.bindings;
     state.table.repackTextureReferences(state.ordered); state.table.repackParams(state.ordered);
+    state.shader.graphs=nativeGraphPlan(state.ordered);
+    state.nativeLayout.materialGraphs=state.shader.graphs.diagnostics.length?state.shader.graphs.diagnostics:undefined;
   }
   if (pending.lightTextures) state.table.lightTexturesIndices = pending.lightTextures;
   const atlas = pending.atlas;
@@ -254,8 +289,8 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     }
     const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
-      (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
-        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()));
+      specializeNativeGraphs((shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
+        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs,false),state.shader.graphs?.key??'');
     const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
       features: frameFeatures,
       constants: targetConstants}) : new Uint8Array(0);
@@ -283,7 +318,7 @@ export function discardSceneUpdates(token: number): void {
   pendingGeometry.delete(token); transformStages.delete(token); geometryStages.delete(token);
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  releaseCompactKernel(token); aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometryAppends.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  releaseGraphFallbacks(token);releaseCompactKernel(token); aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometryAppends.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -307,7 +342,7 @@ export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8
   // Same repacking and layout used by browser MaterialTable updates. Texture
   // indices and atlas mapping remain in the retained MaterialData object.
   state.table.repackParams(state.ordered);
-  const packed = state.table.getBufferArray();
+  const packed = packNativeGraphs(state.table.getBufferArray(),state.ordered,state.table.textures);
   const result = new Uint8Array(16 + packed.byteLength);
   new Uint32Array(result.buffer).set([1, packed.byteLength, 0, 0]);
   result.set(new Uint8Array(packed.buffer), 16);
@@ -332,6 +367,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     for (let i = 0; i < u[1]; i++) {
       const previous = state.source[u[4 + i * 2]], next = decodeMaterial(u, f, u[5 + i * 2], textures);
       next.aovId = previous.aovId;
+      inheritNativeGraph(next,previous);
       changes.set(previous, next);
       emission ||= previous.emissionLuminance !== next.emissionLuminance ||
         (previous.emissionColor[0] !== next.emissionColor[0] || previous.emissionColor[1] !== next.emissionColor[1] || previous.emissionColor[2] !== next.emissionColor[2]) ||
@@ -339,9 +375,11 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
         previous.unlit !== next.unlit || previous.shadowCatcher !== next.shadowCatcher;
     }
     const ordered = state.ordered.map(material => changes.get(material) ?? material);
+    if(nativeGraphPlan(ordered).key!==(state.shader.graphs?.key??''))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
+    if(nativeGraphTextures(ordered).some(texture=>!state.table.textures.includes(texture)))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
     const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
-    const before = wgpuMaterialConstants(state.ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
-    const after = wgpuMaterialConstants(ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
+    const before = nativeMaterialConstants(state.ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
+    const after = nativeMaterialConstants(ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
     if (state.hardware) {
       const opaque = hardwareOpaqueGeometryFlags(ordered, state.prepared.residentBindings, state.hardware.geometries.length);
       if (opaque.some((value, i) => value !== state.hardware!.geometries[i].opaque))
@@ -356,7 +394,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     }
     if (u[0] === 3) return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
     state.table.repackTextureReferences(ordered); state.table.repackParams(ordered); repacked = true;
-    const packed = new Uint8Array(state.table.getBufferArray().buffer);
+    const packed = new Uint8Array(packNativeGraphs(state.table.getBufferArray(),ordered,state.table.textures).buffer);
     const records: number[][] = [resourceRecord(RESOURCE.MATERIALS, KIND.BUFFER, packed.length, 0, 0, 0, 0)];
     const parts = [packed];
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
@@ -375,6 +413,11 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
       records.push(resourceRecord(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, lighting.lightUniform.byteLength, 0, 0, 0, 0),
         resourceRecord(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, FORMAT.RGBA32_FLOAT));
       parts.push(new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer));
+    }
+    if(state.shader.graphs?.key || nativeGraphPlan(ordered).diagnostics.length || state.nativeLayout.materialGraphs?.length) {
+      const graphLayout={...state.nativeLayout,materialGraphs:nativeGraphPlan(ordered).diagnostics};
+      const metadata=nativeLayoutBytes(graphLayout,graphLayout.blasOffset,graphLayout.isEmpty);
+      records.push(resourceRecord(RESOURCE.METADATA,KIND.METADATA,metadata.length,0,0,0,0));parts.push(metadata);
     }
     records.push(resourceRecord(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, rt.buffer.byteLength, 0, 0, 0, 0));
     parts.push(new Uint8Array(rt.buffer));
@@ -423,6 +466,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const materials: MaterialState[] = [];
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
   for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
+  attachGraphFallbacks(token,materials);
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS;
     const count = u[off + M.MATERIAL_COUNT];
@@ -512,7 +556,7 @@ function prepareSceneSources(input: {meshes: MeshState[]; textureIds: Map<Textur
   return {jobs, sources};
 }
 function newMaterialData(materials: MaterialState[], lights: AnalyticLightState[], configuration: ReturnType<typeof defaultSceneConfiguration>): MaterialData {
-  const create = (independentTextures: boolean) => new MaterialData(materials, lights.map(light => light.type === 'RectLight' ? light.texture : undefined), texture => {
+  const create = (independentTextures: boolean) => new MaterialData(materials, [...lights.map(light => light.type === 'RectLight' ? light.texture : undefined),...nativeGraphTextures(materials)], texture => {
     if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
     return Number(texture.pixels.data instanceof Float32Array);
   }, {independentTextures, textureSource: texture => (texture as PixelTexture).pixels, maxTextureDimension2D: configuration.textureDimension, maxTextureArrayLayers: 256, maxTextureArrayBytes: configuration.textureBudgetBytes});
@@ -604,6 +648,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
+  const graphPlan=nativeGraphPlan(prepared.materials);
   const table = newMaterialData(prepared.materials, lights, configuration);
   const geometry = prepared.geometry;
   const {layout: attributeLayout, wordCount: attributeWords, vertexWords: attributeVertexWords} = nativeAttributeLayout(prepared, tlas, hardware);
@@ -630,7 +675,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const stacks = getTraversalStackSizes(tlas, blases);
   const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(Math.max(stacks.tlas, 32), stacks.blas), ...attributeLayout.constants,
-    ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
+    ...nativeMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
   const features = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
@@ -674,7 +719,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.INSTANCES, KIND.BUFFER, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
   // Reserve the final packet span instead of allocating/copying another scene-sized array.
   add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(0), 0, 0, 0, 0);
-  records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
+  records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),prepared.materials,table.textures).buffer), 0, 0, 0, 0);
   add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(RESOURCE.CAMERA, KIND.BUFFER, cameraUniform, 0, 0, 0, 0);
   add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
   const atlasFormat = atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM;
@@ -697,6 +742,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.ENERGY_LUT, KIND.TEXTURE, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, FORMAT.R32_FLOAT);
   add(RESOURCE.DISPLACEMENT, KIND.TEXTURE, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, FORMAT.R32_FLOAT);
   const nativeLayout: NativeLayout = {
+    materialGraphs:graphPlan.diagnostics.length?graphPlan.diagnostics:undefined,
     hasAlpha: Boolean(constants.HAS_ALPHA), attributeStrideBytes: stride * 4,
     positionOffsetBytes: offsets[0] * 4, blasOffset: rt.views.blasOffset[0],
     isEmpty: rt.views.isEmpty[0] !== 0, bevel: rt.views.bevel[0] !== 0,
@@ -708,9 +754,9 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
   const variantFlags = Number(nativeLayout.isEmpty) | Number(!!hardware) * 2 | Number(opaqueClosest) * 4;
   function shader(id: number, source: () => string) {
-    add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, source), 0, 0, 0, 0);
+    add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, () => specializeNativeGraphs(source(),graphPlan,false),graphPlan.key), 0, 0, 0, 0);
   }
-  const sceneShader: SceneShader = {constants, features, variantFlags, isEmpty: capacity === 0, hardware: !!hardware, opaqueClosest};
+  const sceneShader: SceneShader = {graphs:graphPlan,constants, features, variantFlags, isEmpty: capacity === 0, hardware: !!hardware, opaqueClosest};
   if (configuration.variants & 1) add(RESOURCE.SOFTWARE_SHADER, KIND.WGSL, productionShader(RESOURCE.SOFTWARE_SHADER, sceneShader), 0, 0, 0, 0);
   if (configuration.variants & 2) add(RESOURCE.HWRT_SHADER, KIND.WGSL, productionShader(RESOURCE.HWRT_SHADER, sceneShader), 0, 0, 0, 0);
   if (configuration.variants & 4) {
@@ -768,6 +814,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     preparationMark('compact.end');
   });
   preparationMark('packet.end');
+  releaseGraphFallbacks(token);
   return packet;
 }
 
@@ -1225,6 +1272,7 @@ function swapMaterialTextures(m: MaterialState, swaps: Map<TextureState, Texture
   m.fuzzRoughnessMap = swapTexture(m.fuzzRoughnessMap, swaps); m.specularWeightMap = swapTexture(m.specularWeightMap, swaps);
   m.specularColorMap = swapTexture(m.specularColorMap, swaps); m.anisotropyMap = swapTexture(m.anisotropyMap, swaps);
   m.coatNormalMap = swapTexture(m.coatNormalMap, swaps);
+  swapNativeGraphTextures(m,swaps);
 }
 function swapSceneTextures(state: {source: MaterialState[]; ordered: MaterialState[]; lights: AnalyticLightState[]}, swaps: Map<TextureState, TextureState>) {
   for (const m of state.source) swapMaterialTextures(m, swaps);
@@ -1279,10 +1327,10 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     }
     const bevelSamples = (sceneConfigurations.get(token) ?? defaultSceneConfiguration()).bevelSamples;
     const geometry = state.prepared.geometry;
-    const before = wgpuMaterialConstants(state.ordered, state.table, geometry, bevelSamples);
+    const before = nativeMaterialConstants(state.ordered, state.table, geometry, bevelSamples);
     swapSceneTextures(state, swaps);
     const table = newMaterialData(state.ordered, state.lights, sceneConfigurations.get(token) ?? defaultSceneConfiguration());
-    const after = wgpuMaterialConstants(state.ordered, table, geometry, bevelSamples);
+    const after = nativeMaterialConstants(state.ordered, table, geometry, bevelSamples);
     const atlas = table.atlas, committed = state.table.atlas, layers = Math.max(1, atlas.pages.length);
     if (atlas.independentTextures !== committed.independentTextures || !sameConstants(before, after) || (state.shader.features.independentTextures && atlas.placements.some((p, i) => p.layer !== committed.placements[i]?.layer || p.width !== committed.placements[i]?.width || p.height !== committed.placements[i]?.height)) || atlas.width !== committed.width || atlas.height !== committed.height
       || layers !== Math.max(1, committed.pages.length) || atlas.floatStorage !== committed.floatStorage) {
@@ -1297,7 +1345,7 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number, destination: number) {
       records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data); destinations.push(destination);
     }
-    add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
+    add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),state.ordered,table.textures).buffer), 0, 0, 0, 0);
     add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(packMapInfo(table, Number(after.NUM_MAPS)).buffer), 0, 0, 0, 0);
     add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0);
     add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0, 0);

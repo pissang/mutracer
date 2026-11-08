@@ -75,12 +75,23 @@ typedef struct mt_scene_material_graph_desc {
 MT_SCENE_API_LAYOUT(mt_scene_material_graph_desc, 8 + 11 * sizeof(void *));
 mt_status mt_scene_material_graph_desc_default(mt_scene_material_graph_desc *out);
 /* Replace a material graph, or pass NULL to clear it. Requires exclusive scene
- * access. Invalid sizes, non-finite values, array lengths or texture handles
+ * access. Invalid struct sizes, non-finite values, invalid UTF-8 or texture handles
  * return INVALID_ARGUMENT/INVALID_HANDLE without changing the material. Node,
  * type and terminal support is diagnosed when the scene prepares; unsupported
  * graphs use the material fallback. Submit and update to apply an edit. */
 mt_status mt_scene_material_set_graph(mt_scene scene, mt_scene_material_id material,
   const mt_scene_material_graph_desc *graph, char *error, size_t capacity);
+
+/* Fold each terminal using the shared CPU evaluator, without a scene or GPU.
+ * capacity counts terminals; values holds capacity groups of four floats and
+ * widths holds capacity uint32s. Width 0 means a resource/hit-context value;
+ * otherwise 1..4 components are written, with unused values zero. Texture
+ * handles/author_ids are ignored. Arrays stay owned by the caller and are only
+ * borrowed for this call. Invalid IR/non-finite results return INVALID_ARGUMENT;
+ * outputs are unchanged on invalid IR. This call may run on any thread, using
+ * the SDK's serialized CPU runtime. */
+mt_status mt_material_graph_fold(const mt_scene_material_graph_desc *graph,
+  float *values, uint32_t *widths, size_t capacity, char *error, size_t error_capacity);
 
 typedef struct mt_scene_texture_tile {
   uint32_t udim; /* Unique tile number, 1001–1100. */

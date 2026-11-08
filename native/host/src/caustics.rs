@@ -2,6 +2,8 @@ use super::*;
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Metadata {
+    #[serde(default)]
+    pub material_graphs: Vec<crate::api::MaterialGraphDiagnostic>,
     pub flags: u32,
     pub workgroup_size: u32,
     pub light_width: u32,
@@ -80,6 +82,7 @@ impl RadiusScaling {
     }
 }
 pub(crate) struct State {
+    pub(crate) material_graphs: Vec<crate::api::MaterialGraphDiagnostic>,
     pub textures: wgpu::BindGroup,
     emission_textures: wgpu::BindGroup,
     pub pt_color: Option<wgpu::Buffer>,
@@ -691,6 +694,7 @@ impl State {
             None
         };
         Ok(Self {
+            material_graphs: m.material_graphs.clone(),
             textures: texture_group,
             emission_textures,
             pt_color,

@@ -7,7 +7,8 @@ import {materialNeedsVertexTangents} from '../../src/renderer/tangentRequirement
 // way a Web application edits its scene. The shared SceneChangeTracker then
 // classifies the edits exactly as engine.update() does.
 import {SceneChangeTracker, type SceneSnapshotAdapter, type SceneChangeSet} from '../../src/renderer/sceneChangeCore.js';
-import {NativeMaterialSnapshot, captureNativeMaterial, nativeMaterialMatches, syncNativeMaterial} from './material-snapshot.generated.js';
+import {NativeMaterialSnapshot, captureNativeMaterial, nativeMaterialMatches, syncNativeMaterial} from './material-graph.js';
+import {inheritNativeGraph,decodeNativeGraph} from './material-graph.js';
 import {decodeTexture, textureStride, decodeMaterial, decodeMeshMaterials, decodeInstances, decodeLight} from './scene-records.js';
 import {HEADER as H, TEXTURE as T, MATERIAL as MAT, GEOMETRY as G, MESH as M, BATCH as B, LIGHT as L, CAMERA as C, EXTENSION as E,
   VERSION} from './layout.js';
@@ -267,11 +268,18 @@ export class SyncedScene {
     for (let i = 0; i < count; i++) {
       if (unchanged && unchanged[hintOffset + i] && replaced.size === 0) continue;
       const off = u[H.MATERIAL_OFFSET] + i * MAT.WORDS;
-      if (first || i >= old[H.MATERIAL_COUNT]) { this.materials[i] = decodeMaterial(u, f, off, this.textures); continue; }
+      if (first || i >= old[H.MATERIAL_COUNT]) { this.materials[i] = decodeMaterial(u, f, off, this.textures); this.materials[i].aovId=u[H.MATERIAL_AOV_IDS]?u[u[H.MATERIAL_AOV_IDS]+i]:i; inheritNativeGraph(this.materials[i],this.materials[i]); continue; }
       const prior = old[H.MATERIAL_OFFSET] + i * MAT.WORDS;
       // Texture replacement changes object identity even for an unchanged record.
-      if (replaced.size === 0 && sameRecord(old, prior, u, off, MAT.WORDS, [MAT.EXTENSION_OFFSET], [u[off + MAT.EXTENSION_COUNT] * E.WORDS])) continue;
-      syncNativeMaterial(this.materials[i], decodeMaterial(u, f, off, this.textures));
+      let sameGraph=true;
+      if(old[prior+MAT.GRAPH]||u[off+MAT.GRAPH]) {
+      const oldGraph=decodeNativeGraph(old,new Float32Array(old.buffer,old.byteOffset,old.length),old[prior+MAT.GRAPH],this.textures);
+      const graph=decodeNativeGraph(u,f,u[off+MAT.GRAPH],this.textures);
+      sameGraph=(oldGraph?JSON.stringify([oldGraph.ir,oldGraph.authorIds]):'')===(graph?JSON.stringify([graph.ir,graph.authorIds]):'');
+      }
+      if (replaced.size === 0 && sameGraph && sameRecord(old, prior, u, off, MAT.WORDS, [MAT.EXTENSION_OFFSET], [u[off + MAT.EXTENSION_COUNT] * E.WORDS])) continue;
+      const next=decodeMaterial(u,f,off,this.textures);next.aovId=this.materials[i].aovId;inheritNativeGraph(next,this.materials[i]);
+      syncNativeMaterial(this.materials[i],next);
     }
     this.materials.length = count;
     for (let i = 0; i < count; i++) this.materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;

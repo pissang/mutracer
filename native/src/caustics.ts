@@ -1,3 +1,4 @@
+import {nativeGraphPlan} from './material-graph.js';
 import {causticCasterSphere,causticCasterSpheres} from '../../src/renderer/caustics.js';
 import {causticEmissionTable} from '../../src/renderer/causticEmission.js';
 import {packCausticLightUniform} from '../../src/renderer/causticUniform.js';
@@ -23,7 +24,9 @@ export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBi
  const camera=decodeCamera(cameraRecord),projection=camera.getProjectionMatrix(width/height),inverse=new Float32Array(cameraUniform.buffer,cameraUniform.byteOffset,16),vp=mat4.create();mat4.invert(vp,inverse);
  const uniform=new Uint8Array(packCausticLightUniform({casterSphere:bounds,viewProjection:vp,photons:1,batch:0,cameraScale:Math.abs(projection[0]*projection[5])/4,casterCount:spheres.length,choiceCount:emission.count,orthographic:camera.projection==='orthographic'}));
  const preamble=hardware?'enable wgpu_ray_query;\n':'';
- const metadata={flags,workgroupSize:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
+ const graphPlan=nativeGraphPlan(input.materials);
+ const materialGraphs=graphPlan.key?[{code:'unsupported-transport',message:'Material graphs currently use the constant material fallback with light tracing or photon mapping.',materialId:0,node:'',port:''}]:[];
+ const metadata={materialGraphs,flags,workgroupSize:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
   lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||defaultPhotonMapPhotons(width,height),
   initialRadius:settings.photonMapRadius||Math.max(bounds[3]*.03,1e-4),
   perCasterRadius:settings.photonMapRadius||Math.max(maximumCasterRadius*.03,1e-4),

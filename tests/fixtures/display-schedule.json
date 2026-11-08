@@ -68,5 +68,10 @@
         "Publish"
       ]
     }
-  ]
+  ],
+  "materialGraphPreparation": {
+    "events": ["sample", "request-structure", "sample", "request-newer", "complete-obsolete", "sample", "complete-current", "sample", "request-invalid", "sample"],
+    "sampledValues": [0.2, 0.2, 0.2, 0.8, 0.8]
+  },
+  "materialGraphCompilationFailure": {"events": ["sample", "request", "fail", "sample"], "sampledValues": [0.2, 0.2]}
 }

@@ -567,6 +567,9 @@ impl GpuDevice {
     }
 }
 /// Compiles (or reuses) the pipeline of `source` for the scene's group layouts.
+#[cfg(test)]
+pub(crate) static FAIL_GRAPH_PIPELINES: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 /// Returns the pipeline and whether the device cache already held it.
 fn compile_pipeline(
     gpu: &GpuDevice,
@@ -581,8 +584,19 @@ fn compile_pipeline(
         layout: scene.bind_groups.iter().map(|g| g.layout.clone()).collect(),
         hardware,
     };
+    #[cfg(test)]
+    let injected = key.source.contains("fn mx_eval")
+        && FAIL_GRAPH_PIPELINES
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |n| n.checked_sub(1),
+            )
+            .is_ok();
+    #[cfg(not(test))]
+    let injected = false;
     let mut cache = gpu.pipelines.lock().unwrap();
-    if let Some(cached) = cache.get(&key) {
+    if let Some(cached) = cache.get(&key).filter(|_| !injected) {
         gpu.compilation
             .hits
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -628,24 +642,38 @@ fn compile_pipeline(
         bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
         ..Default::default()
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("MuTracer path tracer"),
-        source: wgpu::ShaderSource::Wgsl(key.source.as_str().into()),
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("MuTracer native path tracer"),
-        layout: Some(&layout),
-        module: &shader,
-        entry_point: Some(&scene.entry_point),
-        compilation_options: Default::default(),
-        cache: gpu.pipeline_cache.as_ref(),
-    });
-    let compiled = CachedPipeline {
-        aov_pipelines: aov::pipeline_cache(&key.source),
-        _shader: shader,
-        layouts,
-        pipeline,
-    };
+    let compiled = with_error_scopes(
+        device,
+        || {
+            #[cfg(test)]
+            let shader_source = if injected {
+                format!("{}\ninvalid_material_graph_shader", key.source)
+            } else {
+                key.source.clone()
+            };
+            #[cfg(not(test))]
+            let shader_source = key.source.clone();
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("MuTracer path tracer"),
+                source: wgpu::ShaderSource::Wgsl(shader_source.as_str().into()),
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("MuTracer native path tracer"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some(&scene.entry_point),
+                compilation_options: Default::default(),
+                cache: gpu.pipeline_cache.as_ref(),
+            });
+            Ok(CachedPipeline {
+                aov_pipelines: aov::pipeline_cache(&key.source),
+                _shader: shader,
+                layouts,
+                pipeline,
+            })
+        },
+        |error| format!("Shader pipeline compilation failed: {error}").into(),
+    )?;
     if cache.len() >= 32 {
         cache.clear();
     }

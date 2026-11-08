@@ -49,8 +49,8 @@ pub use display::{
 };
 pub use easu::{EasuOptions, EasuPass};
 pub use engine::{
-    Backend, Camera, Diagnostics, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage,
-    RenderDiagnostics, Subscription,
+    Backend, Camera, Diagnostics, Engine, EngineEvent, EngineInfo, EngineOptions,
+    MaterialGraphDiagnostic, ProgressStage, RenderDiagnostics, Subscription,
 };
 pub use post_process::{
     OutputKind, PostProcessContext, PostProcessOptions, PostProcessSubscription,

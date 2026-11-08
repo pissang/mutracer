@@ -147,6 +147,14 @@ typedef struct mt_engine_diagnostics_info {
 } mt_engine_diagnostics_info;
 MT_ENGINE_LAYOUT(mt_engine_diagnostics_info, 64);
 int32_t mt_engine_diagnostics(mt_engine engine, mt_engine_diagnostics_info *output, char *error, size_t capacity);
+/* Copy a CPU snapshot of material graph diagnostics as UTF-8 JSON without a NUL.
+ * Default {scene:[], renders:[]}; each render row has renderId/diagnostics. Errors
+ * have code, message, materialId and authored node/port locations (empty strings
+ * for graph-wide errors). Pass NULL/0 to query required bytes, then caller-owned
+ * storage; BUFFER_TOO_SMALL reports the needed size. Requires ordinary exclusive
+ * engine access, performs no GPU readback and never transfers ownership. */
+int32_t mt_engine_material_graph_diagnostics(mt_engine engine, void *data,
+  size_t data_capacity, size_t *required, char *error, size_t capacity);
 /* Records the camera for every render; NULL uses the scene's camera record.
  * Takes effect at the next mt_engine_update. Default NULL. */
 int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char *error, size_t capacity);

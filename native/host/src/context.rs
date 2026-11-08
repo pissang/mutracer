@@ -508,12 +508,13 @@ fn prepare_software_fallback(
     {
         let settings = retained.settings;
         let (software, software_assets, software_retained) =
-            scene::prepare_retained_shared_with_settings(
+            scene::prepare_retained_shared_with_graph_fallback(
                 Arc::new(bytes.to_vec()),
                 false,
                 0,
                 &settings,
                 retained.texture_limits,
+                Some(retained.clone()),
             )?;
         *assets = software_assets;
         *retained = software_retained;
@@ -1033,6 +1034,7 @@ fn commit_inner(
             spare_buffers: std::mem::take(&mut context.spare_buffers),
             spare_hardware: std::mem::take(&mut context.spare_hardware),
             scene_only: context.scene_only,
+            graph_fallback: context.scene.as_ref().and_then(|s| s.retained.clone()),
         });
         context.commit = Some(cancel.clone());
         Ok(())
@@ -1061,7 +1063,7 @@ fn commit_inner(
             snapshot.gpu.loss.check()?;
             let started = Instant::now();
             let (mut scene, mut assets, mut retained) =
-                scene::prepare_retained_shared_with_settings(
+                scene::prepare_retained_shared_with_graph_fallback(
                     prepared_descriptor.clone(),
                     snapshot.backend == 1
                         && snapshot.gpu.hardware_ray_query
@@ -1069,6 +1071,7 @@ fn commit_inner(
                     snapshot.backend,
                     &settings,
                     snapshot.gpu.texture_limits(),
+                    snapshot.graph_fallback.clone(),
                 )
                 .map_err(rejected)?;
             cancelled(&cancel)?;
@@ -1383,6 +1386,7 @@ fn apply_incremental(
 }
 struct CommitSnapshot {
     scene_only: bool,
+    graph_fallback: Option<scene::PreparedState>,
     gpu: GpuDevice,
     backend: u32,
     spare_buffers: HashMap<usize, wgpu::Buffer>,
@@ -1790,6 +1794,23 @@ fn update_light_list_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
         bytes[layout::header::LIGHT_COUNT * 4..][..4].try_into()?,
     ) as usize);
     context.finish_update()
+}
+pub(crate) fn material_graph_diagnostics(
+    handle: u64,
+) -> Result<Vec<crate::api::MaterialGraphDiagnostic>> {
+    with_registry(|registry| {
+        let context = context(registry, handle)?;
+        let mut diagnostics = context
+            .scene
+            .as_ref()
+            .and_then(|s| s.scene.native_layout.as_ref())
+            .map(|l| l.material_graphs.clone())
+            .unwrap_or_default();
+        if let Some(caustics) = context.target.as_ref().and_then(|t| t.caustics.as_ref()) {
+            diagnostics.extend(caustics.material_graphs.clone());
+        }
+        Ok(diagnostics)
+    })
 }
 pub(crate) fn material_textures_bindless(handle: u64) -> Result<Option<bool>> {
     with_registry(|registry| {

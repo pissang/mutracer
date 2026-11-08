@@ -348,6 +348,28 @@ pub unsafe extern "C" fn mt_engine_diagnostics(
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_material_graph_diagnostics(
+    handle: u64,
+    data: *mut c_void,
+    size: usize,
+    required: *mut usize,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let d = engine_of(handle)?.diagnostics();
+        let rows: Vec<_> = d
+            .renders
+            .into_iter()
+            .map(|r| serde_json::json!({"renderId":r.id,"diagnostics":r.material_graphs}))
+            .collect();
+        let bytes =
+            serde_json::to_vec(&serde_json::json!({"scene":d.material_graphs,"renders":rows}))
+                .map_err(|e| invalid(&e.to_string()))?;
+        unsafe { copy_out(&bytes, data, size, required) }
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_engine_clear_scene(
     handle: u64,
     error_out: *mut c_char,

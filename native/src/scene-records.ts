@@ -6,7 +6,8 @@ import {TEXTURE as T, MATERIAL as MAT, GEOMETRY as G, MESH as M, BATCH as B, LIG
 import IESProfile, {parseIESProfile} from '../../src/scene/IESProfile.js';
 import {applyNativeMaterialProperties} from './material-properties.js';
 import Geometry, {Attribute} from '../../src/scene/Geometry.js';
-import MaterialState from '../../src/scene/MaterialState.js';
+import type MaterialState from '../../src/scene/MaterialState.js';
+import {NativeMaterial,decodeNativeGraph} from './material-graph.js';
 import type {TextureDataSource} from '../../src/scene/textureData.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
@@ -38,7 +39,7 @@ export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array
 }
 
 export function decodeMaterial(u: Uint32Array, f: Float32Array, off: number, textures: PixelTexture[]): MaterialState {
-  const m = new MaterialState({baseColor: [f[off + MAT.BASE_COLOR], f[off + MAT.BASE_COLOR + 1], f[off + MAT.BASE_COLOR + 2]],
+  const m = new NativeMaterial({baseColor: [f[off + MAT.BASE_COLOR], f[off + MAT.BASE_COLOR + 1], f[off + MAT.BASE_COLOR + 2]],
     specularRoughness: f[off + MAT.ROUGHNESS], baseMetalness: f[off + MAT.METALNESS], transmissionWeight: f[off + MAT.TRANSMISSION],
     specularIor: f[off + MAT.IOR], emissionColor: [f[off + MAT.EMISSION_COLOR], f[off + MAT.EMISSION_COLOR + 1], f[off + MAT.EMISSION_COLOR + 2]],
     emissionLuminance: f[off + MAT.EMISSION_LUMINANCE], coatWeight: f[off + MAT.COAT_WEIGHT], coatRoughness: f[off + MAT.COAT_ROUGHNESS],
@@ -48,6 +49,7 @@ export function decodeMaterial(u: Uint32Array, f: Float32Array, off: number, tex
   m.metallicRoughnessMap = u[off + MAT.METALLIC_ROUGHNESS_MAP] === NONE ? undefined : textures[u[off + MAT.METALLIC_ROUGHNESS_MAP]];
   m.emissiveMap = u[off + MAT.EMISSIVE_MAP] === NONE ? undefined : textures[u[off + MAT.EMISSIVE_MAP]];
   applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
+  m.graph=decodeNativeGraph(u,f,u[off+MAT.GRAPH],textures);
   return m;
 }
 

@@ -27,12 +27,13 @@ export function validateGraphIR(graph: GraphIR): IRDiagnostic[] {
     }
     let nextInput=0;
     for(let i=0;i<count;i++) {
-        const at=i*5, category=graphCategories[graph.nodes[at]], type=graphTypes[graph.nodes[at+2]], first=graph.nodes[at+3], length=graph.nodes[at+4];
+        const at=i*5, first=graph.nodes[at+3], length=graph.nodes[at+4];
+        if(first!==nextInput || length<0 || first+length>graph.inputs.length/5) {report('invalid-ir-layout','Invalid node input range',i,-1);continue;}
+        nextInput=first+length;
         if(!index(graph.nodes[at],graphCategories.length)) {report('unsupported-node','Unknown MaterialX category',i,-1);continue;}
         if(graph.nodes[at+1]!==1) {report('unsupported-node-implementation','Unsupported node implementation version',i,-1);continue;}
         if(!index(graph.nodes[at+2],graphTypes.length)) {report('unsupported-type','Unknown graph port type',i,-1);continue;}
-        if(first!==nextInput || length<0 || first+length>graph.inputs.length/5) {report('invalid-ir-layout','Invalid node input range',i,-1);continue;}
-        nextInput=first+length;
+        const category=graphCategories[graph.nodes[at]],type=graphTypes[graph.nodes[at+2]];
         const inputs: Record<string,{type: GraphType}> = {};
         for(let j=first;j<first+length;j++) {
             const k=j*5, port=graph.inputs[k], inputType=graph.inputs[k+1];
@@ -48,15 +49,18 @@ export function validateGraphIR(graph: GraphIR): IRDiagnostic[] {
         if(!validNodeType(node)) report('unsupported-type',`Unsupported ${category}/${type}`,i,-1);
         for(const name of Object.keys(defaults)) if(!inputs[name]) report('missing-input',`Missing normalized input ${name}`,i,graphPorts.indexOf(name));
         for(let j=first;j<first+length;j++) {
-            const k=j*5, port=graph.inputs[k], inputType=graphTypes[graph.inputs[k+1]], kind=graph.inputs[k+2], source=graph.inputs[k+3], output=graph.inputs[k+4], name=graphPorts[port];
+            const k=j*5, port=graph.inputs[k], kind=graph.inputs[k+2], source=graph.inputs[k+3], output=graph.inputs[k+4];
+            if(!index(port,graphPorts.length)||!index(graph.inputs[k+1],graphTypes.length))continue;
+            const inputType=graphTypes[graph.inputs[k+1]],name=graphPorts[port];
             if(!defaults[name]) {report('unsupported-input',`Unsupported input ${name}`,i,port);continue;}
             if(inputType!==defaults[name].type) report('input-type',`Expected ${defaults[name].type}, got ${inputType}`,i,port);
             if(kind===GraphSource.Node) {
                 if(!index(source,i) || !index(output,graphOutputs.length)) {report('connection-type','Connections must reference an earlier node and a known output',i,port);continue;}
+                if(!index(graph.nodes[source*5],graphCategories.length)||!index(graph.nodes[source*5+2],graphTypes.length)){report('connection-type','Unknown source node category/type',i,port);continue;}
                 const parent={category:graphCategories[graph.nodes[source*5]],type:graphTypes[graph.nodes[source*5+2]]};
                 if(!parent.category || !parent.type || outputType(parent,graphOutputs[output])!==inputType) report('connection-type',`Expected ${inputType} connection`,i,port);
             } else if(kind===GraphSource.Geometry) {
-                const geometry=graphGeometry[source], expected=name==='position'?'objectPosition':name;
+                const geometry=index(source,graphGeometry.length)?graphGeometry[source]:'', expected=name==='position'?'objectPosition':name;
                 if(!index(source,graphGeometry.length) || geometry!==expected || defaults[name].value!==undefined || inputType==='filename' || output!==0) report('unsupported-input','Invalid implicit geometry input',i,port);
             } else if(kind===GraphSource.Parameter) {
                 if(!index(source,graph.parameters.length/4) || output!==0) {report('parameter-value','Invalid parameter slot',i,port);continue;}
@@ -80,6 +84,7 @@ export function validateGraphIR(graph: GraphIR): IRDiagnostic[] {
         if(!index(port,graphTerminals.length)||!index(source,count)||!index(output,graphOutputs.length)) {report('unsupported-terminal','Invalid terminal reference',source,-1);continue;}
         if(terminals.includes(port)) report('duplicate-terminal','Duplicate OpenPBR terminal',source,-1);
         terminals.push(port);
+        if(!index(graph.nodes[source*5],graphCategories.length)||!index(graph.nodes[source*5+2],graphTypes.length)){report('terminal-type','Unknown terminal node category/type',source,-1);continue;}
         const node={category:graphCategories[graph.nodes[source*5]],type:graphTypes[graph.nodes[source*5+2]]};
         if(!node.category || !node.type || outputType(node,graphOutputs[output])!==terminalTypes[graphTerminals[port]]) report('terminal-type',`Expected ${terminalTypes[graphTerminals[port]]} terminal`,source,-1);
     }

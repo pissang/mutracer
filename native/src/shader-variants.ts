@@ -6,11 +6,11 @@ const variants = new Map<number, {signature: string; bytes: Uint8Array}>();
 const order: number[] = [];
 let generated = 0, hits = 0;
 export function nativeShaderVariant(id: number, constants: Record<string, boolean | number>, features: WGPUShaderFeatures,
-  flags: number, source: () => string): Uint8Array {
+  flags: number, source: () => string, graphKey = ''): Uint8Array {
   const keys = Object.keys(constants).sort();
   const values: (boolean | number)[] = [];
   for (const key of keys) values.push(constants[key]);
-  const signature = JSON.stringify({id, keys, values, features, flags});
+  const signature = JSON.stringify(graphKey ? {id, keys, values, features, flags, graphKey} : {id, keys, values, features, flags});
   let hash = 0x811c9dc5;
   for (let i = 0; i < signature.length; i++) hash = Math.imul(hash ^ signature.charCodeAt(i), 0x01000193);
   hash >>>= 0;
