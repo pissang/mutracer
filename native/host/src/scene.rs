@@ -2322,12 +2322,8 @@ pub unsafe extern "C" fn mt_probe_render_scene(
         if samples == 0 || samples > 16384 {
             return Err(fail(Status::InvalidArgument, "Samples must be 1..16384"));
         }
-        let _entry = ENTRY_LOCK.try_lock().map_err(|error| match error {
-            std::sync::TryLockError::WouldBlock => {
-                fail(Status::Busy, "Native probe is already active")
-            }
-            std::sync::TryLockError::Poisoned(_) => "Native probe lock is poisoned".into(),
-        })?;
+        let _entry = crate::try_entry_lock()
+            .map_err(|_| fail(Status::Busy, "Native probe is already active"))?;
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let output = unsafe { CStr::from_ptr(output) }
             .to_str()
@@ -2439,7 +2435,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn aot_exception_preserves_configuration_failure_and_full_commit_class() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let error = runtime::call(|| native_step(mt_core_scene_configure, &[], 0))
             .unwrap_err()
             .to_string();
@@ -2463,8 +2459,8 @@ pub(crate) mod tests {
     }
     #[test]
     fn retained_transform_accepts_range_writes_from_the_aot_call_chain() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         for hardware in [false, true] {
             let (_, _, retained) = prepare_retained(&input(), hardware).unwrap();
             for translation in [0.125f32, 0.0] {
@@ -2491,8 +2487,8 @@ pub(crate) mod tests {
     }
     #[test]
     fn compact_hardware_inputs_preserve_source_vertices_and_indices() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         let bytes = input();
         let (scene, assets, _) = prepare_retained(&bytes, true).unwrap();
         let layout = scene.native_layout.as_ref().unwrap();
@@ -2522,8 +2518,8 @@ pub(crate) mod tests {
     }
     #[test]
     fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         for (hardware, bytes) in [false, true]
             .into_iter()
             .flat_map(|hardware| [input(), displacement_input()].map(|bytes| (hardware, bytes)))
@@ -2577,8 +2573,8 @@ pub(crate) mod tests {
 
     #[test]
     fn production_emits_one_backend_and_reuses_aot_shader_generation() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         runtime::init();
         let settings = settings::RenderSettings {
             seed: 67890,
@@ -2621,8 +2617,8 @@ pub(crate) mod tests {
 
     #[test]
     fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         runtime::init();
         let scene = input();
         let camera = &scene[89 * 4..121 * 4];
@@ -2640,6 +2636,19 @@ pub(crate) mod tests {
     }
     pub(crate) fn input() -> Vec<u8> {
         small_fixture()
+    }
+    pub(crate) fn translated_camera_input() -> Vec<u8> {
+        let bytes = input();
+        let camera = u32::from_le_bytes(
+            bytes[h::CAMERA_OFFSET * 4..h::CAMERA_OFFSET * 4 + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        change(
+            &bytes,
+            camera + crate::layout::camera::TRANSFORM + 14,
+            3f32.to_bits(),
+        )
     }
     fn change(bytes: &[u8], word: usize, value: u32) -> Vec<u8> {
         let mut result = bytes.to_vec();
@@ -2711,29 +2720,29 @@ pub(crate) mod tests {
         // Versions 5 and 6 use 12-word texture records without the UDIM word.
         // Neither descriptor has lights, so the v5 light stride does not apply.
         for version in [5, 6] {
-        let offset = input().len() / 4;
-        let record = vec![
-            1,
-            1,
-            0,
-            (offset + 12) as u32,
-            0,
-            0,
-            1f32.to_bits(),
-            1f32.to_bits(),
-            0,
-            0,
-            0,
-            0,
-        ];
-        let mut bytes = extend(input(), &record);
-        bytes = extend(bytes, &[u32::MAX]);
-        bytes = change(
-            &change(&change(&bytes, h::VERSION, version), h::TEXTURE_COUNT, 1),
-            h::TEXTURE_OFFSET,
-            offset as u32,
-        );
-        assert!(validate(&bytes).is_ok(), "version {version}");
+            let offset = input().len() / 4;
+            let record = vec![
+                1,
+                1,
+                0,
+                (offset + 12) as u32,
+                0,
+                0,
+                1f32.to_bits(),
+                1f32.to_bits(),
+                0,
+                0,
+                0,
+                0,
+            ];
+            let mut bytes = extend(input(), &record);
+            bytes = extend(bytes, &[u32::MAX]);
+            bytes = change(
+                &change(&change(&bytes, h::VERSION, version), h::TEXTURE_COUNT, 1),
+                h::TEXTURE_OFFSET,
+                offset as u32,
+            );
+            assert!(validate(&bytes).is_ok(), "version {version}");
         }
     }
     #[test]
@@ -2818,7 +2827,11 @@ pub(crate) mod tests {
             0,
         ];
         let bytes = change(
-            &change(&extend(extend(bytes, &record), &[u32::MAX]), h::TEXTURE_COUNT, 1),
+            &change(
+                &extend(extend(bytes, &record), &[u32::MAX]),
+                h::TEXTURE_COUNT,
+                1,
+            ),
             h::TEXTURE_OFFSET,
             offset as u32,
         );

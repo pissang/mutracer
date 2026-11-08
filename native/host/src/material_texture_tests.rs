@@ -1,13 +1,27 @@
 use super::*;
 use layout::{geometry as g, header as h, material as m, resource as r, texture as t};
 
+fn words(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect()
+}
+
+fn bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
 fn fixture(wrap: [u32; 2], float: bool) -> Vec<u8> {
-    let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&scene::small_fixture());
+    let mut words = words(&scene::small_fixture());
+    let geometry = words[h::GEOMETRY_OFFSET] as usize;
+    let material = words[h::MATERIAL_OFFSET] as usize;
+    let camera = words[h::CAMERA_OFFSET] as usize;
     let texture = words.len();
     words.resize(texture + 2 * t::WORDS, 0);
     let uv = words.len();
     words.extend([-0.3f32, -0.2, 2.3, -0.2, 1., 2.2].map(f32::to_bits));
-    words[32 + g::UV] = uv as u32;
+    words[geometry + g::UV] = uv as u32;
     let pixels = words.len();
     for i in 0..6u8 {
         let rgba = [i * 40, 255 - i * 40, i * 25, 255];
@@ -39,15 +53,17 @@ fn fixture(wrap: [u32; 2], float: bool) -> Vec<u8> {
     words[texture + t::WORDS + t::WIDTH] = 2;
     words[texture + t::WORDS + t::HEIGHT] = 1;
     words[texture + t::WORDS + t::PIXELS] = second_pixels as u32;
-    words[65 + m::MAP] = 0;
-    words[65 + m::EMISSIVE_MAP] = 1;
-    words[65 + m::EMISSION_COLOR..65 + m::EMISSION_COLOR + 3].fill(1f32.to_bits());
-    words[65 + m::EMISSION_LUMINANCE] = 1f32.to_bits();
-    words[104 + 14] = 3f32.to_bits();
+    words[material + m::MAP] = 0;
+    words[material + m::EMISSIVE_MAP] = 1;
+    words[material + m::EMISSION_COLOR..material + m::EMISSION_COLOR + 3].fill(1f32.to_bits());
+    words[material + m::EMISSION_LUMINANCE] = 1f32.to_bits();
+    words[camera + layout::camera::TRANSFORM + 14] = 3f32.to_bits();
     // Cover the image and exercise UVs outside the texture boundary.
-    words[121..130].copy_from_slice(&[-2f32, -1., 0., 2., -1., 0., 0., 2., 0.].map(f32::to_bits));
+    let positions = words[geometry + g::POSITION] as usize;
+    words[positions..positions + 9]
+        .copy_from_slice(&[-2f32, -1., 0., 2., -1., 0., 0., 2., 0.].map(f32::to_bits));
     words[h::LENGTH] = words.len() as u32;
-    bytemuck::cast_slice(&words).to_vec()
+    bytes(&words)
 }
 
 fn prepare(bytes: &[u8], limits: [u32; 2]) -> (Scene, Assets, scene::PreparedState) {
@@ -58,7 +74,15 @@ fn prepare(bytes: &[u8], limits: [u32; 2]) -> (Scene, Assets, scene::PreparedSta
         &settings::RenderSettings::default(),
         limits,
     )
-    .unwrap()
+    .unwrap_or_else(|error| {
+        let words = words(bytes);
+        panic!(
+            "{error}; header={:?}; mesh={:?}",
+            &words[..layout::header::WORDS],
+            &words[words[layout::header::MESH_OFFSET] as usize
+                ..words[layout::header::MESH_OFFSET] as usize + layout::mesh::WORDS]
+        )
+    })
 }
 
 #[test]
@@ -96,7 +120,7 @@ fn independent_texture_packets_keep_pixels_and_validate_shaders() {
     // A rectangular light reusing a material image must share its independent
     // allocation and remain editable without consuming the budget twice.
     let mut shared = fixture([0, 0], false);
-    let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&shared);
+    let mut words = words(&shared);
     let at = words.len();
     words.resize(at + layout::light::WORDS, 0);
     words[h::LIGHT_COUNT] = 1;
@@ -111,7 +135,7 @@ fn independent_texture_packets_keep_pixels_and_validate_shaders() {
         words[at + layout::light::TRANSFORM + k] = 1f32.to_bits();
     }
     words[h::LENGTH] = words.len() as u32;
-    shared = bytemuck::cast_slice(&words).to_vec();
+    shared = bytes(&words);
     let (scene, _, state) = prepare(&shared, [16384, 65536]);
     assert_eq!(
         scene
@@ -137,7 +161,7 @@ fn independent_texture_packets_keep_pixels_and_validate_shaders() {
 fn shared_image_samplers_map_to_one_physical_texture() {
     for float in [false, true] {
         for variant in 0..3 {
-            let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&fixture([0, 2], float));
+            let mut words = words(&fixture([0, 2], float));
             let off = words[h::TEXTURE_OFFSET] as usize;
             words[off + t::WORDS + t::WIDTH] = if variant == 2 { 2 } else { 3 };
             words[off + t::WORDS + t::HEIGHT] = if variant == 2 { 3 } else { 2 };
@@ -147,7 +171,7 @@ fn shared_image_samplers_map_to_one_physical_texture() {
             if variant == 1 {
                 words[off + t::WORDS + t::FLIP_Y] = 0;
             }
-            let (scene, assets, _) = prepare(bytemuck::cast_slice(&words), [16384, 65536]);
+            let (scene, assets, _) = prepare(&bytes(&words), [16384, 65536]);
             let images: Vec<_> = scene
                 .textures
                 .iter()
@@ -178,7 +202,7 @@ fn shared_image_samplers_map_to_one_physical_texture() {
 
 #[test]
 fn raw_texture_admission_charges_shared_spans_once() {
-    let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&fixture([0, 0], false));
+    let mut words = words(&fixture([0, 0], false));
     let off = words.len();
     let texels = 2048 * 2048;
     let count = (crate::texture_budget::texels() / texels + 2) as usize;
@@ -195,13 +219,17 @@ fn raw_texture_admission_charges_shared_spans_once() {
         words[o + t::UV_SCALE..o + t::UV_SCALE + 2].fill(1f32.to_bits());
     }
     words[h::LENGTH] = words.len() as u32;
-    scene::validate(bytemuck::cast_slice(&words)).unwrap();
+    scene::validate(&bytes(&words)).unwrap();
 }
 
 fn large_fixture() -> Vec<u8> {
-    let mut words: Vec<u32> = bytemuck::pod_collect_to_vec(&scene::small_fixture());
-    let material = words[64..88].to_vec();
-    let mesh = words[44..64].to_vec();
+    let mut words = words(&scene::small_fixture());
+    let material_offset = words[h::MATERIAL_OFFSET] as usize;
+    let mesh_offset = words[h::MESH_OFFSET] as usize;
+    let geometry_offset = words[h::GEOMETRY_OFFSET] as usize;
+    let camera_offset = words[h::CAMERA_OFFSET] as usize;
+    let material = words[material_offset..material_offset + layout::material::WORDS].to_vec();
+    let mesh = words[mesh_offset..mesh_offset + layout::mesh::WORDS].to_vec();
     words[h::MATERIAL_OFFSET] = words.len() as u32;
     words[h::MATERIAL_COUNT] = 5;
     for index in 0..5 {
@@ -223,7 +251,7 @@ fn large_fixture() -> Vec<u8> {
     words[h::TEXTURE_OFFSET] = textures as u32;
     words[h::TEXTURE_COUNT] = 5;
     words.resize(textures + 5 * t::WORDS, 0);
-    words[32 + g::UV] = words.len() as u32;
+    words[geometry_offset + g::UV] = words.len() as u32;
     words.extend([0f32, 0., 1., 0., 0.5, 1.].map(f32::to_bits));
     for index in 0..5 {
         let at = textures + index * t::WORDS;
@@ -234,9 +262,9 @@ fn large_fixture() -> Vec<u8> {
         let color = u32::from_le_bytes([40 + index as u8 * 40, 100, 180, 255]);
         words.extend(std::iter::repeat_n(color, 2048 * 2048));
     }
-    words[104 + 14] = 3f32.to_bits();
+    words[camera_offset + layout::camera::TRANSFORM + 14] = 3f32.to_bits();
     words[h::LENGTH] = words.len() as u32;
-    bytemuck::cast_slice(&words).to_vec()
+    bytes(&words)
 }
 
 #[test]
@@ -313,7 +341,7 @@ fn independent_textures_match_atlas_and_retained_edits_on_gpu() {
                 // Exercise the exact incremental packet and upload path, then compare
                 // it with a fresh independent scene after the same pixel/sampler edit.
                 let mut edited = fixture([wrap_t, wrap_s], float);
-                let words: Vec<u32> = bytemuck::pod_collect_to_vec(&edited);
+                let words = words(&edited);
                 let texture = words[h::TEXTURE_OFFSET] as usize;
                 let pixels = words[texture + t::PIXELS] as usize * 4;
                 edited[pixels..pixels + 4].copy_from_slice(&if float {
@@ -329,6 +357,7 @@ fn independent_textures_match_atlas_and_retained_edits_on_gpu() {
                     GpuScene::new(fresh, &options, &fresh_assets, gpu.clone()).unwrap();
                 fresh.add_samples(&mut fresh_target, 4).unwrap();
                 // New target clears accumulation while retaining the edited resources.
+                let camera = words[h::CAMERA_OFFSET] as usize;
                 let packet = retained
                     .target(
                         &settings::RenderSettings::default(),
@@ -336,7 +365,7 @@ fn independent_textures_match_atlas_and_retained_edits_on_gpu() {
                         0,
                         0,
                         false,
-                        &edited[88 * 4..120 * 4],
+                        &edited[camera * 4..(camera + layout::camera::WORDS) * 4],
                         &gpu.loss,
                         false,
                     )

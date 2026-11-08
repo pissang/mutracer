@@ -2109,7 +2109,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn preparation_does_not_block_render_and_cancellation_preserves_old_scene() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut handle = 0;
         let mut error = [0i8; 512];
         unsafe {
@@ -2285,7 +2285,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn destroy_cancels_and_drains_an_unpublished_candidate() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut handle = 0;
         let mut error = [0i8; 512];
         assert_eq!(
@@ -2351,7 +2351,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn shared_device_preview_survives_reset_and_context_destruction() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -2364,8 +2364,7 @@ mod tests {
         }))
         .unwrap();
         let handle = create_on_device(&adapter, &device, &queue, 0).unwrap();
-        let mut input = scene::tests::input();
-        input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+        let input = scene::tests::translated_camera_input();
         let mut error = [0i8; 4096];
         unsafe {
             assert_eq!(
@@ -2404,8 +2403,8 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn changed_blas_and_tlas_are_ready_after_interleaved_retained_edits() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         let gpu = GpuDevice::with_backend(1).expect("GPU validation requires a working device");
         assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
         let make = |input: &[u8]| {
@@ -2438,8 +2437,7 @@ mod tests {
                 if optional_refit {
                     continue;
                 }
-                let mut input = scene::tests::input();
-                input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+                let mut input = scene::tests::translated_camera_input();
                 let (mut state, mut state_target) = make(&input);
                 state.hardware.as_mut().unwrap().metal_refit_opt_in = optional_refit;
                 let mut transform = [0u32; 20];
@@ -2470,15 +2468,35 @@ mod tests {
                 state.update_lighting(&writes, Some(&state_target)).unwrap();
                 state.reset_target(&mut state_target).unwrap();
                 state.retained.as_ref().unwrap().accept_transform().unwrap();
-                input[60 * 4..61 * 4].copy_from_slice(&0.125f32.to_le_bytes());
-                let original = f32::from_le_bytes(input[120 * 4..121 * 4].try_into().unwrap());
+                let geometry = u32::from_le_bytes(
+                    input[layout::header::GEOMETRY_OFFSET * 4..layout::header::GEOMETRY_OFFSET * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let position_word = u32::from_le_bytes(
+                    input[(geometry + layout::geometry::POSITION) * 4
+                        ..(geometry + layout::geometry::POSITION) * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let changed_word = position_word + 2;
+                input[changed_word * 4..changed_word * 4 + 4]
+                    .copy_from_slice(&0.125f32.to_le_bytes());
+                let original = f32::from_le_bytes(
+                    input[changed_word * 4..changed_word * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                );
                 for (step, shift) in [0.05f32, 0.1, 0.0].into_iter().enumerate() {
-                    input[120 * 4..121 * 4].copy_from_slice(&(original + shift).to_le_bytes());
+                    input[changed_word * 4..changed_word * 4 + 4]
+                        .copy_from_slice(&(original + shift).to_le_bytes());
                     let mut bytes: Vec<_> = [1u32, 0, 3, 0]
                         .iter()
                         .flat_map(|v| v.to_le_bytes())
                         .collect();
-                    bytes.extend_from_slice(&input[121 * 4..130 * 4]);
+                    bytes.extend_from_slice(
+                        &input[position_word * 4..(position_word + 9) * 4],
+                    );
                     let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
                     assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
                     let (resources, capture, group, attributes) =
@@ -2551,12 +2569,11 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn rejected_hardware_candidate_can_render_the_rebuilt_software_scene() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         let gpu = GpuDevice::with_backend(1).expect("GPU validation requires a working device");
         assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
-        let mut input = scene::tests::input();
-        input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+        let input = scene::tests::translated_camera_input();
         let (mut direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
         let mut capture =
             hardware::capture_from_resources(&mut assets, direct.native_layout.as_ref().unwrap())
@@ -2600,8 +2617,8 @@ mod tests {
     }
     #[test]
     fn direct_as_fallback_rebuilds_software_and_retained_edits() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         let input = scene::tests::input();
         let (direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
         assert!(direct.native_layout.as_ref().unwrap().indexed);
@@ -2638,7 +2655,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn panic_marks_the_touched_context_failed_and_commit_recovers_it() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut handle = 0;
         let mut error = [0i8; 512];
         assert_eq!(
@@ -2706,7 +2723,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn snapshot_reports_the_path_of_the_last_successful_commit() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut handle = 0;
         let mut error = [0i8; 512];
         assert_eq!(
@@ -2764,7 +2781,7 @@ mod tests {
     }
     #[test]
     fn caught_context_panic_does_not_poison_the_registry() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut error = [0i8; 128];
         assert_eq!(
             action(error.as_mut_ptr(), error.len(), |_| panic!(
@@ -2797,7 +2814,7 @@ mod tests {
     }
     #[test]
     fn blocking_rust_calls_retry_busy_without_changing_the_c_boundary() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let held = REGISTRY.lock().unwrap();
         let (entered, waiting) = mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
@@ -2820,7 +2837,7 @@ mod tests {
     }
     #[test]
     fn c_validation_precedence_survives_typed_entry_points() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut error = [0i8; 256];
         let (e, n) = (error.as_mut_ptr(), error.len());
         let mut written = 17;
@@ -2905,7 +2922,7 @@ mod tests {
     }
     #[test]
     fn rejected_calls_report_specific_status_codes() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut error = [0i8; 256];
         let (e, n) = (error.as_mut_ptr(), error.len());
         let full: Result<()> = Err("Full scene commit required: probe".into());
@@ -2947,7 +2964,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn scene_state_errors_and_short_reads_report_status_codes() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
         let mut handle = 0;
         let mut error = [0i8; 512];
         let (e, n) = (error.as_mut_ptr(), error.len());

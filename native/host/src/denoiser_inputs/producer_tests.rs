@@ -4,57 +4,106 @@ use crate::*;
 pub(super) fn set(input: &mut [u8], word: usize, value: u32) {
     input[word * 4..word * 4 + 4].copy_from_slice(&value.to_le_bytes());
 }
+fn offset(input: &[u8], word: usize) -> usize {
+    u32::from_le_bytes(input[word * 4..word * 4 + 4].try_into().unwrap()) as usize
+}
 pub(super) fn plane(thin: bool, orthographic: bool, normal_mapped: bool) -> Vec<u8> {
     let mut input = scene::tests::input();
+    let geometry = offset(&input, layout::header::GEOMETRY_OFFSET);
+    let material = offset(&input, layout::header::MATERIAL_OFFSET);
+    let camera = offset(&input, layout::header::CAMERA_OFFSET);
+    let positions = offset(&input, geometry + layout::geometry::POSITION);
     for (i, v) in [-4f32, -4., -3., 4., -4., -3., 0., 4., -3.]
         .iter()
         .enumerate()
     {
-        set(&mut input, 120 + i, v.to_bits());
+        set(&mut input, positions + i, v.to_bits());
     }
     for (i, v) in [0.25f32, 0.5, 0.75, 1.0].iter().enumerate() {
         set(&mut input, 16 + i, v.to_bits());
     }
-    set(&mut input, 64 + 5, if thin { 1f32 } else { 0f32 }.to_bits());
-    set(&mut input, 64 + 14, thin as u32);
+    set(
+        &mut input,
+        material + layout::material::TRANSMISSION,
+        if thin { 1f32 } else { 0f32 }.to_bits(),
+    );
+    set(
+        &mut input,
+        material + layout::material::THIN_WALLED,
+        thin as u32,
+    );
     if orthographic {
-        set(&mut input, 88, 1);
+        set(&mut input, camera + layout::camera::PROJECTION, 1);
         for (i, v) in [(4, -2f32), (5, 2f32), (6, -2f32), (7, 2f32)] {
-            set(&mut input, 88 + i, v.to_bits());
+            set(&mut input, camera + i, v.to_bits());
         }
     }
     // A finite sphere light makes path RNG changes observable in radiance.
     let offset = input.len() / 4;
-    input.resize(input.len() + 28 * 4, 0);
-    set(&mut input, 1, (offset + 28) as u32);
-    set(&mut input, 7, 1);
-    set(&mut input, 12, offset as u32);
-    set(&mut input, offset, 1);
-    for (i, value) in [(1, 0.9f32), (2, 0.7), (3, 0.5), (4, 20.), (5, 0.4)] {
+    input.resize(input.len() + layout::light::WORDS * 4, 0);
+    set(
+        &mut input,
+        layout::header::LENGTH,
+        (offset + layout::light::WORDS) as u32,
+    );
+    set(&mut input, layout::header::LIGHT_COUNT, 1);
+    set(&mut input, layout::header::LIGHT_OFFSET, offset as u32);
+    set(&mut input, offset + layout::light::TYPE, 1);
+    for (i, value) in [
+        (layout::light::COLOR, 0.9f32),
+        (layout::light::COLOR + 1, 0.7),
+        (layout::light::COLOR + 2, 0.5),
+        (layout::light::INTENSITY, 20.),
+        (layout::light::SIZE, 0.4),
+    ] {
         set(&mut input, offset + i, value.to_bits());
     }
     for i in [0, 5, 10, 15] {
-        set(&mut input, offset + 12 + i, 1f32.to_bits());
+        set(
+            &mut input,
+            offset + layout::light::TRANSFORM + i,
+            1f32.to_bits(),
+        );
     }
-    set(&mut input, offset + 12 + 12, (-2f32).to_bits());
-    set(&mut input, offset + 12 + 13, 1f32.to_bits());
+    set(
+        &mut input,
+        offset + layout::light::TRANSFORM + 12,
+        (-2f32).to_bits(),
+    );
+    set(
+        &mut input,
+        offset + layout::light::TRANSFORM + 13,
+        1f32.to_bits(),
+    );
     if normal_mapped {
         let uv = input.len() / 4;
         for value in [0f32, 0., 1., 0., 0.5, 1.] {
             input.extend_from_slice(&value.to_le_bytes());
         }
-        set(&mut input, 32 + 5, uv as u32);
+        set(&mut input, geometry + layout::geometry::UV, uv as u32);
         let texture = input.len() / 4;
-        input.resize(input.len() + 12 * 4, 0);
-        set(&mut input, 8, 1);
-        set(&mut input, 13, texture as u32);
+        input.resize(input.len() + layout::texture::WORDS * 4, 0);
+        set(&mut input, layout::header::TEXTURE_COUNT, 1);
+        set(&mut input, layout::header::TEXTURE_OFFSET, texture as u32);
         set(&mut input, texture, 1);
         set(&mut input, texture + 1, 1);
-        set(&mut input, texture + 3, (texture + 12) as u32);
-        set(&mut input, texture + 6, 1f32.to_bits());
-        set(&mut input, texture + 7, 1f32.to_bits());
+        set(
+            &mut input,
+            texture + layout::texture::PIXELS,
+            (texture + layout::texture::WORDS) as u32,
+        );
+        set(
+            &mut input,
+            texture + layout::texture::UV_SCALE,
+            1f32.to_bits(),
+        );
+        set(
+            &mut input,
+            texture + layout::texture::UV_SCALE + 1,
+            1f32.to_bits(),
+        );
         input.extend_from_slice(&[191, 128, 255, 255]);
-        set(&mut input, 64 + 16, 0);
+        set(&mut input, material + layout::material::NORMAL_MAP, 0);
         let length = input.len() / 4;
         set(&mut input, 1, length as u32);
     }
@@ -92,7 +141,7 @@ pub(super) use crate::test_support::read_texture;
 #[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
-    let _lock = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in if cfg!(target_os = "macos") {
         vec![wgpu::Backends::METAL]
     } else {
@@ -116,11 +165,15 @@ fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
             cases.into_iter().enumerate()
         {
             let mut input = plane(thin, false, false);
+            let geometry = offset(&input, layout::header::GEOMETRY_OFFSET);
+            let positions = offset(&input, geometry + layout::geometry::POSITION);
+            let material = offset(&input, layout::header::MATERIAL_OFFSET);
+            let camera = offset(&input, layout::header::CAMERA_OFFSET);
             for (i, value) in [-400f32, -400., -3., 400., -400., -3., 0., 400., -3.]
                 .into_iter()
                 .enumerate()
             {
-                set(&mut input, 120 + i, value.to_bits());
+                set(&mut input, positions + i, value.to_bits());
             }
             for (i, value) in [
                 (0, 0.15f32),
@@ -131,14 +184,18 @@ fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
                 (5, transmission),
                 (6, ior),
             ] {
-                set(&mut input, 64 + i, value.to_bits());
+                set(&mut input, material + i, value.to_bits());
             }
             for (i, value) in glam::Mat4::from_rotation_y(angle)
                 .to_cols_array()
                 .into_iter()
                 .enumerate()
             {
-                set(&mut input, 104 + i, value.to_bits());
+                set(
+                    &mut input,
+                    camera + layout::camera::TRANSFORM + i,
+                    value.to_bits(),
+                );
             }
             let (description, assets) =
                 scene::prepare_frame_inputs(&input, &settings::RenderSettings::default()).unwrap();
@@ -304,7 +361,7 @@ pub(super) fn test_gpu(backend: wgpu::Backends) -> Option<GpuDevice> {
 #[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn real_frame_inputs_match_plane_oracle_and_preserve_path_rng() {
-    let _lock = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::abi_test_lock();
     for backend in if cfg!(target_os = "macos") {
         vec![wgpu::Backends::METAL]
     } else {

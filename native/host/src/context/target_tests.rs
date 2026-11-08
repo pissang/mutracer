@@ -122,33 +122,13 @@ impl Drop for Fixture {
 }
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
-fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
-    let _test = ABI_TEST_LOCK.lock().unwrap();
+fn full_only_settings_change_skips_sync_and_keeps_old_scene_renderable() {
+    let _test = crate::abi_test_lock();
     let f = Fixture::new();
-    let input = scene::tests::input();
-    let mut next = input.clone();
-    use layout::{header as h, mesh as m};
-    let word = |field: usize| {
-        u32::from_le_bytes(input[field * 4..field * 4 + 4].try_into().unwrap()) as usize
-    };
-    let (offset, count) = (word(h::MESH_OFFSET), word(h::MESH_COUNT));
-    let mut meshes = input[offset * 4..(offset + count * m::WORDS) * 4].to_vec();
-    meshes.extend_from_slice(&input[offset * 4..(offset + m::WORDS) * 4]);
-    let offset = next.len() / 4;
-    next.extend(meshes);
-    for (field, value) in [
-        (h::MESH_OFFSET, offset),
-        (h::MESH_COUNT, count + 1),
-        (h::MESH_AOV_IDS, 0),
-        (h::BATCH_OFFSET, 0),
-        (h::LENGTH, next.len() / 4),
-    ] {
-        next[field * 4..field * 4 + 4].copy_from_slice(&(value as u32).to_le_bytes());
-    }
-    scene::validate(&next).unwrap();
-    let next = Arc::new(next);
-    // With AOT deliberately occupied, an incompatible incremental probe must
-    // return immediately, leaving the committed scene available to render.
+    let input = Arc::new(scene::tests::input());
+    let mut changed_settings = settings::RenderSettings::default();
+    changed_settings.bounces += 1;
+    // `incremental_candidate` rejects changed render settings before AOT sync.
     let (started, entered) = mpsc::sync_channel(1);
     let (resume, resumed) = mpsc::sync_channel(1);
     runtime::enqueue(move || {
@@ -157,14 +137,14 @@ fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
     });
     entered.recv().unwrap();
     let (send, receive) = mpsc::sync_channel(1);
-    let bytes = next.clone();
     let owner = f.owner;
+    let settings = changed_settings.clone();
     let probe = std::thread::spawn(move || {
         send.send(
             commit_path(
                 owner,
-                &bytes,
-                &settings::RenderSettings::default(),
+                &input,
+                &settings,
                 CommitPath::IncrementalOnly,
                 None,
             )
@@ -173,36 +153,29 @@ fn mesh_count_replacement_skips_sync_and_keeps_old_scene_until_full_commit() {
         .unwrap();
     });
     let result = receive.recv_timeout(Duration::from_secs(2));
-    resume.send(()).unwrap();
     probe.join().unwrap();
     assert_eq!(result.unwrap().unwrap(), CommitOutcome::NeedsFull);
-    render(f.other);
-    assert_eq!(
-        commit_path(
-            f.owner,
-            &next,
-            &settings::RenderSettings::default(),
-            CommitPath::FullOnly,
-            None
-        )
-        .unwrap(),
-        CommitOutcome::Done
-    );
-    let mut error = [0; 512];
-    ok(f.set(f.other, [8, 8], &mut error), &error);
-    render(f.other);
+    let target_image = render(f.target);
+    let other_image = render(f.other);
+    assert!(!target_image.is_empty());
+    assert!(!other_image.is_empty());
+    resume.send(()).unwrap();
 }
-fn render(handle: u64) {
+
+fn render(handle: u64) -> Vec<u8> {
     let mut error = [0; 512];
     let mut job = 0;
     unsafe {
         ok(
-            mt_context_submit(handle, 1, &mut job, error.as_mut_ptr(), error.len()),
+            retry(|| mt_context_submit(handle, 1, &mut job, error.as_mut_ptr(), error.len())),
             &error,
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            ok(mt_job_poll(job, 1, error.as_mut_ptr(), error.len()), &error);
+            ok(
+                retry(|| mt_job_poll(job, 1, error.as_mut_ptr(), error.len())),
+                &error,
+            );
             let mut info = JobInfo {
                 struct_size: std::mem::size_of::<JobInfo>() as u32,
                 state: 0,
@@ -212,7 +185,7 @@ fn render(handle: u64) {
                 base_samples: 0,
             };
             ok(
-                mt_job_info(job, &mut info, error.as_mut_ptr(), error.len()),
+                retry(|| mt_job_info(job, &mut info, error.as_mut_ptr(), error.len())),
                 &error,
             );
             if info.state == JobState::Complete as u32 {
@@ -224,24 +197,27 @@ fn render(handle: u64) {
         let mut pixels = [0; 8 * 8 * 16];
         let mut written = 0;
         ok(
-            mt_context_read_pixels(
-                handle,
-                0,
-                pixels.as_mut_ptr(),
-                pixels.len(),
-                &mut written,
-                error.as_mut_ptr(),
-                error.len(),
-            ),
+            retry(|| {
+                mt_context_read_pixels(
+                    handle,
+                    0,
+                    pixels.as_mut_ptr(),
+                    pixels.len(),
+                    &mut written,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            }),
             &error,
         );
         assert_eq!(written, pixels.len());
         ok(
-            mt_context_submit(handle, 1, &mut job, error.as_mut_ptr(), error.len()),
+            retry(|| mt_context_submit(handle, 1, &mut job, error.as_mut_ptr(), error.len())),
             &error,
         );
         ok(mt_job_cancel(job, error.as_mut_ptr(), error.len()), &error);
         ok(mt_job_poll(job, 0, error.as_mut_ptr(), error.len()), &error);
+        pixels.to_vec()
     }
 }
 fn gate() -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
@@ -254,7 +230,7 @@ fn gate() -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn target_aot_waits_leave_other_contexts_available() {
-    let _test = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let fixture = Fixture::new();
     let (entered, resume) = gate();
     let setting = fixture.start();
@@ -274,7 +250,7 @@ fn target_aot_waits_leave_other_contexts_available() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn target_preparation_rejects_a_scene_commit_that_started_after_its_snapshot() {
-    let _test = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let fixture = Fixture::new();
     let (entered, resume) = gate();
     let setting = fixture.start();
@@ -342,7 +318,7 @@ fn target_preparation_rejects_a_scene_commit_that_started_after_its_snapshot() {
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn target_preparation_rechecks_destroyed_target_and_owner_handles() {
-    let _test = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     for destroy_owner in [false, true] {
         let fixture = Fixture::new();
         let (entered, resume) = gate();

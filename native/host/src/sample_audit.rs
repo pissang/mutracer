@@ -338,8 +338,8 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn instrumentation_preserves_aovs_on_the_same_acceleration_structures() {
-        let _test = ABI_TEST_LOCK.lock().unwrap();
-        let _entry = ENTRY_LOCK.lock().unwrap();
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
         for backend in [0, 1] {
             let gpu =
                 GpuDevice::with_backend(backend).expect("GPU validation requires a working device");
@@ -347,8 +347,7 @@ mod tests {
                 backend == 0 || gpu.hardware_ray_query,
                 "GPU validation requires HWRT"
             );
-            let mut input = scene::tests::input();
-            input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+            let input = scene::tests::translated_camera_input();
             let (mut scene, mut assets, _retained) = scene::prepare_retained_with_settings(
                 &input,
                 backend == 1,

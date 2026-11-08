@@ -75,7 +75,7 @@ fn coalesced_preview_collects_async_denoising_before_committing_motion() {
             frame.submit([], output).map(DenoiseOutput::Resident)
         }
     }
-    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _guard = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(16, 12).unwrap();
     let scene = lit_scene();
@@ -380,6 +380,30 @@ fn camera_sync(engine: &Engine) -> Arc<Mutex<CameraSync>> {
         base: Camera::from_bytes(&scene[162 * 4..194 * 4]).unwrap(),
     }))
 }
+fn tick_until_refill_lease(render_loop: &mut RenderLoop) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let status = render_loop.tick().unwrap();
+        if render_loop.needs_refill() {
+            return;
+        }
+        let render = render_loop.final_render();
+        assert_ne!(
+            status,
+            RenderLoopStatus::Finished,
+            "refill lease became unreachable after terminal completion: samples={}, settings={:?}, gpu_sample_ms={:?}, refill_ready={}, render_status={:?}",
+            render.samples(),
+            render.settings().unwrap(),
+            render.gpu_sample_time_ms(),
+            render.refill_ready(),
+            render.status(),
+        );
+        assert_ne!(status, RenderLoopStatus::Error);
+        assert!(Instant::now() < deadline, "loop stuck at {status:?}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn tick_until(
     render_loop: &mut RenderLoop,
     done: impl Fn(&RenderLoop, RenderLoopStatus) -> bool,
@@ -402,9 +426,7 @@ fn tick_until(
 
 #[test]
 fn loop_converge_matches_a_fresh_l0_context() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -453,9 +475,7 @@ fn loop_converge_matches_a_fresh_l0_context() {
 
 #[test]
 fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -560,9 +580,7 @@ fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
 
 #[test]
 fn final_render_presents_the_preview_until_it_is_complete() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -633,9 +651,7 @@ fn final_render_presents_the_preview_until_it_is_complete() {
 
 #[test]
 fn sync_activity_and_consecutive_edits_drive_changing() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -696,9 +712,7 @@ fn sync_activity_and_consecutive_edits_drive_changing() {
 
 #[test]
 fn unsubscribing_inside_a_callback_stops_later_events() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -769,9 +783,7 @@ fn unsubscribing_inside_a_callback_stops_later_events() {
 
 #[test]
 fn collect_accounts_a_batch_without_submitting_another() {
-    let _test = crate::ABI_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _test = crate::abi_test_lock();
     let Some(engine) = software_engine(Backend::Software) else {
         return;
     };
@@ -813,7 +825,7 @@ fn collect_accounts_a_batch_without_submitting_another() {
 #[test]
 #[ignore = "requires real GPU timestamps"]
 fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(64, 48).unwrap();
     engine.set_scene(&lit_scene()).unwrap();
@@ -842,7 +854,10 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
                 // Keep enough work and short tick batches to observe several
                 // refill leases before this fixture reaches its sample cap.
                 max_samples: 16384,
-                time_budget_ms: 1.,
+                // The first lease uses ample budget so it does not depend on
+                // this machine's single-sample timing. Boundary checks below
+                // set the tested budgets explicitly.
+                time_budget_ms: 1000.,
                 batch_samples: true,
                 aovs: 1,
                 aov_samples: 3,
@@ -857,7 +872,7 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         !render_loop.final_render().refill_ready(),
         "no queued sampling must not grant a refill"
     );
-    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    tick_until_refill_lease(&mut render_loop);
     assert!(render_loop.final_render().gpu_sample_time_ms().unwrap() > 0.);
     let table: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/display-schedule.json"
@@ -894,10 +909,10 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
     );
     render_loop.cancel_refill();
     assert!(!render_loop.refill().unwrap());
-    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    tick_until_refill_lease(&mut render_loop);
     std::thread::sleep(Duration::from_millis(17));
     assert!(!render_loop.refill().unwrap());
-    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    tick_until_refill_lease(&mut render_loop);
     sync.lock().unwrap().set_active(true);
     assert!(!render_loop.refill().unwrap());
     render_loop.tick().unwrap();
@@ -930,7 +945,7 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
 #[test]
 #[ignore = "requires real GPU"]
 fn jnlm_shapes_recompose_without_changing_accumulation() {
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     let display = engine.display();
     display.set_size(24, 16).unwrap();
@@ -1000,7 +1015,7 @@ fn jnlm_shapes_recompose_without_changing_accumulation() {
 #[test]
 #[ignore = "requires real GPU"]
 fn jnlm_composes_and_exports_without_changing_beauty_and_large_oidn_prefilters_guides() {
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(24, 16).unwrap();
     engine.set_scene(&lit_scene()).unwrap();
@@ -1061,7 +1076,7 @@ fn jnlm_composes_and_exports_without_changing_beauty_and_large_oidn_prefilters_g
 #[ignore = "requires real GPU"]
 fn grounded_background_edits_match_fresh_contexts() {
     use crate::scene_api::{Environment, GroundedBackground, Scene, Texture, TexturePixels};
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(16, 12).unwrap();
     let mut scene = Scene::new();
@@ -1145,7 +1160,7 @@ fn grounded_background_edits_match_fresh_contexts() {
 #[test]
 #[ignore = "requires real GPU"]
 fn custom_loop_refine_until_respects_deadline_cancellation_and_display() {
-    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let _test = crate::abi_test_lock();
     let engine = super::aov_tests::aov_engine(Backend::Software);
     engine.display().set_size(64, 48).unwrap();
     engine.set_scene(&lit_scene()).unwrap();
@@ -1155,7 +1170,9 @@ fn custom_loop_refine_until_respects_deadline_cancellation_and_display() {
             preview: None,
             final_render: LoopRender::Settings(RenderSettings {
                 max_samples: 16384,
-                time_budget_ms: 1.,
+                // Establish the initial refill lease independently of GPU
+                // speed; the later deadline checks set their own budgets.
+                time_budget_ms: 1000.,
                 batch_samples: true,
                 ..Default::default()
             }),
@@ -1163,7 +1180,7 @@ fn custom_loop_refine_until_respects_deadline_cancellation_and_display() {
         },
     )
     .unwrap();
-    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    tick_until_refill_lease(&mut render_loop);
     let render = render_loop.final_render();
     let mut settings = render.settings().unwrap();
     settings.time_budget_ms = 1000.;
