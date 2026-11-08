@@ -658,7 +658,9 @@ Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear
 `new MaterialGraph({nodes: [], terminal: {}})` creates an empty graph. Attach it as
 `material.graph` (default `undefined`). Nodes have `id`, MaterialX `category`,
 output `type`, and optional typed `inputs`; connections use `{node, output?}`,
-with `output: 'out'` by default. Omitted inputs use node defaults.
+with `output: 'out'` by default. Separate nodes expose component outputs;
+`gltf_colorimage` exposes `outcolor`/`outa` and uses type `color4`.
+Omitted inputs use node defaults.
 
 Use `setNode(node)`, `removeNode(id)`, `setInput(id, port, input?)` and
 `setTerminal(connections)` to edit; each returns the graph and advances its
@@ -667,6 +669,6 @@ default. A missing ID passed to `setInput` throws. Call `engine.update()` after
 edits. Node and terminal snapshots cannot be edited in place.
 
 See [material graphs](./materials.md#material-graphs) for an example, supported
-nodes, terminal inputs, compilation/fallback behavior and limits. Compilation
-state and located diagnostics are available on
+nodes, terminal inputs (including coverage), compilation/fallback behavior and
+limits. Compilation state and located diagnostics are available on
 `engine.getDiagnostics()?.materialGraphs`.

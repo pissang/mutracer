@@ -348,12 +348,19 @@ Nodes have stable IDs and typed inputs. Connect an input with
 connections are immutable snapshots; edit them through the graph's methods.
 Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
 
-Both WebGPU and WebGL 2 support these MaterialX 1.39 categories:
+Both WebGPU and WebGL 2 support the following MaterialX 1.39 categories,
+within the type and sampling limits below:
 
-- `constant`, `image`, `tiledimage`, `texcoord`, `place2d`, `convert`, `normalmap`;
+- `constant`, `dot`, `image`, `tiledimage`, `texcoord`, `place2d`, `convert`, `normalmap`,
+  `gltf_image`, `gltf_colorimage`, `gltf_normalmap`;
 - `position`, `normal`, `tangent`, `bitangent`, `normalize`, `dotproduct`, `crossproduct`;
 - `add`, `subtract`, `multiply`, `divide`, `modulo`, `min`, `max`, `mix`, `clamp`, `power`;
-- `abs`, `floor`, `ceil`, `round`, `sin`, `cos`, `sqrt`, `exp`, `ln`, `sign`;
+- `abs`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan2`, `sqrt`, `exp`, `ln`, `sign`;
+- `extract`, `remap`, `invert`, `range`, `smoothstep`, `luminance`, `contrast`, `rotate2d/3d`,
+  `transformpoint`, `transformvector`, `transformnormal`;
+- `noise2d/3d`, `fractal3d`, `cellnoise2d/3d`, `worleynoise2d/3d`,
+  `ramplr`, `ramptb`, `ramp4`, `splitlr`, `splittb`;
+- `burn`, `dodge`, `screen`, `overlay`, `difference`, `plus`, `minus`;
 - `separate2/3/4`, `combine2/3/4`, `ifgreater`, `ifequal`, `rgbtohsv`, `hsvtorgb`.
 
 Numeric types are `float`, `integer`, `boolean`, `color3/4` and `vector2/3/4`;
@@ -369,18 +376,40 @@ real-world size ratio. UDIM selection and missing tiles follow [UDIM textures](#
 this input rather than `Texture.uvChannel`. Geometry nodes
 support `space: {type: 'string', value: 'object' | 'world'}`, default `object`;
 normalmap's implicit normal/tangent/bitangent use the world frame. Only the
-primary tangent frame is supported. `place2d.rotate` is in degrees and
-`operationorder` defaults to `0` (SRT); `1` selects TRS.
+primary tangent frame is supported. Transform nodes accept object/world spaces;
+omitting both spaces leaves points/vectors unchanged; normal transforms normalize
+the result, including when no space conversion is needed. Specify both spaces
+for a conversion. `rotate2d/3d.amount` and `place2d.rotate` are in degrees.
+For `place2d`, `operationorder` defaults to `0` (SRT); `1` selects TRS.
+
+`luminance` returns a gray color with ACEScg coefficients by default and preserves
+alpha for `color4`. `range` preserves the sign when applying gamma, then optionally
+clamps to its output range. Extract indices must lie within the input's components.
+Noise uses MaterialX's OSL noise functions; increasing fractal octaves increases
+per-hit work. Split nodes use point samples rather than screen-derivative filtering,
+so thin boundaries can alias. `gltf_colorimage` exposes `outcolor` and `outa`;
+its type is `color4`. The viewer upgrades deprecated `swizzle` nodes to
+`extract`/`combine` when importing; authored graphs should use those nodes directly.
 
 Terminals support base weight/color/diffuse roughness/metalness, specular
 weight/color/roughness/IOR/anisotropy, transmission weight/color, fuzz and coat
-inputs, thin-film weight/thickness/IOR, and `geometryNormal` (`normal` is an
-alias). The material's anisotropy aliases also work here. Emission color and
-luminance graphs currently require `unlit: true`; graph coat absorption on an
-emissive surface has the same restriction. These unsupported material contexts
-use the constant fallback. Opacity, displacement, volume,
-subsurface and tangent terminals are not supported. With WebGPU light tracing or photon mapping, graph materials use their constant
-fallback and report `unsupported-transport`. This API takes an authored
+inputs, thin-film weight/thickness/IOR, `geometryNormal` (`normal` is an
+alias), and `opacity` (`geometryOpacity` is an alias). The material's anisotropy
+aliases also work here.
+Opacity replaces the scalar coverage before ordinary alpha texture factors and
+[alpha-mode resolution](#alpha), for both surface and shadow rays. In `auto`,
+a graph coverage input selects blend unless a positive cutoff selects mask;
+explicit `opaque` still ignores coverage. Opacity graphs can use UVs and position,
+but shading-normal or tangent-frame dependencies produce a diagnostic and fallback.
+UV-dependent opacity requires the material's `uvProjection: 'none'`; use graph
+coordinates for procedural coverage. Complex coverage networks also increase
+shadow-ray evaluation cost.
+
+Emission color and luminance graphs currently require `unlit: true`; graph coat
+absorption on an emissive surface has the same restriction. These unsupported material contexts
+use the constant fallback. Displacement, volume, subsurface and tangent terminals
+are not supported. With WebGPU light tracing or photon mapping, graph materials
+use their constant fallback and report `unsupported-transport`. This API takes an authored
 graph; it does not load `.mtlx`/USD files or convert other surface models.
 
 Parameter values, including texture references and UV transforms, update without
@@ -390,9 +419,12 @@ successful graph and its parameters; the first graph uses the material's constan
 and maps. A successful installation restarts accumulation. Compilation can take
 hundreds of milliseconds or longer and becomes more expensive as a scene uses
 more distinct structures. WebGL's background compilation depends on
-`KHR_parallel_shader_compile`. Driver work on the first draw can still pause
-a frame, including when that extension is available. Changes that also require
-new resource/layout support may keep the last image until that support is ready.
+`KHR_parallel_shader_compile`. The first use of a new program can still take
+seconds of driver work. Synchronous HDR readback or other application GL queries
+during that work can block the main thread, including when the extension is
+available. Rendering calls can also pause while new texture/resource layouts are
+prepared or the driver command queue fills. Such changes may keep the last image
+until that support is ready.
 Each material retains its own parameters even when it shares graph code; parameter
 memory grows with its reachable inputs and folded values.
 
@@ -404,3 +436,25 @@ valid graphs on other materials can still install. The fallback is the constant
 material if no successful graph exists. Shader failures do the same. Keep calling `refine()` or use
 RenderLoop while a graph compiles. Shader/program caches consume memory as new
 structures are tried; disposing the engine releases them.
+
+### MaterialX in the viewer
+
+Select a material and import a `.mtlx` file with its textures, or a ZIP containing
+them. Dropping a package onto the viewer replaces the selected material. The first
+material in the shallowest `.mtlx` document is used. Missing images use the node's
+default and produce a warning. Imported graphs, images and fallback maps are saved
+with the viewer's cached model and participate in undo/reset.
+
+The viewer maps `open_pbr_surface`, `standard_surface`, `gltf_pbr` and
+`UsdPreviewSurface` to OpenPBR. Standard Surface uses MaterialX's official
+conversion, including its coat tint, metallic specular and sheen roughness rules;
+this does not make OpenPBR identical to the source renderer's BSDF. Uniform
+networks become material values. Varying networks use `MaterialGraph`, with
+compilation status and located diagnostics shown in the material panel.
+Unsupported graph inputs use the library's fallback behavior. When a network
+can also be baked into ordinary material maps, those maps remain the
+fallback during compilation or rejection. Disney Principled and Simple Hair
+surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
+inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
+Subsurface, displacement and tangent graph inputs and lit emission graphs retain
+the limits described above. XML parsing belongs to the viewer; the library's graph API accepts typed nodes and loaded textures.

@@ -42,6 +42,13 @@ the old variant and its parameter records continue tracing; installation uploads
 new records and binds the new variant together. WebGL stages separate program
 bindings and polls KHR completion while the active bindings remain usable.
 Background programs do not enter the foreground program-readiness barrier.
+Adapter identity is cached before compiling programs: repeated WebGL getParameter
+queries from diagnostics can flush pending driver work even after KHR polling
+is separated correctly. First-use driver work can still wait at synchronous
+readback; caching the identity does not make that work disappear. Texture/layout
+changes can also encounter driver backpressure at ordinary uniform uploads from
+the presentation pass; KHR link completion is not a guarantee that every later
+GL call is nonblocking.
 
 Only a plan matching the current request can install. Validation/compile failures
 retain the successful plan and appear in the existing engine diagnostics. A
@@ -65,7 +72,12 @@ matching emissive-light and caustic-emitter evaluation before it can be enabled;
 it currently produces a located diagnostic and forces constant fallback, even
 when a formerly valid unlit graph is present. Emission graphs on unlit materials
 exercise the same arithmetic/image code without entering light proposals.
-Subsurface/volume, opacity, displacement and tangent terminals are not included.
+Opacity overrides raw coverage before existing alpha-map factors and mode resolution.
+The traversal helper evaluates it at the same UV/position as the surface path;
+frame-dependent opacity is rejected because shadow traversal lacks the shading
+frame. Browser packing conservatively marks auto graph coverage as blend, and
+both pipeline capability sets retain alpha traversal. Subsurface/volume,
+displacement and tangent terminals are not included.
 Light-tracing and photon-mapping variants retain the constant material evaluator
 and expose an unsupported-transport diagnostic until their emitter/material
 evaluation is ported together; the algorithms themselves remain available.
