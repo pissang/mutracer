@@ -66,12 +66,13 @@ These edits commit incrementally:
   map pixels and sizes, while the texture atlas still fits.
 - Changing a material texture reference when the destination is already in the
   retained atlas and the committed shader supports it.
-- Adding, removing and changing lights; background color; environment/background
-  strength and rotation.
+- Adding, removing and changing lights while the scene has at most 64 analytic
+  lights; background color; environment/background strength and rotation.
 
 These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):
 
+- Growing past 64 analytic lights, which reallocates the light array.
 - Texture-reference changes that need an atlas resize or new shader support;
   UV projection or displacement-reference changes.
 - Parameter edits that require new shader support or change transparency, medium,
