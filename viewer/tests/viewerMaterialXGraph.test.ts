@@ -5,6 +5,12 @@ import {normalizeGraph} from '../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate';
 const doc=(body:string,category='open_pbr_surface',inputs='')=>`<materialx version="1.39">${body}<${category} name="S" type="surfaceshader">${inputs}</${category}><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>`;
 describe('MaterialX graph import',()=>{
+ it('drops a varying subsurface color only when its lobe has a uniform zero weight',()=>{
+  const body='<image name="color" type="color3"><input name="file" type="filename" value="sss.png"/></image>';
+  const inputs=(weight:number)=>`<input name="subsurface" type="float" value="${weight}"/><input name="subsurface_color" type="color3" nodename="color"/>`;
+  expect(parseMaterialXGraph(doc(body,'standard_surface',inputs(0))).warnings).toEqual([]);
+  expect(parseMaterialXGraph(doc(body,'standard_surface',inputs(.2))).warnings).toContainEqual(expect.stringContaining('subsurfaceColor'));
+ });
  it('uses the official Standard Surface conversion for tinted coated metals',()=>{
   const m=parseMaterialXGraph(doc('','standard_surface','<input name="base_color" type="color3" value="0.8,0.4,0.2"/><input name="metalness" type="float" value="1"/><input name="specular" type="float" value="0.2"/><input name="coat" type="float" value="0.5"/><input name="coat_color" type="color3" value="0.2,0.6,1"/><input name="sheen_roughness" type="float" value="0.25"/>'));
   expect(m.warnings).toEqual([]);expect(m.graph).toBeUndefined();expect(m.values.specularWeight).toBe(1);expect(m.values.coatWeight).toBe(0);

@@ -269,6 +269,9 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
             // An unsupported input left at zero, or at the default frame, has no effect.
         }else terminal[port]=edge;
     }
+    // OpenPBR/Standard Surface multiply subsurface by its weight. A texture
+    // on that inactive lobe is not an unsupported shading dependency.
+    if(values.subsurfaceWeight===0&&!terminal.subsurfaceWeight)for(const port of ['subsurfaceColor','subsurfaceRadius','subsurfaceRadiusScale','subsurfaceAnisotropy'])delete terminal[port];
     const graph=Object.keys(terminal).length?new MaterialGraph({nodes:r.nodes,terminal}):undefined;
     if(graph){
         const state=new OpenPBRMaterial();Object.assign(state,values);state.graph=graph;
