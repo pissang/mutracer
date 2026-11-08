@@ -114,6 +114,18 @@ describe('opacity graph commits',()=>{
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])[offset]).toBe(0);
         const key=normalizeGraph(graph).key;graph.setInput('a','value',f(0.9));expect(normalizeGraph(graph).key).toBe(key);
     });
+    it.each(['emission','projection','frame'])('revalidates a retained graph when an invalid replacement also changes %s context',kind=>{
+        const frame=kind==='frame';
+        const graph=new MaterialGraph({nodes:[{id:'source',category:frame?'normal':'texcoord',type:frame?'vector3':'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:frame?'vector3':'vector2',connection:{node:'source'}}}}],terminal:{[kind==='emission'?'emissionLuminance':'opacity']:{node:'a'}}});
+        const material=new OpenPBRMaterial({graph,unlit:kind==='emission',alphaMode:frame?'opaque':'auto'}),state=new MaterialGraphState('webgpu');
+        state.request([material]);expect(state.diagnostics).toEqual([]);state.install(state.requested,state.revision);const installed=state.active.graphs[0];
+        material.graph=new MaterialGraph({nodes:[{id:'unknown',category:'future_node',type:'color3'}],terminal:{baseColor:{node:'unknown'}}});
+        if(kind==='emission')material.unlit=false;else if(kind==='projection')material.uvProjection='triplanar';else material.alphaMode='blend';
+        state.request([material]);expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
+        expect(state.diagnostics).toContainEqual(expect.objectContaining({code:kind==='emission'?'unsupported-emission-graph':kind==='projection'?'unsupported-opacity-projection':'unsupported-opacity-context'}));
+        if(kind==='emission')material.unlit=true;else if(kind==='projection')material.uvProjection='none';else material.alphaMode='opaque';
+        state.request([material]);expect(state.requested.graphs[0]).toBe(installed);
+    });
     it('rejects unsupported material projection for UV-dependent opacity',()=>{
         const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}],terminal:{opacity:{node:'a'}}});
         const state=new MaterialGraphState('webgpu'),material=new OpenPBRMaterial({graph});state.request([material]);state.install(state.requested,state.revision);material.uvProjection='triplanar';state.request([material]);expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-projection',port:'opacity'}));expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));

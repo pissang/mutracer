@@ -59,26 +59,39 @@ export class MaterialGraphState {
             if (!material.graph)
                 return undefined;
             const graph = normalizeGraph(material.graph, this.backend, this.capabilities);
-            if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal))) {
-                const port=['emissionColor','emissionLuminance','coatColor','coatWeight'].find(p=>p in graph.terminal)!;
-                graph.diagnostics.push({ node:graph.nodes[graph.terminal[port].node]?.id, port, code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
-                // A formerly valid unlit graph cannot remain installed after
-                // switching to an unsupported lit-emitter context.
-                this.constantFallback.add(material);
-            }
-            if ('opacity' in graph.terminal && material.alphaMode !== 'opaque') {
-                const seen=new Set<number>();let usesUv=false;
-                const check=(index:number) => { if(seen.has(index)||index<0)return;seen.add(index);const node=graph.nodes[index];
-                    if(node.category==='texcoord'||Object.values(node.inputs).some(i=>i.geometry==='texcoord'))usesUv=true;
-                    if(['normal','tangent','bitangent','normalmap','gltf_normalmap','transformnormal'].includes(node.category)||Object.values(node.inputs).some(i=>i.geometry&&i.geometry!=='texcoord'&&i.geometry!=='objectPosition'))graph.diagnostics.push({code:'unsupported-opacity-context',message:'Opacity graphs support UV and position inputs; shading-frame inputs are not available to shadow traversal.',node:node.id,port:'opacity'});
-                    for(const i of Object.values(node.inputs))if(i.node!==undefined)check(i.node);
-                };
-                check(graph.terminal.opacity.node);
-                if(usesUv&&material.uvProjection!=='none'){this.constantFallback.add(material);graph.diagnostics.push({code:'unsupported-opacity-projection',message:'UV-dependent opacity graphs require material uvProjection none; use graph coordinates for procedural coverage.',node:graph.nodes[graph.terminal.opacity.node]?.id,port:'opacity'});}
+            const validateContext=(graph:NormalizedGraph,retained=false)=>{
+                const before=graph.diagnostics.length;
+                if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal))) {
+                    const port=['emissionColor','emissionLuminance','coatColor','coatWeight'].find(p=>p in graph.terminal)!;
+                    graph.diagnostics.push({ node:graph.nodes[graph.terminal[port].node]?.id, port, code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
+                    // A formerly valid unlit graph cannot remain installed after
+                    // switching to an unsupported lit-emitter context.
+                    this.constantFallback.add(material);
+                }
+                if ('opacity' in graph.terminal && material.alphaMode !== 'opaque') {
+                    const seen=new Set<number>();let usesUv=false;
+                    const check=(index:number) => { if(seen.has(index)||index<0)return;seen.add(index);const node=graph.nodes[index];
+                        if(node.category==='texcoord'||Object.values(node.inputs).some(i=>i.geometry==='texcoord'))usesUv=true;
+                        if(['normal','tangent','bitangent','normalmap','gltf_normalmap','transformnormal'].includes(node.category)||Object.values(node.inputs).some(i=>i.geometry&&i.geometry!=='texcoord'&&i.geometry!=='objectPosition'))graph.diagnostics.push({code:'unsupported-opacity-context',message:'Opacity graphs support UV and position inputs; shading-frame inputs are not available to shadow traversal.',node:node.id,port:'opacity'});
+                        for(const i of Object.values(node.inputs))if(i.node!==undefined)check(i.node);
+                    };
+                    check(graph.terminal.opacity.node);
+                    if(usesUv&&material.uvProjection!=='none'){this.constantFallback.add(material);graph.diagnostics.push({code:'unsupported-opacity-projection',message:'UV-dependent opacity graphs require material uvProjection none; use graph coordinates for procedural coverage.',node:graph.nodes[graph.terminal.opacity.node]?.id,port:'opacity'});}
+                }
+                if(retained&&graph.diagnostics.length>before)this.constantFallback.add(material);
+            };
+            validateContext(graph);
+            const previous=this.active.materials?previousGraphs.get(material):this.active.graphs[index];
+            if(graph.diagnostics.length&&previous&&!this.constantFallback.has(material)){
+                // A failed replacement may retain a graph authored for an older
+                // material context. Validate it without mutating the installed snapshot.
+                const retained={...previous,diagnostics:[] as MaterialGraphDiagnostic[]};
+                validateContext(retained,true);
+                diagnostics.push(...retained.diagnostics.filter(d=>!graph.diagnostics.some(current=>current.code===d.code&&current.node===d.node&&current.port===d.port)).map(d=>({...d,materialId:material.aovId})));
             }
             diagnostics.push(...graph.diagnostics.map(d => ({...d,materialId:material.aovId})));
             // Preserve the successful graph for this slot after validation failure.
-            return this.constantFallback.has(material) ? undefined : graph.diagnostics.length ? (this.active.materials ? previousGraphs.get(material) : this.active.graphs[index]) : graph;
+            return this.constantFallback.has(material) ? undefined : graph.diagnostics.length ? previous : graph;
         });
         const structures = Array.from(new Map(graphs.filter((g): g is NormalizedGraph => !!g && !!Object.keys(g.terminal).length).map(g => [g.key, g])).values()).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
         const key = structures.map(g => g.key).join('\n');
