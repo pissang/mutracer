@@ -906,3 +906,5 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .tex-slot__wrap, .tex-slot__repeat { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 5px; }
 .tex-slot__wrap-axis { display: grid; gap: 4px; min-width: 0; }
 .tex-slot__wrap .select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.material-panel[data-drop] { outline: 2px dashed var(--cv-accent); outline-offset: -2px; background: var(--cv-accent-surface); }

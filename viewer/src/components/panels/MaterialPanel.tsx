@@ -9,7 +9,8 @@ import {
 } from '../../engine/materialParams';
 import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
-import { toPathedFiles } from '../../engine/droppedFiles';
+import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
+import { isMaterialXDrop, materialDropTarget } from '../../engine/materialDrop';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -20,6 +21,7 @@ export function MaterialPanel() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
+  const [dropping, setDropping] = useState(false);
 
   if (!material) {
     return (
@@ -43,7 +45,24 @@ export function MaterialPanel() {
   };
 
   return (
-    <>
+    <div className="material-panel" data-drop={dropping || undefined}
+      onDropCapture={() => setDropping(false)}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDropping(true);
+      }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false); }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        setDropping(false);
+        const target = materialDropTarget('panel', null, { materialId: material.id, objectId: null, name: material.name });
+        try {
+          const files = await readDroppedItems(e.dataTransfer.items);
+          if (MATERIALX_IMPORT && isMaterialXDrop(files)) await getEngine()?.importMaterialX(target!.materialId, files);
+          else showToast('Drop a MaterialX package here, or an image on a texture slot', 'error');
+        } catch (error) { showToast(`Could not read dropped files: ${(error as Error).message}`, 'error'); }
+      }}>
       <div className="mat-card">
         <i className="mat-ball" style={{ '--c': linearToHex(base) } as React.CSSProperties} />
         <div>
@@ -103,7 +122,7 @@ export function MaterialPanel() {
         <TextureSlots material={material} />
       </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
-    </>
+    </div>
   );
 }
 
@@ -206,6 +225,8 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
             }}
             onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
             onDrop={(e) => {
+              setDropTarget(null);
+              if (isMaterialXDrop(toPathedFiles(e.dataTransfer.files)) || Array.from(e.dataTransfer.items).some(i => i.webkitGetAsEntry?.()?.isDirectory)) return;
               e.preventDefault();
               e.stopPropagation();
               setDropTarget(null);

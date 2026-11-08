@@ -16,7 +16,7 @@ import {
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
-import { isMaterialXFile } from './droppedFiles';
+import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './materialDrop';
 
 export const MATERIALX_IMPORT = true;
 import { displacementHeightRange } from './displacementHeightRange';
@@ -301,11 +301,17 @@ export class ViewerEngine {
       { presetId: null, credit: null, sourceUrl: url });
   }
 
-  async loadFiles(files: PathedFile[]) {
-    if (MATERIALX_IMPORT && files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
+  async loadFiles(files: PathedFile[], drop?: { clientX: number; clientY: number }) {
+    if (MATERIALX_IMPORT && isMaterialXDrop(files)) {
+      const token = this.loadToken;
       const material = get().material;
-      if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
-      return this.importMaterialX(material.id, files);
+      const selected = material ? { materialId: material.id, objectId: get().selection.objectId, name: material.name } : null;
+      const hit = drop ? await this.pickMaterialTarget(drop.clientX, drop.clientY) : null;
+      if (token !== this.loadToken) return;
+      const target = materialDropTarget('viewport', hit, selected);
+      if (!target) return showToast('Drop on an object or select a material first', 'error');
+      if (hit) this.select(hit.objectId, hit.materialId);
+      return this.importMaterialX(target.materialId, files);
     }
     const pbrt = files.some(f => /\.pbrt(?:\.gz)?$/i.test(f.path));
     if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend), { presetId: null, credit: null, sourceUrl: null });
@@ -1207,6 +1213,23 @@ export class ViewerEngine {
     } catch (error) {
       if (request === this.pickRequest) showToast(`Could not select object: ${(error as Error).message}`, 'error');
     }
+  }
+
+  /** Reads the material at a drop position without changing the current selection. */
+  async pickMaterialTarget(clientX: number, clientY: number): Promise<MaterialDropTarget | null> {
+    const token = this.loadToken;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) / rect.width, y = (clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    let hit = await this.engine._pick(x, y);
+    for (let attempt = 0; hit === undefined && attempt < 3 && token === this.loadToken; attempt++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      hit = await this.engine._pick(x, y);
+    }
+    if (!hit || token !== this.loadToken) return null;
+    const objectId = this.pickObjects.get(hit.object), materialId = this.pickMaterials.get(hit.material);
+    const description = materialId ? this.materials.describe(materialId) : null;
+    return objectId && materialId && description ? { objectId, materialId, name: description.name } : null;
   }
 
   select(objectId: string | null, materialId?: string | null) {

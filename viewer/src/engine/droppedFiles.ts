@@ -14,8 +14,10 @@ export const isMaterialXFile = (name: string) => /\.(mtlx|zip)$/i.test(name);
 
 /** Reads dropped items, descending into folders. */
 export async function readDroppedItems(items: DataTransferItemList): Promise<PathedFile[]> {
-  const entries = Array.from(items).map((item) => item.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];
-  const out: PathedFile[] = [];
+  const sources = Array.from(items).map(item => ({ entry: item.webkitGetAsEntry?.(), file: item.getAsFile() }));
+  const entries = sources.map(s => s.entry).filter(Boolean) as FileSystemEntry[];
+  // Synthetic drops and browsers without directory entries still provide Files.
+  const out: PathedFile[] = sources.filter(s => !s.entry && s.file).map(s => ({ file: s.file!, path: s.file!.name }));
   const visit = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
     if (entry.isFile) {
       const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));

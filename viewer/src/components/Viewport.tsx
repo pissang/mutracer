@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronUp, Move, Pause, Play, Repeat as Loop, Uploa
 import { MATERIALX_IMPORT, ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
-import { hashModelPreset, setUi, useViewer } from '../store';
+import { hashModelPreset, setUi, showToast, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
 import { DebugOverlay } from './DebugOverlay';
 import { StatusBar } from './StatusBar';
@@ -14,6 +14,8 @@ import { Select } from './ui/controls';
 export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [dropName, setDropName] = useState<string | null>(null);
+  const drag = useRef({ active: false, pending: false, last: 0, revision: 0 });
   const picking = useViewer((s) => s.pickingFocus);
   const hidden = useViewer((s) => s.ui.hidden);
   const inspectorOpen = useViewer((s) => s.ui.right);
@@ -44,14 +46,30 @@ export function Viewport() {
     <section
       className="panel viewport"
       data-picking={picking || undefined}
-      onDragEnter={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
-      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
-      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
+      onDragEnter={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drag.current.active = true; setDragging(true); } }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        if (drag.current.pending || performance.now() - drag.current.last < 150) return;
+        drag.current.pending = true;
+        drag.current.last = performance.now();
+        const revision = drag.current.revision;
+        void getEngine()?.pickMaterialTarget(e.clientX, e.clientY).then((hit) => {
+          if (drag.current.active && revision === drag.current.revision) setDropName(hit?.name ?? useViewer.getState().material?.name ?? null);
+        }).catch(() => {}).finally(() => { drag.current.pending = false; });
+      }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { drag.current.active = false; drag.current.revision++; setDragging(false); setDropName(null); } }}
       onDrop={async (e) => {
         e.preventDefault();
+        drag.current.active = false;
+        drag.current.revision++;
         setDragging(false);
-        const files = await readDroppedItems(e.dataTransfer.items);
-        if (files.length) void getEngine()?.loadFiles(files);
+        setDropName(null);
+        const position = { clientX: e.clientX, clientY: e.clientY };
+        try {
+          const files = await readDroppedItems(e.dataTransfer.items);
+          if (files.length) await getEngine()?.loadFiles(files, position);
+        } catch (error) { showToast(`Could not open dropped files: ${(error as Error).message}`, 'error'); }
       }}
     >
       <canvas ref={canvasRef} className="viewport__canvas" aria-label="Path traced view. Drag to orbit, right-drag to pan, scroll to zoom, click to select." />
@@ -79,7 +97,8 @@ export function Viewport() {
       <LoadingCard />
       {dragging && (
         <div className="drop-layer">
-          <div><Upload size={28} />Drop to open<small>.glb · .gltf · .pbrt with its files · folder · .hdr{MATERIALX_IMPORT && ' · MaterialX .mtlx or .zip'}</small></div>
+          <div><Upload size={28} />Drop to open<small>.glb · .gltf · .pbrt with its files · folder · .hdr{MATERIALX_IMPORT && ' · MaterialX .mtlx or .zip'}</small>
+            {MATERIALX_IMPORT && <small>{dropName ? `MaterialX → ${dropName}` : 'MaterialX: drop on an object or select a material'}</small>}</div>
         </div>
       )}
     </section>
