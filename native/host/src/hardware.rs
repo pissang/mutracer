@@ -834,16 +834,22 @@ impl Resources {
             crate::GpuDevice::wait(device)?;
         }
         let started = std::time::Instant::now();
+        let mut blas_completed_wall_ms = metal_blas_wall_ms;
+        let mut tlas_submit_ms = 0.;
+        let mut tlas_completed_wall_ms = None;
         let completed_wall_ms = if let Some(elapsed) = metal_blas_wall_ms {
             // wgpu prohibits mixing raw and high-level encoding APIs. The raw
             // refit has completed; encode its dependent TLAS after that fence.
+            let tlas_started = std::time::Instant::now();
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.build_acceleration_structures(
                 std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
                 [&tlas],
             );
             queue.submit([encoder.finish()]);
+            tlas_submit_ms = tlas_started.elapsed().as_secs_f64() * 1000.;
             crate::GpuDevice::wait(device)?;
+            tlas_completed_wall_ms = Some(tlas_started.elapsed().as_secs_f64() * 1000.);
             Some(elapsed + started.elapsed().as_secs_f64() * 1000.0)
         } else {
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -851,14 +857,22 @@ impl Resources {
                 .build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
             let blas_submission = queue.submit([encoder.finish()]);
             wait_for_as(device, blas_submission)?;
+            if super::profiling::enabled() || profile {
+                blas_completed_wall_ms = Some(started.elapsed().as_secs_f64() * 1000.);
+            }
+            let tlas_started = std::time::Instant::now();
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.build_acceleration_structures(
                 std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
                 [&tlas],
             );
             queue.submit([encoder.finish()]);
+            if super::profiling::enabled() || profile {
+                tlas_submit_ms = tlas_started.elapsed().as_secs_f64() * 1000.;
+            }
             if profile {
                 crate::GpuDevice::wait(device)?;
+                tlas_completed_wall_ms = Some(tlas_started.elapsed().as_secs_f64() * 1000.);
                 Some(started.elapsed().as_secs_f64() * 1000.0)
             } else {
                 None
@@ -868,7 +882,7 @@ impl Resources {
             native_log!(
                 "{}",
                 serde_json::json!({"nativeGeometryAsProfile":{
-                    "changedBlasCount":changed.len(),"totalBlasCount":blases.len(),"blasCompletedWallMs":Option::<f64>::None,"blasTlasCompletedWallMs":completed_wall_ms,
+                    "changedBlasCount":changed.len(),"totalBlasCount":blases.len(),"blasCompletedWallMs":blas_completed_wall_ms,"tlasCpuSubmitMs":tlas_submit_ms,"tlasCompletedWallMs":tlas_completed_wall_ms,"blasTlasCompletedWallMs":completed_wall_ms,
                     "inputUploadBytes":plans.iter().map(|(_,_,data)|data.len()).sum::<usize>(),"method":if metal_blas_wall_ms.is_some() {"metal-refit"} else {"wgpu-rebuild"}
                 }})
             );
