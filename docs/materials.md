@@ -361,7 +361,7 @@ within the type and sampling limits below:
 - `noise2d/3d`, `fractal3d`, `cellnoise2d/3d`, `worleynoise2d/3d`,
   `ramplr`, `ramptb`, `ramp4`, `splitlr`, `splittb`;
 - `burn`, `dodge`, `screen`, `overlay`, `difference`, `plus`, `minus`;
-- `separate2/3/4`, `combine2/3/4`, `ifgreater`, `ifequal`, `rgbtohsv`, `hsvtorgb`.
+- `separate2/3/4`, `combine2/3/4`, `ifgreater`, `ifequal`, `rgbtohsv`, `hsvtorgb`, `hsvadjust`.
 
 Numeric types are `float`, `integer`, `boolean`, `color3/4` and `vector2/3/4`;
 not every node supports every type. Integer parameters are limited to ±16,777,216.
@@ -385,6 +385,8 @@ For `place2d`, `operationorder` defaults to `0` (SRT); `1` selects TRS.
 `luminance` returns a gray color with ACEScg coefficients by default and preserves
 alpha for `color4`. `range` preserves the sign when applying gamma, then optionally
 clamps to its output range. Extract indices must lie within the input's components.
+HSV conversions and `hsvadjust` accept `color3/4` and preserve alpha. `hsvadjust`
+adds hue and multiplies saturation/value by its `amount` vector.
 Increasing fractal octaves increases per-hit work. Split nodes use point samples
 rather than screen-derivative filtering, so thin boundaries can alias. `gltf_colorimage` exposes `outcolor` and `outa`;
 its type is `color4`. The viewer upgrades deprecated `swizzle` nodes to
@@ -458,6 +460,23 @@ can also be baked into ordinary material maps, those maps remain the
 fallback during compilation or rejection. Disney Principled and Simple Hair
 surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
-Subsurface, displacement and tangent graph inputs and lit emission graphs retain
+Subsurface and tangent graph inputs and lit emission graphs retain
 the limits described above. To load `.mtlx` files, use the viewer; the library's
 graph API accepts typed nodes and loaded textures.
+
+Scalar MaterialX displacement imports as a height map and takes effect on WebGPU.
+A single image with height scale/bias keeps its original pixels. Other networks
+that depend only on one UV set are baked at the largest input image dimensions,
+or 1024 × 1024 without images. The viewer uses WebGPU when available and a slower
+CPU fallback when no device is available. Baking runs in the background; larger
+images and more complex networks take more time and memory. The imported height
+map is saved with the cached model and participates in the same undo/reset step
+as the surface material.
+
+Baked heights use an 8-bit PNG normalized to their minimum and maximum. Rounding
+adds at most `(maximum - minimum) / 510` height units of error; UV sampling can
+also lose details smaller than a texel. Baking covers one 0–1 UV tile; repeating
+it can introduce seams. Networks using position, geometric normals, an implicit
+shading frame or both UV sets produce a diagnostic and leave displacement disabled.
+Vector displacement is unsupported. WebGL 2 keeps the surface material without
+applying displacement.
