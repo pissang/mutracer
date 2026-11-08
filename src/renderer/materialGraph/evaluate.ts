@@ -20,7 +20,7 @@ export interface GraphContext {
     worldToObject?: Numeric;
     sample?: (texture: Texture, uv: Numeric) => Numeric;
 }
-export function numeric(value: unknown): Numeric { return Array.isArray(value) ? [...value] : [value === 'world' ? 1 : typeof value === 'string' ? 0 : Number(value ?? 0)]; }
+export function numeric(value: unknown): Numeric { return Array.isArray(value) ? [...value] : [value === 'world' ? 1 : value === '' ? -1 : typeof value === 'string' ? 0 : Number(value ?? 0)]; }
 const zip = (a: Numeric, b: Numeric, f: (a: number, b: number) => number) => Array.from({ length: Math.max(a.length, b.length) }, (_, i) => f(a[i % a.length], b[i % b.length]));
 const normalize = (a: Numeric) => { const length = Math.hypot(...a); return a.map(v => v / length); };
 export function evaluateNode(node: GraphNode, a: Record<string, Numeric>, context: GraphContext = {}, texture?: Texture): Numeric {
@@ -66,10 +66,11 @@ export function evaluateNode(node: GraphNode, a: Record<string, Numeric>, contex
         case 'transformpoint':
         case 'transformvector':
         case 'transformnormal': {
-            if(a.fromspace[0]===a.tospace[0])return v;
+            if(!((a.fromspace[0]===0&&a.tospace[0]===1)||(a.fromspace[0]===1&&a.tospace[0]===0)))return c==='transformnormal'?normalize(v):v;
             const inverse=a.fromspace[0]===1, normal=c==='transformnormal';
             const m=(inverse !== normal ? context.worldToObject : context.objectToWorld) ?? [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
-            return [0,1,2].map(i=>v.reduce((sum,x,j)=>sum+x*m[normal ? i*4+j : j*4+i], c==='transformpoint' ? m[12+i] : 0));
+            const result=[0,1,2].map(i=>v.reduce((sum,x,j)=>sum+x*m[normal ? i*4+j : j*4+i], c==='transformpoint' ? m[12+i] : 0));
+            return normal?normalize(result):result;
         }
         case 'constant': return a.value;
         case 'texcoord': return a.index[0] === 1 ? (context.uv1 ?? [0, 0]) : (context.uv ?? [0, 0]);

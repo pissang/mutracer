@@ -147,7 +147,7 @@ export class MaterialGraphState {
             buffer[i * MATERIAL_FLOAT_COUNT + padding] = this.active.structures.findIndex(g => g.key === graph.key) + 1;
             buffer[i * MATERIAL_FLOAT_COUNT + padding + 1] = buffer.length / MATERIAL_FLOAT_COUNT + chunks.length;
             for (const param of params) {
-                const values = param instanceof Texture ? [textures.indexOf(param)] : Array.isArray(param) ? param : [param === undefined ? -1 : param === 'world' ? 1 : typeof param === 'string' ? 0 : Number(param)];
+                const values = param instanceof Texture ? [textures.indexOf(param)] : Array.isArray(param) ? param : [param === undefined ? -1 : param === 'world' ? 1 : param === '' ? -1 : typeof param === 'string' ? 0 : Number(param)];
                 chunks.push(values as number[]);
             }
         }

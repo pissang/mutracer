@@ -76,9 +76,10 @@ describe('MaterialX adjustment and geometry nodes',()=>{
         for(const [category,want] of [['transformpoint',[7,9,11]],['transformvector',[2,3,4]],['transformnormal',[0.5,1/3,0.25]]] as const){
             const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category,type:'vector3',inputs:{in:v([1,1,1]),fromspace:{type:'string',value:'object'},tospace:{type:'string',value:'world'}}}],terminal:{normal:{node:'n'}}}));
             expect(graph.diagnostics).toEqual([]);
-            expect(evaluateGraph(graph,{objectToWorld,worldToObject}).normal).toEqual(want);
+            const expected=category==='transformnormal'?want.map(x=>x/Math.hypot(...want)):want;
+            expect(evaluateGraph(graph,{objectToWorld,worldToObject}).normal).toEqual(expected);
             graph.parameters[graph.nodes[0].inputs.tospace.slot!]='object';
-            expect(evaluateGraph(graph,{objectToWorld,worldToObject}).normal).toEqual([1,1,1]);
+            expect(evaluateGraph(graph,{objectToWorld,worldToObject}).normal).toEqual(category==='transformnormal'?Array(3).fill(1/Math.sqrt(3)):[1,1,1]);
         }
     });
     it('keeps parameter edits out of structural hashes',()=>{

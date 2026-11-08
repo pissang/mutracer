@@ -164,8 +164,9 @@ async function run() {
             const start = performance.now(), generated = generateGraph(graph, backend), codegenMs = performance.now() - start;
             material.graph = test.graph;
             let lastBeat=performance.now(),maxEventLoopGapMs=0;const heartbeat=setInterval(()=>{const now=performance.now();maxEventLoopGapMs=Math.max(maxEventLoopGapMs,now-lastBeat);lastBeat=now;},10);
-            const firstMs = await settle(true);maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);clearInterval(heartbeat);
+            const firstMs = await settle(true);maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);const maxCompileEventLoopGapMs=maxEventLoopGapMs;
             const diagnostics = engine.getDiagnostics(), pixels = (await render.readPixels('hdr')).data.slice();
+            maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);clearInterval(heartbeat);
             material.graph = undefined;
             material.emissionColor = expected as [
                 number,
@@ -181,7 +182,7 @@ async function run() {
                 finite &&= Number.isFinite(pixels[i]);
             }
             await fetch(`/evidence/${backend}-${test.name}.f32`, { method: 'POST', body: pixels });
-            const row = { name: test.name, nodes: graph.nodes.length, hash: graph.hash, codegenMs, generatedBytes: generated.source.length, firstMs, maxEventLoopGapMs, expected, maxError, finite, passed: finite && maxError < 0.003, shader: diagnostics?.shaderCompilation, compilation: diagnostics?.materialGraphs?.compilation };
+            const row = { name: test.name, nodes: graph.nodes.length, hash: graph.hash, codegenMs, generatedBytes: generated.source.length, firstMs, maxCompileEventLoopGapMs, maxEventLoopGapMs, expected, maxError, finite, passed: finite && maxError < 0.003, shader: diagnostics?.shaderCompilation, compilation: diagnostics?.materialGraphs?.compilation };
             rows.push(row);
             await fetch(`/evidence/${backend}-matrix-partial.json`, { method: 'POST', body: JSON.stringify(rows, null, 2) });
         }

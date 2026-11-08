@@ -110,7 +110,8 @@ export function generateGraph(graph: NormalizedGraph, backend: Backend, name = '
                 const normal=c==='transformnormal';
                 const toWorld=normal?'transpose(mx_w2l)':'mx_l2w', toObject=normal?'transpose(mx_l2w)':'mx_w2l';
                 const transform = (m:string) => `(${m} * ${vec(4, `${a.in}, ${c==='transformpoint'?'1.0':'0.0'}`)}).xyz`;
-                expr = select(`${a.fromspace} == ${a.tospace}`, a.in, select(`${a.fromspace} > 0.5`, transform(toObject), transform(toWorld))); break;
+                expr = select(`${a.fromspace} == 0.0 && ${a.tospace} == 1.0`, transform(toWorld), select(`${a.fromspace} == 1.0 && ${a.tospace} == 0.0`, transform(toObject), a.in));
+                if(normal)expr=`normalize(${expr})`;break;
             }
             case 'constant':
                 expr = a.value;
