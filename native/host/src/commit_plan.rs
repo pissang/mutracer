@@ -52,13 +52,23 @@ fn same_span(a: &Words, ao: usize, b: &Words, bo: usize, count: usize) -> Option
     Some(a.span(ao, count)? == b.span(bo, count)?)
 }
 
+/// Texture record stride: scene versions before 7 lack the trailing UDIM word.
+fn texture_words(w: &Words) -> usize {
+    if w.u(h::VERSION) < 7 { t::WORDS - 1 } else { t::WORDS }
+}
+
+/// Texture record word `k`, reading the UDIM word of older records as 0.
+fn texture_word(w: &Words, offset: usize, k: usize) -> usize {
+    if k < texture_words(w) { w.u(offset + k) } else { 0 }
+}
+
 /// Whether texture `index` has the same record and pixels in both descriptors.
 fn texture_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
     let (ao, bo) = (
-        a.u(h::TEXTURE_OFFSET) + index * t::WORDS,
-        b.u(h::TEXTURE_OFFSET) + index * t::WORDS,
+        a.u(h::TEXTURE_OFFSET) + index * texture_words(a),
+        b.u(h::TEXTURE_OFFSET) + index * texture_words(b),
     );
-    if (0..t::WORDS).any(|k| k != t::PIXELS && a.u(ao + k) != b.u(bo + k)) {
+    if (0..t::WORDS).any(|k| k != t::PIXELS && texture_word(a, ao, k) != texture_word(b, bo, k)) {
         return Some(false);
     }
     let texels =
@@ -582,7 +592,7 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
         if reference == 0 {
             return Some((0, 0, &[]));
         }
-        let to = b.u(h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS;
+        let to = b.u(h::TEXTURE_OFFSET) + (reference - 1) * texture_words(b);
         if b.u(to + t::STORAGE) != 1 {
             return None;
         }
@@ -773,5 +783,35 @@ mod tests {
         assert!(validate_changed(&invalid, &hints).is_err());
         // A hint is trusted: element scans of hinted records are skipped.
         assert!(validate_changed(&invalid, &vec![1; hints.len()]).is_ok());
+    }
+
+    #[test]
+    fn pre_udim_texture_records_compare_by_their_own_stride() {
+        // The same 1x1 texture as a 12-word v6 record and a 13-word v7 record.
+        let scene = |version: u32, udim: u32| {
+            let mut bytes = input();
+            let offset = bytes.len() / 4;
+            let words = if version < 7 { t::WORDS - 1 } else { t::WORDS };
+            let mut record = vec![0u32; words];
+            record[t::WIDTH] = 1;
+            record[t::HEIGHT] = 1;
+            record[t::PIXELS] = (offset + words) as u32;
+            if version >= 7 {
+                record[t::UDIM] = udim;
+            }
+            for value in record.iter().chain(&[u32::MAX]) {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            set(&mut bytes, h::VERSION, version);
+            set(&mut bytes, h::TEXTURE_COUNT, 1);
+            set(&mut bytes, h::TEXTURE_OFFSET, offset as u32);
+            let length = (bytes.len() / 4) as u32;
+            set(&mut bytes, h::LENGTH, length);
+            bytes
+        };
+        let (v6, v7, udim) = (scene(6, 0), scene(7, 0), scene(7, 1));
+        assert_eq!(texture_unchanged(&Words(&v6), &Words(&v7), 0), Some(true));
+        assert_eq!(texture_unchanged(&Words(&v7), &Words(&v6), 0), Some(true));
+        assert_eq!(texture_unchanged(&Words(&v6), &Words(&udim), 0), Some(false));
     }
 }
