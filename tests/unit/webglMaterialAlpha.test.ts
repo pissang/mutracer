@@ -5,11 +5,12 @@ import {createSphereGeometry} from '../../src/util/commonGeometry';
 import Texture from '../../src/scene/Texture';
 import MaterialTable from '../../src/renderer/MaterialTable';
 import WebGLRayTracePass from '../../src/renderer/WebGLRayTracePass';
+import {MaterialGraphState} from '../../src/renderer/materialGraph/state';
 
 // Exercise the pass's actual specialization boundary without a GPU context.
 function updateConstants(materials: OpenPBRMaterial[]) {
   const setDefines = vi.fn();
-  const receiver = {_tracePasses: [{setDefines}], _bevelSamples: 4};
+  const receiver = {graphs:new MaterialGraphState('webgl'), _tracePasses: [{setDefines}], _bevelSamples: 4};
   const method = (WebGLRayTracePass.prototype as unknown as {
     _updateMaterialConstants: (materials: OpenPBRMaterial[], table: MaterialTable, geometry: Geometry) => void
   })._updateMaterialConstants;

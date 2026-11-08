@@ -30,6 +30,8 @@ export interface MaterialGraphOptions {
 export interface MaterialGraphDiagnostic {
     /** Stable machine-readable category. */ code: string;
     /** Human-readable cause. */ message: string;
+    /** Material aovId when reported by an engine. Default undefined. */
+    materialId?: number;
     /** Authored node ID, if applicable. Default undefined. */ node?: string;
     /** Input/output/terminal port, if applicable. Default undefined. */ port?: string;
 }

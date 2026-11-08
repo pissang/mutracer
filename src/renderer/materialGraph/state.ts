@@ -14,7 +14,7 @@ export interface GraphPlan {
 const empty = (): GraphPlan => ({ key: '', graphs: [], structures: [] });
 export interface MaterialGraphCompilationState {
     /** Latest requested revision, initially zero. */ revision: number;
-    /** Installed revision, initially zero. */ installedRevision: number;
+    /** Latest fully valid installed revision, initially zero. */ installedRevision: number;
     /** idle before graphs; compiling includes debounce; ready or failed afterwards. */ status: 'idle' | 'compiling' | 'ready' | 'failed';
     /** Located graph or driver failures. Default empty. */ diagnostics: MaterialGraphDiagnostic[];
     /** Last installed graph program measurements; browser driver stages are combined. Default undefined. */
@@ -41,6 +41,7 @@ export class MaterialGraphState {
     diagnostics: MaterialGraphDiagnostic[] = [];
     private readyAt = 0;
     private compileFailed = false;
+    private constantFallback = new Set<OpenPBRMaterial>();
     private sourceRevisions: {
         graph: OpenPBRMaterial['graph'];
         revision: number | undefined;
@@ -50,17 +51,22 @@ export class MaterialGraphState {
     request(materials: OpenPBRMaterial[]) {
         this.materials = materials;
         this.compileFailed = false;
+        this.constantFallback.clear();
         const diagnostics: MaterialGraphDiagnostic[] = [];
         const previousGraphs = new Map((this.active.materials ?? []).map((m,i) => [m,this.active.graphs[i]]));
         const graphs = materials.map((material, index) => {
             if (!material.graph)
                 return undefined;
             const graph = normalizeGraph(material.graph, this.backend, this.capabilities);
-            if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal)))
+            if (!material.unlit && (['emissionColor', 'emissionLuminance'].some(port => port in graph.terminal) || material.emissionLuminance > 0 && ['coatColor', 'coatWeight'].some(port => port in graph.terminal))) {
                 graph.diagnostics.push({ code: 'unsupported-emission-graph', message: 'Graph emission and graph coat absorption on emissive surfaces currently require an unlit material.' });
-            diagnostics.push(...graph.diagnostics);
+                // A formerly valid unlit graph cannot remain installed after
+                // switching to an unsupported lit-emitter context.
+                this.constantFallback.add(material);
+            }
+            diagnostics.push(...graph.diagnostics.map(d => ({...d,materialId:material.aovId})));
             // Preserve the successful graph for this slot after validation failure.
-            return graph.diagnostics.length ? (this.active.materials ? previousGraphs.get(material) : this.active.graphs[index]) : graph;
+            return this.constantFallback.has(material) ? undefined : graph.diagnostics.length ? (this.active.materials ? previousGraphs.get(material) : this.active.graphs[index]) : graph;
         });
         const structures = Array.from(new Map(graphs.filter((g): g is NormalizedGraph => !!g && !!Object.keys(g.terminal).length).map(g => [g.key, g])).values()).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
         const key = structures.map(g => g.key).join('\n');
@@ -89,7 +95,7 @@ export class MaterialGraphState {
             return false;
         const changed = plan.key !== this.active.key || plan.graphs.some((g, i) => g?.key !== this.active.graphs[i]?.key);
         this.active = this.requested;
-        this.installedRevision = revision;
+        if(!this.diagnostics.length)this.installedRevision = revision;
         if (changed)
             this.generation++;
         this.status = this.diagnostics.length ? 'failed' : plan.key ? 'ready' : 'idle';
@@ -118,6 +124,7 @@ export class MaterialGraphState {
         const chunks: number[][] = [];
         const activeGraphs = new Map((this.active.materials ?? []).map((m,i) => [m,this.active.graphs[i]]));
         for (let i = 0; i < this.materials.length; i++) {
+            if(this.constantFallback.has(this.materials[i]))continue;
             const graph = this.active.materials ? activeGraphs.get(this.materials[i]) : this.active.graphs[i];
             if (!graph)
                 continue;

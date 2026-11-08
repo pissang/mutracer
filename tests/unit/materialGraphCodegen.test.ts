@@ -5,6 +5,7 @@ import { evaluateGraph } from '../../src/renderer/materialGraph/evaluate.js';
 import { generateGraph } from '../../src/renderer/materialGraph/codegen.js';
 import { materialGraphShader } from '../../src/renderer/materialGraph/shader.js';
 import { MaterialGraphState } from '../../src/renderer/materialGraph/state.js';
+import {MATERIAL_FLOAT_COUNT} from '../../src/renderer/materialLayoutSchema.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 const f = (value: number): MaterialGraphInput => ({ type: 'float', value });
 const v = (value: number[]): MaterialGraphInput => ({ type: value.length === 2 ? 'vector2' : value.length === 3 ? 'vector3' : 'vector4', value });
@@ -88,6 +89,21 @@ describe('MaterialX numeric semantics', () => {
         const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph:valid}),new OpenPBRMaterial({graph:invalid})]);
         expect(state.status).toBe('compiling');expect(state.requested.structures).toHaveLength(1);
         expect(state.install(state.requested,state.revision)).toBe(true);expect(state.active.graphs[0]).toBeDefined();expect(state.active.graphs[1]).toBeUndefined();expect(state.status).toBe('failed');
+    });
+    it('does not report a rejected authored graph as installed',()=>{
+        const graph=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
+        const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState('webgpu');
+        state.request([material]);state.install(state.requested,state.revision);const installed=state.installedRevision;
+        graph.setNode({id:'a',category:'noise3d',type:'float'});state.request([material]);
+        expect(state.status).toBe('failed');expect(state.installedRevision).toBe(installed);expect(state.revision).toBeGreaterThan(installed);expect(state.diagnostics[0].materialId).toBe(material.aovId);
+    });
+    it('uses constants when a previously valid graph enters an unsupported material context',()=>{
+        const graph=new MaterialGraph({nodes:[{id:'c',category:'constant',type:'color3'}],terminal:{emissionColor:{node:'c'}}});
+        const material=new OpenPBRMaterial({graph,unlit:true}),state=new MaterialGraphState('webgpu');state.request([material]);state.install(state.requested,state.revision);
+        expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[]).length).toBeGreaterThan(MATERIAL_FLOAT_COUNT);
+        material.unlit=false;state.request([material]);
+        expect(state.requested.graphs[0]).toBeUndefined();expect(state.diagnostics[0].code).toBe('unsupported-emission-graph');
+        expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
     });
     it('keeps old parameters through compilation and rejects obsolete revisions', () => {
         const state = new MaterialGraphState('webgpu'), a = new MaterialGraph({ nodes: [{ id: 'a', category: 'constant', type: 'float', inputs: { value: f(0.2) } }], terminal: { specularRoughness: { node: 'a' } } });

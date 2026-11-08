@@ -1153,7 +1153,7 @@ class WGPURayTracePass {
           },
           bake
         );
-        code = materialGraphShader(code,shader.graphPlan,'webgpu');
+        code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan,'webgpu');
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
         const moduleStartedAt = shaderCompilationNow();
@@ -1751,6 +1751,11 @@ class WGPURayTracePass {
 
   getDiagnostics() {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
+    const materialGraphs = this.graphs.diagnosticsState;
+    if((this._lightTracing || this._photonMapping) && materialGraphs.topologyCount) {
+      materialGraphs.status = 'failed';
+      materialGraphs.diagnostics.push({code:'unsupported-transport',message:'Material graphs currently use the constant material fallback with light tracing or photon mapping.'});
+    }
     return {
       textureAtlas: atlas,
       materialTextures: {
@@ -1763,7 +1768,7 @@ class WGPURayTracePass {
         })
       },
       shaderCompilation: this._requestedVariant?.diagnostics,
-      materialGraphs: this.graphs.diagnosticsState,
+      materialGraphs,
       lightSampling: {
         emissiveTriangles: this._emissiveTriangles.length,
         activeChoices: this._rtUniform.views.lightChoiceCount[0],
