@@ -27,8 +27,8 @@ export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBi
   lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||defaultPhotonMapPhotons(width,height),
   initialRadius:settings.photonMapRadius||Math.max(bounds[3]*.03,1e-4),
   perCasterRadius:settings.photonMapRadius||Math.max(maximumCasterRadius*.03,1e-4),
-  lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections,true,false,!!features.compactVertices,!!features.independentTextures):'',
-  photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections,true,false,!!features.compactVertices,!!features.independentTextures):'',
+  lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage):'',
+  photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage):'',
   composeShader:causticBufferCompositeCompute,gridShader:flags&4?photonGridCompute:'',accumulateShader:causticAccumulateCompute};
  return {metadata,uniform,distribution:new Uint8Array(distribution.buffer),lighting:new Uint8Array(lighting.buffer)};
 }
