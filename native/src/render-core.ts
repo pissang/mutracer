@@ -110,7 +110,8 @@ export function syncNativeScene(bytes: Uint8Array, token: number): Uint8Array {
 export function acceptNativeScene(token: number): Uint8Array { return acceptScene(token); }
 import {receiveNativeSyncHints as receiveSyncHints} from './scene-sync.js';
 export function receiveNativeSyncHints(bytes: Uint8Array, token: number): Uint8Array { return receiveSyncHints(bytes, token); }
-export function releaseNativeScene(token: number): Uint8Array { return releaseScene(token); }
+import {discardSceneUpdates} from './scene-core.js';
+export function releaseNativeScene(token: number): Uint8Array { discardSceneUpdates(token); return releaseScene(token); }
 
 import {sceneLightListParameters as prepareLightList} from './scene-core.js';
 export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareLightList(bytes, token); }

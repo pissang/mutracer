@@ -277,8 +277,13 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   try { return buildSceneParameters(bytes, token); }
   catch (error) { retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error);}
 }
+// Discard private CPU candidates when a preparation is cancelled or rejected.
+export function discardSceneUpdates(token: number): void {
+  pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometryAppends.delete(token);
+  pendingGeometry.delete(token); transformStages.delete(token); geometryStages.delete(token);
+}
 export function releaseSceneParameters(token: number): Uint8Array {
-  releaseCompactKernel(token); aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  releaseCompactKernel(token); aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometryAppends.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -1666,7 +1671,7 @@ export function nativeTransformBegin(bytes: Uint8Array, token: number): Uint8Arr
     const words = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     return words[0] === 5 ? prepareNativeGeometryAppend(bytes, token) : prepareTransformUpdate(bytes, token, true);
   }
-  catch (error) {transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_BEGIN, error);}
+  catch (error) {pendingGeometryAppends.delete(token); transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_BEGIN, error);}
 }
 function nativeGeometryJobsPacket(build: SceneSources): Uint8Array {
   const records: number[][] = [], parts: Uint8Array[] = [];
@@ -1688,6 +1693,7 @@ function nativeGeometryJobsPacket(build: SceneSources): Uint8Array {
 function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Array {
   const state = retainedScenes.get(token);
   if (!state) throw new Error('Missing retained append state');
+  pendingGeometryAppends.delete(token); pendingTransforms.delete(token);
   preparationMark('append.begin');
   const descriptor = bytes.subarray(16);
   const u = new Uint32Array(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength / 4);
@@ -1899,7 +1905,7 @@ export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Ar
     if (!stage || !state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
     const tlas = state.hardware ? linearTlas(stage.instances, state.hardware) : packBuiltTLAS(stage.instances, state.blases, builtBvhs(bytes, 1)[0]);
     const output = packTransformUpdate(stage, tlas, token); transformStages.delete(token); return output;
-  } catch (error) {transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_FINISH, error);}
+  } catch (error) {pendingGeometryAppends.delete(token); transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_FINISH, error);}
 }
 export function nativeGeometryBegin(bytes: Uint8Array, token: number): Uint8Array {
   try {return prepareGeometryUpdate(bytes, token, true);}
