@@ -1,0 +1,78 @@
+#usda 1.0
+(
+    defaultPrim = "Mesh"
+    upAxis = "Y"
+)
+def Mesh "Mesh" (
+    prepend apiSchemas = ["MaterialBindingAPI"]
+) {
+    point3f[] points = [(-1,-1,0),(1,-1,0),(-1,1,0),(1,1,0)]
+    int[] faceVertexCounts = [3,3]
+    int[] faceVertexIndices = [0,1,2,2,1,3]
+    uniform token subdivisionScheme = "none"
+    normal3f[] normals = [(0,0,1),(0,0,1),(0,0,1),(0,0,1)] (interpolation = "vertex")
+    texCoord2f[] primvars:st = [(0,0),(1,0),(0,1),(1,1)] (interpolation = "vertex")
+    rel material:binding = </Materials/Open>
+}
+def Scope "Materials" {
+    def Material "Open" {
+        color3f inputs:tint = (0.2,0.6,0.9)
+        float inputs:gain.timeSamples = {1: 0.3, 2: 0.7}
+        token outputs:mtlx:surface.connect = </Materials/Open/Surface.outputs:out>
+        def Shader "Surface" {
+            uniform token info:id = "ND_open_pbr_surface_surfaceshader"
+            color3f inputs:base_color.connect = </Materials/Open/Network.outputs:color>
+            float inputs:specular_roughness = 0.4
+            token outputs:out
+        }
+        def NodeGraph "Network" {
+            color3f inputs:tint.connect = </Materials/Open.inputs:tint>
+            float inputs:gain.connect = </Materials/Open.inputs:gain>
+            color3f outputs:color.connect = </Materials/Open/Network/Mix.outputs:out>
+            def Shader "UV" {
+                uniform token info:id = "ND_texcoord_vector2"
+                int inputs:index = 0
+                float2 outputs:out
+            }
+            def Shader "X" {
+                uniform token info:id = "ND_extract_vector2"
+                float2 inputs:in.connect = </Materials/Open/Network/UV.outputs:out>
+                int inputs:index = 0
+                float outputs:out
+            }
+            def Shader "Gain" {
+                uniform token info:id = "ND_multiply_float"
+                float inputs:in1.connect = </Materials/Open/Network/X.outputs:out>
+                float inputs:in2.connect = </Materials/Open/Network.inputs:gain>
+                float outputs:out
+            }
+            def Shader "Tint" {
+                uniform token info:id = "ND_constant_color3"
+                color3f inputs:value.connect = </Materials/Open/Network.inputs:tint>
+                color3f outputs:out
+            }
+            def Shader "Multiply" {
+                uniform token info:id = "ND_multiply_color3"
+                color3f inputs:in1.connect = </Materials/Open/Network/Tint.outputs:out>
+                color3f inputs:in2 = (0.5,0.8,0.5)
+                color3f outputs:out
+            }
+            def Shader "Mix" {
+                uniform token info:id = "ND_mix_color3"
+                color3f inputs:bg = (0.6,0.2,0.1)
+                color3f inputs:fg.connect = </Materials/Open/Network/Tint.outputs:out>
+                float inputs:mix.connect = </Materials/Open/Network/Gain.outputs:out>
+                color3f outputs:out
+            }
+        }
+    }
+}
+def DistantLight "Light" {
+    float inputs:intensity = 2
+    float inputs:angle = 0
+    bool inputs:normalize = true
+}
+def Camera "Camera" {
+    double3 xformOp:translate = (0,0,5)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}

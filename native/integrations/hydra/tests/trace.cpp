@@ -92,6 +92,8 @@ int main(int argc, char **argv) {
   if (stage->GetPrimAtPath(SdfPath("/Camera")))
     engine.SetCameraPath(SdfPath("/Camera"));
   UsdImagingGLRenderParams params;
+  if (std::getenv("MUTRACER_HYDRA_GRAPH_EDITS"))
+    params.frame = UsdTimeCode(1.);
   params.enableLighting = true;
   params.enableSceneMaterials = true;
   params.clearColor = GfVec4f(0);
@@ -214,6 +216,44 @@ int main(int argc, char **argv) {
       run("steady");
     } else
       run("initial");
+    if (std::getenv("MUTRACER_HYDRA_GRAPH_EDITS")) {
+      params.frame = UsdTimeCode(2.);
+      run("graph-parameter-animation");
+      auto material =
+          UsdShadeMaterial(stage->GetPrimAtPath(SdfPath("/Materials/Open")));
+      material.GetInput(TfToken("tint")).Set(GfVec3f(.8f, .3f, .1f));
+      run("graph-interface-value");
+      auto mix = UsdShadeShader(
+          stage->GetPrimAtPath(SdfPath("/Materials/Open/Network/Mix")));
+      auto multiply = UsdShadeShader(
+          stage->GetPrimAtPath(SdfPath("/Materials/Open/Network/Multiply")));
+      mix.GetInput(TfToken("fg"))
+          .ConnectToSource(multiply.GetOutput(TfToken("out")));
+      run("graph-connection");
+      auto inserted =
+          UsdShadeMaterial::Define(stage, SdfPath("/Materials/Inserted"));
+      auto surface =
+          UsdShadeShader::Define(stage, SdfPath("/Materials/Inserted/Surface"));
+      surface.CreateIdAttr(
+          VtValue(TfToken("ND_open_pbr_surface_surfaceshader")));
+      auto noise =
+          UsdShadeShader::Define(stage, SdfPath("/Materials/Inserted/Noise"));
+      noise.CreateIdAttr(VtValue(TfToken("ND_noise2d_color3")));
+      noise.CreateInput(TfToken("pivot"), SdfValueTypeNames->Float).Set(.5f);
+      auto color =
+          noise.CreateOutput(TfToken("out"), SdfValueTypeNames->Color3f);
+      surface.CreateInput(TfToken("base_color"), SdfValueTypeNames->Color3f)
+          .ConnectToSource(color);
+      surface
+          .CreateInput(TfToken("specular_roughness"), SdfValueTypeNames->Float)
+          .Set(.4f);
+      inserted.CreateSurfaceOutput(TfToken("mtlx"))
+          .ConnectToSource(
+              surface.CreateOutput(TfToken("out"), SdfValueTypeNames->Token));
+      UsdShadeMaterialBindingAPI::Apply(stage->GetPrimAtPath(SdfPath("/Mesh")))
+          .Bind(inserted);
+      run("graph-new-material");
+    }
     if (std::getenv("MUTRACER_HYDRA_COMPARE")) {
       engine.SetRendererSetting(TfToken("forceCpuOutput"), VtValue(1));
       run("cpu");

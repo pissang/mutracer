@@ -597,7 +597,20 @@ void Param::Record(uint32_t actual, uint32_t samples, double refineMs,
                 << ",\"triangles\":" << x.second.faces.size()
                 << ",\"instances\":" << x.second.instances.size() << '}';
         }
-    trace << "],\"dirtyPrims\":" << events.size()
+    size_t graphBytes = 0;
+    char graphError[2048] = {};
+    std::string graphDiagnostics = "null";
+    if (mt_engine_material_graph_diagnostics(engine, nullptr, 0, &graphBytes,
+                                             graphError,
+                                             sizeof graphError) == MT_OK) {
+      std::vector<char> bytes(graphBytes);
+      if (mt_engine_material_graph_diagnostics(
+              engine, bytes.data(), bytes.size(), &graphBytes, graphError,
+              sizeof graphError) == MT_OK)
+        graphDiagnostics.assign(bytes.begin(), bytes.end());
+    }
+    trace << "],\"materialGraphs\":" << graphDiagnostics
+          << ",\"dirtyPrims\":" << events.size()
           << ",\"predicted\":" << predicted << ",\"actual\":" << actual
           << ",\"submitMs\":" << submitMs << ",\"updateMs\":" << updateMs
           << ",\"refineMs\":" << refineMs << ",\"readHdrMs\":" << readHdrMs

@@ -1,6 +1,7 @@
 // Copyright 2026 MuTracer contributors. SPDX-License-Identifier: MIT
 #include "bridge.h"
 #include "pxr/base/gf/half.h"
+#include "pxr/base/js/json.h"
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/imaging/hio/image.h"
 #include "pxr/usd/ar/resolver.h"
@@ -126,7 +127,8 @@ static GfVec3f MaterialInput(HdMaterialNetwork2 const &network,
                    " cannot be reduced to a constant; using the authored fallback";
     if (warnings)
       warnings->push_back(message);
-    Warn(message);
+    else
+      Warn(message);
   }
   return value.value_or(Value(Input(node, key), fallback));
 }
@@ -212,7 +214,9 @@ std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network,
     set(MT_MAT_THIN_FILM_THICKNESS, GfVec3f(thickness, 0, 0));
     auto opacity = get("opacity", GfVec3f(1));
     set(MT_MAT_OPACITY, GfVec3f(opacity[0], 0, 0));
-  } else if (node->nodeTypeId == TfToken("UsdPreviewSurface")) {
+  } else if ((node->nodeTypeId == TfToken("UsdPreviewSurface") ||
+              node->nodeTypeId ==
+                  TfToken("ND_UsdPreviewSurface_surfaceshader"))) {
     struct Mapping {
       char const *name;
       uint32_t id;
@@ -244,9 +248,22 @@ std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &network,
       set(MT_MAT_BASE_METALNESS, GfVec3f(0));
       Warn("PreviewSurface specular workflow uses a peak-F0 IOR approximation");
     }
-  } else
-    Warn("unsupported surface node " + node->nodeTypeId.GetString() +
-         "; using OpenPBR defaults");
+  } else {
+    auto message = "unsupported surface node " + node->nodeTypeId.GetString() +
+                   "; using OpenPBR defaults";
+    if (warnings)
+      warnings->push_back(message);
+    else
+      Warn(message);
+  }
+  auto specularWeight =
+      std::find_if(values.begin(), values.end(), [](auto const &p) {
+        return p.id == MT_MAT_SPECULAR_WEIGHT;
+      });
+  if (specularWeight != values.end() && specularWeight->value[0] == 0)
+    for (auto &p : values)
+      if (p.id == MT_MAT_SPECULAR_IOR && p.value[0] <= 0)
+        p.value = GfVec3f(1.5f, 0, 0);
   return values;
 }
 static TextureData ReadTextureImage(std::string const &file, bool srgb) {
@@ -425,15 +442,16 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
   auto n = materials.find(path);
   HdMaterialNetwork2 empty;
   auto const &network = n == materials.end() ? empty : n->second;
-  for (auto const &p : ConvertMaterial(network)) {
+  std::vector<std::string> fallbackWarnings;
+  for (auto const &p : ConvertMaterial(network, &fallbackWarnings)) {
     if (p.boolean)
       Check(mt_scene_material_set_uint(scene, handle, p.id, p.value[0] != 0,
                                        error, sizeof error),
             error);
     else
-      Check(mt_scene_material_set_float(scene, handle, p.id, p.value[0],
-                                        p.value[1], p.value[2], error,
-                                        sizeof error),
+      Check(mt_scene_material_set_float(
+                scene, handle, p.id, p.value[0], p.size > 1 ? p.value[1] : 0,
+                p.size > 2 ? p.value[2] : 0, error, sizeof error),
             error);
   }
   Check(mt_scene_material_set_uint(scene, handle, MT_MAT_DOUBLE_SIDED,
@@ -443,10 +461,12 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
                                     error, sizeof error),
         error);
   auto root = Surface(network);
-  bool preview = root && root->nodeTypeId == TfToken("UsdPreviewSurface");
-  bool standard = root &&
-                  (root->nodeTypeId == TfToken("ND_standard_surface_surfaceshader") ||
-                   root->nodeTypeId == TfToken("standard_surface"));
+  bool preview = root && (root->nodeTypeId == TfToken("UsdPreviewSurface") ||
+                          root->nodeTypeId ==
+                              TfToken("ND_UsdPreviewSurface_surfaceshader"));
+  bool standard = root && (root->nodeTypeId ==
+                               TfToken("ND_standard_surface_surfaceshader") ||
+                           root->nodeTypeId == TfToken("standard_surface"));
   float cutoff =
       preview ? Value(Input(*root, "opacityThreshold"), GfVec3f(0))[0] : 0;
   Check(mt_scene_material_set_float(scene, handle, MT_MAT_ALPHA_CUTOFF, cutoff,
@@ -470,20 +490,139 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
       {"emission_color", "emission_color", "emissiveColor", MT_MAT_EMISSIVE_MAP, true},
       {"geometry_opacity", "opacity", "opacity", MT_MAT_ALPHA_MAP, false},
       {"geometry_normal", "normal", "normal", MT_MAT_NORMAL_MAP, false},
-      {"geometry_coat_normal", "coat_normal", "__none", MT_MAT_COAT_NORMAL_MAP, false},
-      {"coat_weight", "coat", "clearcoat", MT_MAT_COAT_WEIGHT_MAP, false},
-      {"coat_roughness", "coat_roughness", "clearcoatRoughness", MT_MAT_COAT_ROUGHNESS_MAP,
+      {"geometry_coat_normal", "coat_normal", "__none", MT_MAT_COAT_NORMAL_MAP,
        false},
-      {"specular_color", "specular_color", "__none", MT_MAT_SPECULAR_COLOR_MAP, true},
-      {"specular_weight", "specular", "__none", MT_MAT_SPECULAR_WEIGHT_MAP, false},
-      {"transmission_weight", "transmission", "__none", MT_MAT_TRANSMISSION_MAP, false},
+      {"coat_weight", "coat", "clearcoat", MT_MAT_COAT_WEIGHT_MAP, false},
+      {"coat_roughness", "coat_roughness", "clearcoatRoughness",
+       MT_MAT_COAT_ROUGHNESS_MAP, false},
+      {"specular_color", "specular_color", "__none", MT_MAT_SPECULAR_COLOR_MAP,
+       true},
+      {"specular_weight", "specular", "__none", MT_MAT_SPECULAR_WEIGHT_MAP,
+       false},
+      {"transmission_weight", "transmission", "__none", MT_MAT_TRANSMISSION_MAP,
+       false},
       {"fuzz_color", "sheen_color", "__none", MT_MAT_FUZZ_COLOR_MAP, true},
-      {"fuzz_roughness", "sheen_roughness", "__none", MT_MAT_FUZZ_ROUGHNESS_MAP, false}};
+      {"fuzz_roughness", "sheen_roughness", "__none", MT_MAT_FUZZ_ROUGHNESS_MAP,
+       false}};
+  auto graph = BuildMaterialGraph(
+      network,
+      [&](std::string const &file, bool srgb, uint32_t wrapS, uint32_t wrapT) {
+        std::string key = "graph:" + TextureReferenceKey(file) + ":" +
+                          std::to_string(srgb) + ":" + std::to_string(wrapS) +
+                          ":" + std::to_string(wrapT);
+        auto version = TextureAssetVersion(file);
+        auto &texture = textureHandles[key];
+        if (!texture || textureVersions[key] != version) {
+          auto data = ReadTexture(file, srgb);
+          data.desc.flip_y = 1;
+          data.desc.wrap_s = wrapS;
+          data.desc.wrap_t = wrapT;
+          if (data.tileData.empty()) {
+            data.desc.pixels = srgb ? static_cast<void *>(data.bytes.data())
+                                    : static_cast<void *>(data.floats.data());
+            data.desc.pixel_bytes =
+                srgb ? data.bytes.size() : data.floats.size() * sizeof(float);
+          } else {
+            for (size_t i = 0; i < data.tileData.size(); ++i) {
+              auto &tile = data.tileData[i];
+              tile.desc.pixels = srgb ? static_cast<void *>(tile.bytes.data())
+                                      : static_cast<void *>(tile.floats.data());
+              tile.desc.pixel_bytes =
+                  srgb ? tile.bytes.size() : tile.floats.size() * sizeof(float);
+              data.tiles[i] = tile.desc;
+            }
+            data.desc.tiles = data.tiles.data();
+            data.desc.tile_count = data.tiles.size();
+          }
+          if (texture)
+            Check(mt_scene_set_texture(scene, texture, &data.desc, error,
+                                       sizeof error),
+                  error);
+          else
+            Check(mt_scene_add_texture(scene, &data.desc, &texture, error,
+                                       sizeof error),
+                  error);
+          textureVersions[key] = version;
+        }
+        return texture;
+      },
+      path);
+  for (auto const &p : graph.values) {
+    auto defaults = OpenPbrDefaults();
+    auto field = std::find_if(defaults.begin(), defaults.end(),
+                              [&](auto const &x) { return x.id == p.first; });
+    if (field != defaults.end() && field->boolean)
+      Check(mt_scene_material_set_uint(scene, handle, p.first, p.second[0] != 0,
+                                       error, sizeof error),
+            error);
+    else {
+      int size = field == defaults.end() ? 1 : field->size;
+      Check(mt_scene_material_set_float(
+                scene, handle, p.first, p.second[0], size > 1 ? p.second[1] : 0,
+                size > 2 ? p.second[2] : 0, error, sizeof error),
+            error);
+    }
+  }
+  for (auto const &p : graph.uintValues)
+    Check(mt_scene_material_set_uint(scene, handle, p.first, p.second, error,
+                                     sizeof error),
+          error);
+  for (auto const &warning : graph.warnings)
+    Warn(warning);
+  if (trace) {
+    JsArray warnings;
+    for (auto const &warning : graph.warnings)
+      warnings.emplace_back(warning);
+    {
+      JsWriter writer(trace, JsWriter::Style::Compact);
+      JsWriteValue(
+          &writer,
+          JsValue(JsObject{
+              {"material", JsValue(path.GetString())},
+              {"graphNodes", JsValue(uint64_t(graph.nodes.size()))},
+              {"graphTerminals", JsValue(uint64_t(graph.terminals.size()))},
+              {"graphWarnings", JsValue(warnings)}}));
+    }
+    trace << "\n";
+    trace.flush();
+  }
+
+  if (graph.terminals.empty())
+    Check(mt_scene_material_set_graph(scene, handle, nullptr, error,
+                                      sizeof error),
+          error);
+  else {
+    // Remove the old direct map approximation when the network evaluates it.
+    if (graph.warnings.empty())
+      for (auto const &slot : slots)
+        Check(mt_scene_material_set_texture(scene, handle, slot.id, 0, error,
+                                            sizeof error),
+              error);
+    mt_scene_material_graph_desc desc;
+    mt_scene_material_graph_desc_default(&desc);
+    desc.nodes = graph.nodes.data();
+    desc.node_count = graph.nodes.size();
+    desc.inputs = graph.inputs.data();
+    desc.input_count = graph.inputs.size();
+    desc.terminals = graph.terminals.data();
+    desc.terminal_count = graph.terminals.size();
+    desc.parameters = graph.parameters.data();
+    desc.parameter_count = graph.parameters.size() / 4;
+    desc.textures = graph.textures.data();
+    desc.texture_count = graph.textures.size();
+    std::vector<char const *> authors;
+    for (auto const &id : graph.authorIds)
+      authors.push_back(id.c_str());
+    desc.author_ids = authors.data();
+    Check(
+        mt_scene_material_set_graph(scene, handle, &desc, error, sizeof error),
+        error);
+  }
   for (auto const &slot : slots) {
     Check(mt_scene_material_set_texture(scene, handle, slot.id, 0, error,
                                         sizeof error),
           error);
-    if (!root)
+    if (!root || graph.warnings.empty())
       continue;
     auto inputName = preview ? slot.usd : standard ? slot.standard : slot.mx;
     auto c = root->inputConnections.find(TfToken(inputName));
@@ -693,7 +832,7 @@ void Param::ApplyMaterial(SdfPath const &path, bool doubleSided,
     }
   }
   materialAssetVersions[path] = MaterialAssetVersion(network);
-  if (!root)
+  if (!root || (!graph.terminals.empty() && graph.warnings.empty()))
     return;
   for (auto const &c : root->inputConnections) {
     bool handled = false;

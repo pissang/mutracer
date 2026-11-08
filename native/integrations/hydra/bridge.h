@@ -91,8 +91,24 @@ struct Property {
   bool boolean = false;
 };
 std::vector<Property> OpenPbrDefaults();
-std::vector<Property> ConvertMaterial(HdMaterialNetwork2 const &,
-                                      std::vector<std::string> *warnings = nullptr);
+std::vector<Property>
+ConvertMaterial(HdMaterialNetwork2 const &,
+                std::vector<std::string> *warnings = nullptr);
+struct MaterialGraphData {
+  std::vector<mt_graph_node> nodes;
+  std::vector<mt_graph_input> inputs;
+  std::vector<mt_graph_terminal> terminals;
+  std::vector<float> parameters;
+  std::vector<mt_scene_texture_id> textures;
+  std::vector<std::string> authorIds, warnings;
+  std::vector<std::pair<uint32_t, GfVec3f>> values;
+  std::vector<std::pair<uint32_t, uint32_t>> uintValues;
+};
+MaterialGraphData BuildMaterialGraph(
+    HdMaterialNetwork2 const &,
+    std::function<mt_scene_texture_id(std::string const &, bool, uint32_t,
+                                      uint32_t)> const &,
+    SdfPath const &authorRoot = SdfPath());
 struct TextureData {
   mt_scene_texture_desc desc{};
   std::vector<uint8_t> bytes;

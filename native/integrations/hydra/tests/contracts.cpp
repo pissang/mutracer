@@ -176,8 +176,92 @@ int main() {
   node.parameters[TfToken("base_color")] = VtValue(GfVec3f(.25f));
   values = ConvertMaterial(network, &warnings);
   Require(Find(values, MT_MAT_BASE_COLOR).value == GfVec3f(.25f) &&
-              !warnings.empty() && warnings.back().find("base_color") != std::string::npos,
+              !warnings.empty() &&
+              warnings.back().find("base_color") != std::string::npos,
           "procedural graph warns and uses the authored fallback");
+
+  auto noTexture = [](std::string const &, bool, uint32_t,
+                      uint32_t) -> mt_scene_texture_id { return 0; };
+  HdMaterialNetwork2 graphNetwork;
+  graphNetwork.terminals[HdMaterialTerminalTokens->surface] = {
+      SdfPath("/Material/Surface"), TfToken("out")};
+  graphNetwork.nodes[SdfPath("/Material/Surface")].nodeTypeId =
+      TfToken("ND_open_pbr_surface_surfaceshader");
+  graphNetwork.nodes[SdfPath("/Material/Surface")]
+      .inputConnections[TfToken("base_color")] = {
+      {SdfPath("/Material/Noise"), TfToken("out")}};
+  graphNetwork.nodes[SdfPath("/Material/Noise")].nodeTypeId =
+      TfToken("ND_noise3d_color3");
+  auto graph = BuildMaterialGraph(graphNetwork, noTexture);
+  Require(graph.warnings.empty() && graph.nodes.size() == 1 &&
+              graph.terminals.size() == 1,
+          "varying noise reaches canonical graph without approximation");
+  Require(graph.nodes[0].category == MT_GRAPH_CATEGORY_NOISE3D &&
+              graph.nodes[0].port_type == MT_GRAPH_PORT_TYPE_COLOR3,
+          "typed category maps to shared IDs");
+  Require(graph.authorIds[0] == "/Material/Noise",
+          "USD author paths survive normalization");
+  Require(std::any_of(graph.inputs.begin(), graph.inputs.end(),
+                      [](auto const &p) {
+                        return p.source_kind == MT_GRAPH_SOURCE_GEOMETRY &&
+                               p.source == MT_GRAPH_GEOMETRY_OBJECT_POSITION;
+                      }),
+          "implicit noise position uses the shared geometry default");
+  graphNetwork.nodes[SdfPath("/Material/Surface")].nodeTypeId =
+      TfToken("ND_standard_surface_surfaceshader");
+  graph = BuildMaterialGraph(graphNetwork, noTexture);
+  Require(!graph.nodes.empty(),
+          "official Standard Surface translation expands into the graph");
+  Require(std::find(graph.authorIds.begin(), graph.authorIds.end(),
+                    "/Material/Noise") != graph.authorIds.end(),
+          "translation retains the original upstream path");
+  auto uniformNetwork = graphNetwork;
+  uniformNetwork.nodes[SdfPath("/Material/Surface")].inputConnections.clear();
+  auto uniformGraph = BuildMaterialGraph(uniformNetwork, noTexture);
+  Require(uniformGraph.nodes.empty() && uniformGraph.terminals.empty() &&
+              !uniformGraph.values.empty(),
+          "uniform translation folds to constants without unreachable nodes");
+  auto invalidNetwork = graphNetwork;
+  invalidNetwork.nodes[SdfPath("/Material/Surface")].nodeTypeId =
+      TfToken("ND_open_pbr_surface_surfaceshader");
+  invalidNetwork.nodes[SdfPath("/Material/Surface")]
+      .parameters[TfToken("unsupported_surface_input")] = VtValue(.5f);
+  auto invalidGraph = BuildMaterialGraph(invalidNetwork, noTexture);
+  Require(!invalidGraph.warnings.empty() &&
+              std::any_of(invalidGraph.terminals.begin(),
+                          invalidGraph.terminals.end(),
+                          [](auto const &t) { return t.port == UINT32_MAX; }),
+          "nonzero unsupported literals preserve whole-graph fallback");
+  invalidNetwork.nodes[SdfPath("/Material/Surface")].parameters.clear();
+  invalidNetwork.nodes[SdfPath("/Material/Noise")].nodeTypeId =
+      TfToken("ND_add_color3");
+  invalidNetwork.nodes[SdfPath("/Material/Noise")]
+      .inputConnections[TfToken("in1")] = {
+      {SdfPath("/Material/Noise"), TfToken("out")}};
+  invalidGraph = BuildMaterialGraph(invalidNetwork, noTexture);
+  Require(std::any_of(invalidGraph.warnings.begin(),
+                      invalidGraph.warnings.end(),
+                      [](auto const &w) {
+                        return w.find("cycle") != std::string::npos;
+                      }),
+          "cycles remain diagnosed after reachability pruning");
+  HdMaterialNetwork2 gltfNetwork;
+  gltfNetwork.terminals[HdMaterialTerminalTokens->surface] = {
+      SdfPath("/Material/Surface"), TfToken("out")};
+  gltfNetwork.nodes[SdfPath("/Material/Surface")].nodeTypeId =
+      TfToken("ND_open_pbr_surface_surfaceshader");
+  gltfNetwork.nodes[SdfPath("/Material/Surface")]
+      .inputConnections[TfToken("base_color")] = {
+      {SdfPath("/Material/Image"), TfToken("outcolor")}};
+  gltfNetwork.nodes[SdfPath("/Material/Image")].nodeTypeId =
+      TfToken("ND_gltf_colorimage");
+  auto gltfGraph = BuildMaterialGraph(gltfNetwork, noTexture);
+  Require(gltfGraph.warnings.empty() && gltfGraph.nodes.size() == 1 &&
+              gltfGraph.nodes[0].category ==
+                  MT_GRAPH_CATEGORY_GLTF_COLORIMAGE &&
+              gltfGraph.nodes[0].port_type == MT_GRAPH_PORT_TYPE_COLOR4 &&
+              gltfGraph.terminals[0].output == MT_GRAPH_OUTPUT_OUTCOLOR,
+          "unsuffixed glTF multioutput nodedef retains typed color output");
   HdMeshTopology topology(TfToken("none"), TfToken("rightHanded"),
                           VtIntArray{4, 3}, VtIntArray{0, 1, 2, 3, 0, 3, 4});
   VtVec3fArray points = {GfVec3f(0, 0, 0), GfVec3f(1, 0, 0), GfVec3f(1, 1, 0),
