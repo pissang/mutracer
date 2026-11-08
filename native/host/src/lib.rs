@@ -1623,6 +1623,12 @@ impl GpuScene {
                     _ => {}
                 }
             }
+            if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
+                native_log!(
+                    "{}",
+                    json!({"nativeSceneBufferGrowth": {"resource": id, "oldBytes": old_size, "newBytes": size}})
+                );
+            }
             grown.push(*id);
         }
         if grown.is_empty() { return Ok(()); }
@@ -1677,12 +1683,18 @@ impl GpuScene {
         let Some(_current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
             return Ok(None);
         };
+        // Geometry refits carry changed BLAS writes but no metadata packet;
+        // append and transform packets can supply an updated layout.
+        let mut hardware_updates = updates.clone();
+        if hardware_updates.native_layout.is_none() {
+            hardware_updates.native_layout = self.scene.native_layout.clone();
+        }
         if updates.changed_blases.is_some() {
             let (capture, assets) = self
                 .retained
                 .as_ref()
                 .ok_or("Missing retained geometry")?
-                .hardware_geometry(updates)?;
+                .hardware_geometry(&hardware_updates)?;
             return with_error_scopes(
                 &self.gpu.device,
                 || -> Result<_> {
@@ -1744,7 +1756,7 @@ impl GpuScene {
             .retained
             .as_ref()
             .ok_or("Missing retained geometry")?
-            .hardware_geometry(updates)
+            .hardware_geometry(&hardware_updates)
             .map_err(|error| format!("Full scene commit required: {error}"))?;
         let device = &self.gpu.device;
         with_error_scopes(
