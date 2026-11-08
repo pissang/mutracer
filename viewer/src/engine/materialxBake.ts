@@ -17,6 +17,17 @@ const mode=(wrap:Texture['wrapS'])=>wrap==='repeat'?0:wrap==='clamp-to-edge'?1:2
 const wrap=(x:number,m:number)=>m===0?x-Math.floor(x):m===1?Math.max(0,Math.min(1,x)):1-Math.abs(1-(x-2*Math.floor(x/2)));
 const srgb=(x:number)=>x<=0.04045?x/12.92:Math.pow((x+0.055)/1.055,2.4);
 
+export function bakeImageInfo(images:readonly Pick<BakeImage,'width'|'height'|'srgb'|'wrapS'|'wrapT'>[]) {
+  const infos=new Float32Array(Math.max(8,images.length*8)),integers=new Uint32Array(infos.buffer);
+  let pixelCount=0;
+  images.forEach((image,i)=>{
+    infos.set([image.width,image.height,0,image.srgb?1:0,mode(image.wrapS),mode(image.wrapT),0,0],i*8);
+    // Pixel offsets are integers, also beyond Float32's consecutive range.
+    integers[i*8+2]=pixelCount;pixelCount+=image.width*image.height;
+  });
+  return {infos,pixelCount};
+}
+
 /** Same normalized, bilinear image semantics as graph rendering; color decoding
  * follows filtering. Images here have top-first rows and the viewer's flipY. */
 export function sampleBakeImage(image:BakeImage,uv:readonly number[]) {
@@ -52,7 +63,7 @@ export function bakeHeightCPU(description:BakeNodes,images:BakeImage[],width:num
 }
 
 const imageShader=`
-struct ImageInfo {size:vec2f,offset:f32,srgb:f32,modes:vec2f,padding:vec2f};
+struct ImageInfo {size:vec2f,offset:u32,srgb:f32,modes:vec2f,padding:vec2f};
 @group(0) @binding(0) var<storage,read> parameters:array<vec4f>;
 @group(0) @binding(1) var<storage,read> imageInfo:array<ImageInfo>;
 @group(0) @binding(2) var<storage,read> imagePixels:array<vec4f>;
@@ -105,9 +116,8 @@ export class HeightBaker {
     const fileSlots=new Set(normalized.nodes.flatMap(n=>n.inputs.file?.slot===undefined?[]:[n.inputs.file.slot]));
     const params=new Float32Array(Math.max(4,generated.parameters.length*4));
     generated.parameters.forEach((p,i)=>params.set(p instanceof Texture?[slots.get(p)??-1]:fileSlots.has(i)?[-1]:numeric(p),i*4));
-    const infos=new Float32Array(Math.max(8,images.length*8));let count=0;
-    for(const [i,[,image]] of imageList.entries()){infos.set([image.width,image.height,count,image.srgb?1:0,mode(image.wrapS),mode(image.wrapT),0,0],i*8);count+=image.width*image.height;}
-    const pixels=new Float32Array(Math.max(4,count*4));let offset=0;
+    const {infos,pixelCount}=bakeImageInfo(imageList.map(([,image])=>image));
+    const pixels=new Float32Array(Math.max(4,pixelCount*4));let offset=0;
     for(const [,image] of imageList){for(const p of image.pixels)pixels[offset++]=p/255;}
     const resources:GPUBuffer[]=[];
     const buffer=(data:Float32Array)=>{

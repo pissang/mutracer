@@ -2,11 +2,16 @@ import {describe,it,expect} from 'vitest';
 import {MaterialGraph} from '@meimu/mutracer';
 import {parseMaterialXGraph} from '../src/engine/materialxGraph';
 import {planDisplacement,quantizeHeight,type BakeImage} from '../src/engine/materialxDisplacement';
-import {bakeHeightCPU,sampleBakeImage} from '../src/engine/materialxBake';
+import {bakeHeightCPU,sampleBakeImage,bakeImageInfo} from '../src/engine/materialxBake';
 import {loadMaterialXDisplacement} from '../src/engine/materialxFiles';
 const doc=(nodes:string,height:string,scale='1')=>`<materialx version="1.39">${nodes}<standard_surface name="S" type="surfaceshader"/><displacement name="D" type="displacementshader"><input name="displacement" type="float" nodename="${height}"/><input name="scale" type="float" value="${scale}"/></displacement><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/><input name="displacementshader" type="displacementshader" nodename="D"/></surfacematerial></materialx>`;
 const image='<image name="h" type="float"><input name="file" type="filename" value="height.png"/></image>';
 describe('MaterialX height displacement',()=>{
+ it('packs exact image offsets beyond the consecutive Float32 integer range',()=>{
+  const metadata={width:4097,height:4097,srgb:false,wrapS:'repeat' as const,wrapT:'repeat' as const};
+  const {infos,pixelCount}=bakeImageInfo([metadata,{...metadata,width:1,height:1}]);
+  expect(new Uint32Array(infos.buffer)[10]).toBe(4097*4097);expect(pixelCount).toBe(4097*4097+1);
+ });
  it('maps an affine image without decoding or resampling the file',async()=>{
   const m=parseMaterialXGraph(doc(image+'<multiply name="gain" type="float"><input name="in1" type="float" nodename="h"/><input name="in2" type="float" value="2"/></multiply><subtract name="offset" type="float"><input name="in1" type="float" nodename="gain"/><input name="in2" type="float" value="0.25"/></subtract>','offset','0.1'));
   expect(m.displacement?.mode).toBe('direct');expect(m.warnings).toEqual([]);
