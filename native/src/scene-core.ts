@@ -363,7 +363,9 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
         return !material.unlit && !material.shadowCatcher && colorLuminance(materialEmission(material)) > 1e-8;
       }));
       emissive = state.emissiveCache.collect(bindings, ordered).map(triangle => ({...triangle}));
-      const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+      preparationMark('update.emissive.end');
+  const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  preparationMark('update.lighting.end');
       packLightingUniform(rt, lighting);
       records.push(resourceRecord(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, lighting.lightUniform.byteLength, 0, 0, 0, 0),
         resourceRecord(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, FORMAT.RGBA32_FLOAT));
@@ -950,7 +952,9 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
       const index = meshIndices.get(b.mesh) ?? -1; return index < 0 ? b : {...b, mesh: stage.meshes[index]};
     });
     emissive = state.emissiveCache.collect(bindings, state.ordered).map(triangle => ({...triangle}));
-    const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+    preparationMark('update.emissive.end');
+  const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  preparationMark('update.lighting.end');
     const uniform = makeRayTraceUniform(); new Uint8Array(uniform.buffer).set(new Uint8Array(state.rt));
     writeTraceLighting(uniform.views, lighting); rt = uniform.buffer;
     for (const [id, kind, data, width, height, format] of [
@@ -1351,8 +1355,11 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   const bvh = new Uint8Array(tlas.buffer);
   // Visibility already selected emissive bindings; scanning non-emissive
   // geometry here would make a TLAS-only edit depend on resident triangle count.
+  preparationMark('update.emissive.begin');
   const emissive = state.emissiveCache.collect(stage.prepared?.emissiveBindings ?? bindings, state.ordered).map(triangle => ({...triangle}));
+  preparationMark('update.emissive.end');
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  preparationMark('update.lighting.end');
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
@@ -1599,7 +1606,9 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   const packedInstances = instanceBytes;
   const {attributes} = packNativeAttributes(prepared, tlas, state.hardware);
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, state.ordered);
+  preparationMark('update.emissive.end');
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  preparationMark('update.lighting.end');
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16; rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
   packLightingUniform(rt, lighting);
@@ -1679,6 +1688,7 @@ function nativeGeometryJobsPacket(build: SceneSources): Uint8Array {
 function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Array {
   const state = retainedScenes.get(token);
   if (!state) throw new Error('Missing retained append state');
+  preparationMark('append.begin');
   let input: ReturnType<typeof decodeScene>;
   const descriptor = bytes.subarray(16);
   try { input = decodeScene(descriptor, token); }
@@ -1705,11 +1715,13 @@ function prepareNativeGeometryAppend(bytes: Uint8Array, token: number): Uint8Arr
     if (instances) mesh.setInstanceState(new InstanceState({count: instances.count, transforms: instances.transforms, colors: instances.colors}));
     meshes.push(mesh);
   }
+  preparationMark('append.decode.end');
   let build: SceneSources;
   try { build = prepareSceneSources({meshes, textureIds: state.textureIds}); }
   catch (error) { throw new Error(`append prepareSceneSources: ${String(error)}`); }
   if (build.jobs.length === 0 || build.jobs.some(job => job.ranges || job.displacementBias !== 0))
     throw new Error('Full commit required: append requires static non-displaced geometry');
+  preparationMark('append.sources.end');
   if (state.hardware) return prepareNativeHardwareAppend(state, meshes, input.geometries, build, token);
   pendingGeometryAppends.set(token, {phase: 0, meshes, inputGeometries: state.geometries.concat(input.geometries.slice(oldGeometryCount)), build});
   return nativeGeometryJobsPacket(build);
@@ -1729,6 +1741,7 @@ function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retain
   }, computeGeometryBounds, false, false);
   if (prepared.geometries.length <= oldGeometryCount || prepared.geometries.some((g, i) => i < oldGeometryCount && g !== state.prepared.geometries[i]))
     throw new Error('Full commit required: appended geometry changes resident HWRT order');
+  preparationMark('append.mesh.end');
   phase = 'compactVertexLayout';
   const layout = compactVertexLayout(prepared.geometries, false);
   if (layout.stride * 4 !== state.nativeLayout.attributeStrideBytes)
@@ -1749,6 +1762,7 @@ function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retain
     indexWords.set(indices, indexCursor); indexCursor += indices.length;
   }
   const attributes = new Uint8Array(attributeWords.buffer), indexBytes = new Uint8Array(indexWords.buffer);
+  preparationMark('append.attributes.end');
   phase = 'hardware metadata';
   const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.residentBindings, prepared.geometries.length);
   const hardware: HardwareScene = {geometries: state.hardware!.geometries.slice(), records: state.hardware!.records,
@@ -1765,11 +1779,16 @@ function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retain
   const nativeLayout: NativeLayout = {...state.nativeLayout, hardwareGeometries: hardware.geometries,
     instanceCount, instanceCapacity: Math.max(state.instanceCapacity, instanceCount + Math.max(2, Math.ceil(instanceCount * 0.25))),
     attributeCapacityBytes: Math.max(state.attributeCapacityBytes, oldVertexCount * layout.stride * WORD_BYTES + attributes.byteLength)};
+  preparationMark('append.emissive.begin');
   const emissive = state.emissiveCache.collect(prepared.emissiveBindings, state.ordered).map(triangle => ({...triangle}));
+  preparationMark('append.emissive.end');
   phase = 'lighting';
+  preparationMark('update.emissive.end');
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
+  preparationMark('update.lighting.end');
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.isEmpty[0] = Number(instanceCount === 0); packLightingUniform(rt, lighting);
+  preparationMark('append.lighting.end');
   phase = 'nativeLayoutBytes';
   const metadata = nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, rt.views.isEmpty[0] !== 0, instanceCount);
   const paddedInstances = new Uint8Array(nativeLayout.instanceCapacity! * 160);
@@ -1825,6 +1844,7 @@ export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Ar
           newMeshes: append.meshes, inputGeometries: append.inputGeometries,
           blasBytes: new Uint8Array(0), attributeBytes: new Uint8Array(0), attributeOffset: 0
         };
+        preparationMark('append.mesh.end');
         const stateBlasCount = state.blases.length;
         const newBlases = prepared.blases.slice(stateBlasCount);
         stage.blasBytes = new Uint8Array(concatBLASBuffers(newBlases));
@@ -1841,6 +1861,7 @@ export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Ar
         }
         stage.attributeBytes = new Uint8Array(attributes.buffer);
         stage.attributeOffset = oldVertexCount * layout.stride * WORD_BYTES;
+        preparationMark('append.attributes.end');
         append.phase = 1; append.stage = stage;
         return requestInstances(prepared.instances);
       }

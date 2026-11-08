@@ -966,20 +966,41 @@ impl PreparedState {
         bytes: &[u8],
         ids: &[usize],
     ) -> Result<LightingUpdates> {
+        struct Profile;
+        impl Drop for Profile {
+            fn drop(&mut self) {
+                let _ = preparation_profile(0);
+            }
+        }
+        let _profile = if crate::profiling::enabled() {
+            preparation_profile(1)?;
+            Some(Profile)
+        } else {
+            None
+        };
+        let started = std::time::Instant::now();
         let mut requests = native_step(begin, bytes, self.token)?;
         let mut geometry_jobs = !self.indexed && Words(bytes).u(0) == 5;
-        for _ in 0..4 {
+        if crate::profiling::enabled() {
+            native_log!(
+                "{}",
+                json!({"nativeUpdatePhase": {"backend": if self.indexed {"HWRT"} else {"Software"}, "stage": "begin", "ms": started.elapsed().as_secs_f64()*1000.}})
+            );
+        }
+        for phase in 0..4 {
             let version = Words(&requests).u(ph::VERSION);
             if version == crate::layout::version::RESOURCE_WRITES || version == 2 {
                 return lighting_packet(&requests, ids);
             }
+            let started = std::time::Instant::now();
+            let instances = !geometry_jobs;
             let tlas = if self.indexed {
                 requests.clone()
             } else {
-                let instances = !geometry_jobs;
                 geometry_jobs = false;
                 tinybvh::jobs(&requests, instances)?
             };
+            let built = started.elapsed();
             let mut pointer = std::ptr::null();
             let mut size = 0;
             unsafe {
@@ -996,6 +1017,12 @@ impl PreparedState {
                 mt_core_collect();
                 result?
             };
+            if crate::profiling::enabled() {
+                native_log!(
+                    "{}",
+                    json!({"nativeUpdatePhase": {"backend": if self.indexed {"HWRT"} else {"Software"}, "phase": phase, "stage": if instances {"TLAS"} else {"BLAS"}, "buildMs": built.as_secs_f64()*1000., "finishMs": (started.elapsed()-built).as_secs_f64()*1000.}})
+                );
+            }
         }
         Err("Native retained update exceeded preparation phases".into())
     }
@@ -1049,13 +1076,23 @@ impl PreparedState {
         }
         for (id, destination, data) in &updates.hardware_writes {
             let mut target = match *id {
-                35 => self.authoritative_indices.lock().unwrap_or_else(|e| e.into_inner()),
-                38 => self.authoritative_bounds.lock().unwrap_or_else(|e| e.into_inner()),
+                35 => self
+                    .authoritative_indices
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                38 => self
+                    .authoritative_bounds
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
                 _ => continue,
             };
             let start = *destination as usize;
-            let end = start.checked_add(data.len()).ok_or("Accepted HWRT metadata overflow")?;
-            if end > target.len() { target.resize(end, 0); }
+            let end = start
+                .checked_add(data.len())
+                .ok_or("Accepted HWRT metadata overflow")?;
+            if end > target.len() {
+                target.resize(end, 0);
+            }
             target[start..end].copy_from_slice(data);
         }
         Ok(())
@@ -1073,25 +1110,49 @@ impl PreparedState {
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let mut indices = self.authoritative_indices.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut indices = self
+            .authoritative_indices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         for (id, destination, data) in &updates.hardware_writes {
             if *id == 35 {
                 let start = *destination as usize;
-                let end = start.checked_add(data.len()).ok_or("HWRT index offset overflow")?;
-                if end > indices.len() { indices.resize(end, 0); }
+                let end = start
+                    .checked_add(data.len())
+                    .ok_or("HWRT index offset overflow")?;
+                if end > indices.len() {
+                    indices.resize(end, 0);
+                }
                 indices[start..end].copy_from_slice(data);
             }
         }
         assets.insert(AssetId::Packet(35), indices);
-        assets.insert(AssetId::Packet(38), self.authoritative_bounds.lock().unwrap_or_else(|e| e.into_inner()).clone());
-        let vertex_end = layout.hardware_geometries.iter().map(|g|
-            (g.vertex_offset as usize + g.vertex_count as usize) * layout.attribute_stride_bytes).max().unwrap_or(0);
+        assets.insert(
+            AssetId::Packet(38),
+            self.authoritative_bounds
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        );
+        let vertex_end = layout
+            .hardware_geometries
+            .iter()
+            .map(|g| {
+                (g.vertex_offset as usize + g.vertex_count as usize) * layout.attribute_stride_bytes
+            })
+            .max()
+            .unwrap_or(0);
         let mut attributes = vec![0; vertex_end];
         for (id, destination, data) in &updates.hardware_writes {
             if *id == 3 {
                 let start = *destination as usize;
-                let end = start.checked_add(data.len()).ok_or("HWRT attribute offset overflow")?;
-                if end > attributes.len() { return Err("HWRT attribute append exceeds layout".into()); }
+                let end = start
+                    .checked_add(data.len())
+                    .ok_or("HWRT attribute offset overflow")?;
+                if end > attributes.len() {
+                    return Err("HWRT attribute append exceeds layout".into());
+                }
                 attributes[start..end].copy_from_slice(data);
             }
         }
@@ -1729,7 +1790,11 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             continue;
         }
         if id == 35 {
-            hardware_writes.push((id, destination as u64, packet[offset..offset + length].to_vec()));
+            hardware_writes.push((
+                id,
+                destination as u64,
+                packet[offset..offset + length].to_vec(),
+            ));
             continue;
         }
         if id == 31 {

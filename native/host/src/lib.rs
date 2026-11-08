@@ -173,8 +173,7 @@ pub(crate) fn entry_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-pub(crate) fn try_entry_lock(
-) -> std::result::Result<
+pub(crate) fn try_entry_lock() -> std::result::Result<
     std::sync::MutexGuard<'static, ()>,
     std::sync::TryLockError<std::sync::MutexGuard<'static, ()>>,
 > {
@@ -882,9 +881,17 @@ impl GpuScene {
         crate::image_limits::validate_target([scene.width, scene.height], &device.limits())?;
         for buffer in &scene.buffers {
             let allocation = match (buffer.id, scene.native_layout.as_ref()) {
-                (1, Some(layout)) => layout.bvh_capacity_bytes.unwrap_or(buffer.size as usize) as u64,
-                (2, Some(layout)) => layout.instance_capacity.unwrap_or(0).saturating_mul(160).max(buffer.size as usize) as u64,
-                (3, Some(layout)) => layout.attribute_capacity_bytes.unwrap_or(buffer.size as usize) as u64,
+                (1, Some(layout)) => {
+                    layout.bvh_capacity_bytes.unwrap_or(buffer.size as usize) as u64
+                }
+                (2, Some(layout)) => layout
+                    .instance_capacity
+                    .unwrap_or(0)
+                    .saturating_mul(160)
+                    .max(buffer.size as usize) as u64,
+                (3, Some(layout)) => layout
+                    .attribute_capacity_bytes
+                    .unwrap_or(buffer.size as usize) as u64,
                 _ => buffer.size,
             };
             if allocation > device.limits().max_buffer_size
@@ -932,7 +939,11 @@ impl GpuScene {
             usage |= wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
             let allocation = match (buffer.id, scene.native_layout.as_ref()) {
                 (1, Some(layout)) => layout.bvh_capacity_bytes.unwrap_or(data.len()) as u64,
-                (2, Some(layout)) => layout.instance_capacity.unwrap_or(0).saturating_mul(160).max(data.len()) as u64,
+                (2, Some(layout)) => layout
+                    .instance_capacity
+                    .unwrap_or(0)
+                    .saturating_mul(160)
+                    .max(data.len()) as u64,
                 (3, Some(layout)) => layout.attribute_capacity_bytes.unwrap_or(data.len()) as u64,
                 _ => data.len() as u64,
             };
@@ -1596,17 +1607,29 @@ impl GpuScene {
             if *id >= layout::resource::ATLAS {
                 continue;
             }
-            let Some(current) = self.buffers.get(id) else { continue; };
+            let Some(current) = self.buffers.get(id) else {
+                continue;
+            };
+            let started = std::time::Instant::now();
             let required = offset.saturating_add(data.len() as u64);
-            if required <= current.size() { continue; }
+            if required <= current.size() {
+                continue;
+            }
             let old_size = current.size();
             let size = required.max(old_size.saturating_mul(2)).div_ceil(256) * 256;
             if size > self.gpu.device.limits().max_buffer_size {
-                return Err(format!("Scene buffer {id} growth to {size} bytes exceeds device limit").into());
+                return Err(format!(
+                    "Scene buffer {id} growth to {size} bytes exceeds device limit"
+                )
+                .into());
             }
-            let usage = current.usage() | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+            let usage =
+                current.usage() | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
             let replacement = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("MuTracer grown scene buffer"), size, usage, mapped_at_creation: false,
+                label: Some("MuTracer grown scene buffer"),
+                size,
+                usage,
+                mapped_at_creation: false,
             });
             let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
             encoder.copy_buffer_to_buffer(current, 0, &replacement, 0, old_size);
@@ -1626,28 +1649,59 @@ impl GpuScene {
             if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
                 native_log!(
                     "{}",
-                    json!({"nativeSceneBufferGrowth": {"resource": id, "oldBytes": old_size, "newBytes": size}})
+                    json!({"nativeSceneBufferGrowth": {"resource": id, "oldBytes": old_size, "newBytes": size, "ms": started.elapsed().as_secs_f64()*1000.}})
                 );
             }
             grown.push(*id);
         }
-        if grown.is_empty() { return Ok(()); }
-        let views: HashMap<_, _> = self.textures.iter().map(|(id, texture)| (*id, scene_texture_view(&self.scene, texture, *id))).collect();
-        let independent_views: Vec<_> = (0..self.scene.textures.iter().filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE).count())
-            .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)]).collect();
+        if grown.is_empty() {
+            return Ok(());
+        }
+        let views: HashMap<_, _> = self
+            .textures
+            .iter()
+            .map(|(id, texture)| (*id, scene_texture_view(&self.scene, texture, *id)))
+            .collect();
+        let independent_views: Vec<_> = (0..self
+            .scene
+            .textures
+            .iter()
+            .filter(|t| t.id >= layout::resource::MATERIAL_TEXTURE_BASE)
+            .count())
+            .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)])
+            .collect();
         for (index, group) in self.scene.bind_groups.iter().enumerate() {
-            if !group.entries.iter().any(|entry| matches!(entry.kind, BindingKind::Buffer) && grown.contains(&entry.id)) { continue; }
-            let mut entries: Vec<_> = group.entries.iter().map(|entry| wgpu::BindGroupEntry {
-                binding: entry.binding,
-                resource: match entry.kind {
-                    BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
-                    BindingKind::TextureArray(_) => wgpu::BindingResource::TextureViewArray(&independent_views),
-                    BindingKind::Texture => wgpu::BindingResource::TextureView(&views[&entry.id]),
-                    BindingKind::Sampler => wgpu::BindingResource::Sampler(&self.samplers[&entry.id]),
-                },
-            }).collect();
+            if !group
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.kind, BindingKind::Buffer) && grown.contains(&entry.id))
+            {
+                continue;
+            }
+            let mut entries: Vec<_> = group
+                .entries
+                .iter()
+                .map(|entry| wgpu::BindGroupEntry {
+                    binding: entry.binding,
+                    resource: match entry.kind {
+                        BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
+                        BindingKind::TextureArray(_) => {
+                            wgpu::BindingResource::TextureViewArray(&independent_views)
+                        }
+                        BindingKind::Texture => {
+                            wgpu::BindingResource::TextureView(&views[&entry.id])
+                        }
+                        BindingKind::Sampler => {
+                            wgpu::BindingResource::Sampler(&self.samplers[&entry.id])
+                        }
+                    },
+                })
+                .collect();
             if index == layout::group::SCENE && self.scene.hwrt.is_some() {
-                let hardware = self.hardware.as_ref().ok_or("Missing HWRT resources during buffer growth")?;
+                let hardware = self
+                    .hardware
+                    .as_ref()
+                    .ok_or("Missing HWRT resources during buffer growth")?;
                 entries.extend([
                     wgpu::BindGroupEntry {
                         binding: layout::hwrt_binding::ACCELERATION as u32,
@@ -1659,13 +1713,20 @@ impl GpuScene {
                     },
                 ]);
             }
-            self.groups[index] = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MuTracer grown scene bindings"),
-                layout: &self.pipeline.get_bind_group_layout(index as u32), entries: &entries,
-            });
+            self.groups[index] = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("MuTracer grown scene bindings"),
+                    layout: &self.pipeline.get_bind_group_layout(index as u32),
+                    entries: &entries,
+                });
         }
         if profiling::enabled() {
-            native_log!("{}", json!({"nativeBufferGrowth": grown.iter().map(|id| json!({"resource":id,"bytes":self.buffers[id].size()})).collect::<Vec<_>>()}));
+            native_log!(
+                "{}",
+                json!({"nativeBufferGrowth": grown.iter().map(|id| json!({"resource":id,"bytes":self.buffers[id].size()})).collect::<Vec<_>>()})
+            );
         }
         Ok(())
     }
@@ -1700,7 +1761,9 @@ impl GpuScene {
                 || -> Result<_> {
                     for (id, destination, data) in &updates.hardware_writes {
                         if *id == 3 {
-                            self.gpu.queue.write_buffer(&self.buffers[&3], *destination, data);
+                            self.gpu
+                                .queue
+                                .write_buffer(&self.buffers[&3], *destination, data);
                         }
                     }
                     let resources = self.hardware.as_ref().unwrap().rebuild_changed(
@@ -1824,9 +1887,25 @@ impl GpuScene {
     ) -> Result<()> {
         if let Some(layout) = &updates.native_layout {
             let mut layout = layout.clone();
-            layout.bvh_capacity_bytes = Some(layout.bvh_capacity_bytes.unwrap_or(0).max(self.buffers.get(&1).map_or(0, |b| b.size() as usize)));
-            layout.instance_capacity = Some(layout.instance_capacity.unwrap_or(0).max(self.buffers.get(&2).map_or(0, |b| (b.size() / 160) as usize)));
-            layout.attribute_capacity_bytes = Some(layout.attribute_capacity_bytes.unwrap_or(0).max(self.buffers.get(&3).map_or(0, |b| b.size() as usize)));
+            layout.bvh_capacity_bytes = Some(
+                layout
+                    .bvh_capacity_bytes
+                    .unwrap_or(0)
+                    .max(self.buffers.get(&1).map_or(0, |b| b.size() as usize)),
+            );
+            layout.instance_capacity = Some(
+                layout.instance_capacity.unwrap_or(0).max(
+                    self.buffers
+                        .get(&2)
+                        .map_or(0, |b| (b.size() / 160) as usize),
+                ),
+            );
+            layout.attribute_capacity_bytes = Some(
+                layout
+                    .attribute_capacity_bytes
+                    .unwrap_or(0)
+                    .max(self.buffers.get(&3).map_or(0, |b| b.size() as usize)),
+            );
             self.scene.native_layout = Some(layout);
         }
         if profiling::enabled() {
@@ -1868,6 +1947,7 @@ impl GpuScene {
             self.rebind_textures(&replaced)?;
         }
         for (id, offset, width, height, data) in updates {
+            let started = std::time::Instant::now();
             if *id == self.scene.rt_uniform {
                 let at = *offset as usize;
                 self.display_trace[at..at + data.len()].copy_from_slice(data);
@@ -1906,6 +1986,12 @@ impl GpuScene {
                         height: *height,
                         depth_or_array_layers: 1,
                     },
+                );
+            }
+            if profiling::enabled() {
+                native_log!(
+                    "{}",
+                    json!({"nativeResourceUpload": {"resource": id, "bytes": data.len(), "ms": started.elapsed().as_secs_f64()*1000.}})
                 );
             }
         }
