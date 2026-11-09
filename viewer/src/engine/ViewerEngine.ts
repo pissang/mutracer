@@ -1296,6 +1296,11 @@ export class ViewerEngine {
     if (graph && terminal in graph.terminal) this.materials.setGraph(materialId, disconnectGraphInput(graph, terminal), label);
   }
 
+  /** Removes the material graph so every material value applies; one undo step. */
+  clearMaterialGraph(materialId: string, label: string) {
+    this.materials.setGraph(materialId, null, label);
+  }
+
   /** Replaces the image of a graph image node with an image file; one undo step. */
   async setMaterialGraphImage(materialId: string, node: string, port: string, file: Blob, label: string) {
     try {

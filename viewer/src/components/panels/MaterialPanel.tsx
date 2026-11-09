@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Unlink, Workflow, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -82,6 +82,12 @@ export function MaterialPanel() {
           <RotateCcw size={13} />
         </button>
       </div>
+      {material.graph && material.graph.inputs.length > 0 && <div className="mat-graph">
+        <Workflow size={12} />
+        <span>MaterialX graph · {material.graph.inputs.length} {material.graph.inputs.length === 1 ? 'input' : 'inputs'}</span>
+        <button className="graph-use" title="Disconnect every graph input and edit all values here"
+          onClick={() => getEngine()?.clearMaterialGraph(material.id, 'Use values for all')}>Use values for all</button>
+      </div>}
       <div className="mat-presets">
         <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
@@ -145,7 +151,7 @@ export function MaterialPanel() {
         onOpenChange={(open) => setOpenGroups((g) => ({ ...g, textures: open }))}
       >
         {material.graph && material.graph.images.length > 0 && <GraphImages material={material} diagnostics={diagnostics} />}
-        <TextureSlots material={material} />
+        <TextureSlots key={material.id} material={material} collapse={!!material.graph?.images.length} />
       </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
     </div>
@@ -216,8 +222,12 @@ function ParamControl({
   );
 }
 
-function TextureSlots({ material }: { material: SelectedMaterial }) {
+/** `collapse` hides the empty slots behind one row, for materials whose graph owns the images. */
+function TextureSlots({ material, collapse }: { material: SelectedMaterial; collapse?: boolean }) {
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
+  const [showEmpty, setShowEmpty] = useState(false);
+  const hideEmpty = collapse && !showEmpty;
+  const slots = TEXTURE_SLOTS.filter(({ key }) => !hideEmpty || material.maps[key] !== undefined);
   const input = useRef<HTMLInputElement>(null);
   const target = useRef<TextureKey | null>(null);
   const [dropTarget, setDropTarget] = useState<TextureKey | null>(null);
@@ -236,7 +246,7 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
   };
   return (
     <div className="tex-slots">
-      {TEXTURE_SLOTS.map(({ key, label, hint }) => {
+      {slots.map(({ key, label, hint }) => {
         const thumb = material.maps[key];
         const has = thumb !== undefined;
         const sampling = material.sampling[key];
@@ -311,7 +321,12 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
           if (target.current) upload(target.current, e.currentTarget.files?.[0]);
           e.currentTarget.value = '';
         }} />
-      <Hint>Drop an image on a slot to replace its texture. Edits are kept for this model until another model is opened.</Hint>
+      {hideEmpty ? slots.length < TEXTURE_SLOTS.length && (
+        <button className="tex-slot tex-slot--add" onClick={() => setShowEmpty(true)}>
+          <span className="tex-slot__thumb"><ImagePlus size={14} /></span>
+          <span className="tex-slot__label"><b>Add texture slot</b></span>
+        </button>
+      ) : <Hint>Drop an image on a slot to replace its texture. Edits are kept for this model until another model is opened.</Hint>}
     </div>
   );
 }
@@ -423,9 +438,9 @@ function GraphLink({ material, input, label, fallback, diagnostics }: {
       </button>
       <span className="graph-link__label">{label}</span>
       <span className="graph-link__source">{shortSource(input.source, material.graph!.images.map(image => image.name))}</span>
-      <button className="icon-btn icon-btn--bare xs" title={`Disconnect from the graph and edit ${full.toLowerCase()} here`} aria-label={`Disconnect ${full}`}
-        onClick={() => getEngine()?.disconnectMaterialGraphInput(material.id, input.terminal, `Disconnect ${full.toLowerCase()}`)}>
-        <Unlink size={12} />
+      <button className="graph-use" title={`Disconnect from the graph and edit ${full.toLowerCase()} here`} aria-label={`Use ${full.toLowerCase()} value`}
+        onClick={() => getEngine()?.disconnectMaterialGraphInput(material.id, input.terminal, `Use ${full.toLowerCase()} value`)}>
+        Use value
       </button>
       {errors.map(message => <small key={message} className="graph-error">{message}</small>)}
     </div>

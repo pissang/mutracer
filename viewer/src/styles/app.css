@@ -535,6 +535,16 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .graph-link__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .graph-link__label { color: var(--cv-text); font-size: 11px; white-space: nowrap; }
 .graph-link__source { min-width: 0; overflow: hidden; color: var(--cv-text-3); font: 10.5px var(--cv-mono); white-space: nowrap; text-overflow: ellipsis; text-align: right; }
+.graph-use { flex: none; height: 22px; padding: 0 8px; border-radius: 6px; color: var(--cv-text-2); font-size: 10.5px; font-weight: 500; white-space: nowrap;
+  background: rgb(255 255 255 / 0.06); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1); cursor: pointer; }
+.graph-use:hover { color: var(--cv-text); background: rgb(255 255 255 / 0.1); }
+.graph-use:focus-visible { outline: 2px solid var(--cv-focus); outline-offset: 2px; }
+.material-panel > .mat-graph { display: flex; align-items: center; gap: 7px; padding-top: 0; color: var(--cv-text-2); font-size: 11px; }
+.mat-graph svg { flex: none; color: var(--cv-accent-hover); }
+.mat-graph span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tex-slot--add { width: 100%; text-align: left; cursor: pointer; border-style: dashed; border-color: var(--cv-control-border); background: none; color: var(--cv-text-3); }
+.tex-slot--add .tex-slot__label b { color: var(--cv-text-2); }
+.tex-slot--add:hover .tex-slot__label b { color: var(--cv-text); }
 .graph-link .graph-error { padding: 0 0 4px 30px; }
 .graph-error { grid-column: 1 / -1; color: var(--cv-warning); font-size: 10px; line-height: 1.35; }
 .tex-slot .graph-error { padding-left: 43px; }
