@@ -63,6 +63,15 @@ fn main() {
         .include(include)
         .warnings(false)
         .compile("mutracer_tinybvh");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=metal_queue.m");
+        cc::Build::new()
+            .file("metal_queue.m")
+            .flag("-fobjc-arc")
+            .compile("mutracer_metal_queue");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=Metal");
+    }
     println!("cargo:rerun-if-env-changed=MUTRACER_AOT_ARCHIVE");
     let archive = std::env::var("MUTRACER_AOT_ARCHIVE")
         .expect("Set MUTRACER_AOT_ARCHIVE to the scriptc render-core.lib.a");

@@ -740,6 +740,23 @@ cargo test --manifest-path native/host/Cargo.toml --lib \
 It prints AOV and primary-hit coverage classifications and reports a mismatch
 separately from the other checks.
 
+For native Metal command-buffer status, set
+`MUTRACER_NATIVE_COMMAND_STATUS=1`. SDK-created devices and `Engine::from_metal`
+record status, NSError domain/code/description and the context/job/flight range
+for sampling submissions; retained raw TLAS updates are also checked. Status 4
+means Completed and 5 means Error. The option enables JSON status records;
+execution errors are returned regardless. This adds no GPU markers or
+readback, but logging and retaining buffers can perturb timing. It does not
+prove every pixel's correctness. `Engine::on_device` cannot observe an existing
+host-owned wgpu queue; diagnostics report unavailable coverage there.
+
+The observer forwards a private Metal queue wrapper to wgpu-hal, retaining
+buffers submitted on the recording thread through their completion check. It
+includes wgpu's upload/barrier buffers without changing encoding or queue
+ordering. Do not call `CommandEncoder::as_hal_mut` after wgpu encoding: wgpu 30
+rejects mixed encoding APIs even for a read-only inspection. Failures invalidate
+the accumulation instead of attempting to undo partially executed GPU writes.
+
 For `api::Render` command-buffer diagnostics, set
 `MUTRACER_NATIVE_DISPATCH_AUDIT=1` when running a `cfg(test)` GPU test. Each
 sample submission then appends a one-thread GPU marker in the same command

@@ -403,7 +403,9 @@ impl Engine {
     /// Request the adapter limits and the optional ray-query feature when creating
     /// the device. The optional gate coordinates submissions with surface configuration.
     /// Forward device loss through [`Engine::device_loss_notifier`]; this constructor
-    /// does not replace the host's wgpu device-loss callback.
+    /// does not replace the host's wgpu device-loss callback. For a host-created
+    /// Metal queue, this constructor cannot inspect native command-buffer execution
+    /// errors; SDK-created devices and `Engine::from_metal` provide that check.
     pub fn on_device(
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,

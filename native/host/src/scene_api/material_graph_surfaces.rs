@@ -530,9 +530,31 @@ fn check_normal_and_bsdf(use_graph: bool) {
         assert_eq!(engine.diagnostics().compilations_started, compiled);
         let normals = render.read_pixels(PixelKind::Normal).unwrap();
         let normal = &normals.data[(16 * 32 + 16) * 4..(16 * 32 + 16) * 4 + 3];
-        for (actual, expected) in normal.iter().zip([0.6, 0., 0.8]) {
-            assert!((actual - expected).abs() < 0.001, "{backend:?}: {normal:?}");
+        let valid_normal = normal
+            .iter()
+            .zip([0.6, 0., 0.8])
+            .all(|(actual, expected)| (actual - expected).abs() < 0.001);
+        if !valid_normal {
+            if let Some(path) = std::env::var_os("MUTRACER_GRAPH_MATRIX_OUTPUT") {
+                let path = std::path::PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                // Preserve this frame before the center-normal assertion, which
+                // precedes the retained/fresh comparison capture below.
+                for (name, data) in [
+                    ("hdr", render.read_pixels(PixelKind::Hdr).unwrap().data),
+                    ("normal", normals.data.clone()),
+                ] {
+                    std::fs::write(
+                        path.join(format!("{backend:?}-normal-precheck-{name}.f32")),
+                        data.iter()
+                            .flat_map(|v| v.to_le_bytes())
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                }
+            }
         }
+        assert!(valid_normal, "{backend:?}: {normal:?}");
         let after = render.read_pixels(PixelKind::Hdr).unwrap().data;
         assert!(
             before

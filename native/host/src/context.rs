@@ -9,7 +9,6 @@ use std::{
 };
 
 struct Context {
-    #[cfg(test)]
     id: u64,
     gpu: GpuDevice,
     backend: u32,
@@ -76,8 +75,8 @@ enum JobState {
     Cancelling = 5,
 }
 struct Flight {
-    #[cfg(test)]
     start: u32,
+    native: crate::native_completion::Batch,
     end: u32,
     done: Arc<AtomicBool>,
     timer: Option<(
@@ -588,7 +587,6 @@ fn create_in(
     registry.contexts.insert(
         handle,
         Context {
-            #[cfg(test)]
             id: handle,
             gpu,
             backend,
@@ -2063,13 +2061,13 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         }
         return Err(error);
     }
-    #[cfg(test)]
     let context_id = context.id;
     let Context {
         scene: own,
         job,
         target,
         gpu,
+        failed,
         ..
     } = context;
     let job = job.as_mut().ok_or("Missing render job")?;
@@ -2083,6 +2081,19 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .as_ref()
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
+        let flight = job.flight.as_ref().unwrap();
+        match flight.native.check(&format!(
+            "context={context_id} job={} flight={}..{}",
+            job.id, flight.start, flight.end
+        )) {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(error) => {
+                *failed = true;
+                job.state = JobState::Failed;
+                return Err(error);
+            }
+        }
         if job
             .flight
             .as_ref()
@@ -2157,7 +2168,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     let scene = owner
         .or(own.as_ref())
         .ok_or("Missing render target scene")?;
-    scene.dispatch_target(
+    let native = scene.dispatch_target(
         target.as_ref().ok_or("No render target")?,
         start,
         count,
@@ -2169,8 +2180,8 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .on_submitted_work_done(move || signal.store(true, Ordering::Release));
     job.submitted += count;
     job.flight = Some(Flight {
-        #[cfg(test)]
         start,
+        native,
         end: job.base + job.submitted,
         done,
         timer: timer.map(|timer| {
@@ -2288,6 +2299,116 @@ mod target_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn failed_native_flight_is_not_credited_and_commit_recovers() {
+        let _test = crate::abi_test_lock();
+        for backend in [0, 1] {
+            for cancel in [false, true] {
+                let gpu = GpuDevice::with_backend(backend).unwrap();
+                let handle = create_with_gpu(gpu, backend).unwrap();
+                let input = scene::tests::input();
+                let mut error = [0i8; 1024];
+                let commit = || unsafe {
+                    let mut commit_error = [0i8; 1024];
+                    mt_context_commit(
+                        handle,
+                        input.as_ptr(),
+                        input.len(),
+                        commit_error.as_mut_ptr(),
+                        commit_error.len(),
+                    )
+                };
+                assert_eq!(commit(), 0);
+                assert_eq!(
+                    unsafe { mt_context_render(handle, 2, error.as_mut_ptr(), error.len()) },
+                    0
+                );
+                let job = submit(handle, 4).unwrap();
+                poll_job(job, 2).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while job_info(job).unwrap().completed_samples < 2 {
+                    poll_job(job, 0).unwrap();
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+                poll_job(job, 2).unwrap();
+                REGISTRY
+                    .lock()
+                    .unwrap()
+                    .contexts
+                    .get_mut(&handle)
+                    .unwrap()
+                    .job
+                    .as_mut()
+                    .unwrap()
+                    .flight
+                    .as_mut()
+                    .unwrap()
+                    .native
+                    .injected_error = Some("controlled command-buffer error code=3".into());
+                if cancel {
+                    cancel_job(job).unwrap();
+                }
+                let failure = loop {
+                    match poll_job(job, 0) {
+                        Ok(()) => assert!(Instant::now() < deadline),
+                        Err(error) => break error,
+                    }
+                };
+                assert_eq!(
+                    classify(failure.as_ref(), Status::Error),
+                    Status::ContextFailed
+                );
+                assert!(
+                    failure
+                        .to_string()
+                        .contains(&format!("context={handle} job={job} flight=4..6"))
+                );
+                let info = job_info(job).unwrap();
+                assert_eq!(
+                    (
+                        info.state,
+                        info.base_samples,
+                        info.submitted_samples,
+                        info.completed_samples
+                    ),
+                    (4, 2, 4, 2)
+                );
+                assert_eq!(
+                    REGISTRY.lock().unwrap().contexts[&handle]
+                        .target
+                        .as_ref()
+                        .unwrap()
+                        .samples,
+                    4
+                );
+                assert!(submit(handle, 1).is_err());
+                let mut written = 0;
+                assert_ne!(
+                    unsafe {
+                        mt_context_read_pixels(
+                            handle,
+                            0,
+                            std::ptr::null_mut(),
+                            0,
+                            &mut written,
+                            error.as_mut_ptr(),
+                            error.len(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(commit(), 0);
+                assert_eq!(
+                    unsafe { mt_context_render(handle, 1, error.as_mut_ptr(), error.len()) },
+                    0
+                );
+                destroy(handle).unwrap();
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires a real GPU; run separately"]
     fn geometry_append_publication_waits_for_registry_ownership() {
@@ -2742,6 +2863,15 @@ mod tests {
                 state.update_lighting(&writes, Some(&state_target)).unwrap();
                 state.reset_target(&mut state_target).unwrap();
                 state.retained.as_ref().unwrap().accept_transform().unwrap();
+                // The full reference must include the accepted matrix edit too.
+                // Otherwise the two contexts query triangles at different x positions.
+                let mesh = u32::from_le_bytes(
+                    input[layout::header::MESH_OFFSET * 4..layout::header::MESH_OFFSET * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let matrix = (mesh + layout::mesh::TRANSFORM) * 4;
+                input[matrix..matrix + 64].copy_from_slice(&bytes[16..80]);
                 let geometry = u32::from_le_bytes(
                     input[layout::header::GEOMETRY_OFFSET * 4
                         ..layout::header::GEOMETRY_OFFSET * 4 + 4]

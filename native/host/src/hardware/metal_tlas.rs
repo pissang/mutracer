@@ -149,6 +149,7 @@ impl Inputs {
             let raw = unsafe { tlas.as_hal::<Metal>() }.ok_or("Metal TLAS unavailable")?;
             &*raw as *const hal::metal::AccelerationStructure
         };
+        let completion = crate::native_completion::Recording::new();
         let mut encoder = device.create_command_encoder(&Default::default());
         // SAFETY: registry ownership excludes concurrent AS use. Source and
         // destination are the same ALLOW_UPDATE TLAS with stable membership.
@@ -194,6 +195,9 @@ impl Inputs {
         // Raw submissions do not register buffer dependencies with wgpu.
         // Complete before a subsequent update can overwrite these inputs.
         super::wait_for_as(device, queue.submit([]))?;
+        completion
+            .finish()
+            .require_success("retained Metal TLAS update")?;
         Ok((bytes, calls))
     }
 }
