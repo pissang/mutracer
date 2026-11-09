@@ -92,6 +92,18 @@ pub(crate) fn request_device(
     descriptor: &wgpu::DeviceDescriptor<'_>,
 ) -> crate::Result<(wgpu::Device, wgpu::Queue)> {
     #[cfg(target_os = "macos")]
+    if !adapter.features().contains(descriptor.required_features)
+        || !descriptor.required_limits.check_limits(&adapter.limits())
+        || (descriptor
+            .required_features
+            .intersects(wgpu::Features::all_experimental_mask())
+            && !descriptor.experimental_features.is_enabled())
+    {
+        // Preserve wgpu's ordinary validation and error types. HAL opening and
+        // create_device_from_hal assume these preconditions were checked already.
+        return Ok(pollster::block_on(adapter.request_device(descriptor))?);
+    }
+    #[cfg(target_os = "macos")]
     if let Some(hal) = unsafe { adapter.as_hal::<wgpu::hal::api::Metal>() } {
         use objc2::Message;
         use wgpu::hal::{Adapter as _, Queue as _};
@@ -200,6 +212,36 @@ impl Batch {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn invalid_device_requests_keep_wgpu_validation() {
+        let gpu = crate::GpuDevice::with_backend(0).unwrap();
+        let mut limits = gpu.adapter.limits();
+        limits.max_bind_groups += 1;
+        assert!(
+            request_device(
+                &gpu.adapter,
+                &wgpu::DeviceDescriptor {
+                    required_limits: limits,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            request_device(
+                &gpu.adapter,
+                &wgpu::DeviceDescriptor {
+                    required_limits: gpu.adapter.limits(),
+                    required_features: wgpu::Features::EXPERIMENTAL_RAY_QUERY,
+                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
