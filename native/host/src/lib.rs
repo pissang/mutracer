@@ -1214,7 +1214,7 @@ impl GpuScene {
         let completion =
             self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         crate::GpuDevice::wait(&self.gpu.device)?;
-        let _ = completion.check("blocking render");
+        completion.require_success("blocking render")?;
         if profiling::gpu_enabled() {
             let gpu_ms = timer
                 .as_ref()

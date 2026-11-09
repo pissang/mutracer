@@ -2067,6 +2067,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         job,
         target,
         gpu,
+        failed,
         ..
     } = context;
     let job = job.as_mut().ok_or("Missing render job")?;
@@ -2081,9 +2082,18 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
         let flight = job.flight.as_ref().unwrap();
-        let _ = flight.native.check(&format!(
-            "context={context_id} job={} flight={}..{}", job.id, flight.start, flight.end
-        ));
+        match flight.native.check(&format!(
+            "context={context_id} job={} flight={}..{}",
+            job.id, flight.start, flight.end
+        )) {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(error) => {
+                *failed = true;
+                job.state = JobState::Failed;
+                return Err(error);
+            }
+        }
         if job
             .flight
             .as_ref()

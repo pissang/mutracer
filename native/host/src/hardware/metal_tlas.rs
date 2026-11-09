@@ -195,7 +195,9 @@ impl Inputs {
         // Raw submissions do not register buffer dependencies with wgpu.
         // Complete before a subsequent update can overwrite these inputs.
         super::wait_for_as(device, queue.submit([]))?;
-        let _ = completion.finish().check("retained Metal TLAS update");
+        completion
+            .finish()
+            .require_success("retained Metal TLAS update")?;
         Ok((bytes, calls))
     }
 }
