@@ -84,6 +84,7 @@ pub mod category {
     pub const TRANSFORMVECTOR: u32 = 80;
     pub const WORLEYNOISE2D: u32 = 81;
     pub const WORLEYNOISE3D: u32 = 82;
+    pub const HSVADJUST: u32 = 83;
 }
 pub mod port_type {
     pub const FLOAT: u32 = 0;

@@ -1,3 +1,4 @@
+import {upgradeMaterialXNormalmap} from '../../src/renderer/materialGraph/surface.js';
 import { Engine, Render, Camera, Mesh, OpenPBRMaterial, MaterialGraph, Texture, UdimTexture, createPlaneGeometry } from '../../src/main.js';
 import type { MaterialGraphNode as Node, MaterialGraphInput as Input, MaterialGraphType as Type } from '../../src/main.js';
 import { normalizeGraph } from '../../src/renderer/materialGraph/normalize.js';
@@ -101,6 +102,12 @@ export function materialGraphCases() {
     const cross = testGraph('crossproduct', {in1:edge('color','vector3'),in2:v([0.2,0.3,0.4])},'vector3');
     cross.setNode({id:'color',category:'convert',type:'vector3',inputs:{in:edge('uv','vector2')}});
     rows.push({name:'dynamic-crossproduct',graph:cross});
+    for(const space of ['tangent','object']) {
+        const nodes:Node[]=[{id:'uv',category:'texcoord',type:'vector2'}, {id:'input',category:'convert',type:'vector3',inputs:{in:edge('uv','vector2')}},
+            ...upgradeMaterialXNormalmap({id:'legacy',category:'normalmap',type:'vector3',inputs:{in:edge('input','vector3'),space:{type:'string',value:space},normal:v([0,0,1]),tangent:v([1,0,0])}}),
+            {id:'out',category:'convert',type:'color3',inputs:{in:edge('legacy','vector3')}}];
+        rows.push({name:`legacy-normalmap-${space}`,graph:new MaterialGraph({nodes,terminal:{emissionColor:{node:'out'}}})});
+    }
     add('normalmap', 'normalmap', { in: v([0.75, 0.5, 1]), scale: f(0.6) }, 'vector3');
     const image = { width: 2, height: 2, data: new Float32Array([0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1]) };
     const texture = new Texture(image);
