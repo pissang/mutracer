@@ -26,6 +26,14 @@ fn graph_plane(segments: usize, constant_uv: bool) -> Geometry {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
+    check_opacity_and_lit(true);
+}
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn constant_material_opacity_surface_shadow_and_lit_control() {
+    check_opacity_and_lit(false);
+}
+fn check_opacity_and_lit(use_graph: bool) {
     use crate::api::{
         Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
         RenderSize,
@@ -61,7 +69,10 @@ fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
             blocker.values.alpha_mode = mode;
             blocker.values.alpha_cutoff = cutoff;
             blocker.set_float(56, [scale, 1., 0.]).unwrap();
-            blocker.graph = Some(graph);
+            if !use_graph {
+                blocker.values.opacity = 0.37 * scale;
+            }
+            blocker.graph = use_graph.then_some(graph);
             if mapped {
                 let mut texture = Texture::rgba8(1, 1, vec![]);
                 texture.pixels = TexturePixels::Rgba32F(vec![0.5, 0.5, 0.5, 1.].into());
@@ -183,6 +194,18 @@ fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
                 .zip(&reference)
                 .map(|(a, b)| (a - b).abs())
                 .fold(0f32, f32::max);
+            if max_error >= 0.003 {
+                if let Some(path) = &destination {
+                    std::fs::write(
+                        path.join(format!("{backend:?}-{name}-reference.f32")),
+                        reference
+                            .iter()
+                            .flat_map(|v| v.to_le_bytes())
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                }
+            }
             assert!(max_error < 0.003, "{backend:?}/{name}: {max_error}");
             {
                 let m = scene.material_mut(blocker).unwrap();
@@ -216,14 +239,15 @@ fn material_graph_gpu_opacity_surface_shadow_and_lit_fallback() {
             m.values.opacity = 1.;
             m.values.emission_strength = 1.;
             m.values.emission = [0.2; 3];
-            m.graph = Some(emission_graph(0.9, false));
+            m.graph = use_graph.then(|| emission_graph(0.9, false));
             let lit = settle(&scene);
-            assert!(
+            assert_eq!(
                 engine
                     .diagnostics()
                     .material_graphs
                     .iter()
-                    .any(|d| d.code == "unsupported-emission-graph")
+                    .any(|d| d.code == "unsupported-emission-graph"),
+                use_graph
             );
             scene.material_mut(blocker).unwrap().graph = None;
             let reference = settle(&scene);
@@ -372,6 +396,14 @@ fn material_graph_gpu_transport_fallback_matches_constant_material() {
 #[test]
 #[ignore = "requires a real GPU; run separately"]
 fn material_graph_surface_normal_and_bsdf_parameters_match_fresh() {
+    check_normal_and_bsdf(true);
+}
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn constant_material_normal_and_bsdf_parameters_match_fresh_control() {
+    check_normal_and_bsdf(false);
+}
+fn check_normal_and_bsdf(use_graph: bool) {
     use crate::api::{
         Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
         RenderSize,
@@ -416,7 +448,27 @@ fn material_graph_surface_normal_and_bsdf_parameters_match_fresh() {
             graph.parameters.push(value);
             graph.author_ids.push(format!("/Surface/parameter{i}"));
         }
-        material.graph = Some(graph);
+        let normal_texture = if use_graph {
+            None
+        } else {
+            Some(
+                scene
+                    .add_texture(crate::scene_api::Texture {
+                        pixels: crate::scene_api::TexturePixels::Rgba32F(
+                            vec![0.5, 0.5, 1., 1.].into(),
+                        ),
+                        ..crate::scene_api::Texture::rgba8(1, 1, vec![])
+                    })
+                    .unwrap(),
+            )
+        };
+        if use_graph {
+            material.graph = Some(graph);
+        } else {
+            material.values.color = [0.2, 0.4, 0.6];
+            material.values.roughness = 0.25;
+            material.set_texture(44, normal_texture).unwrap();
+        }
         let material = scene.add_material(material).unwrap();
         scene.add_mesh(Mesh::new(geometry, material)).unwrap();
         scene
@@ -454,13 +506,18 @@ fn material_graph_surface_normal_and_bsdf_parameters_match_fresh() {
         assert_eq!(render.backend().unwrap().0, backend);
         let before = render.read_pixels(PixelKind::Hdr).unwrap().data;
         let compiled = engine.diagnostics().compilations_started;
-        scene
-            .material_mut(material)
-            .unwrap()
-            .graph
-            .as_mut()
-            .unwrap()
-            .parameters[2] = [0.6, 0., 0.8, 0.];
+        if use_graph {
+            scene
+                .material_mut(material)
+                .unwrap()
+                .graph
+                .as_mut()
+                .unwrap()
+                .parameters[2] = [0.6, 0., 0.8, 0.];
+        } else {
+            scene.texture_mut(normal_texture.unwrap()).unwrap().pixels =
+                crate::scene_api::TexturePixels::Rgba32F(vec![0.8, 0.5, 0.9, 1.].into());
+        }
         assert_eq!(
             scene.pending_commit_kind().unwrap(),
             CommitKind::Incremental

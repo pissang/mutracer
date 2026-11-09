@@ -233,6 +233,12 @@ fn material_graph_gpu_node_matrix_matches_cpu_and_constant_material() {
         engine.set_camera(Some(camera)).unwrap();
         let mut results = Vec::new();
         for row in rows.as_array().unwrap() {
+            if let Ok(filter) = std::env::var("MUTRACER_GRAPH_MATRIX_FILTER") {
+                let name = row["name"].as_str().unwrap();
+                if !filter.split(',').any(|part| name.contains(part)) {
+                    continue;
+                }
+            }
             let name = row["name"].as_str().unwrap();
             let mut scene = Scene::new();
             let mut geometry = Geometry::new(
