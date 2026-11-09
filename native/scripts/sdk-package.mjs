@@ -12,6 +12,7 @@ import {bundleWindowsRuntime} from './windows-redist.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {finalizeHostLibrary} from './finalize-host-library.mjs';
 import {sdkCmakeConfig, sdkVersion, sdkVersionHeader} from './sdk-cmake.mjs';
+import {checkArchiveEntries} from './sdk-archive.mjs';
 import {checkCmakeConsumer} from './sdk-cmake-consumer.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -162,8 +163,12 @@ function archive(directory, destination) {
   mkdirSync(destination, {recursive: true});
   // Replace rather than update: zip updates otherwise retain removed entries.
   rmSync(path, {force: true});
-  if (mac) run('ditto', ['-c', '-k', '--keepParent', resolve(work, directory), path]);
+  // ditto defaults to resource forks/xattrs, which become AppleDouble entries.
+  if (mac) run('ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noqtn', '--keepParent', resolve(work, directory), path]);
   else run(nativeTar, [windows ? '-acf' : '-czf', path, '-C', work, directory]);
+  const listing = run(nativeTar, ['-tf', path]);
+  checkArchiveEntries(listing);
+  writeFileSync(resolve(work, `${directory}-contents.txt`), listing);
   writeFileSync(path + '.sha256', `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${filename}\n`);
   return path;
 }
