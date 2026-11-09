@@ -100,8 +100,10 @@ export async function loadMapImage(plan: MapPlan, pkg: MaterialXPackage): Promis
 export async function loadGraphImages(material: import('./materialxGraph').MaterialXGraphImport, pkg:MaterialXPackage):Promise<string[]> {
   const warnings:string[]=[];
   await Promise.all([...material.images].map(async ([node,plan])=>{
-    const blob=pkg.resolve(plan.file);
-    if(!blob){warnings.push(`${node}.file: missing ${plan.file}; using the image default`);return;}
+    const found=pkg.resolve(plan.file);
+    if(!found){warnings.push(`${node}.file: missing ${plan.file}; using the image default`);return;}
+    // Named files let the panel show the image name; zip entries are plain blobs.
+    const blob=found instanceof File?found:new File([found],plan.file.slice(plan.file.replace(/\\/g,'/').lastIndexOf('/')+1),{type:found.type});
     try{
       const bitmap=await decode(blob),texture=new Texture(bitmap as unknown as HTMLCanvasElement);
       texture.colorSpace=plan.srgb?'srgb':'linear';texture.flipY=true;

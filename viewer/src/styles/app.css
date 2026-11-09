@@ -519,6 +519,19 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .color span { color: var(--cv-text); font-size: 11px; }
 .color code { color: var(--cv-text-3); font: 10.5px var(--cv-mono); }
 .color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.color[data-disabled] { opacity: 0.4; }
+.color[data-disabled] input { pointer-events: none; }
+.graph-badge { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 6px; vertical-align: -3px;
+  border-radius: 4px; color: var(--cv-accent-hover); background: var(--cv-accent-surface); }
+.graph-inputs { display: grid; gap: 2px; }
+.graph-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; padding: 3px 2px 3px 6px; border-radius: var(--cv-radius-compact); }
+.graph-input:hover { background: rgb(255 255 255 / 0.03); }
+.graph-input > span { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.graph-input b { flex: none; color: var(--cv-text); font-size: 11px; font-weight: 500; }
+.graph-input > span small { min-width: 0; overflow: hidden; color: var(--cv-text-3); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.graph-error { grid-column: 1 / -1; color: var(--cv-warning); font-size: 10px; line-height: 1.35; }
+.tex-slot .graph-error { padding-left: 43px; }
+.tex-slots + .tex-slots { margin-top: 4px; }
 .tex { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-left: 6px; vertical-align: -2px;
   background: repeating-conic-gradient(#777 0 25%, #333 0 50%) 0 0 / 6px 6px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.2); }
 
@@ -902,7 +915,7 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .tex-slot__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .tex-slot__thumb .tex { margin: 0; }
 .tex-slot__label { display: grid; gap: 1px; min-width: 0; }
-.tex-slot__label b { color: var(--cv-text); font-size: 11px; font-weight: 500; }
+.tex-slot__label b { overflow: hidden; color: var(--cv-text); font-size: 11px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
 .tex-slot__label small { overflow: hidden; color: var(--cv-text-3); font-size: 9.5px; white-space: nowrap; text-overflow: ellipsis; }
 .tex-slot:not([data-on]) .tex-slot__label b { color: var(--cv-text-2); }
 

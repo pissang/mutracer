@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Unlink, Workflow, X } from 'lucide-react';
+import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
@@ -23,6 +24,7 @@ export function MaterialPanel() {
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
+  const graphState = useGraphDiagnostics();
 
   if (!material) {
     return (
@@ -37,6 +39,9 @@ export function MaterialPanel() {
   const set = (values: MaterialValues, label: string, mergeKey?: string) =>
     getEngine()?.setMaterialValues(material.id, values, label, mergeKey);
   const textures = new Set(material.textures);
+  const driven = new Map(material.graph?.inputs.map(input => [input.key, input]));
+  const diagnostics = graphState?.diagnostics ?? [];
+  const textureCount = Object.keys(material.maps).length + (material.graph?.images.length ?? 0);
   const base = material.values.baseColor as [number, number, number];
   const isOpen = (group: MaterialGroup) => {
     if (openGroups[group.id] !== undefined) return openGroups[group.id];
@@ -68,7 +73,7 @@ export function MaterialPanel() {
         <i className="mat-ball" style={{ '--c': linearToHex(base) } as React.CSSProperties} />
         <div>
           <strong>{material.name}</strong>
-          <small>{material.meshName || 'Mesh'}{material.users > 1 ? ` · shared by ${material.users} meshes` : ''}<MaterialGraphStatus /></small>
+          <small>{material.meshName || 'Mesh'}{material.users > 1 ? ` · shared by ${material.users} meshes` : ''}<MaterialGraphStatus state={graphState} /></small>
         </div>
         <button className="icon-btn sm" title="Reset to loaded values" aria-label="Reset material" onClick={() => getEngine()?.resetMaterial(material.id)}>
           <RotateCcw size={13} />
@@ -115,6 +120,7 @@ export function MaterialPanel() {
                 ? { ...param, ...material.displacementRange } : param.key === 'displacementBias'
                   ? { ...param, ...material.displacementRange, min: -material.displacementRange.max } : param} values={material.values} textures={textures}
                 disabled={group.id === 'displacement' && webgl}
+                graph={driven.get(param.key)} fallback={webgl && !material.graph?.webgl}
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
             {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
@@ -122,12 +128,21 @@ export function MaterialPanel() {
           </Section>
         );
       })}
+      {material.graph && material.graph.inputs.length > 0 && <Section
+        title="Graph"
+        value={String(material.graph.inputs.length)}
+        open={openGroups.graph ?? true}
+        onOpenChange={(open) => setOpenGroups((g) => ({ ...g, graph: open }))}
+      >
+        <GraphInputs material={material} diagnostics={diagnostics} />
+      </Section>}
       <Section
         title="Textures"
-        value={String(Object.keys(material.maps).length)}
-        open={openGroups.textures ?? Object.keys(material.maps).length > 0}
+        value={String(textureCount)}
+        open={openGroups.textures ?? textureCount > 0}
         onOpenChange={(open) => setOpenGroups((g) => ({ ...g, textures: open }))}
       >
+        {material.graph && material.graph.images.length > 0 && <GraphImages material={material} diagnostics={diagnostics} />}
         <TextureSlots material={material} />
       </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
@@ -159,24 +174,30 @@ function MaterialXImport({ materialId }: { materialId: string }) {
 }
 
 function ParamControl({
-  param, values, textures, onChange, disabled
+  param, values, textures, onChange, disabled, graph, fallback
 }: {
   param: MaterialParam;
   values: MaterialValues;
   textures: Set<string>;
   onChange: (values: MaterialValues) => void;
   disabled?: boolean;
+  /** Set when the material graph drives this input. */
+  graph?: GraphInput;
+  /** The backend renders the material value in place of the graph, so the control stays live. */
+  fallback?: boolean;
 }) {
-  const badge = 'texture' in param && param.texture && textures.has(param.texture)
-    ? <i className="tex" title="Multiplied by a texture" /> : null;
+  const badge = graph ? <GraphBadge input={graph} fallback={fallback} />
+    : 'texture' in param && param.texture && textures.has(param.texture)
+      ? <i className="tex" title="Multiplied by a texture" /> : null;
+  disabled = disabled || (!!graph && !fallback);
   if (param.kind === 'color') {
     const value = values[param.key] as [number, number, number];
-    return <ColorField label={param.label} badge={badge} value={linearToHex(value)} onChange={(hex) => onChange({ [param.key]: hexToLinear(hex) })} />;
+    return <ColorField label={param.label} badge={badge} value={linearToHex(value)} disabled={disabled} onChange={(hex) => onChange({ [param.key]: hexToLinear(hex) })} />;
   }
   if (param.kind === 'boolean') {
     return (
-      <Switch label={param.label} checked={Boolean(values[param.key])} onChange={(v) => onChange({ [param.key]: v })}>
-        <span className="field-label">{param.label}</span>
+      <Switch label={param.label} checked={Boolean(values[param.key])} disabled={disabled} onChange={(v) => onChange({ [param.key]: v })}>
+        <span className="field-label">{param.label}{badge}</span>
       </Switch>
     );
   }
@@ -301,8 +322,12 @@ const paramLabel = (group: MaterialGroup, param: MaterialParam) =>
 
 const formatWeight = (w: number) => (w === 0 ? '0' : w.toFixed(2));
 
-function MaterialGraphStatus(){
-  const [state,setState]=useState<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>();
+type GraphInput = NonNullable<SelectedMaterial['graph']>['inputs'][number];
+type GraphState = NonNullable<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>['materialGraphs'];
+
+/** Engine-wide graph compilation state, refreshed whenever the selection or render phase changes. */
+function useGraphDiagnostics(){
+  const [state,setState]=useState<GraphState>();
   const material = useViewer(s => s.material);
   const phase = useViewer(s => s.stats.phase);
   useEffect(() => {
@@ -314,10 +339,10 @@ function MaterialGraphStatus(){
       frame = requestAnimationFrame(() => {
         const engine = getEngine()?.engine;
         if (!engine || controller.signal.aborted) return;
-        setState(engine.getDiagnostics());
+        setState(engine.getDiagnostics()?.materialGraphs);
         void engine.waitForMaterialGraphs({signal: controller.signal}).then(result => {
           if (controller.signal.aborted) return;
-          setState(engine.getDiagnostics());
+          setState(engine.getDiagnostics()?.materialGraphs);
           if (result.outcome === 'superseded') follow();
         });
       });
@@ -325,11 +350,95 @@ function MaterialGraphStatus(){
     follow();
     return () => {controller.abort(); cancelAnimationFrame(frame);};
   }, [material, phase]);
-  const graph=state?.materialGraphs;
+  return state;
+}
+
+function MaterialGraphStatus({state:graph}:{state:GraphState}){
   const details=graph?.diagnostics.map(d=>`${d.node}${d.port?`.${d.port}`:''}: ${d.message}`).join('\n')??'';
   useEffect(()=>{if(details)console.warn(`Material graph diagnostics\n${details}`);},[details]);
   // Ready graphs need no notice; compiling and fallback read as a quiet status.
   if(!graph||(graph.status!=='compiling'&&graph.status!=='failed'))return null;
   const label=graph.status==='compiling'?'compiling graph…':'graph fallback';
   return <span role="status" title={details?`${details}\n(also in the console)`:undefined}>{` · ${label}`}</span>;
+}
+
+const messages = (list: MaterialGraphDiagnostic[]) => [...new Set(list.map(d => d.message))];
+
+function GraphBadge({ input, fallback }: { input: GraphInput; fallback?: boolean }) {
+  return <i className="graph-badge" title={`Graph: ${input.source}${fallback ? ' (WebGPU only)' : ''}`}><Workflow size={10} /></i>;
+}
+
+const PARAM_LABELS = new Map(MATERIAL_GROUPS.flatMap(group => group.params.map(param => [param.key as string, paramLabel(group, param)])));
+const inputLabel = (key: string) => PARAM_LABELS.get(key)
+  ?? key.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`).replace(/^./, c => c.toUpperCase());
+
+/** Graph-driven inputs, including those without a control; disconnecting hands an input back to its control. */
+function GraphInputs({ material, diagnostics }: { material: SelectedMaterial; diagnostics: MaterialGraphDiagnostic[] }) {
+  return (
+    <div className="graph-inputs">
+      {material.graph!.inputs.map(input => {
+        const nodes = new Set(input.nodes);
+        const errors = messages(diagnostics.filter(d => d.node ? nodes.has(d.node) : d.port === input.terminal));
+        const label = inputLabel(input.key);
+        return (
+          <div key={input.terminal} className="graph-input" data-error={errors.length > 0 || undefined}>
+            <span><b>{label}</b><small title={input.source}>{input.source}</small></span>
+            <button className="icon-btn icon-btn--bare xs" title={`Disconnect ${label.toLowerCase()} from the graph`} aria-label={`Disconnect ${label}`}
+              onClick={() => getEngine()?.disconnectMaterialGraphInput(material.id, input.terminal, `Disconnect ${label.toLowerCase()}`)}>
+              <Unlink size={12} />
+            </button>
+            {errors.map(message => <small key={message} className="graph-error">{message}</small>)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Images read by the material graph; replacing one keeps its color space and UV settings. */
+function GraphImages({ material, diagnostics }: { material: SelectedMaterial; diagnostics: MaterialGraphDiagnostic[] }) {
+  const input = useRef<HTMLInputElement>(null);
+  const target = useRef<{ node: string; port: string; name: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const replace = (image: { node: string; port: string; name: string }, file: File | undefined) => {
+    if (!file) return;
+    const error = textureDropError([file]);
+    if (error) return showToast(error, 'error');
+    void getEngine()?.setMaterialGraphImage(material.id, image.node, image.port, file, `Replace ${image.name}`);
+  };
+  return (
+    <div className="tex-slots">
+      {material.graph!.images.map(image => {
+        const errors = messages(diagnostics.filter(d => d.node === image.node));
+        return (
+          <div key={`${image.node}.${image.port}`} className="tex-slot" data-on data-drop={dropTarget === image.node || undefined}
+            onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDropTarget(image.node); } }}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTarget(t => (t === image.node ? null : t)); }}
+            onDrop={(e) => {
+              setDropTarget(null);
+              if (isMaterialXDrop(toPathedFiles(e.dataTransfer.files))) return;
+              e.preventDefault();
+              e.stopPropagation();
+              replace(image, e.dataTransfer.files[0]);
+            }}>
+            <button className="tex-slot__thumb" title={`Replace ${image.name}`} aria-label={`Replace ${image.name}`}
+              onClick={() => { target.current = image; input.current?.click(); }}>
+              {image.thumb ? <img src={image.thumb} alt="" /> : <i className="tex" />}
+            </button>
+            <span className="tex-slot__label">
+              <b title={image.node}>{image.name}</b>
+              <small>{image.feeds.map(inputLabel).join(', ')}</small>
+            </span>
+            <span />
+            {errors.map(message => <small key={message} className="graph-error">{message}</small>)}
+          </div>
+        );
+      })}
+      <input ref={input} type="file" hidden accept={TEXTURE_ACCEPT}
+        onChange={(e) => {
+          if (target.current) replace(target.current, e.currentTarget.files?.[0]);
+          e.currentTarget.value = '';
+        }} />
+    </div>
+  );
 }
