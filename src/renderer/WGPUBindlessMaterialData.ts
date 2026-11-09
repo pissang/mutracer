@@ -18,8 +18,10 @@ export class WGPUBindlessMaterialData {
   private readonly lightIndices: number[] = [];
   private readonly displacementMaps: Texture[];
   private materialCount: number;
+  materials: OpenPBRMaterial[];
   constructor(materials: OpenPBRMaterial[], lights: SceneLight[], private readonly graphs?: MaterialGraphState) {
     this.materialCount = materials.length; graphs?.request(materials);
+    materials = this.materials = graphs?.renderMaterials(materials) ?? materials;
     const extra = graphs?.textures() ?? [];
     if(extra.length) materials = [...materials, ...extra.map(map => new OpenPBRMaterial({map}))];
     const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
@@ -36,12 +38,13 @@ export class WGPUBindlessMaterialData {
       this.bufferData[slot.index] = maps.indices[slot.property];
       if (slot.define) this.defines[slot.define] = maps.indices[slot.property].filter(index => index >= 0).length;
     }
+    this.bufferData.normalMapIndex = this.bufferData.normalMapIndex.map((index,i) => index >= 0 && materials[i].normalMap?.normalMapFrame === 'materialx' ? index + 0.5 : index);
     this.bufferData.mapUvChannel = this.textures.map(t => t.uvChannel);
     this.bufferData.mapColorLinear = this.textures.map(t => isUdimTexture(t) ? 2 + textureColorLinear(t) : textureColorLinear(t));
     this.bufferData.mapTransform = this.textures.flatMap(t => [...t.uvScale, ...t.uvOffset]);
     this.bufferData.mapWrap = this.textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]);
   }
-  repackParams(materials: OpenPBRMaterial[]) { this.graphs?.request(materials); repackMaterialParams(this.bufferData, materials); }
+  repackParams(materials: OpenPBRMaterial[]) { this.graphs?.request(materials); materials = this.materials = this.graphs?.renderMaterials(materials) ?? materials; repackMaterialParams(this.bufferData, materials); }
   getBufferArray() { const packed = packMaterialBuffer(this.bufferData); const buffer = packed.length > this.materialCount * MATERIAL_FLOAT_COUNT ? packed.slice(0, this.materialCount * MATERIAL_FLOAT_COUNT) : packed; return this.graphs?.pack(buffer,this.textures) ?? buffer; }
   getLightTexturesIndices() { return this.lightIndices; }
   getDisplacementMaps() { return this.displacementMaps; }

@@ -131,7 +131,7 @@ an alternate serialization format.
 | --- | --- | --- |
 | `map` | RGB (sRGB), A | Multiplies `baseColor`; alpha use set by `mapAlphaUsage` |
 | `alphaMap` | G | Opacity, as in Three.js |
-| `normalMap`, `normalScale` | RGB | Tangent space; frame selected by `Texture.normalMapFrame` |
+| `normalMap`, `normalScale` | RGB | Tangent space from triangle UV derivatives |
 | `metallicRoughnessMap` | G = roughness, B = metalness | glTF convention |
 | `roughnessMap` | G | |
 | `metalnessMap` | B | |
@@ -147,12 +147,10 @@ an alternate serialization format.
 | `specularWeightMap` | Linear A | Multiplies `specularWeight`, for dielectric and metal |
 | `specularColorMap` | sRGB RGB | Decoded color multiplies `specularColor`, for dielectric and metal |
 
-Normal textures default to `normalMapFrame: 'cotangent'`, using triangle UV
-derivatives. Set the texture's `normalMapFrame` to `'materialx'` to match
-MaterialX tangent-space `normalmap`: it uses normalized world-space primary
-tangents and the vertex normal, and black texels keep the vertex normal.
-The frame uses primary UVs even when the image samples UV1. Both modes work
-on WebGPU and WebGL 2.
+Normal textures use triangle UV derivatives. Graph `normalmap` nodes default to
+normalized world-space primary tangents and the vertex normal; with this frame,
+black texels keep the vertex normal. The primary frame is independent of the
+UV set used to sample the image.
 
 All six layer maps default to `undefined`. They resolve before coat roughening
 and BSDF preparation. Images may be shared between color and data slots;
@@ -355,9 +353,24 @@ Nodes have stable IDs and typed inputs. Connect an input with
 connections are immutable snapshots; edit them through the graph's methods.
 Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
 
-Material graphs require WebGPU. WebGL 2 renders graph materials with their
-constants and maps and reports `unsupported-backend` in
-`engine.getDiagnostics()?.materialGraphs`.
+The engine automatically renders compatible image graphs through ordinary
+texture slots on WebGPU and WebGL 2. This includes base color, roughness,
+metalness, transmission weight, coat weight, specular weight/color, fuzz
+color/roughness and tangent-space normal images, with fixed
+UV0/UV1 selection, wrapping, channel selection and supported UV scale/offset
+and gain operations. Edits that remain compatible do not compile a graph shader.
+
+Other graphs require WebGPU. WebGL 2 uses their material constants and maps
+and reports `unsupported-backend` in `engine.getDiagnostics()?.materialGraphs`.
+Missing images retain their authored defaults. Nonlinear color operations,
+nonzero output bias, scalar sRGB decoding and incompatible shading frames keep
+the graph path. Transmission-medium and glTF anisotropy contexts also keep
+the graph when slot evaluation would change their behavior. Alpha images
+needing channel reordering also keep the graph. Coat, specular and fuzz slot
+conversion currently requires byte/image sources; float and integer data keep
+the graph.
+Compatible graph and texture-slot rendering can differ slightly in floating-point
+rounding; multiple bounces may amplify sparse path differences.
 
 WebGPU supports the following MaterialX 1.39 categories, within the type and
 sampling limits below:
@@ -420,32 +433,29 @@ shadow-ray evaluation cost.
 Emission color and luminance graphs currently require `unlit: true`; graph coat
 absorption on an emissive surface has the same restriction. These unsupported material contexts
 use the constant fallback. Displacement, volume, subsurface and tangent terminals
-are not supported. With WebGPU light tracing or photon mapping, graph materials
-use their constant fallback and report `unsupported-transport`. This API takes an authored
+are not supported. With WebGPU light tracing or photon mapping, graphs that
+still require graph evaluation use their constant fallback and report
+`unsupported-transport`. This API takes an authored
 graph; it does not load `.mtlx`/USD files or convert other surface models.
 
-Parameter values, including texture references and UV transforms, update without
-compiling a shader when their types and connections stay the same. New structures
-compile after a short debounce. During compilation, rendering uses the previous
-successful graph and its parameters; the first graph uses the material's constants
-and maps. A successful installation restarts accumulation. Compilation can take
+Parameter edits update without a graph compile while the installed graph program
+or a compatible texture-slot plan can represent them. An edit that makes a slot
+plan incompatible, or otherwise requires a new graph program, compiles after a
+short debounce. Rendering keeps the previous successful result and its parameters
+or texture slots during compilation; without a previous result, it uses the
+material's constants and maps. A successful installation restarts accumulation. Compilation can take
 hundreds of milliseconds or longer and becomes more expensive as a scene uses
 more distinct structures. Texture/resource changes can also pause rendering
 while the last image remains visible.
 Graphs add work at each material hit; opacity graphs also run for shadow rays.
 Ordinary materials in the same scene do not evaluate the graph's nodes.
-The viewer imports representable MaterialX image networks as ordinary texture
-slots, preserving their color encoding, channels, UV set and transforms.
-Networks requiring unsupported slot operations retain their graph; these need
-WebGPU for graph evaluation. Equivalent slot and graph paths can differ in
-floating-point rounding and later ray-path choices.
 Each material retains its own parameters even when it shares graph code; parameter
 memory grows with its reachable inputs and folded values.
 
 Read `engine.getDiagnostics()?.materialGraphs` for `status` (`idle`, `compiling`,
 `ready`, `failed`), requested/installed revisions, topology count, compilation
 measurements and located diagnostics (`code`, `message`, `materialId`, `node`, `port`).
-Node and port validation errors keep the last successful graph for that material;
+Node and port validation errors keep the last successful result for that material;
 valid graphs on other materials can still install. The fallback is the constant
 material if no successful graph exists. Shader failures do the same. Keep calling `refine()` or use
 RenderLoop while a graph compiles. Shader/program caches consume memory as new

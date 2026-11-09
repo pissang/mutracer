@@ -1,4 +1,6 @@
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
+import {slotTextureSources} from './materialGraph/slotTextures.js';
+import {MATERIAL_TEXTURE_NAMES} from './materialTextureSlots.js';
 import MaterialData from './MaterialData.js';
 import { packMaterialBuffer } from './materialLayout.js';
 import { repackMaterialParams } from './materialParams.js';
@@ -17,7 +19,7 @@ import {
   type TexturePixelSource
 } from './webgl.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
-import type {MaterialGraphState} from './materialGraph/state.js';
+import {MaterialGraphState} from './materialGraph/state.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import { isTextureDataSource } from '../scene/Texture.js';
 import type Texture from '../scene/Texture.js';
@@ -46,7 +48,7 @@ function createDataAtlasPage(
   const domPlacements = page.placements.filter(p => !isTextureDataSource(textures[p.index].image));
   if (domPlacements.length) {
     const canvas = createAtlasCanvas(width, height);
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('Unable to create a canvas for the texture atlas.');
     for (const placement of domPlacements) drawAtlasImage(context, placement, textures[placement.index]);
     const pixels = context.getImageData(0, 0, width, height).data;
@@ -111,7 +113,7 @@ function makeTextureArray(textures: Texture[], plan: TextureAtlasPlan, sRGB = fa
       return createDataAtlasPage(atlasWidth, atlasHeight, page, textures, floatStorage);
     }
     const canvas = createAtlasCanvas(atlasWidth, atlasHeight);
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) {
       throw new Error('Unable to create a canvas for the texture atlas.');
     }
@@ -152,6 +154,8 @@ class MaterialTable {
   private _materialBufferColumnsLog: number = 0;
   private _graphTextures: Texture[] = [];
   private _materialCount = 0;
+  materials: OpenPBRMaterial[] = [];
+  private readonly slotState: MaterialGraphState;
 
   private _displacementMaps: Texture[] = [];
   private _lightTexturesIndices: number[] = [];
@@ -164,14 +168,19 @@ class MaterialTable {
   ) {
     const packStart = performance.now();
     this._materialCount = materials.length;
-    graphs?.request(materials);
+    this.slotState = graphs ?? new MaterialGraphState();
+    this.slotState.request(materials);
+    if (!graphs) this.slotState.install(this.slotState.requested, this.slotState.revision);
+    materials = this.materials = this.slotState.renderMaterials(materials);
     const graphTextures = graphs?.textures() ?? [];
-    const data = new MaterialData(graphTextures.length ? [...materials, ...graphTextures.map(map => new OpenPBRMaterial({map}))] : materials,
+    const packedMaterials = graphTextures.length ? [...materials, ...graphTextures.map(map => new OpenPBRMaterial({map}))] : materials;
+    const textureSource = slotTextureSources(packedMaterials.flatMap(material => MATERIAL_TEXTURE_NAMES.flatMap(name => material[name] ? [material[name]!] : [])));
+    const data = new MaterialData(packedMaterials,
       lights.map(light => light.type === 'RectLight' ? light.texture : undefined),
       texture => {
         const image = (texture as Texture).image;
         return Number(texture.colorSpace ? texture.colorSpace === 'linear' : isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
-      }, options, texture => {
+      }, {...options, textureSource: texture => textureSource(texture as Texture)}, texture => {
         const image = (texture as Texture).image;
         return isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray);
       });
@@ -191,7 +200,9 @@ class MaterialTable {
 
   /** Repack parameters with the same material slots and unchanged texture metadata. */
   repackParams(materials: OpenPBRMaterial[]) {
-    this.graphs?.request(materials);
+    this.slotState.request(materials);
+    if (!this.graphs) this.slotState.install(this.slotState.requested, this.slotState.revision);
+    materials = this.materials = this.slotState.renderMaterials(materials);
     repackMaterialParams(this.bufferData, materials);
     this._updateBuffer();
   }

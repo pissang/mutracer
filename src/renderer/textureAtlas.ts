@@ -132,7 +132,7 @@ function packTextureAtlas(
 
 
 export function planTextureAtlas(textures: TextureState[], mapColorLinear: number[], options: MaterialTableOptions = {},
-  floatStorage = mapColorLinear.some(value => !!value)) {
+  floatStorage = mapColorLinear.some(value => !!value)): TextureAtlasResult {
   const bytesPerPixel = floatStorage ? 8 : 4;
   if (!textures.length) return { independentTextures: !!options.independentTextures, pages: [] as AtlasPage[], placements: [] as AtlasPlacement[],
     width: 1, height: 1, floatStorage, bytesPerPixel, mapInfo: [] as number[],
@@ -170,6 +170,29 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
       mapUvChannel: textures.map(t => t.uvChannel), mapColorLinear: textures.map((t, i) => t.udim ? 2 + Number(!!mapColorLinear[i]) : mapColorLinear[i]),
       stats: {estimatedBytes: bytes(placements), width, height, layers: unique.length, packTimeMs: 0, scale,
         sourcePixels: unique.reduce((n, i) => n + textures[i].image.width * textures[i].image.height, 0), textureCount: textures.length}};
+  }
+  if (options.textureSource) {
+    const indices: number[] = [], unique: TextureState[] = [], sources = new Map<object, Map<boolean, number>>();
+    for (const texture of textures) {
+      const source = options.textureSource(texture);
+      let flips = sources.get(source);
+      if (!flips) { flips = new Map(); sources.set(source, flips); }
+      let index = flips.get(texture.flipY);
+      if (index === undefined) { index = unique.length; unique.push(texture); flips.set(texture.flipY, index); }
+      indices.push(index);
+    }
+    if (unique.length < textures.length) {
+      const atlas: TextureAtlasResult = planTextureAtlas(unique, unique.map(t => mapColorLinear[textures.indexOf(t)]), {...options, textureSource: undefined}, floatStorage);
+      // Placements keep original texture indices for upload; logical samplers alias
+      // the same pixels but retain their own UV/wrap/color metadata.
+      for (const page of atlas.pages) for (const placement of page.placements) placement.index = textures.indexOf(unique[placement.index]);
+      return {...atlas, placements: indices.map(i => atlas.placements[i]),
+        mapInfo: indices.flatMap(i => atlas.mapInfo.slice(i * 4, i * 4 + 4)),
+        mapTransform: textures.flatMap(t => [...t.uvScale, ...t.uvOffset]),
+        mapWrap: textures.flatMap(t => [textureWrapIndex(t.wrapS), textureWrapIndex(t.wrapT)]),
+        mapUvChannel: textures.map(t => t.uvChannel), mapColorLinear,
+        stats: {...atlas.stats, textureCount: textures.length}};
+    }
   }
   const maxTextureArrayLayers = options.maxTextureArrayLayers ?? Infinity;
   const maxTextureDimension2D = options.maxTextureDimension2D ?? Infinity;
@@ -264,4 +287,10 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
       height: atlasHeight, layers: packed.pages.length, packTimeMs: 0, scale, sourcePixels,
       textureCount: textures.length, width: atlasWidth } };
 }
-export type TextureAtlasPlan = ReturnType<typeof planTextureAtlas>;
+interface TextureAtlasResult {
+  independentTextures: boolean; pages: AtlasPage[]; placements: AtlasPlacement[];
+  width: number; height: number; floatStorage: boolean; bytesPerPixel: number;
+  mapInfo: number[]; mapTransform: number[]; mapWrap: number[]; mapUvChannel: number[]; mapColorLinear: number[];
+  stats: TextureAtlasStats;
+}
+export type TextureAtlasPlan = TextureAtlasResult;

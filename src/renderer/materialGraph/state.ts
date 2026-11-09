@@ -1,3 +1,4 @@
+import {SlotTextures} from './slotTextures.js';
 import {flattenGraphUnchecked} from './flatten.js';
 import {graphContextDiagnostics} from './context.js';
 import {graphTerminals} from './ir.js';
@@ -14,6 +15,7 @@ export interface GraphPlan {
     materials?: readonly OpenPBRMaterial[];
     graphs: (NormalizedGraph | undefined)[];
     structures: NormalizedGraph[];
+    slots?: ReadonlyMap<OpenPBRMaterial, OpenPBRMaterial>;
 }
 const empty = (): GraphPlan => ({ key: '', graphs: [], structures: [] });
 export interface MaterialGraphCompilationState {
@@ -35,6 +37,7 @@ export interface MaterialGraphCompilationState {
  * snapshots graph parameters and guards installation by revision. */
 export class MaterialGraphState {
     capabilities = 'atlas';
+    private readonly slotTextures = new SlotTextures();
     active = empty();
     requested = empty();
     revision = 0;
@@ -56,6 +59,7 @@ export class MaterialGraphState {
         this.compileFailed = false;
         this.constantFallback.clear();
         const diagnostics: MaterialGraphDiagnostic[] = [];
+        const slots = new Map<OpenPBRMaterial, OpenPBRMaterial>();
         const previousGraphs = new Map((this.active.materials ?? []).map((m,i) => [m,this.active.graphs[i]]));
         const graphs = materials.map((material, index) => {
             if (!material.graph)
@@ -72,6 +76,12 @@ export class MaterialGraphState {
                 if(retained&&graph.diagnostics.length>before)this.constantFallback.add(material);
             };
             validateContext(graph);
+            const lowered = graph.diagnostics.length ? undefined : this.slotTextures.lower(material);
+            if (lowered) { slots.set(material, lowered); return undefined; }
+            if (graph.diagnostics.length && !this.constantFallback.has(material)) {
+                const retainedSlots = this.active.slots?.get(material);
+                if (retainedSlots) slots.set(material, retainedSlots);
+            }
             const previous=this.active.materials?previousGraphs.get(material):this.active.graphs[index];
             if(graph.diagnostics.length&&previous&&!this.constantFallback.has(material)){
                 // A failed replacement may retain a graph authored for an older
@@ -84,6 +94,7 @@ export class MaterialGraphState {
             // Preserve the successful graph for this slot after validation failure.
             return this.constantFallback.has(material) ? undefined : graph.diagnostics.length ? previous : graph;
         });
+        this.slotTextures.finish();
         const structures = Array.from(new Map(graphs.filter((g): g is NormalizedGraph => !!g && !!Object.keys(g.terminal).length).map(g => [g.key, g])).values()).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
         const key = structures.map(g => g.key).join('\n');
         const assignmentKey = (plan: GraphPlan) => plan.graphs.map(g => g?.key ?? '').join('\n');
@@ -93,7 +104,7 @@ export class MaterialGraphState {
             this.revision++;
             this.readyAt = performance.now() + 32;
         }
-        this.requested = { key, materials: materials.slice(), graphs, structures };
+        this.requested = { key, materials: materials.slice(), graphs, structures, slots };
         this.diagnostics = diagnostics;
         if (key === this.active.key) {
             this.install(this.requested, this.revision);
@@ -125,6 +136,10 @@ export class MaterialGraphState {
         this.diagnostics = [{ code: 'shader-compilation', message: error instanceof Error ? error.message : String(error) }];
     }
     get diagnosticsState(): MaterialGraphCompilationState { return { revision: this.revision, installedRevision: this.installedRevision, status: this.status, compilation: this.compilation && {...this.compilation}, diagnostics: this.diagnostics.map(d => ({...d})), topologyCount: this.requested.structures.length }; }
+    renderMaterials(materials: OpenPBRMaterial[]): OpenPBRMaterial[] {
+        return materials.map(material => this.constantFallback.has(material) ? material : this.requested.slots?.get(material) ??
+            (material.graph ? this.active.slots?.get(material) : undefined) ?? material);
+    }
     textures(): Texture[] {
         const textures = new Set<Texture>();
         for (const plan of [this.active, this.requested])

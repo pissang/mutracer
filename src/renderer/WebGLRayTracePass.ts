@@ -771,6 +771,7 @@ class WebGLRayTracePass {
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
+    materials = materialData.materials ?? materials;
     // Avoid too much shader compilation
     const STACK_SIZE = 50;
     const hasShadowCatcher = materials.some((m) => m.shadowCatcher);

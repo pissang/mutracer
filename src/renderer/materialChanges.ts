@@ -1,4 +1,5 @@
 import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
+import {materialSlotPlan} from './materialGraph/slotTextures.js';
 import Texture from '../scene/Texture.js';
 import { colorLuminance } from './lightSampling.js';
 import { materialEmission } from './materialEmission.js';
@@ -10,6 +11,7 @@ interface MaterialSnapshot {
   geometryKey: string;
   emissive: string;
   emissiveMap: string;
+  slots?: string;
 }
 const textureIds = new WeakMap<object, number>();
 let nextTextureId = 1;
@@ -25,6 +27,7 @@ function key(material: OpenPBRMaterial, keys: readonly (keyof OpenPBRMaterial)[]
 }
 function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
   return {
+    slots: material.graph ? JSON.stringify(materialSlotPlan(material)?.plan.maps) : undefined,
     paramKey: key(material, materialParamKeys),
     textureKey: (material.graph?.nodes.flatMap(node => Object.values(node.inputs ?? {}).map(input => input.value instanceof Texture ? textureKey(input.value) : '')).join('|') ?? '') + '|' + materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
     // Height maps affect projective BLAS bounds.
@@ -56,7 +59,7 @@ export class MaterialChangeTracker {
       emission ||= emissionChanged;
       emissiveMap ||= !previous || previous.emissiveMap !== next.emissiveMap;
       const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey
-        ? 'geometry' : next.textureKey !== previous.textureKey ? 'textures' : emissionChanged ? 'emission' : 'params';
+        ? 'geometry' : next.textureKey !== previous.textureKey || next.slots !== previous.slots ? 'textures' : emissionChanged ? 'emission' : 'params';
       if (ranks[candidate] > ranks[level]) level = candidate;
     }
     return { level, emission, emissiveMap };
