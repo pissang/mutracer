@@ -54,13 +54,16 @@ into material constants. Standard Surface uses MaterialX's official OpenPBR
 translation; glTF and PreviewSurface use the same boundary conversion as the
 viewer. These mappings do not promise pixel equality with another renderer's
 BSDF. The default shading frame is supported; arbitrary coat-normal and tangent
-networks outside that subset fall back.
+networks outside that subset fall back. HSV conversions and `hsvadjust` support
+color3/color4 with alpha preserved. Imported MaterialX 1.38 documents upgrade
+legacy normal maps and atan2 inputs to the current node semantics.
 
 Unsupported inputs report their USD path and port and use the authored constant
 or existing material conversion. Default image-frame controls, uniform zero
 inputs with no effect and default world-space frame inputs do not force a
-fallback. Lit emission, opacity projection and light-tracing/photon-mapping
-restrictions follow the native graph limits. The delegate does not bake graphs.
+fallback. Varying subsurface inputs are ignored when the subsurface weight is
+constant zero; active subsurface graphs still fall back. Lit emission, opacity
+projection and light-tracing/photon-mapping restrictions follow the native graph limits. The delegate does not bake graphs.
 
 Textures use Hio, sRGB color storage or linear float storage. MaterialX image
 nodes support repeat/clamp/mirror wrapping and graph UV transforms.
