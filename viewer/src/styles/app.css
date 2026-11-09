@@ -954,3 +954,6 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .gpuopen-detail pre { white-space: pre-wrap; font: inherit; line-height: 1.5; }
 .gpuopen-detail [role=status] > .hint__link { float: right; }
 .gpuopen-detail .progress { margin-top: 6px; }
+.gpuopen-package-controls { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 7px; }
+.gpuopen-package-controls .seg button { padding-inline: 4px; }
+.gpuopen-package-controls .seg button[data-disabled] { opacity: 0.35; }

@@ -8,7 +8,7 @@ import {
   type GpuOpenMaterial, type GpuOpenPackage, type GpuOpenLicense
 } from '../engine/gpuOpen';
 import { topCategories } from '../engine/polyHaven';
-import { Select } from './ui/controls';
+import { GpuOpenPackagePicker } from './GpuOpenPackagePicker';
 
 const PAGE = 48;
 let lastQuery = '', lastCategory: string | null = null;
@@ -103,7 +103,7 @@ export function GpuOpenBrowser() {
         <a href={gpuOpenSource(pick.id)} target="_blank" rel="noreferrer"><strong>{pick.name}</strong> <ExternalLink size={12} /></a>
         <span>{pick.author} · {pick.license}</span>
         {notice && <details><summary>License</summary><pre>{notice}</pre></details>}
-        {packages ? <Select label="Material package" value={packageId} options={packages.map(p => ({ value: p.id, label: `${p.label} · ${p.size}${p.bytes > GPUOPEN_PACKAGE_LIMIT ? ' · exceeds 128 MB' : ''}` }))}
+        {packages ? <GpuOpenPackagePicker packages={packages} value={packageId}
           onChange={setPackageId} disabled={!!progress} /> : <span>Loading packages…</span>}
         {!canDownloadGpuOpen(pick) ? <a href={gpuOpenSource(pick.id)} target="_blank" rel="noreferrer">Download from GPUOpen</a> :
           <button className="btn btn--wide" disabled={!material || !selected || !!progress || selected.bytes > GPUOPEN_PACKAGE_LIMIT} onClick={() => void apply()}>
