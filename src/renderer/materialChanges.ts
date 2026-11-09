@@ -18,7 +18,7 @@ function textureKey(texture: Texture | undefined) {
   if (!textureIds.has(texture)) textureIds.set(texture, nextTextureId++);
   if (!textureIds.has(texture.image)) textureIds.set(texture.image, nextTextureId++);
   return [textureIds.get(texture), textureIds.get(texture.image), texture.version, texture.uvScale.join(','),
-    texture.uvOffset.join(','), texture.uvChannel, texture.flipY, texture.wrapS, texture.wrapT, texture.colorSpace].join(':');
+    texture.uvOffset.join(','), texture.uvChannel, texture.flipY, texture.wrapS, texture.wrapT, texture.colorSpace, texture.normalMapFrame].join(':');
 }
 function key(material: OpenPBRMaterial, keys: readonly (keyof OpenPBRMaterial)[]) {
   return JSON.stringify(keys.map(k => material[k]));

@@ -307,7 +307,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -318,7 +318,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -329,7 +329,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -340,7 +340,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -351,7 +351,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -362,7 +362,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -373,7 +373,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -384,7 +384,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -395,7 +395,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -406,7 +406,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -417,7 +417,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -428,7 +428,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -439,7 +439,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -450,7 +450,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -461,7 +461,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -472,7 +472,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -483,7 +483,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   {
@@ -494,7 +494,7 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
         previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
         previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
         previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||
-        previous[i++] !== texture.colorSpace) return true;
+        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;
     }
   }
   return i !== previous.length;

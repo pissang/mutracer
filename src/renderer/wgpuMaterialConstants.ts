@@ -24,9 +24,10 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
 
   // Either layer's map requires independent normals, including a smooth
   // coat over a mapped base. Unmapped materials retain the shared path.
-  const USE_COAT_NORMAL_FRAMES = materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap));
+  const USE_COAT_NORMAL_FRAMES = materials.some(m => m.normalMap?.normalMapFrame==='materialx' || m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap));
 
-  return {
+  const materialXNormals=materials.some(m=>m.normalMap?.normalMapFrame==='materialx');
+  const result:Record<string,boolean|number> = {
     MATERIAL_CAPABILITIES:
       (materials.some(m => m.transmissionWeight !== 0 || !!m.map && m.mapAlphaUsage === 'transmission')
         ? MATERIAL_SHADER_CAPABILITIES.transmission : 0) |
@@ -37,7 +38,7 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     // Isotropic OpenPBR constructs its own basis. Normal mapping uses
     // triangle UV differentials rather than this vertex tangent.
     USE_TANGENT: mergedGeometry.tangent != null &&
-      materials.some(materialNeedsVertexTangents),
+      materials.some(m=>materialNeedsVertexTangents(m)||m.normalMap?.normalMapFrame==='materialx'),
 
     USE_COAT_NORMAL_FRAMES,
     USE_ANISOTROPY_DIRECTIONS: USE_COAT_NORMAL_FRAMES || materials.some(m =>
@@ -76,5 +77,7 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0,
     USE_UDIM_MAPS: +materialData.defines.NUM_UDIM_MAPS > 0
   };
+  if(materialXNormals)result.USE_MATERIALX_NORMAL_MAPS=true;
+  return result;
 
 }

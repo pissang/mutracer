@@ -329,7 +329,10 @@ void getMaterial(
 
   vec4 directionInfo = fetchMatData(i + MAT_ROW_DIRECTION_NORMAL);
   mat.anisotropyDirection = vec2(1.0, 0.0);
-  mat.anisotropyDirectionEnabled = directionInfo.y != 0.0;
+  mat.anisotropyDirectionEnabled = directionInfo.y != 0.0 ? 1 : 0;
+#ifdef USE_MATERIALX_NORMAL_MAPS
+  if (fract(roughnessAndNormal.y) > 0.25) mat.anisotropyDirectionEnabled |= 2;
+#endif
   mat.coatAnisotropyRotation = fetchMatData(i + MAT_ROW_FILM_TEXTURE).x;
 #ifdef NUM_ANISOTROPY_MAPS
   if (directionInfo.x >= 0.0) {
@@ -338,7 +341,7 @@ void getMaterial(
     mat.specularAnisotropy *= texel.b;
     vec2 direction = texel.rg * 2.0 - 1.0;
     if (dot(direction, direction) > 1e-4) mat.anisotropyDirection = normalize(direction);
-    mat.anisotropyDirectionEnabled = true;
+    mat.anisotropyDirectionEnabled |= 1;
   }
 #endif
 #ifdef HAS_GLTF_ANISOTROPY
@@ -348,7 +351,7 @@ void getMaterial(
     mat.specularAnisotropy = native.y;
   }
 #endif
-  if (mat.anisotropyDirectionEnabled) {
+  if ((mat.anisotropyDirectionEnabled & 1) != 0) {
     float theta = directionInfo.y;
     vec2 d = mat.anisotropyDirection;
     mat.anisotropyDirection = vec2(cos(theta)*d.x - sin(theta)*d.y, sin(theta)*d.x + cos(theta)*d.y);
@@ -378,7 +381,11 @@ vec3 getMatNormal(int materialIndex, vec2 uv, vec3 normal, vec3 dp1, vec3 dp2, v
   int i = materialIndex * MAT_DATA_SIZE;
   vec4 roughnessAndNormal = fetchMatData(i + MAT_ROW_ROUGHNESS_NORMAL);
   int normalMapIndex = int(roughnessAndNormal.y);
-  if (normalMapIndex >= 0) {
+  if (normalMapIndex >= 0
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    && fract(roughnessAndNormal.y) < 0.25
+#endif
+  ) {
     // http://www.thetenthplanet.de/archives/1180
     // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors
@@ -415,6 +422,19 @@ vec3 getMatNormal(int materialIndex, vec2 uv, vec3 normal, vec3 dp1, vec3 dp2, v
   }
 }
 #endif
+
+#ifdef USE_MATERIALX_NORMAL_MAPS
+void materialx_normal(inout SurfaceInteraction si) {
+  vec4 m = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_ROUGHNESS_NORMAL);
+  if (fract(m.y) < 0.25) return;
+  int index = int(m.y);
+  vec3 value = sampleMap(index, getMapUvSet(index, si.uv, si.uv1)).rgb;
+  vec3 d = value * 2.0 - 1.0;
+  if (dot(value, value) == 0.0) d = vec3(0.0, 0.0, 1.0);
+  si.normal = normalize(normalize(si.geometryTangent) * d.x * m.z + normalize(si.geometryBitangent) * d.y * m.w + si.vertexNormal * d.z);
+}
+#endif
+
 
 `
 });

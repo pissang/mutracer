@@ -79,3 +79,19 @@ it('accepts explicit default tangent normal maps and upgrades object space', asy
  const restored = pruneInactiveInputs([{ id: 'n', category: 'normalmap', type: 'vector3', inputs: { space: { type: 'string', value: 'tangent' } } }], {});
  expect(restored.nodes[0].inputs?.space).toBeUndefined();
 });
+
+it('installs an exact image normal as an ordinary slot with undoable frame metadata', async () => {
+ const originalBitmap=globalThis.createImageBitmap;
+ const bitmap={width:1,height:1,close:vi.fn()};
+ globalThis.createImageBitmap=vi.fn(async()=>bitmap) as unknown as typeof createImageBitmap;
+ try{
+  const source='<materialx version="1.39"><image name="i" type="vector3"><input name="file" type="filename" value="normal.png"/></image><normalmap name="n" type="vector3"><input name="in" type="vector3" nodename="i"/><input name="scale" type="float" value="0.5"/></normalmap><open_pbr_surface name="S"><input name="geometry_normal" type="vector3" nodename="n"/></open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>';
+  const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
+  const file=new File([zipSync({'m.mtlx':strToU8(source),'normal.png':new Uint8Array([1])})],'m.zip');
+  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file,path:file.name}])).toBe(true);
+  const args=setTextures.mock.calls[0] as unknown as unknown[];
+  expect(args[1]).toMatchObject({normalMap:expect.any(Blob)});expect(args[2]).toMatchObject({normalScale:[.5,.5]});expect(args[6]).toBeNull();
+  expect(args[7]).toMatchObject({normalMap:{normalMapFrame:'materialx',colorSpace:'linear',flipY:true,uvScale:[1,1],uvChannel:0}});
+  expect(bitmap.close).toHaveBeenCalled();
+ }finally{globalThis.createImageBitmap=originalBitmap;}
+});

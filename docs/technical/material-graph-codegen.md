@@ -105,6 +105,16 @@ MaterialX normalmap defaults use world-space geometry;
 explicit geometry nodes default to object space. Image nodes reuse the existing
 texture decoding, filtering and UDIM path.
 
+The viewer lowers image networks only when existing slots can preserve their
+operations. Channel copying preserves decoded image channels; scalar sRGB decoding,
+nonzero output bias, nonlinear color math, and unsupported coordinate transforms
+retain graphs. Missing or undecodable direct-map resources also retain the graph
+and its image defaults. A texture's optional MaterialX normal frame uses the same
+world-space decode as a normal terminal, selected by a half-integer normal-map
+index; truncation still addresses the original texture. The ordinary cotangent
+normal path remains the default. This browser slot specialization does not add
+native descriptor options or change the default native shader.
+
 ## Current boundaries
 
 This is an authored typed graph API, not a MaterialX XML/USD importer. Unknown

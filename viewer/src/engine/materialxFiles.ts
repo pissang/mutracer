@@ -133,3 +133,34 @@ export async function loadMaterialXDisplacement(material:import('./materialxGrap
   console.debug('MaterialX displacement bake',{material:material.name,backend:result.backend,width:result.width,height:result.height,maxQuantizationError:result.maxError,...result.timings});
   return {file:result.file,values:{displacementScale:result.scale,displacementBias:result.bias},transform:{uvScale:[1,1] as [number,number],flipY:true,uvChannel:plan.uvChannel,wrapS:'repeat' as const,wrapT:'repeat' as const},warnings:[]};
 }
+
+/** Repack channels only. Values remain at their original precision; networks
+ * needing color conversion, clamping or a nonzero bias keep the graph. */
+export async function loadDirectMaterialX(material:import('./materialxGraph').MaterialXGraphImport,pkg:MaterialXPackage) {
+  if(!material.direct)return;
+  const maps:Partial<Record<import('./materialParams').TextureKey,Blob>>={},transforms:Partial<Record<import('./materialParams').TextureKey,import('./modelCache').TextureTransform>>={};
+  for(const map of material.direct.maps){
+    const image=material.images.get(map.node),blob=image&&pkg.resolve(image.file);
+    if(!blob)return;
+    // Decode once even for unchanged bytes: broken resources must keep the
+    // graph's missing-image default rather than installing a partial map set.
+    let bitmap:ImageBitmap;
+    try{bitmap=await decode(blob);}catch{return;}
+    const [r,g,b,a]=map.channels;
+    if(r===0&&g===1&&b===2&&(a===3||a===-2))maps[map.slot]=blob;
+    else{
+      const canvas=new OffscreenCanvas(bitmap.width,bitmap.height),ctx=canvas.getContext('2d',{willReadFrequently:true})!;
+      ctx.drawImage(bitmap,0,0);
+      const source=ctx.getImageData(0,0,bitmap.width,bitmap.height).data;
+      if(source.some((value,i)=>i%4===3&&value!==255)){bitmap.close();return;}
+      const pixels=new Uint8ClampedArray(source.length);
+      for(let i=0;i<pixels.length;i++){
+        const channel=map.channels[i%4];pixels[i]=channel===-2?255:channel===-1?0:source[i-i%4+channel];
+      }
+      ctx.putImageData(new ImageData(pixels,bitmap.width,bitmap.height),0,0);
+      maps[map.slot]=await canvas.convertToBlob({type:'image/png'});
+    }
+    bitmap.close();transforms[map.slot]=map.transform;
+  }
+  return {maps,transforms,values:material.direct.values};
+}

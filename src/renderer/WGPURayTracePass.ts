@@ -1,3 +1,4 @@
+import {materialXNormalShader} from './materialXNormal.js';
 import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
@@ -1086,8 +1087,9 @@ class WGPURayTracePass {
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
-      const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
+      let code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
         causticDiagnostics.fullEmissionRandom !== false, true, true, false, true);
+      if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1145,6 +1147,7 @@ class WGPURayTracePass {
           },
           bake
         );
+        if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
         code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan);
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
@@ -2609,6 +2612,8 @@ class WGPURayTracePass {
     const hasDisplacement = materialData.getDisplacementMaps().length > 0;
     this._hasDisplacement = hasDisplacement;
 
+    // Optional source specializations must disappear when their last map is removed.
+    delete this._constants.USE_MATERIALX_NORMAL_MAPS;
     Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
       this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
     // Runtime storage metadata has no texture-count specialization.

@@ -75,7 +75,7 @@ for (const field of schema.filter(field => field.category === 'texture')) {
     '        previous[i++] !== texture.image || previous[i++] !== texture.flipY ||',
     '        previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||',
     '        previous[i++] !== texture.uvChannel || previous[i++] !== texture.wrapS || previous[i++] !== texture.wrapT ||',
-    '        previous[i++] !== texture.colorSpace) return true;',
+    '        previous[i++] !== texture.colorSpace || previous[i++] !== texture.normalMapFrame) return true;',
     '    }', '  }');
 }
 lines.push('  return i !== previous.length;', '}', '');
