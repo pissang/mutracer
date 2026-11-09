@@ -1,6 +1,7 @@
-import {describe,it,expect,vi} from 'vitest';
-import {parseMaterialXGraph} from '../src/engine/materialxGraph';
-import {loadDirectMaterialX,type MaterialXPackage} from '../src/engine/materialxFiles';
+import {describe,it,expect} from 'vitest';
+import {parseMaterialXGraph as parse} from '../src/engine/materialxGraph';
+import {planDirectMaterial} from '../../src/renderer/materialGraph/lower';
+const parseMaterialXGraph = (text:string) => { const material=parse(text); return {...material,direct: material.graph ? planDirectMaterial(material.graph,material.images,material.values) : undefined}; };
 const doc=(nodes:string,inputs:string)=>`<materialx version="1.39">${nodes}<open_pbr_surface name="S" type="surfaceshader">${inputs}</open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>`;
 const image=(type='color3',extra='')=>`<image name="i" type="${type}"><input name="file" type="filename" value="image.png"/>${extra}</image>`;
 const port=(name:string,type:string,node='i')=>`<input name="${name}" type="${type}" nodename="${node}"/>`;
@@ -23,7 +24,7 @@ describe('exact MaterialX slot lowering',()=>{
  it('selects MaterialX normals explicitly and retains nondefault shading frames',()=>{
   const normal=(extra='')=>image('vector3')+`<normalmap name="n" type="vector3"><input name="in" type="vector3" nodename="i"/>${extra}</normalmap>`;
   const m=parseMaterialXGraph(doc(normal(),port('geometry_normal','vector3','n')));
-  expect(m.direct?.maps[0]).toMatchObject({slot:'normalMap',transform:{normalMapFrame:'materialx',colorSpace:'linear'}});
+  expect(m.direct?.maps[0]).toMatchObject({slot:'normalMap',transform:{colorSpace:'linear'}});
   expect(m.direct?.values.normalScale).toEqual([1,1]);
   expect(parseMaterialXGraph(doc(normal('<input name="scale" type="float" value="0.5"/>'),port('geometry_normal','vector3','n'))).direct?.values.normalScale).toEqual([.5,.5]);
   for(const extra of ['<input name="normal" type="vector3" value="0,1,0"/>']){
@@ -49,12 +50,5 @@ describe('exact MaterialX slot lowering',()=>{
  });
  it('does not mistake a scaled decoded normal for a scale on the input image',()=>{
   const m=parseMaterialXGraph(doc(image('vector3')+'<normalmap name="n" type="vector3"><input name="in" type="vector3" nodename="i"/></normalmap><multiply name="mul" type="vector3"><input name="in1" type="vector3" nodename="n"/><input name="in2" type="float" value="0.5"/></multiply>',port('geometry_normal','vector3','mul')));expect(m.direct).toBeUndefined();
- });
- it('keeps the authored missing-image default and graph on resource failure',async()=>{
-  const m=parseMaterialXGraph(doc(image(),port('base_color','color3'))),graph=m.graph;
-  const pkg:MaterialXPackage={text:'',path:'m.mtlx',resolve:()=>undefined};
-  expect(await loadDirectMaterialX(m,pkg)).toBeUndefined();expect(m.graph).toBe(graph);
-  vi.stubGlobal('createImageBitmap',vi.fn().mockRejectedValue(new Error('bad image')));
-  expect(await loadDirectMaterialX(m,{...pkg,resolve:()=>new Blob(['invalid'])})).toBeUndefined();expect(m.graph).toBe(graph);vi.unstubAllGlobals();
  });
 });

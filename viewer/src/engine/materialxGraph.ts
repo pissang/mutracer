@@ -7,7 +7,6 @@ import {parseXml,type XmlElement as Element} from './materialx';
 import standardSurface from './materialxStandardSurface';
 import {materialXSurfaceInputs, materialXInactiveLobes, materialXInactiveImageInputs, upgradeMaterialXNormalmap} from '../../../src/renderer/materialGraph/surface';
 import type {MaterialValues} from './materialParams';
-import {planDirectMaterial, type DirectMaterial} from './materialxDirect';
 import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
 const literal=(type:Type,value:Input['value']):Input=>({type,value});
@@ -214,7 +213,6 @@ export interface MaterialXGraphImport {
     warnings:string[];
     coverage:'complete'|'partial'|'fallback';
     displacement?:DisplacementPlan;
-    direct?:DirectMaterial;
 }
 const dynamicCategories=['image','tiledimage','gltf_image','gltf_colorimage','gltf_normalmap','texcoord','position','normal','tangent','bitangent','transformpoint','transformvector','transformnormal'];
 const isDynamic=(normalized:ReturnType<typeof normalizeGraph>)=>normalized.nodes.some(n=>Object.values(n.inputs).some(i=>i.geometry)||dynamicCategories.includes(n.category));
@@ -281,5 +279,5 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
     }
     const displacement=r.displacement(material,shader);
     if(displacement?.reason)warnings.push(displacement.reason);
-    return {name:material.attrs.name??'MaterialX',shader:shader.tag,values,graph,images:r.images,warnings,displacement,direct:graph&&!warnings.length?planDirectMaterial(graph,r.images,values):undefined,coverage:warnings.length?(Object.keys(values).length?'partial':'fallback'):'complete'};
+    return {name:material.attrs.name??'MaterialX',shader:shader.tag,values,graph,images:r.images,warnings,displacement,coverage:warnings.length?(Object.keys(values).length?'partial':'fallback'):'complete'};
 }

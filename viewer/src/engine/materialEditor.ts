@@ -191,7 +191,7 @@ export class MaterialEditor {
 
   private withSampling(texture: Texture, sampling: TextureSampling) {
     const copy = new Texture(texture.image);
-    copy.normalMapFrame = texture.normalMapFrame; copy.source = texture.source; copy.flipY = texture.flipY; copy.colorSpace = texture.colorSpace;
+    copy.source = texture.source; copy.flipY = texture.flipY; copy.colorSpace = texture.colorSpace;
     copy.uvOffset = [...texture.uvOffset]; copy.uvChannel = texture.uvChannel;
     copy.uvScale = [...sampling.uvScale]; copy.wrapS = sampling.wrapS; copy.wrapT = sampling.wrapT;
     const file = this.uploads.get(texture), transform = this.transforms.get(texture);
@@ -315,7 +315,6 @@ export class MaterialEditor {
       texture.uvOffset = [...(transform.uvOffset??[0,0])];
       texture.flipY = transform.flipY;
       if(transform.colorSpace)texture.colorSpace=transform.colorSpace;
-      if(transform.normalMapFrame)texture.normalMapFrame=transform.normalMapFrame;
       if(transform.uvChannel!==undefined)texture.uvChannel=transform.uvChannel;
       if(transform.wrapS)texture.wrapS=transform.wrapS;
       if(transform.wrapT)texture.wrapT=transform.wrapT;
