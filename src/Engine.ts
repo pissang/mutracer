@@ -1,3 +1,4 @@
+import type {MaterialGraphCompilationState} from './renderer/materialGraph/state.js';
 import type {SurfaceHit} from './renderer/surfaceHit.js';
 import InstancedMesh from './scene/InstancedMesh.js';
 import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
@@ -37,6 +38,18 @@ export type BVHBuilder = 'tinybvh' | 'builtin';
 export interface PrepareOptions {
   /** Completed BLAS fraction 0–1. Default undefined. */ onProgress?: (progress: number) => void;
   /** Cancels preparation. Default undefined. */ signal?: AbortSignal;
+}
+/** Options for waiting on the current committed scene's graphs. */
+export interface WaitForMaterialGraphsOptions {
+  /** Cancels only this wait, leaving compilation and rendering running. Default undefined. */
+  signal?: AbortSignal;
+}
+/** A graph wait always resolves; inspect outcome and state.status for success. */
+export interface MaterialGraphWaitResult {
+  /** settled includes idle, ready and failed; superseded means a newer scene edit was committed. */
+  outcome: 'settled' | 'superseded' | 'aborted' | 'unavailable';
+  /** Detached engine-wide diagnostic snapshot at completion; superseded/aborted may still be compiling. */
+  state: MaterialGraphCompilationState;
 }
 /** Engine construction settings. */
 export interface EngineParams {
@@ -119,6 +132,7 @@ export default class Engine {
   private _lastBvhBuild?: { geometryCount: number; bvhTimeMs: number };
   private _lastBvhSettings = '';
   private _lastBudget = -1;
+  private _materialGraphWaiters = new Set<() => void>();
   private _shaderProgress = '';
   private _events = new Events<EngineEvents>();
   /** @internal Optional viewer-owned persistent BLAS cache. */
@@ -257,6 +271,7 @@ export default class Engine {
     if (!this._pipeline) void this.init().catch(() => {});
     if (changed) for (const render of this._renders) render._inputsChanged(resetTiming);
     this._upload();
+    this._checkMaterialGraphWaiters();
     return changed;
   }
   private _upload() {
@@ -288,6 +303,51 @@ export default class Engine {
     this._pendingMeshes = 'none'; this._pendingLights = false; this._pendingBackground = false;
     this._pendingTransforms.clear(); this._pendingVisibility.clear(); this._pendingAdded.clear(); this._pendingColors.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
     this._uploadedRevision = this._sceneRevision;
+    this._checkMaterialGraphWaiters();
+  }
+  /**
+   * Waits for graphs in the scene most recently committed by update(). Options default empty.
+   * Resolves with idle/ready/failed diagnostics; never rejects. Any newer committed scene
+   * edit supersedes the wait (camera-only edits do not). Abort cancels only this waiter.
+   * Keep calling Render.refine() or running RenderLoop: this method does not drive rendering.
+   * A graph-free scene with no pending graph work settles immediately. Disposal, device loss and initialization failure return
+   * unavailable with an engine-unavailable diagnostic. Graph revisions are engine-wide.
+   */
+  waitForMaterialGraphs(options: WaitForMaterialGraphsOptions = {}): Promise<MaterialGraphWaitResult> {
+    const sceneRevision = this._sceneRevision, deviceRevision = this._deviceRevision;
+    const hasGraphs = this._committedScene?.meshes.some(mesh => mesh.materials.some(material => !!material.graph)) ?? false;
+    return new Promise(resolve => {
+      let done = false;
+      let state: MaterialGraphCompilationState = {revision: 0, installedRevision: 0, status: 'idle', diagnostics: [], topologyCount: 0};
+      const finish = (outcome: MaterialGraphWaitResult['outcome']) => {
+        if (done) return;
+        done = true;
+        this._materialGraphWaiters.delete(check);
+        options.signal?.removeEventListener('abort', check);
+        resolve({outcome, state});
+      };
+      const unavailable = (error: unknown) => {
+        state = {...state, status: 'failed', diagnostics: [{code: 'engine-unavailable', message: error instanceof Error ? error.message : String(error)}]};
+        finish('unavailable');
+      };
+      const check = () => {
+        if (done) return;
+        state = this._pipeline?.getDiagnostics().materialGraphs ?? state;
+        if (options.signal?.aborted) return finish('aborted');
+        if (this._disposed) return unavailable('Engine is disposed.');
+        if (deviceRevision !== this._deviceRevision) return unavailable(this._deviceLossError ?? 'Device changed.');
+        if (this._pipelineInitError) return unavailable(this._pipelineInitError);
+        if (sceneRevision !== this._sceneRevision) return finish('superseded');
+        if ((this._uploadedRevision === sceneRevision || !hasGraphs && state.revision === 0 && state.status === 'idle') && state.status !== 'compiling') finish('settled');
+      };
+      this._materialGraphWaiters.add(check);
+      options.signal?.addEventListener('abort', check, {once: true});
+      check();
+      if (!done && !this._pipeline) void this.init().then(check, error => {if (!done) unavailable(error);});
+    });
+  }
+  private _checkMaterialGraphWaiters() {
+    for (const check of this._materialGraphWaiters) check();
   }
   private _bvhConfig(): BvhBuildConfig { return bvhConfig(this); }
   /** Builds static CPU BVHs for this scene without replacing GPU inputs. Options default undefined. */
@@ -478,6 +538,7 @@ export default class Engine {
       this._releaseDenoiser(filter);
     }
     this._denoiserCache.clear();
+    this._checkMaterialGraphWaiters();
   }
   /** Replaces a caller-owned device after validation. Only available on engines
    * constructed with device; the next update/refine uploads the committed scene.
@@ -511,6 +572,7 @@ export default class Engine {
     return this._gpuDevice ? 'WebGPU' : '';
   }
   /** @internal */ _reportShaderProgress() {
+    this._checkMaterialGraphWaiters();
     const compilation = this._pipeline?.getDiagnostics().shaderCompilation;
     if (!compilation) return;
     const key = `${compilation.status}/${compilation.completedPipelineCount}/${compilation.pipelineCount}`;
@@ -566,7 +628,7 @@ export default class Engine {
   /** Releases all renders, shared resources, CPU workers and owned denoisers. */
   dispose() {
     if (this._disposed) return;
-    this._disposed = true; this._bvhPreparationRevision++; this._bvhPreparationController?.abort();
+    this._disposed = true; this._checkMaterialGraphWaiters(); this._bvhPreparationRevision++; this._bvhPreparationController?.abort();
     this._lossController?.abort(new Error('Engine is disposed.')); this._lossController = undefined;
     this._contextRestore?.reject(new Error('Engine is disposed.')); this._contextRestore = undefined;
     if (this._webglListening) {

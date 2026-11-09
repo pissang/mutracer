@@ -106,7 +106,7 @@ export type { SamplingPattern } from './renderer/sampling.js';
 
 // Independent rendering mechanisms.
 export { default as Engine } from './Engine.js';
-export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
+export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, WaitForMaterialGraphsOptions, MaterialGraphWaitResult, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
 export { default as Display } from './Display.js';
 export type { BlobOptions, DisplayChannel, AovIdComponent, DisplaySettings, PostProcess, PostProcessContext, PostProcessOptions } from './Display.js';
 export { default as Render } from './Render.js';

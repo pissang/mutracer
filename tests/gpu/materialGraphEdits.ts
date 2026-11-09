@@ -23,14 +23,11 @@ async function sharing(backend: 'webgpu' | 'webgl', count: () => number) {
     try {
         engine.update();
         await render.converge({ samples: 1, timeoutMs: 90000 });
-        while (engine.getDiagnostics()?.materialGraphs?.status !== 'ready') {
-            if (engine.getDiagnostics()?.materialGraphs?.status === 'failed')
-                throw new Error(JSON.stringify(engine.getDiagnostics()));
-            render.refine();
-            await pause();
-            if (performance.now() - start > 90000)
-                throw new Error('sharing timeout');
-        }
+        const timer = setInterval(() => render.refine(), 10);
+        try {
+            const result = await engine.waitForMaterialGraphs({signal: AbortSignal.timeout(90000)});
+            if (result.outcome !== 'settled' || result.state.status !== 'ready') throw Error(JSON.stringify(result));
+        } finally {clearInterval(timer);}
         return { materials: 70, topologies: engine.getDiagnostics()?.materialGraphs?.topologyCount, compiles: count() - before, firstMs: performance.now() - start, shader: engine.getDiagnostics()?.shaderCompilation, graph: engine.getDiagnostics()?.materialGraphs };
     }
     finally {
@@ -65,14 +62,19 @@ async function run() {
     engine.camera = camera;
     const render = new Render(engine, { bounces: 1, samplingPattern: 'sobol' });
     const state = () => engine.getDiagnostics()?.materialGraphs;
-    const settle = async () => { const start = performance.now(); while (state()?.status !== 'ready') {
-        if (state()?.status === 'failed')
-            throw new Error(JSON.stringify(state()));
-        if (performance.now() - start > 90000)
-            throw new Error('timeout');
-        render.refine();
-        await pause();
-    } return performance.now() - start; };
+    const wait = async () => {
+        const timer = setInterval(() => render.refine(), 10);
+        try {
+            const result = await engine.waitForMaterialGraphs({signal: AbortSignal.timeout(90000)});
+            if (result.outcome !== 'settled') throw Error(JSON.stringify(result));
+            return result.state;
+        } finally {clearInterval(timer);}
+    };
+    const settle = async (expected: 'ready' | 'idle' = 'ready') => {
+        const start = performance.now(), result = await wait();
+        if (result.status !== expected) throw Error(JSON.stringify(result));
+        return performance.now() - start;
+    };
     const pixel = async () => { render.restart(); await render.converge({ samples: 4, timeoutMs: 60000 }); return (await render.readPixels('hdr')).data[0]; };
     try {
         engine.update();
@@ -96,7 +98,9 @@ async function run() {
         }
         let pendingFrames = 0, maximumPendingSamples = 0, obsoleteInstalled = false;
         const started = performance.now(), last = revisions.at(-1)!;
-        while (state()?.status !== 'ready') {
+        let completed = false;
+        const pending = wait().then(result => {completed = true; return result;});
+        while (!completed) {
             if (state()?.status === 'failed')
                 throw new Error(JSON.stringify(state()));
             render.refine();
@@ -109,6 +113,8 @@ async function run() {
                 throw new Error('structure timeout');
             await pause();
         }
+        const structureState = await pending;
+        if (structureState.status !== 'ready') throw Error(JSON.stringify(structureState));
         const structureMs = performance.now() - started, structureCompiles = compiles - beforeStructure, structurePixel = await pixel(), installed = state()!.installedRevision;
         const stable = structurePixel;
         graph.setNode({ id: 'color', category: 'unknown_node', type: 'color3' });
@@ -125,9 +131,7 @@ async function run() {
         failNext = true;
         material.graph = new MaterialGraph({nodes:[{id:'color',category:'mix',type:'color3',inputs:{bg:{type:'color3',value:[0.2,0.2,0.2]},fg:{type:'color3',value:[0.8,0.8,0.8]},mix:{type:'float',value:0.5}}}],terminal:{emissionColor:{node:'color'}}});
         engine.update();render.refine();
-        const failureStart=performance.now();
-        while(state()?.status!=='failed'){render.refine();await pause();if(performance.now()-failureStart>60000)throw new Error('failure timeout');}
-        const driverFailure = state(), driverFailurePixel = await pixel();
+        const driverFailure = await wait(), driverFailurePixel = await pixel();
         material.graph.setInput('color','mix',{type:'float',value:0.25});engine.update();render.refine();await settle();
         const retryPixel = await pixel(), retryCompiles = compiles-beforeFailureCompiles;
         engine.display.setSize(256, 256);
@@ -142,13 +146,7 @@ async function run() {
         material.graph = undefined;
         engine.update();
         await render.converge({ samples: 1, timeoutMs: 60000 });
-        const noGraphStart = performance.now();
-        while (state()?.status === 'compiling') {
-            render.refine();
-            await pause();
-            if (performance.now() - noGraphStart > 60000)
-                throw new Error('detach timeout');
-        }
+        await settle('idle');
         const plainStart = performance.now();
         render.restart();
         await render.converge({ samples: 64, timeoutMs: 60000 });
