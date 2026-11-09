@@ -29,6 +29,7 @@ import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './p
 import type { TextureSampling } from './modelCache';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
+import { disconnectGraphInput } from './materialGraphSummary';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
@@ -1284,6 +1285,21 @@ export class ViewerEngine {
   async setMaterialTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
     try {
       await this.materials.setTexture(materialId, slot, file, label);
+    } catch (error) {
+      showToast(`Could not read the image: ${(error as Error).message}`, 'error');
+    }
+  }
+
+  /** Disconnects one graph-driven surface input so its material value applies; one undo step. */
+  disconnectMaterialGraphInput(materialId: string, terminal: string, label: string) {
+    const graph = this.materials.graph(materialId);
+    if (graph && terminal in graph.terminal) this.materials.setGraph(materialId, disconnectGraphInput(graph, terminal), label);
+  }
+
+  /** Replaces the image of a graph image node with an image file; one undo step. */
+  async setMaterialGraphImage(materialId: string, node: string, port: string, file: Blob, label: string) {
+    try {
+      await this.materials.setGraphImage(materialId, node, port, file, label);
     } catch (error) {
       showToast(`Could not read the image: ${(error as Error).message}`, 'error');
     }

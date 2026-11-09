@@ -3,6 +3,7 @@ import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel, AovKind, AovIdComponent } from '@meimu/mutracer';
 import type { TextureSampling } from './engine/modelCache';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
+import type { GraphImageSummary, GraphInputSummary } from './engine/materialGraphSummary';
 import { STUDIO_PRESETS } from './engine/studio';
 import { DEFAULT_SKY_TIME, SKY_TIME_RANGE } from './engine/sky';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
@@ -245,6 +246,14 @@ export interface SelectedMaterial {
   /** Texture in each slot, as a thumbnail URL; `''` when it cannot be drawn. */
   maps: Partial<Record<TextureKey, string>>;
   sampling: Partial<Record<TextureKey, TextureSampling>>;
+  /** Inputs driven by the material graph and the images it reads; `null` without a graph. */
+  graph: {
+    inputs: GraphInputSummary[];
+    /** `thumb` is a thumbnail URL; `''` when it cannot be drawn. */
+    images: (Omit<GraphImageSummary, 'texture'> & { thumb: string })[];
+    /** Whether WebGL 2 renders the graph; otherwise it renders the material values. */
+    webgl: boolean;
+  } | null;
   /** Suggested local-unit slider range for the selected mesh, without limiting typed values. */
   displacementRange: { min: number; max: number; step: number };
 }

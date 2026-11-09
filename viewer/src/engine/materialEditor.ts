@@ -1,4 +1,6 @@
-import {archiveGraph,restoreGraph} from './materialxGraphArchive';
+import {archiveGraph,graphImageName,rememberGraphImage,restoreGraph} from './materialxGraphArchive';
+import {summarizeMaterialGraph,withGraphInput} from './materialGraphSummary';
+import {materialSlotPlan} from '../../../src/renderer/materialGraph/slotTextures';
 import * as THREE from 'three';
 import { Texture, type MaterialGraph, type OpenPBRMaterial } from '@meimu/mutracer';
 import { useViewer } from '../store';
@@ -172,7 +174,51 @@ export class MaterialEditor {
       const texture = record[key];
       if (texture) { maps[key] = this.thumbnail(texture); sampling[key] = textureSampling(texture); }
     }
-    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps, sampling };
+    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps, sampling,
+      graph: material.graph ? this.describeGraph(material) : null };
+  }
+
+  private describeGraph(material: OpenPBRMaterial) {
+    const {inputs, images} = summarizeMaterialGraph(material.graph!, graphImageName);
+    return {inputs, images: images.map(({texture, ...image}) => ({...image, thumb: texture ? this.thumbnail(texture) : ''})),
+      // WebGL 2 renders graphs that reduce to texture slots and the constant fallback otherwise.
+      webgl: !!materialSlotPlan(material)};
+  }
+
+  graph(materialId: string) {
+    return (this.entries.get(materialId)?.converted.values().next().value as OpenPBRMaterial | undefined)?.graph;
+  }
+
+  /** Replaces the material graph as one undo step; `null` removes it. */
+  setGraph(materialId: string, graph: MaterialGraph | null, label: string) {
+    this.commit(materialId, { values: {}, textures: {}, graph }, label);
+  }
+
+  /**
+   * Replaces the image of a graph image node, keeping the old texture's color
+   * space, orientation, UV and wrap settings. Returns whether it was applied.
+   */
+  async setGraphImage(materialId: string, node: string, port: string, file: Blob, label: string) {
+    const entry = this.entries.get(materialId);
+    const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
+    if (!entry || !material?.graph) return false;
+    const graph = material.graph;
+    const image = await decodeImage(file);
+    // The material or its graph may have been replaced while decoding.
+    if (this.entries.get(materialId) !== entry || material.graph !== graph || !graph.nodes.some(n => n.id === node)) {
+      image.close();
+      return false;
+    }
+    const old = graph.nodes.find(n => n.id === node)?.inputs?.[port]?.value;
+    const texture = new Texture(image as unknown as HTMLCanvasElement);
+    if (old instanceof Texture) {
+      texture.colorSpace = old.colorSpace; texture.flipY = old.flipY;
+      texture.uvScale = [...old.uvScale]; texture.uvOffset = [...old.uvOffset]; texture.uvChannel = old.uvChannel;
+      texture.wrapS = old.wrapS; texture.wrapT = old.wrapT;
+    }
+    rememberGraphImage(texture, file);
+    this.setGraph(materialId, withGraphInput(graph, node, port, texture), label);
+    return true;
   }
 
   setValues(materialId: string, values: MaterialValues, label: string, mergeKey?: string) {

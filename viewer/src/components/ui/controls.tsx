@@ -231,19 +231,20 @@ export function Select<T extends string>({
 // -------------------------------------------------------------- ColorField
 
 export function ColorField({
-  label, value, onChange, badge
+  label, value, onChange, badge, disabled
 }: {
   label: ReactNode;
   value: string;
   onChange: (hex: string) => void;
   badge?: ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <label className="color">
+    <label className="color" data-disabled={disabled || undefined}>
       <i className="sw" style={{ background: value }} />
       <span>{label}{badge}</span>
       <code>{value.toUpperCase()}</code>
-      <input type="color" value={value} onChange={(e) => onChange(e.currentTarget.value)} />
+      <input type="color" value={value} disabled={disabled} onChange={(e) => onChange(e.currentTarget.value)} />
     </label>
   );
 }

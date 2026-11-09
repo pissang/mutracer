@@ -1,6 +1,8 @@
 import {MaterialGraph,Texture,type MaterialGraphNode,type MaterialGraphTerminal} from '@meimu/mutracer';
 const files=new WeakMap<Texture,Blob>();
 export function rememberGraphImage(texture:Texture,file:Blob){files.set(texture,file);}
+/** The file name of a remembered graph image, when it was read from a named file. */
+export function graphImageName(texture:Texture){const file=files.get(texture);return file instanceof File&&file.name?file.name:undefined;}
 export interface GraphArchive {
   nodes:MaterialGraphNode[];
   terminal:MaterialGraphTerminal;
