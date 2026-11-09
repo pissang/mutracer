@@ -303,7 +303,28 @@ const formatWeight = (w: number) => (w === 0 ? '0' : w.toFixed(2));
 
 function MaterialGraphStatus(){
   const [state,setState]=useState<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>();
-  useEffect(()=>{const read=()=>setState(getEngine()?.engine.getDiagnostics());read();const timer=setInterval(read,250);return()=>clearInterval(timer);},[]);
+  const material = useViewer(s => s.material);
+  const phase = useViewer(s => s.stats.phase);
+  useEffect(() => {
+    const controller = new AbortController();
+    // The viewer commits material edits on its next frame. Follow replacements
+    // through the wait result, without polling compilation diagnostics.
+    let frame = 0;
+    const follow = () => {
+      frame = requestAnimationFrame(() => {
+        const engine = getEngine()?.engine;
+        if (!engine || controller.signal.aborted) return;
+        setState(engine.getDiagnostics());
+        void engine.waitForMaterialGraphs({signal: controller.signal}).then(result => {
+          if (controller.signal.aborted) return;
+          setState(engine.getDiagnostics());
+          if (result.outcome === 'superseded') follow();
+        });
+      });
+    };
+    follow();
+    return () => {controller.abort(); cancelAnimationFrame(frame);};
+  }, [material, phase]);
   const graph=state?.materialGraphs;
   const details=graph?.diagnostics.map(d=>`${d.node}${d.port?`.${d.port}`:''}: ${d.message}`).join('\n')??'';
   useEffect(()=>{if(details)console.warn(`Material graph diagnostics\n${details}`);},[details]);
