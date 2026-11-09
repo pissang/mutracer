@@ -49,6 +49,17 @@ can prepare alongside it and drains it on publication.
 [examples/job-host.c](../examples/job-host.c) shows polling from several
 threads, cancellation and resuming.
 
+On SDK-created devices and devices imported through `Engine::from_metal` /
+`mt_engine_create_metal`, a Metal execution error during sampling fails the job
+without crediting its
+in-flight batch, including when cancellation is pending. Earlier completed
+counts remain available, but the image may contain partial writes. With the
+Context API, commit the scene again to restart accumulation before reading or
+rendering. With the Engine API, discard the failed `Render` and create a new
+one. There is no automatic retry. A host-created wgpu device shared through
+`Engine::on_device` cannot provide this native execution check. A successful command buffer still does not rule out the
+[known HWRT image inconsistencies](../README.md#ray-tracing-backends).
+
 ## Threads
 
 Calls may come from any thread. Short operations serialize, and an overlapping

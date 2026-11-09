@@ -2750,7 +2750,9 @@ impl Render {
     /// starts due denoising. Preparation, shader compilation, target changes and
     /// denoising input readback may block; the frame budget is not a hard deadline.
     /// Render failures return `Ok(RenderStatus::Error)` and an engine error event;
-    /// terminal device loss returns `Err(Status::Unavailable)`.
+    /// terminal device loss returns `Err(Status::Unavailable)`. Detected Metal
+    /// execution errors credit none of the in-flight batch; discard this render
+    /// and create a new one before continuing with a clean accumulation.
     pub fn refine(&self) -> Result<RenderStatus> {
         self.refine_with_options(RefineOptions::default())
     }

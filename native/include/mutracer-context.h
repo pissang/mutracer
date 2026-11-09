@@ -158,7 +158,13 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * Submitted batches cannot be interrupted. Completed samples remain accumulated;
  * a later job continues the same sequence. Full completion takes precedence over
  * late cancellation. GPU failures mark the scene/job failed; failed contexts may
- * be destroyed or replaced by commit. Device-loss recovery remains unavailable.
+ * be destroyed or replaced by commit. On SDK-created or imported Metal devices,
+ * a native execution error in a sampling batch returns MT_ERROR_CONTEXT_FAILED;
+ * none of that batch is credited, even after cancellation. Earlier completed
+ * counts remain in job info, but the accumulation cannot be read or continued
+ * until a successful full commit restarts it. Batches are not retried.
+ * Host-owned wgpu devices do not expose this Metal execution check.
+ * Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset
  * or commit, or context destruction; an expired handle returns MT_ERROR_INVALID_HANDLE.
