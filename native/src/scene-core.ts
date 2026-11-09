@@ -58,6 +58,8 @@ import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.j
 import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../../src/util/geometry.js';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
+import {mergeTexturesFromMaterials} from '../../src/renderer/materialTextures.js';
+import {MATERIAL_TEXTURE_NAMES} from '../../src/scene/materialTextureNames.js';
 import {syncNativeMaterial} from './material-graph.js';
 import {materialEmission} from '../../src/renderer/materialEmission.js';
 import {colorLuminance} from '../../src/renderer/lightSampling.js';
@@ -373,6 +375,11 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     const ordered = state.ordered.map(material => changes.get(material) ?? material);
     if(nativeGraphPlan(ordered).key!==(state.shader.graphs?.key??''))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
     if(nativeGraphTextures(ordered).some(texture=>!state.table.textures.includes(texture)))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
+    // Parameter repacking can only reference textures already in this atlas.
+    // Otherwise indexOf would encode -1 and silently render an untextured material.
+    const changedTextures = mergeTexturesFromMaterials([...changes.values()], MATERIAL_TEXTURE_NAMES).textures;
+    if (changedTextures.some(texture => !state.table.textures.includes(texture)))
+      return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
     const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
     const before = nativeMaterialConstants(state.ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
     const after = nativeMaterialConstants(ordered, state.table, state.prepared.geometry, configuration.bevelSamples);

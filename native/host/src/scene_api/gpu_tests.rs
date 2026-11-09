@@ -1661,6 +1661,11 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
             .map(|i| {
                 let mut m = OpenPbrMaterial::default();
                 m.values.color = [0.3 + 0.2 * i as f32, 0.5, 0.7];
+                // Step 8 exercises a reference to a resident atlas texture.
+                // First use of an unresident texture has a separate Full oracle.
+                if i == 0 {
+                    m.textures[0] = Some(t);
+                }
                 s.add_material(m).unwrap()
             })
             .collect();
@@ -1889,9 +1894,9 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
             for kind in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo] {
                 let a = dirty_render.read_pixels(kind).unwrap();
                 let mut others = vec![(&whole_render, "whole-scene")];
-                // Incremental refits keep the previous TLAS topology, so only
-                // full preparations are compared with a fresh engine.
-                if committed == Some(Full) {
+                // Preserve the fresh-scene oracle for the dense matrix edit,
+                // which used to take Full and now retains/refits its TLAS.
+                if committed == Some(Full) || step == 12 {
                     others.push((&reference, "fresh full"));
                 }
                 for (other, name) in others {
@@ -1925,7 +1930,7 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
                                     "dirtyContext": dirty_render.audit_context_id(),
                                     "otherContext": other.audit_context_id(),
                                     "wholeContext": whole_render.audit_context_id(),
-                                    "freshFullContext": (committed == Some(Full))
+                                    "freshFullContext": (committed == Some(Full) || step == 12)
                                         .then(|| reference.audit_context_id()),
                                 }))
                                 .unwrap(),
@@ -2475,6 +2480,80 @@ fn large_instance_and_shared_vertex_edits_match_fresh_hdr_id_and_picking() {
                 );
             }
             println!("LARGE_UPDATE {backend:?} step {step}: exact HDR/ID/pick");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn first_use_of_unresident_texture_matches_full_preparation() {
+    crate::logging::stderr();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let mut scene = Scene::new();
+        let geometry = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let texture = scene
+            .add_texture(Texture::rgba8(1, 1, vec![64, 180, 220, 255]))
+            .unwrap();
+        let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        scene
+            .add_light(Light::Directional {
+                color: [1.; 3],
+                intensity: 1.,
+                transform: Mat4::IDENTITY,
+            })
+            .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        scene.set_default_camera(Some(camera));
+        let settings = RenderSettings {
+            max_samples: 4,
+            aovs: 32,
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 24,
+            },
+            ..Default::default()
+        };
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        wait_for_commit(&render);
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        scene.material_mut(material).unwrap().textures[0] = Some(texture);
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        wait_for_commit(&render);
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Full));
+        let fresh = Engine::new(EngineOptions { backend }).unwrap();
+        let reference = Render::new(&fresh, settings).unwrap();
+        fresh.set_scene_object(&scene).unwrap();
+        fresh.update().unwrap();
+        wait_for_commit(&reference);
+        reference.converge(ConvergeOptions::new(4)).unwrap();
+        for kind in [PixelKind::Hdr, PixelKind::Albedo, PixelKind::Id] {
+            let a = render.read_pixels(kind).unwrap();
+            let b = reference.read_pixels(kind).unwrap();
+            assert_eq!(
+                a.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                b.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "{backend:?} {kind:?}"
+            );
+            assert_eq!(a.id_data, b.id_data, "{backend:?} {kind:?} IDs");
+            if kind == PixelKind::Albedo {
+                let red = a.data[(12 * 32 + 16) * 4];
+                assert!(
+                    red > 0. && red < 0.3,
+                    "{backend:?}: texture must darken the visible albedo: {red}"
+                );
+            }
         }
     }
 }
