@@ -17,6 +17,11 @@ import {
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
 import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './materialDrop';
+// Keep the importer in the initial module graph: a tab can stay open across
+// deployments that remove the previous build's lazily loaded chunks.
+import { parseMaterialXGraph } from './materialxGraph';
+import { loadGraphImages, loadMapImage, readMaterialXPackage, loadMaterialXDisplacement } from './materialxFiles';
+import { parseMaterialX } from './materialx';
 
 export const MATERIALX_IMPORT = true;
 import { displacementHeightRange } from './displacementHeightRange';
@@ -1349,7 +1354,6 @@ export class ViewerEngine {
     if(!imports){imports=new Map();materialXImports.set(this,imports);}
     const request=Symbol(),model=this.modelGroup;imports.set(materialId,request);
     try {
-      const [{parseMaterialXGraph},{loadGraphImages,loadMapImage,readMaterialXPackage,loadMaterialXDisplacement},{parseMaterialX}]=await Promise.all([import('./materialxGraph'),import('./materialxFiles'),import('./materialx')]);
       const pkg=await readMaterialXPackage(files), material=parseMaterialXGraph(pkg.text);
       name=material.name;
       const warnings=[...material.warnings];

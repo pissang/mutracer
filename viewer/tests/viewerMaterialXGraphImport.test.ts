@@ -1,4 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
+import {zipSync,strToU8} from 'fflate';
 vi.hoisted(()=>{vi.stubGlobal('location',{href:'https://viewer.example.com/',search:'',hash:'',pathname:'/'});vi.stubGlobal('document',{baseURI:'https://viewer.example.com/'});vi.stubGlobal('window',{});vi.stubGlobal('history',{replaceState:vi.fn()});});
 import {ViewerEngine} from '../src/engine/ViewerEngine';
 import type {PathedFile} from '../src/engine/droppedFiles';
@@ -6,6 +7,18 @@ import {bakeDisplacement} from '../src/engine/materialxBakeClient';
 vi.mock('../src/engine/materialxBakeClient',()=>({bakeDisplacement:vi.fn()}));
 const xml='<materialx version="1.39"><texcoord name="uv" type="vector2"/><extract name="a" type="float"><input name="in" type="vector2" nodename="uv"/></extract><open_pbr_surface name="S" type="surfaceshader"><input name="geometry_opacity" type="float" nodename="a"/></open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>';
 describe('viewer MaterialX graph replacement',()=>{
+ it('imports a zipped car paint material as one replacement',async()=>{
+  const source='<materialx version="1.39"><standard_surface name="S" type="surfaceshader"><input name="base_color" type="color3" value="0.8,0.1,0.2"/><input name="metalness" type="float" value="1"/></standard_surface><surfacematerial name="Car_Paint"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>';
+  const zip=zipSync({'Car_Paint/Car_Paint.mtlx':strToU8(source)});
+  const file=new File([zip],'Car_Paint_1k_8b (1).zip',{type:'application/zip'});
+  const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
+  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'paint',[{file,path:file.name}])).toBe(true);
+  expect(setTextures).toHaveBeenCalledTimes(1);
+  const args=setTextures.mock.calls[0] as unknown as unknown[];
+  expect(args[0]).toBe('paint');
+  expect(args[2]).toEqual(expect.objectContaining({baseColor:[0.8,0.1,0.2],baseMetalness:1}));
+  expect(args[3]).toBe('Car_Paint MaterialX');
+ });
  it.each(['replace','reset'])('does not install a late bake after %s',async action=>{
   let complete!:(value:Awaited<ReturnType<typeof bakeDisplacement>>)=>void;
   vi.mocked(bakeDisplacement).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));

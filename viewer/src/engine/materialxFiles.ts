@@ -4,6 +4,9 @@ import {rememberGraphImage} from './materialxGraphArchive';
 import { unzipSync } from 'fflate';
 import type { PathedFile } from './droppedFiles';
 import { bakeChannels, type MapPlan } from './materialx';
+import { Texture } from '@meimu/mutracer';
+import { normalizeGraph } from '../../../src/renderer/materialGraph/normalize';
+import { bakeDisplacement } from './materialxBakeClient';
 
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', avif: 'image/avif' };
 
@@ -95,7 +98,6 @@ export async function loadMapImage(plan: MapPlan, pkg: MaterialXPackage): Promis
 
 /** Loads graph images without baking the connected network into texture slots. */
 export async function loadGraphImages(material: import('./materialxGraph').MaterialXGraphImport, pkg:MaterialXPackage):Promise<string[]> {
-  const {Texture}=await import('@meimu/mutracer');
   const warnings:string[]=[];
   await Promise.all([...material.images].map(async ([node,plan])=>{
     const blob=pkg.resolve(plan.file);
@@ -122,8 +124,7 @@ export async function loadMaterialXDisplacement(material:import('./materialxGrap
     if(!file)return {file:null,values:{displacementScale:0,displacementBias:0},warnings:[`${plan.direct.node}.file: missing displacement image`]};
     return {file,values:{displacementScale:plan.direct.scale,displacementBias:plan.direct.bias},transform:{uvScale:plan.direct.uvScale,uvOffset:plan.direct.uvOffset,flipY:true,uvChannel:plan.uvChannel,wrapS:image.wrapS,wrapT:image.wrapT},warnings:[]};
   }
-  const {bakeDisplacement}=await import('./materialxBakeClient');
-  const reachable=new Set((await import('../../../src/renderer/materialGraph/normalize')).normalizeGraph(plan.graph).nodes.map(n=>n.id));
+  const reachable=new Set(normalizeGraph(plan.graph).nodes.map(n=>n.id));
   const images=[...material.images].filter(([node])=>reachable.has(node)).flatMap(([node,image])=>{
     const file=pkg.resolve(image.file);return file?[{...image,node,file}]:[];
   });
