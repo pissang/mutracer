@@ -76,6 +76,11 @@ function compilerSource() {
   cpSync(resolve(root, 'native'), resolve(staged, 'native'), {recursive:true,
     filter: path => !path.replaceAll('\\', '/').includes('/node_modules') &&
       (!/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path))});
+  // TypeScript only recognizes triple-slash directives before imports. Keep
+  // this reference in AOT inputs: putting it on the browser-imported source
+  // changes DOM/Worker global declaration order in the examples typecheck.
+  const sceneCore = resolve(staged, 'native/src/scene-core.ts');
+  writeFileSync(sceneCore, '/// <reference path="./browser-types.d.ts" />\n' + readFileSync(sceneCore, 'utf8'));
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), process.platform==='win32'?'junction':'dir');
   const mesh = resolve(staged, 'src/scene/MeshState.ts');
