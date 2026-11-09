@@ -1,3 +1,5 @@
+/// <reference lib="esnext" />
+/// <reference path="./browser-types.d.ts" />
 import {attachGraphFallbacks,seedGraphFallbacks,releaseGraphFallbacks,nativeGraphPlan,nativeGraphTextures,graphHasTerminal,packNativeGraphs,inheritNativeGraph,swapNativeGraphTextures,type NativeGraphPlan} from './material-graph.js';
 import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize.js';
 import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
@@ -12,8 +14,6 @@ import {selectVisibleInstances} from '../../src/renderer/scenePreparation.js';
 import {AovPrimitiveCache} from '../../src/renderer/AovPrimitiveCache.js';
 import {AovHistory} from '../../src/renderer/aov.js';
 import {decodeCamera} from './camera-core.js';
-/// <reference lib="esnext" />
-/// <reference path="./browser-types.d.ts" />
 import {sceneErrorPacket} from './scene-errors.js';
 import {takeGeometryKernelHints, releaseGeometryKernelHints, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
 import {matrixStorage} from '../../src/math/storage.js';
