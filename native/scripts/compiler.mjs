@@ -81,6 +81,27 @@ function compilerSource() {
   // changes DOM/Worker global declaration order in the examples typecheck.
   const sceneCore = resolve(staged, 'native/src/scene-core.ts');
   writeFileSync(sceneCore, '/// <reference path="./browser-types.d.ts" />\n' + readFileSync(sceneCore, 'utf8'));
+  // scriptc cannot preserve an inferred record when the exported alias is an
+  // index-signature dictionary. Keep both sides dictionary-shaped in native
+  // inputs; public key-union types and browser source stay unchanged.
+  const graphNodes = resolve(staged, 'src/renderer/materialGraph/nodes.ts');
+  const graphNodeSource = readFileSync(graphNodes, 'utf8');
+  const graphFile = ts.createSourceFile('nodes.ts', graphNodeSource, ts.ScriptTarget.Latest, true);
+  const terminalNames = [];
+  for (const statement of graphFile.statements) if (ts.isVariableStatement(statement)) {
+    for (const declaration of statement.declarationList.declarations) {
+      if (!['terminalInputTypes', 'terminalInputAliases'].includes(declaration.name.getText(graphFile))) continue;
+      let value = declaration.initializer;
+      while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value)) value = value.expression;
+      for (const property of value.properties) terminalNames.push(property.name.getText(graphFile));
+    }
+  }
+  writeFileSync(graphNodes, graphNodeSource
+    .replace('const terminalInputTypes = {', 'const terminalInputTypes: Readonly<Record<string, Type>> = {')
+    .replace('} as const satisfies Record<string, Type>;', '};')
+    .replace('const terminalInputAliases = {', 'const terminalInputAliases: Readonly<Record<string, string>> = {')
+    .replace(/(const terminalInputAliases:[^\n]+}) as const;/, '$1;')
+    .replace('keyof typeof terminalInputTypes | keyof typeof terminalInputAliases', terminalNames.map(name => JSON.stringify(name)).join(' | ')));
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), process.platform==='win32'?'junction':'dir');
   const mesh = resolve(staged, 'src/scene/MeshState.ts');
