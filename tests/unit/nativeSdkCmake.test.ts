@@ -3,7 +3,7 @@ import {mkdtempSync, mkdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {expect, it} from 'vitest';
-import {cmakeDependencies, sdkCmakeConfig, sdkVersion} from '../../native/scripts/sdk-cmake.mjs';
+import {cmakeDependencies, sdkCmakeConfig, sdkVersion, sdkVersionHeader} from '../../native/scripts/sdk-cmake.mjs';
 
 it('uses the native package version rather than a dependency version', () => {
   expect(sdkVersion('[package]\nname = "sdk"\nversion = "0.0.0"\n\n[dependencies]\nversion = "3.2.1"\n'))
@@ -63,4 +63,13 @@ endif()
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
+});
+
+it('derives C package version macros from the native crate version', () => {
+  const version = sdkVersion('[package]\nversion = "2.7.3"\n');
+  const header = sdkVersionHeader(version);
+  expect(header).toContain('#define MT_SDK_VERSION "2.7.3"');
+  expect(header).toContain('#define MT_SDK_VERSION_MAJOR 2u');
+  expect(header).toContain('#define MT_SDK_VERSION_MINOR 7u');
+  expect(header).toContain('#define MT_SDK_VERSION_PATCH 3u');
 });

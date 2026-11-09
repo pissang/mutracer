@@ -11,7 +11,7 @@ import {checkSdkExports, nativeLinkArguments, publicApiSymbols} from './sdk-symb
 import {bundleWindowsRuntime} from './windows-redist.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {finalizeHostLibrary} from './finalize-host-library.mjs';
-import {sdkCmakeConfig, sdkVersion} from './sdk-cmake.mjs';
+import {sdkCmakeConfig, sdkVersion, sdkVersionHeader} from './sdk-cmake.mjs';
 import {checkCmakeConsumer} from './sdk-cmake-consumer.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -19,7 +19,8 @@ const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-build/scene-c
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(out, 'cargo-target'));
 const dist = resolve(process.env.MUTRACER_NATIVE_DIST ?? resolve(out, 'dist'));
 const platform = viewerPlatform(), mac = process.platform === 'darwin';
-const work = resolve(out, 'sdk'), name = `MuTracer-SDK-${platform}`;
+const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
+const work = resolve(out, 'sdk'), name = `MuTracer-SDK-${version}-${platform}`;
 const stage = resolve(work, name), lib = resolve(stage, 'lib');
 const symbols = resolve(work, `${name}-symbols`);
 const env = nativeToolchainEnv({...process.env, CARGO_TARGET_DIR: target,
@@ -47,7 +48,8 @@ const headers = readdirSync(resolve(root, 'native/include')).filter(file => file
 const exports = publicApiSymbols(headers.map(file => readFileSync(resolve(root, 'native/include', file), 'utf8')));
 const abi = Number(/#define\s+MT_ABI_VERSION\s+(\d+)/.exec(readFileSync(resolve(root, 'native/include/mutracer-status.h'), 'utf8'))?.[1]);
 if (!abi) throw Error('Missing C ABI version');
-const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
+if (readFileSync(resolve(root, 'native/include/mutracer-version.h'), 'utf8') !== sdkVersionHeader(version))
+  throw Error('SDK version header is stale; run native/scripts/generate-sdk-version.mjs');
 const staticName = windows ? 'mutracer.lib' : 'libmutracer.a';
 const sharedName = windows ? 'mutracer.dll' : `libmutracer.${mac ? 'dylib' : 'so'}`;
 const sourceStatic = resolve(target, 'release', staticName), shared = resolve(lib, sharedName);

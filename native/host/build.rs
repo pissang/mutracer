@@ -1,4 +1,11 @@
 fn main() {
+    let version_header = "../include/mutracer-version.h";
+    println!("cargo:rerun-if-changed={version_header}");
+    let header = std::fs::read_to_string(version_header).unwrap();
+    assert!(
+        header.lines().any(|line| line == format!("#define MT_SDK_VERSION \"{}\"", env!("CARGO_PKG_VERSION"))),
+        "Run node native/scripts/generate-sdk-version.mjs after changing the SDK version"
+    );
     println!("cargo:rerun-if-changed=../src/mutracer-internal-layout.h");
     // This is the same wrapper used by the WebAssembly build, linked natively.
     println!("cargo:rerun-if-changed=tinybvh.cpp");

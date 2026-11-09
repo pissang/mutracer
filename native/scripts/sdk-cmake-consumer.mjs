@@ -55,7 +55,9 @@ export function checkCmakeConsumer({archive, name, work, env, run, abi, version}
   mkdirSync(source);
   writeFileSync(resolve(source, 'main.c'), `#include "mutracer-scene-api.h"
 #include <stdio.h>
+#include <string.h>
 int main(void) {
+  if (strcmp(MT_SDK_VERSION, "${version}") != 0) return 4;
   char error[1024] = {0};
   mt_scene scene = 0;
   if (mt_abi_version() != MT_ABI_VERSION || MT_ABI_VERSION != ${abi}u) return 1;
