@@ -7,6 +7,8 @@ pub(crate) struct Batch {
     #[cfg(target_os = "macos")]
     buffers:
         Vec<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>>,
+    #[cfg(test)]
+    pub(crate) injected_error: Option<String>,
 }
 
 // SAFETY: the retained Metal objects are never encoded or committed through
@@ -117,6 +119,13 @@ impl Batch {
     /// False means native execution is still pending, even if wgpu's callback
     /// has run. Scan every buffer so a later error cannot hide behind a wait.
     pub(crate) fn check(&self, identity: &str) -> crate::Result<bool> {
+        #[cfg(test)]
+        if let Some(error) = &self.injected_error {
+            return Err(crate::status::fail(
+                crate::Status::ContextFailed,
+                format!("GPU execution failed ({identity}): {error}"),
+            ));
+        }
         #[cfg(target_os = "macos")]
         {
             use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
@@ -185,5 +194,46 @@ impl Batch {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn records_submission_of_preencoded_buffers_and_excludes_discarded_buffers() {
+        let gpu = crate::GpuDevice::with_backend(0).unwrap();
+        assert_eq!(gpu.info.backend, wgpu::Backend::Metal);
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.clear_buffer(&buffer, 0, None);
+        let commands = encoder.finish();
+        let recording = Recording::new();
+        gpu.queue.submit([commands]);
+        let batch = recording.finish();
+        assert!(
+            !batch.buffers.is_empty(),
+            "preencoded submission was not observed"
+        );
+        crate::GpuDevice::wait(&gpu.device).unwrap();
+        assert!(batch.check("preencoded submission").unwrap());
+
+        let recording = Recording::new();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.clear_buffer(&buffer, 0, None);
+        drop(encoder.finish());
+        let batch = recording.finish();
+        assert!(
+            batch.buffers.is_empty(),
+            "discarded buffer was charged to a flight"
+        );
+        assert!(batch.check("discarded encoder").unwrap());
     }
 }
