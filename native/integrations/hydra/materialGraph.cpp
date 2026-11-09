@@ -601,13 +601,13 @@ MaterialGraphData BuildMaterialGraph(
     for (auto const &p : authored)
       if (!defaults.count(p)) {
         auto v = node.parameters.find(TfToken(p));
-        bool inactive =
-            p.find("typeName:") == 0 || p.find("colorSpace:") == 0 ||
-            v != node.parameters.end() &&
-                ((p == "layer" || p == "framerange") &&
-                     String(v->second).empty() ||
-                 p == "frameoffset" && Numbers(v->second)[0] == 0 ||
-                 p == "frameendaction" && String(v->second) == "constant");
+        auto const &inactiveInputs = Get(Schema(), "inactiveImageInputs");
+        auto inactiveDefault = Get(inactiveInputs, p);
+        bool inactive = p.find("typeName:") == 0 || p.find("colorSpace:") == 0 ||
+            v != node.parameters.end() && !inactiveDefault.IsNull() &&
+            (inactiveDefault.IsString()
+                 ? String(v->second) == Text(inactiveDefault)
+                 : Numbers(v->second) == Numbers(Literal(inactiveDefault, "float")));
         if (!inactive)
           issue(path, p, "unsupported-input");
       }
@@ -618,12 +618,11 @@ MaterialGraphData BuildMaterialGraph(
       if (!defaults.count(p) && p.find("typeName:") != 0 &&
           p.find("colorSpace:") != 0) {
         auto found = node.parameters.find(TfToken(p));
-        bool inactive =
-            found != node.parameters.end() &&
-            (((p == "layer" || p == "framerange") &&
-              String(found->second).empty()) ||
-             (p == "frameoffset" && Numbers(found->second)[0] == 0) ||
-             (p == "frameendaction" && String(found->second) == "constant"));
+        auto inactiveDefault = Get(Get(Schema(), "inactiveImageInputs"), p);
+        bool inactive = found != node.parameters.end() && !inactiveDefault.IsNull() &&
+            (inactiveDefault.IsString()
+                 ? String(found->second) == Text(inactiveDefault)
+                 : Numbers(found->second) == Numbers(Literal(inactiveDefault, "float")));
         if (inactive)
           continue;
         inputs.push_back({Id("ports", p), MT_GRAPH_PORT_TYPE_FLOAT,
@@ -720,7 +719,26 @@ MaterialGraphData BuildMaterialGraph(
     result.authorIds.push_back(author(path).GetString());
     return index;
   };
-  for (auto const &t : terminals) {
+  // Fold weights before visiting their dependent inputs, just like the XML
+  // importer. Do not load unreachable textures or emit unsupported diagnostics.
+  std::vector<std::pair<std::string, Input>> ordered(terminals.begin(), terminals.end());
+  auto const &lobes = Get(Schema(), "inactiveLobes").GetJsObject();
+  std::stable_sort(ordered.begin(), ordered.end(), [&](auto const &a, auto const &b) {
+    return lobes.count(a.first) > lobes.count(b.first);
+  });
+  for (auto const &t : ordered) {
+    bool inactiveLobe = false;
+    for (auto const &lobe : lobes) {
+      auto property = properties.find(lobe.first);
+      if (property == properties.end()) continue;
+      bool zero = std::any_of(result.values.begin(), result.values.end(), [&](auto const &v) {
+        return v.first == property->second && v.second[0] == 0;
+      });
+      if (zero) for (auto const &port : lobe.second.GetJsArray())
+        if (Text(port) == t.first) inactiveLobe = true;
+    }
+    if (inactiveLobe) continue;
+
     auto value = t.second;
     auto property = properties.find(t.first);
     if (!value.edge && t.first == "normal" && !value.value.IsEmpty()) {

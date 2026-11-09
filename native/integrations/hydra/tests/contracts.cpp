@@ -245,6 +245,19 @@ int main() {
                         return w.find("cycle") != std::string::npos;
                       }),
           "cycles remain diagnosed after reachability pruning");
+  auto sssNetwork = graphNetwork;
+  auto &sssSurface = sssNetwork.nodes[SdfPath("/Material/Surface")];
+  sssSurface.nodeTypeId = TfToken("ND_open_pbr_surface_surfaceshader");
+  sssSurface.inputConnections[TfToken("subsurface_color")] = {
+      {SdfPath("/Material/Noise"), TfToken("out")}};
+  sssSurface.parameters[TfToken("subsurface_weight")] = VtValue(0.f);
+  auto inactiveSss = BuildMaterialGraph(sssNetwork, noTexture);
+  Require(inactiveSss.warnings.empty() && inactiveSss.terminals.size() == 1,
+          "constant zero SSS weight prunes varying SSS without losing base color");
+  sssSurface.parameters[TfToken("subsurface_weight")] = VtValue(0.5f);
+  auto activeSss = BuildMaterialGraph(sssNetwork, noTexture);
+  Require(!activeSss.warnings.empty() && activeSss.terminals.size() == 2,
+          "active varying SSS remains an explicit unsupported terminal");
   HdMaterialNetwork2 gltfNetwork;
   gltfNetwork.terminals[HdMaterialTerminalTokens->surface] = {
       SdfPath("/Material/Surface"), TfToken("out")};

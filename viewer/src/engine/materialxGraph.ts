@@ -5,7 +5,7 @@ import {generateGraph} from '../../../src/renderer/materialGraph/codegen';
 import {terminalTypes,terminalAliases,width} from '../../../src/renderer/materialGraph/nodes';
 import {parseXml,type XmlElement as Element} from './materialx';
 import standardSurface from './materialxStandardSurface';
-import {materialXSurfaceInputs} from '../../../src/renderer/materialGraph/surface';
+import {materialXSurfaceInputs, materialXInactiveLobes, materialXInactiveImageInputs, upgradeMaterialXNormalmap} from '../../../src/renderer/materialGraph/surface';
 import type {MaterialValues} from './materialParams';
 import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
@@ -14,7 +14,7 @@ const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled
 const camel=(s:string)=>s.toLowerCase().replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase());
 const input=(e:Element,name:string)=>e.children.find(c=>c.tag==='input'&&c.attrs.name===name);
 const child=(e:Element,name:string)=>e.children.find(c=>c.attrs.name===name && !['input','output'].includes(c.tag));
-const inactiveImageInputs:Record<string,Input['value']>={layer:'',framerange:'',frameoffset:0,frameendaction:'constant'};
+const inactiveImageInputs = materialXInactiveImageInputs;
 // Unsupported surface inputs that match the default shading frame.
 const defaultFrame:Record<string,string>={coatNormal:'normal',tangent:'tangent'};
 const path=(e:Element):string=>e.parent&&e.parent.tag!=='materialx'?`${path(e.parent)}/${e.attrs.name??e.tag}`:e.attrs.name??e.tag;
@@ -100,7 +100,7 @@ class Reader {
         const legacy=Number(this.root.attrs.version?.split('.')[1]??39)<39;
         if(legacy&&category==='atan2')for(const [old,name] of [['in1','iny'],['in2','inx']])if(inputs[old]){inputs[name]=inputs[old];delete inputs[old];}
         if(legacy&&category==='normalmap'){
-            this.nodes.push(...upgradeNormalmap({id,category,type,inputs}));
+            this.nodes.push(...upgradeMaterialXNormalmap({id,category,type,inputs}));
         }else if(category==='swizzle'){
             this.swizzle(id,type,inputs.in,String(inputs.channels?.value??''));
         }else{
@@ -233,27 +233,10 @@ function inactive(nodes:Node[],port:string,edge:Edge){
 const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
     for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
 };
-function upgradeNormalmap(node:Node):Node[]{
-    const inputs={...node.inputs},space=inputs.space;
-    delete inputs.space;
-    if(!space?.connection&&space?.value==='object'){
-        const decode=`${node.id}/decode`,bias=`${node.id}/bias`;
-        return [{id:decode,category:'multiply',type:'vector3',inputs:{...(inputs.in?{in1:inputs.in}:{}),in2:literal('float',2)}},
-            {id:bias,category:'subtract',type:'vector3',inputs:{in1:{type:'vector3',connection:{node:decode}},in2:literal('float',1)}},
-            {...node,category:'normalize',inputs:{in:{type:'vector3',connection:{node:bias}}}}];
-    }
-    if((inputs.normal||inputs.tangent)&&!inputs.bitangent){
-        const cross=`${node.id}/cross`,unit=`${node.id}/bitangent`;
-        inputs.bitangent={type:'vector3',connection:{node:unit}};
-        return [{id:cross,category:'crossproduct',type:'vector3',inputs:{...(inputs.normal?{in1:inputs.normal}:{}),...(inputs.tangent?{in2:inputs.tangent}:{})}},
-            {id:unit,category:'normalize',type:'vector3',inputs:{in:{type:'vector3',connection:{node:cross}}}}, {...node,inputs}];
-    }
-    return [{...node,inputs}];
-}
 /** Removes inputs that have no effect from a graph saved by an earlier
  * importer, so restored materials match a fresh import. */
 export function pruneInactiveInputs(nodes:Node[],terminal:Record<string,Edge>){
-    const pruned=nodes.flatMap(n=>{if(!n.inputs)return [n];const inputs={...n.inputs};dropInactiveImageInputs(inputs);return n.category==='normalmap'&&inputs.space?upgradeNormalmap({...n,inputs}):[{...n,inputs}];});
+    const pruned=nodes.flatMap(n=>{if(!n.inputs)return [n];const inputs={...n.inputs};dropInactiveImageInputs(inputs);return n.category==='normalmap'&&inputs.space?upgradeMaterialXNormalmap({...n,inputs}):[{...n,inputs}];});
     return {nodes:pruned,terminal:Object.fromEntries(Object.entries(terminal).filter(([port,edge])=>!inactive(pruned,port,edge)))};
 }
 /** Parses one material; resource loading remains owned by the viewer package loader. */
@@ -284,7 +267,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
     }
     // OpenPBR/Standard Surface multiply subsurface by its weight. A texture
     // on that inactive lobe is not an unsupported shading dependency.
-    if(values.subsurfaceWeight===0&&!terminal.subsurfaceWeight)for(const port of ['subsurfaceColor','subsurfaceRadius','subsurfaceRadiusScale','subsurfaceAnisotropy'])delete terminal[port];
+    for(const [weight,ports] of Object.entries(materialXInactiveLobes))if((values as Record<string,unknown>)[weight]===0&&!terminal[weight])for(const port of ports)delete terminal[port];
     const graph=Object.keys(terminal).length?new MaterialGraph({nodes:r.nodes,terminal}):undefined;
     if(graph){
         const state=new OpenPBRMaterial();Object.assign(state,values);state.graph=graph;
