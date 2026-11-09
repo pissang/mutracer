@@ -1,6 +1,6 @@
 # MuTracer native SDK
 
-> Experimental Rust (`mutracer_native`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
+> Experimental Rust (`mutracer_native`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS 14.0+ arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
 
 ## Essentials
 

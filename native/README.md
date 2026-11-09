@@ -9,7 +9,7 @@ C ABI can change between versions.
 
 | Platform | GPU API | Status |
 | --- | --- | --- |
-| macOS arm64 | Metal | Supported; GPU rendering verified |
+| macOS arm64 (14.0+) | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
 | Windows x64 | DX12 or Vulkan | MSVC build; GPU behavior unverified; viewer from CI artifacts only |
 
@@ -59,7 +59,7 @@ target_link_libraries(my_renderer PRIVATE MuTracer::mutracer)
 ```
 
 ```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/MuTracer-SDK-PLATFORM
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/MuTracer-SDK-VERSION-PLATFORM
 cmake --build build --config Release
 ```
 
@@ -247,8 +247,9 @@ increases whenever a C declaration or record layout changes incompatibly.
 When loading a library dynamically, resolve and call `mt_abi_version()` first;
 reject the library if it differs from the `MT_ABI_VERSION` you compiled against.
 
-The CMake package version follows the native Rust crate version, independently
-of the ABI number and the browser library's version. A package version alone
+The archive name, `MT_SDK_VERSION` in `mutracer-version.h` and the CMake package
+version follow the native Rust crate version, independently of the ABI number
+and the browser library's version. A package version alone
 does not establish ABI compatibility. Versioned `find_package` requests accept
 only the exact package version. After `find_package(MuTracer CONFIG REQUIRED)`,
 read `MuTracer_ABI_VERSION` to check the package's ABI at configure time; the
@@ -261,7 +262,8 @@ default to hardware ray tracing (HWRT); software BVH traversal is the
 alternative. Unsupported devices and acceleration-structure limits or
 allocation failures fall back to software. `Render::backend` /
 `mt_render_info` and `mt_context_backend` report the path actually used and
-the fallback reason.
+the fallback reason. Metal HWRT requires macOS 15.0+ and a compatible GPU;
+macOS 14 uses software traversal.
 
 HWRT supports alpha materials, bevel, displacement and affine instances.
 Acceleration structures add build time and memory; any speedup depends on the
