@@ -156,6 +156,19 @@ fn metal_instance_inputs(
     metal_tlas::Inputs::new(device, blases, capture).map(Some)
 }
 
+fn blas_refit_enabled(device: &wgpu::Device) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        metal_refit::available(device)
+            && std::env::var_os("MUTRACER_NATIVE_METAL_REFIT").is_none_or(|v| v != "0")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = device;
+        false
+    }
+}
+
 // Source-order indexed compact vertices build AS inputs without a software BVH. The
 // opt-out retains leaf-order inputs for explicit regression diagnostics.
 pub(super) fn direct_input_enabled() -> bool {
@@ -353,7 +366,12 @@ pub fn prepare_reusing(
         blases.push(device.create_blas(
             &wgpu::CreateBlasDescriptor {
                 label: Some("MuTracer hardware BLAS"),
-                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
+                    | if blas_refit_enabled(device) {
+                        wgpu::AccelerationStructureFlags::ALLOW_UPDATE
+                    } else {
+                        wgpu::AccelerationStructureFlags::empty()
+                    },
                 update_mode: wgpu::AccelerationStructureUpdateMode::Build,
             },
             descriptors.clone(),
@@ -554,9 +572,8 @@ pub fn prepare_reusing(
         raw_instances,
         tlas,
         mapping,
-        updatable_blases: vec![false; blases.len()],
-        metal_refit_opt_in: cfg!(target_os = "macos")
-            && std::env::var_os("MUTRACER_NATIVE_METAL_REFIT").is_some_and(|v| v == "1"),
+        updatable_blases: vec![blas_refit_enabled(device); blases.len()],
+        metal_refit_opt_in: blas_refit_enabled(device),
         used_metal_refit: false,
         _blases: blases,
         _vertices: vertices,
@@ -566,7 +583,7 @@ pub fn prepare_reusing(
 
 // A validated plan owns no GPU side effects; rejected updates preserve old ASes.
 pub struct TransformPlan {
-    instances: Vec<(usize, Instance, u32)>,
+    pub(super) instances: Vec<(usize, Instance, u32)>,
     replacement: Option<usize>,
 }
 impl Resources {
@@ -656,6 +673,7 @@ impl Resources {
         let mut unique = std::collections::HashSet::new();
         let mut plans = Vec::new();
         let mut used_writes = std::collections::HashSet::new();
+        let empty_input = Vec::new();
         for &index in changed {
             if !unique.insert(index) {
                 return Err("Duplicate changed BLAS".into());
@@ -670,14 +688,16 @@ impl Resources {
                 // uploads the changed compact vertices through resource 3.
                 let offset = geometry.first_vertex as u64 * geometry.vertex_stride;
                 let length = geometry.vertex_count as usize * geometry.vertex_stride as usize;
-                let attribute_write = writes
-                    .hardware_writes
-                    .iter()
-                    .position(|(id, destination, data)| {
-                        *id == 3 && *destination == offset && data.len() == length
-                    })
-                    .ok_or("Missing exact changed procedural vertex span")?;
-                used_writes.insert(attribute_write);
+                for (i, (id, destination, data)) in writes.hardware_writes.iter().enumerate() {
+                    if *id == 3
+                        && *destination >= offset
+                        && destination
+                            .checked_add(data.len() as u64)
+                            .is_some_and(|end| end <= offset + length as u64)
+                    {
+                        used_writes.insert(i);
+                    }
+                }
             }
             let (id, offset, length) = if geometry.procedural {
                 (
@@ -692,15 +712,24 @@ impl Resources {
                     geometry.vertex_count as usize * geometry.vertex_stride as usize,
                 )
             };
-            let (write_index, (_, _, data)) = writes
-                .hardware_writes
-                .iter()
-                .enumerate()
-                .find(|(_, (resource, destination, data))| {
-                    *resource == id && *destination == offset && data.len() == length
-                })
-                .ok_or("Missing exact changed geometry AS span")?;
-            used_writes.insert(write_index);
+            let mut data = None;
+            for (write_index, (resource, destination, payload)) in
+                writes.hardware_writes.iter().enumerate()
+            {
+                if *resource == id
+                    && *destination >= offset
+                    && destination
+                        .checked_add(payload.len() as u64)
+                        .is_some_and(|end| end <= offset + length as u64)
+                {
+                    used_writes.insert(write_index);
+                    data = Some(payload);
+                }
+            }
+            if geometry.procedural && data.is_none_or(|data| data.len() != length) {
+                return Err("Missing exact changed geometry AS span".into());
+            }
+            let data = data.unwrap_or(&empty_input);
             if added {
                 let index_offset = geometry.index_offset as u64 * 4;
                 let index_length =
@@ -767,11 +796,34 @@ impl Resources {
                 }
             };
             if *index < old_blas_count {
-                vertices[*index] = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("MuTracer changed AS input"),
-                    contents: data,
-                    usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
-                });
+                vertices[*index] = if geometry.procedural {
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("MuTracer changed AS input"),
+                        contents: data,
+                        usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
+                    })
+                } else {
+                    // Keep the candidate independent of the accepted AS input.
+                    // GPU copy preserves untouched vertices; the scene buffer
+                    // already contains the sparse attribute writes above.
+                    let length = geometry.vertex_count as u64 * geometry.vertex_stride;
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("MuTracer changed AS input"),
+                        size: length,
+                        usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    encoder.copy_buffer_to_buffer(
+                        &scene_buffers[&3],
+                        geometry.first_vertex as u64 * geometry.vertex_stride,
+                        &buffer,
+                        0,
+                        length,
+                    );
+                    queue.submit([encoder.finish()]);
+                    buffer
+                };
             }
             let blas = device.create_blas(
                 &wgpu::CreateBlasDescriptor {
@@ -813,7 +865,7 @@ impl Resources {
         }
         let mut metal_blas_wall_ms: Option<f64> = None;
         #[cfg(target_os = "macos")]
-        if allow_update && changed.iter().all(|&i| self.updatable_blases[i]) {
+        if allow_update && added_blases == 0 && changed.iter().all(|&i| self.updatable_blases[i]) {
             match self.refit_metal_candidate(
                 device,
                 queue,

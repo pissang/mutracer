@@ -3,6 +3,7 @@ import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize
 import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
 import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
 import {nativeTangentRequirements} from './scene-tangents.js';
+import {packedVertexChange} from './vertex-updates.js';
 import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
 import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
@@ -1454,12 +1455,14 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
     for (const material of binding.mesh.materials) if (material.displacementMap && material.displacementBias !== 0)
       return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   }
+  preparationMark('update.vertices.begin');
   const geometry = new Geometry(previous);
   geometry.position = new Attribute(values.slice(4, 4 + count * 3), 3);
   if (flags & 1) geometry.normal = new Attribute(values.slice(4 + count * 3, 4 + count * 6), 3);
   else computeGeometryNormals(geometry);
   if (hasGeneratedVertexTangents(previous)) generateVertexTangents(geometry);
   else if (previous.tangent) geometry.tangent = new Attribute(values.slice(4 + count * (flags & 1 ? 6 : 3)), 4);
+  preparationMark('update.vertices.attributes.end');
   markDeformedGeometry(geometry);
   const meshes = state.meshes.map(mesh => {
     if (mesh.geometry !== previous) return mesh;
@@ -1513,6 +1516,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, mergedAttributes: false, geometries, geometryRegions: regions, geometryStates,
     instanceBindings: residentBindings, blases: blases.map(blas => ({bvh: blas.bvh}))};
   const update = updatePreparedGeometries(kernel, new Set([geometry]), {softwareBvhs: !state.hardware, displacement});
+  preparationMark('update.vertices.blas.end');
   for (let i = 0; i < blases.length; i++) blases[i].bvh = kernel.blases[i].bvh;
   if (update.relocated || update.resized) throw new Error('Full commit required: changed software BLAS layout');
   const dirty = dirtyPreparedInstanceIndices(state.bindings, changedMeshes, state.instances);
@@ -1527,10 +1531,10 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
   for (const index of affectedBlases) {
     const local = geometries[index], region = regions.get(local)!;
-    const data = new Uint32Array(local.vertexCount * layout.stride);
-    packCompactVertices(local, data, layout.stride, layout.offsets, 0, local.vertexCount, 0,
-      false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
-    add(RESOURCE.ATTRIBUTES, new Uint8Array(data.buffer), region.vertexOffset * layout.stride * WORD_BYTES, KIND.BUFFER);
+    const change = packedVertexChange(state.prepared.geometries[index], local, layout.stride, layout.offsets,
+      !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+    if (change.data.byteLength) add(RESOURCE.ATTRIBUTES, change.data,
+      region.vertexOffset * layout.stride * WORD_BYTES + change.offset, KIND.BUFFER);
   }
   if (!state.hardware) for (const range of update.blases)
     add(RESOURCE.BVH, new Uint8Array(range.blas.buffer), state.tlas.buffer.byteLength + range.offset, KIND.BUFFER);
