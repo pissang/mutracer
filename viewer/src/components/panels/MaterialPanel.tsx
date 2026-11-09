@@ -41,11 +41,14 @@ export function MaterialPanel() {
   const textures = new Set(material.textures);
   const driven = new Map(material.graph?.inputs.map(input => [input.key, input]));
   const diagnostics = graphState?.diagnostics ?? [];
+  // WebGL 2 renders the material values of graphs that do not reduce to texture slots.
+  const fallback = webgl && !material.graph?.webgl;
   const textureCount = Object.keys(material.maps).length + (material.graph?.images.length ?? 0);
   const base = material.values.baseColor as [number, number, number];
   const isOpen = (group: MaterialGroup) => {
     if (openGroups[group.id] !== undefined) return openGroups[group.id];
     if (group.id === 'displacement') return true;
+    if (material.graph?.inputs.some(input => groupOf(input.key) === group.id)) return true;
     if (!group.weight) return group.id !== 'advanced';
     return Number(material.values[group.weight]) > 0;
   };
@@ -107,35 +110,34 @@ export function MaterialPanel() {
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
+        const extra = material.graph?.inputs.filter(input => !PARAM_LABELS.has(input.key) && groupOf(input.key) === group.id) ?? [];
+        const link = (input: GraphInput, label: string) => (
+          <GraphLink key={input.terminal} material={material} input={input} label={label} fallback={fallback} diagnostics={diagnostics} />
+        );
         return (
           <Section
             key={group.id}
             title={group.label}
-            value={weight !== undefined ? formatWeight(weight) : undefined}
+            value={group.weight && driven.has(group.weight) && !fallback
+              ? <Workflow size={11} aria-label="Graph" />
+              : weight !== undefined ? formatWeight(weight) : undefined}
             open={isOpen(group)}
             onOpenChange={(open) => setOpenGroups((g) => ({ ...g, [group.id]: open }))}
           >
-            {group.params.map((param) => (
+            {group.params.map((param) => driven.has(param.key) && !fallback ? link(driven.get(param.key)!, param.label) : (
               <ParamControl key={param.key} param={param.key === 'displacementScale'
                 ? { ...param, ...material.displacementRange } : param.key === 'displacementBias'
                   ? { ...param, ...material.displacementRange, min: -material.displacementRange.max } : param} values={material.values} textures={textures}
                 disabled={group.id === 'displacement' && webgl}
-                graph={driven.get(param.key)} fallback={webgl && !material.graph?.webgl}
+                graph={driven.get(param.key)}
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
+            {extra.map(input => link(input, groupLabel(input.key, group)))}
             {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
               'Offset = texture × Scale + Bias, in mesh-local units. Sliders follow object size. Use the numeric inputs to enter any value. A displacement texture is required.'}</Hint>}
           </Section>
         );
       })}
-      {material.graph && material.graph.inputs.length > 0 && <Section
-        title="Graph"
-        value={String(material.graph.inputs.length)}
-        open={openGroups.graph ?? true}
-        onOpenChange={(open) => setOpenGroups((g) => ({ ...g, graph: open }))}
-      >
-        <GraphInputs material={material} diagnostics={diagnostics} />
-      </Section>}
       <Section
         title="Textures"
         value={String(textureCount)}
@@ -174,22 +176,19 @@ function MaterialXImport({ materialId }: { materialId: string }) {
 }
 
 function ParamControl({
-  param, values, textures, onChange, disabled, graph, fallback
+  param, values, textures, onChange, disabled, graph
 }: {
   param: MaterialParam;
   values: MaterialValues;
   textures: Set<string>;
   onChange: (values: MaterialValues) => void;
   disabled?: boolean;
-  /** Set when the material graph drives this input. */
+  /** Set when the graph drives this input on WebGPU but the current backend renders the value. */
   graph?: GraphInput;
-  /** The backend renders the material value in place of the graph, so the control stays live. */
-  fallback?: boolean;
 }) {
-  const badge = graph ? <GraphBadge input={graph} fallback={fallback} />
+  const badge = graph ? <GraphBadge input={graph} />
     : 'texture' in param && param.texture && textures.has(param.texture)
       ? <i className="tex" title="Multiplied by a texture" /> : null;
-  disabled = disabled || (!!graph && !fallback);
   if (param.kind === 'color') {
     const value = values[param.key] as [number, number, number];
     return <ColorField label={param.label} badge={badge} value={linearToHex(value)} disabled={disabled} onChange={(hex) => onChange({ [param.key]: hexToLinear(hex) })} />;
@@ -364,48 +363,79 @@ function MaterialGraphStatus({state:graph}:{state:GraphState}){
 
 const messages = (list: MaterialGraphDiagnostic[]) => [...new Set(list.map(d => d.message))];
 
-function GraphBadge({ input, fallback }: { input: GraphInput; fallback?: boolean }) {
-  return <i className="graph-badge" title={`Graph: ${input.source}${fallback ? ' (WebGPU only)' : ''}`}><Workflow size={10} /></i>;
+function GraphBadge({ input }: { input: GraphInput }) {
+  return <i className="graph-badge" title={`${input.source} (WebGPU only)`}><Workflow size={10} /></i>;
 }
 
 const PARAM_LABELS = new Map(MATERIAL_GROUPS.flatMap(group => group.params.map(param => [param.key as string, paramLabel(group, param)])));
-const inputLabel = (key: string) => PARAM_LABELS.get(key)
-  ?? key.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`).replace(/^./, c => c.toUpperCase());
+const humanize = (key: string) => key.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`).replace(/^./, c => c.toUpperCase());
+const inputLabel = (key: string) => PARAM_LABELS.get(key) ?? humanize(key);
+const GROUP_OF: Record<string, string> = { normal: 'base', baseWeight: 'base', specularColor: 'base' };
+/** The panel group of a graph input, so inputs without a control sit beside related controls. */
+const groupOf = (key: string) => MATERIAL_GROUPS.find(group => group.params.some(param => param.key === key))?.id
+  ?? GROUP_OF[key] ?? MATERIAL_GROUPS.find(group => group.weight && key.startsWith(group.id))?.id ?? 'advanced';
+/** The label inside a group, without the group's own prefix. */
+const groupLabel = (key: string, group: MaterialGroup) =>
+  humanize(group.id !== 'base' && key.startsWith(group.id) && key !== group.id ? key.slice(group.id.length) : key);
 
-/** Graph-driven inputs, including those without a control; disconnecting hands an input back to its control. */
-function GraphInputs({ material, diagnostics }: { material: SelectedMaterial; diagnostics: MaterialGraphDiagnostic[] }) {
+function replaceGraphImage(materialId: string, image: { node: string; port: string; name: string }, file: File | undefined) {
+  if (!file) return;
+  const error = textureDropError([file]);
+  if (error) return showToast(error, 'error');
+  void getEngine()?.setMaterialGraphImage(materialId, image.node, image.port, file, `Replace ${image.name}`);
+}
+
+/** Image names without the extension and the prefix all of them share, e.g. `Nero_Tiles_baseColor.png` → `baseColor`. */
+function shortSource(source: string, names: string[]) {
+  const stems = names.map(name => name.replace(/\.[^.]+$/, ''));
+  let prefix = stems.length > 1 ? stems.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); }) : '';
+  prefix = prefix.slice(0, Math.max(prefix.lastIndexOf('_'), prefix.lastIndexOf('-'), prefix.lastIndexOf(' ')) + 1);
+  return names.reduce((text, name, i) => text.split(name).join(stems[i].slice(prefix.length) || stems[i]), source);
+}
+
+function pickImage(onFile: (file: File | undefined) => void) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = TEXTURE_ACCEPT;
+  input.onchange = () => onFile(input.files?.[0]);
+  input.click();
+}
+
+/**
+ * A graph-driven input in place of its control: the image it reads, its source
+ * and a disconnect button that hands the input back to its control.
+ */
+function GraphLink({ material, input, label, fallback, diagnostics }: {
+  material: SelectedMaterial; input: GraphInput; label: string; fallback: boolean; diagnostics: MaterialGraphDiagnostic[];
+}) {
+  const images = material.graph!.images.filter(image => image.feeds.includes(input.key));
+  const nodes = new Set(input.nodes);
+  const errors = messages(diagnostics.filter(d => d.node ? nodes.has(d.node) : d.port === input.terminal));
+  const full = inputLabel(input.key);
+  const image = images.length === 1 ? images[0] : undefined;
   return (
-    <div className="graph-inputs">
-      {material.graph!.inputs.map(input => {
-        const nodes = new Set(input.nodes);
-        const errors = messages(diagnostics.filter(d => d.node ? nodes.has(d.node) : d.port === input.terminal));
-        const label = inputLabel(input.key);
-        return (
-          <div key={input.terminal} className="graph-input" data-error={errors.length > 0 || undefined}>
-            <span><b>{label}</b><small title={input.source}>{input.source}</small></span>
-            <button className="icon-btn icon-btn--bare xs" title={`Disconnect ${label.toLowerCase()} from the graph`} aria-label={`Disconnect ${label}`}
-              onClick={() => getEngine()?.disconnectMaterialGraphInput(material.id, input.terminal, `Disconnect ${label.toLowerCase()}`)}>
-              <Unlink size={12} />
-            </button>
-            {errors.map(message => <small key={message} className="graph-error">{message}</small>)}
-          </div>
-        );
-      })}
+    <div className="graph-link" data-error={errors.length > 0 || undefined} data-fallback={fallback || undefined}
+      title={`${input.source}${fallback ? ' (WebGPU only)' : ''}`}>
+      <button className="graph-link__thumb" disabled={!image} aria-label={image ? `Replace ${image.name}` : undefined}
+        title={image ? `Replace ${image.name}` : undefined}
+        onClick={() => image && pickImage(file => replaceGraphImage(material.id, image, file))}>
+        {images[0]?.thumb ? <img src={images[0].thumb} alt="" /> : <Workflow size={12} />}
+      </button>
+      <span className="graph-link__label">{label}</span>
+      <span className="graph-link__source">{shortSource(input.source, material.graph!.images.map(image => image.name))}</span>
+      <button className="icon-btn icon-btn--bare xs" title={`Disconnect from the graph and edit ${full.toLowerCase()} here`} aria-label={`Disconnect ${full}`}
+        onClick={() => getEngine()?.disconnectMaterialGraphInput(material.id, input.terminal, `Disconnect ${full.toLowerCase()}`)}>
+        <Unlink size={12} />
+      </button>
+      {errors.map(message => <small key={message} className="graph-error">{message}</small>)}
     </div>
   );
 }
 
 /** Images read by the material graph; replacing one keeps its color space and UV settings. */
 function GraphImages({ material, diagnostics }: { material: SelectedMaterial; diagnostics: MaterialGraphDiagnostic[] }) {
-  const input = useRef<HTMLInputElement>(null);
-  const target = useRef<{ node: string; port: string; name: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const replace = (image: { node: string; port: string; name: string }, file: File | undefined) => {
-    if (!file) return;
-    const error = textureDropError([file]);
-    if (error) return showToast(error, 'error');
-    void getEngine()?.setMaterialGraphImage(material.id, image.node, image.port, file, `Replace ${image.name}`);
-  };
+  const replace = (image: { node: string; port: string; name: string }, file: File | undefined) => replaceGraphImage(material.id, image, file);
   return (
     <div className="tex-slots">
       {material.graph!.images.map(image => {
@@ -422,7 +452,7 @@ function GraphImages({ material, diagnostics }: { material: SelectedMaterial; di
               replace(image, e.dataTransfer.files[0]);
             }}>
             <button className="tex-slot__thumb" title={`Replace ${image.name}`} aria-label={`Replace ${image.name}`}
-              onClick={() => { target.current = image; input.current?.click(); }}>
+              onClick={() => pickImage(file => replace(image, file))}>
               {image.thumb ? <img src={image.thumb} alt="" /> : <i className="tex" />}
             </button>
             <span className="tex-slot__label">
@@ -434,11 +464,6 @@ function GraphImages({ material, diagnostics }: { material: SelectedMaterial; di
           </div>
         );
       })}
-      <input ref={input} type="file" hidden accept={TEXTURE_ACCEPT}
-        onChange={(e) => {
-          if (target.current) replace(target.current, e.currentTarget.files?.[0]);
-          e.currentTarget.value = '';
-        }} />
     </div>
   );
 }
