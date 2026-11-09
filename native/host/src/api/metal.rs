@@ -254,7 +254,12 @@ impl Engine {
         let order = raw.newSharedEvent().ok_or_else(unavailable)?;
         let hal_device =
             unsafe { wgpu::hal::metal::Device::device_from_raw(raw, features, &limits) };
-        let hal_queue = unsafe { wgpu::hal::metal::Queue::queue_from_raw(native_queue, 1.0) };
+        let hal_queue = unsafe {
+            wgpu::hal::metal::Queue::queue_from_raw(
+                crate::native_completion::observe_queue(native_queue),
+                1.0,
+            )
+        };
         hal_queue
             .enable_strict_event_sync()
             .map_err(|e| error(Status::Unavailable, e.to_string()))?;

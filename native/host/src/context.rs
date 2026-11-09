@@ -9,7 +9,6 @@ use std::{
 };
 
 struct Context {
-    #[cfg(test)]
     id: u64,
     gpu: GpuDevice,
     backend: u32,
@@ -76,8 +75,8 @@ enum JobState {
     Cancelling = 5,
 }
 struct Flight {
-    #[cfg(test)]
     start: u32,
+    native: crate::native_completion::Batch,
     end: u32,
     done: Arc<AtomicBool>,
     timer: Option<(
@@ -588,7 +587,6 @@ fn create_in(
     registry.contexts.insert(
         handle,
         Context {
-            #[cfg(test)]
             id: handle,
             gpu,
             backend,
@@ -2063,7 +2061,6 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         }
         return Err(error);
     }
-    #[cfg(test)]
     let context_id = context.id;
     let Context {
         scene: own,
@@ -2083,6 +2080,10 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .as_ref()
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
+        let flight = job.flight.as_ref().unwrap();
+        let _ = flight.native.check(&format!(
+            "context={context_id} job={} flight={}..{}", job.id, flight.start, flight.end
+        ));
         if job
             .flight
             .as_ref()
@@ -2157,7 +2158,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     let scene = owner
         .or(own.as_ref())
         .ok_or("Missing render target scene")?;
-    scene.dispatch_target(
+    let native = scene.dispatch_target(
         target.as_ref().ok_or("No render target")?,
         start,
         count,
@@ -2169,8 +2170,8 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .on_submitted_work_done(move || signal.store(true, Ordering::Release));
     job.submitted += count;
     job.flight = Some(Flight {
-        #[cfg(test)]
         start,
+        native,
         end: job.base + job.submitted,
         done,
         timer: timer.map(|timer| {

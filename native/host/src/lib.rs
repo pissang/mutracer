@@ -81,6 +81,7 @@ mod texture_budget;
 #[rustfmt::skip]
 pub mod layout;
 mod material_properties;
+mod native_completion;
 mod postprocess;
 mod profiling;
 mod runtime;
@@ -497,37 +498,37 @@ impl GpuDevice {
         };
         let denoise_features =
             oidn_webgpu::required_features() | oidn_webgpu::recommended_features(adapter);
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("MuTracer native feasibility"),
-                required_limits: {
-                    let mut limits = adapter.limits();
-                    // wgpu 30 indirect validation addresses buffers with u32.
-                    limits.max_buffer_size = limits.max_buffer_size.min(u32::MAX as u64);
-                    limits
-                },
-                required_features: profile_features
-                    | denoise_features
-                    | cache_feature
-                    | if adapter.features().contains(INDEPENDENT_TEXTURE_FEATURES) {
-                        INDEPENDENT_TEXTURE_FEATURES
-                    } else {
-                        wgpu::Features::empty()
-                    }
-                    | if use_hwrt {
-                        wgpu::Features::EXPERIMENTAL_RAY_QUERY
-                    } else {
-                        wgpu::Features::empty()
-                    },
-                experimental_features: if use_hwrt
-                    || denoise_features.contains(wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX)
-                {
-                    unsafe { wgpu::ExperimentalFeatures::enabled() }
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("MuTracer native feasibility"),
+            required_limits: {
+                let mut limits = adapter.limits();
+                // wgpu 30 indirect validation addresses buffers with u32.
+                limits.max_buffer_size = limits.max_buffer_size.min(u32::MAX as u64);
+                limits
+            },
+            required_features: profile_features
+                | denoise_features
+                | cache_feature
+                | if adapter.features().contains(INDEPENDENT_TEXTURE_FEATURES) {
+                    INDEPENDENT_TEXTURE_FEATURES
                 } else {
-                    wgpu::ExperimentalFeatures::disabled()
+                    wgpu::Features::empty()
+                }
+                | if use_hwrt {
+                    wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                } else {
+                    wgpu::Features::empty()
                 },
-                ..Default::default()
-            }))?;
+            experimental_features: if use_hwrt
+                || denoise_features.contains(wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX)
+            {
+                unsafe { wgpu::ExperimentalFeatures::enabled() }
+            } else {
+                wgpu::ExperimentalFeatures::disabled()
+            },
+            ..Default::default()
+        };
+        let (device, queue) = native_completion::request_device(adapter, &descriptor)?;
         if profiling::gpu_enabled() {
             native_log!(
                 "{}",
@@ -1210,8 +1211,10 @@ impl GpuScene {
             additional * target.caustics.as_ref().map_or(1, |c| c.pass_count()),
             false,
         );
-        self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
+        let completion =
+            self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         crate::GpuDevice::wait(&self.gpu.device)?;
+        let _ = completion.check("blocking render");
         if profiling::gpu_enabled() {
             let gpu_ms = timer
                 .as_ref()
@@ -1427,7 +1430,7 @@ impl GpuScene {
         start: u32,
         additional: u32,
         timer: Option<&profiling::GpuTimer>,
-    ) -> Result<()> {
+    ) -> Result<native_completion::Batch> {
         let end = start
             .checked_add(additional)
             .ok_or("Sample count overflow")?;
@@ -1449,6 +1452,7 @@ impl GpuScene {
         ];
         let uniform = &target.buffers[&layout::resource::TRACE_UNIFORM];
         let pipeline = target.pipeline.as_ref().unwrap_or(&self.pipeline);
+        let completion = native_completion::Recording::new();
         for sample in samples {
             let frame = &target.frames[sample as usize];
             queue.write_buffer(
@@ -1528,7 +1532,7 @@ impl GpuScene {
             }
             queue.submit([encoder.finish()]);
         }
-        Ok(())
+        Ok(completion.finish())
     }
     fn read_target(&self, target: &Target, kind: u32) -> Result<Vec<u8>> {
         if target.samples == 0 {
