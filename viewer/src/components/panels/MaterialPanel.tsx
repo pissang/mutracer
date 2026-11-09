@@ -86,14 +86,16 @@ export function MaterialPanel() {
         </div>
       </div>
       <div className="tex-browse hide-m">
-        <button className="btn btn--wide" aria-pressed={browsing} data-on={browsing || undefined}
+        <button className="btn" aria-pressed={browsing} data-on={browsing || undefined}
+          title={browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
           onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false })}>
-          <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
+          <PolyHavenLogo />Poly Haven
         </button>
         {MATERIALX_IMPORT && <>
-          <button className="btn btn--wide" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
+          <button className="btn" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
+            title={materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen MaterialX materials'}
             onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false })}>
-            <Download size={14} />{materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen materials'}
+            <Download size={14} />GPUOpen
           </button>
           <MaterialXImport materialId={material.id} />
         </>}
@@ -139,9 +141,9 @@ function MaterialXImport({ materialId }: { materialId: string }) {
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <button className="btn btn--wide" disabled={busy} title="A .zip package, or a .mtlx with its texture images. Folders can be dropped on the viewport."
+      <button className="btn" disabled={busy} title="Import MaterialX: a .zip package, or a .mtlx with its texture images. Folders can be dropped on the viewport."
         onClick={() => input.current?.click()}>
-        <FileUp size={14} />{busy ? 'Importing MaterialX…' : 'Import MaterialX'}
+        <FileUp size={14} />{busy ? 'Importing…' : 'MaterialX'}
       </button>
       <input ref={input} type="file" hidden multiple accept=".mtlx,.zip,image/png,image/jpeg,image/webp,image/avif"
         onChange={async (e) => {

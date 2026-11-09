@@ -418,7 +418,10 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .insp-head small { display: block; margin-top: 2px; color: var(--cv-text-3); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-body { --insp-pad: 12px; overflow: auto; display: grid; grid-auto-rows: max-content; align-content: start; min-height: 0; }
 /* Panel contents bleed to the panel edges; dividers separate the blocks. */
-.insp-body > :not(.section, .empty-panel) { padding: 12px var(--insp-pad); border-bottom: 1px solid var(--cv-divider-subtle); }
+.insp-body > :not(.section, .empty-panel, .material-panel),
+.material-panel > :not(.section) { padding: 12px var(--insp-pad); border-bottom: 1px solid var(--cv-divider-subtle); }
+/* The material panel wraps its rows to accept drops; it keeps the inspector's row layout. */
+.material-panel { display: grid; grid-auto-rows: max-content; align-content: start; }
 
 .section { border-bottom: 1px solid var(--cv-divider-subtle); }
 .section__head { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 calc(var(--insp-pad) - 4px) 0 var(--insp-pad); }
@@ -582,8 +585,8 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 
 /* Material */
 .mat-card { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; }
-.insp-body > .mat-card { padding-bottom: 8px; border-bottom: 0; }
-.insp-body > .mat-presets { display: grid; gap: 8px; padding-top: 4px; }
+.material-panel > .mat-card { padding-bottom: 8px; border-bottom: 0; }
+.material-panel > .mat-presets { display: grid; gap: 8px; padding-top: 4px; }
 .mat-card > div { min-width: 0; }
 .mat-ball { --c: #ccc; width: 44px; height: 44px; border-radius: 50%; corner-shape: round;
   background: radial-gradient(circle at 34% 28%, rgb(255 255 255 / 0.9) 0, rgb(255 255 255 / 0) 22%),
@@ -692,8 +695,12 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .tex-browser__filters .search { margin: 0; }
 .tex-browser .ph-grid { margin: 0; padding: 2px 10px 10px; }
 .tex-browser__foot { padding: 8px 12px 10px; border-top: 1px solid var(--cv-divider-subtle); }
-.insp-body > .tex-browse { display: grid; gap: 6px; padding-top: 0; }
-.tex-browse .btn[data-on] { background: var(--cv-accent-surface); color: var(--cv-accent-hover); box-shadow: none; }
+.material-panel > .tex-browse { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding-top: 0; }
+.tex-browse .btn { min-width: 0; height: 30px; padding: 0 8px; gap: 6px; font-weight: 500; color: var(--cv-text-2); }
+.tex-browse .btn:hover { color: var(--cv-text); }
+.tex-browse .btn svg { flex: none; opacity: 0.8; }
+.tex-browse .btn[data-on] { color: var(--cv-accent-hover); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cv-accent) 45%, transparent); }
+.tex-browse .btn[data-on] svg { opacity: 1; }
 .ph-cats { display: flex; flex-wrap: wrap; gap: 4px; }
 .ph-cats button { padding: 2px 8px; border-radius: 999px; background: none;
   color: var(--cv-text-3); font-size: 11px; text-transform: capitalize; }

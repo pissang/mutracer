@@ -449,7 +449,7 @@ file is over it. To replace an individual texture, drop one PNG, JPEG, WebP or
 AVIF image directly on its slot, or click the slot to choose a file. Images
 dropped elsewhere on the panel are not assigned to a slot.
 
-Choose **Browse GPUOpen materials** in the material panel to search the
+Choose **GPUOpen** in the material panel to search the
 [GPUOpen MaterialX Library](https://matlib.gpuopen.com/main/materials/all), filter
 by category and select a package. The default is **1k 8b** when available.
 The browser shows the material's name, author, source and license; use its
