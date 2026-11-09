@@ -120,11 +120,18 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom","new_geometry_add"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom","new_geometry_add","instances_1","vertices_all","vertices_continuous","meshes_1","meshes_64","meshes_1024","meshes_half","meshes_all"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
   switch(c){
+  case 43:case 44:case 45:case 46:case 47:{
+    uint32_t n=c==46?b->mesh_count/2:c==47?b->mesh_count:(const uint32_t[]){1,64,1024}[c-43];
+    for(uint32_t i=0;i<n;i++){float w[16];mt_scene_identity(w);w[12]=(float)(i%64)*1.1f+(on?.01f:0);w[14]=(float)(i/64)*1.1f;CHECK(mt_scene_set_mesh_transform(b->scene,b->meshes[i],w,error,sizeof error));}
+    break;
+  }
+  case 40:b->matrices[12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;
+  case 41:case 42:for(uint32_t i=0;i<b->gd.vertex_count;i++)b->positions[i*3+1]=on?.01f*(float)(i%7):0;CHECK(mt_scene_set_geometry(b->scene,b->geometry,&b->gd,error,sizeof error));break;
   case 35:CHECK(mt_scene_set_mesh_visible(b->scene,b->mesh,(uint32_t)!on,error,sizeof error));break;
   case 36:if(on)CHECK(mt_scene_remove_mesh(b->scene,b->mesh,error,sizeof error));else CHECK(mt_scene_add_mesh(b->scene,&b->md,&b->mesh,error,sizeof error));break;
   case 37:{mt_scene_texture_desc changed=b->td;if(on){changed.width=changed.height=16;changed.pixel_bytes=sizeof b->pixels;}CHECK(mt_scene_set_texture(b->scene,b->textures[3],&changed,error,sizeof error));CHECK(mt_scene_material_set_texture(b->scene,b->material,MT_MAT_MAP,b->textures[on?3:0],error,sizeof error));break;}
@@ -164,7 +171,7 @@ int main(int argc,char **argv){
   const char *filter=argc>10?argv[10]:NULL;Bench b={0};build(&b,backend,meshes,materials,lights,grid,instances,width,height);commit(&b,"initial",0,1);
   /* Two features absent from the baseline, then its original variant. Repeat in
    * one engine to distinguish process-local pipeline reuse from system caching. */
-  for(uint32_t r=0;r<repeats+1;r++){
+  for(uint32_t r=0;!getenv("MUTRACER_EDIT_SKIP_VARIANTS")&&r<repeats+1;r++){
     material(&b,MT_MAT_COAT_WEIGHT,.3f,0,0);commit(&b,"variant_coat",(int)r,1);
     material(&b,MT_MAT_SUBSURFACE_WEIGHT,.2f,0,0);commit(&b,"variant_coat_subsurface",(int)r,1);
     material(&b,MT_MAT_COAT_WEIGHT,0,0,0);material(&b,MT_MAT_SUBSURFACE_WEIGHT,0,0,0);commit(&b,"variant_return",(int)r,1);
@@ -174,7 +181,8 @@ int main(int argc,char **argv){
     for(uint32_t r=0;r<repeats+1;r++){material(&b,s->property,s->value[0],s->value[1],s->value[2]);commit(&b,s->name,(int)r,s->expected);material(&b,s->property,s->original[0],s->original[1],s->original[2]);commit(&b,"reset",-1,s->expected);}
   }
   for(unsigned c=0;c<sizeof edits/sizeof edits[0];c++){
-    if(!selected(filter,edits[c])||(c==2&&!instances))continue;
+    if(!selected(filter,edits[c])||((c==2||c==40)&&!instances))continue;
+    if(c>=43&&c<=45&&(const uint32_t[]){1,64,1024}[c-43]>meshes)continue;
     if((c>=23&&c<=25&&batch_size(c)>meshes)||(c>=26&&c<=28&&batch_size(c)>materials))continue;
     if((c>=31&&c<=33&&(const uint32_t[]){64,1024,16384}[c-31]>instances)||(c==34&&instances<2))continue;
     if(c==29||c==30){
@@ -187,10 +195,17 @@ int main(int argc,char **argv){
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==38){CHECK(mt_scene_remove_mesh(b.scene,b.meshes[b.mesh_count-1],error,sizeof error));commit(&b,"setup",-1,2);}
-    /* Full above max(64, half of the batch) changed instances. */
-    uint32_t limit=instances/2>64?instances/2:64;
-    uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
-    for(uint32_t r=0;r<repeats+1;r++){edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
+    /* Stable batch membership refits regardless of the number of edited matrices. */
+    uint32_t expected=((c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
+    for(uint32_t r=0;r<repeats+1;r++){
+      if(c==42){
+        /* Successive accepted shapes, without an inverse commit in between. */
+        for(uint32_t i=0;i<b.gd.vertex_count;i++)b.positions[i*3+1]=.01f*(float)(i%7)*(float)(r+1)/(float)(repeats+1);
+        CHECK(mt_scene_set_geometry(b.scene,b.geometry,&b.gd,error,sizeof error));
+        commit(&b,edits[c],(int)r,2);
+      }else{edit(&b,c,1);commit(&b,edits[c],(int)r,expected);edit(&b,c,0);commit(&b,c==22?"engine_camera":"reset",-1,expected);}
+    }
+    if(c==42){edit(&b,c,0);commit(&b,"reset",-1,2);}
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,0,error,sizeof error));commit(&b,"cleanup",-1,1);}
     if(c==19){b.environment.environment=b.textures[2];CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"cleanup",-1,1);}
   }

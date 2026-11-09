@@ -2775,7 +2775,7 @@ mod tests {
                     let (resources, capture, group, attributes) =
                         state.prepare_geometry_hardware(&writes).unwrap().unwrap();
                     assert!(attributes.is_none());
-                    assert_eq!(resources.used_metal_refit, optional_refit && step > 0);
+                    assert_eq!(resources.used_metal_refit, optional_refit);
                     state.hardware = Some(resources);
                     state.scene.hwrt = Some(capture);
                     state.groups[0] = group;

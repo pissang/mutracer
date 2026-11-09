@@ -1779,11 +1779,27 @@ impl GpuScene {
             hardware_updates.native_layout = self.scene.native_layout.clone();
         }
         if updates.changed_blases.is_some() {
-            let (capture, _assets) = self
-                .retained
-                .as_ref()
-                .ok_or("Missing retained geometry")?
-                .hardware_geometry(&hardware_updates)?;
+            let capture = if updates.native_layout.is_none() {
+                // Vertex refits carry source-order dirty instance spans, not a
+                // complete replacement. Preserve every unaffected instance and
+                // apply each span at its destination before rebuilding the TLAS.
+                let mut capture = _current.clone();
+                let plan = self
+                    .hardware
+                    .as_ref()
+                    .unwrap()
+                    .transform_plan(&capture, updates)?;
+                for (index, instance, _) in plan.instances {
+                    capture.instances[index] = instance;
+                }
+                capture
+            } else {
+                self.retained
+                    .as_ref()
+                    .ok_or("Missing retained geometry")?
+                    .hardware_geometry(&hardware_updates)?
+                    .0
+            };
             return with_error_scopes(
                 &self.gpu.device,
                 || -> Result<_> {

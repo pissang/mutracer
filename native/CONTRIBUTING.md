@@ -398,8 +398,22 @@ acceleration-structure build paths submit BLASes and wait for completion
 **before encoding TLAS construction**, because Metal's indirect instance
 descriptors and empty HAL barriers make one encoder insufficient. This wait has
 not fixed the [sample miss](#metal-hwrt-sample-miss). `PreferUpdate` is not a
-refit; HAL refit stays opt-in and must keep its thread and resource lifetime
-assumptions.
+refit. Metal stable-topology BLAS edits use HAL refit by default, with separate
+candidate inputs and AS storage. `MUTRACER_NATIVE_METAL_REFIT=0` retains the wgpu
+rebuild path for A/B diagnostics. Preserve the HAL thread and owning-handle
+lifetime assumptions.
+
+Metal matrix edits keep a separate descriptor buffer and upload changed ranges.
+TLASes refit through half the active instances and rebuild above that count;
+both remain incremental scene commits. `MUTRACER_NATIVE_TLAS_BUILD=refit|rebuild`
+forces either AS strategy for A/B evidence; `MUTRACER_NATIVE_METAL_TLAS=0` uses
+wgpu's full instance upload/build path. Raw TLAS encoders complete before input
+buffers can be overwritten. Stable matrix edits preserve the dependency list
+from the tracked wgpu TLAS build; raw build registration would erase that list
+and Metal residency.
+Membership changes use a tracked build to register newly referenced BLASes.
+Geometry candidates reconstruct instance metadata from retained state plus
+destination spans, never by treating one dirty span as a complete instance array.
 
 ### TinyBVH
 

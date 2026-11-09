@@ -50,9 +50,9 @@ can. Every commit restarts accumulation.
 
 These edits commit incrementally:
 
-- Camera changes; mesh matrices; changes to at most 64, or at most half, of a
-  batch's instance matrices in one update; existing instance colors. Commit
-  multiple matrix edits together to reduce update cost.
+- Camera changes; mesh matrices; any number of a batch's instance matrices;
+  existing instance colors. Commit multiple matrix edits together to reduce
+  update cost.
 - Mesh visibility, including an entire instance batch; see [visibility](#visibility).
 - Adding or removing meshes that reuse resident geometry and materials while
   the retained TLAS capacity is sufficient. Removing a mesh does not evict its
@@ -63,7 +63,9 @@ These edits commit incrementally:
   using more memory and preparation work. Compatible appends remain incremental
   after mesh removal.
 - Vertex positions, normals and tangents when the topology and the presence of
-  normal and tangent arrays stay the same.
+  normal and tangent arrays stay the same. Only the vertex span affected by
+  attribute changes is uploaded; generated normals and tangents can
+  widen that span. Shared geometry also updates the bounds of all its instances.
 - OpenPBR numeric and color parameters while the prepared shader and traversal
   support remain compatible. Emission edits also refresh light sampling;
   switching emission on or off is incremental.
@@ -78,8 +80,9 @@ These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):
 
 - Growing past 64 analytic lights, which reallocates the light array.
-- Texture-reference changes that need an atlas resize or new shader support;
-  UV projection or displacement-reference changes.
+- Texture-reference changes that need an atlas resize or new shader support,
+  including the first use of a previously unused scene texture; UV projection
+  or displacement-reference changes.
 - Parameter edits that require new shader support or change transparency, medium,
   dispersion or traversal requirements. For example, the first use of coat/fuzz,
   thin film or subsurface may need full preparation; later compatible weight and
@@ -89,10 +92,23 @@ previous image stays visible ([engine updates](engine.md#updates)):
 - Mesh additions that introduce a material, require new shader support, or add
   displaced, indexed-material or otherwise incompatible geometry; membership
   changes that exceed the retained TLAS capacity; changed instance counts or
-  presence of instance colors; changes to more than 64 and more than half of a
-  batch's instance matrices in one update.
+  presence of instance colors.
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
+
+Large matrix and vertex edits can block the caller during
+[synchronous incremental updates](engine.md#updates). They need temporary CPU
+memory and visit affected instances, so changing one shared geometry can cost
+much more than changing one mesh.
+Hardware vertex edits also need temporary GPU memory proportional to the
+affected geometry. An active displacement map with nonzero bias requires full
+preparation for vertex edits.
+
+Software refits stable-topology geometry and may rebuild when its BVH quality
+limit is exceeded. Metal hardware tracing refits compatible BLASes; other
+hardware adapters rebuild them. Large deformations can slow subsequent tracing,
+especially on hardware where no automatic quality-based BLAS rebuild is applied.
+Changes to emissive geometry also refresh its light sampling.
 
 `pending_commit_kind` / `mt_scene_pending_commit_kind` predicts the next commit
 but cannot see shader, traversal and atlas requirements; `mt_render_info` reports

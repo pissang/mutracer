@@ -3,6 +3,7 @@ import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize
 import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
 import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
 import {nativeTangentRequirements} from './scene-tangents.js';
+import {packedVertexChange} from './vertex-updates.js';
 import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
 import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
@@ -57,6 +58,8 @@ import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.j
 import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../../src/util/geometry.js';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
+import {mergeTexturesFromMaterials} from '../../src/renderer/materialTextures.js';
+import {MATERIAL_TEXTURE_NAMES} from '../../src/scene/materialTextureNames.js';
 import {syncNativeMaterial} from './material-graph.js';
 import {materialEmission} from '../../src/renderer/materialEmission.js';
 import {colorLuminance} from '../../src/renderer/lightSampling.js';
@@ -372,6 +375,11 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     const ordered = state.ordered.map(material => changes.get(material) ?? material);
     if(nativeGraphPlan(ordered).key!==(state.shader.graphs?.key??''))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
     if(nativeGraphTextures(ordered).some(texture=>!state.table.textures.includes(texture)))return new Uint8Array(new Uint32Array([2,2,0,0]).buffer);
+    // Parameter repacking can only reference textures already in this atlas.
+    // Otherwise indexOf would encode -1 and silently render an untextured material.
+    const changedTextures = mergeTexturesFromMaterials([...changes.values()], MATERIAL_TEXTURE_NAMES).textures;
+    if (changedTextures.some(texture => !state.table.textures.includes(texture)))
+      return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
     const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
     const before = nativeMaterialConstants(state.ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
     const after = nativeMaterialConstants(ordered, state.table, state.prepared.geometry, configuration.bevelSamples);
@@ -986,7 +994,8 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   const tlas = copyTLASForRefit(state.tlas);
   const ranges = state.hardware ? {tlasRanges: [], instanceRanges: refitLinearInstances(tlas.instancesBuffer!, stage.instances,
     state.hardware.geometries.map(g => g.indexOffset / 3), state.prepared.geometries.map(g => state.prepared.geometryRegions.get(g)!.vertexOffset), dirty)} :
-    refitTLAS(tlas, stage.instances, prepared.blases, dirty);
+    refitTLAS(tlas, stage.instances, prepared.blases, dirty, true);
+  preparationMark('update.instances.refit.end');
   for (const [id, buffer, spans] of [[RESOURCE.BVH, tlas.buffer, ranges.tlasRanges], [RESOURCE.INSTANCES, tlas.instancesBuffer ?? new ArrayBuffer(0), ranges.instanceRanges]] as const) {
     for (const span of spans) {
       records.push(resourceRecord(id, KIND.BUFFER, span.size, 0, 0, 0, 0)); parts.push(new Uint8Array(buffer.slice(span.offset, span.offset + span.size))); destinations.push(span.offset);
@@ -1130,6 +1139,7 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
 // [source mesh index, local instance index+1, 0, 0, matrix[16]]; one refit
 // applies them all. Candidate meshes never mutate accepted source state.
 function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
+  preparationMark('update.transform.begin');
   pendingTransforms.delete(token); transformStages.delete(token);
   const state = retainedScenes.get(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2), f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2);
@@ -1174,6 +1184,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
     for (const slot of packed.bindingSlots[i] ?? []) if (!only || only.has(packed.localIndices[slot])) dirty.add(slot);
   }
   const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty), stage = {meshes, bindings, instances};
+  preparationMark('update.instances.pack.end');
   if (sameInstanceMembership(state.instances, instances)) return incrementalTransform(stage, dirty, token);
   if (native) {transformStages.set(token, stage); return state.hardware ? resourcePacket([], [], 0, 0) : requestInstances(instances);}
   return packTransformUpdate(stage, buildTLAS(instances, state.blases), token);
@@ -1451,12 +1462,14 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
     for (const material of binding.mesh.materials) if (material.displacementMap && material.displacementBias !== 0)
       return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   }
+  preparationMark('update.vertices.begin');
   const geometry = new Geometry(previous);
   geometry.position = new Attribute(values.slice(4, 4 + count * 3), 3);
   if (flags & 1) geometry.normal = new Attribute(values.slice(4 + count * 3, 4 + count * 6), 3);
   else computeGeometryNormals(geometry);
   if (hasGeneratedVertexTangents(previous)) generateVertexTangents(geometry);
   else if (previous.tangent) geometry.tangent = new Attribute(values.slice(4 + count * (flags & 1 ? 6 : 3)), 4);
+  preparationMark('update.vertices.attributes.end');
   markDeformedGeometry(geometry);
   const meshes = state.meshes.map(mesh => {
     if (mesh.geometry !== previous) return mesh;
@@ -1510,6 +1523,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const kernel: GeometryUpdateState<MeshState> = {geometry: prepared.geometry, mergedAttributes: false, geometries, geometryRegions: regions, geometryStates,
     instanceBindings: residentBindings, blases: blases.map(blas => ({bvh: blas.bvh}))};
   const update = updatePreparedGeometries(kernel, new Set([geometry]), {softwareBvhs: !state.hardware, displacement});
+  preparationMark('update.vertices.blas.end');
   for (let i = 0; i < blases.length; i++) blases[i].bvh = kernel.blases[i].bvh;
   if (update.relocated || update.resized) throw new Error('Full commit required: changed software BLAS layout');
   const dirty = dirtyPreparedInstanceIndices(state.bindings, changedMeshes, state.instances);
@@ -1524,10 +1538,10 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const layout = compactVertexLayout(prepared.geometries, prepared.materials.some(m => !!m.displacementMap));
   for (const index of affectedBlases) {
     const local = geometries[index], region = regions.get(local)!;
-    const data = new Uint32Array(local.vertexCount * layout.stride);
-    packCompactVertices(local, data, layout.stride, layout.offsets, 0, local.vertexCount, 0,
-      false, !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
-    add(RESOURCE.ATTRIBUTES, new Uint8Array(data.buffer), region.vertexOffset * layout.stride * WORD_BYTES, KIND.BUFFER);
+    const change = packedVertexChange(state.prepared.geometries[index], local, layout.stride, layout.offsets,
+      !!layout.constants.COLOR_FLOAT, !!layout.constants.NORMAL_FLOAT);
+    if (change.data.byteLength) add(RESOURCE.ATTRIBUTES, change.data,
+      region.vertexOffset * layout.stride * WORD_BYTES + change.offset, KIND.BUFFER);
   }
   if (!state.hardware) for (const range of update.blases)
     add(RESOURCE.BVH, new Uint8Array(range.blas.buffer), state.tlas.buffer.byteLength + range.offset, KIND.BUFFER);

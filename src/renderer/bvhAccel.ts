@@ -584,8 +584,8 @@ export function refitTLAS(
 
   const placement = getBlasPlacement(blases);
   const scratch = new Float32Array(6), inverseScratch = new Float64Array(16);
-  // Web uses bounded bulk uploads for dense edits. Native adapters retain their
-  // dirty ranges and commit policy until the web path has been reviewed.
+  // Adapters opt in to bounded bulk uploads for dense edits. Sparse updates
+  // keep their dirty record and ancestor ranges.
   const dense = batchUploads && !!dirtySourceIndices && dirtySourceIndices.size > Math.max(64, meshInstancesLength(instances) / 8);
 
   function writeInstance(targetIndex: number, sourceIndex: number) {
