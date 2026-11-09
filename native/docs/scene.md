@@ -80,8 +80,9 @@ These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):
 
 - Growing past 64 analytic lights, which reallocates the light array.
-- Texture-reference changes that need an atlas resize or new shader support;
-  UV projection or displacement-reference changes.
+- Texture-reference changes that need an atlas resize or new shader support,
+  including the first use of a previously unused scene texture; UV projection
+  or displacement-reference changes.
 - Parameter edits that require new shader support or change transparency, medium,
   dispersion or traversal requirements. For example, the first use of coat/fuzz,
   thin film or subsurface may need full preparation; later compatible weight and
@@ -95,8 +96,10 @@ previous image stays visible ([engine updates](engine.md#updates)):
 - Changed texture counts; adding or removing environment or background maps.
 - Edits that need a new shader variant or a larger texture atlas.
 
-Matrix and vertex edits need temporary CPU memory and visit affected instances,
-so changing one shared geometry can cost much more than changing one mesh.
+Large matrix and vertex edits can block the caller during
+[synchronous incremental updates](engine.md#updates). They need temporary CPU
+memory and visit affected instances, so changing one shared geometry can cost
+much more than changing one mesh.
 Hardware vertex edits also need temporary GPU memory proportional to the
 affected geometry. An active displacement map with nonzero bias requires full
 preparation for vertex edits.
