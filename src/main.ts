@@ -46,7 +46,7 @@ export {
 } from './scene/Geometry.js';
 export type { GeometryInit } from './scene/Geometry.js';
 export {default as MaterialGraph} from './scene/MaterialGraph.js';
-export type {MaterialGraphType, MaterialGraphNode, MaterialGraphInput, MaterialGraphConnection, MaterialGraphTerminal, MaterialGraphOptions, MaterialGraphDiagnostic} from './scene/MaterialGraph.js';
+export type {MaterialGraphType, MaterialGraphNode, MaterialGraphInput, MaterialGraphConnection, MaterialGraphTerminal, MaterialGraphTerminalName, MaterialGraphOptions, MaterialGraphDiagnostic, MaterialGraphDiagnosticCode} from './scene/MaterialGraph.js';
 export type { OpenPBRMaterialParams } from './scene/OpenPBRMaterial.js';
 export { default as OpenPBRMaterial } from './scene/OpenPBRMaterial.js';
 export type {

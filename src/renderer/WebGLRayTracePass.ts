@@ -609,7 +609,7 @@ class WebGLRayTracePass {
   getDiagnostics() {
     return { textureAtlas: this._materialData?.textureAtlasStats, materialGraphs: this._graphMaterials ? {
       revision: 0, installedRevision: 0, status: 'failed' as const, topologyCount: 0,
-      diagnostics: [{code: 'unsupported-backend', message: 'Material graphs require WebGPU; WebGL 2 renders the constant material fallback.'}]
+      diagnostics: [{code: 'unsupported-backend' as const, message: 'Material graphs require WebGPU; WebGL 2 renders the constant material fallback.'}]
     } : undefined };
   }
 
