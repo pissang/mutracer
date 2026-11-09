@@ -1,4 +1,3 @@
-import {materialXNormalShader} from './materialXNormal.js';
 import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
@@ -1088,8 +1087,8 @@ class WGPURayTracePass {
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
       let code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
-        causticDiagnostics.fullEmissionRandom !== false, true, true, false, true);
-      if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
+        causticDiagnostics.fullEmissionRandom !== false, true, true, false, true,
+        {materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS});
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1122,6 +1121,11 @@ class WGPURayTracePass {
         let code = wgpuShaderSource(
           constants,
           {
+            materialHooks: {
+              ...materialGraphShader(lightTracing || photonMapping ? {...shader.graphPlan, key: ''} : shader.graphPlan,
+                !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES),
+              materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS
+            },
             maxPathEvents: MAX_PATH_EVENTS_WGPU,
             hasDisplacement,
             channelIndependentRis: Boolean(constants.SPECTRAL),
@@ -1147,8 +1151,6 @@ class WGPURayTracePass {
           },
           bake
         );
-        if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
-        code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan);
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
         const moduleStartedAt = shaderCompilationNow();

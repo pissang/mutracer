@@ -1,3 +1,4 @@
+import {materialCall, type MaterialShaderHooks} from '../materialShaderHooks.js';
 import {prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './spectralPrefix.wgsl.js';
 import {volumeTrackingWgsl} from './volumeTracking.wgsl.js';
 import {MAX_PATH_EVENTS_WEBGL} from '../../pathLimits.js';
@@ -163,7 +164,7 @@ fn shadeVolumeVertex(path: ptr<function, Path>, si: ptr<function, SurfaceInterac
 `;
 }
 
-export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false, maxPathEvents = MAX_PATH_EVENTS_WEBGL, sharePrefix = false) {
+export function createVolumeIntegratorWgsl(deterministicPrimaryAlpha: boolean, hasVolumeNoise = false, maxPathEvents = MAX_PATH_EVENTS_WEBGL, sharePrefix = false, materialHooks: MaterialShaderHooks = {}) {
   const bindings: PrefixBindings = {
     path: ['Path', 'path'], si: ['SurfaceInteraction', 'si'], ma: ['OpenPbrResolvedMaterial', 'ma'],
     aux: ['RayTraceAuxiliary', '*outAux'], depth: ['i32', 'depth'], event: ['i32', 'event'],
@@ -202,7 +203,7 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
 ` : ''}  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
     if (${sharePrefix ? '!spResume && query' : 'query'}) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-      getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+      ${materialCall('&ma', 'si', materialHooks)}
       if (event == 0 && si.hit && ma.materialType == STANDARD) {
         (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
         (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0);
@@ -281,7 +282,7 @@ ${sharePrefix ? '    spResume = false;\n' : ''}    if (path.abort) {
 fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si: SurfaceInteraction; var ma: OpenPbrResolvedMaterial;
   intersectScene(ray, &si, 0, false, false);
-  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+  ${materialCall('&ma', 'si', materialHooks)}
   if (si.hit && HAS_BEVEL && rtUniform.bevel != 0 && ma.bevel > 0.0) { si.normal = getBevelNormal(si, ma.bevel); }
   if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
     (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);

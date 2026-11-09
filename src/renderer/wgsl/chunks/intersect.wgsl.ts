@@ -2,6 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
+import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import { uvProjectionConstants } from '../../materialConstants.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
@@ -657,9 +658,11 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
 
 export function createSceneIntersectionsWgsl({
   perInstanceBounds = false, compactVertices = false, hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
+  materialHooks = {},
   closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel', closestHitHook = ''
 }: {
   perInstanceBounds?: boolean; compactVertices?: boolean; hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
+  materialHooks?: MaterialShaderHooks;
   blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
 }) {
   return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
@@ -827,7 +830,7 @@ if (isOccluded) {
       index,
       hitBarycentric,
       hitPosition,
-      hitNormal${compactVertices ? ', triangleIndex' : ''}
+      hitNormal${compactVertices ? ', triangleIndex' : ''}${materialHooks.graph?.opacity ? ', insIdx' : ''}
     )) {
       // Continue looking for an opaque hit, but never traverse beyond the light.
       tMax = shadowRayTMax;
@@ -858,7 +861,8 @@ export default function getIntersectCode({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   blasLayoutMask = 1,
-  sceneIntersections = ''
+  sceneIntersections = '',
+  materialHooks = {}
 }: {
   perInstanceBounds?: boolean;
   hasDisplacement: boolean;
@@ -866,6 +870,7 @@ export default function getIntersectCode({
   hasCoatNormals?: boolean;
   blasLayoutMask?: number;
   sceneIntersections?: string;
+  materialHooks?: MaterialShaderHooks;
   compactVertices?: boolean;
 }) {
   return /*wgsl*/ `
@@ -1292,7 +1297,7 @@ fn fetchAttributes(
 ${hasAnisotropyDirections ? /* wgsl */ `
 ${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normal;` : ''}
   let directionMaterial = materialsBuffer[(*si).materialIndex];
-  if (directionMaterial.anisotropyMapIndex >= 0.0 || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0${hasCoatNormals ? " || directionMaterial.coatWeight > 0.0" : ""}) {
+  if (${materialHooks.graph ? "directionMaterial._padding1 > 0.0 || " : ""}directionMaterial.anisotropyMapIndex >= 0.0${materialHooks.materialXNormals ? " || fract(directionMaterial.normalMapIndex) > 0.25" : ""} || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0${hasCoatNormals ? " || directionMaterial.coatWeight > 0.0" : ""}) {
     let dp1 = tri.p0 - tri.p2;
     let dp2 = tri.p1 - tri.p2;
     var inputTangent = vec4f(0.0);
@@ -1567,9 +1572,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 }
 
 
-${createIntersectionAlphaWgsl(hasAnisotropyDirections, compactVertices)}
+${createIntersectionAlphaWgsl(hasAnisotropyDirections, compactVertices, materialHooks)}
 
 
 
-${sceneIntersections || createSceneIntersectionsWgsl({perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
+${sceneIntersections || createSceneIntersectionsWgsl({materialHooks, perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

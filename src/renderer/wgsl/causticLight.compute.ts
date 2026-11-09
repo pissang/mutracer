@@ -1,3 +1,4 @@
+import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 import {PHOTON_GRID_SIZE, photonPackingWgsl} from './photonMap.compute.js';
 import {SPECTRUM_PHOTON_DISTRIBUTION, SPECTRUM_WAVELENGTH_RANGE, spectrumWgsl} from '../spectrum.js';
 import background from './chunks/background.wgsl.js';
@@ -37,7 +38,8 @@ export function causticLightCompute(
   perInstanceBounds = false,
   compactVertices = false,
   independentTextures = false,
-  analyticLightStorage = false
+  analyticLightStorage = false,
+  materialHooks: MaterialShaderHooks = {}
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
@@ -48,10 +50,11 @@ ${Object.keys(WGPU_SCENE_FEATURE_BITS)
   .map((name) => `const ${name} = ${!!constants[name]};`)
   .join('\n')}
 ${common}
-${core({independentTextures, compactVertices, analyticLightStorage, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
+${core({materialHooks, independentTextures, compactVertices, analyticLightStorage, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${uv}
-${createMaterialBufferWgsl({independentTextures, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
+${createMaterialBufferWgsl({materialHooks, independentTextures, hasAnisotropyDirections: frames, hasCoatNormals: coat, caustics: true})}
 ${intersect({
+  materialHooks,
   perInstanceBounds,
   compactVertices,
   hasDisplacement,
@@ -65,7 +68,7 @@ ${random}
 ${env}
 ${sampling}
 ${spectrumWgsl}
-${createOpenPbrBsdfWgsl(frames, coat)}
+${createOpenPbrBsdfWgsl(frames, coat, materialHooks)}
 ${light}
 ${background.replace(
   /\b(?:USE_BACKGROUND|USE_BACKGROUND_MAP|USE_GROUNDED_BACKGROUND)\b/g,
@@ -440,7 +443,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
       return;
     }
     var m:OpenPbrResolvedMaterial;
-    getMaterial(&m,si.materialIndex,si.uv,si.uv1,si.instanceIndex,si.vertexColor);
+    ${materialCall('&m', 'si', materialHooks, true)}
     if(m.alpha<1.0&&causticEmission1D(causticDim(79u))>=m.alpha) {
       initRay(&ray,si.position+EPS*ray.d,ray.d);
       continue;

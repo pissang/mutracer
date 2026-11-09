@@ -2,8 +2,12 @@
 
 `MaterialGraph` is the browser authoring facade. Its validated canonical graph
 lowers to the portable `GraphIR` before expression generation and shader
-specialization. Empty structure sets return the input source unchanged. Explicit
-boundary anchors fail compilation if the material evaluator changes shape.
+specialization. `materialGraphShaderIR` returns explicit `MaterialShaderHooks`:
+graph declarations, surface evaluation and an opacity capability. Empty hooks
+preserve default generation byte for byte. The ray-tracing and caustic templates
+own material signatures, call sites, shadow context and resolved-material layout;
+no graph or MaterialX-normal pass rewrites generated WGSL. Shader compression
+can strip comments and indentation without changing these insertion points.
 
 The IR has a format version and append-only integer IDs for categories, types,
 ports, outputs, geometry inputs and OpenPBR terminals. Node records contain the
@@ -94,9 +98,13 @@ The browser specialization enables frame construction only for reachable frame
 inputs, normal/anisotropy terminals, or graph materials with constant anisotropy.
 Lobe, transmission and UV1 capabilities likewise follow reachable terminals and
 inputs; editable selectors retain all of their possible UV sets.
-The specialization passes read-only hit context by value and returns the shading
-normal. `MXResult` contains only the scene's reachable terminals and the fallback
-fields needed to recompute emission. Ordinary material hits skip graph evaluation.
+The material template passes read-only hit context by value and returns the
+shading normal. Explicit calls cover surface integration, volume integration,
+picking and AOV entry points. Native hardware traversal supplies its candidate
+instance to the same opacity boundary. MaterialX normal slots use the template's
+post-transform normal hook, including light-tracing and photon emitters.
+`MXResult` contains only the scene's reachable terminals and the fallback fields
+needed to recompute emission. Ordinary material hits skip graph evaluation.
 The MaterialX frame flag shares the existing direction flag word: bit 0 selects
 texture/rotation directions, bit 1 selects the MaterialX frame. Keep this value
 struct's size stable; a separate graph boolean caused a substantial Metal kernel

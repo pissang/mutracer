@@ -107,7 +107,7 @@ ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord
         && dot(normal, d) > 0.0) { continue; }
     // Primary/path alpha remains in the shared integrator, exactly as software:
     // filtering it here as well would square stochastic BLEND coverage.
-    if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal${features.compactVertices ? ", record" : ""})) { continue; }
+    if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal${features.compactVertices ? ", record" : ""}${features.materialHooks?.graph?.opacity ? ", instance" : ""})) { continue; }
 ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedConfirmed++; }` : ''}
     // naga 30 requires the generated-distance expression to dominate the call.
     let generatedDistance = t;

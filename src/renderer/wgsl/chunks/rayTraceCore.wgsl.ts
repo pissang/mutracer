@@ -1,3 +1,4 @@
+import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import {vertexAttributeReaders} from './vertexAttributes.wgsl.js';
 import { materialBufferWgsl } from '../../materialLayoutSchema.js';
 import {ALL_LIGHT_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../shaderCapabilities.js';
@@ -13,6 +14,7 @@ import {
 
 export default function rayTraceCore({
   // Independent mapInfo starts with image width, height and binding-array index.
+  materialHooks = {},
   independentTextures = false,
   compactVertices = false,
   hasAnisotropyDirections = true,
@@ -23,6 +25,7 @@ export default function rayTraceCore({
   caustics = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
+  materialHooks?: MaterialShaderHooks;
   independentTextures?: boolean;
   compactVertices?: boolean;
   hasAnisotropyDirections?: boolean;
@@ -33,6 +36,8 @@ export default function rayTraceCore({
   caustics?: boolean;
   lightCapabilities?: number;
 }) {
+  // Keep the direction word in this position: specialized u32 bit 0 selects
+  // texture/rotation directions, bit 1 the MaterialX frame. No extra member.
   return /*wgsl*/ `
 // https://www.w3.org/WAI/GL/wiki/Relative_luminance
 const luminance = vec3f(0.2126, 0.7152, 0.0722);
@@ -149,7 +154,7 @@ struct OpenPbrResolvedMaterial {
   coatAnisotropy: f32,
 ${hasAnisotropyDirections ? /* wgsl */ `
   anisotropyDirection: vec2f,
-  anisotropyDirectionEnabled: bool,
+  anisotropyDirectionEnabled: ${materialHooks.graph || materialHooks.materialXNormals ? "u32" : "bool"},
   coatAnisotropyRotation: f32,
 ${hasAnisotropyDirections ? /* wgsl */ `
   directionTangent: vec3f,

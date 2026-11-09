@@ -1,7 +1,8 @@
+import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 import { DEPTH_SAMPLE_GRID } from '../depthQuery.js';
 
 /** Extra entry point in the ray-tracing module; reuses its scene bindings. */
-export default /* wgsl */ `
+export function createDepthQueryWgsl(materialHooks: MaterialShaderHooks = {}) { return /* wgsl */ `
 @group(3) @binding(4) var<uniform> depthArea: vec4f;
 
 @compute @workgroup_size(${DEPTH_SAMPLE_GRID}, ${DEPTH_SAMPLE_GRID})
@@ -25,7 +26,7 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
     intersectScene(ray, &si, 0, false, false);
     if (!si.hit) { return; }
     var material: OpenPbrResolvedMaterial;
-    getMaterial(&material, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    ${materialCall('&material', 'si', materialHooks)}
     if (material.materialType != SHADOW_CATCHER && material.alpha > 0.0) {
       if (picking) {
         let instance = u32(si.instanceIndex) + 1u;
@@ -41,3 +42,5 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
   }
 }
 `;
+}
+export default createDepthQueryWgsl();
