@@ -986,7 +986,8 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   const tlas = copyTLASForRefit(state.tlas);
   const ranges = state.hardware ? {tlasRanges: [], instanceRanges: refitLinearInstances(tlas.instancesBuffer!, stage.instances,
     state.hardware.geometries.map(g => g.indexOffset / 3), state.prepared.geometries.map(g => state.prepared.geometryRegions.get(g)!.vertexOffset), dirty)} :
-    refitTLAS(tlas, stage.instances, prepared.blases, dirty);
+    refitTLAS(tlas, stage.instances, prepared.blases, dirty, true);
+  preparationMark('update.instances.refit.end');
   for (const [id, buffer, spans] of [[RESOURCE.BVH, tlas.buffer, ranges.tlasRanges], [RESOURCE.INSTANCES, tlas.instancesBuffer ?? new ArrayBuffer(0), ranges.instanceRanges]] as const) {
     for (const span of spans) {
       records.push(resourceRecord(id, KIND.BUFFER, span.size, 0, 0, 0, 0)); parts.push(new Uint8Array(buffer.slice(span.offset, span.offset + span.size))); destinations.push(span.offset);
@@ -1130,6 +1131,7 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
 // [source mesh index, local instance index+1, 0, 0, matrix[16]]; one refit
 // applies them all. Candidate meshes never mutate accepted source state.
 function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
+  preparationMark('update.transform.begin');
   pendingTransforms.delete(token); transformStages.delete(token);
   const state = retainedScenes.get(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2), f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2);
@@ -1174,6 +1176,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
     for (const slot of packed.bindingSlots[i] ?? []) if (!only || only.has(packed.localIndices[slot])) dirty.add(slot);
   }
   const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty), stage = {meshes, bindings, instances};
+  preparationMark('update.instances.pack.end');
   if (sameInstanceMembership(state.instances, instances)) return incrementalTransform(stage, dirty, token);
   if (native) {transformStages.set(token, stage); return state.hardware ? resourcePacket([], [], 0, 0) : requestInstances(instances);}
   return packTransformUpdate(stage, buildTLAS(instances, state.blases), token);

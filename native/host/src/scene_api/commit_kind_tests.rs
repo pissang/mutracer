@@ -476,3 +476,28 @@ fn mesh_visibility_is_incremental_unless_structure_changes() {
         f.scene.add_mesh(Mesh::new(f.geometry, f.material)).unwrap();
     });
 }
+
+#[test]
+fn any_number_of_stable_batch_matrices_is_incremental() {
+    for count in [128, 2048] {
+        for changed in [1, 64, count / 2, count / 2 + 1, count] {
+            let mut f = Fixture::new();
+            f.scene.mesh_mut(f.mesh).unwrap().instances = Some(Instances {
+                transforms: vec![Mat4::IDENTITY; count].into(),
+                colors: None,
+            });
+            f.check("stable large matrix batch", Incremental, |f| {
+                let instances = f
+                    .scene
+                    .mesh_mut(f.mesh)
+                    .unwrap()
+                    .instances
+                    .as_mut()
+                    .unwrap();
+                for matrix in &mut Arc::make_mut(&mut instances.transforms)[..changed] {
+                    *matrix = Mat4::from_translation(Vec3::new(0.1, 0., 0.));
+                }
+            });
+        }
+    }
+}

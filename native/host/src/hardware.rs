@@ -5,6 +5,8 @@ use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[cfg(target_os = "macos")]
 mod metal_refit;
+#[cfg(target_os = "macos")]
+mod metal_tlas;
 
 // Explicit AOT packet metadata; units belong to the contract, not uniform words.
 #[derive(Clone, serde::Serialize, Deserialize)]
@@ -122,10 +124,36 @@ pub struct Resources {
     _vertices: Vec<wgpu::Buffer>,
     _indices: Vec<Option<wgpu::Buffer>>,
     raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
+    #[cfg(target_os = "macos")]
+    metal_instances: Option<metal_tlas::Inputs>,
     pub(super) metal_refit_opt_in: bool,
     updatable_blases: Vec<bool>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) used_metal_refit: bool,
+}
+
+// HAL TLAS refits require update-capable storage from the first build.
+fn tlas_flags() -> wgpu::AccelerationStructureFlags {
+    wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
+        | if cfg!(target_os = "macos") {
+            wgpu::AccelerationStructureFlags::ALLOW_UPDATE
+        } else {
+            wgpu::AccelerationStructureFlags::empty()
+        }
+}
+#[cfg(target_os = "macos")]
+fn metal_instance_inputs(
+    device: &wgpu::Device,
+    blases: &[wgpu::Blas],
+    capture: &Capture,
+) -> Result<Option<metal_tlas::Inputs>> {
+    if capture.instances.is_empty()
+        || !metal_refit::available(device)
+        || std::env::var_os("MUTRACER_NATIVE_METAL_TLAS").is_some_and(|v| v == "0")
+    {
+        return Ok(None);
+    }
+    metal_tlas::Inputs::new(device, blases, capture).map(Some)
 }
 
 // Source-order indexed compact vertices build AS inputs without a software BVH. The
@@ -344,7 +372,7 @@ pub fn prepare_reusing(
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("MuTracer hardware TLAS"),
         max_instances: instance_capacity as u32,
-        flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+        flags: tlas_flags(),
         update_mode: wgpu::AccelerationStructureUpdateMode::Build,
     });
     for (index, instance) in capture.instances.iter().enumerate() {
@@ -516,7 +544,11 @@ pub fn prepare_reusing(
             );
         }
     }
+    #[cfg(target_os = "macos")]
+    let metal_instances = metal_instance_inputs(device, &blases, capture)?;
     Ok(Resources {
+        #[cfg(target_os = "macos")]
+        metal_instances,
         inputs,
         indexed: capture.indexed,
         raw_instances,
@@ -768,7 +800,7 @@ impl Resources {
         let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("MuTracer changed geometry TLAS"),
             max_instances: instance_capacity as u32,
-            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            flags: tlas_flags(),
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
         for (index, instance) in capture.instances.iter().enumerate() {
@@ -908,7 +940,11 @@ impl Resources {
                 (index, geometry.index_offset / 3),
             );
         }
+        #[cfg(target_os = "macos")]
+        let metal_instances = metal_instance_inputs(device, &blases, capture)?;
         Ok(Resources {
+            #[cfg(target_os = "macos")]
+            metal_instances,
             inputs,
             indexed: self.indexed,
             tlas,
@@ -1089,6 +1125,45 @@ impl Resources {
                 "{}",
                 serde_json::json!({"nativeHardwareUploadProfile":{"kind":"transform","writeBytes":bytes,"instanceCount":plan.instances.len()}})
             );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if plan.replacement.is_some() {
+                self.metal_instances = metal_instance_inputs(device, &self._blases, capture)?;
+            }
+            if let Some(inputs) = &self.metal_instances {
+                let started = std::time::Instant::now();
+                // Refit through half the resident batch; dense complete edits
+                // rebuild traversal quality. The override supports measured A/B runs.
+                let rebuild = match std::env::var("MUTRACER_NATIVE_TLAS_BUILD").as_deref() {
+                    Ok("refit") => false,
+                    Ok("rebuild") => true,
+                    _ => {
+                        plan.replacement.is_some()
+                            || plan.instances.len() > capture.instances.len() / 2
+                    }
+                };
+                let (bytes, calls) = inputs.update(
+                    device,
+                    queue,
+                    &self._blases,
+                    &mut self.tlas,
+                    plan.instances
+                        .iter()
+                        .map(|(index, instance, _)| (*index, instance.clone())),
+                    rebuild,
+                )?;
+                if super::profiling::enabled() {
+                    native_log!(
+                        "{}",
+                        serde_json::json!({"nativeTlasProfile":{
+                        "method":if rebuild {"metal-rebuild"} else {"metal-refit"}, "instanceUploadBytes":bytes,
+                        "instanceUploadCalls":calls,"changedInstances":plan.instances.len(),
+                        "completedWallMs":started.elapsed().as_secs_f64()*1000.}})
+                    );
+                }
+                return Ok(());
+            }
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.build_acceleration_structures(

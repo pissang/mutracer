@@ -189,9 +189,8 @@ int main(int argc,char **argv){
     if(c==6||c==7){CHECK(mt_scene_material_set_texture(b.scene,b.material,MT_MAT_MAP,b.textures[0],error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==19){b.environment.environment=0;CHECK(mt_scene_set_environment(b.scene,&b.environment,error,sizeof error));commit(&b,"setup",-1,1);}
     if(c==38){CHECK(mt_scene_remove_mesh(b.scene,b.meshes[b.mesh_count-1],error,sizeof error));commit(&b,"setup",-1,2);}
-    /* Full above max(64, half of the batch) changed instances. */
-    uint32_t limit=instances/2>64?instances/2:64;
-    uint32_t expected=((c==2&&instances>limit)||(c==32&&1024>limit)||(c==33&&16384>limit)||(c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
+    /* Stable batch membership refits regardless of the number of edited matrices. */
+    uint32_t expected=((c>=9&&c<=10)||c==19||c==20||c==36||c==37)?1:2;
     for(uint32_t r=0;r<repeats+1;r++){
       if(c==42){
         /* Successive accepted shapes, without an inverse commit in between. */

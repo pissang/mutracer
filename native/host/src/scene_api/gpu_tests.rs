@@ -1835,7 +1835,7 @@ fn dirty_scene_commits_match_whole_scene_and_full_on_both_backends() {
                     for m in Arc::make_mut(&mut i.transforms) {
                         *m = Mat4::from_translation(Vec3::new(0., 0.03, 0.)) * *m;
                     }
-                    Some(Full)
+                    Some(Incremental)
                 }
                 10 => {
                     // A rejected snapshot leaves both engines unchanged.
