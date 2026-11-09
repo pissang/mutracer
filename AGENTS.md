@@ -112,6 +112,8 @@ of stopping for confirmation.
 
 ## Rendering changes
 
+- Changes to large WGSL value structs must update their [layout contracts and GPU benchmark evidence](docs/technical/megakernel-value-layouts.md).
+
 - Keep correctness fixes even when the visual change is small.
 - For an algorithm that both web and native implement, develop and evaluate it
   on web first. Port it to native only after the web version passes review and

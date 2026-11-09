@@ -79,3 +79,16 @@ layout against its own baseline.
 
 MNEE/SMS live in `src/research/mnee/` and never enter release artifacts.
 Tests and research scripts import `registerMnee` and `mneeDiagnostics` from its `index.ts`, then call `registerMnee()` before creating renders.
+
+## Megakernel performance
+
+`node scripts/benchmark-megakernel.mjs --repeats 5 --output /tmp/megakernel.json`
+runs fixed simple/spheres scenes in headless Chrome with a temporary profile.
+Use `--scene simple` or `--scene spheres` for one scene. It warms three 64-sample
+passes, then reports repeated time to 64 spp, per-sample GPU timestamp estimates,
+scene settings, browser/adapter identity and an HDR checksum. GPU timestamps are
+`null` when unavailable. Results are informational and never a timing gate.
+
+Use the same browser/hardware and avoid competing GPU workloads for comparisons.
+The CPU value-layout contract runs in `npm test`; changing it requires the
+[layout review and GPU comparison](../docs/technical/megakernel-value-layouts.md).
