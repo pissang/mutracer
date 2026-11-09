@@ -120,11 +120,16 @@ static const Scalar scalars[]={
  P("thin_film",31,0,.2f),P("film_thickness",32,.5f,.6f),P("film_ior",33,1.4f,1.5f),P("anisotropy_rotation",71,0,.2f),P("coat_rotation",72,0,.2f)
 };
 static const char *edits[]={"camera","mesh_transform","instance_matrices","vertices","thin_walls","texture_add","texture_remove","texture_replace","texture_pixels","uv","indices","mesh_add","mesh_remove","visibility_remove_add","light_add","light_remove","light_modify","environment_intensity","environment_rotation","environment_add","environment_remove","batch","engine_camera",
-  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom","new_geometry_add","instances_1","vertices_all","vertices_continuous"};
+  "batch_transforms_16","batch_transforms_64","batch_transforms_256","batch_materials_16","batch_materials_64","batch_materials_256","first_transform","first_material","instances_64","instances_1024","instances_16384","instances_half","visibility","visibility_delete","texture_larger","mesh_add_headroom","new_geometry_add","instances_1","vertices_all","vertices_continuous","meshes_1","meshes_64","meshes_1024","meshes_half","meshes_all"};
 /* Edits N distinct meshes (world matrices) or N distinct materials in one commit. */
 static uint32_t batch_size(unsigned c){return c>=23&&c<=28?(const uint32_t[]){16,64,256}[(c-23)%3]:0;}
 static void edit(Bench *b,unsigned c,int on){
   switch(c){
+  case 43:case 44:case 45:case 46:case 47:{
+    uint32_t n=c==46?b->mesh_count/2:c==47?b->mesh_count:(const uint32_t[]){1,64,1024}[c-43];
+    for(uint32_t i=0;i<n;i++){float w[16];mt_scene_identity(w);w[12]=(float)(i%64)*1.1f+(on?.01f:0);w[14]=(float)(i/64)*1.1f;CHECK(mt_scene_set_mesh_transform(b->scene,b->meshes[i],w,error,sizeof error));}
+    break;
+  }
   case 40:b->matrices[12]+=on?.01f:-.01f;CHECK(mt_scene_set_instances(b->scene,b->batch,&b->instances,error,sizeof error));break;
   case 41:case 42:for(uint32_t i=0;i<b->gd.vertex_count;i++)b->positions[i*3+1]=on?.01f*(float)(i%7):0;CHECK(mt_scene_set_geometry(b->scene,b->geometry,&b->gd,error,sizeof error));break;
   case 35:CHECK(mt_scene_set_mesh_visible(b->scene,b->mesh,(uint32_t)!on,error,sizeof error));break;
@@ -177,6 +182,7 @@ int main(int argc,char **argv){
   }
   for(unsigned c=0;c<sizeof edits/sizeof edits[0];c++){
     if(!selected(filter,edits[c])||((c==2||c==40)&&!instances))continue;
+    if(c>=43&&c<=45&&(const uint32_t[]){1,64,1024}[c-43]>meshes)continue;
     if((c>=23&&c<=25&&batch_size(c)>meshes)||(c>=26&&c<=28&&batch_size(c)>materials))continue;
     if((c>=31&&c<=33&&(const uint32_t[]){64,1024,16384}[c-31]>instances)||(c==34&&instances<2))continue;
     if(c==29||c==30){
