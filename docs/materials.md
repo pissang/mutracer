@@ -328,7 +328,8 @@ The direction and strength inputs use native OpenPBR semantics by default. For i
 Attach a `MaterialGraph` to an `OpenPBRMaterial`. Terminal names use the material's
 camelCase inputs; inputs without a terminal connection retain the material's
 constants and maps. Use `setNode`, `removeNode`, `setInput` and `setTerminal` to
-edit a graph, then call `engine.update()`:
+edit a graph, then call `engine.update()`. With RenderLoop running, await the
+committed request when an operation needs to know whether installation succeeded:
 
 ```ts
 import {MaterialGraph, OpenPBRMaterial} from '@meimu/mutracer';
@@ -344,6 +345,10 @@ const material = new OpenPBRMaterial({graph, baseColor: [0.8, 0.2, 0.1]});
 
 graph.setInput('roughness', 'value', {type: 'float', value: 0.6});
 engine.update();
+const result = await engine.waitForMaterialGraphs();
+if (result.outcome === 'settled' && result.state.status === 'failed') {
+  console.warn(result.state.diagnostics);
+}
 ```
 
 Nodes have stable IDs and typed inputs. Connect an input with
@@ -352,6 +357,24 @@ Nodes have stable IDs and typed inputs. Connect an input with
 `outr/outg/outb/outa` for colors. Node declarations, input values and terminal
 connections are immutable snapshots; edit them through the graph's methods.
 Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
+
+Terminal keys are checked in TypeScript, including the supported compatibility
+aliases. Use `MaterialGraphTerminalName` for a terminal name or
+`MaterialGraphTerminal` for a connection map. `setInput(id, port, undefined)` removes
+an authored value or connection and restores that input's node default.
+
+`engine.waitForMaterialGraphs({signal})` accepts an optional `AbortSignal`
+(default undefined) and waits for the whole committed scene. It always resolves:
+`outcome: 'settled'` means the request reached `idle`, `ready` or `failed`;
+inspect `state.status` and `state.diagnostics` to distinguish success from fallback.
+A newer committed scene edit returns `superseded`; call again to wait for the new
+request. Camera-only edits do not supersede a wait. `aborted` cancels only that
+wait, leaving compilation running. Disposal, device loss or initialization failure
+returns `unavailable` with an `engine-unavailable` diagnostic. Each result contains
+a detached diagnostic snapshot. A graph-free scene with no pending graph work
+settles immediately.
+The wait does not commit edits or drive rendering: keep calling `refine()` or
+running RenderLoop until it resolves.
 
 The engine automatically renders compatible image graphs through ordinary
 texture slots on WebGPU and WebGL 2. This includes base color, roughness,
@@ -459,9 +482,8 @@ A scene containing only compatible image graphs reports `idle` with topology
 count zero; its installed revision still advances. Node and port validation errors
 keep the last successful result for that material; valid graphs on other materials
 can still install. The fallback is the constant
-material if no successful graph exists. Shader failures do the same. Keep calling `refine()` or use
-RenderLoop while a graph compiles. Shader/program caches consume memory as new
-structures are tried; disposing the engine releases them.
+material if no successful graph exists. Shader failures do the same. Shader/program
+caches consume memory as new structures are tried; disposing the engine releases them.
 
 ### MaterialX in the viewer
 

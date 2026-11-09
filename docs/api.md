@@ -24,6 +24,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | Method / property | Meaning |
 | --- | --- |
 | `update(): boolean` | Sole scene/camera edit detection point; returns whether inputs changed |
+| `waitForMaterialGraphs({signal?})` | Await current committed graphs; signal defaults to undefined; see [graph waits](./materials.md#material-graphs) |
 | `prepare(scene, {onProgress?, signal?})` | Optional CPU preparation for a future scene; options default undefined |
 | `init()` / `info` | Shared initialization promise and `EngineInfo`; info initially undefined |
 | `setDevice(device)` | Replace a caller-owned device; see [device loss](#device-loss) |
@@ -660,15 +661,45 @@ Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear
 output `type`, and optional typed `inputs`; connections use `{node, output?}`,
 with `output: 'out'` by default. Separate nodes expose component outputs;
 `gltf_colorimage` exposes `outcolor`/`outa` and uses type `color4`.
-Omitted inputs use node defaults.
+Omitted inputs use node defaults. `MaterialGraphInput.value` accepts numbers,
+booleans, strings, readonly numeric arrays and loaded `Texture` objects; the
+input's `type` determines which values are valid. Connections override values.
+`MaterialGraphTerminalName` is the union of connectable OpenPBR input names and
+aliases; `MaterialGraphTerminal` is a readonly partial mapping of those names to
+connections. Unknown names in JavaScript or imported data still produce diagnostics.
+Node categories and port names accept strings and are checked at runtime.
 
 Use `setNode(node)`, `removeNode(id)`, `setInput(id, port, input?)` and
 `setTerminal(connections)` to edit; each returns the graph and advances its
-read-only `revision` from zero. `setInput(..., undefined)` restores the node
-default. A missing ID passed to `setInput` throws. Call `engine.update()` after
-edits. Node and terminal snapshots cannot be edited in place.
+read-only `revision` from zero, including replacements with the same value or
+removal of a missing node. This authored counter is independent of engine-wide
+compilation revisions. `setInput(..., undefined)` removes the authored value or
+connection and restores the node default. A missing ID passed to `setInput`
+throws. `setTerminal` replaces all terminal connections. Call `engine.update()`
+after edits. Node and terminal snapshots cannot be edited in place.
 
 See [material graphs](./materials.md#material-graphs) for an example, supported
 nodes, terminal inputs (including coverage), compilation/fallback behavior and
 limits. Compilation state and located diagnostics are available on
 `engine.getDiagnostics()?.materialGraphs`.
+
+`engine.waitForMaterialGraphs({signal?})` returns `Promise<MaterialGraphWaitResult>`.
+The default options are empty; `signal` defaults to undefined. `outcome` is
+`settled`, `superseded`, `aborted` or `unavailable`, and `state` is a detached
+`MaterialGraphCompilationState` snapshot. See [waiting and fallback semantics](./materials.md#material-graphs).
+The method waits for the whole engine; it has no per-material option.
+
+`MaterialGraphCompilationState` fields:
+
+| Field | Initial / default | Meaning |
+| --- | --- | --- |
+| `revision` | `0` | Engine-wide graph request counter, independent of an authored graph's `revision` |
+| `installedRevision` | `0` | Most recent fully valid installed request; valid materials can install in a failed request without advancing this counter |
+| `status` | `'idle'` | `'compiling'` includes debounce; `'ready'` and `'failed'` describe the latest request |
+| `diagnostics` | `[]` | Located failures; `code` uses the exported `MaterialGraphDiagnosticCode` union |
+| `topologyCount` | `0` | Distinct structures requiring graph evaluation; compatible texture-slot graphs are excluded |
+| `compilation` | `undefined` | Last installed program's `sourceBytes`, `sourceGenerationTimeMs`, `moduleCreationTimeMs` and optional `totalTimeMs`; timings are milliseconds |
+
+A diagnostic always has `code` and `message`; `materialId`, `node` and `port`
+default to undefined when the failure cannot be located. Compilation measurements
+may describe an older installed program while a newer request is pending or failed.

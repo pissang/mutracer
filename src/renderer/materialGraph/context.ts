@@ -1,9 +1,10 @@
+import type {MaterialGraphDiagnosticCode} from '../../scene/MaterialGraph.js';
 import {GraphSource,graphCategories,graphGeometry,graphTerminals,type GraphIR} from './ir.js';
 import type {IRDiagnostic} from './validate.js';
 
 /** Shared material/opacity restrictions, independent of author objects and hosts. */
-export function graphContextDiagnostics(graph:GraphIR,unlit:boolean,emissive:boolean,opaque:boolean,projected:boolean):IRDiagnostic[] {
-    const diagnostics:IRDiagnostic[]=[];
+export function graphContextDiagnostics(graph:GraphIR,unlit:boolean,emissive:boolean,opaque:boolean,projected:boolean) {
+    const diagnostics:(IRDiagnostic & {code: MaterialGraphDiagnosticCode})[]=[];
     const terminal=(name:string)=>{const id=graphTerminals.indexOf(name);for(let i=0;i<graph.terminal.length;i+=3)if(graph.terminal[i]===id)return graph.terminal[i+1];return -1;};
     const hasTerminal=(name:string)=>{const id=graphTerminals.indexOf(name);for(let i=0;i<graph.terminal.length;i+=3)if(graph.terminal[i]===id)return true;return false;};
     if(!unlit && (hasTerminal('emissionColor') || hasTerminal('emissionLuminance') || emissive && (hasTerminal('coatColor')||hasTerminal('coatWeight')))) {

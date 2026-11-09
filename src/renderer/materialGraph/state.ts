@@ -22,15 +22,19 @@ export interface GraphPlan {
 }
 const empty = (): GraphPlan => ({ key: '', graphs: [], structures: [] });
 export interface MaterialGraphCompilationState {
-    /** Latest requested revision, initially zero. */ revision: number;
-    /** Latest fully valid installed revision, initially zero. */ installedRevision: number;
+    /** Engine-wide graph request counter, initially zero; independent of MaterialGraph.revision. */ revision: number;
+    /** Latest fully valid engine-wide installed request, initially zero. Failed requests may install valid materials without advancing it. */ installedRevision: number;
     /** Idle when no graph program is needed; compiling includes debounce; ready or failed otherwise. Default idle. */ status: 'idle' | 'compiling' | 'ready' | 'failed';
     /** Located graph or driver failures. Default empty. */ diagnostics: MaterialGraphDiagnostic[];
     /** Last installed graph program measurements; browser driver stages are combined. Default undefined. */
     compilation?: {
+        /** Generated source size in bytes. */
         sourceBytes: number;
+        /** Source generation duration in milliseconds. */
         sourceGenerationTimeMs: number;
+        /** Driver module creation duration in milliseconds. */
         moduleCreationTimeMs: number;
+        /** Total compilation duration in milliseconds. Default undefined until measured. */
         totalTimeMs?: number;
     };
     /** Distinct structures requiring graph evaluation; texture-slot plans are excluded. Default zero. */ topologyCount: number;

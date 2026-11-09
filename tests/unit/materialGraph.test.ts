@@ -38,4 +38,18 @@ describe('MaterialGraph',()=>{
   graph.setInput('c','value',{type:'color3',value:[0,1,0]});expect(graph.revision).toBe(1);
   const material=new OpenPBRMaterial({graph});expect(material.graph).toBe(graph);
  });
+ it('removes authored inputs and connections, preserving node defaults and edit counters',()=>{
+  const graph=new MaterialGraph({nodes:[constant('c',0.2)],terminal:{specularRoughness:{node:'c'}}});
+  graph.setInput('c','value');
+  expect(graph.nodes[0].inputs).toEqual({});
+  expect(normalizeGraph(graph).parameters).toEqual([0]);
+  graph.setInput('c','value',{type:'float',connection:{node:'c'}});
+  graph.setInput('c','value',undefined);
+  expect(normalizeGraph(graph).diagnostics).toEqual([]);
+  graph.removeNode('missing');graph.setTerminal(graph.terminal);
+  expect(graph.revision).toBe(5);
+  expect(()=>graph.setInput('missing','value')).toThrow('unknown node');
+  expect(graph.revision).toBe(5);
+ });
+
 });

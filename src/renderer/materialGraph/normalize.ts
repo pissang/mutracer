@@ -38,7 +38,7 @@ export function graphHash(key: string) {
 export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): NormalizedGraph {
     const diagnostics: Diagnostic[] = [], nodes: GraphNode[] = [], parameters: Input['value'][] = [];
     const source = new Map<string, Node>(), indices = new Map<string, number>(), visiting = new Set<string>();
-    const report = (code: string, message: string, node?: string, port?: string) => diagnostics.push({ code, message, node, port });
+    const report = (code: Diagnostic['code'], message: string, node?: string, port?: string) => diagnostics.push({ code, message, node, port });
     for (const node of graph.nodes) {
         if (source.has(node.id))
             report('duplicate-node', `Duplicate node ID ${node.id}`, node.id);

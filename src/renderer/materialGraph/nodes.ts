@@ -13,8 +13,8 @@ import {width} from './types.js';
 export {width} from './types.js';
 const input = (type: Type, value?: Input['value']): Input => ({ type, value: type === 'boolean' ? Boolean(value) : type === 'filename' || type === 'string' ? value : value ?? (width(type) === 1 ? 0 : Array<number>(width(type)).fill(0)) });
 const same = (node: Node, value = 0) => input(node.type, width(node.type) === 1 ? value : Array<number>(width(node.type)).fill(value));
-export const terminalAliases: Record<string, string> = { geometryOpacity: 'opacity', geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' };
-export const terminalTypes: Record<string, Type> = {
+const terminalInputAliases = { geometryOpacity: 'opacity', geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' } as const;
+const terminalInputTypes = {
     baseWeight: 'float', baseColor: 'color3', baseDiffuseRoughness: 'float', baseMetalness: 'float',
     specularWeight: 'float', specularColor: 'color3', specularRoughness: 'float', specularIor: 'float', specularAnisotropy: 'float',
     transmissionWeight: 'float', transmissionColor: 'color3',
@@ -22,7 +22,12 @@ export const terminalTypes: Record<string, Type> = {
     coatRoughness: 'float', coatAnisotropy: 'float', coatIor: 'float', coatDarkening: 'float',
     thinFilmWeight: 'float', thinFilmThickness: 'float', thinFilmIor: 'float',
     opacity: 'float', emissionColor: 'color3', emissionLuminance: 'float', normal: 'vector3'
-};
+} as const satisfies Record<string, Type>;
+/** Connectable OpenPBR inputs, including compatibility aliases. */
+export type MaterialGraphTerminalName = keyof typeof terminalInputTypes | keyof typeof terminalInputAliases;
+// Widen lookup tables for runtime validation of JavaScript and imported data.
+export const terminalAliases: Readonly<Record<string, string>> = terminalInputAliases;
+export const terminalTypes: Readonly<Record<string, Type>> = terminalInputTypes;
 /** Definitions are authored against MaterialX v1.39.4 stdlib_defs.mtlx/stdlib_ng.mtlx.
  * Parameters remain runtime data even for conditional controls and UV transforms. */
 export function nodeInputs(node: Node): Record<string, Input> | undefined {

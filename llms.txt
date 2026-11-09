@@ -68,4 +68,4 @@
 - [Performance](docs/performance.md): tuning checklist; resident target dimensions/bytes and complete-image presentation diagnostics
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
 
-- [Material graphs](docs/materials.md#material-graphs): attach MaterialGraph to material.graph; edit typed values or connections, then engine.update(). Coverage terminals, supported nodes, async fallback, diagnostics, viewer `.mtlx` import and [update costs](docs/updates.md#material-graph-edits).
+- [Material graphs](docs/materials.md#material-graphs): attach MaterialGraph to material.graph; use typed terminal keys, edit values/connections, then engine.update(). Await engine.waitForMaterialGraphs({signal}) while RenderLoop/refine continues; see the guide for completion, replacement and fallback semantics and [update costs](docs/updates.md#material-graph-edits).
