@@ -280,6 +280,7 @@ public:
   TfTokenVector GetMaterialRenderContexts() const override;
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   void SetDrivers(HdDriverVector const &) override;
+  void SetRenderSetting(TfToken const &, VtValue const &) override;
   HdAovDescriptor GetDefaultAovDescriptor(TfToken const &) const override;
   bool IsStopSupported() const override { return true; }
   bool IsStopped() const override { return param->stopped.load(); }

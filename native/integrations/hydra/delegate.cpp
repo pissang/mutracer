@@ -18,6 +18,7 @@
 #include "pxr/imaging/hgi/tokens.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <thread>
 PXR_NAMESPACE_OPEN_SCOPE
@@ -465,6 +466,7 @@ void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
       options.height = rh;
       options.max_samples = std::clamp(
           Setting(delegate, "convergedSamplesPerPixel", 64), 1, 16384);
+      options.bounces = std::clamp(Setting(delegate, "maxBounces", 3), 1, 20);
       options.aovs = 0;
       for (auto const &a : nextBindings) {
         if (a.aovName == HdAovTokens->depth)
@@ -642,6 +644,35 @@ Delegate::Delegate(HdRenderSettingsMap const &settings)
     : HdRenderDelegate(settings), param(std::make_shared<Param>()),
       registry(std::make_shared<HdResourceRegistry>()) {
   _PopulateDefaultSettings(GetRenderSettingDescriptors());
+  for (auto const &setting : settings)
+    SetRenderSetting(setting.first, setting.second);
+}
+void Delegate::SetRenderSetting(TfToken const &key, VtValue const &value) {
+  // Blender's Python bridge authors PyLong as C++ long, while the descriptors
+  // and render pass use int. Normalize only the delegate's integer options.
+  for (auto const &descriptor : GetRenderSettingDescriptors()) {
+    if (descriptor.key != key || !descriptor.defaultValue.IsHolding<int>())
+      continue;
+    auto setInteger = [&](long long v) {
+      HdRenderDelegate::SetRenderSetting(
+          key, VtValue(int(std::clamp(v, (long long)std::numeric_limits<int>::min(),
+                                    (long long)std::numeric_limits<int>::max()))));
+    };
+    if (value.IsHolding<long>()) {
+      setInteger(value.Get<long>());
+      return;
+    }
+    if (value.IsHolding<long long>()) {
+      setInteger(value.Get<long long>());
+      return;
+    }
+    if (value.IsHolding<bool>()) {
+      setInteger(value.Get<bool>());
+      return;
+    }
+    break;
+  }
+  HdRenderDelegate::SetRenderSetting(key, value);
 }
 void Delegate::SetDrivers(HdDriverVector const &drivers) {
   std::lock_guard<std::mutex> lock(param->mutex);
@@ -689,6 +720,7 @@ TfTokenVector Delegate::GetMaterialRenderContexts() const {
 }
 HdRenderSettingDescriptorList Delegate::GetRenderSettingDescriptors() const {
   return {{"Samples", TfToken("convergedSamplesPerPixel"), VtValue(64)},
+          {"Bounces", TfToken("maxBounces"), VtValue(3)},
           {"Backend (0 software, 1 HWRT)", TfToken("backend"), VtValue(1)},
           {"Resolution scale", TfToken("resolutionScale"), VtValue(1.f)},
           {"Display refresh rate", TfToken("displayRefreshRate"), VtValue(30)},

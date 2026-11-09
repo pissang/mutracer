@@ -34,7 +34,8 @@ time. Its default is this checkout's
 `.native-build/scene-core/cargo-target/release`. Keep the SDK and OpenUSD shared
 libraries accessible at runtime. A Blender or Houdini host requires a separate
 build matching its USD namespace, headers, libraries and compiler ABI; this
-usdview binary is not a Blender add-on.
+usdview binary is not a Blender add-on. Blender 5.2 users can install the
+separately packaged [Blender integration](../blender/README.md).
 
 Mesh and instancer visibility use [whole-mesh/batch SDK visibility](../../docs/scene.md#visibility).
 Individual-instance visibility is not supported.
@@ -125,6 +126,7 @@ distance disables depth of field.
 | Hydra render setting | Default | Values |
 | --- | --- | --- |
 | convergedSamplesPerPixel | 64 | 1–16384 |
+| maxBounces | 3 | 1–20 scattering depth |
 | backend | 1 | 0 software BVH; 1 hardware ray queries with SDK fallback |
 | resolutionScale | 1 | 0.1–1; nearest-neighbor enlargement |
 | displayRefreshRate | 30 | 1–1000 Hz output refresh cap; 0 publishes each changed sample count |
