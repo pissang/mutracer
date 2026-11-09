@@ -4,7 +4,7 @@ The default `gltf` Cargo feature, also enabled in C builds, imports glTF and
 GLB files into a [Scene](scene.md).
 
 ```rust
-let imported = mutracer_native_probe::scene_api::Scene::import_gltf("model.glb")?;
+let imported = mutracer_native::scene_api::Scene::import_gltf("model.glb")?;
 engine.set_scene_object(&imported.scene)?;
 engine.update()?;
 ```

@@ -15,7 +15,7 @@ pub struct Settings {
     sky_time: f32,
     light: KeyLight,
     render: crate::RenderSettings,
-    display: mutracer_native_probe::display::Settings,
+    display: mutracer_native::display::Settings,
     aov: api::AovDisplayOptions,
     size: [u32; 2],
     scale: Option<f32>,
@@ -268,7 +268,7 @@ impl Viewer {
         self.environment = Environment::default();
         self.light = KeyLight::default();
         self.settings = crate::RenderSettings::default();
-        self.display_settings = mutracer_native_probe::display::Settings {
+        self.display_settings = mutracer_native::display::Settings {
             shadow_catcher_alpha: 0.8,
             ..Default::default()
         };

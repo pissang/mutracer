@@ -14,7 +14,7 @@ function run(name,cmd,args){const p=spawnSync(cmd,args,{cwd:root,env,encoding:'u
  writeFileSync(resolve(out,name+'.log'),(p.stdout??'')+(p.stderr??''));if(p.error||p.status!==0)throw Error(name+': '+(p.error?.message??p.stderr));return p.stdout;}
 run('settings',process.execPath,['native/validation/settings-render.mjs']);
 const host=resolve(out,executable('engine-host'));
-run('build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/engine-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe','-Wl,-rpath,'+resolve(target,'release'),'-pthread','-o',host]);
+run('build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/engine-host.c','-L',resolve(target,'release'),'-lmutracer','-Wl,-rpath,'+resolve(target,'release'),'-pthread','-o',host]);
 const results=[];
 // Software must match fresh contexts byte for byte; HWRT differences are recorded (known Metal limitation).
 for(const fixture of ['baseline','v2-alpha','v3-ies','v3-displacement-uv'])for(const backend of [0,1]){

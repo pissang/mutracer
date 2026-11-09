@@ -80,7 +80,7 @@ fn measure_model(
     area: [f32; 2],
     size: [u32; 2],
 ) -> Result<Option<f32>> {
-    use mutracer_native_probe::api;
+    use mutracer_native::api;
     let engine = api::Engine::new(api::EngineOptions {
         backend: api::Backend::Software,
     })?;

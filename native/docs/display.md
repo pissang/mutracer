@@ -189,7 +189,7 @@ create the engine with `Engine::on_device` using that adapter's device and
 queue. The instance, adapter and surface must belong together.
 
 ```rust
-use mutracer_native_probe::api::SurfaceOptions;
+use mutracer_native::api::SurfaceOptions;
 
 let display = engine.display();
 display.set_size(width, height)?; // physical pixels

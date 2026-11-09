@@ -637,7 +637,7 @@ On macOS, build the host cdylib with the current archive and run the C consumer
 (AppKit glue is in `examples/window-appkit.m`):
 
 ```sh
-node native/scripts/window-host.mjs /absolute/libmutracer_native_probe.dylib \
+node native/scripts/window-host.mjs /absolute/libmutracer.dylib \
   /absolute/scene-input.bin /absolute/evidence/c-window
 ```
 

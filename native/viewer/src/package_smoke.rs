@@ -11,7 +11,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
     let model = Model::load(model_path)?;
     let size = [32, 24];
     ensure!(
-        mutracer_native_probe::api::OIDN_WEBGPU_AVAILABLE,
+        mutracer_native::api::OIDN_WEBGPU_AVAILABLE,
         "Missing native denoiser"
     );
     crate::denoiser::preview_oidn_options()?;
@@ -66,7 +66,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
             "Packaged accumulation reset differs"
         );
         crate::renderer::save(&out.join("render.png"), &pixels, size, 0.0)?;
-        let engine = mutracer_native_probe::api::Engine::new(Default::default())?;
+        let engine = mutracer_native::api::Engine::new(Default::default())?;
         crate::live_denoise_smoke::run(&engine, &model, None, None, &out.join("live"))?;
     }
     let summary = serde_json::json!({"passed":true,"gpu":gpu,"gpuValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"denoiser":"oidn-webgpu","denoisingValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"model":model_path});
@@ -84,7 +84,7 @@ pub(crate) fn denoise_model(
     size: [u32; 2],
     samples: u32,
 ) -> Result<(Vec<f32>, f64)> {
-    use mutracer_native_probe::api;
+    use mutracer_native::api;
     let engine = api::Engine::new(api::EngineOptions::default())?;
     let camera = Camera::fit(model.0.center, model.0.radius);
     engine.set_scene(&model.descriptor(&camera.bytes(size), size, &Environment::default()))?;

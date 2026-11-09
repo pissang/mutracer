@@ -187,7 +187,7 @@ memory costs are paid only when you request a picker.
 ```rust
 let picker = scene.picker()?;
 let hit = picker.raycast(
-    mutracer_native_probe::scene_api::Ray {
+    mutracer_native::scene_api::Ray {
         origin: [0., 0., 3.],
         direction: [0., 0., -1.],
     },

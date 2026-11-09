@@ -5,7 +5,7 @@ use crate::{
     studio::Studio,
 };
 use anyhow::{Result, ensure};
-use mutracer_native_probe::layout::light as wire;
+use mutracer_native::layout::light as wire;
 use std::path::Path;
 
 pub fn run(path: &Path, out: &Path) -> Result<()> {

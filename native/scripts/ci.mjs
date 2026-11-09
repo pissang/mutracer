@@ -119,7 +119,7 @@ if(gpuValidation){
  }
  if(process.platform==='darwin'&&enabled('c-window')){
   await run('c-window',process.execPath,['native/scripts/window-host.mjs',
-   resolve(hostTarget,'release/libmutracer_native_probe.dylib'),resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'c-window')]);
+   resolve(hostTarget,'release/libmutracer.dylib'),resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'c-window')]);
   gpu.cWindow=JSON.parse(readFileSync(resolve(out,'c-window/summary.json'),'utf8'));
   if(gpu.cWindow.passed!==true)throw Error('C window presentation was not validated.');
  }

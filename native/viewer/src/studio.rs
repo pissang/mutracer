@@ -1,7 +1,7 @@
 //! Studio presets share their data and placement convention with the web viewer.
 use glam::{DMat4, DVec3, Vec3};
-use mutracer_native_probe::layout::light as wire;
-use mutracer_native_probe::viewer_math::{studio_ambient, studio_panel};
+use mutracer_native::layout::light as wire;
+use mutracer_native::viewer_math::{studio_ambient, studio_panel};
 use std::sync::OnceLock;
 
 fn placed_panel(args: [f64; 14]) -> [f64; 15] {

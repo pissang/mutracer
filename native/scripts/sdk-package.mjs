@@ -48,8 +48,8 @@ const exports = publicApiSymbols(headers.map(file => readFileSync(resolve(root, 
 const abi = Number(/#define\s+MT_ABI_VERSION\s+(\d+)/.exec(readFileSync(resolve(root, 'native/include/mutracer-status.h'), 'utf8'))?.[1]);
 if (!abi) throw Error('Missing C ABI version');
 const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
-const staticName = windows ? 'mutracer_native_probe.lib' : 'libmutracer_native_probe.a';
-const sharedName = windows ? 'mutracer_native_probe.dll' : `libmutracer_native_probe.${mac ? 'dylib' : 'so'}`;
+const staticName = windows ? 'mutracer.lib' : 'libmutracer.a';
+const sharedName = windows ? 'mutracer.dll' : `libmutracer.${mac ? 'dylib' : 'so'}`;
 const sourceStatic = resolve(target, 'release', staticName), shared = resolve(lib, sharedName);
 for (const directory of [stage, symbols]) {
   rmSync(directory, {recursive: true, force: true});
@@ -85,14 +85,14 @@ if (mac) {
   run('codesign', ['--verify', '--strict', shared]);
 } else if (windows) {
   const definition = resolve(work, 'exports.def');
-  writeFileSync(definition, `LIBRARY mutracer_native_probe\nEXPORTS\n${exports.join('\n')}\n`);
+  writeFileSync(definition, `LIBRARY mutracer\nEXPORTS\n${exports.join('\n')}\n`);
   run('link.exe', ['/NOLOGO', '/DLL', '/INCREMENTAL:NO', '/OPT:REF', '/DEBUG:FULL',
     // The .def exports are linker roots and select every public API member.
     // /WHOLEARCHIVE also forces unused Rust support/import objects, which MSVC
     // can reject as a corrupt library (LNK1127) on an otherwise usable staticlib.
     `/DEF:${definition}`, sourceStatic, `/OUT:${shared}`,
-    `/IMPLIB:${resolve(lib, 'mutracer_native_probe.dll.lib')}`,
-    `/PDB:${resolve(symbols, 'mutracer_native_probe.pdb')}`, ...nativeLibraries]);
+    `/IMPLIB:${resolve(lib, 'mutracer.dll.lib')}`,
+    `/PDB:${resolve(symbols, 'mutracer.pdb')}`, ...nativeLibraries]);
   // MSVC puts linked debug data in the separate PDB, not the shipped DLL.
 } else {
   const version = resolve(work, 'exports.elf');
@@ -140,8 +140,8 @@ writeFileSync(consumer, `#include <stdint.h>\n#include <stdio.h>\n` +
 for (const kind of ['shared', 'static']) {
   const binary = resolve(lib, executable(`sdk-${kind}-check`));
   const link = kind === 'static' ? [resolve(lib, staticName), ...nativeLibraries]
-    : windows ? [resolve(lib, 'mutracer_native_probe.dll.lib')]
-      : ['-L', lib, '-lmutracer_native_probe', mac ? '-Wl,-rpath,@loader_path' : '-Wl,-rpath,$ORIGIN'];
+    : windows ? [resolve(lib, 'mutracer.dll.lib')]
+      : ['-L', lib, '-lmutracer', mac ? '-Wl,-rpath,@loader_path' : '-Wl,-rpath,$ORIGIN'];
   run(cCompiler, ['-O2', consumer, ...link, '-o', binary]);
   run(binary, []);
   rmSync(binary);

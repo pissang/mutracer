@@ -653,7 +653,7 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     // Only the display upscale's detail guides remain enabled.
     assert!(
         settings.aovs == 0
-            || settings.aov_resolution == mutracer_native_probe::api::AovResolution::Display
+            || settings.aov_resolution == mutracer_native::api::AovResolution::Display
                 && settings.aovs == 1 | 8 | 16
     );
     assert_eq!(viewer.target.render_loop.preview().unwrap().samples(), 0);

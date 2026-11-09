@@ -19,11 +19,11 @@ it('refuses to export a non-relocatable native link argument', () => {
 
 // These configure-only tests check CMake semantics, not cross-platform linking.
 it.each([
-  {platform: 'darwin', shared: 'libmutracer_native_probe.dylib', static_: 'libmutracer_native_probe.a',
+  {platform: 'darwin', shared: 'libmutracer.dylib', static_: 'libmutracer.a',
     libraries: ['-lc++', '-framework', 'Metal', '-lc++'], expected: '-lc++;FRAMEWORK;-lc++'},
-  {platform: 'linux', shared: 'libmutracer_native_probe.so', static_: 'libmutracer_native_probe.a',
+  {platform: 'linux', shared: 'libmutracer.so', static_: 'libmutracer.a',
     libraries: ['-lgcc_s', '-lutil', '-lrt', '-lpthread', '-lm', '-ldl', '-lc'], expected: '-lgcc_s;-lutil;-lrt;-lpthread;-lm;-ldl;-lc'},
-  {platform: 'win32', shared: 'mutracer_native_probe.dll', static_: 'mutracer_native_probe.lib',
+  {platform: 'win32', shared: 'mutracer.dll', static_: 'mutracer.lib',
     libraries: ['kernel32.lib', 'C:\\SDK path\\runtime.lib', 'kernel32.lib'], expected: 'kernel32.lib;runtime.lib;kernel32.lib'},
 ])('exposes relocatable imported targets for $platform', ({platform, shared, static_, libraries, expected}) => {
   const directory = mkdtempSync(resolve(tmpdir(), 'mutracer cmake '));
@@ -54,7 +54,7 @@ check(MuTracer::mutracer_static IMPORTED_LOCATION "${path(`lib/${static_}`)}")
 check(MuTracer::mutracer INTERFACE_INCLUDE_DIRECTORIES "${path('include')}")
 check(MuTracer::mutracer_static INTERFACE_INCLUDE_DIRECTORIES "${path('include')}")
 check(MuTracer::mutracer_static INTERFACE_LINK_LIBRARIES "${expected.replace('FRAMEWORK', framework)}")
-${platform === 'win32' ? `check(MuTracer::mutracer IMPORTED_IMPLIB "${path('lib/mutracer_native_probe.dll.lib')}")` : ''}
+${platform === 'win32' ? `check(MuTracer::mutracer IMPORTED_IMPLIB "${path('lib/mutracer.dll.lib')}")` : ''}
 if(NOT MuTracer_ABI_VERSION EQUAL 10 OR NOT MuTracer_VERSION STREQUAL "0.0.0")
   message(FATAL_ERROR "Incorrect SDK version/ABI")
 endif()

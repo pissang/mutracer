@@ -1,7 +1,7 @@
 //! Continuous-input validation through RenderLoop, without window automation.
 use anyhow::{Result, ensure};
-use mutracer_native_probe::api::LoopSync;
-use mutracer_native_probe::{api, submission::SubmissionGate};
+use mutracer_native::api::LoopSync;
+use mutracer_native::{api, submission::SubmissionGate};
 use std::{
     path::Path,
     sync::{

@@ -23,7 +23,7 @@ and optional OIDN with a caller-supplied runtime.
 
 ## APIs
 
-| Task | Rust (`mutracer_native_probe`) | C header | Guide |
+| Task | Rust (`mutracer_native`) | C header | Guide |
 | --- | --- | --- | --- |
 | Build, edit or import a scene | `scene_api::Scene` | `mutracer-scene-api.h` | [Scenes](docs/scene.md), [glTF](docs/gltf.md) |
 | Render offline or interactively | `api::{Engine, Render, RenderLoop}` | `mutracer-engine.h` | [Engine](docs/engine.md) |
@@ -39,6 +39,10 @@ comments in [`host/src/api/`](host/src/api) and
 and lifetime. The guides cover workflows and behavior across calls.
 
 ## Build and link
+
+The crate is now `mutracer-native` (Rust `mutracer_native`), replacing
+`mutracer-native-probe` (`mutracer_native_probe`); C consumers link `mutracer`
+instead of `mutracer_native_probe`. The CMake target names are unchanged.
 
 ### Precompiled C SDK
 
@@ -84,18 +88,18 @@ The build writes the core archive to `.native-build/scene-core/render-core.lib.a
 `.native-build/scene-core/cargo-target/release/`, and runs CPU-only checks.
 Set `MUTRACER_NATIVE_OUTPUT` to use another directory.
 
-- **Rust**: depend on the `mutracer-native-probe` crate in `native/host` by path,
+- **Rust**: depend on the `mutracer-native` crate in `native/host` by path,
   and set `MUTRACER_AOT_ARCHIVE` to the archive's absolute path when building.
   The default `gltf` feature provides [glTF import](docs/gltf.md). With the
   same variable set, `cargo doc --no-deps --manifest-path native/host/Cargo.toml --open`
   builds and opens the Rust API reference.
 - **C**: add `native/include` to the include path and link the shared library
-  `mutracer_native_probe`:
+  `mutracer`:
 
 ```bash
 LIB="$PWD/.native-build/scene-core/cargo-target/release"
 cc -I native/include native/examples/minimal-host.c -L "$LIB" \
-  -lmutracer_native_probe -Wl,-rpath,"$LIB" -lm -pthread -o minimal-host
+  -lmutracer -Wl,-rpath,"$LIB" -lm -pthread -o minimal-host
 ```
 
 ## Quick start
@@ -103,7 +107,7 @@ cc -I native/include native/examples/minimal-host.c -L "$LIB" \
 Build a scene, render 8 samples and read linear HDR pixels:
 
 ```rust
-use mutracer_native_probe::{api, scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene}};
+use mutracer_native::{api, scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene}};
 
 let mut scene = Scene::new();
 let geometry = scene.add_geometry(Geometry::new(

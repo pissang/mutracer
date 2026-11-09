@@ -1,6 +1,6 @@
 # Engine API
 
-Rust `mutracer_native_probe::api` and C
+Rust `mutracer_native::api` and C
 [mutracer-engine.h](../include/mutracer-engine.h) follow the browser library's
 object model:
 

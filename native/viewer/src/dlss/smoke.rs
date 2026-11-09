@@ -131,7 +131,7 @@ pub fn run(dlss: &Arc<Dlss>, model_path: &Path, out: &Path) -> Result<()> {
     }
     check_cancel_and_replace(dlss, &engine)?;
     check_denoiser_selection(dlss, &engine)?;
-    let live_gate = Arc::new(mutracer_native_probe::submission::SubmissionGate::default());
+    let live_gate = Arc::new(mutracer_native::submission::SubmissionGate::default());
     let live_engine = api::Engine::on_device(
         &gpu.adapter,
         &gpu.device,

@@ -25,7 +25,7 @@ export function cCompilerArgs(args,platform=process.platform) {
     if(arg==='-L'){directory=args[++i];continue;}
     if(arg.startsWith('-L')){directory=arg.slice(2);continue;}
     if(arg.startsWith('-Wl,-rpath,'))continue;
-    if(arg==='-lmutracer_native_probe'){libraries.push(directory?resolve(directory,'mutracer_native_probe.dll.lib'):'mutracer_native_probe.dll.lib');continue;}
+    if(arg==='-lmutracer'){libraries.push(directory?resolve(directory,'mutracer.dll.lib'):'mutracer.dll.lib');continue;}
     if(arg.startsWith('-l')){libraries.push(arg.slice(2)+'.lib');continue;}
     if(arg.startsWith('-'))throw Error(`Unsupported MSVC C flag: ${arg}`);
     result.push(arg);

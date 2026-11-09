@@ -37,8 +37,8 @@ export function cmakeDependencies(arguments_, platform) {
 
 export function sdkCmakeConfig({platform, version, abi, nativeLibraries}) {
   const windows = platform === 'win32', mac = platform === 'darwin';
-  const shared = windows ? 'mutracer_native_probe.dll' : `libmutracer_native_probe.${mac ? 'dylib' : 'so'}`;
-  const static_ = windows ? 'mutracer_native_probe.lib' : 'libmutracer_native_probe.a';
+  const shared = windows ? 'mutracer.dll' : `libmutracer.${mac ? 'dylib' : 'so'}`;
+  const static_ = windows ? 'mutracer.lib' : 'libmutracer.a';
   const dependencies = cmakeDependencies(nativeLibraries, platform);
   return `# Generated for the precompiled SDK. All package paths follow this file.
 cmake_minimum_required(VERSION 3.20)
@@ -50,7 +50,7 @@ if(NOT TARGET MuTracer::mutracer)
   add_library(MuTracer::mutracer SHARED IMPORTED)
   set_target_properties(MuTracer::mutracer PROPERTIES
     IMPORTED_LOCATION "\${_MuTracer_prefix}/lib/${shared}"
-${windows ? '    IMPORTED_IMPLIB "${_MuTracer_prefix}/lib/mutracer_native_probe.dll.lib"\n' : ''}    INTERFACE_INCLUDE_DIRECTORIES "\${_MuTracer_prefix}/include")
+${windows ? '    IMPORTED_IMPLIB "${_MuTracer_prefix}/lib/mutracer.dll.lib"\n' : ''}    INTERFACE_INCLUDE_DIRECTORIES "\${_MuTracer_prefix}/include")
 endif()
 
 if(NOT TARGET MuTracer::mutracer_static)

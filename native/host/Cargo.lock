@@ -650,7 +650,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mutracer-native-probe"
+name = "mutracer-native"
 version = "0.0.0"
 dependencies = [
  "anyhow",

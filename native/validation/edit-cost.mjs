@@ -39,7 +39,7 @@ function run(name,command,argv){
   if(result.error||result.status!==0)throw Error(`${name}: ${result.error??`exit ${result.status}`}; see ${out}/${name}.stderr.log`);
   return result.stdout;
 }
-run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-O2','-I','native/include','native/examples/edit-cost-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe','-Wl,-rpath,'+resolve(target,'release'),'-lm','-o',host]);
+run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-O2','-I','native/include','native/examples/edit-cost-host.c','-L',resolve(target,'release'),'-lmutracer','-Wl,-rpath,'+resolve(target,'release'),'-lm','-o',host]);
 const presets={S:[10,10,4,4,16],M:[1000,100,32,4,1000],L:[4096,256,60,12,0],LI:[4096,256,60,12,110000]};
 const summaries=[],failures=[];
 const percentile=(a,p)=>a.slice().sort((a,b)=>a-b)[Math.ceil(a.length*p)-1];

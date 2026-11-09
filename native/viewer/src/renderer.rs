@@ -1,10 +1,10 @@
 //! Native ABI client; complete scene preparation can run on a background worker.
 use anyhow::{Result, bail, ensure};
 use glam::{Affine3A, Mat4, Vec3};
-use mutracer_native_probe::context as native;
-use mutracer_native_probe::layout::camera as camera_wire;
-pub use mutracer_native_probe::settings::RenderSettings;
-use mutracer_native_probe::status::Status;
+use mutracer_native::context as native;
+use mutracer_native::layout::camera as camera_wire;
+pub use mutracer_native::settings::RenderSettings;
+use mutracer_native::status::Status;
 use std::{
     ffi::CStr,
     time::{Duration, Instant},
@@ -96,7 +96,7 @@ impl Renderer {
             )
         })?;
         let word = |at: usize| u32::from_le_bytes(bytes[at * 4..at * 4 + 4].try_into().unwrap());
-        use mutracer_native_probe::layout::header as h;
+        use mutracer_native::layout::header as h;
         self.opaque_background = word(h::QUALITY_FLAGS) & 4 == 0
             && word(h::BACKGROUND_TEXTURE) == 0
             && f32::from_bits(word(h::BACKGROUND_COLOR + 3)) >= 0.99999;
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU"]
     fn l0_oracle_converts_hdr_to_l1_without_changing_raw_readback() {
-        use mutracer_native_probe::{api, layout::header as h};
+        use mutracer_native::{api, layout::header as h};
         let model = crate::Model::load(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
         )

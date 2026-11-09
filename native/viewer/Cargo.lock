@@ -2048,7 +2048,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mutracer-native-probe"
+name = "mutracer-native"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -2085,7 +2085,7 @@ dependencies = [
  "gltf",
  "image",
  "libloading",
- "mutracer-native-probe",
+ "mutracer-native",
  "naga",
  "percent-encoding",
  "pollster 0.4.0",

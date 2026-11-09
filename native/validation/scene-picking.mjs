@@ -15,7 +15,7 @@ function run(name,command,args) {
   if(r.error||r.status!==0)throw Error(`${name} failed: ${r.error??r.status}; see ${out}/${name}.log`);
   return r.stdout;
 }
-run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-I','native/include','native/examples/scene-picking.c','-L',library,'-lmutracer_native_probe','-Wl,-rpath,'+library,'-lm','-o',binary]);
+run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-I','native/include','native/examples/scene-picking.c','-L',library,'-lmutracer','-Wl,-rpath,'+library,'-lm','-o',binary]);
 const output=run('consumer',binary,process.argv.slice(2));
 if(!output.includes('PASS scene picking'))throw Error('Missing C consumer result');
 writeFileSync(resolve(out,'summary.json'),JSON.stringify({validated:true,importedFixture:process.argv[2]??null},null,2)+'\n');

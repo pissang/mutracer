@@ -15,7 +15,7 @@ def main():
     args = parser.parse_args()
     integration = Path(__file__).resolve().parent
     root = integration.parents[2]
-    for name in ("libhdMuTracer.dylib", "libmutracer_native_probe.dylib", "resources/plugInfo.json"):
+    for name in ("libhdMuTracer.dylib", "libmutracer.dylib", "resources/plugInfo.json"):
         if not (args.plugin / "hdMuTracer" / name).is_file():
             parser.error(f"Missing Blender build artifact: {name}")
     args.output.parent.mkdir(parents=True, exist_ok=True)

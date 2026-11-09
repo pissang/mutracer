@@ -1,7 +1,7 @@
 //! Minimal window host and real-surface lifecycle smoke.
 //! cargo run --example surface --manifest-path native/viewer/Cargo.toml -- SCENE REPORT
 use anyhow::{Result, ensure};
-use mutracer_native_probe::api::{self, SurfaceStatus};
+use mutracer_native::api::{self, SurfaceStatus};
 use std::{
     path::PathBuf,
     sync::Arc,
