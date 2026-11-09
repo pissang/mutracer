@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ESNext"],
+    "types": ["@cloudflare/workers-types"], "noEmit": true, "declaration": false
+  },
+  "include": ["src/worker.ts", "src/worker-env.d.ts", "src/gpuopenProxy.ts"]
+}

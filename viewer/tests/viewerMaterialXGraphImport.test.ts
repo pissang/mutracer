@@ -21,7 +21,7 @@ describe('viewer MaterialX graph replacement',()=>{
  it('waits for background height baking and installs surface and height as one undo step',async()=>{
   let complete!:(value:Awaited<ReturnType<typeof bakeDisplacement>>)=>void;
   vi.mocked(bakeDisplacement).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));
-  const setTextures=vi.fn(async()=>{}),receiver={materials:{setTextures}};
+  const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
   const text='<materialx version="1.39"><noise2d name="height" type="float"/><standard_surface name="S" type="surfaceshader"/><displacement name="D" type="displacementshader"><input name="displacement" type="float" nodename="height"/></displacement><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/><input name="displacementshader" type="displacementshader" nodename="D"/></surfacematerial></materialx>';
   const promise=ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file:new Blob([text]) as File,path:'height.mtlx'}]);
   await vi.waitFor(()=>expect(complete).toBeTypeOf('function'));expect(setTextures).not.toHaveBeenCalled();
@@ -32,11 +32,37 @@ describe('viewer MaterialX graph replacement',()=>{
   expect(args[7]).toEqual({displacementMap:{uvScale:[1,1],flipY:true,uvChannel:0,wrapS:'repeat',wrapT:'repeat'}});
  });
  it('resets hidden source controls when replacing a previously imported material',async()=>{
-  const setTextures=vi.fn(async()=>{}),receiver={materials:{setTextures}};
+  const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
   const file=new Blob([xml],{type:'application/xml'}) as File;
   expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file,path:'material.mtlx'}] as PathedFile[])).toBe(true);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
   expect(args[2]).toEqual(expect.objectContaining({alphaMode:'auto',alphaCutoff:0,baseWeight:1,coatDarkening:1}));
   expect(args[6]).toEqual(expect.objectContaining({terminal:expect.objectContaining({opacity:expect.anything()})}));
  });
+});
+
+it('does not commit an import cancelled while its files are being read', async () => {
+ const controller = new AbortController(), setTextures = vi.fn();
+ let finish!: (text: string) => void;
+ const text = new Promise<string>(resolve => { finish = resolve; });
+ const file = { text: () => text } as File;
+ const receiver = { materials: { setTextures } };
+ const task = ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine, 'id', [{ file, path: 'm.mtlx' }], controller.signal);
+ controller.abort(); finish(xml);
+ expect(await task).toBe(false);
+ expect(setTextures).not.toHaveBeenCalled();
+});
+
+it('accepts explicit default tangent normal maps and upgrades object space', async () => {
+ const { parseMaterialXGraph, pruneInactiveInputs } = await import('../src/engine/materialxGraph');
+ const doc = (space: string) => `<materialx version="1.38"><image name="image" type="vector3"><input name="file" type="filename" value="normal.png"/></image><normalmap name="n" type="vector3"><input name="in" type="vector3" nodename="image"/>${space}</normalmap><open_pbr_surface name="S" type="surfaceshader"><input name="geometry_normal" type="vector3" nodename="n"/></open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>`;
+ const explicit = parseMaterialXGraph(doc('<input name="space" type="string" value="tangent"/>'));
+ const implicit = parseMaterialXGraph(doc(''));
+ expect(explicit.warnings).toEqual([]);
+ expect(explicit.graph?.nodes).toEqual(implicit.graph?.nodes);
+ const object = parseMaterialXGraph(doc('<input name="space" type="string" value="object"/>'));
+ expect(object.warnings).toEqual([]);
+ expect(object.graph?.nodes.find(node => node.id.endsWith('n'))?.category).toBe('normalize');
+ const restored = pruneInactiveInputs([{ id: 'n', category: 'normalmap', type: 'vector3', inputs: { space: { type: 'string', value: 'tangent' } } }], {});
+ expect(restored.nodes[0].inputs?.space).toBeUndefined();
 });

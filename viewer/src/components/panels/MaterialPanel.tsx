@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
@@ -9,7 +9,8 @@ import {
 } from '../../engine/materialParams';
 import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
-import { toPathedFiles } from '../../engine/droppedFiles';
+import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
+import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -19,7 +20,9 @@ export function MaterialPanel() {
   const [presetCategory, setPresetCategory] = useState(lastPresetCategory);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
+  const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
+  const [dropping, setDropping] = useState(false);
 
   if (!material) {
     return (
@@ -43,7 +46,24 @@ export function MaterialPanel() {
   };
 
   return (
-    <>
+    <div className="material-panel" data-drop={dropping || undefined}
+      onDropCapture={() => setDropping(false)}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDropping(true);
+      }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false); }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        setDropping(false);
+        const target = materialDropTarget('panel', null, { materialId: material.id, objectId: null, name: material.name });
+        try {
+          const files = await readDroppedItems(e.dataTransfer.items);
+          if (MATERIALX_IMPORT && isMaterialXDrop(files)) await getEngine()?.importMaterialX(target!.materialId, files);
+          else showToast('Drop a MaterialX package here, or an image on a texture slot', 'error');
+        } catch (error) { showToast(`Could not read dropped files: ${(error as Error).message}`, 'error'); }
+      }}>
       <div className="mat-card">
         <i className="mat-ball" style={{ '--c': linearToHex(base) } as React.CSSProperties} />
         <div>
@@ -67,10 +87,16 @@ export function MaterialPanel() {
       </div>
       <div className="tex-browse hide-m">
         <button className="btn btn--wide" aria-pressed={browsing} data-on={browsing || undefined}
-          onClick={() => setUi({ textureBrowser: !browsing })}>
+          onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false })}>
           <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
         </button>
-        {MATERIALX_IMPORT && <MaterialXImport materialId={material.id} />}
+        {MATERIALX_IMPORT && <>
+          <button className="btn btn--wide" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
+            onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false })}>
+            <Download size={14} />{materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen materials'}
+          </button>
+          <MaterialXImport materialId={material.id} />
+        </>}
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
@@ -103,7 +129,7 @@ export function MaterialPanel() {
         <TextureSlots material={material} />
       </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
-    </>
+    </div>
   );
 }
 
@@ -182,7 +208,8 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
   const upload = (slot: TextureKey, file: File | undefined) => {
     if (slot === 'displacementMap' && webgl) return;
     if (!file) return;
-    if (!file.type.startsWith('image/')) return showToast(`${file.name} is not an image`, 'error');
+    const error = textureDropError([file]);
+    if (error) return showToast(error, 'error');
     void getEngine()?.setMaterialTexture(material.id, slot, file, `${label(slot)} texture`);
   };
   return (
@@ -201,14 +228,19 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
             onDragOver={(e) => {
               if (!e.dataTransfer.types.includes('Files')) return;
               e.preventDefault();
-              e.stopPropagation();
-              setDropTarget(key);
+              if (!disabled) setDropTarget(key);
             }}
-            onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTarget((t) => (t === key ? null : t)); }}
             onDrop={(e) => {
+              setDropTarget(null);
+              // MaterialX packages (including texture sidecars) belong to the panel.
+              if (isMaterialXDrop(toPathedFiles(e.dataTransfer.files)) || Array.from(e.dataTransfer.items).some(i => i.webkitGetAsEntry?.()?.isDirectory)) return;
               e.preventDefault();
               e.stopPropagation();
               setDropTarget(null);
+              if (disabled) return showToast('Displacement requires WebGPU', 'error');
+              const error = textureDropError(Array.from(e.dataTransfer.files));
+              if (error) return showToast(error, 'error');
               upload(key, e.dataTransfer.files[0]);
             }}
           >
@@ -252,7 +284,7 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
           </div>
         );
       })}
-      <input ref={input} type="file" hidden accept="image/png,image/jpeg,image/webp,image/avif"
+      <input ref={input} type="file" hidden accept={TEXTURE_ACCEPT}
         onChange={(e) => {
           if (target.current) upload(target.current, e.currentTarget.files?.[0]);
           e.currentTarget.value = '';

@@ -211,15 +211,19 @@ export class MaterialEditor {
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
     merge?: { key: string; ms?: number }, transform?: TextureTransform, graph?: MaterialGraph | null,
-    transforms?:Partial<Record<TextureKey,TextureTransform>>
+    transforms?:Partial<Record<TextureKey,TextureTransform>>, signal?: AbortSignal
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
-    if (!entry || !material) return;
+    if (!entry || !material) return false;
+    signal?.throwIfAborted();
     const slots = Object.entries(files) as [TextureKey, Blob | null][];
     const images = await Promise.all(slots.map(([, file]) => (file ? decodeImage(file) : null)));
     // The material may have been replaced while decoding.
-    if (this.entries.get(materialId) !== entry) return;
+    if (this.entries.get(materialId) !== entry || signal?.aborted) {
+      images.forEach(image => image?.close());
+      return false;
+    }
     const textures: MaterialPatch['textures'] = {};
     slots.forEach(([slot, file], i) => {
       const image = images[i];
@@ -235,6 +239,7 @@ export class MaterialEditor {
       values = { ...values, displacementUvProjection: 'triplanar' };
     }
     this.commit(materialId, { values, textures, ...(graph !== undefined ? {graph} : {}) }, label, merge?.key, merge?.ms);
+    return true;
   }
 
   reset(materialId: string) {

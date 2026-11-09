@@ -31,9 +31,10 @@ not promise identical rendered pixels between devices or backends.
 | [ ] Ground | Enable ground shadow and change opacity; inspect contact with the model. |
 | [ ] Material selection | Pick a mesh/material, check shared-material edits, apply a preset and reset to loaded values. |
 | [ ] Material layers | Exercise base color/weight, metalness, roughness, diffuse roughness, IOR/specular, anisotropy, transmission/volume/thin wall, subsurface, coat, fuzz, thin film, emission, opacity/alpha and double-sided/unlit controls where offered. |
-| [ ] Textures | Upload, replace and remove each exposed slot; change Wrap S/T and Repeat S/T, including negative repeats. Apply a Poly Haven set with optional displacement; cancel/replace downloads and switch materials during download. |
+| [ ] Textures | Upload, replace and remove each exposed slot; drop a PNG/JPEG/WebP/AVIF on a slot and check its highlight, undo and cached restoration; reject other formats and drops outside slots; change Wrap S/T and Repeat S/T, including negative repeats. Apply a Poly Haven set with optional displacement; cancel/replace downloads and switch materials during download. |
 | [ ] Displacement | Change scale, bias, subdivision and smoothing; verify silhouettes and return to zero displacement. |
-| [ ] MaterialX (Web) | Import a .zip package or .mtlx with images; check converted layers and textures. |
+| [ ] MaterialX (Web) | Import a .zip package or .mtlx with images; drop on a non-selected object and check the named target and selection. Drop on empty space to use the selection, and on the material panel to use its displayed target; check panel feedback and the no-target prompt. Check converted layers, textures, undo/reset and cached restoration. |
+| [ ] GPUOpen (Web) | Browse, search and filter materials; inspect source, author and license. Select a package (default 1k 8b), download and apply. Check progress, cancel, errors, target changes and over-limit packages; the original material survives an interrupted import. |
 | [ ] Camera | Switch Perspective/Orthographic, adjust FOV, auto-rotate and Fit. Authored cameras keep their projection/FOV until Orbit resumes. |
 | [ ] Depth of field | Enable DOF, adjust f-number, area autofocus and focus frame; move the frame, manually edit focus or pick a point; choose automatic or explicit scene units. Orthographic views disable DOF. |
 | [ ] Quality | Change max samples, bounces, resolution, sampling pattern and clamping. Web also offers a BVH builder. |

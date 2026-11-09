@@ -16,7 +16,7 @@ import {
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
-import { isMaterialXFile } from './droppedFiles';
+import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './materialDrop';
 
 export const MATERIALX_IMPORT = true;
 import { displacementHeightRange } from './displacementHeightRange';
@@ -303,11 +303,17 @@ export class ViewerEngine {
       { presetId: null, credit: null, sourceUrl: url });
   }
 
-  async loadFiles(files: PathedFile[]) {
-    if (MATERIALX_IMPORT && files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
+  async loadFiles(files: PathedFile[], drop?: { clientX: number; clientY: number }) {
+    if (MATERIALX_IMPORT && isMaterialXDrop(files)) {
+      const token = this.loadToken;
       const material = get().material;
-      if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
-      return this.importMaterialX(material.id, files);
+      const selected = material ? { materialId: material.id, objectId: get().selection.objectId, name: material.name } : null;
+      const hit = drop ? await this.pickMaterialTarget(drop.clientX, drop.clientY) : null;
+      if (token !== this.loadToken) return;
+      const target = materialDropTarget('viewport', hit, selected);
+      if (!target) return showToast('Drop on an object or select a material first', 'error');
+      if (hit) this.select(hit.objectId, hit.materialId);
+      return this.importMaterialX(target.materialId, files);
     }
     const pbrt = files.some(f => /\.pbrt(?:\.gz)?$/i.test(f.path));
     if (pbrt) return this.load(files.find(f => /\.pbrt(?:\.gz)?$/i.test(f.path))!.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend), { presetId: null, credit: null, sourceUrl: null });
@@ -1212,6 +1218,23 @@ export class ViewerEngine {
     }
   }
 
+  /** Reads the material at a drop position without changing the current selection. */
+  async pickMaterialTarget(clientX: number, clientY: number): Promise<MaterialDropTarget | null> {
+    const token = this.loadToken;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) / rect.width, y = (clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    let hit = await this.engine._pick(x, y);
+    for (let attempt = 0; hit === undefined && attempt < 3 && token === this.loadToken; attempt++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      hit = await this.engine._pick(x, y);
+    }
+    if (!hit || token !== this.loadToken) return null;
+    const objectId = this.pickObjects.get(hit.object), materialId = this.pickMaterials.get(hit.material);
+    const description = materialId ? this.materials.describe(materialId) : null;
+    return objectId && materialId && description ? { objectId, materialId, name: description.name } : null;
+  }
+
   select(objectId: string | null, materialId?: string | null) {
     this.pickRequest++;
     const object = objectId ? this.modelGroup.getObjectByProperty('uuid', objectId) : null;
@@ -1319,7 +1342,8 @@ export class ViewerEngine {
    * material as one undo step. The import replaces the whole material: every
    * value starts from the neutral base and every texture slot is set or cleared.
    */
-  async importMaterialX(materialId: string, files: PathedFile[]) {
+  async importMaterialX(materialId: string, files: PathedFile[], signal?: AbortSignal) {
+    const token = this.loadToken;
     let name = files[0]?.file.name ?? 'MaterialX';
     let imports=materialXImports.get(this);
     if(!imports){imports=new Map();materialXImports.set(this,imports);}
@@ -1344,14 +1368,16 @@ export class ViewerEngine {
       try{displacement=await loadMaterialXDisplacement(material,pkg);}
       catch(error){warnings.push(`displacement: ${(error as Error).message}`);displacement={file:null,values:{displacementScale:0,displacementBias:0},warnings:[]};}
       if(displacement){maps.displacementMap=displacement.file;warnings.push(...displacement.warnings);}
-      if(imports.get(materialId)!==request||this.modelGroup!==model)return false;
-      await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...displacement?.values},`${name} MaterialX`,undefined,undefined,material.graph??null,displacement?.transform?{displacementMap:displacement.transform}:undefined);
+      signal?.throwIfAborted();
+      if(token!==this.loadToken||imports.get(materialId)!==request||this.modelGroup!==model)return false;
+      const applied=await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...displacement?.values},`${name} MaterialX`,undefined,undefined,material.graph??null,displacement?.transform?{displacementMap:displacement.transform}:undefined,signal);
+      if(!applied||signal?.aborted)return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
       showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
-      if(imports.get(materialId)!==request||this.modelGroup!==model)return false;
+      if(signal?.aborted||imports.get(materialId)!==request||this.modelGroup!==model)return false;
       showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
       return false;
     }
