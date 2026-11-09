@@ -119,24 +119,19 @@ function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views']
 }
 /** Production WGSL: the software shader, or the ray-query shader for hardware scenes. */
 function productionShader(id: number, shader: SceneShader): Uint8Array {
-  const {constants, features, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
+  const {constants, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
+  const features = nativeGraphFeatures(shader.features, shader.graphs, !!shader.features.lightTracing || !!shader.features.photonMapping);
   const plan=shader.graphs;
   return nativeShaderVariant(id, constants, features, variantFlags, () => {
     const source=id===RESOURCE.HWRT_SHADER
       ? 'enable wgpu_ray_query;\n'+wgpuShaderSource(constants,features,true,nativeIntersections(features,isEmpty,false,false,hardware,opaqueClosest))
       : wgpuShaderSource(constants,features,true);
-    return specializeNativeGraphs(source,plan,!!features.lightTracing||!!features.photonMapping);
+    return source;
   },plan?.key??'');
 }
-function specializeNativeGraphs(source:string,plan:NativeGraphPlan|undefined,unsupportedTransport:boolean):string {
-  if(!plan?.key || unsupportedTransport)return source;
-  source=materialGraphShaderIR(source,plan.structures);
-  if(plan.structures.some(g=>graphHasTerminal(g,'opacity'))) {
-    // HWRT carries the local candidate's instance separately from the software BLAS loop.
-    source=source.replace('o + t * d, normal, record))','o + t * d, normal, record, instance))')
-      .replace('o + t * d, normal))','o + t * d, normal, instance))');
-  }
-  return source;
+function nativeGraphFeatures(features: Parameters<typeof wgpuShaderSource>[1], plan: NativeGraphPlan | undefined, unsupportedTransport = false): Parameters<typeof wgpuShaderSource>[1] {
+  return {...features, materialHooks: materialGraphShaderIR(plan?.key && !unsupportedTransport ? plan.structures : [],
+    features.hasAnisotropyDirections || features.hasCoatNormals)};
 }
 function nativeMaterialConstants(materials:MaterialState[],table:MaterialData,geometry:Geometry,bevel:number):Record<string,boolean|number> {
   const constants=wgpuMaterialConstants(materials,table,geometry,bevel),plan=nativeGraphPlan(materials);
@@ -269,9 +264,9 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // with blend coverage. The shared scene retains the stochastic base shader.
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
     const frameInputs=(configuration.variants & 16)!==0;
-    const frameFeatures: Parameters<typeof wgpuShaderSource>[1]={...state.shader.features,hasAlpha};
+    const frameFeatures = nativeGraphFeatures({...state.shader.features,hasAlpha}, state.shader.graphs);
     const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
-    const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
+    const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections({...frameFeatures, materialHooks: {}},state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
     // Independently traced frame guides use the original PT scene bindings.
     // Their radiance estimate is separate from the merged beauty accumulation.
     let effectiveFlags=frameInputs?0:configuration.causticFlags;
@@ -289,8 +284,8 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     }
     const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
-      specializeNativeGraphs((shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
-        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs,false),state.shader.graphs?.key??'');
+      (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
+        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs?.key??'');
     const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
       features: frameFeatures,
       constants: targetConstants}) : new Uint8Array(0);
@@ -677,7 +672,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(Math.max(stacks.tlas, 32), stacks.blas), ...attributeLayout.constants,
     ...nativeMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
-  const features = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
+  const features: Parameters<typeof wgpuShaderSource>[1] = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
@@ -751,10 +746,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     bvhCapacityBytes, tlasCapacityBytes, attributeCapacityBytes: attributeCapacityWords * WORD_BYTES
   };
   add(RESOURCE.METADATA, KIND.METADATA, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
+  features.materialHooks = materialGraphShaderIR(graphPlan.key ? graphPlan.structures : [], features.hasAnisotropyDirections || features.hasCoatNormals);
   const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
   const variantFlags = Number(nativeLayout.isEmpty) | Number(!!hardware) * 2 | Number(opaqueClosest) * 4;
   function shader(id: number, source: () => string) {
-    add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, () => specializeNativeGraphs(source(),graphPlan,false),graphPlan.key), 0, 0, 0, 0);
+    add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, source,graphPlan.key), 0, 0, 0, 0);
   }
   const sceneShader: SceneShader = {graphs:graphPlan,constants, features, variantFlags, isEmpty: capacity === 0, hardware: !!hardware, opaqueClosest};
   if (configuration.variants & 1) add(RESOURCE.SOFTWARE_SHADER, KIND.WGSL, productionShader(RESOURCE.SOFTWARE_SHADER, sceneShader), 0, 0, 0, 0);

@@ -1,4 +1,3 @@
-import rayTraceCompute from '../../src/renderer/wgsl/rayTrace.compute.js';
 import MaterialGraph, {type MaterialGraphNode} from '../../src/scene/MaterialGraph.js';
 import {nodeInputs, validNodeType} from '../../src/renderer/materialGraph/nodes.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
@@ -46,9 +45,8 @@ export function materialGraphRequests() {
     }
     for(const compactVertices of [false,true]) {
         const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
-        const source=rayTraceCompute(options);
         for(const {label,graph} of fixtures.filter(f=>['noise2d-color3-varying','fractal3d-vector3-varying','gltf_colorimage-color4-varying','extract-float-varying','splitlr-color3-varying','hsvtorgb-color3-varying','rotate3d-vector3-varying','opacity-normal'].includes(f.label))) {
-            requests.push({label:`source-${label}-${compactVertices}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),name:'mx_eval',source}))});
+            requests.push({label:`source-${label}-${compactVertices}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),name:'mx_eval',options}))});
         }
     }
     return requests;

@@ -10,7 +10,10 @@ export function nativeShaderVariant(id: number, constants: Record<string, boolea
   const keys = Object.keys(constants).sort();
   const values: (boolean | number)[] = [];
   for (const key of keys) values.push(constants[key]);
-  const signature = JSON.stringify(graphKey ? {id, keys, values, features, flags, graphKey} : {id, keys, values, features, flags});
+  // Hook fragments are derived entirely from graphKey and the existing frame
+  // features; keep them out of the cache identity and its serialized cost.
+  const {materialHooks: _materialHooks, ...sourceFeatures} = features;
+  const signature = JSON.stringify(graphKey ? {id, keys, values, features: sourceFeatures, flags, graphKey} : {id, keys, values, features: sourceFeatures, flags});
   let hash = 0x811c9dc5;
   for (let i = 0; i < signature.length; i++) hash = Math.imul(hash ^ signature.charCodeAt(i), 0x01000193);
   hash >>>= 0;
