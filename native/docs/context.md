@@ -60,6 +60,9 @@ one. There is no automatic retry. A host-created wgpu device shared through
 `Engine::on_device` cannot provide this native execution check. A successful command buffer still does not rule out the
 [known HWRT image inconsistencies](../README.md#ray-tracing-backends).
 
+Large blocking batches use more temporary memory on Metal. Polling with smaller
+batches bounds this cost.
+
 ## Threads
 
 Calls may come from any thread. Short operations serialize, and an overlapping
