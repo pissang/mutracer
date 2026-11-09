@@ -1,3 +1,4 @@
+import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 import { uvProjectionConstants } from '../../materialConstants.js';
 import {
@@ -9,14 +10,14 @@ import {
  * candidate filtering. The caller supplies local-space hit data so UV
  * projection and stochastic glTF BLEND semantics stay backend-independent.
  */
-export function createIntersectionAlphaWgsl(hasAnisotropyDirections = true, compactVertices = false) {
+export function createIntersectionAlphaWgsl(hasAnisotropyDirections = true, compactVertices = false, materialHooks: MaterialShaderHooks = {}) {
   return /* wgsl */ `
 fn intersectionAlphaPasses(
   initialMaterialIndex: i32,
   index: vec3i,
   hitBarycentric: vec3f,
   hitPosition: vec3f,
-  hitNormal: vec3f${compactVertices ? ", record: i32" : ""}
+  hitNormal: vec3f${compactVertices ? ", record: i32" : ""}${materialHooks.graph?.opacity ? ", mx_instance: i32" : ""}
 ) -> bool {
   var materialIndex = initialMaterialIndex;
 ${compactVertices ? /* wgsl */ `materialIndex = triangleMaterial(initialMaterialIndex, record);` : /* wgsl */ `
@@ -30,7 +31,7 @@ ${compactVertices ? /* wgsl */ `materialIndex = triangleMaterial(initialMaterial
 
 `}
   let ma = materialsBuffer[materialIndex];
-  var alpha = ma.alpha;
+  ${materialHooks.graph?.opacity ? "  var alpha = mx_shadow_opacity(materialIndex,index,hitBarycentric,hitPosition,mx_instance,ma.alpha);" : "var alpha = ma.alpha;"}
   if (USE_DIFFUSE_MAPS &&
       ma.mapAlphaUsage == ${mapAlphaUsageConstants.alpha}) {
     let diffuseMapIndex = i32(ma.diffuseMapIndex);

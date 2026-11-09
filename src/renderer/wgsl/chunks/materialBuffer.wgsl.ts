@@ -1,3 +1,5 @@
+import type {MaterialShaderHooks} from '../materialShaderHooks.js';
+import {materialXNormalDeclarations} from '../../materialXNormal.js';
 import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
@@ -10,6 +12,7 @@ import {
 } from '../../materialConstants.js';
 
 export function createMaterialBufferWgsl({
+  materialHooks = {},
   independentTextures = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
@@ -17,6 +20,7 @@ export function createMaterialBufferWgsl({
   hasTransmission = true, caustics = false,
   hasMetalness = true
 }: {
+  materialHooks?: MaterialShaderHooks;
   independentTextures?: boolean;
   hasSceneAlpha?: boolean;
   hasAnisotropyDirections?: boolean;
@@ -24,6 +28,7 @@ export function createMaterialBufferWgsl({
   hasTransmission?: boolean; caustics?: boolean;
   hasMetalness?: boolean;
 } = {}) {
+  const directionFlags = !!(materialHooks.graph || materialHooks.materialXNormals);
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
     : '';
@@ -184,14 +189,14 @@ fn getInstanceColor(instanceIndex: i32) -> vec3f {
   return instancesBuffer[instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9].xyz;
 }
 
-fn getMaterial(
+${materialHooks.materialXNormals ? materialXNormalDeclarations() + '\n' : ''}${materialHooks.graph ? materialHooks.graph.declarations + '\n' : ''}fn getMaterial(
   ma: ptr<function, OpenPbrResolvedMaterial>,
   materialIndex: i32,
   uv: vec2f,
   uv1: vec2f,
   instanceIndex: i32,
-  vertexColor: vec3f
-) {
+  vertexColor: vec3f${materialHooks.graph ? ", mx_si: SurfaceInteraction" : ""}
+)${materialHooks.graph ? " -> vec3f" : ""} {${materialHooks.graph ? "\n  var mx_normal = mx_si.normal;" : ""}
   let matData = materialsBuffer[materialIndex];
 
   (*ma).baseColor = matData.color;
@@ -211,7 +216,7 @@ fn getMaterial(
   (*ma).mediumScattering = max(matData.mediumScattering, vec3f(0.0));
   (*ma).mediumAnisotropy = clamp(matData.mediumAnisotropy, -1.0, 1.0);
   (*ma).mediumType = select(0, 1, max(max((*ma).mediumExtinction.x, (*ma).mediumExtinction.y), (*ma).mediumExtinction.z) > 0.0);
-  (*ma).alpha = matData.alpha;
+  ${materialHooks.graph?.opacity ? "  (*ma).alpha = mx_opacity(materialIndex,uv,uv1,mx_si.position,instanceIndex,matData.alpha);" : "(*ma).alpha = matData.alpha;"}
   ${alphaModeAssignment}
 
   (*ma).thinFilmThickness = matData.thinFilmThickness * 1000.0;
@@ -298,7 +303,7 @@ ${hasCoatNormals ? /* wgsl */ `
 
 ${hasAnisotropyDirections ? /* wgsl */ `
   (*ma).anisotropyDirection = vec2f(1.0, 0.0);
-  (*ma).anisotropyDirectionEnabled = matData.specularAnisotropyRotation != 0.0;
+  ${directionFlags ? `(*ma).anisotropyDirectionEnabled = select(0u, 1u, matData.specularAnisotropyRotation != 0.0)${materialHooks.materialXNormals ? " | select(0u, 2u, fract(matData.normalMapIndex) > 0.25)" : ""};` : "(*ma).anisotropyDirectionEnabled = matData.specularAnisotropyRotation != 0.0;"}
   (*ma).coatAnisotropyRotation = matData.coatAnisotropyRotation;
   if (USE_ANISOTROPY_MAPS && matData.anisotropyMapIndex >= 0.0) {
     let index = i32(matData.anisotropyMapIndex);
@@ -306,14 +311,14 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).specularAnisotropy *= texel.b;
     let direction = texel.rg * 2.0 - 1.0;
     if (dot(direction, direction) > 1e-4) { (*ma).anisotropyDirection = normalize(direction); }
-    (*ma).anisotropyDirectionEnabled = true;
+    ${directionFlags ? (materialHooks.materialXNormals ? "(*ma).anisotropyDirectionEnabled |= 1u;" : "(*ma).anisotropyDirectionEnabled = 1u;") : "(*ma).anisotropyDirectionEnabled = true;"}
   }
   if (matData.specularAnisotropyModel > 0.5 && (*ma).specularAnisotropy > 0.0) {
     let native = gltf_anisotropy_to_openpbr(clamp((*ma).specularRoughness, 0.0, 1.0), (*ma).specularAnisotropy);
     (*ma).specularRoughness = native.x;
     (*ma).specularAnisotropy = native.y;
   }
-  if ((*ma).anisotropyDirectionEnabled) {
+  if (${directionFlags ? "((*ma).anisotropyDirectionEnabled & 1u) != 0u" : "(*ma).anisotropyDirectionEnabled"}) {
     let theta = matData.specularAnisotropyRotation;
     let d = (*ma).anisotropyDirection;
     (*ma).anisotropyDirection = vec2f(cos(theta)*d.x - sin(theta)*d.y, sin(theta)*d.x + cos(theta)*d.y);
@@ -322,7 +327,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.
-  if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {
+  ${materialHooks.graph?.evaluate ?? ''}if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {
     let baseRoughness2 = (*ma).specularRoughness * (*ma).specularRoughness;
     let coatRoughness2 = (*ma).coatRoughness * (*ma).coatRoughness;
     (*ma).specularRoughness = mix((*ma).specularRoughness,
@@ -340,13 +345,13 @@ ${caustics ? /* wgsl */ `  (*ma).causticRoughness = (*ma).specularRoughness;
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);
   let specularAlpha = openpbr_roughness_to_alpha((*ma).specularRoughness, (*ma).specularAnisotropy);
   (*ma).alphaX = specularAlpha.x;
-  (*ma).alphaY = specularAlpha.y;
+  (*ma).alphaY = specularAlpha.y;${materialHooks.graph ? "\n  return mx_normal;" : ""}
 }
 
 fn getMatNormal(materialIndex: i32, uv: vec2f, normal: vec3f, dp1: vec3f, dp2: vec3f, duv1: vec2f, duv2: vec2f) -> vec3f {
   let matData = materialsBuffer[materialIndex];
   let normalMapIndex = i32(matData.normalMapIndex);
-  if (normalMapIndex >= 0) {
+  if (normalMapIndex >= 0${materialHooks.materialXNormals ? " && fract(matData.normalMapIndex) < 0.25" : ""}) {
     // http://www.thetenthplanet.de/archives/1180
     // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors

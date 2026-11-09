@@ -1,3 +1,4 @@
+import type {MaterialShaderHooks} from '../wgsl/materialShaderHooks.js';
 // MaterialX 1.39.4 operator semantics: https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.4/libraries/stdlib
 // See THIRD_PARTY_NOTICES.md and LICENSES/MaterialX-*.txt.
 import {noiseShader} from './noiseShader.js';
@@ -16,38 +17,11 @@ function hasCategory(graph: GraphIR, names: string[]) {
     return false;
 }
 const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness', opacity:'alpha' };
-/** Internal direction flags share one word so resolved materials keep their
- * original size on Metal. Bit 0 is texture/rotation, bit 1 the MaterialX frame. */
-export function materialDirectionFlags(source:string) {
-    if (!source.includes('anisotropyDirectionEnabled: bool,')) return source;
-    const v = (n:number) => `vec${n}f`;
-    // Reuse the existing direction flag word. Growing this value struct by a
-    // boolean severely slows the Metal megakernel even for hits without a graph.
-    source = source.replace('anisotropyDirectionEnabled: bool,', 'anisotropyDirectionEnabled: u32,');
-    source = source.replace('(*ma).anisotropyDirectionEnabled = matData.specularAnisotropyRotation != 0.0;', '(*ma).anisotropyDirectionEnabled = select(0u, 1u, matData.specularAnisotropyRotation != 0.0);');
-    source = source.replace('(*ma).anisotropyDirectionEnabled = true;', '(*ma).anisotropyDirectionEnabled = 1u;');
-    source = source.replace('if ((*ma).anisotropyDirectionEnabled)', 'if (((*ma).anisotropyDirectionEnabled & 1u) != 0u)');
-    source = source.replace('& material.anisotropyDirectionEnabled)', '& ((material.anisotropyDirectionEnabled & 1u) != 0u))');
-    // Production shader templates strip indentation and comments before interpolation.
-    const basisAnchor='prepared.coatBasis = prepared.basis;';
-    if(!source.includes(basisAnchor))throw new Error('Material graph BSDF frame anchor changed');
-    source=source.replace(basisAnchor,`    if((material.anisotropyDirectionEnabled & 2u) != 0u && max(material.specularAnisotropy,material.coatAnisotropy)>0.0) {
-      prepared.basis = openpbr_direction_basis(prepared.basis, material.geometryTangent, material.geometryBitangent, ${v(2)}(1.0,0.0));
-    }
-`+basisAnchor);
-    return source;
-}
-/** Shared specialization retains the constant-material fast path.
- * Explicit anchors fail closed if a generator's material boundary changes. */
-export function materialGraphShaderIR(source: string, structures: GraphIR[]) {
-    if (!structures.length)
-        return source;
+/** Pure shared graph fragments; templates own signatures, call sites and layout. */
+export function materialGraphShaderIR(structures: GraphIR[], frames = true): MaterialShaderHooks {
+    if (!structures.length) return {};
     const v = (n: number) => `vec${n}f`;
     const mat = '(*ma)', p = (field: string) => `${mat}.${fields[field] ?? field}`;
-    const frames = source.includes('anisotropyDirectionEnabled: bool,') || source.includes('anisotropyDirectionEnabled: u32,');
-    if (frames) {
-        source=materialDirectionFlags(source);
-    }
     const used = Object.keys(terminalTypes).filter(field => structures.some(g => hasTerminal(g, field)));
     const emission = ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor'];
     if (used.some(field => emission.includes(field))) for (const field of emission) if (!used.includes(field)) used.push(field);
@@ -66,16 +40,6 @@ export function materialGraphShaderIR(source: string, structures: GraphIR[]) {
         return `fn mx_${inverse ? 'w2l' : 'l2w'}(index:i32) -> mat4x4f { if(index<0){return mat4x4f(vec4f(1,0,0,0),vec4f(0,1,0,0),vec4f(0,0,1,0),vec4f(0,0,0,1));} return mat4x4f(${columns.join(',')}); }\n`;
     };
     declarations += matrix(true) + matrix(false);
-    source = source.replace('if (directionMaterial.anisotropyMapIndex >= 0.0', 'if (directionMaterial._padding1 > 0.0 || directionMaterial.anisotropyMapIndex >= 0.0');
-    // The context travels with each getMaterial call, never mutable shader globals.
-    const signature = 'vertexColor: vec3f\n) {';
-    if (!source.includes(signature))
-        throw new Error('Material graph getMaterial signature anchor changed');
-    source = source.replace(signature, 'vertexColor: vec3f, mx_si: SurfaceInteraction\n) -> vec3f {\n  var mx_normal = mx_si.normal;');
-    source = source.replace(/getMaterial\(([^;\n]+)\.vertexColor\);/g, (_match, args: string) => {
-        const si = args.slice(args.lastIndexOf(',') + 1).trim();
-        return `${si}.normal = getMaterial(${args}.vertexColor, ${si});`;
-    });
     const si = 'mx_si';
     const init = used.map(field => `    mx_result.${field} = ${field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field)};`).join('\n');
     const assignment = (field: string) => {
@@ -107,11 +71,9 @@ export function materialGraphShaderIR(source: string, structures: GraphIR[]) {
         body += '    }\n';
     });
     body += `  }\n`;
-    const anchor = `if (${mat}.coatWeight > 0.0 && ${mat}.coatRoughness > 0.0) {`;
-    if (!source.includes(anchor))
-        throw new Error('Material graph evaluation anchor changed');
-    source = source.replace(anchor, body + anchor);
+    let opacity = false;
     if(structures.some(g=>hasTerminal(g, 'opacity'))) {
+        opacity = true;
         const zero=(type:string)=>width(terminalTypes[type])===1?'0.0':`${v(width(terminalTypes[type]))}(0.0)`;
         const init=used.map(field=>`  result.${field} = ${field==='opacity'?'fallback':zero(field)};`).join('\n');
         const materialId='i32(materialsBuffer[materialIndex]._padding1)';
@@ -122,20 +84,8 @@ export function materialGraphShaderIR(source: string, structures: GraphIR[]) {
         const uv=(secondary:boolean)=>`(bary.x * ${secondary?'vertexUv1':'vertexUv'}(index.x) + bary.y * ${secondary?'vertexUv1':'vertexUv'}(index.y) + bary.z * ${secondary?'vertexUv1':'vertexUv'}(index.z)) * materialsBuffer[materialIndex].uvScale`;
         helper+=`fn mx_shadow_opacity(materialIndex:i32,index:vec3i,bary:vec3f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4f(position,1.0)).xyz,instanceIndex,fallback); }\n`;
         declarations+=helper;
-        const alpha='(*ma).alpha = matData.alpha;';
-        // Replace raw opacity before ordinary texture multiplication and alpha-mode resolution.
-        if(!source.includes(alpha))throw new Error('Material graph raw opacity anchor changed');
-        source=source.replace(alpha,`  (*ma).alpha = mx_opacity(materialIndex,uv,uv1,${si}.position,instanceIndex,matData.alpha);`);
-        source=source.replace(/hitNormal: vec3f(, record: i32)?\n\) -> bool/, 'hitNormal: vec3f$1, mx_instance: i32\n) -> bool');
-        source=source.replace(/(hitNormal(?:, triangleIndex)?)(\s*\n[ \t]*\)\))/, '$1, insIdx$2');
-        source=source.replace('var alpha = ma.alpha;', '  var alpha = mx_shadow_opacity(materialIndex,index,hitBarycentric,hitPosition,mx_instance,ma.alpha);');
     }
-    const end = '(*ma).alphaY = specularAlpha.y;';
-    if (!source.includes(end)) throw new Error('Material graph getMaterial return anchor changed');
-    source = source.replace(end, end + '\n  return mx_normal;');
-    // Declarations follow sampleMap and precede getMaterial.
-    const declaration = 'fn getMaterial(\n';
-    return source.replace(declaration, declarations + '\n' + declaration);
+    return {graph: {declarations, evaluate: body, opacity}};
 }
 
 /** Pure MaterialX helpers shared by surface rendering and UV height baking. */

@@ -25,8 +25,7 @@ describe('MaterialX HSV adjustment',()=>{
   for(const type of ['color3','color4'] as const)for(const category of ['rgbtohsv','hsvtorgb','hsvadjust']){
    const g=normalizeGraph(new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'c',category:'convert',type,inputs:{in:{type:'vector2',connection:{node:'uv'}}}},{id:'n',category,type,inputs:{in:{type,connection:{node:'c'}}}},{id:'out',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'out'}}}));
    expect(g.diagnostics).toEqual([]);
-   const trace=original('src/renderer/wgsl/rayTrace.compute.ts').default({hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:false});
-   const source=materialGraphShader(trace,{key:g.key,graphs:[g],structures:[g]});
+   const source=original('src/renderer/wgsl/rayTrace.compute.ts').default({hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:false,materialHooks:materialGraphShader({key:g.key,graphs:[g],structures:[g]})});
    expect(()=>makeShaderDataDefinitions(source)).not.toThrow();
   }
  });

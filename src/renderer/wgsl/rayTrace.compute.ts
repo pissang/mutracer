@@ -1,3 +1,4 @@
+import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 import {spectralPrefixWgsl, prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './chunks/spectralPrefix.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
@@ -6,9 +7,9 @@ import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import { MAX_PATH_EVENTS_WEBGL } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import reflectanceWGSL from './aovReflectance.wgsl.js';
-import aovTraceWGSL from './aovTrace.wgsl.js';
-import aovTraceDisplayWGSL from './aovTraceDisplay.wgsl.js';
-import depthQueryWGSL from './depthQuery.wgsl.js';
+import {createAovTraceWgsl} from './aovTrace.wgsl.js';
+import {createAovTraceDisplayWgsl} from './aovTraceDisplay.wgsl.js';
+import {createDepthQueryWgsl} from './depthQuery.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -42,6 +43,7 @@ export interface RayTraceInputHooks {
 }
 
 export interface RayTraceShaderOptions {
+  materialHooks?: MaterialShaderHooks;
   /** Internal host budget. Default 20 preserves the native AOT contract. */
   maxPathEvents?: number;
   /** Web TLAS leaf boxes. Default false retains the native layout. */
@@ -88,6 +90,7 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+  const materialHooks = options.materialHooks ?? {};
   const maxPathEvents = options.maxPathEvents ?? MAX_PATH_EVENTS_WEBGL;
   const research = researchTransport()?.compute(options);
   const enabled = research?.enabled ?? false;
@@ -180,23 +183,23 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ materialHooks, independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 
-${createMaterialBufferWgsl({ independentTextures: options.independentTextures, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
+${createMaterialBufferWgsl({ materialHooks, independentTextures: options.independentTextures, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
   caustics: enabled || lightTracing || photonMapping,
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ compactVertices, perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
+${createIntersectionWgsl({ materialHooks, compactVertices, perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
 ${spectrumWgsl}
-${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
+${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks)}
 ${sampleLightWgsl}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
@@ -701,7 +704,7 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
   for (var event = ${sharePrefix ? 'spEvent' : '0'}; event <= eventLimit; event++) {
     if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
       intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
-      getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
+      ${materialCall('ma', '(*si)', materialHooks)}
     }
     if (event == 0) {
       if (initialQuery & (*si).hit & ((*ma).materialType == STANDARD)) {
@@ -793,7 +796,7 @@ ${primaryVariables}
   for (var step = 0; step < (${maxPathEvents} + 1) * 2 + 2; step++) {
     if (query) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-      getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+      ${materialCall('&ma', 'si', materialHooks)}
     }
     query = true;
     if (!primaryReady) {
@@ -862,7 +865,7 @@ ${primaryVariables}
   // random stream; shading advances samplingBounce only after hit completion.
   for (var event = 0; event <= eventLimit; event++) {
     intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-    getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    ${materialCall('&ma', 'si', materialHooks)}
     if (event == 0) {
 ${primaryGuides}
       isNotTransparent = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99;
@@ -906,7 +909,7 @@ ${primaryVariables}
   for (var step = 0; step < stepLimit; step++) {
     if (!primaryReady | ((event != 0) & !path.abort)) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-      getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+      ${materialCall('&ma', 'si', materialHooks)}
     }
     if (event == 0) {
       if (!primaryReady) {
@@ -990,7 +993,7 @@ ${sharePrefix ? /* wgsl */ `      if (spActive) {
 ` : /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
   intersectScene(ray, &si, 0, false, false);
-  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+  ${materialCall('&ma', 'si', materialHooks)}
 ${primaryGuides}
     if (SPECTRAL) {
       // Keep one source-level integrateOnePath call for both interactive
@@ -1198,7 +1201,7 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + depthQueryWGSL + reflectanceWGSL + (options.displayAovStorage ? aovTraceDisplayWGSL : aovTraceWGSL);
+  let specializedSource = source + createDepthQueryWgsl(materialHooks) + reflectanceWGSL + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks) : createAovTraceWgsl(materialHooks));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,

@@ -17,9 +17,12 @@
  */
 
 import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW } from '../../openPbrEnergyLut.js';
+import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 const LOBE_INDICES = [0, 1, 2, 3, 4, 5, 6];
 
-export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
+export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, materialHooks: MaterialShaderHooks = {}) {
+  // Preserve the existing member position: bit 0 is texture/rotation; bit 1 is MaterialX.
+  const directionFlags = !!(materialHooks.graph || materialHooks.materialXNormals);
   return /* wgsl */ `
 const OPENPBR_LOBE_FUZZ: i32 = 0;
 const OPENPBR_LOBE_COAT: i32 = 1;
@@ -861,7 +864,10 @@ fn openpbr_prepare(
         max(material.specularAnisotropy, material.coatAnisotropy)
     );
 ${hasAnisotropyDirections ? /* wgsl */ `
-    prepared.coatBasis = prepared.basis;
+    ${directionFlags ? `    if((material.anisotropyDirectionEnabled & 2u) != 0u && max(material.specularAnisotropy,material.coatAnisotropy)>0.0) {
+      prepared.basis = openpbr_direction_basis(prepared.basis, material.geometryTangent, material.geometryBitangent, vec2f(1.0,0.0));
+    }
+` : ''}prepared.coatBasis = prepared.basis;
     prepared.directionFrames = false;
 ${hasCoatNormals ? /* wgsl */ `
     // Adobe c91aad1 openpbr_prepare_lobes: geometry_coat_basis is independent
@@ -871,7 +877,7 @@ ${hasCoatNormals ? /* wgsl */ `
         prepared.directionFrames = true;
     }
 ` : ''}
-    if ((material.specularAnisotropy > 0.0) & material.anisotropyDirectionEnabled) {
+    if ((material.specularAnisotropy > 0.0) & ${directionFlags ? "((material.anisotropyDirectionEnabled & 1u) != 0u)" : "material.anisotropyDirectionEnabled"}) {
         prepared.basis = openpbr_direction_basis(prepared.basis, material.directionTangent, material.directionBitangent, material.anisotropyDirection);
         prepared.directionFrames = true;
     }

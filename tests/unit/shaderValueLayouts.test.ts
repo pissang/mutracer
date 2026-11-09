@@ -32,8 +32,7 @@ describe('megakernel value-layout contracts',()=>{
     for(const frames of [false,true])for(const sceneAlpha of [false,true])for(const compactVertices of [false,true])for(const specialized of [false,true]) {
         it(`keeps value layouts (frames=${frames}, alpha=${sceneAlpha}, compact=${compactVertices}, graph=${specialized})`,()=>{
             gpu();
-            const source=rayTrace({hasDisplacement:false,hasAnisotropyDirections:frames,hasCoatNormals:frames,hasAlpha:true,hasSceneAlpha:sceneAlpha,compactVertices});
-            const generated=specialized?materialGraphShaderIR(source,[graph]):source;
+            const generated=rayTrace({hasDisplacement:false,hasAnisotropyDirections:frames,hasCoatNormals:frames,hasAlpha:true,hasSceneAlpha:sceneAlpha,compactVertices,materialHooks:specialized?materialGraphShaderIR([graph],frames):{}});
             const original=makeShaderDataDefinitions(generated),definitions=valueDefinitions(generated);
             for(const [name,expected] of Object.entries(frames?layouts.frames:layouts.plain)) {
                 const struct=definitions.structs[name];

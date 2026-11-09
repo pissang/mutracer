@@ -1,9 +1,10 @@
-import original from './aovTrace.wgsl.js';
+import {createAovTraceWgsl} from './aovTrace.wgsl.js';
+import type {MaterialShaderHooks} from './materialShaderHooks.js';
 import {aovCompactStorage} from './aovCompact.wgsl.js';
 
 // Web-only storage specialization. The default shader (also used by native)
 // remains byte-identical; geometry/material evaluation comes from that source.
-export default aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + original
+export function createAovTraceDisplayWgsl(materialHooks: MaterialShaderHooks = {}) { return aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + createAovTraceWgsl(materialHooks)
   .replace(`var<storage, read_write> aovAccum: array<AovAccumulation>;`, `var<storage, read_write> aovAccum: array<u32>;`)
   .replace(`fn aovMatrix(`, /* wgsl */ `fn aovLoad(index: u32) -> AovAccumulation {
   if(AOV_COMPACT){
@@ -54,3 +55,5 @@ fn aovMatrix(`)
   if (!AOV_DISPLAY && AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {`)
   .replace(`pixel.diffuse+=vec4f(reflectance.diffuse,1.0);`, `if ((aovParameters.w & 8u) != 0u) { pixel.diffuse+=vec4f(reflectance.diffuse,1.0); }`)
   .replace(`pixel.specular+=vec4f(reflectance.specular,1.0);`, `if ((aovParameters.w & 16u) != 0u) { pixel.specular+=vec4f(reflectance.specular,1.0); }`);
+}
+export default createAovTraceDisplayWgsl();

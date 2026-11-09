@@ -17,8 +17,8 @@ describe('material graphs in production shader builds',()=>{
   expect(graph.diagnostics).toEqual([]);
   const plan={key:graph.key,graphs:[graph],structures:[graph]};
   const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
-  const source=(loader:typeof original)=>loader('src/renderer/wgsl/rayTrace.compute.ts').default(options);
-  const full=materialGraphShader(source(original),plan),compact=materialGraphShader(source(stripped),plan);
+  const source=(loader:typeof original)=>loader('src/renderer/wgsl/rayTrace.compute.ts').default({...options,materialHooks:materialGraphShader(plan)});
+  const full=source(original),compact=source(stripped);
   expect(tokens(compact)).toEqual(tokens(full));
   expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();
  });

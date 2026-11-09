@@ -3,7 +3,10 @@ import rayTraceCompute, {type RayTraceInputHooks} from './wgsl/rayTrace.compute.
 import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
+import type {MaterialShaderHooks} from './wgsl/materialShaderHooks.js';
+
 export interface WGPUShaderFeatures {
+  materialHooks?: MaterialShaderHooks;
   /** Native wgpu binding arrays. Default false. */
   independentTextures?: boolean;
   /** Internal host budget. Default 20 preserves native shader generation. */

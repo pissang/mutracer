@@ -73,7 +73,7 @@ describe('MaterialX numeric semantics', () => {
         const division=run('divide',{in1:f(1),in2:f(2)});
         const singular={...division,parameters:[1,0]};
         expect(generateGraph(division).source).toBe(generateGraph(singular).source);
-        expect(materialGraphShader('unchanged', { key: '', graphs: [], structures: [] })).toBe('unchanged');
+        expect(materialGraphShader({ key: '', graphs: [], structures: [] })).toEqual({});
     });
     it('merges repeated expressions without aliasing independent parameters',()=>{
         const input={type:'float' as const,connection:{node:'parts',output:'outx'}};

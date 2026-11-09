@@ -1,6 +1,7 @@
+import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
-export default /* wgsl */ `
+export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}) { return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;
 struct AovAccumulation {
@@ -29,7 +30,7 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
   for (var layer = 0; layer < 32; layer++) {
     intersectScene(ray, si, 0, false, false);
     if (!(*si).hit) { return false; }
-    getMaterial(material, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
+    ${materialCall('material', '(*si)', materialHooks)}
     if ((*material).materialType != SHADOW_CATCHER && (*material).alpha >= 0.5) { return true; }
     ray.o = (*si).position + ray.d * (EPS * 0.02);
   }
@@ -120,3 +121,5 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,3.0);
 }
 `;
+}
+export default createAovTraceWgsl();

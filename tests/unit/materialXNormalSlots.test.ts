@@ -9,7 +9,6 @@ import {createPlaneGeometry} from '../../src/util/commonGeometry.js';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
 import WGPURayTracePass from '../../src/renderer/WGPURayTracePass.js';
 import {causticLightCompute} from '../../src/renderer/wgsl/causticLight.compute.js';
-import {materialXNormalShader} from '../../src/renderer/materialXNormal.js';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import MaterialGraph from '../../src/scene/MaterialGraph.js';
@@ -37,14 +36,14 @@ describe('MaterialX normal texture slots',()=>{
   expect(receiver._constants).not.toHaveProperty('USE_MATERIALX_NORMAL_MAPS');
  });
  it.each(['lightTracing','photonMapping'] as const)('specializes the %s emitter without a separate material layout',mode=>{
-  gpu();const source=causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32,USE_ANISOTROPY_DIRECTIONS:true,USE_COAT_NORMAL_FRAMES:true},1,false,mode);
-  expect(makeShaderDataDefinitions(materialXNormalShader(source)).entryPoints.main).toBeDefined();
+  gpu();const source=causticLightCompute({NUM_MAPS:1,NUM_UNIFORM_LIGHTS:1,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32,USE_ANISOTROPY_DIRECTIONS:true,USE_COAT_NORMAL_FRAMES:true},1,false,mode,'',true,false,false,false,false,{materialXNormals:true});
+  expect(makeShaderDataDefinitions(source).entryPoints.main).toBeDefined();
  });
  it.each([false,true])('specializes compressed shaders and composes with graphs (compact=%s)',compactVertices=>{
   gpu();const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
-  const shader=(loader:typeof original)=>materialXNormalShader(loader('src/renderer/wgsl/rayTrace.compute.ts').default(options));
+  const shader=(loader:typeof original)=>loader('src/renderer/wgsl/rayTrace.compute.ts').default({...options,materialHooks:{materialXNormals:true}});
   const full=shader(original),compact=shader(stripped);expect(tokens(compact)).toEqual(tokens(full));expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();
   const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category:'normalmap',type:'vector3'}],terminal:{normal:{node:'n'}}}));
-  expect(makeShaderDataDefinitions(materialGraphShader(compact,{key:graph.key,graphs:[graph],structures:[graph]})).entryPoints.main).toBeDefined();
+  expect(makeShaderDataDefinitions(stripped('src/renderer/wgsl/rayTrace.compute.ts').default({...options,materialHooks:{...materialGraphShader({key:graph.key,graphs:[graph],structures:[graph]}),materialXNormals:true}})).entryPoints.main).toBeDefined();
  });
 });
