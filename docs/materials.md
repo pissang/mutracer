@@ -131,7 +131,7 @@ an alternate serialization format.
 | --- | --- | --- |
 | `map` | RGB (sRGB), A | Multiplies `baseColor`; alpha use set by `mapAlphaUsage` |
 | `alphaMap` | G | Opacity, as in Three.js |
-| `normalMap`, `normalScale` | RGB | Tangent space; uses triangle UV derivatives |
+| `normalMap`, `normalScale` | RGB | Tangent space; frame selected by `Texture.normalMapFrame` |
 | `metallicRoughnessMap` | G = roughness, B = metalness | glTF convention |
 | `roughnessMap` | G | |
 | `metalnessMap` | B | |
@@ -146,6 +146,13 @@ an alternate serialization format.
 | `fuzzRoughnessMap` | Linear A | Multiplies `fuzzRoughness` |
 | `specularWeightMap` | Linear A | Multiplies `specularWeight`, for dielectric and metal |
 | `specularColorMap` | sRGB RGB | Decoded color multiplies `specularColor`, for dielectric and metal |
+
+Normal textures default to `normalMapFrame: 'cotangent'`, using triangle UV
+derivatives. Set the texture's `normalMapFrame` to `'materialx'` to match
+MaterialX tangent-space `normalmap`: it uses normalized world-space primary
+tangents and the vertex normal, and black texels keep the vertex normal.
+The frame uses primary UVs even when the image samples UV1. Both modes work
+on WebGPU and WebGL 2.
 
 All six layer maps default to `undefined`. They resolve before coat roughening
 and BSDF preparation. Images may be shared between color and data slots;
@@ -423,13 +430,15 @@ compile after a short debounce. During compilation, rendering uses the previous
 successful graph and its parameters; the first graph uses the material's constants
 and maps. A successful installation restarts accumulation. Compilation can take
 hundreds of milliseconds or longer and becomes more expensive as a scene uses
-more distinct structures. WebGL's background compilation depends on
-`KHR_parallel_shader_compile`. The first use of a new program can still take
-seconds of driver work. Synchronous HDR readback or other application GL queries
-during that work can block the main thread, including when the extension is
-available. Rendering calls can also pause while new texture/resource layouts are
-prepared or the driver command queue fills. Such changes may keep the last image
-until that support is ready.
+more distinct structures. Texture/resource changes can also pause rendering
+while the last image remains visible.
+Graphs add work at each material hit; opacity graphs also run for shadow rays.
+Ordinary materials in the same scene do not evaluate the graph's nodes.
+The viewer imports representable MaterialX image networks as ordinary texture
+slots, preserving their color encoding, channels, UV set and transforms.
+Networks requiring unsupported slot operations retain their graph; these need
+WebGPU for graph evaluation. Equivalent slot and graph paths can differ in
+floating-point rounding and later ray-path choices.
 Each material retains its own parameters even when it shares graph code; parameter
 memory grows with its reachable inputs and folded values.
 

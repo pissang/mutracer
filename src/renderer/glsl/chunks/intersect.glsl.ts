@@ -694,7 +694,11 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
 #endif
   vec4 directionMaterial = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DIRECTION_NORMAL);
   float coatRotation = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_FILM_TEXTURE).x;
-  if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0
+  if (
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    fract(fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_ROUGHNESS_NORMAL).y) > 0.25 ||
+#endif
+    directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0
 #ifdef USE_COAT_NORMAL_FRAMES
     || fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_COAT).w > 0.0
 #endif
@@ -712,7 +716,11 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     si.geometryBitangent = geometryAxes[1];
     mat2x3 directionAxes = geometryAxes;
 #ifdef NUM_ANISOTROPY_MAPS
-    if (directionMaterial.x >= 0.0 && mapUvChannel[int(directionMaterial.x)] > 0.5) {
+    if (
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    fract(fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_ROUGHNESS_NORMAL).y) > 0.25 ||
+#endif
+    directionMaterial.x >= 0.0 && mapUvChannel[int(directionMaterial.x)] > 0.5) {
       vec2 a = fetchVertexUv1(index.x);
       vec2 b = fetchVertexUv1(index.y);
       vec2 c = fetchVertexUv1(index.z);
@@ -977,6 +985,9 @@ ${getBVHTraverseCode(glsl`
     si.geometryTangent = mat3(l2w) * si.geometryTangent;
     si.geometryBitangent = mat3(l2w) * si.geometryBitangent;
     si.position = (l2w * vec4(si.position, 1.0)).xyz;
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    materialx_normal(si);
+#endif
   }
 }
 
@@ -1045,6 +1056,9 @@ ${getBVHTraverseCode(
     si.geometryTangent = mat3(l2w) * si.geometryTangent;
     si.geometryBitangent = mat3(l2w) * si.geometryBitangent;
     si.position = (l2w * vec4(si.position, 1.0)).xyz;
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    materialx_normal(si);
+#endif
   }
 }
 

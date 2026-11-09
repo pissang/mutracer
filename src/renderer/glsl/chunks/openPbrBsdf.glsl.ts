@@ -962,6 +962,11 @@ OpenPbrPreparedBsdf openpbr_prepare(
         normal,
         max(material.specularAnisotropy, material.coatAnisotropy)
     );
+#ifdef USE_MATERIALX_NORMAL_MAPS
+    if ((material.anisotropyDirectionEnabled & 2) != 0 && max(material.specularAnisotropy, material.coatAnisotropy) > 0.0) {
+      prepared.basis = openpbr_direction_basis(prepared.basis, material.geometryTangent, material.geometryBitangent, vec2(1.0, 0.0));
+    }
+#endif
     prepared.coatBasis = prepared.basis;
     prepared.directionFrames = false;
 #ifdef USE_COAT_NORMAL_FRAMES
@@ -972,7 +977,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
         prepared.directionFrames = true;
     }
 #endif
-    if (material.specularAnisotropy > 0.0 && material.anisotropyDirectionEnabled) {
+    if (material.specularAnisotropy > 0.0 && (material.anisotropyDirectionEnabled & 1) != 0) {
         prepared.basis = openpbr_direction_basis(prepared.basis, material.directionTangent, material.directionBitangent, material.anisotropyDirection);
         prepared.directionFrames = true;
     }

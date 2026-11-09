@@ -116,11 +116,11 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
 export const MATERIAL_KEYS = [...new Set([
   ...MATERIAL_GROUPS.flatMap((g) => g.params.map((p) => p.key)),
   'displacementStepSize', 'displacementUvProjection', 'displacementUvProjectionScale',
-  'alphaMode', 'alphaCutoff', 'specularColor', 'subsurfaceRadiusScale', 'baseWeight', 'coatColor', 'coatAnisotropy', 'coatDarkening', 'fuzzColor', 'transmissionScatter', 'transmissionScatterAnisotropy', 'subsurfaceAnisotropy'
+  'normalScale', 'mapAlphaUsage', 'alphaMode', 'alphaCutoff', 'specularColor', 'subsurfaceRadiusScale', 'baseWeight', 'coatColor', 'coatAnisotropy', 'coatDarkening', 'fuzzColor', 'transmissionScatter', 'transmissionScatterAnisotropy', 'subsurfaceAnisotropy'
 ] as const)];
 export type DisplacementProjection = OpenPBRMaterial['displacementUvProjection'];
 export const DISPLACEMENT_PROJECTIONS: DisplacementProjection[] = ['none', 'triplanar', 'spherical', 'cylindrical'];
-export type MaterialValues = Partial<Record<(typeof MATERIAL_KEYS)[number], number | boolean | [number, number, number] | DisplacementProjection | OpenPBRMaterial['alphaMode']>>;
+export type MaterialValues = Partial<Record<(typeof MATERIAL_KEYS)[number], number | boolean | [number, number] | [number, number, number] | OpenPBRMaterial['mapAlphaUsage'] | DisplacementProjection | OpenPBRMaterial['alphaMode']>>;
 
 export function readMaterial(material: OpenPBRMaterial): MaterialValues {
   const values: MaterialValues = {};

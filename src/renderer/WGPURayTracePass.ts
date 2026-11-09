@@ -1,3 +1,5 @@
+import {materialXNormalShader} from './materialXNormal.js';
+import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
@@ -930,9 +932,10 @@ class WGPURayTracePass {
       this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
       const graphPlan = this.graphs.candidate(!!this._rayTracePipeline);
+      const graphConstants = materialGraphConstants(this._constants, graphPlan, this._preparedMeshData?.geometry);
       const pipelineInputs = JSON.stringify([
         graphPlan.key,
-        this._constants,
+        graphConstants,
         Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
         this._hasDisplacement,
         this._alphaBlendStrategy,
@@ -941,7 +944,7 @@ class WGPURayTracePass {
         this._causticKey,
         !!this._bindless
       ]);
-      // Steady rendering must not repeat capability selection and cache-key
+      // Steady rendering must not repeat capability retention and pipeline-key
       // preparation. Dirty resources still take the normal bind-group path.
       if (
         pipelineInputs === this._activeInputs &&
@@ -956,17 +959,6 @@ class WGPURayTracePass {
         }
         this._requestedVariant = this._activeVariant;
         return;
-      }
-      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
-      const graphConstants = {...this._constants};
-      if(graphPlan.key) {
-        graphConstants.USE_ANISOTROPY_DIRECTIONS = true;
-        if(graphPlan.structures.some(g => 'normal' in g.terminal))graphConstants.USE_COAT_NORMAL_FRAMES = true;
-        graphConstants.USE_TANGENT = this._preparedMeshData?.geometry.tangent != null;
-        graphConstants.USE_UV1 = this._preparedMeshData?.geometry.uv1 != null;
-        if(graphPlan.structures.some(g => 'opacity' in g.terminal)){graphConstants.HAS_ALPHA=true;graphConstants.HAS_ALPHA_MASK=true;graphConstants.HAS_ALPHA_BLEND=true;}
-        graphConstants.HAS_COAT = true; graphConstants.HAS_FUZZ = true; graphConstants.HAS_THIN_FILM = true;
-        graphConstants.MATERIAL_CAPABILITIES = Number(graphConstants.MATERIAL_CAPABILITIES) | 3;
       }
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(graphConstants);
       const requiredCapabilities = retainedShaderCapabilities(graphConstants);
@@ -1095,8 +1087,9 @@ class WGPURayTracePass {
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
-      const code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
+      let code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
         causticDiagnostics.fullEmissionRandom !== false, true, true, false, true);
+      if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1154,6 +1147,7 @@ class WGPURayTracePass {
           },
           bake
         );
+        if(constants.USE_MATERIALX_NORMAL_MAPS)code=materialXNormalShader(code);
         code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan);
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
@@ -2618,6 +2612,8 @@ class WGPURayTracePass {
     const hasDisplacement = materialData.getDisplacementMaps().length > 0;
     this._hasDisplacement = hasDisplacement;
 
+    // Optional source specializations must disappear when their last map is removed.
+    delete this._constants.USE_MATERIALX_NORMAL_MAPS;
     Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
       this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
     // Runtime storage metadata has no texture-count specialization.

@@ -20,7 +20,7 @@ import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './
 // Keep the importer in the initial module graph: a tab can stay open across
 // deployments that remove the previous build's lazily loaded chunks.
 import { parseMaterialXGraph } from './materialxGraph';
-import { loadGraphImages, loadMapImage, readMaterialXPackage, loadMaterialXDisplacement } from './materialxFiles';
+import { loadDirectMaterialX, loadGraphImages, loadMapImage, readMaterialXPackage, loadMaterialXDisplacement } from './materialxFiles';
 import { parseMaterialX } from './materialx';
 
 export const MATERIALX_IMPORT = true;
@@ -1357,7 +1357,8 @@ export class ViewerEngine {
       const pkg=await readMaterialXPackage(files), material=parseMaterialXGraph(pkg.text);
       name=material.name;
       const warnings=[...material.warnings];
-      if(material.graph||material.displacement)warnings.push(...await loadGraphImages(material,pkg));
+      const direct=await loadDirectMaterialX(material,pkg);
+      if((!direct&&material.graph)||material.displacement)warnings.push(...await loadGraphImages(material,pkg));
       const maps:Partial<Record<TextureKey,Blob|null>>=Object.fromEntries(TEXTURE_KEYS.map(key=>[key,null]));
       let fallbackValues:MaterialValues={};
       // Keep the previous importer's values/maps as the explicit fallback while
@@ -1368,17 +1369,18 @@ export class ViewerEngine {
           try{maps[slot as TextureKey]=await loadMapImage(plan!,pkg);}catch(error){warnings.push(`texture ${(error as Error).message}`);}
         }));
       } catch { /* Unsupported surface families retain the neutral material. */ }
+      if(direct)Object.assign(maps,Object.fromEntries(TEXTURE_KEYS.map(key=>[key,direct.maps[key]??null])));
       let displacement:Awaited<ReturnType<typeof loadMaterialXDisplacement>>;
       try{displacement=await loadMaterialXDisplacement(material,pkg);}
       catch(error){warnings.push(`displacement: ${(error as Error).message}`);displacement={file:null,values:{displacementScale:0,displacementBias:0},warnings:[]};}
       if(displacement){maps.displacementMap=displacement.file;warnings.push(...displacement.warnings);}
       signal?.throwIfAborted();
       if(token!==this.loadToken||imports.get(materialId)!==request||this.modelGroup!==model)return false;
-      const applied=await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...displacement?.values},`${name} MaterialX`,undefined,undefined,material.graph??null,displacement?.transform?{displacementMap:displacement.transform}:undefined,signal);
+      const applied=await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...direct?.values,...displacement?.values},`${name} MaterialX`,undefined,undefined,direct?null:material.graph??null,{...direct?.transforms,...(displacement?.transform?{displacementMap:displacement.transform}:{})},signal);
       if(!applied||signal?.aborted)return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
-      showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}${material.graph?' · compiling material graph':''}`,warnings.length?'warning':'success');
+      showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}${material.graph&&!direct?' · compiling material graph':''}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
       if(signal?.aborted||imports.get(materialId)!==request||this.modelGroup!==model)return false;

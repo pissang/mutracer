@@ -12,6 +12,6 @@ exports[`caustic contracts > preserves published light and photon transport sour
 
 exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"50fd60d65b48054ef4daccc917586ccb98d299c9064ec75b4dd1c635cd8ef002"`;
 
-exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"c40a4087ecfa42b8feb9adf5b7d0aa26da9b2d7f603dacb3fc8f8be57ac04b24"`;
+exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"c4a33ece4808d23bb05591363dbf01b4efd6ab97605d23239ed210457032f4b4"`;
 
 exports[`caustic contracts > preserves the disabled shader across caustic switch settings > WGSL off 1`] = `"2782415b75e4287e577e333bf7264e5ea744b5d38738fcf1f5ee7087dc8e9dde"`;

@@ -120,7 +120,7 @@ struct OpenPbrResolvedMaterial {
   float coatRoughness;
   float coatAnisotropy;
   vec2 anisotropyDirection;
-  bool anisotropyDirectionEnabled;
+  int anisotropyDirectionEnabled;
   float coatAnisotropyRotation;
   vec3 directionTangent;
   vec3 directionBitangent;

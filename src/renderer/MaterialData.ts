@@ -33,7 +33,7 @@ export default class MaterialData {
     this.bufferData = createMaterialBufferData(materials);
     this.bufferData.diffuseMapIndex = maps.indices.map;
     this.bufferData.alphaMapIndex = maps.indices.alphaMap;
-    this.bufferData.normalMapIndex = maps.indices.normalMap;
+    this.bufferData.normalMapIndex = maps.indices.normalMap.map((index,i)=>index>=0&&materials[i].normalMap?.normalMapFrame==='materialx'?index+0.5:index);
     this.bufferData.emissiveMapIndex = maps.indices.emissiveMap;
     this.bufferData.metallicRoughnessMapIndex = maps.indices.metallicRoughnessMap;
     this.bufferData.roughnessMapIndex = maps.indices.roughnessMap;
@@ -65,7 +65,7 @@ export default class MaterialData {
       return texture ? this.textures.indexOf(texture) : -1;
     });
     this.bufferData.diffuseMapIndex = indices('map'); this.bufferData.alphaMapIndex = indices('alphaMap');
-    this.bufferData.normalMapIndex = indices('normalMap'); this.bufferData.emissiveMapIndex = indices('emissiveMap');
+    this.bufferData.normalMapIndex = indices('normalMap').map((index,i)=>index>=0&&materials[i].normalMap?.normalMapFrame==='materialx'?index+0.5:index); this.bufferData.emissiveMapIndex = indices('emissiveMap');
     this.bufferData.metallicRoughnessMapIndex = indices('metallicRoughnessMap'); this.bufferData.roughnessMapIndex = indices('roughnessMap');
     this.bufferData.metalnessMapIndex = indices('metalnessMap'); this.bufferData.transmissionMapIndex = indices('transmissionMap');
     this.bufferData.thinFilmMapIndex = indices('thinFilmMap'); this.bufferData.displacementMapIndex = indices('displacementMap');
