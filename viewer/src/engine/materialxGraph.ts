@@ -35,8 +35,9 @@ class Reader {
         if(e?.attrs.nodegraph){const graph=child(this.root,e.attrs.nodegraph);return this.source(graph?.children.find(c=>c.tag==='output'&&(!e.attrs.output||c.attrs.name===e.attrs.output)));}
     }
     displacement(material:Element,shader:Element):DisplacementPlan|undefined {
-        const port=input(material,'displacementshader'),node=this.source(port);
-        if(port&&node?.tag!=='displacement')return {graph:new MaterialGraph(),mode:'fallback',uvChannel:0,reason:`${path(material)}.displacementshader: unsupported displacement shader ${node?.tag??'missing node'}`};
+        // An unconnected displacementshader input means no displacement.
+        const port=input(material,'displacementshader'),linked=!!(port?.attrs.nodename||port?.attrs.nodegraph),node=this.source(port);
+        if(linked&&node?.tag!=='displacement')return {graph:new MaterialGraph(),mode:'fallback',uvChannel:0,reason:`${path(material)}.displacementshader: unsupported displacement shader ${node?.tag??'missing node'}`};
         const height=node?input(node,'displacement'):shader.tag==='UsdPreviewSurface'?input(shader,'displacement'):undefined;
         if(!height)return;
         const value=this.resolve(height,literal('float',0));

@@ -56,3 +56,9 @@ describe('MaterialX height displacement',()=>{
   expect(()=>quantizeHeight(new Float32Array([NaN]))).toThrow('non-finite');
  });
 });
+
+it('treats an unconnected displacement shader input as no displacement',()=>{
+  const material=(port:string)=>parseMaterialXGraph(`<materialx version="1.39"><standard_surface name="S" type="surfaceshader"/><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/>${port}</surfacematerial></materialx>`);
+  expect(material('<input name="displacementshader" type="displacementshader"/>').displacement).toBeUndefined();
+  expect(material('<input name="displacementshader" type="displacementshader" nodename="Missing"/>').displacement?.reason).toContain('missing node');
+});
