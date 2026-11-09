@@ -1,25 +1,25 @@
 //! glTF-to-descriptor adapter; all renderer preparation stays in the AOT library.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3};
-use mutracer_native_probe::layout::light as light_wire;
+use mutracer_native::layout::light as light_wire;
 #[cfg(test)]
-use mutracer_native_probe::layout::{header as h, texture as tex};
+use mutracer_native::layout::{header as h, texture as tex};
 use std::{path::Path, sync::Arc};
 
-pub use mutracer_native_probe::scene_api::Geometry;
+pub use mutracer_native::scene_api::Geometry;
 #[cfg(test)]
-pub use mutracer_native_probe::scene_api::MaterialLayers;
-pub use mutracer_native_probe::scene_api::viewer_support::Descriptor;
+pub use mutracer_native::scene_api::MaterialLayers;
+pub use mutracer_native::scene_api::viewer_support::Descriptor;
 #[cfg(test)]
-pub use mutracer_native_probe::scene_api::viewer_support::material_values;
-pub use mutracer_native_probe::scene_api::viewer_support::{Material, Mesh, Texture};
+pub use mutracer_native::scene_api::viewer_support::material_values;
+pub use mutracer_native::scene_api::viewer_support::{Material, Mesh, Texture};
 #[derive(Clone)]
 pub struct Model(
-    pub mutracer_native_probe::scene_api::viewer_support::Model,
+    pub mutracer_native::scene_api::viewer_support::Model,
     pub crate::model_scene::Scene,
 );
 impl std::ops::Deref for Model {
-    type Target = mutracer_native_probe::scene_api::viewer_support::Model;
+    type Target = mutracer_native::scene_api::viewer_support::Model;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -36,7 +36,7 @@ impl Model {
     pub fn load_with_hdr(path: &Path, hdr: Option<&Path>) -> Result<Self> {
         let entry = crate::model_files::resolve(path)?;
         let path = entry.model.as_path();
-        let bytes = mutracer_native_probe::scene_api::viewer_support::Model::read(path)?;
+        let bytes = mutracer_native::scene_api::viewer_support::Model::read(path)?;
         let mut json = crate::examples::model_json(&bytes)?;
         // The viewer handles punctual lights, including their required extension.
         let mut patched = false;
@@ -52,7 +52,7 @@ impl Model {
         } else {
             bytes
         };
-        let mut model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
+        let mut model = mutracer_native::scene_api::viewer_support::Model::load_bytes(
             &bytes,
             Some(path),
         )?;
@@ -263,8 +263,8 @@ impl Model {
         &self,
         environment: &Environment,
         light: &KeyLight,
-    ) -> mutracer_native_probe::scene_api::Scene {
-        use mutracer_native_probe::scene_api::viewer_support as encoder;
+    ) -> mutracer_native::scene_api::Scene {
+        use mutracer_native::scene_api::viewer_support as encoder;
         let mut lights = environment
             .studio
             .records(self.center, self.radius, self.ground_y);
@@ -309,7 +309,7 @@ impl Model {
         .to_scene(&env)
         .expect("Validated imported scene");
         if environment.ground_shadow {
-            use mutracer_native_probe::scene_api::{Geometry, Mesh, OpenPbrMaterial};
+            use mutracer_native::scene_api::{Geometry, Mesh, OpenPbrMaterial};
             let h = self.radius * 6.;
             let geometry = scene
                 .add_geometry(Geometry::new(
@@ -346,7 +346,7 @@ impl Model {
                 .unwrap_or((self.radius * 4.).max(1.6));
             scene
                 .set_grounded_background(Some(
-                    mutracer_native_probe::scene_api::GroundedBackground {
+                    mutracer_native::scene_api::GroundedBackground {
                         height,
                         radius: environment.grounded_radius.unwrap_or(height * 20.),
                         ground_height: self.ground_y,

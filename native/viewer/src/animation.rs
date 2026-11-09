@@ -3,7 +3,7 @@ use crate::scene::Model;
 #[cfg(test)]
 use glam::{Mat4, Vec3};
 #[cfg(test)]
-use mutracer_native_probe::scene_api::viewer_support::Animation;
+use mutracer_native::scene_api::viewer_support::Animation;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]

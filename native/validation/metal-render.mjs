@@ -14,7 +14,7 @@ function run(name, command, args) {
   if (r.error || r.status !== 0) throw Error(`${name} failed; see ${out}/${name}.log`);
   return r.stdout;
 }
-run('build', 'clang', ['-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/metal-host.m', '-framework', 'Foundation', '-framework', 'Metal', '-L', resolve(target, 'release'), '-lmutracer_native_probe', '-Wl,-rpath,' + resolve(target, 'release'), '-o', executable]);
+run('build', 'clang', ['-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/metal-host.m', '-framework', 'Foundation', '-framework', 'Metal', '-L', resolve(target, 'release'), '-lmutracer', '-Wl,-rpath,' + resolve(target, 'release'), '-o', executable]);
 const startedAt = new Date().toISOString(), results = [];
 for (const backend of [0, 1]) {
   const mode = process.argv.includes('--gpu-timing') ? '--gpu-timing' : process.argv.includes('--bench') ? '--bench' : process.argv.includes('--shared') ? '--shared' : '--check';

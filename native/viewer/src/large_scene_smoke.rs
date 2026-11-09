@@ -7,7 +7,7 @@ use anyhow::{Result, ensure};
 use std::{path::Path, time::Instant};
 pub fn run(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
-    mutracer_native_probe::logging::stderr();
+    mutracer_native::logging::stderr();
     let mode: u32 = std::env::var("MUTRACER_SCENE_BACKEND")
         .unwrap_or_else(|_| "1".into())
         .parse()?;

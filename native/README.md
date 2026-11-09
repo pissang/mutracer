@@ -9,7 +9,7 @@ C ABI can change between versions.
 
 | Platform | GPU API | Status |
 | --- | --- | --- |
-| macOS arm64 | Metal | Supported; GPU rendering verified |
+| macOS arm64 (14.0+) | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
 | Windows x64 | DX12 or Vulkan | MSVC build; GPU behavior unverified; viewer from CI artifacts only |
 
@@ -23,7 +23,7 @@ and optional OIDN with a caller-supplied runtime.
 
 ## APIs
 
-| Task | Rust (`mutracer_native_probe`) | C header | Guide |
+| Task | Rust (`mutracer_native`) | C header | Guide |
 | --- | --- | --- | --- |
 | Build, edit or import a scene | `scene_api::Scene` | `mutracer-scene-api.h` | [Scenes](docs/scene.md), [glTF](docs/gltf.md) |
 | Render offline or interactively | `api::{Engine, Render, RenderLoop}` | `mutracer-engine.h` | [Engine](docs/engine.md) |
@@ -40,6 +40,10 @@ and lifetime. The guides cover workflows and behavior across calls.
 
 ## Build and link
 
+The crate is now `mutracer-native` (Rust `mutracer_native`), replacing
+`mutracer-native-probe` (`mutracer_native_probe`); C consumers link `mutracer`
+instead of `mutracer_native_probe`. The CMake target names are unchanged.
+
 ### Precompiled C SDK
 
 Extract the SDK archive for your OS and CPU architecture, then set
@@ -55,7 +59,7 @@ target_link_libraries(my_renderer PRIVATE MuTracer::mutracer)
 ```
 
 ```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/MuTracer-SDK-PLATFORM
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/MuTracer-SDK-VERSION-PLATFORM
 cmake --build build --config Release
 ```
 
@@ -84,18 +88,18 @@ The build writes the core archive to `.native-build/scene-core/render-core.lib.a
 `.native-build/scene-core/cargo-target/release/`, and runs CPU-only checks.
 Set `MUTRACER_NATIVE_OUTPUT` to use another directory.
 
-- **Rust**: depend on the `mutracer-native-probe` crate in `native/host` by path,
+- **Rust**: depend on the `mutracer-native` crate in `native/host` by path,
   and set `MUTRACER_AOT_ARCHIVE` to the archive's absolute path when building.
   The default `gltf` feature provides [glTF import](docs/gltf.md). With the
   same variable set, `cargo doc --no-deps --manifest-path native/host/Cargo.toml --open`
   builds and opens the Rust API reference.
 - **C**: add `native/include` to the include path and link the shared library
-  `mutracer_native_probe`:
+  `mutracer`:
 
 ```bash
 LIB="$PWD/.native-build/scene-core/cargo-target/release"
 cc -I native/include native/examples/minimal-host.c -L "$LIB" \
-  -lmutracer_native_probe -Wl,-rpath,"$LIB" -lm -pthread -o minimal-host
+  -lmutracer -Wl,-rpath,"$LIB" -lm -pthread -o minimal-host
 ```
 
 ## Quick start
@@ -103,7 +107,7 @@ cc -I native/include native/examples/minimal-host.c -L "$LIB" \
 Build a scene, render 8 samples and read linear HDR pixels:
 
 ```rust
-use mutracer_native_probe::{api, scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene}};
+use mutracer_native::{api, scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene}};
 
 let mut scene = Scene::new();
 let geometry = scene.add_geometry(Geometry::new(
@@ -243,8 +247,9 @@ increases whenever a C declaration or record layout changes incompatibly.
 When loading a library dynamically, resolve and call `mt_abi_version()` first;
 reject the library if it differs from the `MT_ABI_VERSION` you compiled against.
 
-The CMake package version follows the native Rust crate version, independently
-of the ABI number and the browser library's version. A package version alone
+The archive name, `MT_SDK_VERSION` in `mutracer-version.h` and the CMake package
+version follow the native Rust crate version, independently of the ABI number
+and the browser library's version. A package version alone
 does not establish ABI compatibility. Versioned `find_package` requests accept
 only the exact package version. After `find_package(MuTracer CONFIG REQUIRED)`,
 read `MuTracer_ABI_VERSION` to check the package's ABI at configure time; the
@@ -257,7 +262,8 @@ default to hardware ray tracing (HWRT); software BVH traversal is the
 alternative. Unsupported devices and acceleration-structure limits or
 allocation failures fall back to software. `Render::backend` /
 `mt_render_info` and `mt_context_backend` report the path actually used and
-the fallback reason.
+the fallback reason. Metal HWRT requires macOS 15.0+ and a compatible GPU;
+macOS 14 uses software traversal.
 
 HWRT supports alpha materials, bevel, displacement and affine instances.
 Acceleration structures add build time and memory; any speedup depends on the

@@ -3,7 +3,7 @@
 //! `cargo run --example adapter-validation -- INDEX software|hardware adapter|device OUT [4k|limits]`
 use anyhow::{Result, ensure};
 use glam::Mat4;
-use mutracer_native_probe::{
+use mutracer_native::{
     api::{
         Backend, Camera, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
         RenderSize,

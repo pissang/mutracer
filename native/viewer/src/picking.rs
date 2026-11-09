@@ -1,5 +1,5 @@
 //! Viewport queries share the committed renderer's GPU acceleration structures.
-use mutracer_native_probe::api::{self, SurfacePick};
+use mutracer_native::api::{self, SurfacePick};
 use std::sync::mpsc;
 
 pub enum Reply {

@@ -1,6 +1,6 @@
 [package]
-name = "mutracer-native-probe"
-version = "0.0.0"
+name = "mutracer-native"
+version = "0.1.0"
 edition = "2024"
 publish = false
 

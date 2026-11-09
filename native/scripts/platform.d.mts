@@ -1,3 +1,4 @@
+export const macosDeploymentTarget: string;
 export const windows: boolean;
 export const nativeTar: string;
 export const cCompiler: string;

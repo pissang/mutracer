@@ -19,7 +19,7 @@ function run(name,command,args){
   if(result.error||result.status!==0)throw Error(`${name} failed; see ${out}/${name}.log`);
   return result.stdout;
 }
-run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-I','native/include','-I',include,'native/examples/vulkan-host.c','-L',library,'-lmutracer_native_probe','-Wl,-rpath,'+library,...(process.platform==='linux'?['-ldl']:[]),'-o',binary]);
+run('build',cCompiler,['-std=c11','-Wall','-Wextra','-Werror','-I','native/include','-I',include,'native/examples/vulkan-host.c','-L',library,'-lmutracer','-Wl,-rpath,'+library,...(process.platform==='linux'?['-ldl']:[]),'-o',binary]);
 const results=[];
 for(const backend of process.argv.includes('--software-only')?[0]:[0,1]){
   const text=run('backend-'+backend,binary,[String(backend)]);

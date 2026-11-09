@@ -8,6 +8,15 @@ import tempfile
 import zipfile
 
 
+def check_archive(path):
+    with zipfile.ZipFile(path) as archive:
+        invalid = [name for name in archive.namelist()
+                   if any(part == "__MACOSX" or part.startswith("._")
+                          for part in name.replace("\\", "/").split("/"))]
+        if invalid:
+            raise ValueError(f"AppleDouble metadata in archive: {invalid}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", type=Path, help="Installed directory containing hdMuTracer/")
@@ -15,7 +24,7 @@ def main():
     args = parser.parse_args()
     integration = Path(__file__).resolve().parent
     root = integration.parents[2]
-    for name in ("libhdMuTracer.dylib", "libmutracer_native_probe.dylib", "resources/plugInfo.json"):
+    for name in ("libhdMuTracer.dylib", "libmutracer.dylib", "resources/plugInfo.json"):
         if not (args.plugin / "hdMuTracer" / name).is_file():
             parser.error(f"Missing Blender build artifact: {name}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -28,8 +37,12 @@ def main():
         shutil.copytree(root / "LICENSES", package / "LICENSES")
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(package.rglob("*")):
+                if any(part == "__MACOSX" or part.startswith("._")
+                       for part in path.relative_to(directory).parts):
+                    continue
                 if path.is_file() and not path.name.startswith("."):
                     archive.write(path, path.relative_to(directory))
+    check_archive(args.output)
     print(args.output)
 
 

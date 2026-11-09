@@ -470,7 +470,7 @@ impl Viewer {
             )
         };
         format!(
-            r#"use mutracer_native_probe::{{api::*, scene_api::Scene}};
+            r#"use mutracer_native::{{api::*, scene_api::Scene}};
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {{
     let imported = Scene::import_gltf("model.glb")?;

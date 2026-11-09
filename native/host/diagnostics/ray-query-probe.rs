@@ -32,7 +32,7 @@ fn ray(
     }
 }
 fn main() {
-    mutracer_native_probe::logging::stderr();
+    mutracer_native::logging::stderr();
     if let Err(e) = run() {
         eprintln!("{e}");
         std::process::exit(1);

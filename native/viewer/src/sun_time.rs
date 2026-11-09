@@ -529,7 +529,7 @@ mod tests {
     fn diagram_elevation_matches_the_shared_sky() {
         for hours in [5.5, 6., 9., 12., 15., 18., 18.5] {
             assert!(
-                (elevation(hours) - mutracer_native_probe::viewer_math::sun_position(hours)[0])
+                (elevation(hours) - mutracer_native::viewer_math::sun_position(hours)[0])
                     .abs()
                     < 0.00002
             );

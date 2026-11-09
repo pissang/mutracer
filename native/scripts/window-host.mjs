@@ -19,7 +19,7 @@ function run(name, command, args) {
   if (result.error || result.status !== 0) throw result.error ?? Error(`${name} failed; see ${out}/${name}.log`);
 }
 if(windows)run('build',cCompiler,['-std=c11','-I','native/include','native/examples/window-host.c','native/examples/window-win32.c',
-  '-L',dirname(resolve(library)),'-lmutracer_native_probe','-luser32','-o',executable]);
+  '-L',dirname(resolve(library)),'-lmutracer','-luser32','-o',executable]);
 else run('build', 'clang', ['-std=c11', '-I', 'native/include', 'native/examples/window-host.c',
   'native/examples/window-appkit.m', '-framework', 'AppKit', '-framework', 'QuartzCore',
   resolve(library), '-Wl,-rpath,' + dirname(resolve(library)), '-o', executable]);

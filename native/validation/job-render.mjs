@@ -23,7 +23,7 @@ run('context-validation',process.execPath,['native/validation/context-render.mjs
 // native:ci:hosts already ran the host tests.
 if(!process.env.MUTRACER_NATIVE_SCENE_OUTPUT)run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
 const host=resolve(out,executable('job-host'));
-run('job-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/job-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
+run('job-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/job-host.c','-L',resolve(target,'release'),'-lmutracer',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'raw/scene-verification.json'))).results;
 const results=[];
 for(const {variant} of fixtures){

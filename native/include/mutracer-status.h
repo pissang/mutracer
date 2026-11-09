@@ -1,6 +1,7 @@
 #ifndef MUTRACER_STATUS_H
 #define MUTRACER_STATUS_H
 #include <stdint.h>
+#include "mutracer-version.h"
 #ifdef __cplusplus
 extern "C" {
 #endif

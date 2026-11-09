@@ -1,7 +1,7 @@
 //! A same-device identity filter through the public custom-denoiser API.
 //! Run with a version-4 raw scene descriptor; the final readback is an explicit
 //! diagnostic export, not part of filtering or presentation.
-use mutracer_native_probe::api::{
+use mutracer_native::api::{
     CancelToken, ConvergeOptions, CustomDenoiser, DenoiseInput, DenoiseInputMode, DenoiseOutput,
     DenoiseSchedule, Engine, EngineOptions, PixelKind, Render, RenderSettings,
 };

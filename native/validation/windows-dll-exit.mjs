@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT, 'windows-dll-exit');
 const builds = resolve(process.env.CARGO_TARGET_DIR, 'release/build');
-const includes = readdirSync(builds).filter(name => name.startsWith('mutracer-native-probe-'))
+const includes = readdirSync(builds).filter(name => name.startsWith('mutracer-native-'))
   .map(name => resolve(builds, name, 'out/tinybvh'))
   .filter(path => existsSync(resolve(path, 'tiny_bvh_base.h')))
   .sort((a, b) => statSync(resolve(b, 'tiny_bvh_base.h')).mtimeMs - statSync(resolve(a, 'tiny_bvh_base.h')).mtimeMs);

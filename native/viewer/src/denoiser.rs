@@ -1,5 +1,5 @@
 //! Viewer denoiser selection and its application to preview/final targets.
-use mutracer_native_probe::api;
+use mutracer_native::api;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]

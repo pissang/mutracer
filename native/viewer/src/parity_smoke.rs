@@ -351,7 +351,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             "Settings lost after backend switch"
         );
         println!("PASS retained settings after edits and backend switch {mode}");
-        let display = mutracer_native_probe::display::Settings::default();
+        let display = mutracer_native::display::Settings::default();
         let hdr = viewer.hdr()?;
         let generation = viewer.generation;
         let samples = viewer.samples;

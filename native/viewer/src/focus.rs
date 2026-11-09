@@ -2,7 +2,7 @@
 //! may start a lens pull.
 use crate::renderer::Camera;
 use eframe::egui;
-use mutracer_native_probe::api;
+use mutracer_native::api;
 use std::{
     sync::mpsc,
     time::{Duration, Instant},

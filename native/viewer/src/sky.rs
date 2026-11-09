@@ -336,7 +336,7 @@ impl Baker {
     }
 }
 fn sun_position(hours: f32) -> (f32, f32) {
-    let [elevation, azimuth] = mutracer_native_probe::viewer_math::sun_position(hours);
+    let [elevation, azimuth] = mutracer_native::viewer_math::sun_position(hours);
     (elevation, azimuth)
 }
 #[cfg(test)]
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     #[ignore = "requires a real GPU and OIDN"]
     fn gpu_environment_pole_render_stays_bounded_through_oidn() -> Result<()> {
-        use mutracer_native_probe::api;
+        use mutracer_native::api;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;

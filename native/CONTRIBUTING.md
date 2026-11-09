@@ -263,7 +263,14 @@ After `native:ci`, run `native:sdk:package` with the same
 For `native:scene:static` outputs, the default `.../cargo-target` applies.
 `MUTRACER_NATIVE_DIST` selects the archive destination. Packages contain C headers
 and shared/static libraries plus a relocatable CMake config; debug symbols are
-archived separately in `sdk-symbols/`. Packaging requires CMake 3.20+ and checks
+archived separately in `sdk-symbols/`. Change the native version only in
+`host/Cargo.toml`, then run `node native/scripts/generate-sdk-version.mjs` and
+refresh the host and viewer Cargo lockfiles. The build rejects a stale C version
+header. macOS builds through the native scripts set `MACOSX_DEPLOYMENT_TARGET=14.0`
+for Rust, C and Objective-C dependencies; set the same variable for direct Cargo
+builds. Hydra defaults `CMAKE_OSX_DEPLOYMENT_TARGET` to 14.0. Packaging excludes
+resource forks and extended attributes and rejects `._*` or `__MACOSX` entries
+in SDK and Blender archives. Packaging requires CMake 3.20+ and checks
 all C exports and direct C linking. It also extracts the archive elsewhere,
 hides the staged SDK, and configures, builds and runs CMake consumers of both
 targets with Node, npm, scriptc and Rust tools removed from `PATH`. These CPU
@@ -637,7 +644,7 @@ On macOS, build the host cdylib with the current archive and run the C consumer
 (AppKit glue is in `examples/window-appkit.m`):
 
 ```sh
-node native/scripts/window-host.mjs /absolute/libmutracer_native_probe.dylib \
+node native/scripts/window-host.mjs /absolute/libmutracer.dylib \
   /absolute/scene-input.bin /absolute/evidence/c-window
 ```
 

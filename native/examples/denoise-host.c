@@ -1,5 +1,5 @@
 /* Optional OIDN C consumer. Inputs are linear RGBA32F files from the raw renderer.
- * Build with -I native/include and link libmutracer_native_probe. No Node/JS runtime. */
+ * Build with -I native/include and link libmutracer. No Node/JS runtime. */
 #include "mutracer-denoise.h"
 #include <errno.h>
 #include <stdio.h>

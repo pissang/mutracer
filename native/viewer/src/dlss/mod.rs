@@ -3,7 +3,7 @@ mod ffi;
 mod gpu;
 use anyhow::{Context, Result, ensure};
 use ash::vk::Handle;
-use mutracer_native_probe::api::{self, CustomDenoiser, TemporalGuide as Guide};
+use mutracer_native::api::{self, CustomDenoiser, TemporalGuide as Guide};
 use std::{
     collections::HashMap,
     path::Path,

@@ -4,7 +4,7 @@
 use crate::renderer::{Camera, RenderSettings, Renderer};
 use crate::scene::{Descriptor, Environment, KeyLight, Model};
 use anyhow::{Result, ensure};
-use mutracer_native_probe::api;
+use mutracer_native::api;
 use std::{path::Path, time::Instant};
 
 const ITERATIONS: usize = 12;
@@ -46,7 +46,7 @@ impl Scene {
 
 pub fn run(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
-    mutracer_native_probe::logging::stderr();
+    mutracer_native::logging::stderr();
     let model = Model::load(path)?;
     let camera = Camera::fit(model.0.center, model.0.radius);
     let mut scene = Scene {

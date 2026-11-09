@@ -6,12 +6,13 @@ import {spawnSync} from 'node:child_process';
 import {copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {archiveName, cCompiler, executable, nativeTar, nativeToolchainEnv, spawnNative, viewerPlatform, windows} from './platform.mjs';
+import {archiveName, cCompiler, executable, macosDeploymentTarget, nativeTar, nativeToolchainEnv, spawnNative, viewerPlatform, windows} from './platform.mjs';
 import {checkSdkExports, nativeLinkArguments, publicApiSymbols} from './sdk-symbols.mjs';
 import {bundleWindowsRuntime} from './windows-redist.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {finalizeHostLibrary} from './finalize-host-library.mjs';
-import {sdkCmakeConfig, sdkVersion} from './sdk-cmake.mjs';
+import {sdkCmakeConfig, sdkVersion, sdkVersionHeader} from './sdk-cmake.mjs';
+import {checkArchiveEntries} from './sdk-archive.mjs';
 import {checkCmakeConsumer} from './sdk-cmake-consumer.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -19,7 +20,8 @@ const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-build/scene-c
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(out, 'cargo-target'));
 const dist = resolve(process.env.MUTRACER_NATIVE_DIST ?? resolve(out, 'dist'));
 const platform = viewerPlatform(), mac = process.platform === 'darwin';
-const work = resolve(out, 'sdk'), name = `MuTracer-SDK-${platform}`;
+const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
+const work = resolve(out, 'sdk'), name = `MuTracer-SDK-${version}-${platform}`;
 const stage = resolve(work, name), lib = resolve(stage, 'lib');
 const symbols = resolve(work, `${name}-symbols`);
 const env = nativeToolchainEnv({...process.env, CARGO_TARGET_DIR: target,
@@ -47,9 +49,10 @@ const headers = readdirSync(resolve(root, 'native/include')).filter(file => file
 const exports = publicApiSymbols(headers.map(file => readFileSync(resolve(root, 'native/include', file), 'utf8')));
 const abi = Number(/#define\s+MT_ABI_VERSION\s+(\d+)/.exec(readFileSync(resolve(root, 'native/include/mutracer-status.h'), 'utf8'))?.[1]);
 if (!abi) throw Error('Missing C ABI version');
-const version = sdkVersion(readFileSync(resolve(root, 'native/host/Cargo.toml'), 'utf8'));
-const staticName = windows ? 'mutracer_native_probe.lib' : 'libmutracer_native_probe.a';
-const sharedName = windows ? 'mutracer_native_probe.dll' : `libmutracer_native_probe.${mac ? 'dylib' : 'so'}`;
+if (readFileSync(resolve(root, 'native/include/mutracer-version.h'), 'utf8') !== sdkVersionHeader(version))
+  throw Error('SDK version header is stale; run native/scripts/generate-sdk-version.mjs');
+const staticName = windows ? 'mutracer.lib' : 'libmutracer.a';
+const sharedName = windows ? 'mutracer.dll' : `libmutracer.${mac ? 'dylib' : 'so'}`;
 const sourceStatic = resolve(target, 'release', staticName), shared = resolve(lib, sharedName);
 for (const directory of [stage, symbols]) {
   rmSync(directory, {recursive: true, force: true});
@@ -85,14 +88,14 @@ if (mac) {
   run('codesign', ['--verify', '--strict', shared]);
 } else if (windows) {
   const definition = resolve(work, 'exports.def');
-  writeFileSync(definition, `LIBRARY mutracer_native_probe\nEXPORTS\n${exports.join('\n')}\n`);
+  writeFileSync(definition, `LIBRARY mutracer\nEXPORTS\n${exports.join('\n')}\n`);
   run('link.exe', ['/NOLOGO', '/DLL', '/INCREMENTAL:NO', '/OPT:REF', '/DEBUG:FULL',
     // The .def exports are linker roots and select every public API member.
     // /WHOLEARCHIVE also forces unused Rust support/import objects, which MSVC
     // can reject as a corrupt library (LNK1127) on an otherwise usable staticlib.
     `/DEF:${definition}`, sourceStatic, `/OUT:${shared}`,
-    `/IMPLIB:${resolve(lib, 'mutracer_native_probe.dll.lib')}`,
-    `/PDB:${resolve(symbols, 'mutracer_native_probe.pdb')}`, ...nativeLibraries]);
+    `/IMPLIB:${resolve(lib, 'mutracer.dll.lib')}`,
+    `/PDB:${resolve(symbols, 'mutracer.pdb')}`, ...nativeLibraries]);
   // MSVC puts linked debug data in the separate PDB, not the shipped DLL.
 } else {
   const version = resolve(work, 'exports.elf');
@@ -140,8 +143,8 @@ writeFileSync(consumer, `#include <stdint.h>\n#include <stdio.h>\n` +
 for (const kind of ['shared', 'static']) {
   const binary = resolve(lib, executable(`sdk-${kind}-check`));
   const link = kind === 'static' ? [resolve(lib, staticName), ...nativeLibraries]
-    : windows ? [resolve(lib, 'mutracer_native_probe.dll.lib')]
-      : ['-L', lib, '-lmutracer_native_probe', mac ? '-Wl,-rpath,@loader_path' : '-Wl,-rpath,$ORIGIN'];
+    : windows ? [resolve(lib, 'mutracer.dll.lib')]
+      : ['-L', lib, '-lmutracer', mac ? '-Wl,-rpath,@loader_path' : '-Wl,-rpath,$ORIGIN'];
   run(cCompiler, ['-O2', consumer, ...link, '-o', binary]);
   run(binary, []);
   rmSync(binary);
@@ -149,6 +152,7 @@ for (const kind of ['shared', 'static']) {
   if (windows) rmSync(resolve(lib, 'consumer.obj'), {force: true});
 }
 const summary = {platform, version, abi, exports, nativeLibraries,
+  ...(mac ? {macosDeploymentTarget} : {}),
   staticBytes: statSync(resolve(lib, staticName)).size, sharedBytes: statSync(shared).size,
   validated: {exports: true, staticConsumer: true, sharedConsumer: true, staticArchiveUnmodified: true}};
 if (!readFileSync(sourceStatic).equals(readFileSync(resolve(lib, staticName)))) throw Error('Static SDK archive was modified');
@@ -159,8 +163,12 @@ function archive(directory, destination) {
   mkdirSync(destination, {recursive: true});
   // Replace rather than update: zip updates otherwise retain removed entries.
   rmSync(path, {force: true});
-  if (mac) run('ditto', ['-c', '-k', '--keepParent', resolve(work, directory), path]);
+  // ditto defaults to resource forks/xattrs, which become AppleDouble entries.
+  if (mac) run('ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noqtn', '--keepParent', resolve(work, directory), path]);
   else run(nativeTar, [windows ? '-acf' : '-czf', path, '-C', work, directory]);
+  const listing = run(nativeTar, ['-tf', path]);
+  checkArchiveEntries(listing);
+  writeFileSync(resolve(work, `${directory}-contents.txt`), listing);
   writeFileSync(path + '.sha256', `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${filename}\n`);
   return path;
 }

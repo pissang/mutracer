@@ -3,8 +3,8 @@
 //! a new context. Usage: incremental-oracle SAMPLES BACKEND SCENE.bin...
 //! Prints one JSON line per fixture and edit; exits nonzero on any mismatch or
 //! when an edit that should be incremental fell back to full preparation.
-use mutracer_native_probe::context as native;
-use mutracer_native_probe::layout::{
+use mutracer_native::context as native;
+use mutracer_native::layout::{
     camera as cam, geometry as g, header as h, light as l, material as mat, mesh as m, texture as t,
 };
 

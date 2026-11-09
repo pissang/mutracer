@@ -47,7 +47,7 @@ mod ui_smoke;
 mod workflow;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
-use mutracer_native_probe::api;
+use mutracer_native::api;
 use renderer::{Camera, RenderSettings, Renderer};
 use scene::{Descriptor, Environment, KeyLight, Model};
 use std::{
@@ -103,7 +103,7 @@ impl api::LoopSync for InputActivity {
 impl Target {
     fn new(
         gpu: Option<&eframe::egui_wgpu::RenderState>,
-        gate: Option<&Arc<mutracer_native_probe::submission::SubmissionGate>>,
+        gate: Option<&Arc<mutracer_native::submission::SubmissionGate>>,
         backend: u32,
         settings: api::RenderSettings,
     ) -> Result<Self> {
@@ -241,7 +241,7 @@ fn render_settings(settings: &RenderSettings, size: [u32; 2], held: bool) -> api
         ..Default::default()
     }
 }
-fn display_settings(settings: &mutracer_native_probe::display::Settings) -> api::DisplaySettings {
+fn display_settings(settings: &mutracer_native::display::Settings) -> api::DisplaySettings {
     api::DisplaySettings {
         tone_mapping: match settings.tone_mapping {
             1 => api::ToneMapping::Aces,
@@ -316,7 +316,7 @@ impl DeviceLossForwarder {
     }
 }
 struct Viewer {
-    submission_gate: Option<std::sync::Arc<mutracer_native_probe::submission::SubmissionGate>>,
+    submission_gate: Option<std::sync::Arc<mutracer_native::submission::SubmissionGate>>,
     startup_smoke: Option<(PathBuf, std::time::Instant, u32)>,
     metrics: Option<metrics::Metrics>,
     gpu: Option<eframe::egui_wgpu::RenderState>,
@@ -348,7 +348,7 @@ struct Viewer {
     picker: picking::Picker,
     focus: focus::AutoFocus,
     samples: u32,
-    display_settings: mutracer_native_probe::display::Settings,
+    display_settings: mutracer_native::display::Settings,
     applied_display: Option<api::DisplaySettings>,
     aov_display: api::AovDisplayOptions,
     debug_open: bool,
@@ -461,7 +461,7 @@ impl Viewer {
         let settings = RenderSettings::default();
         let submission_gate = gpu
             .is_some()
-            .then(|| Arc::new(mutracer_native_probe::submission::SubmissionGate::default()));
+            .then(|| Arc::new(mutracer_native::submission::SubmissionGate::default()));
         let target = Target::new(
             gpu.as_ref(),
             submission_gate.as_ref(),
@@ -531,7 +531,7 @@ impl Viewer {
             picker: picking::Picker::default(),
             focus: focus::AutoFocus::default(),
             samples: 0,
-            display_settings: mutracer_native_probe::display::Settings {
+            display_settings: mutracer_native::display::Settings {
                 shadow_catcher_alpha: 0.8,
                 ..Default::default()
             },
@@ -659,7 +659,7 @@ impl Viewer {
         )))
     }
     /// The finished image composed with `settings`, straight alpha, top row first.
-    fn read_rgba(&self, settings: &mutracer_native_probe::display::Settings) -> Result<Vec<u8>> {
+    fn read_rgba(&self, settings: &mutracer_native::display::Settings) -> Result<Vec<u8>> {
         let display = self.target.engine.display();
         let previous = display.settings();
         let mut settings = display_settings(settings);
@@ -2584,7 +2584,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
 // New viewer controls exercise the existing raw-scene OpenPBR contract on both
 // intersection paths. Fresh contexts are independent full-preparation oracles.
 fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
-    use mutracer_native_probe::layout::{header as h, material as mat};
+    use mutracer_native::layout::{header as h, material as mat};
     let original = Model::load(path)?;
     let camera = Camera::fit(original.center, original.radius);
     let size = [160, 106];

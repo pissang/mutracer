@@ -2,7 +2,7 @@
 //! space. Environment reprojection matches viewer/src/engine/modelLighting.ts.
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Quat, Vec3};
-use mutracer_native_probe::layout::light as wire;
+use mutracer_native::layout::light as wire;
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
@@ -110,7 +110,7 @@ impl Scene {
     pub fn load(
         json: &Value,
         path: &Path,
-        model: &mut mutracer_native_probe::scene_api::viewer_support::Model,
+        model: &mut mutracer_native::scene_api::viewer_support::Model,
     ) -> Result<Self> {
         let mut result = Self::default();
         result.nodes = Arc::new(crate::scene_tree::from_gltf(json, model));
@@ -461,7 +461,7 @@ mod tests {
     ) -> (Scene, Vec<String>) {
         let path = folder.model("bistro/bistro.glb");
         let mut model =
-            mutracer_native_probe::scene_api::viewer_support::Model::load(&path).unwrap();
+            mutracer_native::scene_api::viewer_support::Model::load(&path).unwrap();
         let mut json = crate::examples::model_json(&std::fs::read(&path).unwrap()).unwrap();
         json["extras"] = serde_json::json!({"pbrt":{"light_sources":[{
             "gltf":"metadata_only","pbrt":"infinite","source":source,
@@ -538,7 +538,7 @@ mod tests {
     fn cameras_and_lights_follow_active_hierarchy_and_pbrt_transform() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb");
         let mut model =
-            mutracer_native_probe::scene_api::viewer_support::Model::load(&path).unwrap();
+            mutracer_native::scene_api::viewer_support::Model::load(&path).unwrap();
         let json = serde_json::json!({"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"translation":[2,3,4],"children":[1]},{"camera":0,"translation":[1,0,0]},{"camera":0}],"cameras":[{"perspective":{"yfov":0.5}}],"extras":{"pbrt":{"light_sources":[{"gltf":"metadata_only","pbrt":"distant","radiance_rgb":[8,4,2],"from":[1,0,0],"to":[0,0,0]},{"gltf":"metadata_only","pbrt":"infinite","radiance_rgb":[0.3,0.2,0.1]}]}}});
         let scene = Scene::load(&json, &path, &mut model).unwrap();
         assert_eq!(scene.cameras.len(), 1);
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn authored_camera_preserves_right_axis_and_navigation_handedness() {
         use crate::renderer::Camera;
-        use mutracer_native_probe::layout::camera as c;
+        use mutracer_native::layout::camera as c;
         fn world(camera: &Camera) -> Mat4 {
             let bytes = camera.bytes([120, 80]);
             let values: Vec<f32> = bytes[c::TRANSFORM * 4..]
@@ -633,7 +633,7 @@ mod tests {
     #[ignore = "requires a real GPU"]
     fn gpu_reflected_camera_image_picking_and_depth_match_source_basis() {
         use crate::renderer::Camera;
-        use mutracer_native_probe::{
+        use mutracer_native::{
             api,
             layout::camera as c,
             scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene as RenderScene},

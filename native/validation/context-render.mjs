@@ -28,7 +28,7 @@ if(!reuse){
  run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
 }
 const host=resolve(out,executable('context-host'));
-run('context-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
+run('context-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'scene-verification.json'))).results;
 const results=[];
 for(const {variant} of fixtures){

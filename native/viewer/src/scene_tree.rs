@@ -417,7 +417,7 @@ impl Viewer {
 }
 pub fn from_gltf(
     json: &serde_json::Value,
-    model: &mutracer_native_probe::scene_api::viewer_support::Model,
+    model: &mutracer_native::scene_api::viewer_support::Model,
 ) -> Vec<Node> {
     let mut nodes: Vec<Node> = json["nodes"]
         .as_array()
@@ -560,7 +560,7 @@ mod tests {
         json["scene"] = 0.into();
         json["scenes"] = serde_json::json!([{"nodes":[4,0]}, {"nodes":[3]}]);
         let bytes = crate::examples::with_json(&bytes, &json).unwrap();
-        let model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
+        let model = mutracer_native::scene_api::viewer_support::Model::load_bytes(
             &bytes,
             Some(&path),
         )

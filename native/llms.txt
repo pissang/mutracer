@@ -1,10 +1,10 @@
 # MuTracer native SDK
 
-> Experimental Rust (`mutracer_native_probe`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
+> Experimental Rust (`mutracer_native`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS 14.0+ arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
 
 ## Essentials
 
-- Build: `npm ci`, `npm ci --prefix native/toolchain --include=optional`, `export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"`, `npm run native:scene:static`; Rust needs `MUTRACER_AOT_ARCHIVE`, C links `mutracer_native_probe`; [build and link](README.md#build-and-link).
+- Build: `npm ci`, `npm ci --prefix native/toolchain --include=optional`, `export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"`, `npm run native:scene:static`; Rust needs `MUTRACER_AOT_ARCHIVE`, C links `mutracer`; [build and link](README.md#build-and-link).
 - Pick an API: Scene + Engine for most apps; Context for one low-level accumulation and polling jobs; descriptors for binary scenes; [API table](README.md#apis).
 - Minimal program: build a Scene, `Engine::new`, `Render::new`, `set_scene_object`, `update`, `converge`, `read_pixels`; the default scene is unlit and black; [quick start](README.md#quick-start).
 - API reference: options, defaults, errors and lifetimes live on each C declaration in `include/*.h` and on the Rust items in `host/src/api/` and `host/src/scene_api/`; the guides cover workflows and behavior across calls.

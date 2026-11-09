@@ -13,7 +13,7 @@ function run(name,cmd,args){const p=spawnSync(cmd,args,{cwd:root,env,encoding:'u
  writeFileSync(resolve(out,name+'.log'),(p.stdout??'')+(p.stderr??''));if(p.error||p.status!==0)throw Error(name+': '+(p.error?.message??p.stderr));return p.stdout;}
 run('camera',process.execPath,['native/validation/camera-render.mjs']);
 const host=resolve(out,executable('settings-host'));
-run('build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/settings-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe','-Wl,-rpath,'+resolve(target,'release'),'-o',host]);
+run('build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/settings-host.c','-L',resolve(target,'release'),'-lmutracer','-Wl,-rpath,'+resolve(target,'release'),'-o',host]);
 const results=[];
 for(const fixture of ['baseline','v2-alpha','v3-ies','v3-displacement-uv'])for(const backend of [0,1]){
  const destination=resolve(out,fixture+'-'+backend);mkdirSync(destination,{recursive:true});

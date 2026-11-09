@@ -86,9 +86,9 @@ mod tests {
         ] {
             let actual = preview_scales(viewport, size, maximum);
             assert_eq!(actual, expected);
-            let settings = mutracer_native_probe::api::RenderSettings {
-                size: mutracer_native_probe::api::RenderSize::Scale(actual[1]),
-                adaptive_resolution: Some(mutracer_native_probe::api::AdaptiveResolution {
+            let settings = mutracer_native::api::RenderSettings {
+                size: mutracer_native::api::RenderSize::Scale(actual[1]),
+                adaptive_resolution: Some(mutracer_native::api::AdaptiveResolution {
                     target_frame_ms: 80.,
                     min_scale: actual[0],
                 }),

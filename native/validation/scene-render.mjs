@@ -52,7 +52,7 @@ await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
 finalizeHostLibrary(target);
 const sceneHost=resolve(out,executable('scene-host')), minimalHost=resolve(out,executable('minimal-host'));
-const linkLibrary=windows?[resolve(target,'release/mutracer_native_probe.dll.lib')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`];
+const linkLibrary=windows?[resolve(target,'release/mutracer.dll.lib')]:['-L',resolve(target,'release'),'-lmutracer',`-Wl,-rpath,${resolve(target,'release')}`];
 run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', ...linkLibrary, ...cLinkFlags,'-o',sceneHost]);
 run('minimal-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/minimal-host.c', ...linkLibrary, ...cLinkFlags,'-o',minimalHost]);
 run('core-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, ...cLinkFlags, '-o', resolve(out, executable('core-host'))]);

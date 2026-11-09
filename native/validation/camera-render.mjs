@@ -21,7 +21,7 @@ function run(name,command,args){
 // Revalidate the complete AOT/raw/context/job graph before testing partial uploads.
 run('job-validation',process.execPath,['native/validation/job-render.mjs']);
 const host=resolve(out,executable('camera-host'));
-run('camera-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/camera-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
+run('camera-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/camera-host.c','-L',resolve(target,'release'),'-lmutracer',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(jobs,'job-verification.json'))).results;
 const results=[];
 for(const {variant} of fixtures){
