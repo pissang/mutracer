@@ -1183,7 +1183,13 @@ impl Resources {
             if plan.replacement.is_some() {
                 self.metal_instances = metal_instance_inputs(device, &self._blases, capture)?;
             }
-            if let Some(inputs) = &self.metal_instances {
+            // A membership change can introduce a BLAS absent from the old
+            // TLAS dependency list. Use the tracked build below to register it.
+            if let Some(inputs) = self
+                .metal_instances
+                .as_ref()
+                .filter(|_| plan.replacement.is_none())
+            {
                 let started = std::time::Instant::now();
                 // Refit through half the resident batch; dense complete edits
                 // rebuild traversal quality. The override supports measured A/B runs.

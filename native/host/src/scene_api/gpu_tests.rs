@@ -2358,6 +2358,19 @@ fn large_instance_and_shared_vertex_edits_match_fresh_hdr_id_and_picking() {
         material.values.emission_strength = 1.;
         let material = scene.add_material(material).unwrap();
         scene.add_mesh(Mesh::new(other, material)).unwrap();
+        // Distinct BLAS allocations expose missing Metal residency metadata;
+        // the small two-BLAS version can keep working from incidental residency.
+        for i in 0..4096 {
+            let g = scene
+                .add_geometry(Geometry::new(
+                    vec![-0.2, -0.2, 0., 0.2, -0.2, 0., 0., 0.2, 0.],
+                    vec![0, 1, 2],
+                ))
+                .unwrap();
+            let mut mesh = Mesh::new(g, material);
+            mesh.transform = Mat4::from_translation(Vec3::new(100. + i as f32, 0., 0.));
+            scene.add_mesh(mesh).unwrap();
+        }
         let mut batch = Mesh::new(geometry, material);
         batch.instances = Some(Instances {
             transforms: (0..count)

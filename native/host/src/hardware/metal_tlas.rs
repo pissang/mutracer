@@ -185,7 +185,10 @@ impl Inputs {
                 );
                 Ok(())
             })?;
-            encoder.mark_acceleration_structures_built(std::iter::empty::<&wgpu::Blas>(), [&*tlas]);
+            // This TLAS was already built through wgpu with the same BLASes.
+            // Marking it built again would replace its tracked dependencies
+            // with an empty list, losing Metal residency on later trace passes.
+            // Stable matrix edits preserve that dependency list instead.
         }
         queue.submit([encoder.finish()]);
         // Raw submissions do not register buffer dependencies with wgpu.
