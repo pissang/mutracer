@@ -3,6 +3,7 @@
 #include "pxr/imaging/hd/tokens.h"
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 PXR_NAMESPACE_USING_DIRECTIVE
 using namespace mtHydra;
@@ -60,6 +61,22 @@ int main() {
   Require(delegate.Restart() && !delegate.IsStopped(), "Hydra restart state");
   Require(delegate.GetRenderSetting(TfToken("forceCpuOutput")) == VtValue(0),
           "automatic GPU output is the default");
+  Require(delegate.GetRenderSetting(TfToken("maxBounces")) == VtValue(3),
+          "default scattering depth matches the SDK");
+  HdRenderSettingsMap initialSettings;
+  initialSettings[TfToken("convergedSamplesPerPixel")] = VtValue(1L);
+  initialSettings[TfToken("maxBounces")] = VtValue(6L);
+  Delegate blenderSettings(initialSettings);
+  Require(blenderSettings.GetRenderSetting(TfToken("convergedSamplesPerPixel")) == VtValue(1) &&
+              blenderSettings.GetRenderSetting(TfToken("maxBounces")) == VtValue(6),
+          "initial Blender long settings use descriptor integer types");
+  blenderSettings.SetRenderSetting(TfToken("backend"), VtValue(0L));
+  blenderSettings.SetRenderSetting(TfToken("forceCpuOutput"), VtValue(true));
+  blenderSettings.SetRenderSetting(TfToken("maxBounces"), VtValue(std::numeric_limits<long long>::max()));
+  Require(blenderSettings.GetRenderSetting(TfToken("backend")) == VtValue(0) &&
+              blenderSettings.GetRenderSetting(TfToken("forceCpuOutput")) == VtValue(1) &&
+              blenderSettings.GetRenderSetting(TfToken("maxBounces")) == VtValue(std::numeric_limits<int>::max()),
+          "updated host integer and boolean settings normalize without overflow");
   Buffer buffer(SdfPath("/Buffer"));
   Require(buffer.Allocate(GfVec3i(2, 2, 1), HdFormatFloat32Vec4, false),
           "float color allocation");
@@ -288,6 +305,17 @@ int main() {
           "triangle IDs map to original polygon");
   Require(g.points.size() == 27, "face corners split");
   Require(std::abs(g.uv[12] - .2f) < 1e-6f, "face-varying seam retained");
+  HdMeshTopology triangleTopology(TfToken("none"),
+      HdTokens->rightHanded, VtIntArray{3}, VtIntArray{0, 1, 2});
+  Primvar triangleUv{VtValue(VtVec2fArray{GfVec2f(.25f, .5f),
+      GfVec2f(.75f, .5f), GfVec2f(.5f, 1.f)}), HdInterpolationFaceVarying};
+  Primvar triangleNormals{VtValue(VtVec3fArray(3, GfVec3f(0, 1, 0))),
+      HdInterpolationFaceVarying};
+  auto triangle = Triangulate(triangleTopology, SdfPath("/Triangle"), points,
+                              triangleNormals, triangleUv, {});
+  Require(triangle.uv == std::vector<float>({.25f, .5f, .75f, .5f, .5f, 1.f}) &&
+              triangle.normals == std::vector<float>({0, 1, 0, 0, 1, 0, 0, 1, 0}),
+          "already triangulated face-varying UVs and authored normals survive");
   std::map<SdfPath, InstanceData> instances;
   auto &inner = instances[SdfPath("/Inner")];
   auto &outer = instances[SdfPath("/Outer")];

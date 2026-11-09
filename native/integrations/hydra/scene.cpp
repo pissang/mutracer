@@ -52,9 +52,13 @@ static VtArray<T> Expand(HdMeshUtil const &util, Primvar const &pv,
   auto a = pv.value.UncheckedGet<VtArray<T>>();
   if (pv.interpolation == HdInterpolationFaceVarying) {
     VtValue out;
-    if (util.ComputeTriangulatedFaceVaryingPrimvar(a.cdata(), a.size(), type,
-                                                   &out) !=
-        HdMeshComputationResult::Success)
+    auto result = util.ComputeTriangulatedFaceVaryingPrimvar(
+        a.cdata(), a.size(), type, &out);
+    // Live Hydra hosts can submit triangles directly. USD leaves the output
+    // empty when the original corner stream already matches the topology.
+    if (result == HdMeshComputationResult::Unchanged)
+      return a;
+    if (result != HdMeshComputationResult::Success)
       return {};
     return out.Get<VtArray<T>>();
   }
