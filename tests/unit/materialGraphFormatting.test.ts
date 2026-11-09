@@ -17,12 +17,9 @@ describe('material graphs in production shader builds',()=>{
   expect(graph.diagnostics).toEqual([]);
   const plan={key:graph.key,graphs:[graph],structures:[graph]};
   const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
-  for(const backend of ['webgpu','webgl'] as const){
-   const path=backend==='webgpu'?'src/renderer/wgsl/rayTrace.compute.ts':'src/renderer/glsl/raytrace.frag.ts';
-   const source=(loader:typeof original)=>{const value=loader(path).default(options);return backend==='webgpu'?value:value.main;};
-   const full=materialGraphShader(source(original),plan,backend),compact=materialGraphShader(source(stripped),plan,backend);
-   expect(tokens(compact)).toEqual(tokens(full));
-   if(backend==='webgpu')expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();
-  }
+  const source=(loader:typeof original)=>loader('src/renderer/wgsl/rayTrace.compute.ts').default(options);
+  const full=materialGraphShader(source(original),plan),compact=materialGraphShader(source(stripped),plan);
+  expect(tokens(compact)).toEqual(tokens(full));
+  expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();
  });
 });

@@ -14,7 +14,7 @@ const v=(value:number[],type:Type='vector3'):Input=>({type,value});
 function run(category:string, inputs:Record<string,Input>, type:Type='float') {
     const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category,type,inputs},{id:'c',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'c'}}}));
     expect(graph.diagnostics).toEqual([]);
-    for(const backend of ['webgpu','webgl'] as const) generateGraph(graph,backend);
+    generateGraph(graph);
     return evaluateGraph(graph).baseColor;
 }
 describe('MaterialX adjustment and geometry nodes',()=>{
@@ -86,7 +86,7 @@ describe('MaterialX adjustment and geometry nodes',()=>{
         const graph=new MaterialGraph({nodes:[{id:'n',category:'range',type:'float'}],terminal:{specularRoughness:{node:'n'}}});
         const first=normalizeGraph(graph);graph.setInput('n','gamma',f(2));graph.setInput('n','doclamp',{type:'boolean',value:true});
         const second=normalizeGraph(graph);expect(second.key).toBe(first.key);
-        for(const backend of ['webgpu','webgl'] as const)expect(generateGraph(first,backend).source).toBe(generateGraph(second,backend).source);
+        expect(generateGraph(first).source).toBe(generateGraph(second).source);
     });
 });
 
@@ -106,7 +106,7 @@ describe('MaterialX OSL noise reference',()=>{
 describe('opacity graph commits',()=>{
     it('resolves auto graph coverage conservatively and retains explicit opaque',()=>{
         const graph=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float',inputs:{value:f(0.3)}}],terminal:{geometryOpacity:{node:'a'}}});
-        const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState('webgpu');state.request([material]);
+        const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState();state.request([material]);
         expect(state.diagnostics).toEqual([]);state.install(state.requested,state.revision);
         const offset=materialLayoutFields().find(f=>f.name==='alphaMode')!.offset/4;
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])[offset]).toBe(2);
@@ -117,7 +117,7 @@ describe('opacity graph commits',()=>{
     it.each(['emission','projection','frame'])('revalidates a retained graph when an invalid replacement also changes %s context',kind=>{
         const frame=kind==='frame';
         const graph=new MaterialGraph({nodes:[{id:'source',category:frame?'normal':'texcoord',type:frame?'vector3':'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:frame?'vector3':'vector2',connection:{node:'source'}}}}],terminal:{[kind==='emission'?'emissionLuminance':'opacity']:{node:'a'}}});
-        const material=new OpenPBRMaterial({graph,unlit:kind==='emission',alphaMode:frame?'opaque':'auto'}),state=new MaterialGraphState('webgpu');
+        const material=new OpenPBRMaterial({graph,unlit:kind==='emission',alphaMode:frame?'opaque':'auto'}),state=new MaterialGraphState();
         state.request([material]);expect(state.diagnostics).toEqual([]);state.install(state.requested,state.revision);const installed=state.active.graphs[0];
         material.graph=new MaterialGraph({nodes:[{id:'unknown',category:'future_node',type:'color3'}],terminal:{baseColor:{node:'unknown'}}});
         if(kind==='emission')material.unlit=false;else if(kind==='projection')material.uvProjection='triplanar';else material.alphaMode='blend';
@@ -128,11 +128,11 @@ describe('opacity graph commits',()=>{
     });
     it('rejects unsupported material projection for UV-dependent opacity',()=>{
         const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}],terminal:{opacity:{node:'a'}}});
-        const state=new MaterialGraphState('webgpu'),material=new OpenPBRMaterial({graph});state.request([material]);state.install(state.requested,state.revision);material.uvProjection='triplanar';state.request([material]);expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-projection',port:'opacity'}));expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
+        const state=new MaterialGraphState(),material=new OpenPBRMaterial({graph});state.request([material]);state.install(state.requested,state.revision);material.uvProjection='triplanar';state.request([material]);expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-projection',port:'opacity'}));expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
     });
     it('locates frame-dependent shadow coverage rather than accepting inconsistent shadows',()=>{
         const graph=new MaterialGraph({nodes:[{id:'n',category:'normal',type:'vector3'},{id:'a',category:'extract',type:'float',inputs:{in:{type:'vector3',connection:{node:'n'}}}}],terminal:{opacity:{node:'a'}}});
-        const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph})]);
+        const state=new MaterialGraphState();state.request([new OpenPBRMaterial({graph})]);
         expect(state.diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-opacity-context',node:'n',port:'opacity'}));
         state.request([new OpenPBRMaterial({graph,alphaMode:'opaque'})]);expect(state.diagnostics).toEqual([]);
     });

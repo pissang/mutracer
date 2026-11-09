@@ -8,8 +8,8 @@ function graph(value:number,structure=false,invalid=false) {
         ...(structure?[{id:'multiply',category:'multiply',type:'color3' as const,inputs:{in1:{type:'color3' as const,connection:{node:'value'}},in2:{type:'float' as const,value:1}}}]:[])],terminal:{emissionColor:{node:structure?'multiply':'value'}}});
 }
 describe('material graph preparation schedule',()=>{
-    it.each(['webgpu','webgl'] as const)('keeps the installed %s graph sampling and installs only the newest request',backend=>{
-        const material=new OpenPBRMaterial({unlit:true,emissionLuminance:1,graph:graph(.2)}),state=new MaterialGraphState(backend);
+    it('keeps the installed graph sampling and installs only the newest request',()=>{
+        const material=new OpenPBRMaterial({unlit:true,emissionLuminance:1,graph:graph(.2)}),state=new MaterialGraphState();
         state.request([material]);state.install(state.requested,state.revision);
         let obsolete=state.requested,obsoleteRevision=0;const sampled:number[]=[];
         for(const event of fixture.materialGraphPreparation.events) {
@@ -22,8 +22,8 @@ describe('material graph preparation schedule',()=>{
         }
         expect(sampled).toEqual(fixture.materialGraphPreparation.sampledValues);
     });
-    it.each(['webgpu','webgl'] as const)('retains the %s graph after pipeline failure',backend=>{
-        const material=new OpenPBRMaterial({unlit:true,emissionLuminance:1,graph:graph(.2)}),state=new MaterialGraphState(backend);
+    it('retains the graph after pipeline failure',()=>{
+        const material=new OpenPBRMaterial({unlit:true,emissionLuminance:1,graph:graph(.2)}),state=new MaterialGraphState();
         state.request([material]);state.install(state.requested,state.revision);const sampled:number[]=[];
         for(const event of fixture.materialGraphCompilationFailure.events) {
             if(event==='sample')sampled.push((state.active.graphs[0]!.parameters[0] as number[])[0]);

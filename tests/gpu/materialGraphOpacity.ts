@@ -1,7 +1,7 @@
 import {Engine, Render, Camera, Mesh, OpenPBRMaterial, MaterialGraph, Texture, AmbientLight, SphereLight, createPlaneGeometry, type MaterialAlphaMode} from '../../src/main.js';
 const pause=()=>new Promise(r=>setTimeout(r,10));
 async function run(){
- const backend=location.search.includes('webgl')?'webgl':'webgpu',rows=[],nativeComparison=new URLSearchParams(location.search).has('native');
+ const backend='webgpu',rows=[],nativeComparison=new URLSearchParams(location.search).has('native');
  for(const mode of ['auto','opaque','mask','blend'] as MaterialAlphaMode[])for(const cutoff of mode==='mask'?[0.25,0.5]:[0])for(const uvScale of mode==='blend'?[1,2]:[1])for(const mapped of mode==='blend'&&uvScale===1?[false,true]:[false]){
   const canvas=document.createElement('canvas'),engine=new Engine({backend,canvas});engine.display.setSize(48,48);
   const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'alpha',category:'extract',type:'float',inputs:{in:{type:'vector2',connection:{node:'uv'}},index:{type:'integer',value:0}}}],terminal:{geometryOpacity:{node:'alpha'}}});

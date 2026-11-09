@@ -5,7 +5,7 @@ import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
 import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
 import { normalizeGraph, type NormalizedGraph } from './normalize.js';
-import { generateGraph, type Backend } from './codegen.js';
+import { generateGraph } from './codegen.js';
 import { MATERIAL_FLOAT_COUNT, materialLayoutFields } from '../materialLayoutSchema.js';
 const alphaModeOffset = materialLayoutFields().find(field => field.name === 'alphaMode')!.offset / 4;
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
@@ -51,7 +51,6 @@ export class MaterialGraphState {
         revision: number | undefined;
     }[] = [];
     private materials: OpenPBRMaterial[] = [];
-    constructor(readonly backend: Backend) { }
     request(materials: OpenPBRMaterial[]) {
         this.materials = materials;
         this.compileFailed = false;
@@ -61,7 +60,7 @@ export class MaterialGraphState {
         const graphs = materials.map((material, index) => {
             if (!material.graph)
                 return undefined;
-            const graph = normalizeGraph(material.graph, this.backend, this.capabilities);
+            const graph = normalizeGraph(material.graph, this.capabilities);
             const validateContext=(graph:NormalizedGraph,retained=false)=>{
                 const before=graph.diagnostics.length;
                 const context=graphContextDiagnostics(flattenGraphUnchecked(graph),material.unlit,material.emissionLuminance>0,material.alphaMode==='opaque',material.uvProjection!=='none');
@@ -146,7 +145,7 @@ export class MaterialGraphState {
             if (!graph)
                 continue;
             if ('opacity' in graph.terminal && this.materials[i].alphaMode === 'auto' && this.materials[i].alphaCutoff <= 0) buffer[i * MATERIAL_FLOAT_COUNT + alphaModeOffset] = 2;
-            const generated = generateGraph(graph, this.backend);
+            const generated = generateGraph(graph);
             const params: [
                 unknown,
                 ...unknown[]

@@ -103,7 +103,7 @@ export function packNativeGraphs(buffer:Float32Array,materials:MaterialState[],t
             if(texture&&!textures.includes(texture))throw new Error('Graph texture is outside the retained material atlas');
             ir.parameters[slot]=texture?textures.indexOf(texture):-1;
         }
-        const generated=generateGraphIR(ir,'webgpu');
+        const generated=generateGraphIR(ir);
         if(graphHasTerminal(ir,'opacity')&&material.alphaMode==='auto'&&material.alphaCutoff<=0)buffer[i*MATERIAL_FLOAT_COUNT+alpha]=2;
         buffer[i*MATERIAL_FLOAT_COUNT+padding]=keys.indexOf(graphStructureKey(ir))+1;
         buffer[i*MATERIAL_FLOAT_COUNT+padding+1]=buffer.length/MATERIAL_FLOAT_COUNT+chunks.length;

@@ -5,12 +5,12 @@ import {createSphereGeometry} from '../../src/util/commonGeometry';
 import Texture from '../../src/scene/Texture';
 import MaterialTable from '../../src/renderer/MaterialTable';
 import WebGLRayTracePass from '../../src/renderer/WebGLRayTracePass';
-import {MaterialGraphState} from '../../src/renderer/materialGraph/state';
+import MaterialGraph from '../../src/scene/MaterialGraph';
 
 // Exercise the pass's actual specialization boundary without a GPU context.
-function updateConstants(materials: OpenPBRMaterial[]) {
+function updateConstants(materials: OpenPBRMaterial[], receiver: Record<string, unknown> = {}) {
   const setDefines = vi.fn();
-  const receiver = {graphs:new MaterialGraphState('webgl'), _tracePasses: [{setDefines}], _bevelSamples: 4};
+  Object.assign(receiver, {_tracePasses: [{setDefines}], _bevelSamples: 4});
   const method = (WebGLRayTracePass.prototype as unknown as {
     _updateMaterialConstants: (materials: OpenPBRMaterial[], table: MaterialTable, geometry: Geometry) => void
   })._updateMaterialConstants;
@@ -32,5 +32,18 @@ describe('WebGL material alpha specialization', () => {
   ])('selects HAS_ALPHA for resolved inputs %j', (params, expected) => {
     expect(updateConstants([new OpenPBRMaterial(params)])).toBe(expected);
     expect(updateConstants([new OpenPBRMaterial(), new OpenPBRMaterial(params)])).toBe(expected);
+  });
+});
+
+describe('WebGL material graphs', () => {
+  it('renders the constant fallback and reports the backend', () => {
+    const graph = new MaterialGraph({nodes: [{id: 'uv', category: 'texcoord', type: 'vector2'},
+      {id: 'a', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}}}], terminal: {opacity: {node: 'a'}}});
+    const receiver: Record<string, unknown> = {};
+    expect(updateConstants([new OpenPBRMaterial({graph})], receiver)).toBe(false);
+    const diagnostics = WebGLRayTracePass.prototype.getDiagnostics.call(receiver as unknown as WebGLRayTracePass);
+    expect(diagnostics.materialGraphs?.diagnostics).toEqual([expect.objectContaining({code: 'unsupported-backend'})]);
+    updateConstants([new OpenPBRMaterial()], receiver);
+    expect(WebGLRayTracePass.prototype.getDiagnostics.call(receiver as unknown as WebGLRayTracePass).materialGraphs).toBeUndefined();
   });
 });

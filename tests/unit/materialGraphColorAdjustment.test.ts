@@ -3,7 +3,6 @@ import {makeShaderDataDefinitions} from 'webgpu-utils';
 import MaterialGraph from '../../src/scene/MaterialGraph';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate';
-import {generateGraph} from '../../src/renderer/materialGraph/codegen';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader';
 import {gpu,original} from './shaderSourceFormattingFixture';
 describe('MaterialX HSV adjustment',()=>{
@@ -27,9 +26,8 @@ describe('MaterialX HSV adjustment',()=>{
    const g=normalizeGraph(new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'c',category:'convert',type,inputs:{in:{type:'vector2',connection:{node:'uv'}}}},{id:'n',category,type,inputs:{in:{type,connection:{node:'c'}}}},{id:'out',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'out'}}}));
    expect(g.diagnostics).toEqual([]);
    const trace=original('src/renderer/wgsl/rayTrace.compute.ts').default({hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:false});
-   const source=materialGraphShader(trace,{key:g.key,graphs:[g],structures:[g]},'webgpu');
+   const source=materialGraphShader(trace,{key:g.key,graphs:[g],structures:[g]});
    expect(()=>makeShaderDataDefinitions(source)).not.toThrow();
-   expect(generateGraph(g,'webgl').source.length).toBeGreaterThan(0);
   }
  });
 });

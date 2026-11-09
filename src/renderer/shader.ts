@@ -78,8 +78,6 @@ export class FragmentShader<
   readonly functions: Array<(name?: string) => string>;
   readonly main: string;
   parallelCompile = false;
-  /** Internal: allow existing programs to render while this program links. */
-  backgroundCompile = false;
 
   constructor(options: FragmentShaderOptions) {
     const includes = options.includes || [];

@@ -1,7 +1,7 @@
 import {Engine,Render,Camera,Mesh,OpenPBRMaterial,MaterialGraph,GeometryAttribute,createPlaneGeometry} from '../../src/main.js';
 const pause=()=>new Promise(resolve=>setTimeout(resolve,10));
 Object.assign(window,{runBenchmark:async()=>{
- const backend=location.search.includes('webgl')?'webgl':'webgpu',rows=[];
+ const backend='webgpu',rows=[];
  for(const category of ['position','normal','transformpoint','transformvector','transformnormal']){
   const engine=new Engine({backend,canvas:document.createElement('canvas')});engine.display.setSize(48,48);
   const transform=category.startsWith('transform'),baseCategory=category==='transformnormal'?'normal':'position';

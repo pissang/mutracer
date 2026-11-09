@@ -17,11 +17,11 @@ function outputValue(value: Numeric, output: string): Numeric {
     return output === 'out' ? value : [value['xyzwrgba'.indexOf(output.slice(3)) % 4]];
 }
 /** Shared deterministic emitter. Parameters are runtime data, never shader literals. */
-export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', name = 'mx_eval'): GeneratedGraphIR {
+export function generateGraphIR(graph: GraphIR, name = 'mx_eval'): GeneratedGraphIR {
     const diagnostics=validateGraphIR(graph);
     if(diagnostics.length) throw new Error(diagnostics.map(d=>`${d.code} node=${d.node} port=${d.port}: ${d.message}`).join('\n'));
-    const wg = backend === 'webgpu', parameters = graph.parameters.slice(), types = (type: Type) => width(type) === 1 ? 'f32' : `vec${width(type)}${wg ? 'f' : ''}`;
-    const vec = (n: number, x: string) => `${wg ? `vec${n}f` : `vec${n}`}(${x})`;
+    const parameters = graph.parameters.slice();
+    const vec = (n: number, x: string) => `vec${n}f(${x})`;
     const cast = (x: string, from: Type, to: Type) => width(from) === width(to) ? x : width(from) === 1 ? vec(width(to), x) : width(to) < width(from) ? `(${x}).${'xyzw'.slice(0, width(to))}` : vec(width(to), [x, ...Array.from({ length: width(to) - width(from) }, (_, i) => i + width(from) === 3 ? '1.0' : '0.0')].join(', '));
     const refs: string[] = [], uniform: Numeric[] = [], lines: string[] = [], keys: string[] = [], expressions: string[] = [];
     let foldedNodes = 0, commonExpressions = 0;
@@ -60,15 +60,15 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
             continue;
         }
         const fit = (port: string) => cast(a[port], node.inputs[port].type, node.type);
-        const select = (condition: string, yes: string, no: string) => wg ? `select(${no}, ${yes}, ${condition})` : `((${condition}) ? (${yes}) : (${no}))`;
+        const select = (condition: string, yes: string, no: string) => `select(${no}, ${yes}, ${condition})`;
         switch (c) {
             case 'noise2d': case 'noise3d': case 'fractal3d': case 'cellnoise2d': case 'cellnoise3d': case 'worleynoise2d': case 'worleynoise3d': {
                 const n=width(node.type), dim=c.endsWith('2d')?2:3, p=dim===2?vec(3,`${a.texcoord}, 0.0`):a.position;
                 const swizzle = (count:number) => n===count?'':`.${'xyzw'.slice(0,n)}`;
                 if(c.startsWith('cellnoise'))expr=`mx_cell(${p},${dim},-1)`;
-                else if(c.startsWith('worley'))expr=`mx_worley(${p},${dim},${n},${a.jitter},${wg?'i32':'int'}(${a.style}))${swizzle(3)}`;
+                else if(c.startsWith('worley'))expr=`mx_worley(${p},${dim},${n},${a.jitter},i32(${a.style}))${swizzle(3)}`;
                 else {
-                    const value=c==='fractal3d'?`mx_fractal(${p},${n},${wg?'i32':'int'}(${a.octaves}),${a.lacunarity},${a.diminish})`:`mx_noise(${p},${dim},${n},false)`;
+                    const value=c==='fractal3d'?`mx_fractal(${p},${n},i32(${a.octaves}),${a.lacunarity},${a.diminish})`:`mx_noise(${p},${dim},${n},false)`;
                     expr=`(${value}${swizzle(4)} * ${fit('amplitude')}${c==='fractal3d'?'':` + ${width(node.type)===1?a.pivot:vec(n,a.pivot)}`})`;
                 }
                 break;
@@ -91,7 +91,7 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
                 expr=terms.length===1?terms[0]:vec(terms.length,terms.join(', '));break;
             }
             case 'dot': expr = a.in; break;
-            case 'extract': expr = `(${a.in})[${wg ? 'i32' : 'int'}(${a.index})]`; break;
+            case 'extract': expr = `(${a.in})[i32(${a.index})]`; break;
             case 'invert': expr = `(${fit('amount')} - ${a.in})`; break;
             case 'remap':
             case 'range': {
@@ -111,7 +111,7 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
             }
             case 'contrast': expr = `((${a.in} - ${fit('pivot')}) * ${fit('amount')} + ${fit('pivot')})`; break;
             case 'luminance': { const l = `dot((${a.in}).rgb, ${a.lumacoeffs})`; expr=vec(width(node.type), width(node.type)===4 ? `${vec(3,l)}, (${a.in}).a` : l); break; }
-            case 'atan2': expr = `${wg ? 'atan2' : 'atan'}(${a.iny}, ${a.inx})`; break;
+            case 'atan2': expr = `atan2(${a.iny}, ${a.inx})`; break;
             case 'rotate2d': expr = `mx_rotate(${a.in}, -${a.amount})`; break;
             case 'rotate3d': expr = `mx_rotate3d(${a.in}, ${a.amount}, ${a.axis})`; break;
             case 'transformpoint':
@@ -142,7 +142,7 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
                 if(c.startsWith('gltf_'))uv=`mx_place2d(${uv},${a.pivot},${vec(2,'1.0')} / ${a.scale},-${a.rotate},${a.offset} * ${vec(2,'-1.0,1.0')},${c==='gltf_colorimage'?'0.0':a.operationorder})`;
                 if (c === 'tiledimage')
                     uv = `((${uv} * ${a.uvtiling} - ${a.uvoffset}) / ${a.realworldimagesize} * ${a.realworldtilesize})`;
-                expr = `mx_image(${wg ? 'i32' : 'int'}(${a.file}), ${uv}, ${vec(4, `${a.default}${width(node.type) === 4 ? '' : `, ${Array(4 - width(node.type)).fill('0.0').join(', ')}`}`)}, ${node.type.startsWith('color') ? 'true' : 'false'})${width(node.type) === 4 ? '' : `.${'xyzw'.slice(0, width(node.type))}`}`;
+                expr = `mx_image(i32(${a.file}), ${uv}, ${vec(4, `${a.default}${width(node.type) === 4 ? '' : `, ${Array(4 - width(node.type)).fill('0.0').join(', ')}`}`)}, ${node.type.startsWith('color') ? 'true' : 'false'})${width(node.type) === 4 ? '' : `.${'xyzw'.slice(0, width(node.type))}`}`;
                 if(c==='gltf_colorimage')expr=`(${expr} * ${a.color} * ${a.geomcolor})`;
                 if(a.factor)expr=`(${expr} * ${a.factor})`;
                 if(c==='gltf_normalmap')expr=`mx_normalmap(${expr}, ${vec(2,'1.0')}, mx_normal, mx_tangent, mx_bitangent)`;
@@ -208,7 +208,7 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
             case 'crossproduct':
                 expr = `cross(${a.in1}, ${a.in2})`;
                 break;
-            default: expr = `${c === 'ln' ? 'log' : c === 'round' && !wg ? 'roundEven' : c}(${a.in})`;
+            default: expr = `${c === 'ln' ? 'log' : c}(${a.in})`;
         }
 
         const key = `${node.type}:${expr}`, prior = keys.indexOf(key);
@@ -219,9 +219,9 @@ export function generateGraphIR(graph: GraphIR, backend: 'webgpu' | 'webgl', nam
         }
         refs[i] = `mx_n${i}`;
         keys.push(key); expressions.push(refs[i]);
-        lines.push(wg ? `  let ${refs[i]} = ${expr};` : `  ${types(node.type).replace('f32', 'float')} ${refs[i]} = ${expr};`);
+        lines.push(`  let ${refs[i]} = ${expr};`);
     }
     for(let i=0;i<graph.terminal.length;i+=3) lines.push(`  result.${graphTerminals[graph.terminal[i]]} = ${ref(graph.terminal[i+1],graphOutputs[graph.terminal[i+2]])};`);
-    const source = wg ? `fn ${name}(base: i32, uv: vec2f, uv1: vec2f, mx_position: vec3f, mx_normal: vec3f, mx_tangent: vec3f, mx_bitangent: vec3f, mx_w2l: mat4x4f, mx_l2w: mat4x4f, initial: MXResult) -> MXResult {\n  var result = initial;\n${lines.join('\n')}\n  return result;\n}` : `MXResult ${name}(int base, vec2 uv, vec2 uv1, vec3 mx_position, vec3 mx_normal, vec3 mx_tangent, vec3 mx_bitangent, mat4 mx_w2l, mat4 mx_l2w, MXResult initial) {\n  MXResult result = initial;\n${lines.join('\n')}\n  return result;\n}`;
+    const source = `fn ${name}(base: i32, uv: vec2f, uv1: vec2f, mx_position: vec3f, mx_normal: vec3f, mx_tangent: vec3f, mx_bitangent: vec3f, mx_w2l: mat4x4f, mx_l2w: mat4x4f, initial: MXResult) -> MXResult {\n  var result = initial;\n${lines.join('\n')}\n  return result;\n}`;
     return { source, parameters, foldedNodes, commonExpressions, foldedWidths };
 }

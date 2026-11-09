@@ -1,7 +1,7 @@
 import { Engine, Render, AmbientLight, SphereLight, Camera, Mesh, OpenPBRMaterial, MaterialGraph, Texture, UdimTexture, createPlaneGeometry } from '../../src/main.js';
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 async function run() {
-    const backend = location.search.includes('webgl') ? 'webgl' : 'webgpu';
+    const backend = 'webgpu';
     const results = [];
     const solid = (rgb: number[]) => ({ width: 4, height: 4, data: new Float32Array(Array.from({ length: 16 }, () => [...rgb, 1]).flat()) });
     const normalMap = new Texture(solid([0.75, 0.5, 1]));

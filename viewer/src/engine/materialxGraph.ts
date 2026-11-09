@@ -275,7 +275,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         const normalized=normalizeGraph(graph);
         warnings.push(...normalized.diagnostics.map(d=>`${d.node??''}${d.port?'.'+d.port:''}: ${d.message}`));
         if(!state.unlit && (['emissionColor','emissionLuminance'].some(p=>p in normalized.terminal)||state.emissionLuminance>0&&['coatColor','coatWeight'].some(p=>p in normalized.terminal)))warnings.push('Lit emission graphs use the constant material fallback.');
-        if(!normalized.diagnostics.length)generateGraph(normalized,'webgpu');
+        if(!normalized.diagnostics.length)generateGraph(normalized);
     }
     const displacement=r.displacement(material,shader);
     if(displacement?.reason)warnings.push(displacement.reason);

@@ -264,7 +264,7 @@ class WGPURayTracePass {
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _graphs?: MaterialGraphState;
-  get graphs() { return this._graphs ??= new MaterialGraphState('webgpu'); }
+  get graphs() { return this._graphs ??= new MaterialGraphState(); }
   private _canTraceOldGraph = false;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
@@ -1154,7 +1154,7 @@ class WGPURayTracePass {
           },
           bake
         );
-        code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan,'webgpu');
+        code = materialGraphShader(code,lightTracing || photonMapping ? {...shader.graphPlan,key:''} : shader.graphPlan);
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
         const moduleStartedAt = shaderCompilationNow();

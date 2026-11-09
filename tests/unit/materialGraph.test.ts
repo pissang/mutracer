@@ -12,8 +12,7 @@ describe('MaterialGraph',()=>{
   const b=new MaterialGraph({nodes:[constant('renamed',0.8)],terminal:{specularRoughness:{node:'renamed'}}});
   const an=normalizeGraph(a),bn=normalizeGraph(b);
   expect(an.diagnostics).toEqual([]);expect(an.nodes).toHaveLength(1);expect(an.key).toBe(bn.key);expect(an.parameters).not.toEqual(bn.parameters);
-  expect(normalizeGraph(a,'webgl').key).not.toBe(an.key);
-  expect(normalizeGraph(a,'webgpu','bindless').key).not.toBe(an.key);
+  expect(normalizeGraph(a,'bindless').key).not.toBe(an.key);
  });
  it('normalizes author order and locates invalid edges',()=>{
   const nodes=[constant('a',0.2),{id:'b',category:'multiply',type:'float' as const,inputs:{in1:{type:'float' as const,connection:{node:'a'}},in2:{type:'float' as const,value:2}}}];

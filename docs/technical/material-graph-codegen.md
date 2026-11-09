@@ -20,7 +20,9 @@ folding uses the same `evaluateNumericNode` as the browser CPU evaluator. Browse
 image sampling and hit-context queries remain outside that numeric evaluator.
 The required native AOT material-graph module executes these functions through
 the byte ABI, checking all supported category/type combinations and complete
-surface/shadow specialization on both shader languages. Browser adapters restore
+surface/shadow specialization. Graphs emit WGSL only: WebGL 2 does not compile
+graph programs, because linking the specialized megakernel through ANGLE took
+tens of seconds and stalled sampling, so graph materials there use their fallback. Browser adapters restore
 resource identities and the original parameter value shapes after generation. Native and
 Hydra uniform ingestion also call `foldGraphTerminal` through the serialized AOT
 runtime. It validates each reachable terminal independently and delegates numeric
@@ -33,7 +35,7 @@ viewer's source data.
 
 `normalizeGraph` walks terminal inputs and node ports in canonical order,
 retains only reachable nodes, assigns topological indices and removes author IDs.
-Its exact key includes the implementation version, backend, texture binding
+Its exact key includes the implementation version, texture binding
 capability and typed edges/parameter slots. A short FNV fingerprint is for
 reporting; caches retain the exact key. Numeric values, booleans, strings from the
 supported enums, and texture identities are data. Backend pipeline keys also
@@ -79,23 +81,13 @@ still own scheduling. Parameter/assignment changes covered by the installed
 structure set can install without compiling. A different set waits for a short
 debounce. WebGPU queues a normal async trace variant. When layout-compatible,
 the old variant and its parameter records continue tracing; installation uploads
-new records and binds the new variant together. WebGL stages separate program
-bindings and polls KHR completion while the active bindings remain usable.
-Background programs do not enter the foreground program-readiness barrier.
-Adapter identity is cached before compiling programs: repeated WebGL getParameter
-queries from diagnostics can flush pending driver work even after KHR polling
-is separated correctly. First-use driver work can still wait at synchronous
-readback; caching the identity does not make that work disappear. Texture/layout
-changes can also encounter driver backpressure at ordinary uniform uploads from
-the presentation pass; KHR link completion is not a guarantee that every later
-GL call is nonblocking.
+new records and binds the new variant together.
 
 Only a plan matching the current request can install. Validation/compile failures
 retain the successful plan and appear in the existing engine diagnostics. A
 successful structural installation advances a generation observed independently
 by each render target, restarting its accumulation without changing the shared
-display schedule. WebGL caches background programs by exact composed source;
-WebGPU uses the existing bounded variant and shader caches.
+display schedule. WebGPU uses the existing bounded variant and shader caches.
 
 Geometry inputs use the hit's local/world transforms and primary tangent frame.
 The browser specialization enables frame construction for graph materials even

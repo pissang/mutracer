@@ -35,7 +35,7 @@ export function graphHash(key: string) {
 }
 /** Canonical port-ordered DFS removes author IDs, declaration order and dead nodes.
  * Exact canonical keys accompany the short hash to avoid cache collisions. */
-export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl' = 'webgpu', capabilities = 'atlas'): NormalizedGraph {
+export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): NormalizedGraph {
     const diagnostics: Diagnostic[] = [], nodes: GraphNode[] = [], parameters: Input['value'][] = [];
     const source = new Map<string, Node>(), indices = new Map<string, number>(), visiting = new Set<string>();
     const report = (code: string, message: string, node?: string, port?: string) => diagnostics.push({ code, message, node, port });
@@ -138,6 +138,6 @@ export function normalizeGraph(graph: MaterialGraph, backend: 'webgpu' | 'webgl'
             report('terminal-type', `Expected ${terminalTypes[port]} terminal`, edge.node, port);
         terminal[port] = { node: index, output };
     }
-    const key = JSON.stringify([GRAPH_IMPLEMENTATION_VERSION, backend, capabilities, nodes.map(({ category, type, inputs }) => ({ category, type, inputs })), terminal]);
+    const key = JSON.stringify([GRAPH_IMPLEMENTATION_VERSION, 'webgpu', capabilities, nodes.map(({ category, type, inputs }) => ({ category, type, inputs })), terminal]);
     return { key, hash: graphHash(key), nodes, terminal, parameters, diagnostics };
 }

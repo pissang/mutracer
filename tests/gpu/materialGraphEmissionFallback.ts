@@ -2,7 +2,7 @@ import {Engine,Render,Camera,Mesh,OpenPBRMaterial,MaterialGraph,Texture,AmbientL
 import {collectEmissiveTriangles} from '../../src/renderer/lightSampling.js';
 const pause=()=>new Promise(r=>setTimeout(r,10));
 async function run(){
- const backend=location.search.includes('webgl')?'webgl':'webgpu',rows=[];
+ const backend='webgpu',rows=[];
  for(const test of [{port:'emissionColor',map:false},{port:'emissionLuminance',map:false},{port:'coatWeight',map:false},{port:'emissionColor',map:true}]){
   const {port}=test,name=port+(test.map?'-map':'');
   const engine=new Engine({backend,canvas:document.createElement('canvas')});engine.display.setSize(48,48);

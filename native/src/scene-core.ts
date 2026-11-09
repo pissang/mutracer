@@ -130,7 +130,7 @@ function productionShader(id: number, shader: SceneShader): Uint8Array {
 }
 function specializeNativeGraphs(source:string,plan:NativeGraphPlan|undefined,unsupportedTransport:boolean):string {
   if(!plan?.key || unsupportedTransport)return source;
-  source=materialGraphShaderIR(source,plan.structures,'webgpu');
+  source=materialGraphShaderIR(source,plan.structures);
   if(plan.structures.some(g=>graphHasTerminal(g,'opacity'))) {
     // HWRT carries the local candidate's instance separately from the software BLAS loop.
     source=source.replace('o + t * d, normal, record))','o + t * d, normal, record, instance))')

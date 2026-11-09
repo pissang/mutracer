@@ -18,7 +18,7 @@ describe('native material graph preparation',()=>{
     it('packs the browser parameter and topology contract for every supported node/type',()=>{
         for(const {label,graph} of materialGraphFixtures()) {
             const native=raw(graph),web=new OpenPBRMaterial({unlit:true});
-            const state=new MaterialGraphState('webgpu');
+            const state=new MaterialGraphState();
             const plan={key:graph.key,materials:[web],graphs:[graph],structures:[graph]};
             state.requested=plan;state.active=plan;
             // request initializes packing's material list; install the normalized fixture afterwards.

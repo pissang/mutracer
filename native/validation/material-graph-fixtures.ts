@@ -1,5 +1,4 @@
 import rayTraceCompute from '../../src/renderer/wgsl/rayTrace.compute.js';
-import rayTraceFragment from '../../src/renderer/glsl/rayTrace.frag.js';
 import MaterialGraph, {type MaterialGraphNode} from '../../src/scene/MaterialGraph.js';
 import {nodeInputs, validNodeType} from '../../src/renderer/materialGraph/nodes.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
@@ -39,17 +38,17 @@ export function materialGraphFixtures() {
 }
 export function materialGraphRequests() {
     const fixtures=materialGraphFixtures();
-    const requests=fixtures.flatMap(({label,graph}) => ['webgpu','webgl'].map(backend => ({label:`${label}-${backend}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),backend,name:'mx_eval'}))})));
+    const requests=fixtures.map(({label,graph}) => ({label,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),name:'mx_eval'}))}));
     for(const {label,graph} of fixtures) requests.push({label:`fold-${label}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),fold:true}))});
     for(const table of ['nodes','inputs','terminal'] as const)for(let offset=0;offset<(table==='terminal'?3:5);offset++) {
         const graph=flattenGraph(fixtures[0].graph);graph[table][offset]=0xffffffff;
         requests.push({label:`invalid-${table}-${offset}`,input:new TextEncoder().encode(JSON.stringify({graph,validate:true}))});
     }
-    for(const backend of ['webgpu','webgl'] as const) for(const compactVertices of [false,true]) {
+    for(const compactVertices of [false,true]) {
         const options={hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:true,hasSceneAlpha:true,compactVertices};
-        const source=backend==='webgpu'?rayTraceCompute(options):rayTraceFragment(options).main;
+        const source=rayTraceCompute(options);
         for(const {label,graph} of fixtures.filter(f=>['noise2d-color3-varying','fractal3d-vector3-varying','gltf_colorimage-color4-varying','extract-float-varying','splitlr-color3-varying','hsvtorgb-color3-varying','rotate3d-vector3-varying','opacity-normal'].includes(f.label))) {
-            requests.push({label:`source-${label}-${backend}-${compactVertices}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),backend,name:'mx_eval',source}))});
+            requests.push({label:`source-${label}-${compactVertices}`,input:new TextEncoder().encode(JSON.stringify({graph:flattenGraph(graph),name:'mx_eval',source}))});
         }
     }
     return requests;

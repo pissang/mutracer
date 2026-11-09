@@ -33,11 +33,9 @@ describe('MaterialX numeric semantics', () => {
         const graph = run(category, inputs);
         expect(graph.diagnostics).toEqual([]);
         expect(evaluateGraph(graph).specularRoughness[0]).toBeCloseTo(expected, 10);
-        for (const backend of ['webgpu', 'webgl'] as const) {
-            const generated = generateGraph(graph, backend);
-            expect(generated.foldedNodes).toBe(1);
-            expect(generated.parameters.at(-1)).toBeDefined();
-        }
+        const generated = generateGraph(graph);
+        expect(generated.foldedNodes).toBe(1);
+        expect(generated.parameters.at(-1)).toBeDefined();
     });
     it('uses divide/rotate/subtract placement, including TRS', () => {
         const graph = run('place2d', { texcoord: v([4, 2]), scale: v([2, 1]), rotate: f(90), offset: v([1, 0]) }, 'vector2');
@@ -71,12 +69,11 @@ describe('MaterialX numeric semantics', () => {
     it('emits deterministic sources independent of parameter values', () => {
         const graph = run('multiply', { in1: f(0.4), in2: f(0.5) });
         const changed = { ...graph, parameters: [2, 3] };
-        for (const backend of ['webgpu', 'webgl'] as const)
-            expect(generateGraph(graph, backend).source).toBe(generateGraph(changed, backend).source);
+        expect(generateGraph(graph).source).toBe(generateGraph(changed).source);
         const division=run('divide',{in1:f(1),in2:f(2)});
         const singular={...division,parameters:[1,0]};
-        for(const backend of ['webgpu','webgl'] as const)expect(generateGraph(division,backend).source).toBe(generateGraph(singular,backend).source);
-        expect(materialGraphShader('unchanged', { key: '', graphs: [], structures: [] }, 'webgpu')).toBe('unchanged');
+        expect(generateGraph(division).source).toBe(generateGraph(singular).source);
+        expect(materialGraphShader('unchanged', { key: '', graphs: [], structures: [] })).toBe('unchanged');
     });
     it('merges repeated expressions without aliasing independent parameters',()=>{
         const input={type:'float' as const,connection:{node:'parts',output:'outx'}};
@@ -87,38 +84,38 @@ describe('MaterialX numeric semantics', () => {
             {id:'b',category:'multiply',type:'float',inputs:{in1:input,in2:input}}
         ],terminal:{specularRoughness:{node:'a'},fuzzRoughness:{node:'b'}}}));
         expect(graph.diagnostics).toEqual([]);
-        for(const backend of ['webgpu','webgl'] as const)expect(generateGraph(graph,backend).commonExpressions).toBeGreaterThan(0);
+        expect(generateGraph(graph).commonExpressions).toBeGreaterThan(0);
         expect(evaluateGraph(graph,{uv:[0.4,0.6]}).specularRoughness[0]).toBeCloseTo(0.16);
     });
     it('locates unsupported emissive-surface semantics while preserving fallback',()=>{
         const graph=new MaterialGraph({nodes:[{id:'color',category:'constant',type:'color3'}],terminal:{emissionColor:{node:'color'}}});
-        const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph})]);
+        const state=new MaterialGraphState();state.request([new OpenPBRMaterial({graph})]);
         expect(state.status).toBe('failed');expect(state.diagnostics[0].code).toBe('unsupported-emission-graph');expect(state.active.key).toBe('');
     });
     it('installs valid materials even when another material graph is unsupported',()=>{
         const valid=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
         const invalid=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node',type:'float'}],terminal:{specularRoughness:{node:'bad'}}});
-        const state=new MaterialGraphState('webgpu');state.request([new OpenPBRMaterial({graph:valid}),new OpenPBRMaterial({graph:invalid})]);
+        const state=new MaterialGraphState();state.request([new OpenPBRMaterial({graph:valid}),new OpenPBRMaterial({graph:invalid})]);
         expect(state.status).toBe('compiling');expect(state.requested.structures).toHaveLength(1);
         expect(state.install(state.requested,state.revision)).toBe(true);expect(state.active.graphs[0]).toBeDefined();expect(state.active.graphs[1]).toBeUndefined();expect(state.status).toBe('failed');
     });
     it('does not report a rejected authored graph as installed',()=>{
         const graph=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
-        const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState('webgpu');
+        const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState();
         state.request([material]);state.install(state.requested,state.revision);const installed=state.installedRevision;
         graph.setNode({id:'a',category:'unknown_node',type:'float'});state.request([material]);
         expect(state.status).toBe('failed');expect(state.installedRevision).toBe(installed);expect(state.revision).toBeGreaterThan(installed);expect(state.diagnostics[0].materialId).toBe(material.aovId);
     });
     it('uses constants when a previously valid graph enters an unsupported material context',()=>{
         const graph=new MaterialGraph({nodes:[{id:'c',category:'constant',type:'color3'}],terminal:{emissionColor:{node:'c'}}});
-        const material=new OpenPBRMaterial({graph,unlit:true}),state=new MaterialGraphState('webgpu');state.request([material]);state.install(state.requested,state.revision);
+        const material=new OpenPBRMaterial({graph,unlit:true}),state=new MaterialGraphState();state.request([material]);state.install(state.requested,state.revision);
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[]).length).toBeGreaterThan(MATERIAL_FLOAT_COUNT);
         material.unlit=false;state.request([material]);
         expect(state.requested.graphs[0]).toBeUndefined();expect(state.diagnostics[0].code).toBe('unsupported-emission-graph');
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
     });
     it('keeps old parameters through compilation and rejects obsolete revisions', () => {
-        const state = new MaterialGraphState('webgpu'), a = new MaterialGraph({ nodes: [{ id: 'a', category: 'constant', type: 'float', inputs: { value: f(0.2) } }], terminal: { specularRoughness: { node: 'a' } } });
+        const state = new MaterialGraphState(), a = new MaterialGraph({ nodes: [{ id: 'a', category: 'constant', type: 'float', inputs: { value: f(0.2) } }], terminal: { specularRoughness: { node: 'a' } } });
         const material = new OpenPBRMaterial({ graph: a });
         state.request([material]);
         const first = state.requested, revision = state.revision;

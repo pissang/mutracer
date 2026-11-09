@@ -8,7 +8,7 @@ const rows=materialGraphCases().map(test=>{
 const terminal=test.graph.terminal.emissionColor!;
 test.graph.setNode({id:'positive-output',category:'add',type:'color3',inputs:{in1:{type:'color3',connection:terminal},in2:{type:'color3',value:[2,2,2]}}});
 test.graph.setTerminal({emissionColor:{node:'positive-output'}});
-const g=normalizeGraph(test.graph,'webgpu');if(g.diagnostics.length)throw Error(JSON.stringify(g.diagnostics));
+const g=normalizeGraph(test.graph);if(g.diagnostics.length)throw Error(JSON.stringify(g.diagnostics));
 const ir=flattenGraph(g),textures:any[]=[];
 for(let i=0;i<g.parameters.length;i++){const t=g.parameters[i];if(t instanceof Texture){ir.parameters[i*4]=textures.length;textures.push({width:t.image.width,height:t.image.height,data:Array.from((t.image as any).data),scale:t.uvScale,offset:t.uvOffset,wrap:[t.wrapS,t.wrapT].map(x=>['repeat','clamp-to-edge','mirrored-repeat'].indexOf(x)),flipY:t.flipY,udim:!!t.udim});}}
 return {name:test.name,ir,authorIds:g.nodes.map(n=>n.id),textures,expected:evaluateGraph(g,{uv:[.37,.61],uv1:[0,0],normal:[0,0,1],tangent:[1,0,0],bitangent:[0,1,0],position:[0,0,0],sample:test.sample}).emissionColor};

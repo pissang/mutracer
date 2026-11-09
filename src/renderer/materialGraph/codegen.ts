@@ -1,15 +1,14 @@
 import type {NormalizedGraph} from './normalize.js';
 import {flattenGraph} from './flatten.js';
 import {generateGraphIR} from './generate.js';
-export type Backend = 'webgpu' | 'webgl';
 export interface GeneratedGraph {
     source: string;
     parameters: NormalizedGraph['parameters'];
     foldedNodes: number;
     commonExpressions: number;
 }
-export function generateGraph(graph: NormalizedGraph, backend: Backend, name = 'mx_eval'): GeneratedGraph {
-    const generated = generateGraphIR(flattenGraph(graph), backend, name);
+export function generateGraph(graph: NormalizedGraph, name = 'mx_eval'): GeneratedGraph {
+    const generated = generateGraphIR(flattenGraph(graph), name);
     const parameters = graph.parameters.slice();
     for (let i=0; i<generated.foldedWidths.length; i++) {
         const start=(graph.parameters.length+i)*4;

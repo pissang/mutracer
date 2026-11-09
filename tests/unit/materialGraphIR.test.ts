@@ -22,11 +22,9 @@ describe('portable material graph IR',()=>{
             const ir=flattenGraph(fixture.graph);
             expect(validateGraphIR(ir),fixture.label).toEqual([]);
             expect(JSON.parse(JSON.stringify(ir))).toEqual(ir);
-            for(const backend of ['webgpu','webgl'] as const) {
-                const generated=generateGraphIR(ir,backend);
-                expect(generated.parameters.length%4).toBe(0);
-                expect(generated.foldedWidths.length).toBe(generated.foldedNodes);
-            }
+            const generated=generateGraphIR(ir);
+            expect(generated.parameters.length%4).toBe(0);
+            expect(generated.foldedWidths.length).toBe(generated.foldedNodes);
         }
     });
     it('folds terminal constants through the shared numeric semantics',()=>{
@@ -55,8 +53,8 @@ describe('portable material graph IR',()=>{
         const a=graph(),b=structuredClone(a);
         b.parameters[0]=1;
         expect(validateGraphIR(b)).toEqual([]);
-        expect(generateGraphIR(a,'webgpu').source).toBe(generateGraphIR(b,'webgpu').source);
-        expect(generateGraphIR(a,'webgpu').parameters).not.toEqual(generateGraphIR(b,'webgpu').parameters);
+        expect(generateGraphIR(a).source).toBe(generateGraphIR(b).source);
+        expect(generateGraphIR(a).parameters).not.toEqual(generateGraphIR(b).parameters);
     });
     it('rejects incompatible versions, cyclic edges and mistyped terminals before emission',()=>{
         const cases=[graph(),graph(),graph(),graph()];
@@ -66,7 +64,7 @@ describe('portable material graph IR',()=>{
         cases[3].terminal[1]=0;
         for(const ir of cases) {
             expect(validateGraphIR(ir).length).toBeGreaterThan(0);
-            expect(()=>generateGraphIR(ir,'webgpu')).toThrow();
+            expect(()=>generateGraphIR(ir)).toThrow();
         }
     });
     it('locates invalid parameter controls and missing normalized inputs',()=>{

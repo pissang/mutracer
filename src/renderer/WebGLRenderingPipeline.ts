@@ -59,7 +59,6 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let elapsedTileTime: number | undefined;
   let tileTimingGeneration = 0;
   let isFirstFrame = true;
-  let graphGeneration = 0;
   let renderFailed = false;
   let disposed = false;
   let renderWidth = 1;
@@ -302,7 +301,6 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     rayTracePass.setCamera(camera);
     aovCamera=camera;
     if (!rayTracePass.preparePrograms()) return true;
-    if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) { graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; }
     const resetAccumulation = isFirstFrame;
     if(resetAccumulation) aov.reset();
     if (execution?.aovs?.length && !rayTracePass.prepareAovs(aov,camera,renderWidth,renderHeight,execution.aovs)) return true;
@@ -616,13 +614,6 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     getAovSamples() { return aov.samples; },
     restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
-      if (rayTracePass.graphs?.status === 'compiling' || graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
-        rayTracePass.setCamera(camera); rayTracePass.preparePrograms();
-        if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
-          graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; sampleCount = 0; return false;
-        }
-        if(rayTracePass.graphs?.status === 'compiling')return false;
-      }
       if (samples < 1 || !execution?.aovs?.length) return true;
       rayTracePass.setCamera(camera); aovCamera = camera;
       return rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,samples,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);

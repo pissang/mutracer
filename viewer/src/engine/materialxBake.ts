@@ -97,11 +97,11 @@ export class HeightBaker {
   private pipelines=new Map<string,Promise<GPUComputePipeline>>();
   constructor(private device:GPUDevice){}
   async bake(description:BakeNodes,images:BakeImage[],width:number,height:number):Promise<BakeResult> {
-    const {normalized,textures}=loadedGraph(description,images),generated=generateGraph(normalized,'webgpu');
+    const {normalized,textures}=loadedGraph(description,images),generated=generateGraph(normalized);
     const key=normalized.key,start=performance.now(),cacheHit=this.pipelines.has(key);
     let pending=this.pipelines.get(key);
     if(!pending) {
-      const source=imageShader+graphMathShader([normalized],'webgpu')+generated.source;
+      const source=imageShader+graphMathShader([normalized])+generated.source;
       const module=this.device.createShaderModule({code:source});
       const bindings=this.device.createBindGroupLayout({entries:[...[0,1,2].map(binding=>({binding,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage' as const}})),{binding:3,visibility:GPUShaderStage.COMPUTE,storageTexture:{access:'write-only',format:'r32float'}}]});
       pending=this.device.createComputePipelineAsync({layout:this.device.createPipelineLayout({bindGroupLayouts:[bindings]}),compute:{module,entryPoint:'main'}});

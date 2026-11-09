@@ -39,24 +39,19 @@ async function sharing(backend: 'webgpu' | 'webgl', count: () => number) {
     }
 }
 async function run() {
-    const backend = location.search.includes('webgl') ? 'webgl' : 'webgpu';
+    const backend = 'webgpu';
     let compiles = 0;
     let failNext = false;
-    const failedPrograms = new Set<WebGLProgram>();
-    const originalStatus = backend === 'webgl' ? WebGL2RenderingContext.prototype.getProgramParameter : undefined;
-    if(originalStatus)WebGL2RenderingContext.prototype.getProgramParameter=function(program,key){if(key===this.LINK_STATUS&&failedPrograms.has(program))return false;return originalStatus.call(this,program,key);};
-    const prototype = backend === 'webgpu' ? GPUDevice.prototype : WebGL2RenderingContext.prototype;
-    const method = backend === 'webgpu' ? 'createComputePipelineAsync' : 'linkProgram', original = (prototype as any)[method];
-    (prototype as any)[method] = function (...args: any[]) {
-        if (backend === 'webgl' || args[0]?.label === 'Ray Trace') {
+    const prototype = GPUDevice.prototype, original = prototype.createComputePipelineAsync;
+    (prototype as any).createComputePipelineAsync = function (...args: any[]) {
+        if (args[0]?.label === 'Ray Trace') {
             compiles++;
             if(failNext) {
                 failNext=false;
-                if(backend==='webgpu')return Promise.reject(new Error('fixture graph pipeline failure'));
-                failedPrograms.add(args[0]);
+                return Promise.reject(new Error('fixture graph pipeline failure'));
             }
         }
-        return original.apply(this,args);
+        return original.apply(this,args as never);
     };
     const engine = new Engine({ backend, canvas: document.createElement('canvas') });
     engine.display.setSize(32, 32);
@@ -165,8 +160,7 @@ async function run() {
     finally {
         render.dispose();
         engine.dispose();
-        (prototype as any)[method] = original;
-        if(originalStatus)WebGL2RenderingContext.prototype.getProgramParameter=originalStatus;
+        prototype.createComputePipelineAsync = original;
     }
 }
 Object.assign(window, { runBenchmark: run });

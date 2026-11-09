@@ -348,8 +348,12 @@ Nodes have stable IDs and typed inputs. Connect an input with
 connections are immutable snapshots; edit them through the graph's methods.
 Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
 
-Both WebGPU and WebGL 2 support the following MaterialX 1.39 categories,
-within the type and sampling limits below:
+Material graphs require WebGPU. WebGL 2 renders graph materials with their
+constants and maps and reports `unsupported-backend` in
+`engine.getDiagnostics()?.materialGraphs`.
+
+WebGPU supports the following MaterialX 1.39 categories, within the type and
+sampling limits below:
 
 - `constant`, `dot`, `image`, `tiledimage`, `texcoord`, `place2d`, `convert`, `normalmap`,
   `gltf_image`, `gltf_colorimage`, `gltf_normalmap`;
@@ -476,8 +480,7 @@ no effect, such as unsupported controls left at zero or image frame inputs at
 their defaults, are ignored. Other unsupported graph inputs use the library's
 fallback behavior. When a network
 can also be baked into ordinary material maps, those maps remain the
-fallback during compilation or rejection. If WebGL 2 remains on “compiling graph”
-after convergence, increase the sample target to resume installation.
+fallback during compilation, after rejection and on WebGL 2.
 Disney Principled and Simple Hair surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
 Subsurface and tangent graph inputs and lit emission graphs retain

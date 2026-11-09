@@ -127,7 +127,7 @@ export function materialGraphCases() {
     return rows;
 }
 async function run() {
-    const backend = location.search.includes('webgl') ? 'webgl' : 'webgpu', engine = new Engine({ backend, canvas: document.createElement('canvas') });
+    const backend = 'webgpu', engine = new Engine({ backend, canvas: document.createElement('canvas') });
     engine.display.setSize(24, 24);
     const material = new OpenPBRMaterial({ unlit: true, emissionColor: [0.2, 0.4, 0.6], emissionLuminance: 1 });
     const geometry = createPlaneGeometry(1, 1, 'vertical');
@@ -183,11 +183,11 @@ async function run() {
                 test.graph.setNode({ id: 'positive-output', category: 'add', type: 'color3', inputs: { in1: { type: 'color3', connection: test.graph.terminal.emissionColor! }, in2: { type: 'color3', value: [2, 2, 2] } } });
                 test.graph.setTerminal({ emissionColor: { node: 'positive-output' } });
             }
-            const graph = normalizeGraph(test.graph, backend);
+            const graph = normalizeGraph(test.graph);
             if (graph.diagnostics.length)
                 throw new Error(test.name + JSON.stringify(graph.diagnostics));
             const expected = evaluateGraph(graph, { uv, uv1: [0, 0], normal, tangent: [1, 0, 0], bitangent: [0, 1, 0], position: [0, 0, 0], sample: test.sample }).emissionColor;
-            const start = performance.now(), generated = generateGraph(graph, backend), codegenMs = performance.now() - start;
+            const start = performance.now(), generated = generateGraph(graph), codegenMs = performance.now() - start;
             material.graph = test.graph;
             let lastBeat=performance.now(),maxEventLoopGapMs=0;const heartbeat=setInterval(()=>{const now=performance.now();maxEventLoopGapMs=Math.max(maxEventLoopGapMs,now-lastBeat);lastBeat=now;},10);
             const firstMs = await settle(true);maxEventLoopGapMs=Math.max(maxEventLoopGapMs,performance.now()-lastBeat);const maxCompileEventLoopGapMs=maxEventLoopGapMs;
