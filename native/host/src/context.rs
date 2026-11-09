@@ -2863,6 +2863,15 @@ mod tests {
                 state.update_lighting(&writes, Some(&state_target)).unwrap();
                 state.reset_target(&mut state_target).unwrap();
                 state.retained.as_ref().unwrap().accept_transform().unwrap();
+                // The full reference must include the accepted matrix edit too.
+                // Otherwise the two contexts query triangles at different x positions.
+                let mesh = u32::from_le_bytes(
+                    input[layout::header::MESH_OFFSET * 4..layout::header::MESH_OFFSET * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let matrix = (mesh + layout::mesh::TRANSFORM) * 4;
+                input[matrix..matrix + 64].copy_from_slice(&bytes[16..80]);
                 let geometry = u32::from_le_bytes(
                     input[layout::header::GEOMETRY_OFFSET * 4
                         ..layout::header::GEOMETRY_OFFSET * 4 + 4]
