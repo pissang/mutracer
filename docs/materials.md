@@ -423,13 +423,10 @@ compile after a short debounce. During compilation, rendering uses the previous
 successful graph and its parameters; the first graph uses the material's constants
 and maps. A successful installation restarts accumulation. Compilation can take
 hundreds of milliseconds or longer and becomes more expensive as a scene uses
-more distinct structures. WebGL's background compilation depends on
-`KHR_parallel_shader_compile`. The first use of a new program can still take
-seconds of driver work. Synchronous HDR readback or other application GL queries
-during that work can block the main thread, including when the extension is
-available. Rendering calls can also pause while new texture/resource layouts are
-prepared or the driver command queue fills. Such changes may keep the last image
-until that support is ready.
+more distinct structures. Texture/resource changes can also pause rendering
+while the last image remains visible.
+Graphs add work at each material hit; opacity graphs also run for shadow rays.
+Ordinary materials in the same scene do not evaluate the graph's nodes.
 Each material retains its own parameters even when it shares graph code; parameter
 memory grows with its reachable inputs and folded values.
 

@@ -90,8 +90,18 @@ by each render target, restarting its accumulation without changing the shared
 display schedule. WebGPU uses the existing bounded variant and shader caches.
 
 Geometry inputs use the hit's local/world transforms and primary tangent frame.
-The browser specialization enables frame construction for graph materials even
-without anisotropy maps. MaterialX normalmap defaults use world-space geometry;
+The browser specialization enables frame construction only for reachable frame
+inputs, normal/anisotropy terminals, or graph materials with constant anisotropy.
+Lobe, transmission and UV1 capabilities likewise follow reachable terminals and
+inputs; editable selectors retain all of their possible UV sets.
+The specialization passes read-only hit context by value and returns the shading
+normal. `MXResult` contains only the scene's reachable terminals and the fallback
+fields needed to recompute emission. Ordinary material hits skip graph evaluation.
+The MaterialX frame flag shares the existing direction flag word: bit 0 selects
+texture/rotation directions, bit 1 selects the MaterialX frame. Keep this value
+struct's size stable; a separate graph boolean caused a substantial Metal kernel
+slowdown even on hits without a graph. The allocation mechanism is driver-dependent.
+MaterialX normalmap defaults use world-space geometry;
 explicit geometry nodes default to object space. Image nodes reuse the existing
 texture decoding, filtering and UDIM path.
 
