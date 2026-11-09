@@ -455,8 +455,10 @@ memory grows with its reachable inputs and folded values.
 Read `engine.getDiagnostics()?.materialGraphs` for `status` (`idle`, `compiling`,
 `ready`, `failed`), requested/installed revisions, topology count, compilation
 measurements and located diagnostics (`code`, `message`, `materialId`, `node`, `port`).
-Node and port validation errors keep the last successful result for that material;
-valid graphs on other materials can still install. The fallback is the constant
+A scene containing only compatible image graphs reports `idle` with topology
+count zero; its installed revision still advances. Node and port validation errors
+keep the last successful result for that material; valid graphs on other materials
+can still install. The fallback is the constant
 material if no successful graph exists. Shader failures do the same. Keep calling `refine()` or use
 RenderLoop while a graph compiles. Shader/program caches consume memory as new
 structures are tried; disposing the engine releases them.

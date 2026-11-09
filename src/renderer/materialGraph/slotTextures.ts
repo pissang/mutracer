@@ -104,6 +104,17 @@ class ChannelCopy {
 export class SlotTextures {
     private cache = new WeakMap<Texture, {image: Texture['image']; version: number; pixels: Map<string, Texture['image']>; samplers: Map<string, Texture>; rejected: Set<string>}>();
     private copier?: ChannelCopy;
+    private capabilities = new WeakMap<OpenPBRMaterial, OpenPBRMaterial>();
+    private overrides = new WeakMap<OpenPBRMaterial, Partial<OpenPBRMaterial>>();
+    apply(material: OpenPBRMaterial, snapshot: OpenPBRMaterial) {
+        const overrides = this.overrides.get(snapshot);
+        if (!overrides) return snapshot;
+        if (material.aovId === snapshot.aovId && (Object.keys(material) as (keyof OpenPBRMaterial)[]).every(key => key in overrides || Object.is(material[key], snapshot[key]))) return snapshot;
+        const result = Object.assign(Object.create(Object.getPrototypeOf(material)), material, overrides) as OpenPBRMaterial;
+        result.aovId = material.aovId;
+        return result;
+    }
+    getCapabilities(material: OpenPBRMaterial) { return this.capabilities.get(material) ?? material; }
     finish() { this.copier?.dispose(); this.copier = undefined; }
     private texture(source: Texture, map: DirectMap) {
         let cached = this.cache.get(source);
@@ -152,9 +163,19 @@ export class SlotTextures {
         const {plan, sources} = result;
         const lowered = Object.assign(Object.create(Object.getPrototypeOf(material)), material, plan.values) as OpenPBRMaterial;
         lowered.aovId = material.aovId;
+        const overrides: Partial<OpenPBRMaterial> = {...plan.values};
         try {
-            for (const map of plan.maps) lowered[map.slot] = this.texture(sources.get(map.node)!, map);
+            for (const map of plan.maps) overrides[map.slot] = lowered[map.slot] = this.texture(sources.get(map.node)!, map);
         } catch { return; } // Preserve the graph on unavailable/failed image conversion.
+        this.overrides.set(lowered, overrides);
+        const weights = {coatWeightMap: 'coatWeight', transmissionMap: 'transmissionWeight', metalnessMap: 'baseMetalness'} as const;
+        const fields = plan.maps.flatMap(map => map.slot in weights ? [weights[map.slot as keyof typeof weights]] : []);
+        if (fields.length) {
+            const capability = Object.assign(Object.create(Object.getPrototypeOf(lowered)), lowered) as OpenPBRMaterial;
+            capability.aovId = lowered.aovId;
+            for (const field of fields) capability[field] = 1;
+            this.capabilities.set(lowered, capability);
+        }
         return lowered;
     }
 }

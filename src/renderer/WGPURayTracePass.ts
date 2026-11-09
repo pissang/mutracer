@@ -2602,7 +2602,7 @@ class WGPURayTracePass {
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable | WGPUBindlessMaterialData, mergedGeometry: Geometry) {
-    materials = materialData.materials ?? materials;
+    materials = materialData.capabilityMaterials ?? materials;
     const hasTransmission = materials.some((m) => m.transmissionWeight > 0);
     if (hasTransmission !== this._hasTransmission) {
       this._hasTransmission = hasTransmission;

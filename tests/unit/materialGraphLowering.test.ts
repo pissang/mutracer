@@ -6,6 +6,7 @@ import {SlotTextures,materialSlotPlan,slotTextureSource,slotTextureSources} from
 import {MaterialGraphState} from '../../src/renderer/materialGraph/state.js';
 import {MaterialChangeTracker} from '../../src/renderer/materialChanges.js';
 import {planIndependentTextures} from '../../src/renderer/WGPUBindlessTextures.js';
+import {materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
 import {planTextureAtlas} from '../../src/renderer/textureAtlas.js';
 function fixture() {
@@ -75,6 +76,26 @@ describe('library graph slot lowering',()=>{
         expect(result.specularWeight).toBe(.5);
         expect((result.specularWeightMap!.image as {data:Uint8Array}).data).toEqual(new Uint8Array([32,64,192,192]));
         expect(new MaterialData([result],[],()=>1).bufferData.specularWeightMapIndex).toEqual([0]);
+    });
+    it('restores authored constants and overridden texture references when a terminal is disconnected',()=>{
+        const {material,graph}=fixture(),state=new MaterialGraphState();
+        const original=new Texture({width:1,height:1,data:new Uint8Array([10,80,30,255])});material.roughnessMap=original;
+        state.request([material]);const lowered=state.renderMaterials([material])[0];
+        material.specularWeight=.25;
+        graph.setNode({id:'uv',category:'texcoord',type:'vector2'}).setNode({id:'color',category:'convert',type:'color3',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}).setTerminal({baseColor:{node:'color'}});
+        state.request([material]);expect(state.renderMaterials([material])[0].specularWeight).toBe(.25);const textures=state.textures();expect(textures).toContain(original);expect(textures).toContain(lowered.roughnessMap);
+        const base=new MaterialData([lowered],[],()=>1).getBufferArray();
+        const roughness=materialLayoutFields().find(field=>field.name==='roughness')!.offset/4;
+        const index=materialLayoutFields().find(field=>field.name==='roughnessMapIndex')!.offset/4;
+        expect(state.pack(base,textures)[roughness]).toBe(.5);
+        state.install(state.requested,state.revision);
+        const packed=state.pack(base,textures);expect(packed[roughness]).toBe(Math.fround(.1));expect(packed[index]).toBe(textures.indexOf(original));
+    });
+    it('retains reachable slot capabilities across zero-gain edits without changing packed values',()=>{
+        const {material,graph}=fixture(),state=new MaterialGraphState();graph.setTerminal({coatWeight:{node:'gain'}}).setInput('gain','in2',{type:'float',value:0});
+        state.request([material]);expect(state.slotCapabilities()[0].coatWeight).toBe(1);expect(state.renderMaterials([material])[0].coatWeight).toBe(0);
+        graph.setInput('gain','in2',{type:'float',value:.5});state.request([material]);
+        expect(state.slotCapabilities()[0].coatWeight).toBe(1);expect(state.active.key).toBe('');expect(state.renderMaterials([material])[0].coatWeight).toBe(.5);
     });
     it('keeps transmission-medium and glTF roughness conversion contexts on the graph path',()=>{
         const {material,graph}=fixture();

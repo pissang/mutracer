@@ -19,10 +19,14 @@ export class WGPUBindlessMaterialData {
   private readonly displacementMaps: Texture[];
   private materialCount: number;
   materials: OpenPBRMaterial[];
+  private readonly retainedCapabilities: OpenPBRMaterial[];
+  get capabilityMaterials() { return this.graphs?.capabilityMaterials(this.retainedCapabilities) ?? this.materials; }
   constructor(materials: OpenPBRMaterial[], lights: SceneLight[], private readonly graphs?: MaterialGraphState) {
     this.materialCount = materials.length; graphs?.request(materials);
+    this.retainedCapabilities = graphs?.slotCapabilities() ?? [];
     materials = this.materials = graphs?.renderMaterials(materials) ?? materials;
-    const extra = graphs?.textures() ?? [];
+    const ordinaryTextures = new Set(materials.flatMap(material => MATERIAL_TEXTURE_NAMES.flatMap(name => material[name] ? [material[name]!] : [])));
+    const extra = (graphs?.textures() ?? []).filter(texture => !ordinaryTextures.has(texture));
     if(extra.length) materials = [...materials, ...extra.map(map => new OpenPBRMaterial({map}))];
     const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
     this.textures = maps.textures.slice();
@@ -38,6 +42,7 @@ export class WGPUBindlessMaterialData {
       this.bufferData[slot.index] = maps.indices[slot.property];
       if (slot.define) this.defines[slot.define] = maps.indices[slot.property].filter(index => index >= 0).length;
     }
+    for (const slot of MATERIAL_TEXTURE_SLOTS) if (slot.define && this.capabilityMaterials.some(material => material[slot.property])) this.defines[slot.define] = Math.max(1, this.defines[slot.define] ?? 0);
     this.bufferData.normalMapIndex = this.bufferData.normalMapIndex.map((index,i) => index >= 0 && materials[i].normalMap?.normalMapFrame === 'materialx' ? index + 0.5 : index);
     this.bufferData.mapUvChannel = this.textures.map(t => t.uvChannel);
     this.bufferData.mapColorLinear = this.textures.map(t => isUdimTexture(t) ? 2 + textureColorLinear(t) : textureColorLinear(t));

@@ -771,7 +771,7 @@ class WebGLRayTracePass {
   }
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
-    materials = materialData.materials ?? materials;
+    materials = materialData.capabilityMaterials ?? materials;
     // Avoid too much shader compilation
     const STACK_SIZE = 50;
     const hasShadowCatcher = materials.some((m) => m.shadowCatcher);
@@ -779,7 +779,7 @@ class WebGLRayTracePass {
     const HAS_MEDIUM = materials.some(materialUsesMedium);
 
     this._hasShadowCatcher = hasShadowCatcher;
-    this._graphMaterials = materials.filter(m => !!m.graph).length;
+    this._graphMaterials = (materialData.materials ?? materials).filter(m => !!m.graph).length;
     this._hasTransmission = materials.some(
       (m) =>
         m.transmissionWeight > 0 ||

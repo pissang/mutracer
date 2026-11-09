@@ -1,6 +1,6 @@
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import {slotTextureSources} from './materialGraph/slotTextures.js';
-import {MATERIAL_TEXTURE_NAMES} from './materialTextureSlots.js';
+import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureSlots.js';
 import MaterialData from './MaterialData.js';
 import { packMaterialBuffer } from './materialLayout.js';
 import { repackMaterialParams } from './materialParams.js';
@@ -156,6 +156,8 @@ class MaterialTable {
   private _materialCount = 0;
   materials: OpenPBRMaterial[] = [];
   private readonly slotState: MaterialGraphState;
+  private readonly retainedCapabilities: OpenPBRMaterial[];
+  get capabilityMaterials() { return this.slotState.capabilityMaterials(this.retainedCapabilities); }
 
   private _displacementMaps: Texture[] = [];
   private _lightTexturesIndices: number[] = [];
@@ -171,8 +173,10 @@ class MaterialTable {
     this.slotState = graphs ?? new MaterialGraphState();
     this.slotState.request(materials);
     if (!graphs) this.slotState.install(this.slotState.requested, this.slotState.revision);
+    this.retainedCapabilities = this.slotState.slotCapabilities();
     materials = this.materials = this.slotState.renderMaterials(materials);
-    const graphTextures = graphs?.textures() ?? [];
+    const ordinaryTextures = new Set(materials.flatMap(material => MATERIAL_TEXTURE_NAMES.flatMap(name => material[name] ? [material[name]!] : [])));
+    const graphTextures = (graphs?.textures() ?? []).filter(texture => !ordinaryTextures.has(texture));
     const packedMaterials = graphTextures.length ? [...materials, ...graphTextures.map(map => new OpenPBRMaterial({map}))] : materials;
     const textureSource = slotTextureSources(packedMaterials.flatMap(material => MATERIAL_TEXTURE_NAMES.flatMap(name => material[name] ? [material[name]!] : [])));
     const data = new MaterialData(packedMaterials,
@@ -191,6 +195,7 @@ class MaterialTable {
     this._graphTextures = data.textures as Texture[];
     this.bufferData = data.bufferData;
     this.defines = data.defines;
+    for (const slot of MATERIAL_TEXTURE_SLOTS) if (slot.define && this.capabilityMaterials.some(material => material[slot.property])) this.defines[slot.define] = Math.max(1, this.defines[slot.define] ?? 0);
     this._displacementMaps = data.displacementMaps as Texture[];
     this._lightTexturesIndices = data.lightTexturesIndices;
 

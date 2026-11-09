@@ -1,3 +1,6 @@
+import {createMaterialBufferData} from '../materialParams.js';
+import {packMaterialBuffer} from '../materialLayout.js';
+import {MATERIAL_TEXTURE_SLOTS} from '../materialTextureSlots.js';
 import {SlotTextures} from './slotTextures.js';
 import {flattenGraphUnchecked} from './flatten.js';
 import {graphContextDiagnostics} from './context.js';
@@ -21,7 +24,7 @@ const empty = (): GraphPlan => ({ key: '', graphs: [], structures: [] });
 export interface MaterialGraphCompilationState {
     /** Latest requested revision, initially zero. */ revision: number;
     /** Latest fully valid installed revision, initially zero. */ installedRevision: number;
-    /** idle before graphs; compiling includes debounce; ready or failed afterwards. */ status: 'idle' | 'compiling' | 'ready' | 'failed';
+    /** Idle when no graph program is needed; compiling includes debounce; ready or failed otherwise. Default idle. */ status: 'idle' | 'compiling' | 'ready' | 'failed';
     /** Located graph or driver failures. Default empty. */ diagnostics: MaterialGraphDiagnostic[];
     /** Last installed graph program measurements; browser driver stages are combined. Default undefined. */
     compilation?: {
@@ -30,7 +33,7 @@ export interface MaterialGraphCompilationState {
         moduleCreationTimeMs: number;
         totalTimeMs?: number;
     };
-    /** Distinct reachable graph structures in the requested scene. Default zero. */ topologyCount: number;
+    /** Distinct structures requiring graph evaluation; texture-slot plans are excluded. Default zero. */ topologyCount: number;
 }
 /** Graph data is staged independently of uniforms used by the installed pipeline.
  * The existing backend pipeline caches own compilation/scheduling; this class only
@@ -38,6 +41,7 @@ export interface MaterialGraphCompilationState {
 export class MaterialGraphState {
     capabilities = 'atlas';
     private readonly slotTextures = new SlotTextures();
+    private hasSlotHistory = false;
     active = empty();
     requested = empty();
     revision = 0;
@@ -77,7 +81,7 @@ export class MaterialGraphState {
             };
             validateContext(graph);
             const lowered = graph.diagnostics.length ? undefined : this.slotTextures.lower(material);
-            if (lowered) { slots.set(material, lowered); return undefined; }
+            if (lowered) { this.hasSlotHistory = true; slots.set(material, lowered); return undefined; }
             if (graph.diagnostics.length && !this.constantFallback.has(material)) {
                 const retainedSlots = this.active.slots?.get(material);
                 if (retainedSlots) slots.set(material, retainedSlots);
@@ -137,8 +141,16 @@ export class MaterialGraphState {
     }
     get diagnosticsState(): MaterialGraphCompilationState { return { revision: this.revision, installedRevision: this.installedRevision, status: this.status, compilation: this.compilation && {...this.compilation}, diagnostics: this.diagnostics.map(d => ({...d})), topologyCount: this.requested.structures.length }; }
     renderMaterials(materials: OpenPBRMaterial[]): OpenPBRMaterial[] {
-        return materials.map(material => this.constantFallback.has(material) ? material : this.requested.slots?.get(material) ??
-            (material.graph ? this.active.slots?.get(material) : undefined) ?? material);
+        return materials.map(material => {
+            const snapshot = this.requested.slots?.get(material) ?? (material.graph ? this.active.slots?.get(material) : undefined);
+            return this.constantFallback.has(material) || !snapshot ? material : this.slotTextures.apply(material, snapshot);
+        });
+    }
+    slotCapabilities(): OpenPBRMaterial[] {
+        return [...new Set([...(this.active.slots?.values() ?? []), ...(this.requested.slots?.values() ?? [])])].map(material => this.slotTextures.getCapabilities(material));
+    }
+    capabilityMaterials(retained: readonly OpenPBRMaterial[] = []): OpenPBRMaterial[] {
+        return [...this.materials, ...retained, ...this.slotCapabilities()];
     }
     textures(): Texture[] {
         const textures = new Set<Texture>();
@@ -147,9 +159,32 @@ export class MaterialGraphState {
                 for (const value of graph?.parameters ?? [])
                     if (value instanceof Texture)
                         textures.add(value);
+        if (this.hasSlotHistory) {
+            for (const material of [...this.materials, ...(this.active.slots?.values() ?? []), ...(this.requested.slots?.values() ?? [])])
+                for (const slot of MATERIAL_TEXTURE_SLOTS) {
+                    const texture = material[slot.property];
+                    if (texture) textures.add(texture);
+                }
+        }
         return [...textures];
     }
     pack(buffer: Float32Array, textures: readonly Texture[]) {
+        if (this.hasSlotHistory) {
+            // Pipeline installation can remove a terminal that the previous slot
+            // plan overrode. Restore authored rows before applying graph outputs;
+            // the resource table stages both authored and retained slot images.
+            const materials = this.materials.map(material => {
+                const snapshot = this.active.slots?.get(material);
+                return this.constantFallback.has(material) || !snapshot ? material : this.slotTextures.apply(material, snapshot);
+            });
+            const data = createMaterialBufferData(materials);
+            for (const slot of MATERIAL_TEXTURE_SLOTS) data[slot.index] = materials.map(material => {
+                const texture = material[slot.property];
+                const index = texture ? textures.indexOf(texture) : -1;
+                return slot.property === 'normalMap' && index >= 0 && texture?.normalMapFrame === 'materialx' ? index + .5 : index;
+            });
+            buffer = packMaterialBuffer(data);
+        }
         if (!this.active.key)
             return buffer;
         const chunks: number[][] = [];

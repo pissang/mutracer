@@ -129,9 +129,15 @@ storage or bindless GPU images. Gains do not enter the image-cache key.
 
 Lowered plans use internal material snapshots. Gain-only edits repack parameters;
 resource/sampler changes rebuild texture metadata without graph compilation.
-A transition to graph evaluation keeps the previous direct slots while the
-requested shader compiles; the installed graph then overrides its connected
-inputs. Validation failures retain the installed result. The normal frame uses
+A transition to graph evaluation stages authored and retained slot images while
+the requested shader compiles. Packing selects installed slot overrides or the
+authored rows before applying graph outputs, so disconnecting a terminal restores
+its authored constants/maps at installation. Slot snapshots override only connected
+inputs; unconnected material edits remain live. Reachable coat, transmission and
+metal slot capabilities stay enabled through zero-gain edits, avoiding a new
+program when a compatible gain crosses zero. A table retains capabilities needed
+by either staged result until its resources are rebuilt. Validation failures retain
+the installed result. The normal frame uses
 an internal half-integer normal-map index, so truncation still addresses the
 original texture. No public Texture option or native descriptor is required.
 The ordinary cotangent normal path and no-graph shader source remain unchanged.
