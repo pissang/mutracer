@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {archiveName, cCompiler, executable, nativeTar, nativeToolchainEnv, spawnNative, viewerPlatform, windows} from './platform.mjs';
+import {archiveName, cCompiler, executable, macosDeploymentTarget, nativeTar, nativeToolchainEnv, spawnNative, viewerPlatform, windows} from './platform.mjs';
 import {checkSdkExports, nativeLinkArguments, publicApiSymbols} from './sdk-symbols.mjs';
 import {bundleWindowsRuntime} from './windows-redist.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
@@ -151,6 +151,7 @@ for (const kind of ['shared', 'static']) {
   if (windows) rmSync(resolve(lib, 'consumer.obj'), {force: true});
 }
 const summary = {platform, version, abi, exports, nativeLibraries,
+  ...(mac ? {macosDeploymentTarget} : {}),
   staticBytes: statSync(resolve(lib, staticName)).size, sharedBytes: statSync(shared).size,
   validated: {exports: true, staticConsumer: true, sharedConsumer: true, staticArchiveUnmodified: true}};
 if (!readFileSync(sourceStatic).equals(readFileSync(resolve(lib, staticName)))) throw Error('Static SDK archive was modified');

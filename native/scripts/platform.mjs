@@ -1,6 +1,7 @@
 // Names at the native toolchain/OS boundary; renderer data stays platform-neutral.
 import {delimiter,resolve,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
+export const macosDeploymentTarget = '14.0';
 export const windows = process.platform === 'win32';
 // Git Bash's GNU tar treats a Windows drive letter as a remote archive host.
 export const nativeTar = windows ? resolve(process.env.SystemRoot??'C:\\Windows','System32/tar.exe') : 'tar';
@@ -41,6 +42,8 @@ export function spawnNative(command,args,options={}) {
 
 export function nativeToolchainEnv(environment=process.env) {
   const env={...environment};
+  // Apply to rustc, cc-rs, scriptc's clang and C/ObjC consumers alike.
+  if(process.platform==='darwin')env.MACOSX_DEPLOYMENT_TARGET=macosDeploymentTarget;
   if(windows) {
     const path=Object.keys(env).find(key=>key.toLowerCase()==='path');
     const previous=path?env[path]:'';

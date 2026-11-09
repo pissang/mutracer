@@ -1,6 +1,6 @@
 import {existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync} from 'node:fs';
 import {delimiter, resolve} from 'node:path';
-import {executable, nativeTar, windows} from './platform.mjs';
+import {executable, macosDeploymentTarget, nativeTar, windows} from './platform.mjs';
 
 const excluded = /^(?:node|nodejs|npm|npx|cargo|rustc|rustup|scriptc)(?:\.(?:exe|cmd|bat|com))?$/i;
 
@@ -104,7 +104,8 @@ endif()
     const build = resolve(directory, kind);
     run(cmake, ['-S', source, '-B', build, `-DCMAKE_PREFIX_PATH=${prefix}`,
       `-DSDK_TARGET=${kind === 'shared' ? 'mutracer' : 'mutracer_static'}`,
-      '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
+      '-DCMAKE_BUILD_TYPE=Release',
+      ...(process.platform === 'darwin' ? [`-DCMAKE_OSX_DEPLOYMENT_TARGET=${macosDeploymentTarget}`] : []), '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
       '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', ...(!windows ? ['-G', 'Unix Makefiles', `-DCMAKE_MAKE_PROGRAM=${make}`] : [])], options);
     run(cmake, ['--build', build, '--config', 'Release', '--verbose'], options);
     run(resolve(build, 'bin', executable('consumer')), [], options);
