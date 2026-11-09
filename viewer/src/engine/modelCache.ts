@@ -127,7 +127,6 @@ export interface TextureSampling {
 /** UV repeat and orientation of an imported texture; uploads otherwise follow the texture they replace. */
 export interface TextureTransform {
   colorSpace?:'srgb'|'linear';
-  normalMapFrame?:'cotangent'|'materialx';
   uvScale: [number, number];
   flipY: boolean;
   uvOffset?:[number,number];
@@ -143,7 +142,6 @@ function readTransform(value: unknown): TextureTransform | undefined {
   const wraps:TextureWrapMode[]=['repeat','clamp-to-edge','mirrored-repeat'];
   return { uvScale: [t.uvScale[0], t.uvScale[1]], flipY: t.flipY,
     ...(t.colorSpace==='srgb'||t.colorSpace==='linear'?{colorSpace:t.colorSpace}:{}),
-    ...(t.normalMapFrame==='cotangent'||t.normalMapFrame==='materialx'?{normalMapFrame:t.normalMapFrame}:{}),
     ...(Array.isArray(t.uvOffset)&&t.uvOffset.length===2&&t.uvOffset.every(Number.isFinite)?{uvOffset:[...t.uvOffset] as [number,number]}:{}),
     ...(t.uvChannel===0||t.uvChannel===1?{uvChannel:t.uvChannel}:{}),
     ...(t.wrapS&&wraps.includes(t.wrapS)?{wrapS:t.wrapS}:{}),...(t.wrapT&&wraps.includes(t.wrapT)?{wrapT:t.wrapT}:{}) };

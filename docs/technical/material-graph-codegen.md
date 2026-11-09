@@ -105,15 +105,42 @@ MaterialX normalmap defaults use world-space geometry;
 explicit geometry nodes default to object space. Image nodes reuse the existing
 texture decoding, filtering and UDIM path.
 
-The viewer lowers image networks only when existing slots can preserve their
-operations. Channel copying preserves decoded image channels; scalar sRGB decoding,
-nonzero output bias, nonlinear color math, and unsupported coordinate transforms
-retain graphs. Missing or undecodable direct-map resources also retain the graph
-and its image defaults. A texture's optional MaterialX normal frame uses the same
-world-space decode as a normal terminal, selected by a half-integer normal-map
-index; truncation still addresses the original texture. The ordinary cotangent
-normal path remains the default. This browser slot specialization does not add
-native descriptor options or change the default native shader.
+The browser library lowers image networks during material preparation when
+existing slots preserve their operations. The authored graph/material remain
+unchanged. Slot plans support fixed UV sets, affine scale/offset, channel
+selection, uniform gain and default world-space normalmap frames. Source Texture
+UV transforms follow graph coordinates; color decoding remains at the sample
+site. Nonzero bias, nonlinear math, scalar sRGB decoding, projected UVs,
+conflicting combined maps, transmission-medium or glTF anisotropy conversion
+contexts, and unavailable resources retain the graph. Additional coat, specular
+and fuzz slots require bounded image channels to preserve their clamp order.
+
+Channel variants are cached by source identity/version and swizzle; sampler
+variants additionally include UV, wrap, encoding and normal-frame metadata.
+Raw pixel arrays are reordered without changing their component type. DOM
+images first use the atlas's Canvas color conversion, then a temporary WebGL 2
+channel-copy pass shared by both backends,
+without image-sized CPU readback. A one-pixel MIN-alpha reduction rejects
+nonopaque sources before swizzling because Canvas alpha composition/resizing
+would otherwise change channel values. Temporary GPU resources are released
+at the end of each preparation batch; failed copies retain the graph until
+source invalidation. Logical samplers over the same derived pixels share atlas
+storage or bindless GPU images. Gains do not enter the image-cache key.
+
+Lowered plans use internal material snapshots. Gain-only edits repack parameters;
+resource/sampler changes rebuild texture metadata without graph compilation.
+A transition to graph evaluation stages authored and retained slot images while
+the requested shader compiles. Packing selects installed slot overrides or the
+authored rows before applying graph outputs, so disconnecting a terminal restores
+its authored constants/maps at installation. Slot snapshots override only connected
+inputs; unconnected material edits remain live. Reachable coat, transmission and
+metal slot capabilities stay enabled through zero-gain edits, avoiding a new
+program when a compatible gain crosses zero. A table retains capabilities needed
+by either staged result until its resources are rebuilt. Validation failures retain
+the installed result. The normal frame uses
+an internal half-integer normal-map index, so truncation still addresses the
+original texture. No public Texture option or native descriptor is required.
+The ordinary cotangent normal path and no-graph shader source remain unchanged.
 
 ## Current boundaries
 

@@ -21,7 +21,9 @@ export function materialXNormalShader(source:string) {
     source=source.replace(declaration,helper+'\n'+declaration);
     // The primary normal changes in world space after the instance transform.
     source=source.replace('if (normalMapIndex >= 0) {','if (normalMapIndex >= 0 && fract(matData.normalMapIndex) < 0.25) {');
-    source=source.replace('if (directionMaterial.anisotropyMapIndex >= 0.0', 'if (fract(directionMaterial.normalMapIndex) > 0.25 || directionMaterial.anisotropyMapIndex >= 0.0');
+    // Keep the leading graph anchor so graph specialization can add its frame
+    // condition even after the last ordinary normal slot has been retired.
+    source=source.replace('if (directionMaterial.anisotropyMapIndex >= 0.0', 'if (directionMaterial.anisotropyMapIndex >= 0.0 || fract(directionMaterial.normalMapIndex) > 0.25');
     source=source.replace('(*ma).anisotropyDirectionEnabled = select(0u, 1u, matData.specularAnisotropyRotation != 0.0);', '(*ma).anisotropyDirectionEnabled = select(0u, 1u, matData.specularAnisotropyRotation != 0.0) | select(0u, 2u, fract(matData.normalMapIndex) > 0.25);');
     source=source.replace('(*ma).anisotropyDirectionEnabled = 1u;', '(*ma).anisotropyDirectionEnabled |= 1u;');
     let calls=0;

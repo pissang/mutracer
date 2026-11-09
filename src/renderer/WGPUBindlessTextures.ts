@@ -1,3 +1,4 @@
+import {slotTextureSources} from './materialGraph/slotTextures.js';
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';
@@ -12,7 +13,13 @@ import {bindlessLimitReason, createResourceTable, FIRST_TEXTURE_SLOT, RESOURCE_T
 export interface TextureExtent {width: number; height: number;}
 export function planIndependentTextures(textures: readonly Texture[], budget: number, dimension: number) {
   const floatStorage = textures.some(textureFloatStorage), bytesPerPixel = floatStorage ? 8 : 4;
-  const indices = [...new Map(textures.map((t, i) => [t, i])).values()];
+  const sourceOf = slotTextureSources(textures);
+  const seen = new Map<object, Set<boolean>>(), indices: number[] = [];
+  textures.forEach((texture, i) => {
+    const source = sourceOf(texture); let flips = seen.get(source);
+    if (!flips) { flips = new Set(); seen.set(source, flips); }
+    if (!flips.has(texture.flipY)) { flips.add(texture.flipY); indices.push(i); }
+  });
   for (const {image} of textures) if (!Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height) || image.width < 1 || image.height < 1) {
     throw new Error('Material textures require positive integer dimensions.');
   }
@@ -33,7 +40,7 @@ export function independentTexturePixels(texture: Texture, size: TextureExtent, 
   if (isTextureDataSource(texture.image)) {
     writeRawAtlasPlacement(data, size.width, {index: 0, layer: 0, x: 0, y: 0, ...size}, {image: texture.image, flipY: texture.flipY}, floatStorage);
   } else {
-    const canvas = createCanvas(size.width, size.height), context = canvas.getContext('2d');
+    const canvas = createCanvas(size.width, size.height), context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('Unable to prepare material texture pixels.');
     if (texture.flipY) {context.translate(0, size.height); context.scale(1, -1);}
     if (isProceduralSkyImage(texture.image)) throw new Error('ProceduralSky is only supported as an environment or background.');
@@ -87,11 +94,16 @@ export class WGPUBindlessTextures {
     const plan = planIndependentTextures(textures, budget, this.device.limits.maxTextureDimension2D);
     const format = plan.floatStorage ? 'rgba16float' : 'rgba8unorm';
     const next = new Map<Texture, TextureEntry>(), created: GPUTexture[] = [];
+    const sourceOf = slotTextureSources(textures);
     let newTable: ResourceTable | undefined, newBuffer: GPUBuffer | undefined;
     try {
       textures.forEach((texture, i) => {
         if (next.has(texture)) return;
-        const size = plan.sizes[i], old = this.entries.get(texture);
+        const size = plan.sizes[i];
+        const sameSource = (t: Texture) => sourceOf(t) === sourceOf(texture) && t.flipY === texture.flipY;
+        const alias = [...next].find(([t]) => sameSource(t))?.[1];
+        if (alias) { next.set(texture, alias); return; }
+        const old = this.entries.get(texture) ?? [...this.entries].find(([t]) => sameSource(t))?.[1];
         const reusable = old && old.width === size.width && old.height === size.height && old.format === format;
         const gpu = reusable ? old.gpu : this.device.createTexture({label: 'Material texture', size: [size.width, size.height], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST});
         if (!reusable) created.push(gpu);

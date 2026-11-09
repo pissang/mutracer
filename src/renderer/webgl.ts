@@ -638,7 +638,7 @@ export class WebGLDevice {
 
   constructor(options: RendererOptions) {
     this.canvas = options.canvas;
-    const gl = options.canvas.getContext('webgl2', options);
+    const gl = options.canvas.getContext('webgl2', options) as WebGL2RenderingContext | null;
     if (!gl) throw new Error('WebGL 2.0 is required');
     this.gl = gl;
     gl.getExtension('EXT_color_buffer_float');

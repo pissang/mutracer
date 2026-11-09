@@ -16,7 +16,7 @@ export default class TextureState {
   image: TextureImageSize;
   /** True only for a UDIM logical image. Internal portable sampling marker. */
   readonly udim?: boolean;
-  /** Normal-slot tangent frame. Default 'cotangent'; 'materialx' decodes against normalized world-space primary tangents, including a geometric-normal fallback for black texels. */
+  /** @internal Slot lowering selects the MaterialX world tangent frame. */
   normalMapFrame: 'cotangent' | 'materialx' = 'cotangent';
   version = 0;
   /** Flip the image vertically when uploading. Default `false`. */

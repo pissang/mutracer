@@ -30,7 +30,7 @@ export async function measureProgressiveSwitches(engine: Engine, scene: Scene, c
     restores.push(() => {owner[key] = original;});
   }
   if (engine.device) {count(engine.device, 'createTexture', 'textures'); count(engine.device, 'createBuffer', 'buffers');}
-  else {const gl = engine.display.canvas.getContext('webgl2')!; count(gl, 'createTexture', 'textures'); count(gl, 'createFramebuffer', 'framebuffers');}
+  else {const gl = engine.display.canvas.getContext('webgl2') as WebGL2RenderingContext; count(gl, 'createTexture', 'textures'); count(gl, 'createFramebuffer', 'framebuffers');}
   frames.length = 0;
   try {
     for (let i = 0; i < 10; i++) await cycle();

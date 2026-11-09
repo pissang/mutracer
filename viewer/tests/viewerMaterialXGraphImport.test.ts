@@ -80,7 +80,7 @@ it('accepts explicit default tangent normal maps and upgrades object space', asy
  expect(restored.nodes[0].inputs?.space).toBeUndefined();
 });
 
-it('installs an exact image normal as an ordinary slot with undoable frame metadata', async () => {
+it('hands an exact image normal graph and its loaded resource to the library', async () => {
  const originalBitmap=globalThis.createImageBitmap;
  const bitmap={width:1,height:1,close:vi.fn()};
  globalThis.createImageBitmap=vi.fn(async()=>bitmap) as unknown as typeof createImageBitmap;
@@ -90,8 +90,11 @@ it('installs an exact image normal as an ordinary slot with undoable frame metad
   const file=new File([zipSync({'m.mtlx':strToU8(source),'normal.png':new Uint8Array([1])})],'m.zip');
   expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file,path:file.name}])).toBe(true);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
-  expect(args[1]).toMatchObject({normalMap:expect.any(Blob)});expect(args[2]).toMatchObject({normalScale:[.5,.5]});expect(args[6]).toBeNull();
-  expect(args[7]).toMatchObject({normalMap:{normalMapFrame:'materialx',colorSpace:'linear',flipY:true,uvScale:[1,1],uvChannel:0}});
-  expect(bitmap.close).toHaveBeenCalled();
+  expect(args[1]).toMatchObject({normalMap:null});
+  const graph=args[6] as import('../../src/main').MaterialGraph;
+  expect(graph.terminal).toHaveProperty('normal');
+  expect(graph.nodes.find(n=>n.id==='i')?.inputs?.file?.value).toMatchObject({image:bitmap,colorSpace:'linear',flipY:true});
+  expect(args[7]).toEqual({});
+  expect(bitmap.close).not.toHaveBeenCalled();
  }finally{globalThis.createImageBitmap=originalBitmap;}
 });
