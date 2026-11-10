@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, ExternalLink, Search, X } from 'lucide-react';
-import { setUi, showToast, useViewer } from '../store';
+import { showToast, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import {
   canDownloadGpuOpen, defaultGpuOpenPackage, downloadGpuOpenPackage, filterGpuOpenMaterials, gpuOpenPackages,
@@ -78,7 +78,6 @@ export function GpuOpenBrowser() {
       <div className="insp-head">
         <a className="badge" href="https://matlib.gpuopen.com" target="_blank" rel="noreferrer" aria-label="GPUOpen website"><Download size={18} /></a>
         <div className="copy"><strong>GPUOpen materials</strong><small>{material ? `Apply to ${material.name}` : 'Select a material'}</small></div>
-        <button className="icon-btn icon-btn--bare sm" aria-label="Close GPUOpen materials" onClick={() => setUi({ materialBrowser: false })}><X size={14} /></button>
       </div>
       <div className="tex-browser__filters">
         <label className="search"><Search size={13} /><input placeholder="Search wood, metal, fabric…" value={query} onChange={e => setQuery(e.currentTarget.value)} />

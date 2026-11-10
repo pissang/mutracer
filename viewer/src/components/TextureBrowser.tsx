@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { setUi, useViewer } from '../store';
+import { useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import {
   TEXTURE_RESOLUTIONS, filterTextures, listPolyHavenTextures, polyHavenMaps, polyHavenThumbnail, topCategories,
@@ -101,8 +101,6 @@ export function TextureBrowser() {
           <strong>Poly Haven textures</strong>
           <small>{material ? `Click to apply to ${material.name}` : 'Select a material to apply textures'}</small>
         </div>
-        <button className="icon-btn icon-btn--bare sm" aria-label="Close textures" title="Close"
-          onClick={() => setUi({ textureBrowser: false })}><X size={14} /></button>
       </div>
       <div className="tex-browser__filters">
         <label className="search">

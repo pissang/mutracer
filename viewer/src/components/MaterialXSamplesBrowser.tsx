@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Shapes, X } from 'lucide-react';
-import { setUi, useViewer } from '../store';
+import { Shapes } from 'lucide-react';
+import { useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { thumbnailUrl } from '../engine/presets';
 import { MATERIALX_SAMPLES, materialXSampleFiles } from '../engine/materialxSamples';
@@ -15,7 +15,6 @@ export function MaterialXSamplesBrowser() {
       <div className="insp-head">
         <span className="badge"><Shapes size={18} /></span>
         <div className="copy"><strong>MaterialX samples</strong><small>{material ? `Apply to ${material.name}` : 'Select a material'}</small></div>
-        <button className="icon-btn icon-btn--bare sm" aria-label="Close MaterialX samples" onClick={() => setUi({ sampleBrowser: false })}><X size={14} /></button>
       </div>
       <div className="ph-grid">
         {MATERIALX_SAMPLES.map(sample => (

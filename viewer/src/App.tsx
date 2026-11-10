@@ -1,20 +1,14 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Toast } from './components/Toast';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
 import { redo, undo } from './history';
 import { Toolbar } from './components/Toolbar';
-import { SceneTree } from './components/SceneTree';
-import { Viewport } from './components/Viewport';
-import { Inspector, InspectorRail, TABS } from './components/Inspector';
+import { Inspector, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
-import { GpuOpenBrowser } from './components/GpuOpenBrowser';
-import { MaterialXSamplesBrowser } from './components/MaterialXSamplesBrowser';
-import { TextureBrowser } from './components/TextureBrowser';
-import { ExamplesPanel } from './components/ExamplesBrowser';
-
-const GraphEditor = lazy(() => import('./components/graphEditor/GraphEditor'));
+import { DesktopWorkspace } from './components/layout/DesktopWorkspace';
+import { ViewportPortal, ViewportSlot } from './components/layout/ViewportHost';
 
 const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
@@ -79,29 +73,17 @@ export function App() {
   const ui = useViewer((s) => s.ui);
   const mobile = useMobile();
   useShortcuts();
-  const left = ui.left && !ui.hidden && !mobile;
-  const right = ui.right && !ui.hidden && !mobile;
-  const materials = right && ui.materialBrowser && ui.tab === 'material';
-  const samples = right && ui.sampleBrowser && !materials && ui.tab === 'material';
-  const textures = right && ui.textureBrowser && !materials && !samples && ui.tab === 'material';
-  const examples = right && ui.examplesPinned && !textures && !materials && !samples;
-  const browse = textures || materials || samples || examples;
+  const sheet = mobile && ui.right && !ui.hidden;
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar mobile={mobile} />}
-      <main className="workspace" data-left={left || undefined} data-right={right || undefined} data-browse={browse || undefined} data-mobile={mobile || undefined}
-        data-sheet={(mobile && ui.right && !ui.hidden) || undefined}>
-        {left && <SceneTree />}
-        <Viewport />
-        {textures && <TextureBrowser />}
-        {materials && <GpuOpenBrowser />}
-        {samples && <MaterialXSamplesBrowser />}
-        {examples && <ExamplesPanel />}
-        {ui.graphEditor && !mobile && !ui.hidden && <Suspense fallback={null}><GraphEditor /></Suspense>}
-        {right && <Inspector mobile={false} />}
-        {!mobile && !ui.hidden && <InspectorRail />}
-        {mobile && ui.right && !ui.hidden && <Inspector mobile />}
-      </main>
+      {!mobile && !ui.hidden
+        ? <main className="workspace workspace--desktop"><DesktopWorkspace /></main>
+        : <main className="workspace" data-mobile={mobile || undefined} data-sheet={sheet || undefined}>
+          <ViewportSlot />
+          {sheet && <Inspector />}
+        </main>}
+      <ViewportPortal />
       <ExportDialog />
       <CodeDialog />
       <Toast />

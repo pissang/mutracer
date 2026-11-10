@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { Button, Dialog, DialogTrigger, Heading, Popover, Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
-import { ChevronDown, ExternalLink, Pin, PinOff, Sparkles, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Pin, PinOff, Sparkles } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
+import { revealPanel } from './layout/panels';
 import { MODEL_PRESETS } from '../engine/presets';
 import { RESEARCH_SCENES_SOURCE } from '../engine/researchModelPresets';
 
@@ -11,9 +12,8 @@ export function ExamplesMenu({ mobile }: { mobile: boolean }) {
   if (ui.examplesPinned && !mobile) {
     return (
       <Button id="examples-trigger" className="btn" aria-label="Examples" aria-controls="examples-panel"
-        data-active={ui.right && !(ui.textureBrowser && ui.tab === 'material') || undefined}
         onPress={() => {
-          setUi({ right: true, textureBrowser: false });
+          revealPanel('examples');
           requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#examples-panel button')?.focus());
         }}>
         <Sparkles size={15} /><span className="hide-xs">Examples</span><Pin size={13} />
@@ -30,7 +30,7 @@ export function ExamplesMenu({ mobile }: { mobile: boolean }) {
           <div className="examples-head">
             <Heading slot="title">Examples</Heading>
             {!mobile && <button className="icon-btn icon-btn--bare sm" aria-label="Pin to right panel" title="Pin to right panel"
-              onClick={() => setUi({ examplesPinned: true, examplesOpen: false, right: true, textureBrowser: false })}>
+              onClick={() => setUi({ examplesPinned: true, examplesOpen: false })}>
               <Pin size={15} />
             </button>}
           </div>
@@ -51,11 +51,6 @@ export function ExamplesPanel() {
         <div className="copy"><strong>Examples</strong></div>
         <button ref={unpin} className="icon-btn icon-btn--bare sm" aria-label="Unpin examples" title="Unpin examples"
           onClick={() => setUi({ examplesPinned: false, examplesOpen: true })}><PinOff size={15} /></button>
-        <button className="icon-btn icon-btn--bare sm" aria-label="Close examples" title="Close examples"
-          onClick={() => {
-            setUi({ examplesPinned: false, examplesOpen: false });
-            requestAnimationFrame(() => document.getElementById('examples-trigger')?.focus());
-          }}><X size={14} /></button>
       </div>
       <div className="examples-panel__body"><ExamplesBrowser /></div>
     </section>

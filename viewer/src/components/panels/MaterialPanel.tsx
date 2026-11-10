@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Shapes, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
-import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
+import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
 import {
@@ -11,6 +11,7 @@ import {
 import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
 import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
+import { togglePanel } from '../layout/panels';
 import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
 
 // Kept across material selections.
@@ -104,25 +105,25 @@ export function MaterialPanel() {
       <div className="tex-browse hide-m">
         <button className="btn" aria-pressed={browsing} data-on={browsing || undefined}
           title={browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
-          onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false, sampleBrowser: false })}>
+          onClick={() => togglePanel('textures')}>
           <PolyHavenLogo />Poly Haven
         </button>
         {MATERIALX_IMPORT && <>
           <button className="btn" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
             title={materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen MaterialX materials'}
-            onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false, sampleBrowser: false })}>
+            onClick={() => togglePanel('gpuopen')}>
             <Download size={14} />GPUOpen
           </button>
           <button className="btn" aria-pressed={sampleBrowsing} data-on={sampleBrowsing || undefined}
             title={sampleBrowsing ? 'Hide MaterialX samples' : 'Browse bundled MaterialX samples'}
-            onClick={() => setUi({ sampleBrowser: !sampleBrowsing, textureBrowser: false, materialBrowser: false })}>
+            onClick={() => togglePanel('samples')}>
             <Shapes size={14} />Samples
           </button>
           <MaterialXImport materialId={material.id} />
         </>}
         <button className="btn" aria-pressed={graphEditing} data-on={graphEditing || undefined}
           title={graphEditing ? 'Hide the node graph' : 'Edit the material node graph'}
-          onClick={() => setUi({ graphEditor: !graphEditing })}>
+          onClick={() => togglePanel('graph')}>
           <Workflow size={14} />Graph
         </button>
       </div>

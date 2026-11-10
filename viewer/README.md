@@ -13,6 +13,10 @@ editable. The Lighting panel expands import warnings. Downloads of 1 GB or more
 require confirmation, and scenes above the browser import memory budget are
 rejected before binary downloads. See [supported features and limits](../tools/pbrt/README.md).
 
+On desktop every panel is a tab: drag a tab into another group, or onto a
+group's edge to split it, and drag the gaps between groups to resize them. `[`
+and `]` collapse the side groups. The arrangement is saved in the browser.
+
 Drag a numeric input left or right to adjust its value, or click it to type.
 Enter or clicking elsewhere commits typed edits; Escape cancels them. While
 editing text, dragging selects text instead of changing the value.
@@ -102,7 +106,9 @@ src/
                            layout, derived from the engine's node tables
   engine/materialxExport.ts
                            Writes a material graph back to .mtlx
-  components/graphEditor/  Node graph drawer (@xyflow/react, loaded on demand)
+  components/graphEditor/  Node graph panel (@xyflow/react, loaded on demand)
+  components/layout/       Desktop workspace (react-resizable-panels): panels as
+                           dockable tabs, the saved layout, the viewport host
   assets/thumbnails/       Example, material preset and MaterialX sample thumbnails
   dev/thumbnails.ts        Renders those thumbnails (development only)
   store.ts                 zustand store: settings, stats, tree, selection, UI

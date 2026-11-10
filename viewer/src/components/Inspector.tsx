@@ -20,47 +20,25 @@ const PANELS: Record<InspectorTab, () => JSX.Element> = {
   render: RenderPanel
 };
 
-export function Inspector({ mobile }: { mobile: boolean }) {
-  const ui = useViewer((s) => s.ui);
-  if (mobile) {
-    const tab = ui.mobileTab;
-    const Panel = tab === 'scene' ? null : PANELS[tab];
-    return (
-      <section className="panel inspector inspector--sheet" aria-label="Inspector">
-        <div className="sheet-tabs" role="tablist">
-          {[{ id: 'scene' as const, label: 'Scene' }, ...TABS].map((t) => (
-            <button key={t.id} role="tab" aria-selected={tab === t.id} data-on={tab === t.id || undefined}
-              onClick={() => setUi({ mobileTab: t.id })}>{t.label}</button>
-          ))}
-        </div>
-        {Panel ? <div className="insp-body">{<Panel />}</div> : <SceneTree />}
-      </section>
-    );
-  }
-  const current = TABS.find((t) => t.id === ui.tab)!;
-  const Panel = PANELS[ui.tab];
+/** The mobile inspector: a bottom sheet with the scene tree and every panel. */
+export function Inspector() {
+  const tab = useViewer((s) => s.ui.mobileTab);
+  const Panel = tab === 'scene' ? null : PANELS[tab];
   return (
-    <section className="panel inspector" aria-label={current.label}>
-      <div className="insp-head">
-        <span className="badge"><current.Icon size={16} /></span>
-        <div className="copy"><strong>{current.label}</strong></div>
+    <section className="panel inspector inspector--sheet" aria-label="Inspector">
+      <div className="sheet-tabs" role="tablist">
+        {[{ id: 'scene' as const, label: 'Scene' }, ...TABS].map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} data-on={tab === t.id || undefined}
+            onClick={() => setUi({ mobileTab: t.id })}>{t.label}</button>
+        ))}
       </div>
-      <div className="insp-body" role="tabpanel"><Panel /></div>
+      {Panel ? <div className="insp-body"><Panel /></div> : <SceneTree />}
     </section>
   );
 }
 
-export function InspectorRail() {
-  const tab = useViewer((s) => s.ui.tab);
-  const open = useViewer((s) => s.ui.right);
-  return (
-    <nav className="panel rail" role="tablist" aria-label="Inspector" aria-orientation="vertical">
-      {TABS.map(({ id, label, Icon }, i) => (
-        <button key={id} role="tab" aria-selected={tab === id} data-on={(open && tab === id) || undefined} title={`${label} (${i + 1})`}
-          onClick={() => setUi(tab === id && open ? { right: false } : { tab: id, right: true })}>
-          <Icon size={18} />{label}
-        </button>
-      ))}
-    </nav>
-  );
+/** One inspector panel, shown as a tab of the desktop workspace. */
+export function InspectorPanel({ tab }: { tab: InspectorTab }) {
+  const Panel = PANELS[tab];
+  return <section className="panel inspector"><div className="insp-body"><Panel /></div></section>;
 }

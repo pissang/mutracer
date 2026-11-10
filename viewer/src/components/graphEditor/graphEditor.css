@@ -1,23 +1,17 @@
-/* Material node graph drawer, laid over the bottom of the viewport column. */
-.workspace:has(> .graph-editor) { position: relative; }
+/* Material node graph panel. */
 .graph-editor {
   --gx-float: #a8adb7; --gx-integer: #7fb0c9; --gx-boolean: #d58fb8;
   --gx-color3: #e6b76a; --gx-color4: #e69a6a; --gx-vector2: #72c69c; --gx-vector3: #9cc9f4; --gx-vector4: #b49cf4;
   --gx-filename: #f18787; --gx-string: #8b919c;
-  position: absolute; grid-row: 1; grid-column: 1; left: 0; right: 0; bottom: 0; z-index: 20;
-  display: grid; grid-template-rows: auto auto minmax(0, 1fr);
-  background: var(--cv-panel); border-top: 1px solid var(--cv-divider); box-shadow: var(--cv-shadow-overlay);
+  height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr);
   font-size: 12px; color: var(--cv-text);
 }
-.workspace[data-left] > .graph-editor { grid-column: 2; }
-.graph-editor__resize { height: 6px; margin-top: -3px; cursor: ns-resize; touch-action: none; }
-.graph-editor__resize:hover { background: var(--cv-accent-border); }
-.graph-editor__bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px 6px 12px; min-width: 0; }
+.graph-editor__bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; min-width: 0; }
 .graph-editor__bar > strong { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 6px; }
 .graph-editor__bar .btn.sm { height: 26px; padding: 0 9px; gap: 5px; font-size: 12px; }
 .graph-editor__status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cv-text-3); text-align: right; }
 .graph-editor__status[data-state="failed"] { color: var(--cv-warning); }
-.graph-editor__empty { display: flex; align-items: center; justify-content: space-between; padding: 12px; color: var(--cv-text-3); }
+.graph-editor__empty { padding: 12px; color: var(--cv-text-3); }
 .graph-editor__body { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-height: 0; border-top: 1px solid var(--cv-divider-subtle); }
 .graph-editor__canvas { position: relative; min-height: 0; }
 .graph-editor .react-flow { --xy-background-color: var(--cv-workspace); --xy-edge-stroke: var(--cv-text-4); --xy-controls-button-background-color: var(--cv-control); --xy-controls-button-background-color-hover: var(--cv-control-hover); --xy-controls-button-border-color: var(--cv-control-border); --xy-controls-button-color: var(--cv-text-2); }

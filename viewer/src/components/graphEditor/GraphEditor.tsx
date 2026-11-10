@@ -5,10 +5,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './graphEditor.css';
-import { Download, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { Download, LayoutGrid, Plus, Trash2 } from 'lucide-react';
 import { zipSync, strToU8 } from 'fflate';
 import { MaterialGraph, Texture, type MaterialGraphConnection, type MaterialGraphDiagnostic, type MaterialGraphInput, type MaterialGraphNode, type MaterialGraphType } from '@meimu/mutracer';
-import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
+import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import {
   PALETTE, TERMINALS, addNode, canonicalTerminal, categoryTypes, connect, connectionError, disconnect, layoutGraph, nodeOutputs, nodePorts,
@@ -26,35 +26,20 @@ import { NODE_TYPES, SURFACE, shortId, type MxFlowNode, type PortView, type Surf
 
 type FlowNode = MxFlowNode | SurfaceFlowNode;
 const EMPTY = new MaterialGraph();
-const HEIGHT_KEY = 'mutracer.graphEditorHeight';
-const readHeight = () => { try { return Number(localStorage.getItem(HEIGHT_KEY)) || 0; } catch { return 0; } };
-const writeHeight = (h: number) => { try { localStorage.setItem(HEIGHT_KEY, String(Math.round(h))); } catch { /* storage unavailable */ } };
 
 const targetOf = (node: string, handle: string | null | undefined): Target =>
   node === SURFACE ? { terminal: handle ?? '' } : { node, port: handle ?? '' };
 const sourceOf = (node: string, handle: string | null | undefined): MaterialGraphConnection =>
   handle && handle !== 'out' ? { node, output: handle } : { node };
 
-/** Bottom drawer over the viewport that edits the selected material's MaterialX graph. */
+/** Workspace panel that edits the selected material's MaterialX graph. */
 export default function GraphEditor() {
   const material = useViewer(s => s.material);
-  const [height, setHeight] = useState(() => readHeight() || Math.round(window.innerHeight * 0.45));
-  const drag = useRef<{ y: number; height: number } | null>(null);
   return (
-    <section className="graph-editor" style={{ height }} aria-label="Material node graph">
-      <div className="graph-editor__resize" role="separator" aria-orientation="horizontal" aria-label="Resize node graph"
-        onPointerDown={e => { drag.current = { y: e.clientY, height }; e.currentTarget.setPointerCapture(e.pointerId); }}
-        onPointerMove={e => {
-          if (!drag.current) return;
-          setHeight(Math.min(window.innerHeight - 160, Math.max(200, drag.current.height + drag.current.y - e.clientY)));
-        }}
-        onPointerUp={() => { drag.current = null; writeHeight(height); }} />
+    <section className="panel graph-editor" aria-label="Material node graph">
       {material
         ? <ReactFlowProvider key={material.id}><Workspace material={material} /></ReactFlowProvider>
-        : <div className="graph-editor__empty">
-          <span>Select a material to edit its node graph.</span>
-          <button className="icon-btn icon-btn--bare sm" aria-label="Close node graph" title="Close" onClick={() => setUi({ graphEditor: false })}><X size={14} /></button>
-        </div>}
+        : <div className="graph-editor__empty">Select a material to edit its node graph.</div>}
     </section>
   );
 }
@@ -226,7 +211,6 @@ function Workspace({ material }: { material: SelectedMaterial }) {
             : nodeErrors ? `${nodeErrors} node ${nodeErrors === 1 ? 'error' : 'errors'}`
               : status === 'compiling' ? 'Compiling…' : '')}
         </span>
-        <button className="icon-btn icon-btn--bare sm" aria-label="Close node graph" title="Close" onClick={() => setUi({ graphEditor: false })}><X size={14} /></button>
       </header>
       <div className="graph-editor__body">
         <div className="graph-editor__canvas">

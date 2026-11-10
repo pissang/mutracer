@@ -1,0 +1,45 @@
+/* Desktop workspace: tabsets are the viewer's panels; separators are the gaps between them. */
+.ws { height: 100%; min-height: 0; }
+.ws-tabset { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden;
+  border-radius: var(--cv-radius-panel); background: var(--cv-panel); }
+.ws-header { display: flex; align-items: center; gap: 4px; min-height: 36px; padding: 4px 6px 0; border-bottom: 1px solid var(--cv-divider-subtle); }
+.ws-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.ws-tab { display: flex; flex: none; align-items: center; gap: 5px; height: 30px; padding: 0 7px; border-radius: var(--cv-radius-compact) var(--cv-radius-compact) 0 0;
+  color: var(--cv-text-3); font-size: 12px; font-weight: 500; white-space: nowrap; cursor: default; user-select: none; outline: none; }
+.ws-tab:hover { color: var(--cv-text); }
+.ws-tab:focus-visible { outline: 2px solid var(--cv-focus); outline-offset: -2px; }
+.ws-tab[data-tab-selected] { color: var(--cv-text); box-shadow: inset 0 -2px var(--cv-accent); }
+.ws-tab[data-tab-selected] > svg { color: var(--cv-accent-hover); }
+.ws-tab__close { display: grid; place-items: center; width: 18px; height: 18px; margin-right: -4px; padding: 0; border: 0; border-radius: 5px;
+  background: none; color: var(--cv-text-4); cursor: pointer; }
+.ws-tab__close:hover { background: var(--cv-control-hover); color: var(--cv-text); }
+.ws-panels { position: relative; flex: 1; min-height: 0; }
+.ws-panels [data-tab-content] { height: 100%; }
+.ws-panels [data-tab-content] > .panel { height: 100%; border-radius: 0; background: none; }
+.ws-panels .scene-panel .panel-head h2 { display: none; }
+
+/* Narrow tab strips drop the icons. Collapsed strips are sized by their content, so they aren't containers. */
+.ws-tabset:not([data-tabset-collapsed]) > .ws-header { container-type: inline-size; }
+@container (max-width: 340px) {
+  .ws-tabset:not([data-tabset-collapsed]) .ws-tab > svg { display: none; }
+}
+
+/* The viewport's tabset shows its single tab without a header. */
+.ws-tabset:has(.viewport-slot) > .ws-header { display: none; }
+.ws-tabset:has(.viewport-slot) { background: var(--cv-workspace); }
+
+/* Collapsed tabsets become a strip of icons along their split. */
+.ws-tabset[data-tabset-collapsed] .ws-header { flex-direction: column; height: 100%; padding: 6px 4px; border: 0; }
+.ws-tabset[data-tabset-collapsed] .ws-tabs { flex-direction: column; overflow: visible; }
+.ws-tabset[data-tabset-collapsed] .ws-tab { justify-content: center; width: 36px; height: 36px; padding: 0; border-radius: var(--cv-radius-compact); box-shadow: none; }
+.ws-tabset[data-tabset-collapsed] .ws-tab:hover { background: rgb(255 255 255 / 0.04); }
+.ws-tabset[data-tabset-collapsed] :is(.ws-tab__title, .ws-tab__close) { display: none; }
+
+.ws-separator { flex: none; width: 8px; height: 8px; outline: none; }
+.ws-separator::after { content: ''; display: block; width: 100%; height: 100%; border-radius: 2px; transition: background 120ms; }
+.ws-separator:is(:hover, [data-separator='active'], :focus-visible)::after { background: var(--cv-accent-border); }
+[data-split][aria-orientation='horizontal'] > .ws-separator, .ws-separator[aria-orientation='vertical'] { height: auto; }
+
+.ws-drop { border: 2px solid var(--cv-accent); border-radius: var(--cv-radius-panel); background: var(--cv-accent-surface); transition: inset 150ms, opacity 150ms; pointer-events: none; }
+.ws-drag { padding: 5px 10px; border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact);
+  background: var(--cv-overlay); color: var(--cv-text); font-size: 12px; box-shadow: var(--cv-shadow-floating); }

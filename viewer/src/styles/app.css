@@ -138,21 +138,10 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .backend-pill b { color: var(--cv-text); font-weight: 600; white-space: nowrap; }
 .backend-pill .adapter { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.workspace {
-  display: grid; min-height: 0; gap: 8px; padding: 8px;
-  grid-template-columns: minmax(0, 1fr) 64px;
-}
-.workspace[data-left] { grid-template-columns: 252px minmax(0, 1fr) 64px; }
-.workspace[data-right] { grid-template-columns: minmax(0, 1fr) 316px 64px; }
-.workspace[data-left][data-right] { grid-template-columns: 252px minmax(0, 1fr) 316px 64px; }
-.workspace[data-right][data-browse] { grid-template-columns: minmax(0, 1fr) 300px 316px 64px; }
-.workspace[data-left][data-right][data-browse] { grid-template-columns: 252px minmax(0, 1fr) 300px 316px 64px; }
-/* Narrow windows give the scene tree's room to the viewport while browsing. */
-@media (max-width: 1200px) {
-  .workspace[data-left][data-right][data-browse] { grid-template-columns: minmax(0, 1fr) 300px 316px 64px; }
-  .workspace[data-browse] > .scene-panel { display: none; }
-}
-.app[data-hidden] .workspace { grid-template-columns: minmax(0, 1fr); padding: 0; }
+.workspace { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); padding: 8px; }
+.workspace--desktop { padding: 0 8px 8px; }
+.viewport-slot, .viewport-host { display: grid; min-width: 0; min-height: 0; height: 100%; }
+.app[data-hidden] .workspace { padding: 0; }
 .app[data-hidden] .viewport { border-radius: 0; }
 .panel { min-width: 0; min-height: 0; border-radius: var(--cv-radius-panel); background: var(--cv-panel); }
 
@@ -648,15 +637,6 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .diagnostics div { display: grid; grid-template-columns: 96px 1fr; gap: 8px; padding: 6px 8px; background: var(--cv-panel); }
 .diagnostics dt { color: var(--cv-text-4); font-size: 10.5px; }
 .diagnostics dd { margin: 0; overflow-wrap: anywhere; color: var(--cv-text-2); font-size: 10.5px; }
-
-/* Inspector rail */
-.rail { display: flex; flex-direction: column; gap: 3px; padding: 6px; }
-.rail button { display: grid; grid-template-rows: 18px 14px; justify-items: center; align-content: center; gap: 5px; height: 54px;
-  border-radius: var(--cv-radius-control); background: transparent; color: var(--cv-text-3);
-  font-size: 10.5px; font-weight: 500; outline: none; }
-.rail button:hover { color: var(--cv-text); background: rgb(255 255 255 / 0.035); }
-.rail button:focus-visible { outline: 2px solid var(--cv-focus); outline-offset: -2px; }
-.rail button[data-on] { background: var(--cv-accent-surface); color: var(--cv-accent-hover); font-weight: 650; }
 
 /* Popovers, menus and dialogs */
 .popover { z-index: 40; padding: 6px; border: 1px solid rgb(255 255 255 / 0.09); border-radius: 16px; outline: none;
