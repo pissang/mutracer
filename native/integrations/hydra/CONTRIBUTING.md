@@ -28,6 +28,24 @@ preserves the CPU float FMA and double depth projection. Its shader requires
 depth inputs, float32/float16, perspective/orthographic and scaling against CPU
 operations, including the final depth attachment.
 
+Windows builds use MSVC `/utf-8`, `/bigobj` and `/MD`; Objective-C++ and Metal
+sources are selected only on Apple platforms. Non-Metal Hgi hosts use the CPU
+render-buffer path. The Windows GPU conversion tests create their own hidden
+WGL drawable: OpenUSD 26.03's `GlfTestGLContext` does not create a GL context on
+Windows. These tests still execute the Hgi conversion shaders and retain the
+same pixel assertions. The slow-host queue simulator requires Metal and reports
+an error when explicitly requested on another platform.
+
+The Windows GL test executables request the discrete NVIDIA GPU through their
+process-local Optimus export. `hydraGpuContracts` enables
+`HGIGL_ENABLE_BINDLESS_BUFFER=1` for its process so HgiGL emits the shader-int64
+extension needed by the existing integer IEEE conversion. The tested Intel
+Iris Xe GL driver lacks that extension. GL float16 image stores may truncate;
+the conversion rounds to representable half values before storage and retains
+the CPU bitwise oracle. Metal keeps its existing storage conversion.
+Windows render-pass execution and SDK teardown preserve the host's current GL
+context through `GlfGLContextScopeHolder`, including lazy SDK initialization.
+
 Generate fixtures using the Python environment used for the OpenUSD build:
 
 ```sh

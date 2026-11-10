@@ -1,13 +1,15 @@
 # MuTracer for Blender
 
-Experimental MuTracer render engine for **Blender 5.2 on macOS arm64 / Metal**.
+Experimental MuTracer render engine for **Blender 5.2 on macOS arm64 / Metal**
+and **Blender 5.2.1 on Windows x64**.
 It renders Principled BSDF materials through Blender's MaterialX/OpenPBR
 conversion. It requires a GPU, including for background rendering.
 
 ## Use
 
 In Blender, open **Edit → Preferences → Add-ons → Install from Disk**, select
-the packaged `mutracer-blender-5.2-macos-arm64.zip`, and enable **MuTracer**.
+the package for your platform (`mutracer-blender-5.2-macos-arm64.zip` or
+`mutracer-blender-5.2-windows-x64.zip`), and enable **MuTracer**.
 Choose **MuTracer** as the scene's render engine, set an active camera and lights,
 and press **F12**. For a viewport, select **Rendered** shading.
 
@@ -49,8 +51,10 @@ light units and material conversion; they do not promise pixel equality.
 Depth of field is unverified in Blender; its live camera aperture units can
 differ from exported USD.
 
-This integration uses CPU render-buffer readback for final images and the
-Metal viewport; it does not provide zero-copy display. One active view per
+This integration uses CPU render-buffer readback for final images and viewport
+output; it does not provide zero-copy display. Windows background rendering is
+verified with Blender 5.2.1; Windows viewport presentation remains unverified.
+One active view per
 delegate is supported. Only Combined is exposed; compositing passes, motion
 blur, curves, volumes and multi-view output are unavailable. Material previews
 are disabled. The viewport still requires visual verification on a visible
