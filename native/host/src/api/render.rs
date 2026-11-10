@@ -3222,7 +3222,7 @@ impl Render {
     /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps
     /// raw per-sample averages. HDR temporarily reads 48 GPU bytes per pixel.
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
-        self.with(|state, id| {
+        let result = self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
             for event in drain(render)? {
                 state.sample_events.push((id, event));
@@ -3306,7 +3306,14 @@ impl Render {
                 data: flip_rows(&data, width, height),
                 id_data: None,
             })
-        })
+        });
+        #[cfg(test)]
+        if kind == PixelKind::Hdr {
+            if let Ok(image) = &result {
+                super::test_support::capture_hdr_readback(self.id, image);
+            }
+        }
+        result
     }
     /// Accounts a finished batch and captures it without submitting another, so a
     /// host can present the last frame before committing new input. Returns
