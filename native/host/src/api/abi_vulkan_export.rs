@@ -24,7 +24,9 @@ pub struct TimelineDesc {
 
 fn extensions(next: *const c_void, reserved: u32) -> Result<()> {
     if !next.is_null() || reserved != 0 {
-        return Err(invalid("Unsupported Vulkan GPU record extension/reserved field"));
+        return Err(invalid(
+            "Unsupported Vulkan GPU record extension/reserved field",
+        ));
     }
     Ok(())
 }
@@ -48,7 +50,12 @@ pub(super) unsafe fn import_image(
             vk::ImageLayout::from_raw(desc.initial_layout as i32),
         )?
     };
-    unsafe { output.write(insert(Object::VulkanGpuImage { engine: owner, image })?) };
+    unsafe {
+        output.write(insert(Object::VulkanGpuImage {
+            engine: owner,
+            image,
+        })?)
+    };
     Ok(())
 }
 
@@ -63,7 +70,12 @@ pub(super) unsafe fn import_timeline(
     }
     extensions(desc.next, desc.reserved)?;
     let timeline = unsafe { engine_of(owner)?.import_vulkan_timeline(desc.semaphore)? };
-    unsafe { output.write(insert(Object::VulkanGpuTimeline { engine: owner, timeline })?) };
+    unsafe {
+        output.write(insert(Object::VulkanGpuTimeline {
+            engine: owner,
+            timeline,
+        })?)
+    };
     Ok(())
 }
 
@@ -79,10 +91,32 @@ pub(super) fn timeline(handle: u64) -> Result<super::vulkan_export::VulkanTimeli
         _ => Err(invalid_handle()),
     })
 }
+
+pub(super) fn check_destroy(engine: &Engine) -> Result<()> {
+    if engine.inner.vulkan.lock().unwrap().is_none() || engine.inner.gpu.loss.reason().is_some() {
+        return Ok(());
+    }
+    // Poll once without waiting for a host-ready signal. A lost device permits
+    // destruction, but an unknown submission error on a live device does not.
+    let complete = match engine.poll_vulkan_exports(0) {
+        Ok(complete) => complete,
+        Err(_) if engine.inner.gpu.loss.reason().is_some() => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !complete {
+        return Err(error(Status::Busy, "GPU exports are still pending"));
+    }
+    Ok(())
+}
+
 pub(super) fn destroy(handle: u64, image: bool) -> Result<()> {
     let owner = registry(|r| match r.objects.get(&handle) {
         Some(Object::VulkanGpuImage { engine, .. }) if image => Ok(*engine),
         Some(Object::VulkanGpuTimeline { engine, .. }) if !image => Ok(*engine),
+        #[cfg(target_os = "windows")]
+        Some(Object::D3d12GpuImage { engine, .. }) if image => Ok(*engine),
+        #[cfg(target_os = "windows")]
+        Some(Object::D3d12GpuTimeline { engine, .. }) if !image => Ok(*engine),
         _ => Err(invalid_handle()),
     })?;
     engine_of(owner)?;
@@ -112,6 +146,7 @@ pub struct ExportDesc {
 }
 
 #[unsafe(no_mangle)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub unsafe extern "C" fn mt_render_export_gpu(
     render: u64,
     desc: *const ExportDesc,
@@ -125,51 +160,93 @@ pub unsafe extern "C" fn mt_render_export_gpu(
         }
         unsafe { sequence.write(0) };
         let desc = unsafe { record(desc)? };
-        if desc.struct_size as usize != std::mem::size_of::<ExportDesc>() || !(1..=8).contains(&desc.image_count) || desc.images.is_null() || desc.done == 0 || desc.done_value == 0 || desc.done_value == u64::MAX || (desc.ready == 0 && desc.ready_value != 0) {
+        if desc.struct_size as usize != std::mem::size_of::<ExportDesc>()
+            || !(1..=8).contains(&desc.image_count)
+            || desc.images.is_null()
+            || desc.done == 0
+            || desc.done_value == 0
+            || desc.done_value == u64::MAX
+            || (desc.ready == 0 && desc.ready_value != 0)
+        {
             return Err(invalid("Invalid Vulkan GPU export record"));
         }
-        if !desc.next.is_null() { return Err(invalid("Unsupported Vulkan GPU export extension")); }
+        if !desc.next.is_null() {
+            return Err(invalid("Unsupported Vulkan GPU export extension"));
+        }
         let entries = unsafe { std::slice::from_raw_parts(desc.images, desc.image_count as usize) };
         let mut vk_images = Vec::with_capacity(entries.len());
         #[cfg(target_os = "windows")]
         let mut dx_images = Vec::with_capacity(entries.len());
         let mut mode = 0u8;
         for item in entries {
-            if item.struct_size as usize != std::mem::size_of::<ExportImage>() || !item.next.is_null() || item.reserved != 0 { return Err(invalid("Invalid Vulkan export image record")); }
+            if item.struct_size as usize != std::mem::size_of::<ExportImage>()
+                || !item.next.is_null()
+                || item.reserved != 0
+            {
+                return Err(invalid("Invalid Vulkan export image record"));
+            }
             if let Ok(value) = image(item.image) {
-                if mode == 2 { return Err(invalid("Cannot mix Vulkan and D3D12 export images")); }
-                mode = 1; vk_images.push((value, item.kind, item.row_order));
+                if mode == 2 {
+                    return Err(invalid("Cannot mix Vulkan and D3D12 export images"));
+                }
+                mode = 1;
+                vk_images.push((value, item.kind, item.row_order));
             } else {
                 #[cfg(target_os = "windows")]
                 {
                     let value = super::d3d12_export_abi::image(item.image)?;
-                    if mode == 1 { return Err(invalid("Cannot mix Vulkan and D3D12 export images")); }
-                    mode = 2; dx_images.push((value, item.kind, item.row_order));
+                    if mode == 1 {
+                        return Err(invalid("Cannot mix Vulkan and D3D12 export images"));
+                    }
+                    mode = 2;
+                    dx_images.push((value, item.kind, item.row_order));
                 }
                 #[cfg(not(target_os = "windows"))]
                 return Err(invalid("Unknown Vulkan image handle"));
             }
         }
         let id = if mode == 1 {
-            let ready = if desc.ready == 0 { None } else { Some((timeline(desc.ready)?, desc.ready_value)) };
+            let ready = if desc.ready == 0 {
+                None
+            } else {
+                Some((timeline(desc.ready)?, desc.ready_value))
+            };
             let done = timeline(desc.done)?;
-            render_of(render)?.export_vulkan(&vk_images, ready.as_ref().map(|(t, v)| (t, *v)), (&done, desc.done_value))?
+            render_of(render)?.export_vulkan(
+                &vk_images,
+                ready.as_ref().map(|(t, v)| (t, *v)),
+                (&done, desc.done_value),
+            )?
         } else if mode == 2 {
             #[cfg(target_os = "windows")]
             {
-                let ready = if desc.ready == 0 { None } else { Some((super::d3d12_export_abi::timeline(desc.ready)?, desc.ready_value)) };
+                let ready = if desc.ready == 0 {
+                    None
+                } else {
+                    Some((
+                        super::d3d12_export_abi::timeline(desc.ready)?,
+                        desc.ready_value,
+                    ))
+                };
                 let done = super::d3d12_export_abi::timeline(desc.done)?;
-                render_of(render)?.export_d3d12(&dx_images, ready.as_ref().map(|(t, v)| (t, *v)), (&done, desc.done_value))?
+                render_of(render)?.export_d3d12(
+                    &dx_images,
+                    ready.as_ref().map(|(t, v)| (t, *v)),
+                    (&done, desc.done_value),
+                )?
             }
             #[cfg(not(target_os = "windows"))]
             return Err(invalid("D3D12 export is unavailable on this platform"));
-        } else { return Err(invalid("No export images")); };
+        } else {
+            return Err(invalid("No export images"));
+        };
         unsafe { sequence.write(id) };
         Ok(())
     })
 }
 
 #[unsafe(no_mangle)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub unsafe extern "C" fn mt_engine_gpu_poll(
     engine: u64,
     sequence: u64,
@@ -183,7 +260,11 @@ pub unsafe extern "C" fn mt_engine_gpu_poll(
         }
         unsafe { complete.write(0) };
         #[cfg(target_os = "windows")]
-        let value = if engine_of(engine)?.is_d3d12() { engine_of(engine)?.poll_d3d12_exports(sequence)? } else { engine_of(engine)?.poll_vulkan_exports(sequence)? };
+        let value = if engine_of(engine)?.is_d3d12() {
+            engine_of(engine)?.poll_d3d12_exports(sequence)?
+        } else {
+            engine_of(engine)?.poll_vulkan_exports(sequence)?
+        };
         #[cfg(not(target_os = "windows"))]
         let value = engine_of(engine)?.poll_vulkan_exports(sequence)?;
         unsafe { complete.write(value as u32) };
@@ -192,16 +273,23 @@ pub unsafe extern "C" fn mt_engine_gpu_poll(
 }
 
 #[unsafe(no_mangle)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub extern "C" fn mt_gpu_image_destroy(image: u64, error_out: *mut c_char, capacity: usize) -> i32 {
     call(error_out, capacity, || destroy(image, true))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mt_gpu_timeline_destroy(timeline: u64, error_out: *mut c_char, capacity: usize) -> i32 {
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub extern "C" fn mt_gpu_timeline_destroy(
+    timeline: u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
     call(error_out, capacity, || destroy(timeline, false))
 }
 
 #[unsafe(no_mangle)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub unsafe extern "C" fn mt_engine_import_vulkan_image(
     owner: u64,
     desc: *const ImageDesc,
@@ -209,10 +297,13 @@ pub unsafe extern "C" fn mt_engine_import_vulkan_image(
     error_out: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    call(error_out, capacity, || unsafe { import_image(owner, desc, output) })
+    call(error_out, capacity, || unsafe {
+        import_image(owner, desc, output)
+    })
 }
 
 #[unsafe(no_mangle)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub unsafe extern "C" fn mt_engine_import_vulkan_timeline(
     owner: u64,
     desc: *const TimelineDesc,
@@ -220,7 +311,9 @@ pub unsafe extern "C" fn mt_engine_import_vulkan_timeline(
     error_out: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    call(error_out, capacity, || unsafe { import_timeline(owner, desc, output) })
+    call(error_out, capacity, || unsafe {
+        import_timeline(owner, desc, output)
+    })
 }
 
 #[cfg(test)]
