@@ -1,4 +1,4 @@
-// Shared startup preparation for the packaged viewer and the Subsecond dev host.
+// Startup preparation for the packaged native viewer.
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from './compiler.mjs';
 import {spawnSync} from 'node:child_process';

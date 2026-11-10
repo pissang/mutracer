@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     #[test]
     fn path_and_bytes_have_identical_descriptors_and_names() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../validation/assets/sample.glb");
         let a = Scene::import_gltf(&path).unwrap();
         let b = Scene::import_gltf_bytes(&std::fs::read(&path).unwrap(), None).unwrap();
         let canonical = |scene: &Scene| {

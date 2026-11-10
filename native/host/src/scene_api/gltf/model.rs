@@ -1191,7 +1191,7 @@ mod tests {
             height: 1,
         };
         let mut model =
-            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb"))
+            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../validation/assets/sample.glb"))
                 .unwrap();
         let pixels = vec![image.pixels.clone()];
         for texture in document.textures() {
@@ -1224,7 +1224,7 @@ mod tests {
             height: height as u32,
         };
         let mut model =
-            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb"))
+            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../validation/assets/sample.glb"))
                 .unwrap();
         let pixels = vec![image.pixels.clone()];
         for texture in document.textures() {

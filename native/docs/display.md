@@ -199,7 +199,7 @@ render_loop.tick()?; // present and tick now also draw to the window
 display.resize_surface(new_width, new_height)?;
 ```
 
-[viewer/examples/surface.rs](../viewer/examples/surface.rs) is a complete host.
+[webview-viewer/examples/surface.rs](../webview-viewer/examples/surface.rs) is a complete host.
 Share one `SubmissionGate` across engines that use the same device.
 
 **C**: fill `mt_native_window` and call `mt_engine_create_for_window`, which

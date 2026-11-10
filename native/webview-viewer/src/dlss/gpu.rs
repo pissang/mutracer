@@ -66,7 +66,7 @@ pub fn bootstrap(ngx: &ffi::Ngx) -> Result<Gpu> {
         );
     }
     let descriptor = wgpu::DeviceDescriptor {
-        label: Some("MuTracer DLSS RR and egui"),
+        label: Some("MuTracer DLSS RR and WebView"),
         required_limits: adapter.limits(),
         required_features: adapter.features()
             & (wgpu::Features::EXPERIMENTAL_RAY_QUERY

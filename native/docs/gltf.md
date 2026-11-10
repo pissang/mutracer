@@ -20,7 +20,7 @@ engine.update()?;
 - The import uses the default scene (or the first scene) at the first animation
   clip's initial pose. Imported meshes have world matrices, so moving one does
   not move other meshes from the same node. The
-  [viewer](../viewer/README.md) also plays animations.
+  [viewer](../webview-viewer/README.md) also plays animations.
 
 ## Resources
 

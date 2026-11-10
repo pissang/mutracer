@@ -82,9 +82,9 @@ jobs:
             ~/.cargo/git
             ${{ runner.temp }}/mutracer-native/host-target
             ${{ runner.temp }}/mutracer-native/viewer-target
-          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-${{ github.sha }}
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/webview-viewer/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/webview-viewer/Cargo.lock') }}-
             native-${{ runner.os }}-${{ runner.arch }}-
       - name: Set up MSVC and Windows SDK
         if: runner.os == 'Windows'
