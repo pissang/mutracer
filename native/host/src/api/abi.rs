@@ -1361,13 +1361,19 @@ pub unsafe extern "C" fn mt_display_read_pixels(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        if format > 1 {
+        if format > 2 {
             return Err(invalid("Unknown display format"));
         }
         if written.is_null() {
             return Err(invalid("Null written"));
         }
-        let (w, h, rgba) = display_of(handle)?.read_rgba8(&*render_of(render)?)?;
+        let display = display_of(handle)?;
+        let render = render_of(render)?;
+        let (w, h, rgba) = if format == 2 {
+            display.read_rgba16f(&render)?
+        } else {
+            display.read_rgba8(&render)?
+        };
         let bytes = if format == 1 {
             let mut bytes = Vec::new();
             let mut encoder = png::Encoder::new(&mut bytes, w, h);
@@ -2746,6 +2752,7 @@ mod tests {
         assert_eq!(value("MT_CHANNEL_CENTER_DEPTH"), 13);
         assert_eq!(value("MT_CHANNEL_CENTER_POSITION"), 14);
         assert_eq!(value("MT_DISPLAY_PNG"), 1);
+        assert_eq!(value("MT_DISPLAY_RGBA16F"), 2);
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
         assert_eq!(value("MT_DENOISE_OIDN_WEBGPU"), 5);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);

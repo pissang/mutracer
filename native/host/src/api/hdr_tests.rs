@@ -171,3 +171,37 @@ fn l1_hdr_matches_ts_coverage_and_background_without_changing_l0() {
         engine.dispose();
     }
 }
+
+#[test]
+#[ignore = "requires a real GPU"]
+fn standalone_hdr_composition_preserves_render_and_sdr_output() {
+    let _lock = crate::abi_test_lock();
+    let engine = Engine::new(Default::default()).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            size: RenderSize::Fixed {
+                width: 13,
+                height: 9,
+            },
+            max_samples: 4,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let display = engine.display();
+    let before = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let sdr = display.read_rgba8(&render).unwrap();
+    let image = display.compose_hdr(&render).unwrap().unwrap();
+    assert_eq!(image.format(), wgpu::TextureFormat::Rgba16Float);
+    let (w, h, half) = display.read_rgba16f(&render).unwrap();
+    assert_eq!([w, h], [13, 9]);
+    assert_eq!(half.len(), 13 * 9 * 8);
+    assert!(half.chunks_exact(2).any(|b| b != [0, 0]));
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap().data, before);
+    assert_eq!(display.read_rgba8(&render).unwrap(), sdr);
+    assert_eq!(render.samples(), 4);
+}

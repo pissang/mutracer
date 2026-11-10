@@ -343,7 +343,11 @@ typedef enum mt_display_format {
   /* Straight-alpha RGBA8 at the render's size, top row first. */
   MT_DISPLAY_RGBA8 = 0,
   /* The same image encoded as PNG. */
-  MT_DISPLAY_PNG = 1
+  MT_DISPLAY_PNG = 1,
+  /* Straight-alpha linear scRGB packed little-endian RGBA binary16, top row
+   * first; eight bytes per pixel. Includes HDR display passes without needing
+   * a window; preserves values above 1. */
+  MT_DISPLAY_RGBA16F = 2
 } mt_display_format;
 /* The render's complete image composed with the current display settings.
  * pixels=NULL, size=0 queries the required size (which composes the image).

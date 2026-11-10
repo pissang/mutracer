@@ -730,6 +730,29 @@ impl Display {
         self.engine.flush();
         result
     }
+    /// Composes this render as straight-alpha linear scRGB RGBA16Float, including
+    /// HDR display passes, without attaching or presenting a window. Default
+    /// composition uses the render size. Returns None before a complete image.
+    /// Values above 1 are preserved. Borrow only until the next composition,
+    /// refine, resize or disposal; do not write or destroy the returned texture.
+    pub fn compose_hdr(&self, render: &Render) -> Result<Option<wgpu::Texture>> {
+        let result = self
+            .compose_mode(render, false, true)
+            .map(|image| image.map(|image| image.texture));
+        self.engine.flush();
+        result
+    }
+    /// The same image as [`Display::compose_hdr`] in packed little-endian RGBA
+    /// binary16, top row first. Errors before a complete image. Uses GPU readback;
+    /// consumes eight bytes per pixel plus a padded staging buffer.
+    pub fn read_rgba16f(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
+        let image = self
+            .compose_hdr(render)?
+            .ok_or_else(|| error(Status::InvalidState, "Render has no complete image"))?;
+        let bytes = crate::display::read_image(&self.engine.inner.gpu, &image)
+            .map_err(|e| error(Status::Error, e.to_string()))?;
+        Ok((image.width(), image.height(), bytes))
+    }
     /// [`Display::read_rgba8`] encoded as PNG.
     pub fn encode_png(&self, render: &Render) -> Result<Vec<u8>> {
         let (width, height, rgba) = self.read_rgba8(render)?;

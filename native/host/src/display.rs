@@ -1123,7 +1123,11 @@ mod tests {
 /// Straight RGBA8 readback, including auxiliary images with no beauty capture.
 pub(crate) fn read_image(gpu: &GpuDevice, texture: &wgpu::Texture) -> Result<Vec<u8>> {
     let size = [texture.width(), texture.height()];
-    let stride = (size[0] * 4).div_ceil(256) * 256;
+    let pixel_bytes = texture
+        .format()
+        .block_copy_size(None)
+        .ok_or("Unsupported display readback format")?;
+    let stride = (size[0] * pixel_bytes).div_ceil(256) * 256;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Display export readback"),
         size: stride as u64 * size[1] as u64,
@@ -1157,7 +1161,11 @@ pub(crate) fn read_image(gpu: &GpuDevice, texture: &wgpu::Texture) -> Result<Vec
     let mapped = buffer.get_mapped_range(..)?;
     Ok(mapped
         .chunks_exact(stride as usize)
-        .flat_map(|row| row[..size[0] as usize * 4].iter().copied())
+        .flat_map(|row| {
+            row[..size[0] as usize * pixel_bytes as usize]
+                .iter()
+                .copied()
+        })
         .collect())
 }
 
