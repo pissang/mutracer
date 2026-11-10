@@ -306,6 +306,7 @@ fn external_vulkan_device_images_and_native_post_process() {
     );
     render.converge(ConvergeOptions::new(1)).unwrap();
     let cpu_begin = Instant::now();
+    let cpu_hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
     let cpu_depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
     println!(
         "Vulkan CPU read_pixels same scene: {:.3} ms",
@@ -462,7 +463,10 @@ fn external_vulkan_device_images_and_native_post_process() {
     let export_begin = Instant::now();
     let export_sequence = render
         .export_vulkan(
-            &[(imported_depth.clone(), 1, 0)],
+            &[
+                (imported_export.clone(), 0, 0),
+                (imported_depth.clone(), 1, 0),
+            ],
             Some((&imported_ready, 1)),
             (&imported_done, 1),
         )
@@ -490,8 +494,8 @@ fn external_vulkan_device_images_and_native_post_process() {
         .values(&[2]);
     unsafe { device.wait_semaphores(&wait_info2, u64::MAX) }.unwrap();
     assert!(engine.poll_vulkan_exports(export_sequence2).unwrap());
-    let exported_reference = cpu_depth_reference;
-    let exported_depth_reference = exported_reference.clone();
+    let exported_reference = cpu_hdr_reference;
+    let exported_depth_reference = cpu_depth_reference;
     let export_buffer = unsafe {
         device
             .create_buffer(
@@ -576,7 +580,7 @@ fn external_vulkan_device_images_and_native_post_process() {
             &[],
             &[],
             &[vk::ImageMemoryBarrier::default()
-                .image(depth_image)
+                .image(export_image)
                 .subresource_range(export_range)
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -587,7 +591,7 @@ fn external_vulkan_device_images_and_native_post_process() {
         );
         device.cmd_copy_image_to_buffer(
             export_command,
-            depth_image,
+            export_image,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             export_buffer,
             &[vk::BufferImageCopy::default()
@@ -706,10 +710,10 @@ fn external_vulkan_device_images_and_native_post_process() {
             )
             .unwrap()
     };
-    let exported_depth = unsafe {
-        std::slice::from_raw_parts(depth_mapped.cast::<f32>(), exported_depth_reference.len())
-    };
-    assert_eq!(exported_depth, exported_depth_reference.as_slice());
+    let exported_depth = unsafe { std::slice::from_raw_parts(depth_mapped.cast::<f32>(), 8 * 6) };
+    for (index, value) in exported_depth.iter().enumerate() {
+        assert_eq!(*value, exported_depth_reference[index * 4]);
+    }
     unsafe {
         device.unmap_memory(export_buffer_memory);
         device.destroy_command_pool(export_pool, None);
@@ -915,14 +919,12 @@ fn external_vulkan_device_images_and_native_post_process() {
     assert_eq!(engine.inner.gpu.queue.readback_count(), before);
     let ids = render.read_pixels(PixelKind::Id).unwrap();
     assert!(ids.id_data.unwrap().iter().all(|v| *v == u32::MAX));
-    assert!(
-        render
-            .read_pixels(PixelKind::Depth)
-            .unwrap()
-            .data
-            .iter()
-            .all(|v| *v == 0.)
-    );
+    assert!(render
+        .read_pixels(PixelKind::Depth)
+        .unwrap()
+        .data
+        .iter()
+        .all(|v| *v == 0.));
     render
         .set_settings(RenderSettings {
             max_samples: 1,
