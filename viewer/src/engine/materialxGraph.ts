@@ -10,8 +10,10 @@ import type {MaterialValues} from './materialParams';
 import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
 const literal=(type:Type,value:Input['value']):Input=>({type,value});
-const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled:'thinWalled',geometryNormal:'normal',specularRoughnessAnisotropy:'specularAnisotropy',coatRoughnessAnisotropy:'coatAnisotropy',subsurfaceScatterAnisotropy:'subsurfaceAnisotropy'};
-const camel=(s:string)=>s.toLowerCase().replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase());
+/** MaterialX surface input names (camel-cased) that map to differently named material properties. */
+export const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled:'thinWalled',geometryNormal:'normal',specularRoughnessAnisotropy:'specularAnisotropy',coatRoughnessAnisotropy:'coatAnisotropy',subsurfaceScatterAnisotropy:'subsurfaceAnisotropy'};
+/** MaterialX snake_case input name to its camelCase material property. */
+export const camel=(s:string)=>s.toLowerCase().replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase());
 const input=(e:Element,name:string)=>e.children.find(c=>c.tag==='input'&&c.attrs.name===name);
 const child=(e:Element,name:string)=>e.children.find(c=>c.attrs.name===name && !['input','output'].includes(c.tag));
 const inactiveImageInputs = materialXInactiveImageInputs;
