@@ -598,13 +598,33 @@ mod gpu_tests {
         source: &ID3D12Resource,
         bytes: u64,
     ) -> Vec<f32> {
+        // D3D12 texture rows are padded to D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+        // CopyResource(texture, buffer) is not a valid texture readback.  Use
+        // the device's footprint and strip the padding while mapping.
+        let source_desc = unsafe { source.GetDesc() };
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut _rows = 0;
+        let mut _row_bytes = 0;
+        let mut total_bytes = 0;
+        unsafe {
+            device.GetCopyableFootprints(
+                &source_desc,
+                0,
+                1,
+                0,
+                Some(&mut footprint),
+                Some(&mut _rows),
+                Some(&mut _row_bytes),
+                Some(&mut total_bytes),
+            );
+        }
         let heap = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_READBACK,
             ..Default::default()
         };
         let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: bytes,
+            Width: total_bytes,
             Height: 1,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -650,9 +670,23 @@ mod gpu_tests {
         };
         unsafe {
             list.ResourceBarrier(std::slice::from_ref(&barrier));
-            list.CopyResource(&readback, source);
+            let mut dst_location = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: ManuallyDrop::new(Some(readback.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    PlacedFootprint: footprint,
+                },
+            };
+            let mut src_location = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: ManuallyDrop::new(Some(source.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            list.CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, None);
             list.Close().unwrap();
             ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
+            ManuallyDrop::drop(&mut dst_location.pResource);
+            ManuallyDrop::drop(&mut src_location.pResource);
             queue.ExecuteCommandLists(&[Some(list.cast().unwrap())]);
         }
         let completion: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
@@ -671,15 +705,22 @@ mod gpu_tests {
                     0,
                     Some(&D3D12_RANGE {
                         Begin: 0,
-                        End: bytes as usize,
+                        End: total_bytes as usize,
                     }),
                     Some(&mut ptr),
                 )
                 .unwrap();
         }
-        let values = unsafe {
-            std::slice::from_raw_parts(ptr.cast::<f32>(), (bytes / 4) as usize).to_vec()
-        };
+        let tight_row_bytes = bytes / u64::from(source_desc.Height);
+        let row_pitch = u64::from(footprint.Footprint.RowPitch);
+        let values = (0..source_desc.Height)
+            .flat_map(|row| unsafe {
+                let row_ptr = (ptr as *const u8).add((footprint.Offset + u64::from(row) * row_pitch) as usize);
+                std::slice::from_raw_parts(row_ptr.cast::<f32>(), (tight_row_bytes / 4) as usize)
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
         unsafe {
             readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
         }
