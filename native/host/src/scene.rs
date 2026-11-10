@@ -3275,3 +3275,26 @@ pub(crate) fn fold_material_graph(bytes: Vec<u8>) -> Result<Vec<u8>> {
         }
     })
 }
+
+#[cfg(test)]
+#[test]
+fn viewer_scene_descriptor_contract() {
+    let Some(directory) = std::env::var_os("MUTRACER_WEBVIEW_DESCRIPTOR_FIXTURES") else {
+        eprintln!("Skip viewer descriptors: MUTRACER_WEBVIEW_DESCRIPTOR_FIXTURES unset");
+        return;
+    };
+    let mut count = 0;
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) != Some("bin") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        validate(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", path.display()));
+        count += 1;
+    }
+    assert!(
+        count >= 2,
+        "Generate viewer fixtures before this contract check"
+    );
+}
