@@ -218,8 +218,26 @@ int main(void) {
                                  sizeof error_text));
   mt_vk_device_info vi = {sizeof vi};
   OK(mt_engine_vulkan_info(engine, &vi, error_text, sizeof error_text));
+  uint32_t queue_family_count = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(vi.physical_device,
+                                           &queue_family_count, NULL);
+  VkQueueFamilyProperties *queue_families =
+      (VkQueueFamilyProperties *)calloc(queue_family_count,
+                                        sizeof *queue_families);
+  if (!queue_families)
+    FAIL("queue-family allocation");
+  vkGetPhysicalDeviceQueueFamilyProperties(vi.physical_device,
+                                           &queue_family_count, queue_families);
+  uint32_t physical_queue_count =
+      vi.queue_family < queue_family_count
+          ? queue_families[vi.queue_family].queueCount
+          : 0;
   printf("Vulkan C host device=%p family=%u\n", (void *)vi.device,
          vi.queue_family);
+  printf("Vulkan queue family %u exposes %u queue(s); imported library queue "
+         "index=%u (host-created device enables one queue)\n",
+         vi.queue_family, physical_queue_count, vi.queue_index);
+  free(queue_families);
   const uint32_t w = 8, h = 6;
   VkDevice d = vi.device;
   VkImage images[2];
@@ -253,8 +271,7 @@ int main(void) {
     VK(vkAllocateMemory(d, &ma, NULL, &image_memory[k]));
     VK(vkBindImageMemory(d, images[k], image_memory[k], 0));
     mt_vk_gpu_image_desc id = {sizeof id,  0, NULL, images[k],
-                               formats[k], w, h,    VK_IMAGE_LAYOUT_GENERAL,
-                               0};
+                               formats[k], w, h,    VK_IMAGE_LAYOUT_GENERAL};
     OK(mt_engine_import_vulkan_image(engine, &id, &imports[k], error_text,
                                      sizeof error_text));
   }
@@ -334,10 +351,10 @@ int main(void) {
   fclose(f);
   printf("PASS Vulkan C host: HDR/depth byte-identical; wrote "
          "vulkan-export-output.bin\n");
+  mt_render_destroy(render, error_text, sizeof error_text);
   mt_gpu_image_destroy(imports[0], error_text, sizeof error_text);
   mt_gpu_image_destroy(imports[1], error_text, sizeof error_text);
   mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text);
-  mt_render_destroy(render, error_text, sizeof error_text);
   mt_scene_destroy(scene, error_text, sizeof error_text);
   mt_engine_destroy(engine, error_text, sizeof error_text);
   for (int k = 0; k < 2; k++) {

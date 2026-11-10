@@ -116,7 +116,7 @@ static int readback(ID3D12Device *d, ID3D12CommandQueue *q, ID3D12Resource *src,
   D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_READBACK};
   D3D12_RESOURCE_DESC bd = {
       D3D12_RESOURCE_DIMENSION_BUFFER, 0, total, 1, 1, 1, DXGI_FORMAT_UNKNOWN,
-      D3D12_TEXTURE_LAYOUT_ROW_MAJOR,  0};
+      {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE};
   ID3D12Resource *st = NULL;
   DX(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd,
                                 D3D12_RESOURCE_STATE_COPY_DEST, NULL,
@@ -345,10 +345,10 @@ int main(void) {
   printf("PASS D3D12 C host: sequences=%llu,%llu HDR/depth byte-identical "
          "twice; wrote d3d12-export-output.bin\n",
          (unsigned long long)seq, (unsigned long long)seq2);
+  mt_render_destroy(render, error_text, sizeof error_text);
   mt_gpu_image_destroy(hih, error_text, sizeof error_text);
   mt_gpu_image_destroy(dih, error_text, sizeof error_text);
   mt_gpu_timeline_destroy(th, error_text, sizeof error_text);
-  mt_render_destroy(render, error_text, sizeof error_text);
   mt_scene_destroy(scene, error_text, sizeof error_text);
   mt_engine_destroy(engine, error_text, sizeof error_text);
   CloseHandle(hh);

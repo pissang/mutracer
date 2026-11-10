@@ -806,7 +806,10 @@ mod gpu_tests {
         .expect("D3D12 adapter");
         let adapter_info = adapter.get_info();
         println!("D3D12 export adapter: {adapter_info:?}");
-        assert!(adapter_info.name.to_ascii_lowercase().contains("rtx 4060"));
+        assert!(matches!(
+            adapter_info.device_type,
+            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu
+        ));
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits: adapter.limits(),
             ..Default::default()

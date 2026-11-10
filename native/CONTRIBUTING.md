@@ -876,12 +876,16 @@ Linux/Windows drivers or Vulkan HWRT. C callers also need their Vulkan SDK heade
 when including `mutracer-vulkan.h`; the ordinary headers do not require them.
 
 On Windows, compile `examples/vulkan-export-host.c` with the SDK Vulkan headers
-and `examples/d3d12-export-host.c` with the Windows SDK. These are minimal host
-integration harnesses: create the native image/resource and two timeline
-objects on the device returned by the corresponding `*_info` call, fill the
-descriptor handles, then submit `mt_render_export_gpu` and poll
-`mt_engine_gpu_poll`. Run the resulting host only through `gpu-lock.ps1 W3`.
-The host retains and destroys native objects; MuTracer only retains wrappers.
+and `examples/d3d12-export-host.c` with the Windows SDK, using the C++ compiler
+mode (`/TP`) because the COM interfaces use C++ methods even though the files
+keep the `.c` extension. These are host integration harnesses: create the native
+image/resource and timeline objects on the device returned by the corresponding
+`*_info` call, fill the descriptor handles, then submit `mt_render_export_gpu`
+and poll `mt_engine_gpu_poll` with a deadline. Run the resulting host only
+through `gpu-lock.ps1 W3`. Destroy the render and MuTracer import wrappers
+before destroying host images, memory, fences or semaphores; destroy the
+borrowed engine/device last. MuTracer only retains wrappers and never releases
+the host-owned native objects.
 
 ## glTF material comparison
 

@@ -39,7 +39,6 @@ typedef struct mt_vk_gpu_image_desc {
   VkFormat format;
   uint32_t width, height;
   uint32_t initial_layout;
-  uint32_t reserved2;
 } mt_vk_gpu_image_desc;
 MT_VK_LAYOUT(mt_vk_gpu_image_desc, 40);
 typedef struct mt_vk_gpu_timeline_desc {
