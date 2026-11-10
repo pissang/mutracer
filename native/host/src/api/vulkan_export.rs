@@ -18,6 +18,7 @@ fn unavailable() -> super::Error {
     error(Status::Unavailable, "Vulkan GPU export is unavailable")
 }
 
+/// Borrowed wrapper for a host-owned Vulkan image imported on an engine device.
 #[derive(Clone)]
 pub struct VulkanImage {
     pub(super) engine: Engine,
@@ -25,6 +26,7 @@ pub struct VulkanImage {
     pub(super) raw_id: usize,
 }
 
+/// Borrowed wrapper for a host-owned Vulkan timeline semaphore.
 #[derive(Clone)]
 pub struct VulkanTimeline {
     pub(super) engine: Engine,
@@ -34,7 +36,7 @@ pub struct VulkanTimeline {
 
 /// Export state is kept on the engine so timelines remain canonical across
 /// repeated imports and completion can be polled without a blocking wait.
-pub struct State {
+pub(crate) struct State {
     pub(super) sequence: u64,
     pub(super) completed: u64,
     pending: Vec<Pending>,

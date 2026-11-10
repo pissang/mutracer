@@ -27,12 +27,14 @@ fn unavailable() -> super::Error {
     error(Status::Unavailable, "D3D12 GPU export is unavailable")
 }
 
+/// Borrowed wrapper for a host-owned same-device D3D12 UAV texture.
 #[derive(Clone)]
 pub struct D3d12Image {
     pub(super) engine: Engine,
     pub(super) texture: wgpu::Texture,
     pub(super) raw_id: usize,
 }
+/// Borrowed wrapper for a host-owned same-device shared fence.
 #[derive(Clone)]
 pub struct D3d12Timeline {
     pub(super) engine: Engine,
@@ -40,7 +42,7 @@ pub struct D3d12Timeline {
     pub(super) last_signal: Arc<Mutex<u64>>,
 }
 
-pub struct State {
+pub(crate) struct State {
     pub(super) sequence: u64,
     pub(super) completed: u64,
     pending: Vec<Pending>,
