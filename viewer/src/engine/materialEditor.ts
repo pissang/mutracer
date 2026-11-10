@@ -8,17 +8,19 @@ import {
   TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
   type MaterialValues, type TextureKey
 } from './materialParams';
-import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type TextureTransform, type TextureSampling } from './modelCache';
+import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type MaterialXHeight, type TextureTransform, type TextureSampling } from './modelCache';
 import { discardHistory, pushHistory, type HistoryItem } from '../history';
 
 /** Values and textures to set; `null` empties a texture slot. */
 export interface MaterialPatch {
+  materialXHeights?: MaterialXHeight[];
   graph?: MaterialGraph | null;
   values: MaterialValues;
   textures: Partial<Record<TextureKey, Texture | null>>;
 }
 
 interface Entry {
+  materialXHeights?: MaterialXHeight[];
   name: string;
   /** Traversal order in the model; the persistent identity across reloads. */
   index: number;
@@ -48,6 +50,7 @@ class MaterialEdit implements HistoryItem {
 
 /** A stored edit with its textures decoded, waiting for its material to be converted. */
 interface PendingEdit {
+  materialXHeights?: MaterialXHeight[];
   graph?:MaterialGraph|null;
   name: string;
   values: MaterialValues;
@@ -82,7 +85,7 @@ export async function readPendingEdits(modelId: string): Promise<PendingEdits | 
       }
     }));
     const graph=edit.graph?await restoreGraph(edit.graph):undefined;
-    pending.set(edit.index, { graph, name: edit.name, values: edit.values, textures, sampling:edit.sampling });
+    pending.set(edit.index, { graph, name: edit.name, values: edit.values, textures, sampling:edit.sampling, materialXHeights:edit.materialXHeights });
   }));
   return pending;
 }
@@ -151,7 +154,7 @@ export class MaterialEditor {
       if (edit && edit.name === (source.name || '')) this.apply(entry, this.fromPending(edit, converted), [converted]);
     } else if (first) {
       // Variants (e.g. instance colors) get the edits made so far, not the full state.
-      this.apply(entry, diff(entry.initial, readState(first)), [converted]);
+      this.apply(entry, diff(entry.initial, readState(first, entry.materialXHeights)), [converted]);
     }
   }
 
@@ -175,6 +178,7 @@ export class MaterialEditor {
       if (texture) { maps[key] = this.thumbnail(texture); sampling[key] = textureSampling(texture); }
     }
     return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps, sampling,
+      materialXHeights: entry.materialXHeights?.map(height => height.name) ?? [],
       graph: material.graph ? this.describeGraph(material) : null };
   }
 
@@ -250,6 +254,16 @@ export class MaterialEditor {
     await this.setTextures(materialId, { [slot]: file }, {}, label);
   }
 
+  /** Applies a package height only after the user chooses it. */
+  async setMaterialXHeight(materialId: string, name: string, scale: number) {
+    const entry = this.entries.get(materialId);
+    const height = entry?.materialXHeights?.find(item => item.name === name);
+    if (!entry || !height) return false;
+    return this.setTextures(materialId, { displacementMap: height.file },
+      { displacementScale: scale, displacementBias: 0 }, 'Apply MaterialX height map',
+      undefined, height.transform, undefined, undefined, undefined, entry.materialXHeights);
+  }
+
   /**
    * Replaces several texture slots and values as one undo step; `null` empties a slot.
    * New textures take `transform`, or else the UV transform of the texture they replace.
@@ -257,16 +271,18 @@ export class MaterialEditor {
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
     merge?: { key: string; ms?: number }, transform?: TextureTransform, graph?: MaterialGraph | null,
-    transforms?:Partial<Record<TextureKey,TextureTransform>>, signal?: AbortSignal
+    transforms?:Partial<Record<TextureKey,TextureTransform>>, signal?: AbortSignal, materialXHeights?: MaterialXHeight[]
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return false;
     signal?.throwIfAborted();
+    const previousHeights = entry.materialXHeights;
     const slots = Object.entries(files) as [TextureKey, Blob | null][];
     const images = await Promise.all(slots.map(([, file]) => (file ? decodeImage(file) : null)));
     // The material may have been replaced while decoding.
-    if (this.entries.get(materialId) !== entry || signal?.aborted) {
+    if (this.entries.get(materialId) !== entry || signal?.aborted ||
+      entry.materialXHeights !== previousHeights) {
       images.forEach(image => image?.close());
       return false;
     }
@@ -284,7 +300,8 @@ export class MaterialEditor {
       (values.displacementUvProjection ?? material.displacementUvProjection) === 'none') {
       values = { ...values, displacementUvProjection: 'triplanar' };
     }
-    this.commit(materialId, { values, textures, ...(graph !== undefined ? {graph} : {}) }, label, merge?.key, merge?.ms);
+    this.commit(materialId, { values, textures, ...(graph !== undefined ? {graph} : {}),
+      ...(materialXHeights !== undefined ? {materialXHeights} : {}) }, label, merge?.key, merge?.ms);
     return true;
   }
 
@@ -320,7 +337,7 @@ export class MaterialEditor {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return;
-    const current = readState(material);
+    const current = readState(material, entry.materialXHeights);
     const after = diff(current, patch);
     if (isEmpty(after)) return;
     const before = pick(current, after);
@@ -330,6 +347,7 @@ export class MaterialEditor {
   }
 
   private apply(entry: Entry, patch: MaterialPatch, targets: Iterable<OpenPBRMaterial> = entry.converted) {
+    if (patch.materialXHeights !== undefined) entry.materialXHeights = patch.materialXHeights;
     for (const material of targets) {
       const record = material as unknown as Record<string, unknown>;
       for (const [key, texture] of Object.entries(patch.textures)) record[key] = texture ?? undefined;
@@ -351,7 +369,7 @@ export class MaterialEditor {
       const texture = textures[slot] === null ? undefined : textures[slot] ?? material[slot];
       if (texture) textures[slot] = this.withSampling(texture, sampling);
     }
-    return { values: edit.values, textures, ...(edit.graph?{graph:edit.graph}:{}) };
+    return { values: edit.values, textures, ...(edit.graph?{graph:edit.graph}:{}), materialXHeights:edit.materialXHeights ?? [] };
   }
 
   private upload(image: ImageBitmap, file: Blob, material: OpenPBRMaterial, slot: TextureKey, transform?: TextureTransform) {
@@ -396,7 +414,7 @@ export class MaterialEditor {
     for (const [materialId, entry] of this.entries) {
       const material = entry.converted.values().next().value as OpenPBRMaterial | undefined;
       if (!entry.initial || !material || entry.index < 0) continue;
-      const changes = diff(entry.initial, readState(material));
+      const changes = diff(entry.initial, readState(material, entry.materialXHeights));
       if (isEmpty(changes)) continue;
       const textures: StoredEdit['textures'] = [];
       for (const [slot, texture] of Object.entries(changes.textures) as [TextureKey, Texture | null][]) {
@@ -409,12 +427,13 @@ export class MaterialEditor {
         if (texture && (!original || !sameSampling(texture, original))) sampling[slot] = textureSampling(texture);
       }
       materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures, ...('graph' in changes?{graph:archiveGraph(changes.graph??undefined)}:{}),
+        ...(changes.materialXHeights?.length ? {materialXHeights:changes.materialXHeights} : {}),
         ...(Object.keys(sampling).length ? {sampling} : {}) });
     }
     // Keep stored edits of materials that have not been converted yet.
     for (const [index, edit] of this.pending) {
       materials.push({
-        index, name: edit.name, values: edit.values, sampling:edit.sampling, ...(edit.graph?{graph:archiveGraph(edit.graph)}:{}),
+        index, name: edit.name, values: edit.values, sampling:edit.sampling, materialXHeights:edit.materialXHeights, ...(edit.graph?{graph:archiveGraph(edit.graph)}:{}),
         textures: Object.entries(edit.textures).map(([slot, upload]) =>
           ({ slot: slot as TextureKey, file: upload?.file ?? null, transform: upload?.transform }))
       });
@@ -441,11 +460,13 @@ export class MaterialEditor {
   }
 }
 
-function readState(material: OpenPBRMaterial): MaterialPatch {
+const NO_HEIGHTS: MaterialXHeight[] = [];
+
+function readState(material: OpenPBRMaterial, materialXHeights = NO_HEIGHTS): MaterialPatch {
   const record = material as unknown as Record<string, Texture | undefined>;
   const textures: MaterialPatch['textures'] = {};
   for (const key of TEXTURE_KEYS) textures[key] = record[key] ?? null;
-  return { values: readMaterial(material), textures, graph:material.graph??null };
+  return { values: readMaterial(material), textures, graph:material.graph??null, materialXHeights };
 }
 
 /** The parts of `next` that differ from `base`. */
@@ -458,6 +479,8 @@ function diff(base: MaterialPatch, next: MaterialPatch): MaterialPatch {
     if ((base.textures[key] ?? null) !== (texture ?? null)) out.textures[key] = texture ?? null;
   }
   if ('graph' in next && next.graph !== base.graph) out.graph=next.graph;
+  if (next.materialXHeights !== undefined && next.materialXHeights !== base.materialXHeights &&
+    (next.materialXHeights.length || base.materialXHeights?.length)) out.materialXHeights=next.materialXHeights;
   return out;
 }
 
@@ -470,15 +493,17 @@ function pick(state: MaterialPatch, keys: MaterialPatch): MaterialPatch {
   }
   for (const key of Object.keys(keys.textures) as TextureKey[]) out.textures[key] = state.textures[key] ?? null;
   if ('graph' in keys) out.graph=state.graph??null;
+  if (keys.materialXHeights !== undefined) out.materialXHeights=state.materialXHeights ?? NO_HEIGHTS;
   return out;
 }
 
 function merge(a: MaterialPatch, b: MaterialPatch): MaterialPatch {
-  return { values: { ...a.values, ...b.values }, textures: { ...a.textures, ...b.textures }, ...('graph' in b?{graph:b.graph}:'graph' in a?{graph:a.graph}:{}) };
+  return { values: { ...a.values, ...b.values }, textures: { ...a.textures, ...b.textures }, ...('graph' in b?{graph:b.graph}:'graph' in a?{graph:a.graph}:{}),
+    ...(b.materialXHeights !== undefined ? {materialXHeights:b.materialXHeights} : a.materialXHeights !== undefined ? {materialXHeights:a.materialXHeights} : {}) };
 }
 
 function isEmpty(patch: MaterialPatch) {
-  return !('graph' in patch) && !Object.keys(patch.values).length && !Object.keys(patch.textures).length;
+  return !('graph' in patch) && patch.materialXHeights === undefined && !Object.keys(patch.values).length && !Object.keys(patch.textures).length;
 }
 
 /** glTF orientation; keeps the UV transform of the texture it replaces, or of the base color map. */

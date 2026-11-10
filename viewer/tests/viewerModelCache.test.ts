@@ -157,4 +157,21 @@ describe('current model OPFS cache', () => {
     expect(image.wrapS).toBe('clamp-to-edge');expect(image.uvOffset).toEqual([0.1,0.2]);expect(restored!.terminal).toEqual(graph.terminal);expect(edits.materials[0].values.baseWeight).toBe(0.7);
   });
 
+  it('persists optional heights with original bytes and transforms beside applied textures', async () => {
+    filesystem();
+    const transform = {uvScale:[2,3] as [number,number],uvOffset:[.1,.2] as [number,number],uvChannel:1 as const,flipY:true,colorSpace:'linear' as const};
+    await saveMaterialEdits({modelId:'m',materials:[{index:0,name:'Rock',values:{displacementScale:0},
+      textures:[{slot:'map',file:new Blob(['base'])}], materialXHeights:[
+        {name:'Rock_height.png',file:new Blob(['height'],{type:'image/png'}),transform},
+        {name:'Rock_disp.jpg',file:new Blob(['displacement'],{type:'image/jpeg'}),transform}
+      ]}]});
+    const edit=(await readMaterialEdits())!.materials[0];
+    expect(await edit.textures[0].file!.text()).toBe('base');
+    expect(edit.materialXHeights?.map(height=>height.name)).toEqual(['Rock_height.png','Rock_disp.jpg']);
+    expect(edit.materialXHeights?.[0].transform).toEqual(transform);
+    expect(edit.materialXHeights?.[0].file.type).toBe('image/png');
+    expect(await edit.materialXHeights?.[0].file.text()).toBe('height');
+    expect(await edit.materialXHeights?.[1].file.text()).toBe('displacement');
+  });
+
 });

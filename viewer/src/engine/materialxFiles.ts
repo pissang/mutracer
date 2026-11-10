@@ -25,6 +25,8 @@ export interface MaterialXPackage {
   /** Path of the document inside the package. */
   path: string;
   text: string;
+  /** Package entries, including images not referenced by the document. */
+  files?: ReadonlyMap<string, Blob>;
   /** Finds a texture referenced by the document. */
   resolve(file: string): Blob | undefined;
 }
@@ -59,6 +61,7 @@ export async function readMaterialXPackage(files: PathedFile[]): Promise<Materia
   return {
     path,
     text,
+    files: all,
     resolve(file) {
       const relative = normalizePath(dir + file);
       const name = relative.slice(relative.lastIndexOf('/') + 1).toLowerCase();

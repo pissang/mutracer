@@ -501,6 +501,8 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 
 /* Select */
 .select-field { min-width: 0; }
+.mat-package-height { display: grid; gap: 7px; min-width: 0; }
+.mat-package-height .select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .select { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 30px; padding: 0 9px 0 10px;
   border-radius: var(--cv-radius-button); background: var(--cv-input);
   color: var(--cv-text); font-size: 11px; outline: none; white-space: nowrap; }

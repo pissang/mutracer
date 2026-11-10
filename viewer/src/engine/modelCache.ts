@@ -108,6 +108,7 @@ export function clearModelCache(): Promise<void> {
 
 /** Material edits of the cached model; uploaded textures keep their original files. */
 export interface MaterialEdit {
+  materialXHeights?: MaterialXHeight[];
   graph?:GraphArchive|null;
   /** Position of the material in the model's traversal order. */
   index: number;
@@ -116,6 +117,13 @@ export interface MaterialEdit {
   /** `null` removes the loaded texture from the slot. */
   textures: { slot: TextureKey; file: Blob | null; transform?: TextureTransform }[];
   sampling?: Partial<Record<TextureKey, TextureSampling>>;
+}
+
+/** Optional, unconnected height images retained from a MaterialX package. */
+export interface MaterialXHeight {
+  name: string;
+  file: Blob;
+  transform: TextureTransform;
 }
 
 export interface TextureSampling {
@@ -181,12 +189,16 @@ export function saveMaterialEdits(edits: MaterialEdits): Promise<void> {
       const blobs: Blob[] = [];
       const header = new TextEncoder().encode(JSON.stringify({
         version: 1, modelId: edits.modelId,
-        materials: edits.materials.map(({ index, name, values, textures, sampling, graph }) => ({
+        materials: edits.materials.map(({ index, name, values, textures, sampling, graph, materialXHeights }) => ({
           index, name, values, sampling,
           graph:graph&&{nodes:graph.nodes,terminal:graph.terminal,images:graph.images.map(image=>{blobs.push(image.file);return {...image,file:{type:image.file.type,size:image.file.size}};})},
           textures: textures.map(({ slot, file, transform }) => {
             if (file) blobs.push(file);
             return { slot, file: file && { type: file.type, size: file.size }, transform };
+          }),
+          materialXHeights: materialXHeights?.map(height => {
+            blobs.push(height.file);
+            return { ...height, file: { type: height.file.type, size: height.file.size } };
           })
         }))
       }));
@@ -252,7 +264,16 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
           offset += size;
         }
         const sampling = readSampling(entry.sampling);
-        materials.push({ index: entry.index, name: entry.name, values, textures, ...(graph?{graph}:{}), ...(sampling ? {sampling} : {}) });
+        const materialXHeights: MaterialXHeight[] = [];
+        if (entry.materialXHeights !== undefined && !Array.isArray(entry.materialXHeights)) return null;
+        for (const height of entry.materialXHeights ?? []) {
+          const { size, type } = height.file ?? {}, transform = readTransform(height.transform);
+          if (typeof height.name !== 'string' || !transform || !Number.isSafeInteger(size) || size < 0 || offset + size > file.size || typeof type !== 'string') return null;
+          materialXHeights.push({ name: height.name, transform, file: new Blob([await file.slice(offset, offset + size).arrayBuffer()], { type }) });
+          offset += size;
+        }
+        materials.push({ index: entry.index, name: entry.name, values, textures, ...(graph?{graph}:{}), ...(sampling ? {sampling} : {}),
+          ...(materialXHeights.length ? {materialXHeights} : {}) });
       }
       if (offset !== file.size) return null;
       return { modelId: header.modelId, materials };

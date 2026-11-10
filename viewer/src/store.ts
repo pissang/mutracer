@@ -237,6 +237,7 @@ export interface AnimationState {
 }
 
 export interface SelectedMaterial {
+  materialXHeights?: string[];
   id: string;
   name: string;
   meshName: string;

@@ -20,6 +20,7 @@ import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './
 // Keep the importer in the initial module graph: a tab can stay open across
 // deployments that remove the previous build's lazily loaded chunks.
 import { parseMaterialXGraph } from './materialxGraph';
+import { findMaterialXHeights } from './materialxHeights';
 import { loadGraphImages, loadMapImage, readMaterialXPackage, loadMaterialXDisplacement } from './materialxFiles';
 import { parseMaterialX } from './materialx';
 
@@ -1290,6 +1291,20 @@ export class ViewerEngine {
     }
   }
 
+  async setMaterialXHeight(materialId: string, name: string) {
+    if (this.engine.backend !== 'webgpu') return false;
+    const selected = get().material;
+    if (selected?.id !== materialId) return false;
+    const scale = Number(selected.values.displacementScale);
+    try {
+      return await this.materials.setMaterialXHeight(materialId, name,
+        scale !== 0 ? scale : selected.displacementRange.max * .1);
+    } catch (error) {
+      showToast(`Could not read the height map: ${(error as Error).message}`, 'error');
+      return false;
+    }
+  }
+
   /** Disconnects one graph-driven surface input so its material value applies; one undo step. */
   disconnectMaterialGraphInput(materialId: string, terminal: string, label: string) {
     const graph = this.materials.graph(materialId);
@@ -1395,7 +1410,9 @@ export class ViewerEngine {
       if(displacement){maps.displacementMap=displacement.file;warnings.push(...displacement.warnings);}
       signal?.throwIfAborted();
       if(token!==this.loadToken||imports.get(materialId)!==request||this.modelGroup!==model)return false;
-      const applied=await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...displacement?.values},`${name} MaterialX`,undefined,undefined,material.graph??null,{...(displacement?.transform?{displacementMap:displacement.transform}:{})},signal);
+      const materialXHeights=findMaterialXHeights(material,pkg);
+      const applied=await this.materials.setTextures(materialId,maps,{...readMaterial(new OpenPBRMaterial()),...MATERIAL_BASE,...fallbackValues,...material.values,...displacement?.values,
+        ...(materialXHeights.length ? {displacementScale:0,displacementBias:0} : {})},`${name} MaterialX`,undefined,undefined,material.graph??null,{...(displacement?.transform?{displacementMap:displacement.transform}:{})},signal,materialXHeights);
       if(!applied||signal?.aborted)return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);

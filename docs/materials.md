@@ -530,6 +530,17 @@ Subsurface and tangent graph inputs and lit emission graphs retain
 the limits described above. To load `.mtlx` files, use the viewer; the library's
 graph API accepts typed nodes and loaded textures.
 
+If the material has no displacement connection, the viewer also detects package
+PNG, JPEG, WebP and AVIF images with `height`, `displacement` or `disp` as a
+filename word. In **Displacement**, choose a **Package height map** and click
+**Apply height map** to enable it, then adjust **Scale** and **Bias**. These maps stay
+disabled until applied. The initial scale is 1% of the selected mesh's longest
+dimension in local units, with zero bias. Set both values to `0`, or remove the
+displacement texture, to turn displacement off. The choices and settings are
+saved with the cached model and support undo/reset. When possible, the height map
+uses a surface image's UV repeat and offset; otherwise it uses UV0 with one
+repeat. Adjust **Wrap & repeat** in the displacement texture slot if needed.
+
 Scalar MaterialX displacement imports as a height map and takes effect on WebGPU.
 A single image with height scale/bias keeps its original pixels. Other networks
 that depend only on one UV set are baked at the largest input image dimensions,

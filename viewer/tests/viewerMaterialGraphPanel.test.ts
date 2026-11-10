@@ -7,7 +7,8 @@ vi.hoisted(() => { vi.stubGlobal('location', { hash: '', href: 'https://viewer.e
 vi.mock('../src/engine/modelCache', () => ({ readMaterialEdits: vi.fn(), saveMaterialEdits: vi.fn() }));
 import { disconnectGraphInput, summarizeMaterialGraph } from '../src/engine/materialGraphSummary';
 import { archiveGraph, graphImageName, rememberGraphImage, restoreGraph } from '../src/engine/materialxGraphArchive';
-import { MaterialEditor } from '../src/engine/materialEditor';
+import { MaterialEditor, readPendingEdits } from '../src/engine/materialEditor';
+import { readMaterialEdits, saveMaterialEdits, type MaterialXHeight } from '../src/engine/modelCache';
 import { discardHistory, redo, undo } from '../src/history';
 
 class Bitmap { close() {} }
@@ -83,7 +84,7 @@ describe('material graph edits', () => {
     editor = new MaterialEditor(() => {});
     editor.setModel(mesh, null);
     editor.onConverted(source, material, mesh.uuid);
-    return { id: source.uuid, material };
+    return { id: source.uuid, material, source, mesh };
   }
 
   it('describes the graph and disconnects inputs as undoable steps', () => {
@@ -134,5 +135,62 @@ describe('material graph edits', () => {
 
     undo();
     expect(material.graph).toBe(graph);
+  });
+
+  it('keeps package heights disabled until applied and undoes choices and strength with the material', async () => {
+    const { id, material, source, mesh } = setup();
+    const heights: MaterialXHeight[] = [{name:'Rock_height.png',file:new Blob(['height']),
+      transform:{uvScale:[2,3],uvOffset:[.1,.2],uvChannel:1,flipY:true,colorSpace:'linear'}}];
+    await editor.setTextures(id, {}, {displacementScale:0,displacementBias:0}, 'Import',
+      undefined,undefined,null,undefined,undefined,heights);
+    expect(material.displacementMap).toBeUndefined();
+    expect(editor.describe(id)?.materialXHeights).toEqual(['Rock_height.png']);
+    expect(await editor.setMaterialXHeight(id, 'Rock_height.png', .02)).toBe(true);
+    expect(material.displacementMap).toMatchObject({uvScale:[2,3],uvOffset:[.1,.2],uvChannel:1,flipY:true,colorSpace:'linear'});
+    expect(material.displacementScale).toBe(.02);
+    editor.setValues(id, {displacementScale:.04}, 'Strength');
+    const variant=new OpenPBRMaterial();
+    editor.onConverted(source,variant,mesh.uuid);
+    expect(variant.displacementMap).toBe(material.displacementMap);
+    expect(variant.displacementScale).toBe(.04);
+    undo();expect(material.displacementScale).toBe(.02);
+    undo();expect(material.displacementMap).toBeUndefined();expect(material.displacementScale).toBe(0);
+    undo();expect(editor.describe(id)?.materialXHeights).toEqual([]);
+    redo();expect(editor.describe(id)?.materialXHeights).toEqual(['Rock_height.png']);
+    redo();expect(material.displacementScale).toBe(.02);
+    editor.reset(id);expect(editor.describe(id)?.materialXHeights).toEqual([]);expect(material.displacementMap).toBeUndefined();
+    undo();expect(material.displacementScale).toBe(.02);expect(editor.describe(id)?.materialXHeights).toEqual(['Rock_height.png']);
+
+    editor.modelId='model';editor.setValues(id,{displacementScale:.03},'Strength');editor.flush();
+    const edit=vi.mocked(saveMaterialEdits).mock.lastCall![0].materials[0];
+    expect(edit.materialXHeights).toBe(heights);
+    expect(edit.textures.find(texture=>texture.slot==='displacementMap')?.file).toBe(heights[0].file);
+    expect(edit.values.displacementScale).toBe(.03);
+  });
+
+  it('restores optional maps without decoding them before the user applies one', async () => {
+    const heights: MaterialXHeight[]=[{name:'height.png',file:new Blob(['height']),transform:{uvScale:[1,1],flipY:true}}];
+    vi.mocked(readMaterialEdits).mockResolvedValueOnce({modelId:'model',materials:[{index:0,name:'',values:{displacementScale:0},textures:[],materialXHeights:heights}]});
+    const pending=await readPendingEdits('model');
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    const { id,material,mesh,source }=setup();
+    editor.setModel(mesh,pending);editor.onConverted(source,material,mesh.uuid);
+    expect(editor.describe(id)?.materialXHeights).toEqual(['height.png']);
+    expect(material.displacementMap).toBeUndefined();
+    expect(await editor.setMaterialXHeight(id,'height.png',.01)).toBe(true);
+    expect(material.displacementScale).toBe(.01);
+  });
+
+  it('discards a height decoded after the imported material is reset', async () => {
+    const { id,material }=setup();
+    const heights: MaterialXHeight[]=[{name:'height.png',file:new Blob(['height']),transform:{uvScale:[1,1],flipY:true}}];
+    await editor.setTextures(id,{}, {displacementScale:0}, 'Import',undefined,undefined,null,undefined,undefined,heights);
+    let complete!: (image: ImageBitmap) => void;
+    vi.mocked(createImageBitmap).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));
+    const task=editor.setMaterialXHeight(id,'height.png',.02);
+    editor.reset(id);
+    const bitmap={close:vi.fn()} as unknown as ImageBitmap;complete(bitmap);
+    expect(await task).toBe(false);expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(material.displacementMap).toBeUndefined();expect(editor.describe(id)?.materialXHeights).toEqual([]);
   });
 });

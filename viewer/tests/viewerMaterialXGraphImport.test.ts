@@ -7,6 +7,16 @@ import {bakeDisplacement} from '../src/engine/materialxBakeClient';
 vi.mock('../src/engine/materialxBakeClient',()=>({bakeDisplacement:vi.fn()}));
 const xml='<materialx version="1.39"><texcoord name="uv" type="vector2"/><extract name="a" type="float"><input name="in" type="vector2" nodename="uv"/></extract><open_pbr_surface name="S" type="surfaceshader"><input name="geometry_opacity" type="float" nodename="a"/></open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>';
 describe('viewer MaterialX graph replacement',()=>{
+ it('retains unconnected package heights as choices without enabling or decoding them',async()=>{
+  const source='<materialx version="1.39"><standard_surface name="S" type="surfaceshader"/><surfacematerial name="Rock"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>';
+  const file=new File([zipSync({'Rock.mtlx':strToU8(source),'Rock_height.png':new Uint8Array([1])})],'Rock.zip');
+  const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
+  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'rock',[{file,path:file.name}])).toBe(true);
+  const args=setTextures.mock.calls[0] as unknown as unknown[];
+  expect(args[1]).toMatchObject({displacementMap:null});
+  expect(args[2]).toMatchObject({displacementScale:0,displacementBias:0});
+  expect(args[9]).toEqual([expect.objectContaining({name:'Rock_height.png',file:expect.any(Blob)})]);
+ });
  it('imports a zipped car paint material as one replacement',async()=>{
   const source='<materialx version="1.39"><standard_surface name="S" type="surfaceshader"><input name="base_color" type="color3" value="0.8,0.1,0.2"/><input name="metalness" type="float" value="1"/></standard_surface><surfacematerial name="Car_Paint"><input name="surfaceshader" type="surfaceshader" nodename="S"/></surfacematerial></materialx>';
   const zip=zipSync({'Car_Paint/Car_Paint.mtlx':strToU8(source)});

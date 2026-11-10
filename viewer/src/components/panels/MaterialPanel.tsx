@@ -130,6 +130,8 @@ export function MaterialPanel() {
             open={isOpen(group)}
             onOpenChange={(open) => setOpenGroups((g) => ({ ...g, [group.id]: open }))}
           >
+            {group.id === 'displacement' && !!material.materialXHeights?.length &&
+              <PackageHeightMaps key={material.id + material.materialXHeights.join('|')} material={material} disabled={webgl} />}
             {group.params.map((param) => driven.has(param.key) && !fallback ? link(driven.get(param.key)!, param.label) : (
               <ParamControl key={param.key} param={param.key === 'displacementScale'
                 ? { ...param, ...material.displacementRange } : param.key === 'displacementBias'
@@ -139,8 +141,7 @@ export function MaterialPanel() {
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
             {extra.map(input => link(input, groupLabel(input.key, group)))}
-            {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
-              'Offset = texture × Scale + Bias, in mesh-local units. Sliders follow object size. Use the numeric inputs to enter any value. A displacement texture is required.'}</Hint>}
+            {group.id === 'displacement' && webgl && <Hint>Displacement requires WebGPU.</Hint>}
           </Section>
         );
       })}
@@ -156,6 +157,23 @@ export function MaterialPanel() {
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
     </div>
   );
+}
+
+function PackageHeightMaps({ material, disabled }: { material: SelectedMaterial; disabled: boolean }) {
+  const names = material.materialXHeights!;
+  const [name, setName] = useState(names[0]);
+  const [busy, setBusy] = useState(false);
+  return <div className="mat-package-height">
+    <span className="field-label">Package height map</span>
+    <Select label="Package height map" value={name} options={names.map(value => ({ value, label: value }))}
+      disabled={disabled || busy} onChange={setName} />
+    <button className="btn" disabled={disabled || busy} onClick={async () => {
+      setBusy(true);
+      try { await getEngine()?.setMaterialXHeight(material.id, name); }
+      finally { setBusy(false); }
+    }}>{busy ? 'Applying…' : 'Apply height map'}</button>
+    <Hint>Not connected in MaterialX. Apply to enable displacement.</Hint>
+  </div>;
 }
 
 /** Picks a MaterialX .zip, or a .mtlx with its textures; folders can be dropped on the viewport. */
