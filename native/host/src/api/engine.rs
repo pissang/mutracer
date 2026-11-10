@@ -388,7 +388,8 @@ impl Engine {
     /// Enumeration creates no devices and can return an empty list. Retain an
     /// adapter and use [`Engine::on_adapter`] to select that exact device.
     pub fn adapters() -> Vec<wgpu::Adapter> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         crate::GpuDevice::adapters(&instance)
     }
     /// Creates its own device on the selected adapter; failure returns Unavailable
