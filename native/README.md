@@ -28,6 +28,7 @@ and optional OIDN with a caller-supplied runtime.
 | Build, edit or import a scene | `scene_api::Scene` | `mutracer-scene-api.h` | [Scenes](docs/scene.md), [glTF](docs/gltf.md) |
 | Render offline or interactively | `api::{Engine, Render, RenderLoop}` | `mutracer-engine.h` | [Engine](docs/engine.md) |
 | Tone map, export, add effects, present to a window | `api::Display` | `mutracer-engine.h` | [Display](docs/display.md) |
+| Share native GPU output | `api::{metal, vulkan_export, d3d12_export}` | `mutracer-gpu.h` and platform headers | [Metal](docs/metal.md), [Vulkan](docs/vulkan.md), [D3D12](docs/d3d12.md) |
 | Denoise renders or your own images | `Render::set_denoiser`, `CustomDenoiser` | `mutracer-engine.h`, `mutracer-denoise.h` | [Denoising](docs/denoising.md) |
 | One low-level accumulation with polling jobs | — | `mutracer-context.h` | [Context](docs/context.md) |
 | Read or write binary scene descriptors | `Scene::descriptor` | `mutracer-scene.h`, `mutracer-scene-builder.h` | [Scene format](docs/scene-format.md) |

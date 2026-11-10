@@ -66,6 +66,12 @@ API for SDK-created devices, adapter probes and GPU tests. Without that variable
 wgpu chooses its usual default. Explicit platform device imports still use their
 declared API. Confirm the backend in the adapter probe before comparing runs.
 
+For D3D12 scene kernels, set `WGPU_DX12_COMPILER=dxc` before enumerating
+adapters or creating the engine. The tested Windows C hosts exceed FXC's
+instruction limits. Keep the SDK's `dxcompiler.dll` and `dxil.dll` beside the
+executable, together with the other packaged runtime DLLs. This is a process
+environment setting; the SDK does not change the system compiler configuration.
+
 The scriptc 0.4.4 runtime pack still imports several GNU-compatible interfaces.
 `windows-msvc-archive.mjs` edits only MuTracer's generated COFF archives: it
 maps constructor sections to `.CRT$XCU`, uses MSVC's stack probe, and prefixes
