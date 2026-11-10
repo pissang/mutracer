@@ -6,7 +6,7 @@ import { PUBLIC_MODEL_PRESETS } from './publicModelPresets';
 import { RESEARCH_MODEL_PRESETS } from './researchModelPresets';
 
 // Material swatches stay local.
-const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/material-*.webp', { eager: true, query: '?url', import: 'default' });
+const THUMBNAILS = import.meta.glob<string>(['../assets/thumbnails/material-*.webp', '../assets/thumbnails/materialx-*.webp'], { eager: true, query: '?url', import: 'default' });
 export const thumbnailUrl = (name: string): string | undefined => THUMBNAILS[`../assets/thumbnails/${name}.webp`];
 
 export interface ModelPreset {

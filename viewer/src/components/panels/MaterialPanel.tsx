@@ -12,6 +12,7 @@ import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switc
 import { PolyHavenLogo } from '../PolyHavenLogo';
 import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
 import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
+import { MATERIALX_SAMPLES, materialXSampleFiles } from '../../engine/materialxSamples';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -89,10 +90,16 @@ export function MaterialPanel() {
           onClick={() => getEngine()?.clearMaterialGraph(material.id, 'Use values for all')}>Use values for all</button>
       </div>}
       <div className="mat-presets">
-        <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
+        <Segmented label="Preset category" value={presetCategory}
+          options={MATERIALX_IMPORT ? MATERIAL_PRESET_CATEGORIES : MATERIAL_PRESET_CATEGORIES.filter((c) => c.value !== 'materialx')}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
         <div className="preset-grid" aria-label="Material presets">
-          {MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
+          {presetCategory === 'materialx' ? MATERIALX_SAMPLES.map((sample) => (
+            <button key={sample.id} className="preset" title={`Import ${sample.label} MaterialX`}
+              onClick={() => getEngine()?.importMaterialX(material.id, materialXSampleFiles(sample))}>
+              <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
+            </button>
+          )) : MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
             <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
               <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
             </button>

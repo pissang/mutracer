@@ -95,7 +95,10 @@ src/
   history.ts               Shared undo/redo history for material, lighting
                            and render edits
   engine/presets.ts        Example models and HDRIs with licenses
-  assets/thumbnails/       Example and material preset thumbnails
+  engine/materialxSamples.ts
+                           Bundled MaterialX samples (assets/materialx/), also
+                           the importer's regression fixtures
+  assets/thumbnails/       Example, material preset and MaterialX sample thumbnails
   dev/thumbnails.ts        Renders those thumbnails (development only)
   store.ts                 zustand store: settings, stats, tree, selection, UI
   components/              React UI (react-aria-components, lucide-react)
