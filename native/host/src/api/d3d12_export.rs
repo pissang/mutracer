@@ -470,6 +470,16 @@ impl super::Render {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(source.width().div_ceil(8), source.height().div_ceil(8), 1);
         }
+        // DX12 PRESENT maps to native COMMON. Keep the exported resource in
+        // COMMON for host copies and for the next export's tracked state.
+        encoder.transition_resources(
+            std::iter::empty(),
+            images.iter().map(|(image, _, _)| wgpu::TextureTransition {
+                texture: &image.texture,
+                selector: None,
+                state: wgpu::TextureUses::PRESENT,
+            }),
+        );
         let command = encoder.finish();
         let sequence = state
             .sequence
@@ -546,6 +556,10 @@ impl Engine {
         self.check_device()?;
         let hal = unsafe { self.inner.gpu.device.as_hal::<Dx12>() }.ok_or_else(unavailable)?;
         unsafe { hal.raw_device().GetDeviceRemovedReason() }.map_err(|e| {
+            self.inner
+                .gpu
+                .loss
+                .notify(format!("D3D12 device removed while polling export: {e}"));
             error(
                 Status::Unavailable,
                 format!("D3D12 device removed; export outcome is unknown: {e}"),
@@ -574,6 +588,12 @@ impl Engine {
                 break;
             }
             let completed = unsafe { work.done.GetCompletedValue() };
+            if completed == u64::MAX {
+                self.inner
+                    .gpu
+                    .loss
+                    .notify("D3D12 fence returned UINT64_MAX while polling export");
+            }
             if !fence_completed(completed, work.value)? {
                 break;
             }

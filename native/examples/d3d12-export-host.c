@@ -227,24 +227,28 @@ int main(void) {
 #else
   const uint32_t w = 8, h = 6, samples = 1;
 #endif
-  ID3D12Resource *hdr = NULL, *dep = NULL;
-  HANDLE hh = NULL, dh = NULL;
+  ID3D12Resource *hdr = NULL, *dep = NULL, *cen = NULL;
+  HANDLE hh = NULL, dh = NULL, chh = NULL;
   ID3D12Fence *done = NULL;
   HANDLE fh = NULL;
   DX(d->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&done)));
   DX(d->CreateSharedHandle(done, NULL, GENERIC_ALL, NULL, &fh));
   if (create_texture(d, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, &hdr, &hh) ||
-      create_texture(d, w, h, DXGI_FORMAT_R32_FLOAT, &dep, &dh))
+      create_texture(d, w, h, DXGI_FORMAT_R32_FLOAT, &dep, &dh) ||
+      create_texture(d, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, &cen, &chh))
     FAIL("shared texture");
   mt_d3d12_image_desc
       hi = {sizeof hi, 0, NULL, hh, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, 0},
-      di = {sizeof di, 0, NULL, dh, DXGI_FORMAT_R32_FLOAT, w, h, 0};
+      di = {sizeof di, 0, NULL, dh, DXGI_FORMAT_R32_FLOAT, w, h, 0},
+      ci = {sizeof ci, 0, NULL, chh, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, 0};
   mt_d3d12_timeline_desc ti = {sizeof ti, 0, NULL, fh};
-  mt_gpu_image hih = 0, dih = 0;
+  mt_gpu_image hih = 0, dih = 0, cih = 0;
   mt_gpu_timeline th = 0;
   OK(mt_engine_import_d3d12_image(engine, &hi, &hih, error_text,
                                   sizeof error_text));
   OK(mt_engine_import_d3d12_image(engine, &di, &dih, error_text,
+                                  sizeof error_text));
+  OK(mt_engine_import_d3d12_image(engine, &ci, &cih, error_text,
                                   sizeof error_text));
   OK(mt_engine_import_d3d12_timeline(engine, &ti, &th, error_text,
                                      sizeof error_text));
@@ -260,7 +264,7 @@ int main(void) {
   ro.width = w;
   ro.height = h;
   ro.max_samples = samples;
-  ro.aovs = MT_AOV_DEPTH;
+  ro.aovs = MT_AOV_DEPTH | MT_AOV_CENTER_DEPTH;
   mt_render render = 0;
   OK(mt_render_create(engine, &ro, &render, error_text, sizeof error_text));
   OK(mt_engine_update(engine, NULL, error_text, sizeof error_text));
@@ -271,19 +275,23 @@ int main(void) {
   double render_ms = (double)(GetTickCount64() - render_begin);
   size_t hb = (size_t)w * h * 16, db = (size_t)w * h * 4,
          depth_cpu_bytes = (size_t)w * h * 16, written = 0;
-  float *ch = (float *)malloc(hb), *cd = (float *)malloc(depth_cpu_bytes);
-  if (!ch || !cd)
+  float *ch = (float *)malloc(hb), *cd = (float *)malloc(depth_cpu_bytes),
+        *cc = (float *)malloc(hb);
+  if (!ch || !cd || !cc)
     FAIL("CPU allocation");
   ULONGLONG cpu_begin = GetTickCount64();
   OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text,
                            sizeof error_text));
   OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
                            &written, error_text, sizeof error_text));
+  OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
+                           error_text, sizeof error_text));
   double cpu_ms = (double)(GetTickCount64() - cpu_begin);
-  mt_gpu_export_image ims[2] = {
+  mt_gpu_export_image ims[3] = {
       {sizeof ims[0], MT_GPU_OUTPUT_HDR, NULL, hih, MT_GPU_TOP_FIRST, 0},
-      {sizeof ims[1], MT_GPU_OUTPUT_DEPTH, NULL, dih, MT_GPU_TOP_FIRST, 0}};
-  mt_gpu_export_desc ex = {sizeof ex, 2, NULL, ims, 0, 0, th, 1};
+      {sizeof ims[1], MT_GPU_OUTPUT_DEPTH, NULL, dih, MT_GPU_TOP_FIRST, 0},
+      {sizeof ims[2], MT_GPU_OUTPUT_CENTER_DEPTH, NULL, cih, MT_GPU_TOP_FIRST, 0}};
+  mt_gpu_export_desc ex = {sizeof ex, 3, NULL, ims, 0, 0, th, 1};
   uint64_t seq = 0;
   ULONGLONG export_begin = GetTickCount64();
   OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
@@ -306,14 +314,17 @@ int main(void) {
   if (!complete)
     FAIL("export not complete");
   double export_submit_ms = (double)(GetTickCount64() - export_begin);
-  float *gh = (float *)malloc(hb), *gd = (float *)malloc(db);
+  float *gh = (float *)malloc(hb), *gd = (float *)malloc(db),
+        *gc = (float *)malloc(hb);
   ID3D12Fence *copy = NULL;
   DX(d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&copy)));
   printf("D3D12 export complete; beginning HDR/depth readback\n");
   if (readback(d, q, hdr, w, h, gh, hb / h, copy, 1) ||
-      readback(d, q, dep, w, h, gd, db / h, copy, 2))
+      readback(d, q, dep, w, h, gd, db / h, copy, 2) ||
+      readback(d, q, cen, w, h, gc, hb / h, copy, 3))
     FAIL("readback");
-  if (memcmp(ch, gh, hb) || !depth_matches(cd, gd, w * h))
+  if (memcmp(ch, gh, hb) || memcmp(cc, gc, hb) ||
+      !depth_matches(cd, gd, w * h))
     FAIL("CPU/export pixel mismatch");
   ex.done_value = 2;
   uint64_t seq2 = 0;
@@ -334,10 +345,12 @@ int main(void) {
                          sizeof error_text) != MT_OK ||
       !complete)
     FAIL("poll reused export");
-  if (readback(d, q, hdr, w, h, gh, hb / h, copy, 3) ||
-      readback(d, q, dep, w, h, gd, db / h, copy, 4))
+  if (readback(d, q, hdr, w, h, gh, hb / h, copy, 4) ||
+      readback(d, q, dep, w, h, gd, db / h, copy, 5) ||
+      readback(d, q, cen, w, h, gc, hb / h, copy, 6))
     FAIL("reused readback");
-  if (memcmp(ch, gh, hb) || !depth_matches(cd, gd, w * h))
+  if (memcmp(ch, gh, hb) || memcmp(cc, gc, hb) ||
+      !depth_matches(cd, gd, w * h))
     FAIL("reused CPU/export pixel mismatch");
 #ifdef MT_PERF_720P
   const unsigned warm_frames = 5;
@@ -349,6 +362,8 @@ int main(void) {
                              sizeof error_text));
     OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
                              &written, error_text, sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
+                             error_text, sizeof error_text));
   }
   double warm_cpu_ms =
       (double)(GetTickCount64() - warm_cpu_begin) / (double)warm_frames;
@@ -390,12 +405,13 @@ int main(void) {
     FAIL("output file");
   fwrite(gh, 1, hb, f);
   fwrite(gd, 1, db, f);
+  fwrite(gc, 1, hb, f);
   fclose(f);
   printf("D3D12 metrics: samples=%u render=%.0fms (%.2f spp/s) CPU "
          "readback=%.0fms export submit+fence=%.0fms\n",
          samples, render_ms, render_ms > 0 ? 1000.0 * samples / render_ms : 0.0,
          cpu_ms, export_submit_ms);
-  printf("PASS D3D12 C host: sequences=%llu,%llu HDR/depth byte-identical "
+  printf("PASS D3D12 C host: sequences=%llu,%llu HDR/depth/center-depth byte-identical "
          "twice; wrote d3d12-export-output.bin\n",
          (unsigned long long)seq, (unsigned long long)seq2);
   UINT debug_errors = 0;
@@ -430,12 +446,15 @@ int main(void) {
   OK(mt_render_destroy(render, error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(hih, error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(dih, error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(cih, error_text, sizeof error_text));
   OK(mt_gpu_timeline_destroy(th, error_text, sizeof error_text));
   CloseHandle(hh);
   CloseHandle(dh);
+  CloseHandle(chh);
   CloseHandle(fh);
   hdr->Release();
   dep->Release();
+  cen->Release();
   done->Release();
   copy->Release();
   OK(mt_scene_destroy(scene, error_text, sizeof error_text));
@@ -443,6 +462,7 @@ int main(void) {
   free(scene_data);
   free(ch);
   free(cd);
+  free(cc);
   free(gh);
   free(gd);
   if (debug)

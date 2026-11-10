@@ -238,7 +238,11 @@ int main(void) {
          "index=%u (host-created device enables one queue)\n",
          vi.queue_family, physical_queue_count, vi.queue_index);
   free(queue_families);
-  const uint32_t w = 8, h = 6;
+#ifdef MT_PERF_720P
+  const uint32_t w = 1280, h = 720, perf_samples = 4;
+#else
+  const uint32_t w = 8, h = 6, perf_samples = 1;
+#endif
   VkDevice d = vi.device;
   VkImage images[2];
   VkDeviceMemory image_memory[2];
@@ -297,13 +301,13 @@ int main(void) {
   OK(mt_render_options_default(&ro));
   ro.width = w;
   ro.height = h;
-  ro.max_samples = 1;
+  ro.max_samples = perf_samples;
   ro.aovs = MT_AOV_DEPTH;
   mt_render render = 0;
   OK(mt_render_create(engine, &ro, &render, error_text, sizeof error_text));
   OK(mt_engine_update(engine, NULL, error_text, sizeof error_text));
   mt_converge_options co;
-  OK(mt_converge_options_default(1, &co));
+  OK(mt_converge_options_default(perf_samples, &co));
   OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
   size_t hb = (size_t)w * h * 16, db = (size_t)w * h * 4,
          depth_cpu_bytes = (size_t)w * h * 16, written = 0;
@@ -344,6 +348,52 @@ int main(void) {
   }
   if (memcmp(ch, gh, hb) || !depth_matches(cd, gd, w * h))
     FAIL("CPU/export pixel mismatch");
+#ifdef MT_PERF_720P
+  const unsigned warm_frames = 5;
+  ULONGLONG warm_cpu_begin = GetTickCount64();
+  for (unsigned frame = 0; frame < warm_frames; frame++) {
+    OK(mt_render_restart(render, error_text, sizeof error_text));
+    OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text,
+                             sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
+                             &written, error_text, sizeof error_text));
+  }
+  double warm_cpu_ms = (double)(GetTickCount64() - warm_cpu_begin) /
+                       (double)warm_frames;
+  ULONGLONG warm_gpu_begin = GetTickCount64();
+  for (unsigned frame = 0; frame < warm_frames; frame++) {
+    OK(mt_render_restart(render, error_text, sizeof error_text));
+    OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+    for (int k = 0; k < 2; k++) {
+      mt_gpu_export_image im = {sizeof im, (uint32_t)k, NULL, imports[k],
+                                MT_GPU_TOP_FIRST, 0};
+      mt_gpu_export_desc ex = {sizeof ex, 1, NULL, &im, 0, 0, timeline,
+                               (uint64_t)(3 + frame * 2 + k)};
+      uint64_t seq = 0;
+      OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+      uint32_t complete = 0;
+      for (unsigned wait = 0; wait < 30000; wait++) {
+        mt_status s = mt_engine_gpu_poll(engine, seq, &complete, error_text,
+                                         sizeof error_text);
+        if (s != MT_OK)
+          FAIL("poll Vulkan warm export");
+        if (complete)
+          break;
+        Sleep(1);
+      }
+      if (!complete)
+        FAIL("Vulkan warm export timeout");
+    }
+  }
+  double warm_gpu_ms = (double)(GetTickCount64() - warm_gpu_begin) /
+                       (double)warm_frames;
+  printf("Vulkan warm metrics: frames=%u samples=%u CPU frame=%.0fms (%.2f spp/s) "
+         "GPU export frame=%.0fms (%.2f spp/s)\n",
+         warm_frames, perf_samples, warm_cpu_ms,
+         1000.0 * perf_samples / warm_cpu_ms, warm_gpu_ms,
+         1000.0 * perf_samples / warm_gpu_ms);
+#endif
   FILE *f = fopen("vulkan-export-output.bin", "wb");
   if (!f)
     FAIL("output file");

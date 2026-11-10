@@ -567,6 +567,10 @@ impl Engine {
             {
                 Ok(value) => value,
                 Err(vk::Result::ERROR_DEVICE_LOST) => {
+                    self.inner
+                        .gpu
+                        .loss
+                        .notify("Vulkan device lost while polling export timeline");
                     return Err(error(
                         Status::Unavailable,
                         "Vulkan device lost while polling export timeline",
