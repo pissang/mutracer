@@ -53,11 +53,14 @@ On SDK-created devices and devices imported through `Engine::from_metal` /
 `mt_engine_create_metal`, a Metal execution error during sampling fails the job
 without crediting its
 in-flight batch, including when cancellation is pending. Earlier completed
-counts remain available, but the image may contain partial writes. With the
-Context API, commit the scene again to restart accumulation before reading or
-rendering. With the Engine API, discard the failed `Render` and create a new
-one. There is no automatic retry. A host-created wgpu device shared through
-`Engine::on_device` cannot provide this native execution check. A successful command buffer still does not rule out the
+counts remain available, but the image may contain partial writes. On Windows
+D3D12/Vulkan devices, wgpu's device-lost callback follows the same terminal
+path: the job becomes failed, its in-flight batch is not credited, and no
+automatic retry is attempted. With the Context API, commit the scene again to
+restart accumulation before reading or rendering. With the Engine API, discard
+the failed `Render` and create a new one. A host-created wgpu device shared
+through `Engine::on_device` cannot provide the native command-buffer status
+check; the host must forward device-loss notifications. A successful command buffer still does not rule out the
 [known HWRT image inconsistencies](../README.md#ray-tracing-backends).
 
 Large blocking batches use more temporary memory on Metal. Polling with smaller

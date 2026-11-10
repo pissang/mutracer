@@ -209,10 +209,29 @@ impl Batch {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn injected_execution_failure_is_context_failed_and_never_success() {
+        let batch = Batch {
+            #[cfg(target_os = "macos")]
+            buffers: Vec::new(),
+            injected_error: Some("VK_ERROR_DEVICE_LOST".into()),
+        };
+        let error = batch.check("windows test flight").unwrap_err();
+        assert_eq!(error.status, crate::Status::ContextFailed);
+        assert!(error.message.contains("VK_ERROR_DEVICE_LOST"));
+    }
+
+    #[test]
+    fn an_empty_completed_batch_is_successful() {
+        let batch = Batch::default();
+        assert!(batch.check("completed test flight").unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn invalid_device_requests_keep_wgpu_validation() {
