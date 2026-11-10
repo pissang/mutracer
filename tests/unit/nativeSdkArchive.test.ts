@@ -25,21 +25,25 @@ it.skipIf(process.platform !== 'darwin')('does not archive resource forks or ext
   } finally { rmSync(directory, {recursive: true, force: true}); }
 });
 
-it('filters metadata directories from Blender packages and rejects contaminated zips', () => {
+it.each([
+  {platform: 'macos-arm64', libraries: ['libhdMuTracer.dylib', 'libmutracer.dylib']},
+  {platform: 'windows-x64', libraries: ['hdMuTracer.dll', 'mutracer.dll']},
+])('packages $platform Blender libraries and rejects contaminated zips', ({platform, libraries}) => {
+  const python = process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3');
   const directory = mkdtempSync(resolve(tmpdir(), 'mutracer blender '));
   try {
     const plugin = resolve(directory, 'plugin'), archive = resolve(directory, 'addon.zip');
-    for (const file of ['libhdMuTracer.dylib', 'libmutracer.dylib', 'resources/plugInfo.json',
+    for (const file of [...libraries, 'resources/plugInfo.json',
       '__MACOSX/hidden', 'resources/._plugInfo.json']) {
       const path = resolve(plugin, 'hdMuTracer', file);
       mkdirSync(resolve(path, '..'), {recursive: true});
       writeFileSync(path, 'fixture');
     }
-    execFileSync('python3', ['native/integrations/blender/package.py', plugin, archive]);
-    const listing = execFileSync('python3', ['-c',
+    execFileSync(python, ['native/integrations/blender/package.py', plugin, archive, '--platform', platform]);
+    const listing = execFileSync(python, ['-c',
       'import zipfile,sys; print("\\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))', archive], {encoding: 'utf8'});
-    expect(checkArchiveEntries(listing)).toContain('mutracer_blender/plugin/hdMuTracer/libmutracer.dylib');
-    const result = execFileSync('python3', ['-c', `import runpy,zipfile,sys
+    expect(checkArchiveEntries(listing)).toContain(`mutracer_blender/plugin/hdMuTracer/${libraries[1]}`);
+    const result = execFileSync(python, ['-c', `import runpy,zipfile,sys
 check = runpy.run_path('native/integrations/blender/package.py')['check_archive']
 with zipfile.ZipFile(sys.argv[1], 'a') as archive: archive.writestr('__MACOSX/._file', b'bad')
 try: check(sys.argv[1])
