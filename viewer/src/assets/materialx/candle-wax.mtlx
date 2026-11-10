@@ -1,0 +1,112 @@
+<?xml version="1.0"?>
+<!--
+  Candle wax: OpenPBR subsurface with a thin transmissive skin. The
+  scattering color and radius are constants; the graph drives what the
+  viewer can vary per hit: a vertical ramp of the diffuse tint, an HSV
+  adjustment of it, Worley smudges in the roughness, and a soft
+  drip-ripple normal from texture coordinates. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_candle_wax">
+    <input name="top_color" type="color3" value="0.92, 0.82, 0.62" uiname="Top color" />
+    <input name="bottom_color" type="color3" value="0.62, 0.22, 0.08" uiname="Bottom color" />
+    <input name="hue_shift" type="float" value="0" uiname="Hue shift" uimin="-0.5" uimax="0.5" />
+    <input name="smudge_scale" type="float" value="6" uiname="Smudge scale" />
+    <input name="ripple_count" type="float" value="14" uiname="Ripples" />
+    <input name="ripple_depth" type="float" value="0.3" uiname="Ripple depth" />
+
+    <texcoord name="uv" type="vector2" />
+    <ramptb name="height_ramp" type="color3">
+      <input name="valuet" type="color3" interfacename="top_color" />
+      <input name="valueb" type="color3" interfacename="bottom_color" />
+      <input name="texcoord" type="vector2" nodename="uv" />
+    </ramptb>
+    <combine3 name="hsv_amount" type="vector3">
+      <input name="in1" type="float" interfacename="hue_shift" />
+      <input name="in2" type="float" value="1.05" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <hsvadjust name="tint" type="color3">
+      <input name="in" type="color3" nodename="height_ramp" />
+      <input name="amount" type="vector3" nodename="hsv_amount" />
+    </hsvadjust>
+
+    <!-- Fingerprint-like smudges: polish near Worley feature points, rougher between them. -->
+    <position name="object_position" type="vector3" />
+    <multiply name="smudge_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="smudge_scale" />
+    </multiply>
+    <worleynoise3d name="smudge_cells" type="float">
+      <input name="position" type="vector3" nodename="smudge_position" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <range name="smudge" type="float">
+      <input name="in" type="float" nodename="smudge_cells" />
+      <input name="inlow" type="float" value="0.1" />
+      <input name="inhigh" type="float" value="0.7" />
+      <input name="outlow" type="float" value="0.22" />
+      <input name="outhigh" type="float" value="0.5" />
+      <input name="gamma" type="float" value="1.6" />
+      <input name="doclamp" type="boolean" value="true" />
+    </range>
+
+    <!-- Drip ripples running down V: height sin(k v), normal tilt from its derivative. -->
+    <separate2 name="uv_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="uv" />
+    </separate2>
+    <multiply name="ripple_frequency" type="float">
+      <input name="in1" type="float" interfacename="ripple_count" />
+      <input name="in2" type="float" value="6.2831853" />
+    </multiply>
+    <multiply name="ripple_phase" type="float">
+      <input name="in1" type="float" nodename="uv_parts" output="outy" />
+      <input name="in2" type="float" nodename="ripple_frequency" />
+    </multiply>
+    <cos name="ripple_slope" type="float">
+      <input name="in" type="float" nodename="ripple_phase" />
+    </cos>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="ripple_slope" />
+      <input name="in2" type="float" interfacename="ripple_depth" />
+    </multiply>
+    <combine3 name="ripple_tangent" type="vector3">
+      <input name="in1" type="float" value="0" />
+      <input name="in2" type="float" nodename="tilt_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <multiply name="ripple_half" type="vector3">
+      <input name="in1" type="vector3" nodename="ripple_tangent" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="ripple_encoded" type="vector3">
+      <input name="in1" type="vector3" nodename="ripple_half" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <normalmap name="ripple_normal" type="vector3">
+      <input name="in" type="vector3" nodename="ripple_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="tint" />
+    <output name="roughness_out" type="float" nodename="smudge" />
+    <output name="normal_out" type="vector3" nodename="ripple_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_candle_wax" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_candle_wax" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_candle_wax" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.44" />
+    <input name="subsurface_weight" type="float" value="0.6" />
+    <input name="subsurface_color" type="color3" value="0.95, 0.72, 0.42" />
+    <input name="subsurface_radius" type="float" value="0.25" />
+    <input name="subsurface_radius_scale" type="color3" value="1, 0.6, 0.3" />
+    <input name="subsurface_scatter_anisotropy" type="float" value="0.2" />
+    <input name="transmission_weight" type="float" value="0.1" />
+    <input name="transmission_color" type="color3" value="1, 0.85, 0.6" />
+    <input name="transmission_depth" type="float" value="0.5" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_candle_wax" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Candle_Wax" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_candle_wax" />
+  </surfacematerial>
+</materialx>

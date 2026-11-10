@@ -1,0 +1,168 @@
+<?xml version="1.0"?>
+<!--
+  Tartan velvet: OpenPBR fuzz over a woven tartan. place2d tiles the UVs,
+  modulo folds them into one repeat, smoothstep bands build the sett and a
+  sine weave tilts the normal with its analytic derivative. Fuzz color
+  follows the pattern. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_tartan_velvet">
+    <input name="ground_color" type="color3" value="0.03, 0.09, 0.05" uiname="Ground" />
+    <input name="band_color" type="color3" value="0.2, 0.012, 0.02" uiname="Band" />
+    <input name="line_color" type="color3" value="0.7, 0.55, 0.12" uiname="Line" />
+    <input name="repeats" type="vector2" value="0.25, 0.25" uiname="Repeat size" />
+    <input name="threads" type="float" value="48" uiname="Threads per repeat" />
+    <input name="weave_depth" type="float" value="0.35" uiname="Weave depth" />
+
+    <texcoord name="uv" type="vector2" />
+    <place2d name="tiled_uv" type="vector2">
+      <input name="texcoord" type="vector2" nodename="uv" />
+      <input name="scale" type="vector2" interfacename="repeats" />
+    </place2d>
+    <modulo name="repeat_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="tiled_uv" />
+      <input name="in2" type="float" value="1" />
+    </modulo>
+    <separate2 name="repeat_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="repeat_uv" />
+    </separate2>
+
+    <!-- Wide band: on between 0.3 and 0.7 of each repeat. -->
+    <smoothstep name="band_u_on" type="float">
+      <input name="in" type="float" nodename="repeat_parts" output="outx" />
+      <input name="low" type="float" value="0.28" />
+      <input name="high" type="float" value="0.32" />
+    </smoothstep>
+    <smoothstep name="band_u_off" type="float">
+      <input name="in" type="float" nodename="repeat_parts" output="outx" />
+      <input name="low" type="float" value="0.68" />
+      <input name="high" type="float" value="0.72" />
+    </smoothstep>
+    <subtract name="band_u" type="float">
+      <input name="in1" type="float" nodename="band_u_on" />
+      <input name="in2" type="float" nodename="band_u_off" />
+    </subtract>
+    <smoothstep name="band_v_on" type="float">
+      <input name="in" type="float" nodename="repeat_parts" output="outy" />
+      <input name="low" type="float" value="0.28" />
+      <input name="high" type="float" value="0.32" />
+    </smoothstep>
+    <smoothstep name="band_v_off" type="float">
+      <input name="in" type="float" nodename="repeat_parts" output="outy" />
+      <input name="low" type="float" value="0.68" />
+      <input name="high" type="float" value="0.72" />
+    </smoothstep>
+    <subtract name="band_v" type="float">
+      <input name="in1" type="float" nodename="band_v_on" />
+      <input name="in2" type="float" nodename="band_v_off" />
+    </subtract>
+    <!-- Warp and weft overlap: half strength alone, full where they cross. -->
+    <add name="band_sum" type="float">
+      <input name="in1" type="float" nodename="band_u" />
+      <input name="in2" type="float" nodename="band_v" />
+    </add>
+    <multiply name="band_mask" type="float">
+      <input name="in1" type="float" nodename="band_sum" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+
+    <!-- Thin over-check line at the repeat edge. -->
+    <subtract name="centered" type="vector2">
+      <input name="in1" type="vector2" nodename="repeat_uv" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="edge_distance" type="vector2">
+      <input name="in" type="vector2" nodename="centered" />
+    </absval>
+    <separate2 name="edge_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="edge_distance" />
+    </separate2>
+    <max name="edge_max" type="float">
+      <input name="in1" type="float" nodename="edge_parts" output="outx" />
+      <input name="in2" type="float" nodename="edge_parts" output="outy" />
+    </max>
+    <smoothstep name="line_mask" type="float">
+      <input name="in" type="float" nodename="edge_max" />
+      <input name="low" type="float" value="0.47" />
+      <input name="high" type="float" value="0.485" />
+    </smoothstep>
+
+    <mix name="banded" type="color3">
+      <input name="bg" type="color3" interfacename="ground_color" />
+      <input name="fg" type="color3" interfacename="band_color" />
+      <input name="mix" type="float" nodename="band_mask" />
+    </mix>
+    <mix name="pattern" type="color3">
+      <input name="bg" type="color3" nodename="banded" />
+      <input name="fg" type="color3" interfacename="line_color" />
+      <input name="mix" type="float" nodename="line_mask" />
+    </mix>
+    <screen name="fuzz_tint" type="color3">
+      <input name="fg" type="color3" value="0.35, 0.35, 0.35" />
+      <input name="bg" type="color3" nodename="pattern" />
+    </screen>
+
+    <!-- Weave: height sin(a u) sin(a v); tilt = derivative. -->
+    <multiply name="weave_frequency" type="float">
+      <input name="in1" type="float" interfacename="threads" />
+      <input name="in2" type="float" value="6.2831853" />
+    </multiply>
+    <multiply name="weave_phase" type="vector2">
+      <input name="in1" type="vector2" nodename="tiled_uv" />
+      <input name="in2" type="float" nodename="weave_frequency" />
+    </multiply>
+    <sin name="weave_sin" type="vector2">
+      <input name="in" type="vector2" nodename="weave_phase" />
+    </sin>
+    <cos name="weave_cos" type="vector2">
+      <input name="in" type="vector2" nodename="weave_phase" />
+    </cos>
+    <separate2 name="sin_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="weave_sin" />
+    </separate2>
+    <separate2 name="cos_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="weave_cos" />
+    </separate2>
+    <multiply name="slope_u" type="float">
+      <input name="in1" type="float" nodename="cos_parts" output="outx" />
+      <input name="in2" type="float" nodename="sin_parts" output="outy" />
+    </multiply>
+    <multiply name="slope_v" type="float">
+      <input name="in1" type="float" nodename="sin_parts" output="outx" />
+      <input name="in2" type="float" nodename="cos_parts" output="outy" />
+    </multiply>
+    <combine3 name="weave_tilt" type="vector3">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" nodename="slope_v" />
+      <input name="in3" type="float" value="0" />
+    </combine3>
+    <multiply name="weave_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="weave_tilt" />
+      <input name="in2" type="float" interfacename="weave_depth" />
+    </multiply>
+    <add name="weave_encoded" type="vector3">
+      <input name="in1" type="vector3" nodename="weave_scaled" />
+      <input name="in2" type="vector3" value="0.5, 0.5, 1" />
+    </add>
+    <normalmap name="weave_normal" type="vector3">
+      <input name="in" type="vector3" nodename="weave_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="pattern" />
+    <output name="fuzz_color_out" type="color3" nodename="fuzz_tint" />
+    <output name="normal_out" type="vector3" nodename="weave_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_tartan_velvet" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_tartan_velvet" output="base_color_out" />
+    <input name="specular_roughness" type="float" value="0.75" />
+    <input name="specular_weight" type="float" value="0.4" />
+    <input name="fuzz_weight" type="float" value="1" />
+    <input name="fuzz_color" type="color3" nodegraph="NG_tartan_velvet" output="fuzz_color_out" />
+    <input name="fuzz_roughness" type="float" value="0.45" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_tartan_velvet" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Tartan_Velvet" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_tartan_velvet" />
+  </surfacematerial>
+</materialx>
