@@ -36,6 +36,11 @@ present to the window.
 Rust hosts retain an adapter from `Engine::adapters` and use
 `Engine::on_adapter`, or share their own wgpu device with `Engine::on_device`.
 The existing engine constructors continue to select a device automatically.
+Set `WGPU_BACKEND=dx12` or `WGPU_BACKEND=vulkan` before enumeration or engine
+creation to restrict SDK-created devices to that graphics API. When unset, wgpu
+chooses its default. This is separate from the Software/HWRT traversal option;
+host-device imports keep the API of the supplied device. Enumerate again after
+changing the variable because C adapter indices can change.
 C hosts can also [import a Metal device and export to host textures](metal.md),
 or [share a Vulkan device and queue](vulkan.md).
 

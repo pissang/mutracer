@@ -57,13 +57,16 @@ typedef struct mt_engine_options {
 } mt_engine_options;
 MT_ENGINE_LAYOUT(mt_engine_options, 8);
 int32_t mt_engine_options_default(mt_engine_options *output);
-/* Creates a device of its own. No usable GPU returns MT_ERROR_UNAVAILABLE. */
+/* Creates a device of its own. WGPU_BACKEND restricts the graphics API (dx12 or
+ * vulkan on Windows); when unset, wgpu chooses its default. options.backend
+ * selects traversal independently. No usable GPU returns MT_ERROR_UNAVAILABLE. */
 int32_t mt_engine_create(const mt_engine_options *options, mt_engine *output, char *error, size_t capacity);
 int32_t mt_engine_destroy(mt_engine engine, char *error, size_t capacity);
 /* Enumeration creates no devices. NULL/0 queries required count; enough capacity
  * writes all records (no initialization required). BUFFER_TOO_SMALL writes only
  * required. Order: backend, vendor, device, name. Indices refer to this machine's
- * current adapter list; re-enumerate after GPU hotplug. Empty list is valid. */
+ * current adapter list; WGPU_BACKEND restricts the enumerated graphics APIs.
+ * Re-enumerate after GPU hotplug or changing that variable. Empty list is valid. */
 typedef struct mt_gpu_adapter_info {
   uint32_t struct_size, index;
   uint32_t backend; /* 0 other, 1 Metal, 2 Vulkan, 3 DX12. */

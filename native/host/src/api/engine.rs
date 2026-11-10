@@ -374,7 +374,8 @@ pub struct Engine {
     pub(super) inner: Arc<Inner>,
 }
 impl Engine {
-    /// Creates a device of its own.
+    /// Creates a device of its own. `WGPU_BACKEND` selects its graphics API;
+    /// when unset, wgpu chooses its default. `options.backend` selects traversal.
     pub fn new(options: EngineOptions) -> Result<Self> {
         let gpu = GpuDevice::with_backend(options.backend.code())
             .map_err(|e| error(Status::Unavailable, format!("GPU device unavailable: {e}")))?;
@@ -383,8 +384,10 @@ impl Engine {
     /// Available adapters in a deterministic order (backend, vendor, device, name).
     /// Enumeration creates no devices and can return an empty list. Retain an
     /// adapter and use [`Engine::on_adapter`] to select that exact device.
+    /// `WGPU_BACKEND`, when set, restricts the enumerated graphics APIs.
     pub fn adapters() -> Vec<wgpu::Adapter> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         crate::GpuDevice::adapters(&instance)
     }
     /// Creates its own device on the selected adapter; failure returns Unavailable

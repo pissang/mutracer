@@ -49,6 +49,15 @@ export MUTRACER_NATIVE_OUTPUT=/absolute/evidence/directory
 Windows builds use the x64 MSVC Developer environment, Windows SDK, Rust's
 `stable-x86_64-pc-windows-msvc` toolchain and Zig 0.15.2 for scriptc's archiver.
 C/C++ consumers compile with `/MD`; no MinGW CRT or GCC C++ runtime is linked.
+SDK packaging converts rustc's `/DEFAULTLIB:msvcrt` and `/DEFAULTLIB:oldnames`
+directives to relocatable library names for both direct C and CMake consumers.
+Other default-library directives, including static or debug CRT variants, are
+rejected; do not package a `/MT` build as the `/MD` SDK.
+
+Set `WGPU_BACKEND=dx12` or `WGPU_BACKEND=vulkan` to select the native graphics
+API for SDK-created devices, adapter probes and GPU tests. Without that variable,
+wgpu chooses its usual default. Explicit platform device imports still use their
+declared API. Confirm the backend in the adapter probe before comparing runs.
 
 The scriptc 0.4.4 runtime pack still imports several GNU-compatible interfaces.
 `windows-msvc-archive.mjs` edits only MuTracer's generated COFF archives: it

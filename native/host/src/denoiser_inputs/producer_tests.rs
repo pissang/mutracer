@@ -335,7 +335,7 @@ pub(super) fn test_gpu(backend: wgpu::Backends) -> Option<GpuDevice> {
     }
     let mut descriptor = wgpu::InstanceDescriptor {
         backends: backend,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
+        ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
     };
     if backend == wgpu::Backends::DX12 {
         descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::DynamicDxc {

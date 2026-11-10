@@ -67,15 +67,21 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                         .texture,
                 );
                 let mut moved = input.clone();
+                let camera_transform = u32::from_le_bytes(
+                    input[layout::header::CAMERA_OFFSET * 4..][..4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize
+                    + layout::camera::TRANSFORM;
                 for (i, value) in glam::Mat4::from_rotation_y(yaw)
                     .to_cols_array()
                     .into_iter()
                     .enumerate()
                 {
-                    set(&mut moved, 104 + i, value.to_bits());
+                    set(&mut moved, camera_transform + i, value.to_bits());
                 }
-                set(&mut moved, 104 + 12, translation[0].to_bits());
-                set(&mut moved, 104 + 13, translation[1].to_bits());
+                set(&mut moved, camera_transform + 12, translation[0].to_bits());
+                set(&mut moved, camera_transform + 13, translation[1].to_bits());
                 let (_, moved_assets) =
                     scene::prepare_frame_inputs(&moved, &settings::RenderSettings::default())
                         .unwrap();

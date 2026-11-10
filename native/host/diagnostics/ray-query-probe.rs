@@ -44,7 +44,8 @@ fn run() -> Result<()> {
         .ok_or("Usage: ray-query-probe OUTPUT_DIRECTORY")?;
     let directory = Path::new(&directory);
     fs::create_dir_all(directory)?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
