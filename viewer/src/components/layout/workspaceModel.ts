@@ -41,7 +41,7 @@ export function defaultModel(tab: InspectorTab, left: boolean, right: boolean): 
       type: 'split', orientation: 'horizontal', children: [
         { type: 'tabset', id: 'scene-tabs', size: '252px', minWidth: '180px', collapsible: true, collapsed: !left, tabs: [panelTab('scene')] },
         { type: 'tabset', id: 'viewport-tabs', disableDrag: true, tabs: [panelTab('viewport')] },
-        { type: 'tabset', id: 'inspector-tabs', size: '316px', minWidth: '260px', collapsible: true, collapsed: !right, selectedId: tab, tabs: INSPECTOR.map(panelTab) }
+        { type: 'tabset', id: 'inspector-tabs', size: '280px', minWidth: '240px', collapsible: true, collapsed: !right, selectedId: tab, tabs: INSPECTOR.map(panelTab) }
       ]
     }
   };
@@ -133,7 +133,7 @@ function pixels(size: Size, length: number): number | undefined {
 }
 
 /** Width of the separators between tabsets, in pixels. */
-const GAP = 8;
+const GAP = 6;
 
 export interface Lengths {
   /** A split's length along its orientation. */

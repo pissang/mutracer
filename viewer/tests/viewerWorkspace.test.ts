@@ -65,13 +65,13 @@ describe('viewer workspace layout', () => {
     const lengths = (split: number): Lengths => ({ split: () => split, node: () => undefined, strip: () => 44 });
     const pinned = model(pinSizes(model(), lengths(1424)));
     const sizes = (current: Model) => (current.root as SplitNode<null, PanelData>).children.map(child => child.size as number);
-    const available = 1424 - 16;
-    expect(sizes(pinned).map(size => Math.round(size * available / 100))).toEqual([252, available - 252 - 316, 316]);
-    expect([...tabsets(pinned)].map(tabset => tabset.data?.px)).toEqual([252, undefined, 316]);
+    const available = 1424 - 12;
+    expect(sizes(pinned).map(size => Math.round(size * available / 100))).toEqual([252, available - 252 - 280, 280]);
+    expect([...tabsets(pinned)].map(tabset => tabset.data?.px)).toEqual([252, undefined, 280]);
 
     // A narrower window keeps the remembered side sizes.
     const narrow = model(pinSizes(pinned, lengths(1084)));
-    expect(sizes(narrow).map(size => Math.round(size * (1084 - 16) / 100))).toEqual([252, 1084 - 16 - 252 - 316, 316]);
+    expect(sizes(narrow).map(size => Math.round(size * (1084 - 12) / 100))).toEqual([252, 1084 - 12 - 252 - 280, 280]);
 
     // A collapsed tabset's strip, not its size, is taken from the viewport's share.
     const collapsed = model({ ...pinned, root: { ...pinned.root, children: (pinned.root as SplitNode<null, PanelData>).children.map(child =>
@@ -79,6 +79,6 @@ describe('viewer workspace layout', () => {
     // Applied as is: the model's sizes are weights that the workspace distributes.
     const repinned = sizes(pinSizes(collapsed, lengths(1424)) as Model);
     expect(Math.round(repinned[1] * available / 100)).toBe(available - 252 - 44);
-    expect(Math.round(repinned[2] * available / 100)).toBe(316);
+    expect(Math.round(repinned[2] * available / 100)).toBe(280);
   });
 });

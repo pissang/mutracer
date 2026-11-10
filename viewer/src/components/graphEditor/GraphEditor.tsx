@@ -26,6 +26,8 @@ import { NODE_TYPES, SURFACE, shortId, type MxFlowNode, type PortView, type Surf
 
 type FlowNode = MxFlowNode | SurfaceFlowNode;
 const EMPTY = new MaterialGraph();
+/** Fitting never zooms out so far that node labels become unreadable; the rest is a pan away. */
+const FIT_VIEW = { padding: 0.1, minZoom: 0.4 };
 
 const targetOf = (node: string, handle: string | null | undefined): Target =>
   node === SURFACE ? { terminal: handle ?? '' } : { node, port: handle ?? '' };
@@ -185,7 +187,7 @@ function Workspace({ material }: { material: SelectedMaterial }) {
     setNodes([]);
     setLayoutRun(run => run + 1);
     // The rebuild effect places every node again; fit once they are measured.
-    setTimeout(() => void flow.fitView({ padding: 0.1, duration: 200 }), 80);
+    setTimeout(() => void flow.fitView({ ...FIT_VIEW, duration: 200 }), 80);
   };
 
   const unused = graph.nodes.length - live.size;
@@ -221,7 +223,8 @@ function Workspace({ material }: { material: SelectedMaterial }) {
             onConnectEnd={() => { if (lastRejection.current) setRejected(lastRejection.current); lastRejection.current = null; }}
             onReconnect={onReconnect} onReconnectStart={() => { reconnected.current = false; }} onReconnectEnd={onReconnectEnd}
             onDelete={onDelete} onSelectionChange={onSelectionChange}
-            deleteKeyCode={['Backspace', 'Delete']} fitView fitViewOptions={{ padding: 0.1 }} minZoom={0.1} maxZoom={2}
+            deleteKeyCode={['Backspace', 'Delete']} fitView fitViewOptions={FIT_VIEW} minZoom={0.1} maxZoom={2}
+            panOnScroll zoomActivationKeyCode={['Meta', 'Control']} panOnDrag={[0, 1]}
             proOptions={{ hideAttribution: true }}>
             <Background gap={20} size={1} />
             <Controls showInteractive={false} />
