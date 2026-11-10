@@ -6,7 +6,8 @@ use std::time::Duration;
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn device_loss_shared_host_callback_fails_all_engines_without_recovery() {
     let _test = crate::abi_test_lock();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_limits: adapter.limits(),

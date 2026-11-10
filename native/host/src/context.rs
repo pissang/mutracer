@@ -2747,7 +2747,8 @@ mod tests {
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn shared_device_preview_survives_reset_and_context_destruction() {
         let _test = crate::abi_test_lock();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()

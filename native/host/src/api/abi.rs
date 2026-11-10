@@ -889,7 +889,8 @@ pub unsafe extern "C" fn mt_engine_create_on_adapter(
         if output.is_null() {
             return Err(invalid("Null output"));
         }
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = selected_adapter(&instance, adapter_index)?;
         let engine = Engine::on_adapter(
             &adapter,

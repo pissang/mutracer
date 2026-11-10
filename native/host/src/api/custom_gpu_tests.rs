@@ -252,7 +252,7 @@ pub(super) fn native_backend() -> wgpu::Backends {
 pub(super) fn fixture(backend: wgpu::Backends) -> (Engine, Render) {
     let mut descriptor = wgpu::InstanceDescriptor {
         backends: backend,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
+        ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
     };
     if backend == wgpu::Backends::DX12 {
         // The production megakernel requires DXC; use the same caller-owned
