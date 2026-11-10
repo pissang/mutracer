@@ -9,10 +9,10 @@ export interface MaterialXSample {
 
 const sources = import.meta.glob<string>('../assets/materialx/*.mtlx', { query: '?raw', import: 'default', eager: true });
 
-// Panel order and short labels; the documents name their materials in full.
+// Browser order and labels.
 const LABELS: Record<string, string> = {
-  'car-paint': 'Flake paint', 'weathered-steel': 'Rusty steel', 'varnished-wood': 'Wood',
-  'candle-wax': 'Wax', 'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles'
+  'car-paint': 'Flake paint', 'weathered-steel': 'Rusted steel', 'varnished-wood': 'Wood grain',
+  'candle-wax': 'Candle wax', 'tartan-velvet': 'Tartan velvet', 'cobblestone': 'Cobblestone'
 };
 const order = Object.keys(LABELS);
 

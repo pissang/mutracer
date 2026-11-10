@@ -313,7 +313,7 @@ export interface ViewerState {
     tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean;
     /** Viewport debug overlay expanded. */
     debug: boolean;
-    exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; materialBrowser: boolean;
+    exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; materialBrowser: boolean; sampleBrowser: boolean;
     examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
     mobileTab: InspectorTab | 'scene';
   };
@@ -442,6 +442,7 @@ export const useViewer = create<ViewerState>(() => ({
     helpOpen: false,
     textureBrowser: false,
     materialBrowser: false,
+    sampleBrowser: false,
     examplesPinned: storedUi.examplesPinned === true,
     examplesOpen: false,
     examplesCollection: null,

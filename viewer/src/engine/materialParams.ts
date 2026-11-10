@@ -168,15 +168,13 @@ export const MATERIAL_BASE: MaterialValues = {
   subsurfaceWeight: 0, subsurfaceRadiusScale: [1, 0.5, 0.25], fuzzWeight: 0, thinFilmWeight: 0, emissionLuminance: 0, opacity: 1
 };
 
-/** `materialx` lists the bundled MaterialX samples instead of value presets. */
-export type MaterialPresetCategory = 'basic' | 'metal' | 'glass' | 'soft' | 'materialx';
+export type MaterialPresetCategory = 'basic' | 'metal' | 'glass' | 'soft';
 
 export const MATERIAL_PRESET_CATEGORIES: { value: MaterialPresetCategory; label: string }[] = [
   { value: 'basic', label: 'Basic' },
   { value: 'metal', label: 'Metal' },
   { value: 'glass', label: 'Glass' },
-  { value: 'soft', label: 'Soft' },
-  { value: 'materialx', label: 'MaterialX' }
+  { value: 'soft', label: 'Soft' }
 ];
 
 export interface MaterialPreset {

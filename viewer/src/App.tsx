@@ -10,6 +10,7 @@ import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
 import { GpuOpenBrowser } from './components/GpuOpenBrowser';
+import { MaterialXSamplesBrowser } from './components/MaterialXSamplesBrowser';
 import { TextureBrowser } from './components/TextureBrowser';
 import { ExamplesPanel } from './components/ExamplesBrowser';
 
@@ -77,9 +78,10 @@ export function App() {
   const left = ui.left && !ui.hidden && !mobile;
   const right = ui.right && !ui.hidden && !mobile;
   const materials = right && ui.materialBrowser && ui.tab === 'material';
-  const textures = right && ui.textureBrowser && !materials && ui.tab === 'material';
-  const examples = right && ui.examplesPinned && !textures && !materials;
-  const browse = textures || materials || examples;
+  const samples = right && ui.sampleBrowser && !materials && ui.tab === 'material';
+  const textures = right && ui.textureBrowser && !materials && !samples && ui.tab === 'material';
+  const examples = right && ui.examplesPinned && !textures && !materials && !samples;
+  const browse = textures || materials || samples || examples;
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar mobile={mobile} />}
@@ -89,6 +91,7 @@ export function App() {
         <Viewport />
         {textures && <TextureBrowser />}
         {materials && <GpuOpenBrowser />}
+        {samples && <MaterialXSamplesBrowser />}
         {examples && <ExamplesPanel />}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}

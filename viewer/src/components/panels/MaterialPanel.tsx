@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Shapes, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -12,7 +12,6 @@ import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switc
 import { PolyHavenLogo } from '../PolyHavenLogo';
 import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
 import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
-import { MATERIALX_SAMPLES, materialXSampleFiles } from '../../engine/materialxSamples';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -23,6 +22,7 @@ export function MaterialPanel() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
+  const sampleBrowsing = useViewer((s) => s.ui.sampleBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
   const graphState = useGraphDiagnostics();
@@ -90,16 +90,10 @@ export function MaterialPanel() {
           onClick={() => getEngine()?.clearMaterialGraph(material.id, 'Use values for all')}>Use values for all</button>
       </div>}
       <div className="mat-presets">
-        <Segmented label="Preset category" value={presetCategory}
-          options={MATERIALX_IMPORT ? MATERIAL_PRESET_CATEGORIES : MATERIAL_PRESET_CATEGORIES.filter((c) => c.value !== 'materialx')}
+        <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
         <div className="preset-grid" aria-label="Material presets">
-          {presetCategory === 'materialx' ? MATERIALX_SAMPLES.map((sample) => (
-            <button key={sample.id} className="preset" title={`Import ${sample.label} MaterialX`}
-              onClick={() => getEngine()?.importMaterialX(material.id, materialXSampleFiles(sample))}>
-              <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
-            </button>
-          )) : MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
+          {MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
             <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
               <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
             </button>
@@ -109,14 +103,19 @@ export function MaterialPanel() {
       <div className="tex-browse hide-m">
         <button className="btn" aria-pressed={browsing} data-on={browsing || undefined}
           title={browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
-          onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false })}>
+          onClick={() => setUi({ textureBrowser: !browsing, materialBrowser: false, sampleBrowser: false })}>
           <PolyHavenLogo />Poly Haven
         </button>
         {MATERIALX_IMPORT && <>
           <button className="btn" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
             title={materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen MaterialX materials'}
-            onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false })}>
+            onClick={() => setUi({ materialBrowser: !materialBrowsing, textureBrowser: false, sampleBrowser: false })}>
             <Download size={14} />GPUOpen
+          </button>
+          <button className="btn" aria-pressed={sampleBrowsing} data-on={sampleBrowsing || undefined}
+            title={sampleBrowsing ? 'Hide MaterialX samples' : 'Browse bundled MaterialX samples'}
+            onClick={() => setUi({ sampleBrowser: !sampleBrowsing, textureBrowser: false, materialBrowser: false })}>
+            <Shapes size={14} />Samples
           </button>
           <MaterialXImport materialId={material.id} />
         </>}
