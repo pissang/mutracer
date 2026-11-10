@@ -376,7 +376,7 @@ fn external_vulkan_device_images_and_native_post_process() {
     };
     let imported_done = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
     let export_sequence = render
-        .export_vulkan(&[(imported_export, 0, 0)], None, (&imported_done, 1))
+        .export_vulkan(&[(imported_export.clone(), 0, 0)], None, (&imported_done, 1))
         .unwrap();
     let wait_info = vk::SemaphoreWaitInfo::default()
         .semaphores(std::slice::from_ref(&export_done))
@@ -526,6 +526,8 @@ fn external_vulkan_device_images_and_native_post_process() {
         device.destroy_image(export_image, None);
         device.free_memory(export_memory, None);
     }
+    drop(imported_export);
+    drop(imported_done);
     let before = engine.inner.gpu.queue.readback_count();
     let mut image = std::mem::MaybeUninit::uninit();
     ok(
