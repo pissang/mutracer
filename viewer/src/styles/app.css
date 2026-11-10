@@ -249,15 +249,16 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 /* Preserve keyboard focus when the button component resets its native outline. */
 button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-focus); outline-offset: 2px; }
 
-.dock { width: max-content; max-width: 100%; min-width: 0; flex-wrap: wrap; height: auto; min-height: 46px; padding: 0 6px 0 9px; gap: 4px; }
+.dock { width: max-content; max-width: 100%; min-width: 0; flex-wrap: nowrap; height: 46px; padding: 0 6px 0 9px; gap: 4px; }
 .dock .sep { height: 22px; margin: 0 2px; }
-.dock__summary, .dock__settings, .dock__denoise { display: contents; }
+.dock__summary, .dock__settings, .dock__samples, .dock__resolution, .dock__denoise { display: contents; }
 .oidn-loading { height: auto; min-height: 30px; padding: 6px 10px; gap: 7px; color: var(--cv-text-2); font-size: 11px; pointer-events: none; }
 .oidn-loading svg { animation: ring-spin 0.9s linear infinite; }
 .dock .dock__more { display: none; }
-.dock-options { width: 240px; padding: 12px; }
+.popover.dock-options { width: 240px; padding: 12px; }
 .dock-options [role='dialog'] { display: grid; gap: 12px; outline: none; }
 .dock-options .dialog__title { font-size: 12px; }
+.dock-options > [role='dialog'] > .select-field { width: 100%; }
 .dock-options .field-row .select-field { width: 110px; }
 .dock > *, .dock .select-field { flex: none; }
 .dock .select { width: auto; gap: 6px; padding: 0 7px 0 8px; font-family: var(--cv-mono); font-variant-numeric: tabular-nums; }
@@ -274,12 +275,19 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .dock__toggle[data-selected] { color: var(--cv-accent-hover); }
 .dock__toggle input { width: 13px; height: 13px; margin: 0; flex: none; accent-color: var(--cv-accent); cursor: pointer; }
 .dock[data-phase='error'] .dock__status b { color: var(--cv-error); }
-/* Keep checkbox labels visible when the viewport narrows. */
+/* Move secondary settings into the popover before the dock runs out of room. */
+@container (max-width: 840px) {
+  .dock .dock__denoise { display: none; }
+  .dock .dock__more { display: grid; }
+}
+@container (max-width: 660px) {
+  .dock .dock__resolution { display: none; }
+}
 @container (max-width: 520px) {
   .dock .select .muted { display: none; }
-  .dock { flex-wrap: wrap; justify-content: center; height: auto; min-height: 46px; padding: 8px 6px; }
 }
 @container (max-width: 400px) {
+  .dock .dock__samples { display: none; }
   .dock .sep, .dock__pause, .dock__time { display: none; }
   .dock { gap: 3px; }
   .dock__status { width: 48px; }

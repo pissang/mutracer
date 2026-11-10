@@ -65,7 +65,6 @@ export function StatusBar() {
   const done = phase === 'finished' || phase === 'paused';
   const remaining = phase === 'converging' && samples > 4 ? ((sampleTarget - samples) * msPerSample) / 1000 : 0;
   const time = done ? formatTime(elapsed) : remaining > 0.5 ? `~${formatTime(remaining)}` : '';
-  const sampleOptions = [...new Set([...SAMPLE_STEPS, maxSamples])].sort((a, b) => a - b);
   const denoise = settings.denoise;
 
   return (
@@ -85,14 +84,8 @@ export function StatusBar() {
       </div>
       <span className="sep" />
       <div className="dock__settings">
-        <Select
-          label="Max samples"
-          prefix="Samples"
-          value={String(maxSamples)}
-          options={sampleOptions.map((v) => ({ value: String(v), label: String(v) }))}
-          onChange={(v) => setSettings({ maxSamples: Number(v) })}
-        />
-        <ResolutionSelect prefix="Res" />
+        <div className="dock__samples"><SampleSelect /></div>
+        <div className="dock__resolution"><ResolutionSelect prefix="Res" /></div>
         <div className="dock__denoise">
           <label
             className="dock__toggle"
@@ -127,6 +120,18 @@ export function StatusBar() {
   );
 }
 
+function SampleSelect() {
+  const maxSamples = useViewer((s) => s.settings.maxSamples);
+  const options = [...new Set([...SAMPLE_STEPS, maxSamples])].sort((a, b) => a - b);
+  return <Select
+    label="Max samples"
+    prefix="Samples"
+    value={String(maxSamples)}
+    options={options.map((v) => ({ value: String(v), label: String(v) }))}
+    onChange={(v) => setSettings({ maxSamples: Number(v) })}
+  />;
+}
+
 function DenoiserSelect({ disabled = false }: { disabled?: boolean }) {
   const settings = useViewer((s) => s.settings);
   const webgl = useViewer((s) => s.backend.name === 'WebGL 2');
@@ -153,6 +158,8 @@ function RenderSettingsPopover() {
             <Heading slot="title" className="dialog__title">Render settings
               <button className="icon-btn icon-btn--bare xs" aria-label="Close render settings" onClick={close}><X size={12} /></button>
             </Heading>
+            <SampleSelect />
+            <ResolutionSelect prefix="Res" />
             <Switch label="Denoise" checked={settings.denoise} onChange={(v) => setSettings({ denoise: v })}>
               <span className="field-label">Denoise</span>
             </Switch>
