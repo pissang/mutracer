@@ -178,8 +178,36 @@ static int host_copy(VkDevice d, VkPhysicalDevice physical, VkQueue q,
   VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
   si.commandBufferCount = 1;
   si.pCommandBuffers = &cmd;
-  VK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE));
-  VK(vkQueueWaitIdle(q));
+  VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence = VK_NULL_HANDLE;
+  VkResult submit = vkCreateFence(d, &fi, NULL, &fence);
+  if (submit != VK_SUCCESS) {
+    fprintf(stderr, "Vulkan host-copy fence creation failed: %d\n", submit);
+    vkDestroyCommandPool(d, pool, NULL);
+    vkDestroyBuffer(d, b, NULL);
+    vkFreeMemory(d, bm, NULL);
+    return 1;
+  }
+  submit = vkQueueSubmit(q, 1, &si, fence);
+  if (submit != VK_SUCCESS) {
+    fprintf(stderr, "Vulkan host-copy submit failed: %d\n", submit);
+    vkDestroyFence(d, fence, NULL);
+    vkDestroyCommandPool(d, pool, NULL);
+    vkDestroyBuffer(d, b, NULL);
+    vkFreeMemory(d, bm, NULL);
+    return 1;
+  }
+  VkResult wait_result =
+      vkWaitForFences(d, 1, &fence, VK_TRUE, 30ULL * 1000ULL * 1000ULL * 1000ULL);
+  if (wait_result != VK_SUCCESS) {
+    fprintf(stderr, "Vulkan host-copy fence wait failed: %d\n", wait_result);
+    vkDestroyFence(d, fence, NULL);
+    vkDestroyCommandPool(d, pool, NULL);
+    vkDestroyBuffer(d, b, NULL);
+    vkFreeMemory(d, bm, NULL);
+    return 1;
+  }
+  vkDestroyFence(d, fence, NULL);
   void *mapped = NULL;
   VkDeviceSize offset = 0;
   VK(vkMapMemory(d, bm, offset, bytes, 0, &mapped));
@@ -263,8 +291,7 @@ int main(void) {
     ci.arrayLayers = 1;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VK(vkCreateImage(d, &ci, NULL, &images[k]));
