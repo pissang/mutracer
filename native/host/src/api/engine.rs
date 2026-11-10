@@ -460,8 +460,15 @@ impl Engine {
                 gpu,
                 #[cfg(target_os = "macos")]
                 metal: Mutex::new(None),
-                #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
-                vulkan: Mutex::new(None),
+                #[cfg(any(
+                    target_os = "windows",
+                    target_os = "linux",
+                    feature = "vulkan-interop"
+                ))]
+                vulkan: Mutex::new(adapter.as_ref().and_then(|a| {
+                    (a.get_info().backend == wgpu::Backend::Vulkan)
+                        .then(super::vulkan_export::State::new)
+                })),
                 #[cfg(target_os = "windows")]
                 d3d12: Mutex::new(adapter.as_ref().and_then(|a| {
                     (a.get_info().backend == wgpu::Backend::Dx12)

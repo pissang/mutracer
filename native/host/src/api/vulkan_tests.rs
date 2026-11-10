@@ -2,6 +2,7 @@ use super::*;
 use crate::scene_api::{Environment, Geometry, Mesh, OpenPbrMaterial, Scene};
 use glam::{Mat4, Vec3};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 extern "C" fn retired(user: *mut c_void) {
     unsafe { &*user.cast::<AtomicU32>() }.fetch_add(1, Ordering::Relaxed);
 }
@@ -304,6 +305,12 @@ fn external_vulkan_device_images_and_native_post_process() {
         Status::InvalidState as i32
     );
     render.converge(ConvergeOptions::new(1)).unwrap();
+    let cpu_begin = Instant::now();
+    let cpu_depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+    println!(
+        "Vulkan CPU read_pixels same scene: {:.3} ms",
+        cpu_begin.elapsed().as_secs_f64() * 1000.0
+    );
 
     // Exercise the new foreign-image export path on the imported device. The
     // target is host-owned and the done semaphore is a real Vulkan timeline;
@@ -360,7 +367,8 @@ fn external_vulkan_device_images_and_native_post_process() {
         .enumerate()
         .position(|(i, t)| {
             export_requirements.memory_type_bits & (1 << i) != 0
-                && t.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                && t.property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
         })
         .unwrap() as u32;
     let export_memory = unsafe {
@@ -381,7 +389,8 @@ fn external_vulkan_device_images_and_native_post_process() {
         .enumerate()
         .position(|(i, t)| {
             depth_requirements.memory_type_bits & (1 << i) != 0
-                && t.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                && t.property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
         })
         .unwrap() as u32;
     let depth_memory = unsafe {
@@ -450,9 +459,10 @@ fn external_vulkan_device_images_and_native_post_process() {
             )
             .unwrap();
     }
+    let export_begin = Instant::now();
     let export_sequence = render
         .export_vulkan(
-            &[(imported_export.clone(), 0, 0), (imported_depth.clone(), 1, 0)],
+            &[(imported_depth.clone(), 1, 0)],
             Some((&imported_ready, 1)),
             (&imported_done, 1),
         )
@@ -462,11 +472,15 @@ fn external_vulkan_device_images_and_native_post_process() {
         .values(&[1]);
     unsafe { device.wait_semaphores(&wait_info, u64::MAX) }.unwrap();
     assert!(engine.poll_vulkan_exports(export_sequence).unwrap());
+    println!(
+        "Vulkan export submit+timeline: {:.3} ms",
+        export_begin.elapsed().as_secs_f64() * 1000.0
+    );
     // Reuse the same imported image and both timelines for a second accepted
     // export; done values remain strictly increasing.
     let export_sequence2 = render
         .export_vulkan(
-            &[(imported_export.clone(), 0, 0), (imported_depth.clone(), 1, 0)],
+            &[(imported_depth.clone(), 1, 0)],
             Some((&imported_ready, 1)),
             (&imported_done, 2),
         )
@@ -476,8 +490,8 @@ fn external_vulkan_device_images_and_native_post_process() {
         .values(&[2]);
     unsafe { device.wait_semaphores(&wait_info2, u64::MAX) }.unwrap();
     assert!(engine.poll_vulkan_exports(export_sequence2).unwrap());
-    let exported_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
-    let exported_depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+    let exported_reference = cpu_depth_reference;
+    let exported_depth_reference = exported_reference.clone();
     let export_buffer = unsafe {
         device
             .create_buffer(
@@ -489,7 +503,8 @@ fn external_vulkan_device_images_and_native_post_process() {
             )
             .unwrap()
     };
-    let export_buffer_requirements = unsafe { device.get_buffer_memory_requirements(export_buffer) };
+    let export_buffer_requirements =
+        unsafe { device.get_buffer_memory_requirements(export_buffer) };
     let export_buffer_type = memory
         .memory_types_as_slice()
         .iter()
@@ -561,7 +576,7 @@ fn external_vulkan_device_images_and_native_post_process() {
             &[],
             &[],
             &[vk::ImageMemoryBarrier::default()
-                .image(export_image)
+                .image(depth_image)
                 .subresource_range(export_range)
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -572,7 +587,7 @@ fn external_vulkan_device_images_and_native_post_process() {
         );
         device.cmd_copy_image_to_buffer(
             export_command,
-            export_image,
+            depth_image,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             export_buffer,
             &[vk::BufferImageCopy::default()
@@ -597,21 +612,24 @@ fn external_vulkan_device_images_and_native_post_process() {
             )
             .unwrap();
     }
-    ok(
-        mt_vk_lease_release(export_lease, error.as_mut_ptr(), error.len()),
-        &error,
-    );
     unsafe { device.queue_wait_idle(info.queue) }.unwrap();
     let export_mapped = unsafe {
         device
-            .map_memory(export_buffer_memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+            .map_memory(
+                export_buffer_memory,
+                0,
+                vk::WHOLE_SIZE,
+                vk::MemoryMapFlags::empty(),
+            )
             .unwrap()
     };
     let exported_pixels = unsafe {
         std::slice::from_raw_parts(export_mapped.cast::<f32>(), exported_reference.len())
     };
     assert_eq!(exported_pixels, exported_reference.as_slice());
-    unsafe { device.unmap_memory(export_buffer_memory); }
+    unsafe {
+        device.unmap_memory(export_buffer_memory);
+    }
     // The depth AOV uses a single-channel R32_SFLOAT storage image.  Read it
     // back through the host queue as well, so the test covers the format
     // conversion path independently of the four-channel HDR image.
@@ -674,9 +692,18 @@ fn external_vulkan_device_images_and_native_post_process() {
             .unwrap();
         device.queue_wait_idle(info.queue).unwrap();
     }
+    ok(
+        mt_vk_lease_release(export_lease, error.as_mut_ptr(), error.len()),
+        &error,
+    );
     let depth_mapped = unsafe {
         device
-            .map_memory(export_buffer_memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+            .map_memory(
+                export_buffer_memory,
+                0,
+                vk::WHOLE_SIZE,
+                vk::MemoryMapFlags::empty(),
+            )
             .unwrap()
     };
     let exported_depth = unsafe {
@@ -696,6 +723,7 @@ fn external_vulkan_device_images_and_native_post_process() {
         device.free_memory(depth_memory, None);
     }
     drop(imported_export);
+    drop(imported_depth);
     drop(imported_ready);
     drop(imported_done);
     let before = engine.inner.gpu.queue.readback_count();

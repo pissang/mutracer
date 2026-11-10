@@ -1,7 +1,7 @@
 //! Same-device D3D12 resource and fence imports.
 #![cfg(target_os = "windows")]
 use super::{Engine, Result, Status, error};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -27,6 +27,15 @@ fn unavailable() -> super::Error {
     error(Status::Unavailable, "D3D12 GPU export is unavailable")
 }
 
+fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64) -> Result<()> {
+    let mut last = last_signal.lock().unwrap();
+    if value == 0 || value == u64::MAX || value <= *last {
+        return Err(invalid("D3D12 timeline value is not strictly increasing"));
+    }
+    *last = value;
+    Ok(())
+}
+
 /// Borrowed wrapper for a host-owned same-device D3D12 UAV texture.
 #[derive(Clone)]
 pub struct D3d12Image {
@@ -47,6 +56,7 @@ pub(crate) struct State {
     pub(super) completed: u64,
     pending: Vec<Pending>,
     pub(super) pipelines: HashMap<(wgpu::TextureFormat, u32, bool), wgpu::ComputePipeline>,
+    pub(super) timelines: HashMap<usize, Arc<Mutex<u64>>>,
 }
 struct Pending {
     sequence: u64,
@@ -65,6 +75,7 @@ impl State {
             completed: 0,
             pending: vec![],
             pipelines: HashMap::new(),
+            timelines: HashMap::new(),
         }
     }
 }
@@ -246,10 +257,31 @@ impl Engine {
             return Err(invalid("D3D12 fence must be shared on the same adapter"));
         }
         let value = unsafe { fence.GetCompletedValue() };
+        if value == u64::MAX {
+            return Err(error(
+                Status::Unavailable,
+                "D3D12 fence reports device removal while importing",
+            ));
+        }
+        let identity = fence.cast::<windows::core::IUnknown>().map_err(|e| {
+            error(
+                Status::InvalidArgument,
+                format!("D3D12 fence identity query failed: {e}"),
+            )
+        })?;
+        let key = identity.as_raw() as usize;
+        let mut state = self.inner.d3d12.lock().unwrap();
+        let last_signal = state
+            .as_mut()
+            .ok_or_else(unavailable)?
+            .timelines
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(value)))
+            .clone();
         Ok(D3d12Timeline {
             engine: self.clone(),
             fence,
-            last_signal: Arc::new(Mutex::new(value)),
+            last_signal,
         })
     }
 }
@@ -275,12 +307,23 @@ impl super::Render {
             if !Arc::ptr_eq(&engine.inner, &r.engine.inner) || value == u64::MAX {
                 return Err(invalid("Invalid D3D12 ready timeline"));
             }
+            if r.fence.as_raw() == done.0.fence.as_raw() && value >= done.1 {
+                return Err(invalid(
+                    "D3D12 ready value must be less than done on the same timeline",
+                ));
+            }
         }
         let mut sources = Vec::new();
+        let mut destination_ids = HashSet::new();
         for (image, kind, rows) in images {
             if !Arc::ptr_eq(&engine.inner, &image.engine.inner) || *rows > 1 {
                 return Err(invalid(
                     "D3D12 image belongs to another engine or has invalid row order",
+                ));
+            }
+            if !destination_ids.insert(image.raw_id) {
+                return Err(invalid(
+                    "D3D12 export destinations must be distinct resources",
                 ));
             }
             let source = match *kind {
@@ -325,10 +368,6 @@ impl super::Render {
         if state.pending.len() >= 32 {
             return Err(error(Status::Busy, "32 GPU exports are pending"));
         }
-        let mut last = done.0.last_signal.lock().unwrap();
-        if done.1 <= *last {
-            return Err(invalid("D3D12 done values must strictly increase"));
-        }
         let gpu = &engine.inner.gpu;
         // Complete command encoding and all sequence/resource validation before
         // touching a host fence. A rejected call must not wait or signal it.
@@ -347,35 +386,35 @@ impl super::Render {
                         label: Some("D3D12 output conversion"),
                         source: wgpu::ShaderSource::Wgsl(shader(format, *kind, *rows == 1).into()),
                     });
-                let layout = gpu.device.create_bind_group_layout(
-                    &wgpu::BindGroupLayoutDescriptor {
-                        label: None,
-                        entries: &[
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 0,
-                                visibility: wgpu::ShaderStages::COMPUTE,
-                                ty: wgpu::BindingType::Texture {
-                                    sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: false,
+                let layout =
+                    gpu.device
+                        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            label: None,
+                            entries: &[
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 0,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Texture {
+                                        sample_type: wgpu::TextureSampleType::Float {
+                                            filterable: false,
+                                        },
+                                        view_dimension: wgpu::TextureViewDimension::D2,
+                                        multisampled: false,
                                     },
-                                    view_dimension: wgpu::TextureViewDimension::D2,
-                                    multisampled: false,
+                                    count: None,
                                 },
-                                count: None,
-                            },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 1,
-                                visibility: wgpu::ShaderStages::COMPUTE,
-                                ty: wgpu::BindingType::StorageTexture {
-                                    access: wgpu::StorageTextureAccess::WriteOnly,
-                                    format,
-                                    view_dimension: wgpu::TextureViewDimension::D2,
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 1,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::StorageTexture {
+                                        access: wgpu::StorageTextureAccess::WriteOnly,
+                                        format,
+                                        view_dimension: wgpu::TextureViewDimension::D2,
+                                    },
+                                    count: None,
                                 },
-                                count: None,
-                            },
-                        ],
-                    },
-                );
+                            ],
+                        });
                 let pl = gpu
                     .device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -421,6 +460,7 @@ impl super::Render {
             .sequence
             .checked_add(1)
             .ok_or_else(|| error(Status::Error, "GPU sequence exhausted"))?;
+        reserve_timeline_value(&done.0.last_signal, done.1)?;
         let complete = Arc::new(AtomicBool::new(false));
         let flag = complete.clone();
         let mut pending = Pending {
@@ -447,7 +487,10 @@ impl super::Render {
                 flag.store(true, Ordering::Release);
             });
             unsafe { hal.raw_queue().Signal(&done.0.fence, done.1) }.map_err(|e| {
-                error(Status::Unavailable, format!("D3D12 queue signal failed: {e}"))
+                error(
+                    Status::Unavailable,
+                    format!("D3D12 queue signal failed: {e}"),
+                )
             })?;
             Ok(())
         });
@@ -456,13 +499,11 @@ impl super::Render {
                 // The command is in flight but the completion signal is unknown;
                 // retain all resources and never credit this sequence as done.
                 pending.failed = true;
-                *last = done.1;
                 state.sequence = sequence;
                 state.pending.push(pending);
             }
             return Err(error);
         }
-        *last = done.1;
         state.sequence = sequence;
         state.pending.push(pending);
         Ok(sequence)
@@ -520,7 +561,8 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::fence_completed;
+    use super::{fence_completed, reserve_timeline_value};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn removed_fence_value_is_not_completion() {
@@ -528,22 +570,33 @@ mod tests {
         assert!(!fence_completed(7, 8).unwrap());
         assert!(fence_completed(u64::MAX, 8).is_err());
     }
+
+    #[test]
+    fn duplicate_import_wrappers_share_signal_reservation() {
+        let canonical = Arc::new(Mutex::new(0));
+        let second_wrapper = canonical.clone();
+        assert!(reserve_timeline_value(&canonical, 1).is_ok());
+        assert!(reserve_timeline_value(&second_wrapper, 1).is_err());
+        assert!(reserve_timeline_value(&second_wrapper, 2).is_ok());
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
 mod gpu_tests {
     use super::*;
-    use crate::api::{Backend, ConvergeOptions, EngineOptions, PixelKind, Render, RenderSettings, RenderSize};
+    use crate::api::{
+        Backend, ConvergeOptions, EngineOptions, PixelKind, Render, RenderSettings, RenderSize,
+    };
     use crate::scene_api::{Environment, Geometry, Mesh, OpenPbrMaterial, Scene};
     use glam::{Mat4, Vec3};
     use std::ffi::c_void;
     use std::mem::ManuallyDrop;
-    use windows::core::PCWSTR;
+    use std::time::Instant;
+    use wgpu::hal::api::Dx12;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Graphics::Direct3D12::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
-    use windows::Win32::Graphics::Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE};
-    use wgpu::hal::api::Dx12;
+    use windows::core::PCWSTR;
 
     unsafe fn shared_texture(
         device: &ID3D12Device,
@@ -560,7 +613,10 @@ mod gpu_tests {
             DepthOrArraySize: 1,
             MipLevels: 1,
             Format: format,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
             Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             ..Default::default()
@@ -581,12 +637,7 @@ mod gpu_tests {
         let resource = resource.unwrap();
         let handle = unsafe {
             device
-                .CreateSharedHandle(
-                    &resource,
-                    None,
-                    DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
-                    PCWSTR::null(),
-                )
+                .CreateSharedHandle(&resource, None, 0x10000000, PCWSTR::null())
                 .unwrap()
         };
         (resource, handle)
@@ -629,7 +680,10 @@ mod gpu_tests {
             DepthOrArraySize: 1,
             MipLevels: 1,
             Format: DXGI_FORMAT_UNKNOWN,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
             ..Default::default()
         };
@@ -647,13 +701,10 @@ mod gpu_tests {
                 .unwrap();
         }
         let readback = readback.unwrap();
-        let allocator: ID3D12CommandAllocator = unsafe {
-            device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
-        }
-        .unwrap();
+        let allocator: ID3D12CommandAllocator =
+            unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.unwrap();
         let list: ID3D12GraphicsCommandList = unsafe {
-            device
-                .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+            device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
         }
         .unwrap();
         let mut barrier = D3D12_RESOURCE_BARRIER {
@@ -680,7 +731,9 @@ mod gpu_tests {
             let mut src_location = D3D12_TEXTURE_COPY_LOCATION {
                 pResource: ManuallyDrop::new(Some(source.clone())),
                 Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
             };
             list.CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, None);
             list.Close().unwrap();
@@ -689,7 +742,8 @@ mod gpu_tests {
             ManuallyDrop::drop(&mut src_location.pResource);
             queue.ExecuteCommandLists(&[Some(list.cast().unwrap())]);
         }
-        let completion: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let completion: ID3D12Fence =
+            unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
         unsafe { queue.Signal(&completion, 1).unwrap() };
         for _ in 0..100_000 {
             if unsafe { completion.GetCompletedValue() } >= 1 {
@@ -715,7 +769,8 @@ mod gpu_tests {
         let row_pitch = u64::from(footprint.Footprint.RowPitch);
         let values = (0..source_desc.Height)
             .flat_map(|row| unsafe {
-                let row_ptr = (ptr as *const u8).add((footprint.Offset + u64::from(row) * row_pitch) as usize);
+                let row_ptr = (ptr as *const u8)
+                    .add((footprint.Offset + u64::from(row) * row_pitch) as usize);
                 std::slice::from_raw_parts(row_ptr.cast::<f32>(), (tight_row_bytes / 4) as usize)
                     .iter()
                     .copied()
@@ -731,26 +786,41 @@ mod gpu_tests {
     #[ignore = "requires RTX-class D3D12 hardware"]
     fn d3d12_foreign_export_hdr_and_depth_match_readback() {
         let _lock = crate::abi_test_lock();
-        let adapter = Engine::adapters()
-            .into_iter()
-            .find(|a| {
-                let info = a.get_info();
-                info.backend == wgpu::Backend::Dx12
-                    && info.name.to_ascii_lowercase().contains("rtx 4060")
-            })
-            .or_else(|| {
-                Engine::adapters().into_iter().find(|a| {
-                    a.get_info().backend == wgpu::Backend::Dx12
-                })
-            })
-            .expect("D3D12 adapter");
-        let engine = Engine::on_adapter(
+        // Use the same caller-owned DynamicDxc setup as the production
+        // viewer.  The default Engine::on_adapter path intentionally keeps
+        // FXC compatibility, but this megakernel is too large for FXC's loop
+        // unroller on RTX 4060.
+        let mut descriptor = wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        };
+        descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::DynamicDxc {
+            dxc_path: std::env::var("MUTRACER_TEST_DXC")
+                .unwrap_or_else(|_| "dxcompiler.dll".into()),
+        };
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .expect("D3D12 adapter");
+        let adapter_info = adapter.get_info();
+        println!("D3D12 export adapter: {adapter_info:?}");
+        assert!(adapter_info.name.to_ascii_lowercase().contains("rtx 4060"));
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let engine = Engine::on_device(
             &adapter,
+            &device,
+            &queue,
             EngineOptions {
                 backend: Backend::Hardware,
             },
-        )
-        .unwrap();
+            None,
+        );
         let mut scene = Scene::new();
         let geometry = scene
             .add_geometry(Geometry::new(
@@ -785,11 +855,20 @@ mod gpu_tests {
         )
         .unwrap();
         render.converge(ConvergeOptions::new(1)).unwrap();
+        let cpu_begin = Instant::now();
+        let hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
+        let depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+        println!(
+            "D3D12 CPU read_pixels same scene: {:.3} ms",
+            cpu_begin.elapsed().as_secs_f64() * 1000.0
+        );
         let hal = unsafe { engine.inner.gpu.device.as_hal::<Dx12>() }.unwrap();
         let device = hal.raw_device().clone();
         let queue = hal.raw_queue().clone();
-        let (hdr_resource, hdr_handle) = unsafe { shared_texture(&device, DXGI_FORMAT_R32G32B32A32_FLOAT) };
-        let (depth_resource, depth_handle) = unsafe { shared_texture(&device, DXGI_FORMAT_R32_FLOAT) };
+        let (hdr_resource, hdr_handle) =
+            unsafe { shared_texture(&device, DXGI_FORMAT_R32G32B32A32_FLOAT) };
+        let (depth_resource, depth_handle) =
+            unsafe { shared_texture(&device, DXGI_FORMAT_R32_FLOAT) };
         let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }.unwrap();
         let fence_handle = unsafe {
             device
@@ -807,8 +886,13 @@ mod gpu_tests {
                 .unwrap()
         };
         let done = unsafe { engine.import_d3d12_timeline(fence_handle) }.unwrap();
+        let export_begin = Instant::now();
         let sequence = render
-            .export_d3d12(&[(hdr.clone(), 0, 0), (depth.clone(), 1, 0)], None, (&done, 1))
+            .export_d3d12(
+                &[(hdr.clone(), 0, 0), (depth.clone(), 1, 0)],
+                None,
+                (&done, 1),
+            )
             .unwrap();
         for _ in 0..5000 {
             if engine.poll_d3d12_exports(sequence).unwrap() {
@@ -818,16 +902,16 @@ mod gpu_tests {
         }
         assert_eq!(unsafe { fence.GetCompletedValue() }, 1);
         assert!(engine.poll_d3d12_exports(sequence).unwrap());
-        let hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
-        let depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+        println!(
+            "D3D12 export submit+fence: {:.3} ms",
+            export_begin.elapsed().as_secs_f64() * 1000.0
+        );
         assert_eq!(hdr_reference.len(), 8 * 6 * 4);
         assert_eq!(depth_reference.len(), 8 * 6 * 4);
-        let hdr_exported = unsafe {
-            copy_texture_readback(&device, &queue, &hdr_resource, (8 * 6 * 16) as u64)
-        };
-        let depth_exported = unsafe {
-            copy_texture_readback(&device, &queue, &depth_resource, (8 * 6 * 16) as u64)
-        };
+        let hdr_exported =
+            unsafe { copy_texture_readback(&device, &queue, &hdr_resource, (8 * 6 * 16) as u64) };
+        let depth_exported =
+            unsafe { copy_texture_readback(&device, &queue, &depth_resource, (8 * 6 * 16) as u64) };
         assert_eq!(hdr_exported, hdr_reference);
         assert_eq!(depth_exported, depth_reference);
         // The imported resources are kept alive through polling and host
@@ -857,7 +941,7 @@ fn shader(format: wgpu::TextureFormat, kind: u32, flip: bool) -> String {
     };
     let convert = if kind == 1 || kind == 3 {
         if format == wgpu::TextureFormat::R32Float {
-            "v.x"
+            "vec4f(v.x,0,0,1)"
         } else {
             "vec4f(v.x,0,0,v.y)"
         }
