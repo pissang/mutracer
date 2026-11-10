@@ -180,6 +180,7 @@ unsafe extern "C" fn mt_engine_import_metal_timeline(
     })
 }
 #[unsafe(no_mangle)]
+#[cfg(target_os = "macos")]
 unsafe extern "C" fn mt_render_export_gpu(
     render: u64,
     desc: *const ExportDesc,
@@ -254,6 +255,7 @@ unsafe extern "C" fn mt_render_export_gpu(
     })
 }
 #[unsafe(no_mangle)]
+#[cfg(target_os = "macos")]
 unsafe extern "C" fn mt_engine_gpu_poll(
     engine: u64,
     sequence: u64,
@@ -291,10 +293,12 @@ fn destroy(handle: u64, image: bool) -> Result<()> {
     })
 }
 #[unsafe(no_mangle)]
+#[cfg(target_os = "macos")]
 extern "C" fn mt_gpu_image_destroy(image: u64, error_out: *mut c_char, capacity: usize) -> i32 {
     call(error_out, capacity, || destroy(image, true))
 }
 #[unsafe(no_mangle)]
+#[cfg(target_os = "macos")]
 extern "C" fn mt_gpu_timeline_destroy(
     timeline: u64,
     error_out: *mut c_char,
@@ -315,6 +319,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<ExportDesc>(), 56);
     }
     #[test]
+    #[cfg(target_os = "macos")]
     fn null_outputs_are_rejected_without_native_access() {
         let status = unsafe {
             mt_engine_create_metal(

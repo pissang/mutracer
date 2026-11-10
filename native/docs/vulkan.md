@@ -90,11 +90,19 @@ SDR and HDR-window formats and the exact layouts.
 - Queue/image leases synchronize CPU submission access without waiting for GPU
   completion; long leases stall rendering and background uploads. Display passes
   add intermediate images and GPU work.
-- Sharing requires the same device and exact queue. Cross-device external memory,
-  other queues, queue-family transfers and external semaphore handoffs are not
-  exposed. Metal hosts with an already-created device can use the independent
-  [texture export path](metal.md); already-created Vulkan devices still need a
-  separate external-memory integration.
+- Sharing requires the same device. Windows also accepts host-owned `VkImage`
+  and timeline `VkSemaphore` records created by the exact `VkDevice` passed to
+  `mt_engine_create_vulkan`; wgpu-hal wraps the image with external memory and
+  the library queue submits native timeline waits/signals. MuTracer never
+  destroys these handles. The host remains responsible for queue-family
+  ownership transfers and resource lifetime until the done value has passed.
+  The image must be storage-capable and created with the negotiated timeline
+  semaphore feature (`VK_KHR_timeline_semaphore` on pre-1.2 devices). The host
+  may consume the image on a different queue when it uses a concurrent image or
+  explicit queue-family ownership transfers around the ready/done values; the
+  queue imported into MuTracer remains the library submission queue.
+  Cross-device external-memory import is not part of this contract. Metal hosts
+  with an already-created device can use the independent [texture export path](metal.md).
 - Native handles and Vulkan feature declarations are trusted caller inputs;
   invalid handles or queue/layout/lifetime violations cannot be made safe by
   argument validation.

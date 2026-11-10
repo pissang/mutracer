@@ -11,7 +11,7 @@ C ABI can change between versions.
 | --- | --- | --- |
 | macOS arm64 (14.0+) | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
-| Windows x64 | DX12 or Vulkan | MSVC SDK, Software/HWRT rendering and packaged viewer verified on RTX 4060; strict image-parity issues remain |
+| Windows x64 | DX12 or Vulkan | MSVC SDK, Software/HWRT and viewer verified on RTX 4060; same-device GPU export available; strict image-parity issues remain |
 
 [Built-in denoising](docs/denoising.md) supports oidn-webgpu on the rendering GPU
 and optional OIDN with a caller-supplied runtime.
@@ -204,6 +204,8 @@ int main(void) {
 | [examples/job-host.c](examples/job-host.c) | Polling jobs and cancellation |
 | [examples/denoise-host.c](examples/denoise-host.c) | Standalone OIDN denoiser |
 | [examples/window-host.c](examples/window-host.c) | C window presentation (macOS glue in `window-appkit.m`) |
+| [examples/vulkan-export-host.c](examples/vulkan-export-host.c) | Vulkan same-device image/timeline export host harness |
+| [examples/d3d12-export-host.c](examples/d3d12-export-host.c) | D3D12 same-device shared-resource/fence export host harness |
 | [viewer/examples/surface.rs](viewer/examples/surface.rs) | Rust window and HDR presentation |
 
 `npm run native:engine`, `native:context` and `native:jobs` build the C hosts and

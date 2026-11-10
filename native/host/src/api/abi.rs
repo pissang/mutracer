@@ -2,10 +2,68 @@
 //!
 //! Objects live in one registry. Each call clones what it needs out of the
 //! registry and runs without holding it, so callbacks may call back into the ABI.
+#[cfg(target_os = "windows")]
+#[path = "abi_d3d12_export.rs"]
+pub(super) mod d3d12_export_abi;
+#[path = "abi_gpu_unavailable.rs"]
+mod gpu_unavailable;
 #[path = "abi_metal.rs"]
 mod metal;
 #[path = "abi_vulkan.rs"]
 mod vulkan;
+#[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+#[path = "abi_vulkan_export.rs"]
+mod vulkan_export_abi;
+#[cfg(not(target_os = "windows"))]
+pub(super) mod d3d12_export_abi {
+    use super::*;
+    use std::ffi::c_char;
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn mt_engine_d3d12_info(
+        _engine: u64,
+        _output: *mut c_void,
+        error_out: *mut c_char,
+        capacity: usize,
+    ) -> i32 {
+        call(error_out, capacity, || {
+            Err(error(
+                Status::Unavailable,
+                "D3D12 GPU export is unavailable",
+            ))
+        })
+    }
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn mt_engine_import_d3d12_image(
+        _engine: u64,
+        _desc: *const c_void,
+        _output: *mut u64,
+        error_out: *mut c_char,
+        capacity: usize,
+    ) -> i32 {
+        call(error_out, capacity, || {
+            Err(error(
+                Status::Unavailable,
+                "D3D12 GPU export is unavailable",
+            ))
+        })
+    }
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn mt_engine_import_d3d12_timeline(
+        _engine: u64,
+        _desc: *const c_void,
+        _output: *mut u64,
+        error_out: *mut c_char,
+        capacity: usize,
+    ) -> i32 {
+        call(error_out, capacity, || {
+            Err(error(
+                Status::Unavailable,
+                "D3D12 GPU export is unavailable",
+            ))
+        })
+    }
+}
 use super::*;
 use crate::status;
 use std::collections::HashMap;
@@ -60,6 +118,26 @@ enum Object {
         engine: u64,
         timeline: super::metal::MetalTimeline,
     },
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    VulkanGpuImage {
+        engine: u64,
+        image: super::vulkan_export::VulkanImage,
+    },
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    VulkanGpuTimeline {
+        engine: u64,
+        timeline: super::vulkan_export::VulkanTimeline,
+    },
+    #[cfg(target_os = "windows")]
+    D3d12GpuImage {
+        engine: u64,
+        image: super::d3d12_export::D3d12Image,
+    },
+    #[cfg(target_os = "windows")]
+    D3d12GpuTimeline {
+        engine: u64,
+        timeline: super::d3d12_export::D3d12Timeline,
+    },
     Engine(EngineEntry),
     Display {
         engine: u64,
@@ -77,6 +155,14 @@ impl Object {
             Object::Engine(_) => None,
             #[cfg(target_os = "macos")]
             Object::GpuImage { engine, .. } | Object::GpuTimeline { engine, .. } => Some(*engine),
+            #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+            Object::VulkanGpuImage { engine, .. } | Object::VulkanGpuTimeline { engine, .. } => {
+                Some(*engine)
+            }
+            #[cfg(target_os = "windows")]
+            Object::D3d12GpuImage { engine, .. } | Object::D3d12GpuTimeline { engine, .. } => {
+                Some(*engine)
+            }
             Object::Display { engine } => Some(*engine),
             Object::Render(r) => Some(r.engine),
             Object::Loop(l) => Some(l.engine),
@@ -945,6 +1031,10 @@ pub unsafe extern "C" fn mt_engine_destroy(
 ) -> i32 {
     call(error_out, capacity, || {
         metal::check_destroy(&engine_of(handle)?)?;
+        #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+        vulkan_export_abi::check_destroy(&engine_of(handle)?)?;
+        #[cfg(target_os = "windows")]
+        d3d12_export_abi::check_destroy(&engine_of(handle)?)?;
         vulkan::engine_destroyed(handle);
         // Loops first, then renders, then the engine; dropped outside the registry.
         let mut removed = registry(|r| {
@@ -970,6 +1060,10 @@ pub unsafe extern "C" fn mt_engine_destroy(
             Object::Engine(_) => 4,
             #[cfg(target_os = "macos")]
             Object::GpuImage { .. } | Object::GpuTimeline { .. } => 3,
+            #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+            Object::VulkanGpuImage { .. } | Object::VulkanGpuTimeline { .. } => 3,
+            #[cfg(target_os = "windows")]
+            Object::D3d12GpuImage { .. } | Object::D3d12GpuTimeline { .. } => 3,
         });
         let mut engine = None;
         for object in removed {
