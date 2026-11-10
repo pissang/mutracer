@@ -523,6 +523,10 @@ impl super::Render {
             if submitted {
                 // The command is in flight but the completion signal is unknown;
                 // retain all resources and never credit this sequence as done.
+                self.inner
+                    .gpu
+                    .loss
+                    .notify("D3D12 export signal failed after submit; outcome unknown");
                 pending.failed = true;
                 state.sequence = sequence;
                 state.pending.push(pending);

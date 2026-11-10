@@ -288,8 +288,11 @@ int main(void) {
   VK(vkCreateSemaphore(d, &sci, NULL, &sem));
   mt_vk_gpu_timeline_desc td = {sizeof td, 0, NULL, sem};
   mt_gpu_timeline timeline = 0;
+  mt_gpu_timeline timeline_duplicate = 0;
   OK(mt_engine_import_vulkan_timeline(engine, &td, &timeline, error_text,
                                       sizeof error_text));
+  OK(mt_engine_import_vulkan_timeline(engine, &td, &timeline_duplicate,
+                                      error_text, sizeof error_text));
   mt_scene scene = 0;
   void *scene_data = NULL;
   size_t scene_n = 0;
@@ -326,6 +329,17 @@ int main(void) {
                              0,         0, timeline, (uint64_t)(k + 1)};
     uint64_t seq = 0;
     OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+    if (k == 0) {
+      mt_gpu_export_desc duplicate = ex;
+      duplicate.done = timeline_duplicate;
+      uint64_t rejected_sequence = 99;
+      if (mt_render_export_gpu(render, &duplicate, &rejected_sequence,
+                               error_text, sizeof error_text) !=
+          MT_ERROR_INVALID_ARGUMENT)
+        FAIL("duplicate imported timeline value must be rejected");
+      if (rejected_sequence != 0)
+        FAIL("rejected duplicate export touched sequence");
+    }
     uint32_t complete = 0;
     for (unsigned wait = 0; wait < 10000; wait++) {
       mt_status s = mt_engine_gpu_poll(engine, seq, &complete, error_text,
@@ -406,6 +420,7 @@ int main(void) {
   OK(mt_gpu_image_destroy(imports[0], error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(imports[1], error_text, sizeof error_text));
   OK(mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(timeline_duplicate, error_text, sizeof error_text));
   OK(mt_scene_destroy(scene, error_text, sizeof error_text));
   for (int k = 0; k < 2; k++) {
     vkDestroyImage(d, images[k], NULL);
