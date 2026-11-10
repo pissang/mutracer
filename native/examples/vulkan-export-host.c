@@ -377,6 +377,13 @@ int main(void) {
                            &written, error_text, sizeof error_text));
   OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
                            error_text, sizeof error_text));
+  int depth_hit = 0, center_hit = 0;
+  for (uint32_t pixel = 0; pixel < w * h; pixel++) {
+    depth_hit |= cd[pixel * 4] > 0 && cd[pixel * 4 + 3] > 0;
+    center_hit |= cc[pixel * 4] > 0 && cc[pixel * 4 + 3] > 0;
+  }
+  if (!depth_hit || !center_hit)
+    FAIL("depth fixtures must contain visible geometry");
   mt_gpu_export_image batch[3];
   for (int k = 0; k < 3; k++)
     batch[k] = {sizeof batch[k], kinds[k], NULL, imports[k], MT_GPU_TOP_FIRST, 0};
