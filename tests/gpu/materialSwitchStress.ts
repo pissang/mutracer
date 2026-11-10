@@ -1,5 +1,5 @@
 import {Engine} from '../../src/main.js';
-import {ViewerEngine} from '../../viewer/src/engine/ViewerEngine';
+import {WebEngine} from '../../viewer/src/engine/WebEngine';
 import {createMaterialSpheres} from '../../viewer/src/engine/loadModel';
 import {setSettings, useViewer, type TreeNode} from '../../viewer/src/store';
 import {MATERIAL_PRESETS} from '../../viewer/src/engine/materialParams';
@@ -25,7 +25,7 @@ function firstMesh(nodes: TreeNode[]): TreeNode | undefined {
 
 run.onclick = async () => {
   run.disabled = download.disabled = true;
-  let viewer: ViewerEngine | undefined;
+  let viewer: WebEngine | undefined;
   const events: unknown[] = [];
   const errors: string[] = [];
   const live = new Set<GPUBuffer | GPUTexture>();
@@ -77,7 +77,7 @@ run.onclick = async () => {
     };
     setSettings({resolutionScale: 1, maxSamples: 64, denoise: true, denoiseModel: 'standard', oidnModel: 'standard',
       denoiseWhileConverging: true, autoRotate: false});
-    viewer = new ViewerEngine(document.querySelector('canvas')!);
+    viewer = new WebEngine(document.querySelector('canvas')!);
     const current = viewer;
     const onPageHide = () => { current.dispose(); restore(); };
     window.addEventListener('pagehide', onPageHide, {once: true});

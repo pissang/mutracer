@@ -8,7 +8,7 @@ vi.hoisted(() => {
   vi.stubGlobal('window', {});
 });
 
-import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { WebEngine } from '../src/engine/WebEngine';
 import { OIDNLoadingStatus } from '../src/components/OIDNLoadingStatus';
 import { DEFAULT_SETTINGS, useViewer } from '../src/store';
 
@@ -21,7 +21,7 @@ function deferred() {
 
 function viewer(backend = 'webgpu') {
   const final = deferred(), preview = deferred();
-  const engine = Object.assign(Object.create(ViewerEngine.prototype), {
+  const engine = Object.assign(Object.create(WebEngine.prototype), {
     engine: { backend }, settings: { ...DEFAULT_SETTINGS }, denoiserUpdateToken: 0, disposed: false,
     final: { setDenoiser: vi.fn(() => final.promise) },
     preview: { setDenoiser: vi.fn(() => preview.promise) }

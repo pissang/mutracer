@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Texture, type MaterialGraphInput, type MaterialGraphNode } from '@meimu/mutracer';
+import { type MaterialGraphInput, type MaterialGraphNode } from '@meimu/mutracer';
 import { getEngine } from '../../engine/ViewerEngine';
 import { hexToLinear, linearToHex } from '../../engine/materialParams';
-import { graphImageName } from '../../engine/materialxGraphArchive';
+import { graphImageName, graphImageTexture } from '../../engine/materialxGraphArchive';
 import { ColorField, Select, Switch } from '../ui/controls';
 import { NumberInput } from '../ui/NumberInput';
 
@@ -39,7 +39,7 @@ export function ParamEditor({ port, input, node, materialId, onChange }: {
       </span>;
     }
     case 'filename': {
-      const texture = value instanceof Texture ? value : undefined;
+      const texture = graphImageTexture(value);
       return <span className="gx-param__link">
         {texture ? graphImageName(texture) ?? 'image' : 'none'}
         <button className="graph-use" onClick={() => pickImage(file => void getEngine()?.setMaterialGraphImage(materialId, node.id, port, file, `${node.category} image`))}>

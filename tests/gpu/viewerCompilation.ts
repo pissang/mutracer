@@ -1,4 +1,4 @@
-import {ViewerEngine} from '../../viewer/src/engine/ViewerEngine';
+import {WebEngine} from '../../viewer/src/engine/WebEngine';
 import {createMaterialSpheres} from '../../viewer/src/engine/loadModel';
 import {setSettings, useViewer, type TreeNode} from '../../viewer/src/store';
 import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
@@ -19,7 +19,7 @@ export async function capture(lightTracing = true, photonMapping = true, slot: '
   setSettings({maxSamples: 2, resolutionScale: 1, denoise: false, autoRotate: false,
     envId: 'sky', caustics: true, causticLightTracing: lightTracing, causticPhotonMapping: photonMapping});
   useViewer.setState({paused: true});
-  const viewer = new ViewerEngine(document.querySelector('canvas')!);
+  const viewer = new WebEngine(document.querySelector('canvas')!);
   const errors: string[] = [];
   viewer.engine.on('error', error => errors.push(error.message));
   const update = WGPURayTracePass.prototype.updatePipeline;
@@ -90,7 +90,7 @@ export async function stress(iterations = 32, denoise = false) {
     denoiseWhileConverging: denoise, autoRotate: false,
     envId: 'sky', caustics: true, causticLightTracing: true, causticPhotonMapping: true});
   useViewer.setState({paused: false});
-  const viewer = new ViewerEngine(document.querySelector('canvas')!);
+  const viewer = new WebEngine(document.querySelector('canvas')!);
   const errors: string[] = [], events: unknown[] = [];
   viewer.engine.on('error', error => errors.push(error.message));
   try {

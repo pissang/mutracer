@@ -20,34 +20,34 @@ try {
  try {
   await page.tab.call('Emulation.setDeviceMetricsOverride',{width:2200,height:1200,deviceScaleFactor:1,mobile:false});
   for(let i=0;i<900;i++){
-   const ready=await page.tab.evaluate(`(async()=>{try{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const e=getEngine();return e?.code()?.includes('cornell_caustic')&&e.final.samples>0;}catch{return false;}})()`);
+   const ready=await page.tab.evaluate(`(async()=>{try{const {getEngine}=await import('/src/engine/WebEngine.ts');const e=getEngine();return e?.code()?.includes('cornell_caustic')&&e.final.samples>0;}catch{return false;}})()`);
    if(ready)break;
    if(i===899)throw Error('Cornell viewer load timeout');await delay(200);
   }
-  await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');const e=getEngine();window.photonViewerErrors=[];e.engine.device?.addEventListener('uncapturederror',event=>window.photonViewerErrors.push(event.error.message));const c=e.engine.display.canvas;c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;setSettings({cameraIndex:0,bounces:8,caustics:${process.env.CAUSTIC_MODE!=='pt'},causticPhotonMapping:${process.env.CAUSTIC_MODE!=='pt'},causticLightTracing:${process.env.CAUSTIC_MODE==='combined'},maxSamples:1,fStop:0,autoRotate:false});})()`);
-  await page.tab.evaluate(`import('/@fs/${profileRoot}/tests/gpu/photonViewerProfile.ts').then(async m=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');window.radiusProfile=m.profileViewer(getEngine());})`);
+  await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const {setSettings}=await import('/src/store.ts');const e=getEngine();window.photonViewerErrors=[];e.engine.device?.addEventListener('uncapturederror',event=>window.photonViewerErrors.push(event.error.message));const c=e.engine.display.canvas;c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;setSettings({cameraIndex:0,bounces:8,caustics:${process.env.CAUSTIC_MODE!=='pt'},causticPhotonMapping:${process.env.CAUSTIC_MODE!=='pt'},causticLightTracing:${process.env.CAUSTIC_MODE==='combined'},maxSamples:1,fStop:0,autoRotate:false});})()`);
+  await page.tab.evaluate(`import('/@fs/${profileRoot}/tests/gpu/photonViewerProfile.ts').then(async m=>{const {getEngine}=await import('/src/engine/WebEngine.ts');window.radiusProfile=m.profileViewer(getEngine());})`);
   await page.tab.evaluate(`import('/@fs/${root}/src/renderer/causticDiagnostics.ts').then(m=>{m.causticDiagnostics.photonSkipQuery=${process.env.QUERY_OFF==='1'};})`);
   const results=[];
   for(const denoise of process.env.DENOISE==='0'?[false]:process.env.DENOISE==='1'?[true]:[false,true])for(const scale of [.5,1]){
    await page.tab.evaluate(`import('/src/store.ts').then(m=>m.setSettings({resolutionScale:${scale},denoise:${denoise},maxSamples:1}))`);
    for(let i=0;i<1800;i++){
-    const ready=await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const e=getEngine();return e.final.samples===1&&e.loop.status==='finished'&&e.final.resolutionScale===${scale};})()`);
+    const ready=await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const e=getEngine();return e.final.samples===1&&e.loop.status==='finished'&&e.final.resolutionScale===${scale};})()`);
     if(ready)break;
     if(i===1799)throw Error('Viewer warmup timeout');await delay(100);
    }
-   await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');setSettings({maxSamples:64});const e=getEngine();e.final.restart();window.radiusProfile.start();window.photonViewerStarted=performance.now();${process.env.OFFLINE==='1'?`e.final.maxTiles=1;e.final.timeBudgetMs=1000;await e.loop.converge({samples:64,samplesPerBatch:1,sampleSequenceOffset:0});`:''}})()`);
+   await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const {setSettings}=await import('/src/store.ts');setSettings({maxSamples:64});const e=getEngine();e.final.restart();window.radiusProfile.start();window.photonViewerStarted=performance.now();${process.env.OFFLINE==='1'?`e.final.maxTiles=1;e.final.timeBudgetMs=1000;await e.loop.converge({samples:64,samplesPerBatch:1,sampleSequenceOffset:0});`:''}})()`);
    let row;
    for(let i=0;i<6000;i++){
-    row=await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {useViewer}=await import('/src/store.ts');const e=getEngine();if(window.photonViewerErrors.length)throw Error(window.photonViewerErrors.join('\\n'));if(e.loop.status==='error')throw Error(JSON.stringify(useViewer.getState().toast));if(e.final.samples<64||e.loop.status!=='finished')return null;await e.engine.device?.queue.onSubmittedWorkDone();return{wallMs:performance.now()-window.photonViewerStarted,stats:useViewer.getState().stats,width:e.final.width,height:e.final.height,samples:e.final.samples,settings:useViewer.getState().settings};})()`);
+    row=await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const {useViewer}=await import('/src/store.ts');const e=getEngine();if(window.photonViewerErrors.length)throw Error(window.photonViewerErrors.join('\\n'));if(e.loop.status==='error')throw Error(JSON.stringify(useViewer.getState().toast));if(e.final.samples<64||e.loop.status!=='finished')return null;await e.engine.device?.queue.onSubmittedWorkDone();return{wallMs:performance.now()-window.photonViewerStarted,stats:useViewer.getState().stats,width:e.final.width,height:e.final.height,samples:e.final.samples,settings:useViewer.getState().settings};})()`);
     if(row)break;
     if(i===5999)throw Error('Viewer completion timeout');await delay(100);
    }
    const profile=await page.tab.evaluate('window.radiusProfile.stop()');writeFileSync(resolve(out,`profile-${scale}-${denoise}.json`),JSON.stringify(profile));
    if(process.env.CAPTURE_HDR==='1'){
-    await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const image=await getEngine().final.readPixels('hdr');const r=await fetch('/__radius-hdr/${scale}-${denoise}.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('HDR evidence upload failed');})()`);
+    await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const image=await getEngine().final.readPixels('hdr');const r=await fetch('/__radius-hdr/${scale}-${denoise}.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('HDR evidence upload failed');})()`);
     writeFileSync(resolve(out,`${scale}-${denoise}.json`),JSON.stringify({width:row.width,height:row.height}));
     if(denoise){
-     await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const image=await getEngine().final.readPixels('denoised');const r=await fetch('/__radius-hdr/${scale}-${denoise}-oidn.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('OIDN evidence upload failed');})()`);
+     await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const image=await getEngine().final.readPixels('denoised');const r=await fetch('/__radius-hdr/${scale}-${denoise}-oidn.f32',{method:'POST',body:image.data.buffer});if(!r.ok)throw Error('OIDN evidence upload failed');})()`);
      writeFileSync(resolve(out,`${scale}-${denoise}-oidn.json`),JSON.stringify({width:row.width,height:row.height}));
     }
     const screenshot=await page.tab.call('Page.captureScreenshot',{format:'png'});

@@ -54,7 +54,7 @@ function FrameGraph() {
       if (current !== engine) {
         unsubscribe.forEach((off) => off());
         engine = current;
-        unsubscribe = engine ? [engine.preview.on('sample', push), engine.final.on('sample', push)] : [];
+        unsubscribe = engine ? [engine.on('sample', push)] : [];
       }
       const dpr = devicePixelRatio;
       const width = Math.round(canvas.clientWidth * dpr);
@@ -135,7 +135,7 @@ function DebugControls() {
 function Diagnostics() {
   const [diagnostics, setDiagnostics] = useState<EngineDiagnostics | undefined>();
   useEffect(() => {
-    const read = () => setDiagnostics(getEngine()?.engine.getDiagnostics());
+    const read = () => setDiagnostics(getEngine()?.getDiagnostics());
     read();
     const timer = setInterval(read, 1000);
     return () => clearInterval(timer);

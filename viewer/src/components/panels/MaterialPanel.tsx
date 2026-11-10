@@ -369,7 +369,7 @@ const paramLabel = (group: MaterialGroup, param: MaterialParam) =>
 const formatWeight = (w: number) => (w === 0 ? '0' : w.toFixed(2));
 
 type GraphInput = NonNullable<SelectedMaterial['graph']>['inputs'][number];
-type GraphState = NonNullable<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>['materialGraphs'];
+type GraphState = NonNullable<ReturnType<NonNullable<ReturnType<typeof getEngine>>['getDiagnostics']>>['materialGraphs'];
 
 /** Engine-wide graph compilation state, refreshed whenever the selection or render phase changes. */
 export function useGraphDiagnostics(){
@@ -383,7 +383,7 @@ export function useGraphDiagnostics(){
     let frame = 0;
     const follow = () => {
       frame = requestAnimationFrame(() => {
-        const engine = getEngine()?.engine;
+        const engine = getEngine();
         if (!engine || controller.signal.aborted) return;
         setState(engine.getDiagnostics()?.materialGraphs);
         void engine.waitForMaterialGraphs({signal: controller.signal}).then(result => {

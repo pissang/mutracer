@@ -7,7 +7,7 @@ vi.hoisted(() => {
   vi.stubGlobal('window', {});
 });
 
-import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { WebEngine } from '../src/engine/WebEngine';
 import { loadModelFromSource, type LoadedModel, type PathedFile } from '../src/engine/loadModel';
 
 beforeEach(() => vi.stubGlobal('File', File));
@@ -30,7 +30,7 @@ it('imports and caches an HDR referenced by a model in the dropped folder', asyn
     { path: 'kroken/environment.hdr', file: new File([hdr], 'environment.hdr') }
   ] as unknown as PathedFile[];
   let loaded!: LoadedModel;
-  const viewer = Object.assign(Object.create(ViewerEngine.prototype), {
+  const viewer = Object.assign(Object.create(WebEngine.prototype), {
     setEnvironmentData: vi.fn(), modelBackend: async () => 'webgpu',
     load: vi.fn(async (_name, loader) => { loaded = await loader(vi.fn(), new AbortController().signal); })
   });
@@ -45,7 +45,7 @@ it('imports and caches an HDR referenced by a model in the dropped folder', asyn
 });
 
 it('still applies an HDR dropped without a model', async () => {
-  const viewer = Object.assign(Object.create(ViewerEngine.prototype), { setEnvironmentData: vi.fn(), load: vi.fn() });
+  const viewer = Object.assign(Object.create(WebEngine.prototype), { setEnvironmentData: vi.fn(), load: vi.fn() });
   await viewer.loadFiles([{ path: 'environment.hdr', file: new File([hdr], 'environment.hdr') }]);
   expect(viewer.setEnvironmentData).toHaveBeenCalledWith(expect.objectContaining({ width: 1, height: 1 }), 'custom');
   expect(viewer.load).not.toHaveBeenCalled();

@@ -19,14 +19,14 @@ vi.mock('../src/engine/environment', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/engine/environment')>(),
   loadHDR: vi.fn()
 }));
-import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { WebEngine } from '../src/engine/WebEngine';
 import { Environment, loadHDR, type EquirectData } from '../src/engine/environment';
 import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } from '../src/store';
 
 // Exercise the real load/setModel/resetView path; replace GPU synchronization
 // and persistence with inert boundaries so these tests run without a device.
 function engine() {
-  const viewer = Object.create(ViewerEngine.prototype);
+  const viewer = Object.create(WebEngine.prototype);
   Object.assign(viewer, {
     pickRequest: 0, pickObjects: new Map(), pickMaterials: new Map(),
     upscalePass: Object.assign(vi.fn(), {dispose: vi.fn()}),
@@ -43,7 +43,7 @@ function engine() {
     saveCamera: vi.fn(), restoreCamera: vi.fn(() => false)
   });
   Object.defineProperty(viewer, 'settings', { get: () => useViewer.getState().settings });
-  return viewer as Pick<ViewerEngine, 'loadModel' | 'applyModelCamera' | 'fit'> & {
+  return viewer as Pick<WebEngine, 'loadModel' | 'applyModelCamera' | 'fit'> & {
     // Private orchestration entry point, also used by loadPreset/loadInitialModel.
     load: (name: string, loader: () => Promise<LoadedModel>, meta: CachedModel['meta'], restored?: CachedModel) => Promise<boolean>;
     restoreCamera: ReturnType<typeof vi.fn>;
@@ -232,7 +232,7 @@ describe('imported camera choice', () => {
       scene, engine: { display: { canvas: { height: 1 } } }, final: {}, preview: {}, studioRig: new THREE.Group(),
       environment: new Environment({ ...pixels, data: new Float32Array([1, 1, 1, 1]) }),
       studioAmbient: new Environment(pixels),
-      applyBackground: (ViewerEngine.prototype as unknown as { applyBackground(): void }).applyBackground
+      applyBackground: (WebEngine.prototype as unknown as { applyBackground(): void }).applyBackground
     });
     const environment = viewer as unknown as {
       applyEnvironmentPreset(id: string): Promise<void>;
@@ -411,7 +411,7 @@ describe('initial link and preset precedence',()=>{
   expect(useViewer.getState().settings).toMatchObject({caustics:true,causticLightTracing:true,causticPhotonMapping:true});
  });
  it('applies a link edited in an open viewer over the scene it loads',async()=>{
-  const viewer=engine() as ReturnType<typeof engine>&Pick<ViewerEngine,'openURL'|'loadPreset'>;
+  const viewer=engine() as ReturnType<typeof engine>&Pick<WebEngine,'openURL'|'loadPreset'>;
   const meta=(presetId:string)=>({presetId,credit:null,sourceUrl:null});
   viewer.loadPreset=async id=>viewer.load(id,async()=>model(1),meta(id));
   await viewer.load('Spheres',async()=>model(0),meta('spheres'));
@@ -441,7 +441,7 @@ describe('initial link and preset precedence',()=>{
 describe('display upscale policy',()=>{
  it.each(['webgpu','webgl'])('enables display AOVs only for reduced beauty on %s',backend=>{
   const remove=vi.fn(), add=vi.fn(()=>remove),dispose=vi.fn();
-  const viewer=Object.assign(Object.create(ViewerEngine.prototype),{
+  const viewer=Object.assign(Object.create(WebEngine.prototype),{
    engine:{backend,display:{addPostProcess:add}},final:{resolutionScale:.5},
    settings:{...DEFAULT_SETTINGS},upscalePass:Object.assign(vi.fn(),{dispose})
   });
@@ -454,7 +454,7 @@ describe('display upscale policy',()=>{
  });
  it('keeps the pass for a reduced preview but traces no detail AOVs for a full-resolution final',()=>{
   const add=vi.fn(()=>vi.fn());
-  const viewer=Object.assign(Object.create(ViewerEngine.prototype),{
+  const viewer=Object.assign(Object.create(WebEngine.prototype),{
    engine:{backend:'webgpu',display:{addPostProcess:add}},final:{resolutionScale:1},
    settings:{...DEFAULT_SETTINGS},upscalePass:Object.assign(vi.fn(),{dispose:vi.fn()})
   });

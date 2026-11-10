@@ -1,6 +1,6 @@
 import {describe,it,expect,vi} from 'vitest';
 vi.hoisted(()=>{vi.stubGlobal('location',{href:'https://viewer.example.com/',search:'',hash:'',pathname:'/'});vi.stubGlobal('document',{baseURI:'https://viewer.example.com/'});vi.stubGlobal('window',{});vi.stubGlobal('history',{replaceState:vi.fn()});});
-import {ViewerEngine} from '../src/engine/ViewerEngine';
+import {WebEngine} from '../src/engine/WebEngine';
 import {MATERIALX_SAMPLES,materialXSampleFiles} from '../src/engine/materialxSamples';
 import {parseMaterialXGraph} from '../src/engine/materialxGraph';
 import {parseMaterialX} from '../src/engine/materialx';
@@ -103,7 +103,7 @@ describe('bundled MaterialX samples',()=>{
   it.each(MATERIALX_SAMPLES.map(s=>[s.id]))('imports %s through the viewer as one material replacement',async id=>{
     vi.mocked(bakeDisplacement).mockResolvedValueOnce({file:new Blob(['height']),scale:0.04,bias:0,maxError:0.04/510,width:1024,height:1024,backend:'cpu',timings:{compileMs:0,executeMs:1,readbackMs:0,cacheHit:false}});
     const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
-    expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'target',materialXSampleFiles(sample(id)))).toBe(true);
+    expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'target',materialXSampleFiles(sample(id)))).toBe(true);
     expect(setTextures).toHaveBeenCalledTimes(1);
     const args=setTextures.mock.calls[0] as unknown as unknown[];
     expect(args[3]).toMatch(/^[A-Z][A-Za-z_]+ MaterialX$/);

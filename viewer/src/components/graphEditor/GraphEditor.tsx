@@ -1,3 +1,4 @@
+import { emptyMaterialGraph } from '../../engine/graphEdit';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background, Controls, ControlButton, MiniMap, ReactFlow, ReactFlowProvider, applyEdgeChanges, applyNodeChanges, useReactFlow, useConnection, useNodesInitialized, useStore,
@@ -7,7 +8,7 @@ import '@xyflow/react/dist/style.css';
 import './graphEditor.css';
 import { Download, LayoutGrid, Plus, Focus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { zipSync, strToU8 } from 'fflate';
-import { MaterialGraph, type MaterialGraphConnection, type MaterialGraphDiagnostic, type MaterialGraphInput, type MaterialGraphNode, type MaterialGraphType } from '@meimu/mutracer';
+import { type MaterialGraph, type MaterialGraphConnection, type MaterialGraphDiagnostic, type MaterialGraphInput, type MaterialGraphNode, type MaterialGraphType } from '@meimu/mutracer';
 import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import {
@@ -25,7 +26,7 @@ import { useGraphDiagnostics } from '../panels/MaterialPanel';
 import { GraphEditing, NODE_TYPES, SURFACE, shortId, type MxFlowNode, type PortView, type SurfaceFlowNode } from './GraphNodes';
 
 type FlowNode = MxFlowNode | SurfaceFlowNode;
-const EMPTY = new MaterialGraph();
+const EMPTY = emptyMaterialGraph();
 /** Fitting never zooms out so far that node labels become unreadable; the rest is a pan away. */
 const FIT_VIEW = { padding: 0.15, minZoom: 0.85, maxZoom: 1 };
 // View state survives material selection and dock remounts without entering material undo/export.

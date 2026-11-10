@@ -12,7 +12,7 @@ export function ResolutionSelect({ prefix }: { prefix?: string }) {
   const height = useViewer((s) => s.settings.resolutionHeight);
   // Rerenders with the stats, which change whenever the canvas is resized.
   useViewer((s) => s.stats.width);
-  const canvas = getEngine()?.engine.display.canvas;
+  const canvas = getEngine()?.viewportSize;
   const size = (value: number) => canvas ? `${Math.round(canvas.width * value)}×${Math.round(canvas.height * value)}` : undefined;
   const scales = [...new Set([...SCALES, scale])].sort((a, b) => a - b);
   const heights = [...new Set([...RESOLUTION_HEIGHTS, ...(height === null ? [] : [height])])].sort((a, b) => a - b);

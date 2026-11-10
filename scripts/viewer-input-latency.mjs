@@ -12,10 +12,10 @@ try{for(const model of (process.env.MODELS?.split(',')??['research-cornell-caust
  try{
  await page.tab.call('Emulation.setDeviceMetricsOverride',{width:2200,height:1200,deviceScaleFactor:1,mobile:false});
  for(let i=0;i<900;i++){
-  if(await page.tab.evaluate(`(async()=>{try{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const e=getEngine();return !!e?.model&&e.final.samples>0;}catch{return false;}})()`))break;
+  if(await page.tab.evaluate(`(async()=>{try{const {getEngine}=await import('/src/engine/WebEngine.ts');const e=getEngine();return !!e?.model&&e.final.samples>0;}catch{return false;}})()`))break;
   if(i===899)throw Error('load timeout');await delay(200);
  }
- await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/ViewerEngine.ts');const {setSettings}=await import('/src/store.ts');const e=window.latencyViewer=getEngine();const c=e.engine.display.canvas;
+ await page.tab.evaluate(`(async()=>{const {getEngine}=await import('/src/engine/WebEngine.ts');const {setSettings}=await import('/src/store.ts');const e=window.latencyViewer=getEngine();const c=e.engine.display.canvas;
  c.style.setProperty('width','1920px','important');c.style.setProperty('height','1080px','important');c.style.setProperty('min-width','1920px','important');c.style.setProperty('min-height','1080px','important');e.needsResize=true;
  setSettings({cameraIndex:${model==='research-cornell-caustic'?0:-1},resolutionScale:1,bounces:8,denoise:false,maxSamples:1024,autoRotate:false,fStop:0,caustics:${model==='research-cornell-caustic'},causticPhotonMapping:true,causticLightTracing:false});
  e.controls.enableDamping=false;

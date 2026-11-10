@@ -114,7 +114,7 @@ async function generateThumbnails() {
     if (!await engine.importMaterialX(materialId, materialXSampleFiles(sample))) throw new Error(`Could not import ${sample.label}`);
     // Material edits commit on the next frame; then wait for the graph program.
     await new Promise(requestAnimationFrame);
-    await engine.engine.waitForMaterialGraphs();
+    await engine.waitForMaterialGraphs();
     shots.push([`materialx-${sample.id}`, await engine.renderImage({ ...MATERIAL_SIZE, transparent: false }, 'image/webp', 0.9)]);
   }
 

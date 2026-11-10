@@ -10,7 +10,7 @@ vi.hoisted(() => {
   vi.stubGlobal('history', { replaceState: vi.fn() });
 });
 
-import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { WebEngine } from '../src/engine/WebEngine';
 import { DEFAULT_SETTINGS, useViewer } from '../src/store';
 
 beforeEach(() => {
@@ -39,7 +39,7 @@ describe('image export camera', () => {
     const expectedProjection = source.projectionMatrix.elements.slice();
     const blob = new Blob(['png'], {type: 'image/png'});
     const encode = vi.spyOn(engine.display, 'toBlob').mockResolvedValue(blob);
-    const viewer = Object.create(ViewerEngine.prototype) as ViewerEngine;
+    const viewer = Object.create(WebEngine.prototype) as WebEngine;
     Object.assign(viewer, {
       upscalePass: Object.assign(vi.fn(),{dispose:vi.fn()}),
       engine, final, modelCameras: [source], settings: useViewer.getState().settings,

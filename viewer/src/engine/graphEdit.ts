@@ -416,3 +416,5 @@ export function layoutGraph(graph: MaterialGraph): GraphLayout {
   }
   return { positions, surface: { x: 70, y: 0 } };
 }
+
+export const emptyMaterialGraph = () => new MaterialGraph();

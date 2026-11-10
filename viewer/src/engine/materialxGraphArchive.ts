@@ -35,3 +35,5 @@ export async function restoreGraph(archive:GraphArchive|null|undefined):Promise<
   }));
   return graph;
 }
+
+export const graphImageTexture = (value: unknown): Texture | undefined => value instanceof Texture ? value : undefined;

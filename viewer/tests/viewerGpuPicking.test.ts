@@ -5,10 +5,10 @@ vi.hoisted(() => {
   vi.stubGlobal('window', {});
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => {fn(0); return 1;});
 });
-import {ViewerEngine} from '../src/engine/ViewerEngine';
+import {WebEngine} from '../src/engine/WebEngine';
 
 function viewer(pick: () => Promise<unknown>) {
-  return Object.assign(Object.create(ViewerEngine.prototype), {engine: {_pick: vi.fn(pick)},
+  return Object.assign(Object.create(WebEngine.prototype), {engine: {_pick: vi.fn(pick)},
     pickRequest: 1, pickObjects: new Map([[42, 'object-uuid']]), pickMaterials: new Map([[84, 'material-uuid']]), select: vi.fn()});
 }
 it('selects GPU object/material identities and clears background clicks', async () => {

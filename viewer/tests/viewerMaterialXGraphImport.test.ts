@@ -1,7 +1,7 @@
 import {describe,it,expect,vi} from 'vitest';
 import {zipSync,strToU8} from 'fflate';
 vi.hoisted(()=>{vi.stubGlobal('location',{href:'https://viewer.example.com/',search:'',hash:'',pathname:'/'});vi.stubGlobal('document',{baseURI:'https://viewer.example.com/'});vi.stubGlobal('window',{});vi.stubGlobal('history',{replaceState:vi.fn()});});
-import {ViewerEngine} from '../src/engine/ViewerEngine';
+import {WebEngine} from '../src/engine/WebEngine';
 import type {PathedFile} from '../src/engine/droppedFiles';
 import {bakeDisplacement} from '../src/engine/materialxBakeClient';
 vi.mock('../src/engine/materialxBakeClient',()=>({bakeDisplacement:vi.fn()}));
@@ -11,7 +11,7 @@ describe('viewer MaterialX graph replacement',()=>{
   const source='<materialx version="1.39"><standard_surface name="S" type="surfaceshader"/><surfacematerial name="Rock"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>';
   const file=new File([zipSync({'Rock.mtlx':strToU8(source),'Rock_height.png':new Uint8Array([1])})],'Rock.zip');
   const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
-  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'rock',[{file,path:file.name}])).toBe(true);
+  expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'rock',[{file,path:file.name}])).toBe(true);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
   expect(args[1]).toMatchObject({displacementMap:null});
   expect(args[2]).toMatchObject({displacementScale:0,displacementBias:0});
@@ -22,7 +22,7 @@ describe('viewer MaterialX graph replacement',()=>{
   const zip=zipSync({'Car_Paint/Car_Paint.mtlx':strToU8(source)});
   const file=new File([zip],'Car_Paint_1k_8b (1).zip',{type:'application/zip'});
   const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
-  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'paint',[{file,path:file.name}])).toBe(true);
+  expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'paint',[{file,path:file.name}])).toBe(true);
   expect(setTextures).toHaveBeenCalledTimes(1);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
   expect(args[0]).toBe('paint');
@@ -34,10 +34,10 @@ describe('viewer MaterialX graph replacement',()=>{
   vi.mocked(bakeDisplacement).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));
   const setTextures=vi.fn(async()=>{}),reset=vi.fn(),receiver={materials:{setTextures,reset}};
   const source='<materialx version="1.39"><noise2d name="h" type="float"/><standard_surface name="S" type="surfaceshader"/><displacement name="D" type="displacementshader"><input name="displacement" type="float" nodename="h"/></displacement><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/><input name="displacementshader" type="displacementshader" nodename="D"/></surfacematerial></materialx>';
-  const pending=ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file:new Blob([source]) as File,path:'h.mtlx'}]);
+  const pending=WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file:new Blob([source]) as File,path:'h.mtlx'}]);
   await vi.waitFor(()=>expect(complete).toBeTypeOf('function'));
-  if(action==='reset')ViewerEngine.prototype.resetMaterial.call(receiver as unknown as ViewerEngine,'id');
-  else await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file:new Blob([xml]) as File,path:'new.mtlx'}]);
+  if(action==='reset')WebEngine.prototype.resetMaterial.call(receiver as unknown as WebEngine,'id');
+  else await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file:new Blob([xml]) as File,path:'new.mtlx'}]);
   complete({file:new Blob(['height']),scale:.2,bias:0,maxError:0,width:1024,height:1024,backend:'webgpu',timings:{compileMs:0,executeMs:1,readbackMs:1,cacheHit:true}});
   expect(await pending).toBe(false);expect(setTextures).toHaveBeenCalledTimes(action==='replace'?1:0);
  });
@@ -46,7 +46,7 @@ describe('viewer MaterialX graph replacement',()=>{
   vi.mocked(bakeDisplacement).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));
   const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
   const text='<materialx version="1.39"><noise2d name="height" type="float"/><standard_surface name="S" type="surfaceshader"/><displacement name="D" type="displacementshader"><input name="displacement" type="float" nodename="height"/></displacement><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/><input name="displacementshader" type="displacementshader" nodename="D"/></surfacematerial></materialx>';
-  const promise=ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file:new Blob([text]) as File,path:'height.mtlx'}]);
+  const promise=WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file:new Blob([text]) as File,path:'height.mtlx'}]);
   await vi.waitFor(()=>expect(complete).toBeTypeOf('function'));expect(setTextures).not.toHaveBeenCalled();
   const file=new Blob(['baked PNG'],{type:'image/png'});complete({file,scale:.2,bias:-.1,maxError:.2/510,width:1024,height:1024,backend:'webgpu',timings:{compileMs:10,executeMs:1,readbackMs:1,cacheHit:false}});
   expect(await promise).toBe(true);expect(setTextures).toHaveBeenCalledTimes(1);
@@ -57,7 +57,7 @@ describe('viewer MaterialX graph replacement',()=>{
  it('resets hidden source controls when replacing a previously imported material',async()=>{
   const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
   const file=new Blob([xml],{type:'application/xml'}) as File;
-  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file,path:'material.mtlx'}] as PathedFile[])).toBe(true);
+  expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file,path:'material.mtlx'}] as PathedFile[])).toBe(true);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
   expect(args[2]).toEqual(expect.objectContaining({alphaMode:'auto',alphaCutoff:0,baseWeight:1,coatDarkening:1}));
   expect(args[6]).toEqual(expect.objectContaining({terminal:expect.objectContaining({opacity:expect.anything()})}));
@@ -70,7 +70,7 @@ it('does not commit an import cancelled while its files are being read', async (
  const text = new Promise<string>(resolve => { finish = resolve; });
  const file = { text: () => text } as File;
  const receiver = { materials: { setTextures } };
- const task = ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine, 'id', [{ file, path: 'm.mtlx' }], controller.signal);
+ const task = WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine, 'id', [{ file, path: 'm.mtlx' }], controller.signal);
  controller.abort(); finish(xml);
  expect(await task).toBe(false);
  expect(setTextures).not.toHaveBeenCalled();
@@ -98,7 +98,7 @@ it('hands an exact image normal graph and its loaded resource to the library', a
   const source='<materialx version="1.39"><image name="i" type="vector3"><input name="file" type="filename" value="normal.png"/></image><normalmap name="n" type="vector3"><input name="in" type="vector3" nodename="i"/><input name="scale" type="float" value="0.5"/></normalmap><open_pbr_surface name="S"><input name="geometry_normal" type="vector3" nodename="n"/></open_pbr_surface><surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>';
   const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
   const file=new File([zipSync({'m.mtlx':strToU8(source),'normal.png':new Uint8Array([1])})],'m.zip');
-  expect(await ViewerEngine.prototype.importMaterialX.call(receiver as unknown as ViewerEngine,'id',[{file,path:file.name}])).toBe(true);
+  expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file,path:file.name}])).toBe(true);
   const args=setTextures.mock.calls[0] as unknown as unknown[];
   expect(args[1]).toMatchObject({normalMap:null});
   const graph=args[6] as import('../../src/main').MaterialGraph;

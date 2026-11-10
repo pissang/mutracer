@@ -35,7 +35,7 @@ export function ExportDialog() {
       const engine = getEngine();
       const target = preview.current;
       if (!engine || !target) return;
-      const source = engine.engine.display.canvas;
+      const source = engine.viewportSize;
       target.width = 480;
       target.height = Math.round((480 * source.height) / Math.max(1, source.width));
       void engine.captureImage().then(createImageBitmap).then(image => {
@@ -47,7 +47,7 @@ export function ExportDialog() {
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : size === 'custom' ? [Number(customWidth), Number(customHeight)] : [stats.width, stats.height];
-  const maxDimension = getEngine()?.engine.info?.limits.maxTextureDimension2D ?? 8192;
+  const maxDimension = getEngine()?.maxImageDimension ?? 8192;
   const validSize = size !== 'custom' || dims.every(value => validDimension(value, maxDimension));
   const estimate = !VIEWER_AOVS.some(kind => kind === output) && stats.msPerSample > 0 && validSize ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
   const busy = progress !== null || downloading;

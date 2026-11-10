@@ -5,7 +5,7 @@ vi.hoisted(() => {
   vi.stubGlobal('window', {});
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 1; });
 });
-import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { WebEngine } from '../src/engine/WebEngine';
 import { useViewer } from '../src/store';
 import { isMaterialXDrop, materialDropTarget, textureDropError } from '../src/engine/materialDrop';
 
@@ -26,7 +26,7 @@ it('recognizes MaterialX with sidecars and leaves model packages on the model ro
 });
 it('applies a viewport drop to the picked material and selects it', async () => {
   useViewer.setState({ material: { id: 'selected', name: 'Selected material' } as never, selection: { objectId: 'selected-object', materialId: 'selected' } });
-  const engine = Object.assign(Object.create(ViewerEngine.prototype), {
+  const engine = Object.assign(Object.create(WebEngine.prototype), {
     loadToken: 1, pickMaterialTarget: vi.fn(async () => hit), select: vi.fn(), importMaterialX: vi.fn()
   });
   await engine.loadFiles(files, { clientX: 120, clientY: 90 });
@@ -38,7 +38,7 @@ it('applies a viewport drop to the picked material and selects it', async () => 
   expect(engine.importMaterialX).toHaveBeenLastCalledWith('selected', files);
 });
 it('reads GPU identities without changing selection and discards a replaced scene', async () => {
-  const engine = Object.assign(Object.create(ViewerEngine.prototype), {
+  const engine = Object.assign(Object.create(WebEngine.prototype), {
     loadToken: 1, canvas: { getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 200 }) },
     engine: { _pick: vi.fn(async () => ({ object: 42, material: 84 })) },
     pickObjects: new Map([[42, hit.objectId]]), pickMaterials: new Map([[84, hit.materialId]]),
