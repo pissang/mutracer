@@ -102,6 +102,17 @@ impl Engine {
     }
 
     /// Open a host NT-shared D3D12 texture on this engine's raw device.
+    ///
+    /// The returned wrapper borrows the resource. It does not close the NT
+    /// handle or release the host's resource on behalf of the caller. The
+    /// resource must be a same-adapter, shared DEFAULT-heap 2D UAV texture with
+    /// one mip/sample and the exact declared format and extent.
+    ///
+    /// # Safety
+    /// `handle` must be a valid NT handle created for the exact raw device
+    /// behind this engine and must remain open, with its resource alive, until
+    /// the wrapper and all accepted export work have been retired. The caller
+    /// must keep D3D12 resource-state transitions coherent with the queue work.
     pub unsafe fn import_d3d12_image(
         &self,
         handle: HANDLE,
@@ -193,6 +204,15 @@ impl Engine {
     }
 
     /// Open a host NT-shared fence. The fence remains owned by the host.
+    ///
+    /// The fence must have `D3D12_FENCE_FLAG_SHARED` without
+    /// `D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER`; values are strictly increasing
+    /// per imported done timeline and `UINT64_MAX` is reserved for device loss.
+    ///
+    /// # Safety
+    /// `handle` must be a valid NT handle for a fence created by the exact raw
+    /// device behind this engine. Keep the handle and fence alive until the
+    /// timeline wrapper is destroyed and all accepted exports have drained.
     pub unsafe fn import_d3d12_timeline(&self, handle: HANDLE) -> Result<D3d12Timeline> {
         self.check_device()?;
         if handle.0.is_null() {

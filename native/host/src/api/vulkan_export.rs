@@ -81,6 +81,13 @@ fn format(format: vk::Format) -> Result<wgpu::TextureFormat> {
 impl Engine {
     /// Wrap a host-owned VkImage from this engine's imported VkDevice.
     ///
+    /// The wrapper does not destroy the image or its memory. The host must
+    /// retain both through all accepted exports and until the wrapper is
+    /// released; storage usage, one mip/layer/sample and the declared layout
+    /// are required. A host consumer on another queue must use concurrent
+    /// sharing or explicit queue-family ownership transfers around the
+    /// imported ready/done timeline values.
+    ///
     /// # Safety
     /// `image` and its memory must remain valid until the returned wgpu work is
     /// retired. They must be created by the same VkDevice as this engine.
@@ -148,7 +155,14 @@ impl Engine {
     }
 
     /// Import a host-owned Vulkan timeline semaphore. The device identity is
-    /// established by the engine's imported VkDevice; the handle is never closed.
+    /// established by the engine's imported VkDevice; the handle is never
+    /// closed. The semaphore must have the Vulkan timeline feature enabled;
+    /// signal values are strictly increasing and `u64::MAX` is reserved.
+    ///
+    /// # Safety
+    /// `semaphore` must be a valid timeline semaphore created by the exact
+    /// imported VkDevice and must remain alive until all accepted exports have
+    /// drained and the wrapper has been released.
     pub unsafe fn import_vulkan_timeline(&self, semaphore: vk::Semaphore) -> Result<VulkanTimeline> {
         self.check_device()?;
         if semaphore.is_null() {
