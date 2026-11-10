@@ -3159,7 +3159,6 @@ impl Render {
         }
         Ok(ConvergeResult { samples: target })
     }
-    #[cfg(target_os = "macos")]
     pub(super) fn metal_hdr_inputs(&self) -> Result<([wgpu::Buffer; 3], [u32; 4])> {
         self.with(|state, id| {
             if !readiness(state, id).complete {

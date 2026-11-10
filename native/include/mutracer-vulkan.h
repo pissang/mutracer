@@ -2,6 +2,7 @@
 #define MUTRACER_VULKAN_H
 #include <vulkan/vulkan.h>
 #include "mutracer-engine.h"
+#include "mutracer-gpu.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,6 +29,32 @@ typedef void (*mt_vk_retired_callback)(void *user);
 typedef uint64_t mt_vk_device_plan;
 typedef uint64_t mt_vk_lease;
 typedef uint64_t mt_vk_post_process;
+/* Host-owned GPU export records. The VkImage and timeline semaphore are not
+ * destroyed by MuTracer. They must have been created by mt_vk_device_desc's
+ * VkDevice. The image is 2D, one mip/layer/sample and storage-capable. */
+typedef struct mt_vk_gpu_image_desc {
+  uint32_t struct_size, reserved;
+  const void *next;
+  VkImage image;
+  VkFormat format;
+  uint32_t width, height;
+  uint32_t initial_layout;
+  uint32_t reserved2;
+} mt_vk_gpu_image_desc;
+MT_VK_LAYOUT(mt_vk_gpu_image_desc, 40);
+typedef struct mt_vk_gpu_timeline_desc {
+  uint32_t struct_size, reserved;
+  const void *next;
+  VkSemaphore semaphore;
+} mt_vk_gpu_timeline_desc;
+MT_VK_LAYOUT(mt_vk_gpu_timeline_desc, 24);
+/* Imports retain only a wgpu wrapper; the host owns image memory and semaphore.
+ * The generic mt_render_export_gpu/mt_engine_gpu_poll functions then use the
+ * imported records with Vulkan timeline waits/signals on the library queue. */
+int32_t mt_engine_import_vulkan_image(mt_engine engine, const mt_vk_gpu_image_desc *desc,
+  mt_gpu_image *output, char *error, size_t error_capacity);
+int32_t mt_engine_import_vulkan_timeline(mt_engine engine, const mt_vk_gpu_timeline_desc *desc,
+  mt_gpu_timeline *output, char *error, size_t error_capacity);
 /* Query before vkCreateInstance. Enable every returned extension. NULL/0 queries
  * count; too little capacity returns BUFFER_TOO_SMALL without array writes.
  * Strings are process-lifetime, immutable. api_version must be >= Vulkan 1.1.

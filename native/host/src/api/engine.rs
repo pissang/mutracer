@@ -355,6 +355,8 @@ pub(super) struct Inner {
     pub(super) gpu: GpuDevice,
     #[cfg(target_os = "macos")]
     pub(super) metal: Mutex<Option<super::metal::State>>,
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    pub(super) vulkan: Mutex<Option<super::vulkan_export::State>>,
     pub(super) adapter: Option<wgpu::Adapter>,
     pub(super) backend: Backend,
 }
@@ -456,6 +458,8 @@ impl Engine {
                 gpu,
                 #[cfg(target_os = "macos")]
                 metal: Mutex::new(None),
+                #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+                vulkan: Mutex::new(None),
                 adapter,
                 backend: options.backend,
             }),

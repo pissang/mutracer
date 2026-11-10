@@ -4,9 +4,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Platform-neutral output imports and timeline submission. The zero-copy import
- * implementation currently exists for Metal; Vulkan/D3D12 foreign-resource
- * imports are unavailable until their HAL ownership layer is implemented.
+/* Platform-neutral output imports and timeline submission. Zero-copy imports
+ * are implemented for Metal and Windows Vulkan/D3D12; the platform headers
+ * describe the native handle records. Imported resources must belong to the
+ * same device passed to the engine and remain host-owned.
  * Same engine/thread rules as mutracer-engine.h; only mt_render_cancel concurrent.
  * Every next must be NULL, reserved field 0, struct_size sizeof(current record).
  */

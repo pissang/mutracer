@@ -456,7 +456,6 @@ impl Display {
     }
     // Metal exports match L1 CPU HDR readback exactly, including its f32 mean
     // and opaque-background rules. These are immutable captured GPU buffers.
-    #[cfg(target_os = "macos")]
     pub(crate) fn metal_hdr_inputs(&self) -> ([wgpu::Buffer; 3], [u32; 4]) {
         (
             [self.raw.clone(), self.normal.clone(), self.albedo.clone()],

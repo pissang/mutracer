@@ -6,6 +6,11 @@
 mod metal;
 #[path = "abi_vulkan.rs"]
 mod vulkan;
+#[path = "abi_vulkan_export.rs"]
+mod vulkan_export_abi;
+#[cfg(target_os = "windows")]
+#[path = "abi_d3d12_export.rs"]
+mod d3d12_export_abi;
 use super::*;
 use crate::status;
 use std::collections::HashMap;
@@ -60,6 +65,26 @@ enum Object {
         engine: u64,
         timeline: super::metal::MetalTimeline,
     },
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    VulkanGpuImage {
+        engine: u64,
+        image: super::vulkan_export::VulkanImage,
+    },
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    VulkanGpuTimeline {
+        engine: u64,
+        timeline: super::vulkan_export::VulkanTimeline,
+    },
+    #[cfg(target_os = "windows")]
+    D3d12GpuImage {
+        engine: u64,
+        image: super::d3d12_export::D3d12Image,
+    },
+    #[cfg(target_os = "windows")]
+    D3d12GpuTimeline {
+        engine: u64,
+        timeline: super::d3d12_export::D3d12Timeline,
+    },
     Engine(EngineEntry),
     Display {
         engine: u64,
@@ -77,6 +102,10 @@ impl Object {
             Object::Engine(_) => None,
             #[cfg(target_os = "macos")]
             Object::GpuImage { engine, .. } | Object::GpuTimeline { engine, .. } => Some(*engine),
+            #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+            Object::VulkanGpuImage { engine, .. } | Object::VulkanGpuTimeline { engine, .. } => Some(*engine),
+            #[cfg(target_os = "windows")]
+            Object::D3d12GpuImage { engine, .. } | Object::D3d12GpuTimeline { engine, .. } => Some(*engine),
             Object::Display { engine } => Some(*engine),
             Object::Render(r) => Some(r.engine),
             Object::Loop(l) => Some(l.engine),
@@ -969,6 +998,10 @@ pub unsafe extern "C" fn mt_engine_destroy(
             Object::Engine(_) => 4,
             #[cfg(target_os = "macos")]
             Object::GpuImage { .. } | Object::GpuTimeline { .. } => 3,
+            #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+            Object::VulkanGpuImage { .. } | Object::VulkanGpuTimeline { .. } => 3,
+            #[cfg(target_os = "windows")]
+            Object::D3d12GpuImage { .. } | Object::D3d12GpuTimeline { .. } => 3,
         });
         let mut engine = None;
         for object in removed {
