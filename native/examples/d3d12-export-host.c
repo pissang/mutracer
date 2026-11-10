@@ -148,8 +148,6 @@ static int readback(ID3D12Device *d, ID3D12CommandQueue *q, ID3D12Resource *src,
   ID3D12CommandList *ls[] = {l};
   q->ExecuteCommandLists(1, ls);
   DX(q->Signal(f, value));
-  while (f->GetCompletedValue() < value)
-    Sleep(1);
   ULONGLONG deadline = GetTickCount64() + 30000;
   for (;;) {
     UINT64 completed = f->GetCompletedValue();
@@ -192,6 +190,7 @@ static int depth_matches(const float *rgba, const float *r32, uint32_t pixels) {
   return 1;
 }
 int main(void) {
+  setvbuf(stdout, NULL, _IONBF, 0);
   size_t n = 0;
   OK(mt_gpu_adapters(NULL, 0, &n, error_text, sizeof error_text));
   mt_gpu_adapter_info *as = (mt_gpu_adapter_info *)calloc(n, sizeof *as);
@@ -303,6 +302,7 @@ int main(void) {
   float *gh = (float *)malloc(hb), *gd = (float *)malloc(db);
   ID3D12Fence *copy = NULL;
   DX(d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&copy)));
+  printf("D3D12 export complete; beginning HDR/depth readback\n");
   if (readback(d, q, hdr, w, h, gh, hb / h, copy, 1) ||
       readback(d, q, dep, w, h, gd, db / h, copy, 2))
     FAIL("readback");
@@ -349,8 +349,6 @@ int main(void) {
   mt_gpu_image_destroy(hih, error_text, sizeof error_text);
   mt_gpu_image_destroy(dih, error_text, sizeof error_text);
   mt_gpu_timeline_destroy(th, error_text, sizeof error_text);
-  mt_scene_destroy(scene, error_text, sizeof error_text);
-  mt_engine_destroy(engine, error_text, sizeof error_text);
   CloseHandle(hh);
   CloseHandle(dh);
   CloseHandle(fh);
@@ -358,6 +356,8 @@ int main(void) {
   dep->Release();
   done->Release();
   copy->Release();
+  mt_scene_destroy(scene, error_text, sizeof error_text);
+  mt_engine_destroy(engine, error_text, sizeof error_text);
   free(scene_data);
   free(ch);
   free(cd);

@@ -94,8 +94,11 @@ int32_t mt_vk_device_plan_destroy(mt_vk_device_plan plan, char *error, size_t ca
  * until their retirement callbacks run, which can be later than engine/plan
  * destruction. Destroy native devices before their instance. Import each native
  * device into only one engine (use multiple renders on that engine). No Vulkan
- * allocation callbacks are supported. Host must serialize its own queue calls
- * through queue/image acquisition below; do not submit directly at other times.
+ * allocation callbacks are supported. Operations on the library queue and
+ * library-owned render images must use the queue/image leases below; do not
+ * submit there concurrently. A host may submit its own imported images on a
+ * separately enabled queue without a library lease, but must obey imported
+ * timeline wait/signal values and keep host objects alive until completion.
  * Plan may be destroyed after this returns; device creation failure leaves it
  * reusable. Queue family/index must have been enabled in vkCreateDevice. */
 typedef struct mt_vk_device_desc {

@@ -356,12 +356,12 @@ int main(void) {
   mt_gpu_image_destroy(imports[1], error_text, sizeof error_text);
   mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text);
   mt_scene_destroy(scene, error_text, sizeof error_text);
-  mt_engine_destroy(engine, error_text, sizeof error_text);
   for (int k = 0; k < 2; k++) {
     vkDestroyImage(d, images[k], NULL);
     vkFreeMemory(d, image_memory[k], NULL);
   }
   vkDestroySemaphore(d, sem, NULL);
+  mt_engine_destroy(engine, error_text, sizeof error_text);
   free(scene_data);
   free(ch);
   free(cd);

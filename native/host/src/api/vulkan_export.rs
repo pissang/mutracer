@@ -212,12 +212,15 @@ impl Engine {
             return Err(invalid("Null Vulkan timeline semaphore"));
         }
         let hal = unsafe { self.inner.gpu.device.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
-        let value =
-            unsafe { hal.raw_device().get_semaphore_counter_value(semaphore) }.map_err(|e| {
-                error(
+        let value = unsafe { hal.raw_device().get_semaphore_counter_value(semaphore) }
+            .map_err(|e| match e {
+                vk::Result::ERROR_DEVICE_LOST => {
+                    error(Status::Unavailable, "Vulkan device lost while importing timeline")
+                }
+                other => error(
                     Status::InvalidArgument,
-                    format!("Vulkan semaphore is not a timeline: {e}"),
-                )
+                    format!("Vulkan semaphore is not a timeline: {other}"),
+                ),
             })?;
         let mut state = self.inner.vulkan.lock().unwrap();
         let last_signal = state
@@ -525,11 +528,24 @@ impl Engine {
         }
         let hal = unsafe { self.inner.gpu.device.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
         while let Some(work) = state.pending.first() {
-            let signaled = unsafe {
+            let signaled = match unsafe {
                 hal.raw_device()
                     .get_semaphore_counter_value(work.done.semaphore)
-            }
-            .unwrap_or(0);
+            } {
+                Ok(value) => value,
+                Err(vk::Result::ERROR_DEVICE_LOST) => {
+                    return Err(error(
+                        Status::Unavailable,
+                        "Vulkan device lost while polling export timeline",
+                    ));
+                }
+                Err(other) => {
+                    return Err(error(
+                        Status::Unavailable,
+                        format!("Vulkan timeline query failed while polling: {other}"),
+                    ));
+                }
+            };
             if !work.complete.load(Ordering::Acquire) || signaled < work.value {
                 break;
             }
