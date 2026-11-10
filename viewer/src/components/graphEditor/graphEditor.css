@@ -1,8 +1,9 @@
 /* Material node graph panel. */
 .graph-editor {
-  --gx-float: #a8adb7; --gx-integer: #7fb0c9; --gx-boolean: #d58fb8;
-  --gx-color3: #e6b76a; --gx-color4: #e69a6a; --gx-vector2: #72c69c; --gx-vector3: #9cc9f4; --gx-vector4: #b49cf4;
-  --gx-filename: #f18787; --gx-string: #8b919c;
+  /* Port types are told apart by low-saturation tints; edges stay neutral. */
+  --gx-float: #9a9fa8; --gx-integer: #8a9ca8; --gx-boolean: #a8949f;
+  --gx-color3: #b8a486; --gx-color4: #b89a88; --gx-vector2: #8ea89a; --gx-vector3: #93a3b8; --gx-vector4: #a198b8;
+  --gx-filename: #b08e8e; --gx-string: #8b919c;
   height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr);
   font-size: 12px; color: var(--cv-text);
 }
@@ -17,7 +18,7 @@
 .graph-editor .react-flow { --xy-background-color: var(--cv-workspace); --xy-edge-stroke: var(--cv-text-4); --xy-controls-button-background-color: var(--cv-control); --xy-controls-button-background-color-hover: var(--cv-control-hover); --xy-controls-button-border-color: var(--cv-control-border); --xy-controls-button-color: var(--cv-text-2); }
 
 .gx-node { width: 210px; padding-bottom: 6px; border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact); background: var(--cv-overlay); box-shadow: var(--cv-shadow-control); }
-.react-flow__node.selected > .gx-node { border-color: var(--cv-accent); }
+.react-flow__node.selected > .gx-node { border-color: var(--cv-active); }
 .gx-node[data-error] { border-color: var(--cv-error); }
 .gx-node[data-unused] { opacity: 0.55; }
 .gx-node > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 10px 0; }
@@ -44,14 +45,7 @@
 .gx-row[data-type="filename"] { --gx-type: var(--gx-filename); }
 .gx-row[data-type="string"] { --gx-type: var(--gx-string); }
 .react-flow__edge.gx-edge path.react-flow__edge-path { stroke-width: 1.5; }
-.gx-edge--color3 path.react-flow__edge-path { stroke: var(--gx-color3); }
-.gx-edge--color4 path.react-flow__edge-path { stroke: var(--gx-color4); }
-.gx-edge--vector2 path.react-flow__edge-path { stroke: var(--gx-vector2); }
-.gx-edge--vector3 path.react-flow__edge-path { stroke: var(--gx-vector3); }
-.gx-edge--vector4 path.react-flow__edge-path { stroke: var(--gx-vector4); }
-.gx-edge--integer path.react-flow__edge-path { stroke: var(--gx-integer); }
-.gx-edge--boolean path.react-flow__edge-path { stroke: var(--gx-boolean); }
-.react-flow__edge.selected.gx-edge path.react-flow__edge-path { stroke: var(--cv-accent); stroke-width: 2.5; }
+.react-flow__edge.selected.gx-edge path.react-flow__edge-path { stroke: var(--cv-active-text); stroke-width: 2.5; }
 
 .gx-palette { position: relative; }
 .gx-palette__menu {
