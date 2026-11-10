@@ -648,13 +648,15 @@ pub fn capture_display(
     handle: u64,
     display: &mut Option<crate::display::Display>,
 ) -> std::result::Result<bool, String> {
-    capture_display_filtered(handle, display, None)
+    capture_display_filtered(handle, display, None).map_err(|error| error.to_string())
 }
 pub(crate) fn capture_display_filtered(
     handle: u64,
     display: &mut Option<crate::display::Display>,
     jnlm: Option<crate::display::jnlm::Options>,
-) -> std::result::Result<bool, String> {
+) -> Result<bool> {
+    // Keep status information so L1 can distinguish a retired scene target
+    // from an execution failure while preparation publishes on another thread.
     let result = with_registry(|registry| {
         let (state, linked) = with_scene(registry, handle)?;
         let (scene, target) = render_parts(state, linked)?;
@@ -685,7 +687,7 @@ pub(crate) fn capture_display_filtered(
     });
     match result {
         Err(e) if classify(e.as_ref(), Status::Error) == Status::Busy => Ok(false),
-        result => result.map_err(|e| e.to_string()),
+        result => result,
     }
 }
 

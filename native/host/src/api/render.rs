@@ -1663,8 +1663,7 @@ fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
     }
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
-    let query =
-        context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
+    let query = context_result(context::aov_query(render.context))?;
     let mut layout = aov_layout(render, mask);
     if !layout.display {
         layout.size = query.size();
@@ -1739,7 +1738,11 @@ fn capture(render: &mut RenderState) -> Result<bool> {
     if !render.needs_capture || render.refine_options.defer_resolve {
         return Ok(true);
     }
-    match context::capture_display_filtered(render.context, &mut render.capture, render.jnlm) {
+    match context_result(context::capture_display_filtered(
+        render.context,
+        &mut render.capture,
+        render.jnlm,
+    )) {
         Ok(true) => {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
@@ -1760,7 +1763,7 @@ fn capture(render: &mut RenderState) -> Result<bool> {
             Ok(true)
         }
         Ok(false) => Ok(false),
-        Err(message) => Err(error(Status::Error, message)),
+        Err(error) => Err(error),
     }
 }
 fn submit(render: &mut RenderState, count: u32) -> Result<()> {
