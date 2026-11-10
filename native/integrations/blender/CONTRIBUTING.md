@@ -24,6 +24,32 @@ SDK and the host executable's resource-library path for USD. Python symbols
 used by inline USD converters resolve from Blender's executable; USD references
 remain checked at link time. Do not ship the development USD or Python libraries.
 
+For Windows x64, use MSVC with the dynamic CRT (`/MD`). The verified Blender
+5.2.1 build uses USD 26.03, `blender.shared/usd_ms.dll`, `tbb12.dll` and
+CPython 3.13 (`python313.dll`). Generate import libraries from these exact host
+DLLs with `dumpbin /exports`, a module-definition file and `lib /machine:x64`;
+place `usd_ms.lib`, `tbb12.lib` and `python313.lib` in the development prefix's
+`lib` directory. Apply Blender's USD constructor-section patch to the matching
+development headers; its Windows registration section is `.pxbctor`. Header
+version alone does not establish a compatible host ABI.
+
+Configure `MUTRACER_BLENDER_ROOT` to the directory containing `blender.exe`,
+`CMAKE_PREFIX_PATH` to that development prefix, and `MUTRACER_LIBRARY_DIR` to
+the packaged SDK's `lib` directory. Install as above, then package with:
+
+```sh
+python native/integrations/blender/package.py /absolute/blender-plugin \
+  /absolute/mutracer-blender-5.2-windows-x64.zip --platform windows-x64
+```
+
+The Windows package includes the SDK runtime DLLs and licenses, alongside the
+delegate. The add-on retains DLL search-directory handles and preloads its
+sibling `mutracer.dll` by absolute path before loading the USD plugin. This
+allows relocation without depending on Blender's working directory. Windows
+uses Blender's render-buffer task because its OpenGL GPU task does not provide
+the render-buffer bindings this delegate consumes. MuTracer's GPU rendering
+and hardware ray queries remain available.
+
 Extract the zip to a temporary directory and run:
 
 ```sh

@@ -30,6 +30,8 @@ GpuOutput::~GpuOutput() {
   }
 }
 void GpuOutput::Drain() {
+  if (!native)
+    return;
   char error[2048] = {};
   auto begin = Clock::now();
   uint32_t complete = 0;
@@ -191,8 +193,10 @@ void GpuOutput::Configure(uint32_t rwidth, uint32_t rheight, uint32_t w,
     s.depth =
         texture("MuTracer depth attachment", w, h, HgiFormatFloat32,
                 HgiTextureUsageBitsShaderRead | HgiTextureUsageBitsDepthTarget);
-    s.hdrImport = native->Import(s.hdr);
-    s.depthImport = native->Import(s.distance);
+    if (native) {
+      s.hdrImport = native->Import(s.hdr);
+      s.depthImport = native->Import(s.distance);
+    }
     HgiResourceBindingsDesc bindings;
     unsigned index = 0;
     for (auto t : {s.hdr, s.distance, s.color, s.clip}) {
@@ -249,7 +253,7 @@ void GpuOutput::Prepare(uint32_t rwidth, uint32_t rheight, uint32_t w,
     float scale[4], clear[4];
     uint32_t projection[8];
   } constants{{w, h, rw, rh},
-              {1, 1, 0, 0},
+              {1, 1, 0, f == HdFormatFloat16Vec4 ? 1.f : 0.f},
               {clear[0], clear[1], clear[2], clear[3]},
               {}};
   auto commands = hgi->CreateComputeCmds(HgiComputeCmdsDesc());
@@ -312,7 +316,7 @@ bool GpuOutput::Publish(mt_render render, uint32_t rwidth, uint32_t rheight,
     float scale[4], clear[4];
     double z[2], w[2];
   } constants{{w, h, rw, rh},
-              {scale, 0, hasDepth ? 1.f : 0.f, 0},
+              {scale, 0, hasDepth ? 1.f : 0.f, f == HdFormatFloat16Vec4 ? 1.f : 0.f},
               {clear[0], clear[1], clear[2], clear[3]},
               {projection[2][2], projection[3][2]},
               {projection[2][3], projection[3][3]}};

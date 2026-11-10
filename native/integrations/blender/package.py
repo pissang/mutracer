@@ -4,6 +4,7 @@
 import argparse
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import zipfile
 
@@ -21,10 +22,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", type=Path, help="Installed directory containing hdMuTracer/")
     parser.add_argument("output", type=Path, help="Output zip (outside the repository)")
+    parser.add_argument("--platform", choices=("macos-arm64", "windows-x64"),
+                        default="windows-x64" if sys.platform == "win32" else "macos-arm64",
+                        help="Target platform (defaults to the current host)")
     args = parser.parse_args()
     integration = Path(__file__).resolve().parent
     root = integration.parents[2]
-    for name in ("libhdMuTracer.dylib", "libmutracer.dylib", "resources/plugInfo.json"):
+    windows = args.platform == "windows-x64"
+    libraries = ("hdMuTracer.dll", "mutracer.dll") if windows else ("libhdMuTracer.dylib", "libmutracer.dylib")
+    for name in (*libraries, "resources/plugInfo.json"):
         if not (args.plugin / "hdMuTracer" / name).is_file():
             parser.error(f"Missing Blender build artifact: {name}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
