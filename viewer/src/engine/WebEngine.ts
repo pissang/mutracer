@@ -1,3 +1,5 @@
+import {createRenderEngine,createRender,createRenderLoop} from './renderRuntime';
+import {NativeRenderHost} from './NativeRenderHost';
 import {ViewerBvhCache} from './bvhCache';
 import {causticOptions} from '../caustics';
 import { leavingDisplaySettings, presetSettings,presetStageSettings} from '../presetSettings';
@@ -150,12 +152,13 @@ export class WebEngine implements ViewerEngine {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    if((window as Window & {mutracerEvidence?:boolean}).mutracerEvidence)setSettings({maxSamples:16},{record:false});
     this.settings = get().settings;
-    this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+    this.engine = createRenderEngine(canvas);
     this.engine._bvhCache = new ViewerBvhCache();
-    this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
+    this.preview = createRender(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-    this.final = new Render(this.engine, {fallback: this.preview, batchSamples: true});
+    this.final = createRender(this.engine, {fallback: this.preview, batchSamples: true});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
@@ -170,6 +173,15 @@ export class WebEngine implements ViewerEngine {
 
     this.controls = new ViewerOrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
+    if(this.engine instanceof NativeRenderHost){
+      this.controls.disconnect();
+      this.engine.onResize=()=>{this.needsResize=true;};
+      this.engine.onViewportClick=(x,y)=>{if(get().pickingFocus){set({pickingFocus:false});this.pickFocus(x,y);}else void this.pickAt(x,y,++this.pickRequest);};
+      this.engine.onCamera=(matrix,target,zoom)=>{
+        this.beginOrbit();this.camera.matrix.fromArray(matrix);this.camera.matrix.decompose(this.camera.position,this.camera.quaternion,this.camera.scale);this.camera.zoom=zoom;this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld(true);
+        this.controls.target.fromArray(target);this.scheduleCameraSave();this.requestAutofocus();
+      };
+    }
     this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
       this.dragging = true;
@@ -188,15 +200,16 @@ export class WebEngine implements ViewerEngine {
     this.viewSync = new class extends Sync {
       update() {
         if (this.engine.camera) this.engine.camera.copy(owner.lensCamera(owner.activeCamera(), owner.advanceFocus(performance.now())));
+        if(this.engine instanceof NativeRenderHost)this.engine.cameraTarget=owner.controls.target.toArray();
       }
       get active() { return !!get().animation?.playing || owner.pull !== null; }
     }(this.engine);
-    this.loop = new RenderLoop(this.engine, {preview: this.preview, final: this.final, sync: [this.sync, this.viewSync]});
+    this.loop = createRenderLoop(this.engine, {preview: this.preview, final: this.final, sync: [this.sync, this.viewSync]});
     this.loop.select = ({changing}) => this.settings.previewEnabled && changing ? 'preview' : 'final';
     this.applySettings(this.settings, null);
     void this.engine.init().then(info => {
       if (this.disposed) return;
-      set({ backend: { name: info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
+      set({ backend: { name: this.engine instanceof NativeRenderHost ? 'Native' : info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
       this.configureUpscale();
       return this.updateDenoiser();
     }).catch(() => {});
@@ -271,6 +284,12 @@ export class WebEngine implements ViewerEngine {
 
   /** Explicit links win; otherwise reopen the sole cached model. */
   async loadInitialModel(presetId: string | null) {
+    if(this.engine instanceof NativeRenderHost){
+      await this.engine.init();
+      const bridgeWindow=window as Window & {mutracerInitialModel?:{files:{path:string;blob:string}[]}};
+      const initial=bridgeWindow.mutracerInitialModel;
+      if(initial){delete bridgeWindow.mutracerInitialModel;const host=this.engine;return this.loadFiles(await Promise.all(initial.files.map(async file=>({path:file.path,file:new File([await host.download(file.blob)],file.path.split('/').pop()!)}))));}
+    }
     const token = ++this.loadToken;
     const cached = await readModelCache();
     if (token !== this.loadToken) return;
@@ -851,6 +870,15 @@ export class WebEngine implements ViewerEngine {
     this.controls.enableDamping = false;
     this.controls.update();
     this.controls.enableDamping = true;
+    if(this.engine instanceof NativeRenderHost){
+      this.controls.disconnect();
+      this.engine.onResize=()=>{this.needsResize=true;};
+      this.engine.onViewportClick=(x,y)=>{if(get().pickingFocus){set({pickingFocus:false});this.pickFocus(x,y);}else void this.pickAt(x,y,++this.pickRequest);};
+      this.engine.onCamera=(matrix,target,zoom)=>{
+        this.beginOrbit();this.camera.matrix.fromArray(matrix);this.camera.matrix.decompose(this.camera.position,this.camera.quaternion,this.camera.scale);this.camera.zoom=zoom;this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld(true);
+        this.controls.target.fromArray(target);this.scheduleCameraSave();this.requestAutofocus();
+      };
+    }
 
     const target = this.controls.target;
     const direction = from.position.clone().sub(target);
@@ -881,6 +909,7 @@ export class WebEngine implements ViewerEngine {
   }
 
   private viewAspect() {
+    if(this.engine instanceof NativeRenderHost&&this.engine.nativeSize)return this.engine.nativeSize[0]/Math.max(1,this.engine.nativeSize[1]);
     return this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
   }
 
@@ -930,6 +959,15 @@ export class WebEngine implements ViewerEngine {
     this.controls.enableDamping = false;
     this.controls.update();
     this.controls.enableDamping = true;
+    if(this.engine instanceof NativeRenderHost){
+      this.controls.disconnect();
+      this.engine.onResize=()=>{this.needsResize=true;};
+      this.engine.onViewportClick=(x,y)=>{if(get().pickingFocus){set({pickingFocus:false});this.pickFocus(x,y);}else void this.pickAt(x,y,++this.pickRequest);};
+      this.engine.onCamera=(matrix,target,zoom)=>{
+        this.beginOrbit();this.camera.matrix.fromArray(matrix);this.camera.matrix.decompose(this.camera.position,this.camera.quaternion,this.camera.scale);this.camera.zoom=zoom;this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld(true);
+        this.controls.target.fromArray(target);this.scheduleCameraSave();this.requestAutofocus();
+      };
+    }
     this.controls.autoRotate = this.settings.autoRotate;
     this.needsResize = true;
     return true;
@@ -1578,9 +1616,14 @@ export class WebEngine implements ViewerEngine {
   }
 
   private downloadImage(blob: Blob, samples: number, suffix?: string) {
-    const link = document.createElement('a');
     const base = (get().model?.name ?? 'mutracer').replace(/\.[^.]+$/, '');
-    link.download = `mutracer-${base}${suffix ? `-${suffix}` : ''}-${samples}spp.png`;
+    const name = `mutracer-${base}${suffix ? `-${suffix}` : ''}-${samples}spp.png`;
+    if(this.engine instanceof NativeRenderHost){
+      const host=this.engine;
+      void blob.arrayBuffer().then(buffer=>host.upload(new Uint8Array(buffer))).then(payload=>host.transport.request<boolean>('save',{blob:payload,name})).then(saved=>{if(saved)showToast(`Saved ${name}`,'success');}).catch(error=>showToast(error.message,'error'));
+      return;
+    }
+    const link = document.createElement('a');link.download=name;
     const url = URL.createObjectURL(blob);
     link.href = url;
     link.click();
@@ -1609,7 +1652,7 @@ export class WebEngine implements ViewerEngine {
     try {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
-      image = new Render(this.engine, {width: options.width, height: options.height,
+      image = createRender(this.engine, {width: options.width, height: options.height,
         aovs: VIEWER_AOVS.filter(kind => kind === this.settings.output), aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping, caustics: this.final.caustics,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
@@ -1698,6 +1741,9 @@ export class WebEngine implements ViewerEngine {
 
   private resize() {
     this.needsResize = false;
+    if(this.engine instanceof NativeRenderHost&&this.engine.nativeSize){
+      const [width,height]=this.engine.nativeSize;this.engine.display.setSize(width,height);this.final.resolutionScale=renderResolutionScale(this.settings,height);this.configureUpscale();setAspect(this.activeCamera(),width/Math.max(1,height));return;
+    }
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const frame = this.canvas.parentElement;
     if (frame) {

@@ -2,3 +2,6 @@
 html, body, #root, .app, .workspace, .workspace--desktop, .desktop-workspace,
 .viewport, .viewport__canvas, .viewport-slot, .dock-panel[data-panel="viewport"] { background: transparent !important; }
 .ws-tabset:has(.viewport-slot) { background: transparent !important; }
+
+html[data-native-layout="split"] .viewport__canvas {visibility:hidden;}
+html[data-native-layout="split"] .viewport::after {content:"Scene is shown in the native viewport window";position:absolute;inset:45% 24px auto;text-align:center;color:#999;pointer-events:none;}

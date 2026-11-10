@@ -4,6 +4,7 @@ import type {BakeImage,BakeNodes} from './materialxDisplacement';
 
 export interface BakeRequest {
   id:number;
+  cpuOnly?:boolean;
   graph:BakeNodes;
   images:{node:string;file:Blob;srgb:boolean;wrapS?:BakeImage['wrapS'];wrapT?:BakeImage['wrapT']}[];
 }
@@ -34,7 +35,7 @@ self.onmessage=(event:MessageEvent<BakeRequest>)=>{
         } finally {bitmap.close();}
       }
       const width=images.length?Math.max(...images.map(i=>i.width)):1024,height=images.length?Math.max(...images.map(i=>i.height)):1024;
-      const gpu=await getBaker(),result=gpu?await gpu.bake(graph,images,width,height):bakeHeightCPU(graph,images,width,height);
+      const gpu=event.data.cpuOnly?undefined:await getBaker(),result=gpu?await gpu.bake(graph,images,width,height):bakeHeightCPU(graph,images,width,height);
       const png=await heightPNG(result);
       self.postMessage({id,...png,width,height,backend:result.backend,timings:result.timings});
     } catch(error) {self.postMessage({id,error:(error as Error).message});}

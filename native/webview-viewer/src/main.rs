@@ -1,14 +1,24 @@
-//! Independent wry prototype. The native SDK owns every traced pixel.
+//! Shared WebEngine + React UI; only Engine/Render/Display execution crosses IPC.
 mod assets;
+mod binary;
+mod catalog;
+#[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+mod dlss;
 mod gpu;
+mod initial_files;
 mod input;
-mod scene;
-use anyhow::{Context, Result, ensure};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use glam::Vec3;
+#[cfg(test)]
+mod reference_tests;
+mod sky;
+mod smoke;
+mod wire;
+use anyhow::{Context, Result, bail, ensure};
+use glam::Mat4;
 use mutracer_native::api;
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -21,128 +31,266 @@ use winit::{
     window::{Window, WindowId},
 };
 use wry::{WebView, WebViewBuilder};
-
-#[derive(Clone)]
 struct Message {
     body: String,
-    received: Instant,
+}
+#[cfg(target_os = "linux")]
+use gtk::prelude::*;
+struct Export {
+    request: Value,
+    target: u64,
+    samples: u32,
+    completed: bool,
+    camera: api::Camera,
 }
 struct Host {
-    // Drop the overlay and engine before destroying their parent window/device.
+    #[cfg(target_os = "linux")]
+    gtk_window: gtk::Window,
+    restart: Option<Value>,
+    closing: bool,
+    workflow: bool,
+    #[cfg(target_os = "linux")]
+    cursor: [f32; 2],
+    #[cfg(target_os = "linux")]
+    down: Option<[f32; 2]>,
     webview: WebView,
-    render_loop: api::RenderLoop,
+    render_loop: Option<api::RenderLoop>,
+    targets: BTreeMap<u64, Arc<api::Render>>,
+    target_configs: BTreeMap<u64, Value>,
+    sample_subscriptions: BTreeMap<u64, api::Subscription>,
+    events: Arc<Mutex<Vec<Value>>>,
+    _engine_subscription: api::Subscription,
     engine: api::Engine,
-    model: scene::Model,
+    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+    dlss: Option<Arc<dlss::Dlss>>,
     orbit: input::Orbit,
     gpu: gpu::Gpu,
     window: Arc<Window>,
+    binary: binary::Shared,
+    sky: sky::Baker,
+    descriptor: Option<Arc<Vec<u8>>>,
+    camera: api::Camera,
     rect: [u32; 4],
     logical_height: f32,
-    paused: bool,
+    output_aspect: f64,
     ready: bool,
+    paused: bool,
+    dirty: bool,
+    phase: String,
     last_publish: Instant,
-    last_samples: u32,
-    accumulation_start: Instant,
-    sample_elapsed: f64,
-    sample_ms: f64,
-    frame_times: Arc<Mutex<Vec<f64>>>,
-    engine_events: Arc<Mutex<Vec<Value>>>,
-    _events: Vec<api::Subscription>,
-    pending_edit: Option<(f64, Instant, u64)>,
-    latencies: Vec<Value>,
-    camera_packets: u64,
-    material_edits: u64,
-    smoke_phase: u32,
+    upscale: Option<api::PostProcessSubscription>,
+    export: Option<Export>,
+    evidence: Option<PathBuf>,
+    started: Instant,
 }
 impl Host {
+    #[cfg(target_os = "linux")]
+    fn native_bounds(&mut self) -> Result<()> {
+        let size = self.window.inner_size();
+        let (mut w, mut h) = (size.width.max(1), size.height.max(1));
+        if self.output_aspect > 0. {
+            w = w
+                .min((f64::from(h) * self.output_aspect).round() as u32)
+                .max(1);
+            h = (f64::from(w) / self.output_aspect).round().max(1.) as u32;
+        }
+        self.rect = [
+            size.width.saturating_sub(w) / 2,
+            size.height.saturating_sub(h) / 2,
+            w,
+            h,
+        ];
+        self.logical_height = h as f32;
+        self.engine.display().set_size(w, h)?;
+        Ok(())
+    }
+    fn dlss_available(&self) -> bool {
+        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+        {
+            self.dlss.is_some()
+        }
+        #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
+        {
+            false
+        }
+    }
+
     fn new(
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<Message>,
         path: Option<&std::path::Path>,
+        evidence: Option<PathBuf>,
+        workflow: bool,
     ) -> Result<Self> {
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
-                    .with_title("MuTracer · Native WebView prototype")
+                    .with_title("MuTracer")
                     .with_inner_size(LogicalSize::new(1280., 800.)),
             )?,
         );
+        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+        let dlss = if std::env::var("MUTRACER_VIEWER_DLSS").as_deref() == Ok("1") {
+            let dir = std::env::current_exe()?
+                .parent()
+                .context("App directory")?
+                .to_path_buf();
+            Some(dlss::Dlss::new(&dir, 0)?)
+        } else {
+            None
+        };
+        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+        let gpu = if let Some(filter) = &dlss {
+            gpu::Gpu::from_device(&window, filter.device())?
+        } else {
+            gpu::Gpu::new(event_loop, &window)?
+        };
+        #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
         let gpu = gpu::Gpu::new(event_loop, &window)?;
         let engine = gpu.engine();
-        let model = if let Some(path) = path {
-            scene::Model::path(path)?
-        } else {
-            scene::Model::bytes(
-                include_bytes!("../../../examples/assets/chess.glb"),
-                "Chess.glb",
-            )?
-        };
-        let mut orbit = input::Orbit::default();
-        orbit.target = model.center;
-        orbit.radius = model.radius * 3.;
-        engine.display().set_size(640, 400)?;
-        engine.set_camera(Some(orbit.camera()))?;
-        engine.set_scene_object(&model.scene)?;
-        let render_loop = api::RenderLoop::new(
-            &engine,
-            api::RenderLoopOptions {
-                preview: None,
-                final_render: api::LoopRender::Settings(api::RenderSettings {
-                    max_samples: 64,
-                    bounces: 6,
-                    seed: 12345,
-                    size: api::RenderSize::Scale(0.5),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        )?;
-        let frame_times = Arc::new(Mutex::new(Vec::new()));
-        let times = frame_times.clone();
-        let samples = render_loop
-            .final_render()
-            .on_sample(move |event| times.lock().unwrap().push(event.frame_time_ms));
-        let engine_events = Arc::new(Mutex::new(Vec::new()));
-        let events = engine_events.clone();
-        let subscription=engine.on(move |event|match event {
-            api::EngineEvent::Progress {progress,..}=>events.lock().unwrap().push(json!({"event":"progress","value":{"name":"Native scene","stage":"bvh","loaded":progress,"total":1}})),
-            api::EngineEvent::Error {message}=>events.lock().unwrap().push(json!({"event":"error","value":message})),_=>{}
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let outgoing = events.clone();
+        let subscription=engine.on(move|event|{
+            let event=match event{
+                api::EngineEvent::Error{message}=>json!({"event":"error","value":message}),
+                api::EngineEvent::DeviceLost{reason,..}=>json!({"event":"error","value":reason}),
+                api::EngineEvent::Progress{stage,progress}=>json!({"event":"progress","value":{"stage":if *stage==api::ProgressStage::Preparation{"bvh"}else{"shaders"},"progress":progress}})
+            };outgoing.lock().unwrap().push(event);
         });
+        let sky = sky::Baker::new(gpu.device.clone(), gpu.queue.clone());
+        let binary = binary::Shared::default();
+        let mailbox = binary.clone();
+        let mut initial_model = Value::Null;
+        if let Some(path) = path {
+            initial_model = initial_files::stage(path, &binary)?;
+        }
         let size = window.inner_size();
-        let webview=WebViewBuilder::new()
+        let protocol = move |_: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+            if let Some(key) = request.uri().path().strip_prefix("/bridge/") {
+                let result = if request.method() == wry::http::Method::POST {
+                    mailbox
+                        .lock()
+                        .unwrap()
+                        .receive(key, request.body().clone())
+                        .map(|_| Vec::new())
+                } else {
+                    mailbox.lock().unwrap().take(key)
+                };
+                return match result {
+                    Ok(bytes) => wry::http::Response::builder()
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Cache-Control", "no-store")
+                        .body(Cow::Owned(bytes))
+                        .unwrap(),
+                    Err(error) => wry::http::Response::builder()
+                        .status(400)
+                        .body(Cow::Owned(error.to_string().into_bytes()))
+                        .unwrap(),
+                };
+            }
+            assets::response(request.uri().path())
+        };
+        let init = format!(
+            "window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
+            evidence.is_some()
+        );
+        #[cfg(target_os = "linux")]
+        let ui_proxy = proxy.clone();
+        let builder = WebViewBuilder::new()
+            .with_incognito(evidence.is_some())
             .with_transparent(true)
-            .with_bounds(wry::Rect{position:wry::dpi::PhysicalPosition::new(0,0).into(),size:wry::dpi::PhysicalSize::new(size.width,size.height).into()})
-            .with_custom_protocol("mutracer".into(),|_,request|assets::response(request.uri().path()))
-            .with_initialization_script("window.addEventListener('error', e => window.ipc.postMessage(JSON.stringify({version:1,id:0,command:'frontendError',args:{message:e.message}})));window.addEventListener('unhandledrejection', e => window.ipc.postMessage(JSON.stringify({version:1,id:0,command:'frontendError',args:{message:String(e.reason)}})));")
-            .with_ipc_handler(move |request|{let _=proxy.send_event(Message{body:request.into_body(),received:Instant::now()});})
-            .with_navigation_handler(|url|url.starts_with("mutracer://localhost/")||url.starts_with("http://mutracer.localhost/"))
-            .with_url("mutracer://localhost/index.html")
-            .build_as_child(&*window)?;
+            .with_bounds(wry::Rect {
+                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                size: wry::dpi::PhysicalSize::new(size.width, size.height).into(),
+            })
+            .with_asynchronous_custom_protocol("mutracer".into(), move |id, request, responder| {
+                if request.uri().path().starts_with("/api/gpuopen/")
+                    && request.method() == wry::http::Method::GET
+                {
+                    let path = request
+                        .uri()
+                        .path_and_query()
+                        .map(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    std::thread::spawn(move || responder.respond(catalog::response(&path)));
+                } else {
+                    responder.respond(protocol(id, request));
+                }
+            })
+            .with_initialization_script(&init)
+            .with_ipc_handler(move |request| {
+                let _ = proxy.send_event(Message {
+                    body: request.into_body(),
+                });
+            })
+            .with_navigation_handler(|url| {
+                url.starts_with("mutracer://localhost/")
+                    || url.starts_with("http://mutracer.localhost/")
+            })
+            .with_url("mutracer://localhost/index.html");
+        #[cfg(not(target_os = "linux"))]
+        let webview = builder.build_as_child(&*window)?;
+        #[cfg(target_os = "linux")]
+        let (webview, gtk_window) = {
+            use wry::WebViewBuilderExtUnix;
+            let ui = gtk::Window::new(gtk::WindowType::Toplevel);
+            ui.set_title("MuTracer · Controls");
+            let close_proxy = ui_proxy.clone();
+            ui.connect_delete_event(move |_, _| {
+                let _ = close_proxy.send_event(Message {
+                    body: "{\"version\":1,\"id\":0,\"command\":\"quit\",\"args\":{}}".into(),
+                });
+                gtk::glib::Propagation::Proceed
+            });
+            ui.set_default_size(900, 800);
+            let fixed = gtk::Fixed::new();
+            let resize_proxy = ui_proxy.clone();
+            fixed.connect_size_allocate(move|_,size|{let _=resize_proxy.send_event(Message{body:json!({"version":1,"id":0,"command":"uiBounds","args":{"width":size.width(),"height":size.height()}}).to_string()});});
+            ui.add(&fixed);
+            ui.show_all();
+            let view = builder.with_transparent(false).build_gtk(&fixed)?;
+            (view, ui)
+        };
         Ok(Self {
+            #[cfg(target_os = "linux")]
+            gtk_window,
+            restart: None,
+            closing: false,
+            workflow,
+            #[cfg(target_os = "linux")]
+            cursor: [0., 0.],
+            #[cfg(target_os = "linux")]
+            down: None,
             webview,
-            render_loop,
+            render_loop: None,
+            targets: BTreeMap::new(),
+            target_configs: BTreeMap::new(),
+            sample_subscriptions: BTreeMap::new(),
+            events,
+            _engine_subscription: subscription,
             engine,
-            model,
-            orbit,
+            #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+            dlss,
+            orbit: input::Orbit::default(),
             gpu,
             window,
+            binary,
+            sky,
+            descriptor: None,
+            camera: api::Camera::default(),
             rect: [0, 0, 640, 400],
             logical_height: 400.,
-            paused: false,
+            output_aspect: 0.,
             ready: false,
+            paused: false,
+            dirty: true,
+            phase: "preparing".into(),
             last_publish: Instant::now(),
-            last_samples: 0,
-            accumulation_start: Instant::now(),
-            sample_elapsed: 0.,
-            sample_ms: 0.,
-            frame_times,
-            engine_events,
-            _events: vec![samples, subscription],
-            pending_edit: None,
-            latencies: vec![],
-            camera_packets: 0,
-            material_edits: 0,
-            smoke_phase: 0,
+            upscale: None,
+            export: None,
+            evidence,
+            started: Instant::now(),
         })
     }
     fn send(&self, value: Value) -> Result<()> {
@@ -153,331 +301,527 @@ impl Host {
     fn event(&self, event: &str, value: Value) -> Result<()> {
         self.send(json!({"event":event,"value":value}))
     }
-    fn replace_model(&mut self, model: scene::Model) -> Result<()> {
-        self.orbit.target = model.center;
-        self.orbit.radius = model.radius * 3.;
-        self.model = model;
-        self.engine.set_scene_object(&self.model.scene)?;
-        self.engine.set_camera(Some(self.orbit.camera()))?;
-        self.event("scene", self.model.snapshot()?)?;
+    fn target(&self, v: &Value) -> Result<&Arc<api::Render>> {
+        self.targets
+            .get(&v["target"].as_u64().context("Missing target")?)
+            .context("Unknown render target")
+    }
+    fn settings(&mut self, v: &Value) -> Result<()> {
+        // Parse all settings before mutating the engine. SDK validation guards values.
+        let configs = v["targets"].as_array().context("Expected targets")?;
+        let parsed = configs
+            .iter()
+            .map(|c| {
+                Ok((
+                    c["id"].as_u64().context("Target ID")?,
+                    wire::render(&c["settings"], &c["fixedSize"])?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let display = wire::display(&v["display"])?;
+        for (id, settings) in parsed {
+            if let Some(target) = self.targets.get(&id) {
+                if self.target_configs.get(&id) != configs.iter().find(|c| c["id"] == id) {
+                    target.set_settings(settings)?;
+                }
+            } else {
+                let target = Arc::new(api::Render::new(&self.engine, settings)?);
+                let events = self.events.clone();
+                let subscription=target.on_sample(move|event|events.lock().unwrap().push(json!({"event":"sample","value":{"target":id,"samples":event.samples,"isFirstFrame":event.is_first_frame,"frameTimeMs":event.frame_time_ms}})));
+                self.sample_subscriptions.insert(id, subscription);
+                self.targets.insert(id, target);
+            }
+        }
+        for c in configs {
+            let id = c["id"].as_u64().unwrap();
+            if self.target_configs.get(&id) != Some(c) {
+                let target = &self.targets[&id];
+                let fallback = c["fallback"].as_u64().and_then(|id| self.targets.get(&id));
+                target.set_fallback(fallback.map(Arc::as_ref))?;
+                #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+                if c["denoiser"]["type"] == "dlss" {
+                    let filter = self
+                        .dlss
+                        .as_ref()
+                        .context("DLSS runtime is unavailable")?
+                        .clone();
+                    target.set_jnlm_display_filter(None)?;
+                    target.set_custom_denoiser(Some(filter), api::DenoiseSchedule::EverySample)?;
+                } else {
+                    wire::denoiser(target, &c["denoiser"])?;
+                }
+                #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
+                wire::denoiser(target, &c["denoiser"])?;
+                self.target_configs.insert(id, c.clone());
+            }
+        }
+        self.engine.display().set_settings(display)?;
+        #[cfg(not(target_os = "linux"))]
+        let size = v["size"].as_array().context("Expected display size")?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            ensure!(size.len() == 2, "Expected display size");
+            self.engine.display().set_size(
+                size[0].as_u64().context("Invalid width")? as u32,
+                size[1].as_u64().context("Invalid height")? as u32,
+            )?;
+        }
+        self.output_aspect = v["aspect"]
+            .as_f64()
+            .filter(|n| n.is_finite() && *n > 0.)
+            .unwrap_or(0.);
+        #[cfg(target_os = "linux")]
+        self.native_bounds()?;
+        let upscale = v["upscale"].as_bool().unwrap_or(false);
+        if upscale && self.upscale.is_none() {
+            self.upscale = Some(self.engine.display().add_upscale(api::EasuOptions {
+                albedo_detail: true,
+                ..Default::default()
+            })?);
+        } else if !upscale {
+            self.upscale = None;
+        }
+        let final_id = v["final"].as_u64();
+        if let Some(final_target) = final_id.and_then(|id| self.targets.get(&id)) {
+            if self.render_loop.is_none() {
+                self.render_loop = Some(api::RenderLoop::new(
+                    &self.engine,
+                    api::RenderLoopOptions {
+                        preview: v["preview"]
+                            .as_u64()
+                            .and_then(|id| self.targets.get(&id))
+                            .map(|t| api::LoopRender::Render(t.clone())),
+                        final_render: api::LoopRender::Render(final_target.clone()),
+                        coalesce_scene_updates: v["coalesce"].as_bool().unwrap_or(false),
+                        ..Default::default()
+                    },
+                )?);
+            }
+            self.render_loop.as_mut().unwrap().coalesce_scene_updates =
+                v["coalesce"].as_bool().unwrap_or(false);
+            let preview_enabled = final_target.settings().is_ok()
+                && configs
+                    .iter()
+                    .find(|c| c["id"].as_u64() == final_id)
+                    .is_some_and(|c| !c["fallback"].is_null());
+            let requested = v["selection"] == "preview";
+            self.render_loop.as_mut().unwrap().set_select(move |info| {
+                if preview_enabled && (requested || info.changing) {
+                    api::Selection::Preview
+                } else {
+                    api::Selection::Final
+                }
+            });
+        }
         Ok(())
     }
-    fn command(&mut self, request: &Value, received: Instant) -> Result<Value> {
-        ensure!(request["version"] == 1, "Unsupported protocol version");
+    fn command(&mut self, request: &Value) -> Result<Option<Value>> {
+        ensure!(request["version"] == 1, "Unsupported IPC version");
         let args = &request["args"];
         match request["command"].as_str().context("Missing command")? {
             "ready" => {
                 self.ready = true;
-                self.event("scene", self.model.snapshot()?)?;
-                self.event(
-                    "backend",
-                    json!(format!(
-                        "{} · {:?}",
-                        self.engine.info().adapter_name,
-                        self.engine.info().backend
-                    )),
-                )?;
-                return Ok(
-                    json!({"maxSamples":self.render_loop.final_render().settings()?.max_samples}),
-                );
+                return Ok(Some(
+                    json!({"adapterName":self.engine.info().adapter_name,"maxImageDimension":self.gpu.device.limits().max_texture_dimension_2d.min(8192),"hwrt":self.engine.info().hardware_ray_query,"dlssRR":self.dlss_available(),"gpuSelection":!self.dlss_available(),"adapters":pollster::block_on(self.gpu.instance.enumerate_adapters(wgpu::Backends::all())).iter().filter(|a|a.is_surface_supported(&self.gpu.surface)).map(|a|a.get_info().name).collect::<Vec<_>>(),"backend":if self.engine.info().backend==api::Backend::Software{"software"}else{"hardware"},"hdrWindow":self.gpu.hdr_supported(),"layout":if cfg!(target_os="linux"){"split"}else{"overlay"}}),
+                ));
             }
-            "sample" => self.replace_model(scene::Model::bytes(
-                include_bytes!("../../../examples/assets/chess.glb"),
-                "Chess.glb",
-            )?)?,
-            "loadBytes" => {
-                let data = args["bytes"].as_str().context("Missing model bytes")?;
+            "commit" => {
+                let next = if let Some(key) = args["blob"].as_str() {
+                    let bytes = self.binary.lock().unwrap().take(key)?;
+                    Some(Arc::new(wire::delta(
+                        self.descriptor.as_deref().map(Vec::as_slice),
+                        &bytes,
+                    )?))
+                } else {
+                    None
+                };
+                if args["settings"].is_object() {
+                    self.settings(&args["settings"])?;
+                }
+                if let Some(next) = next {
+                    self.engine.set_scene_shared(next.clone())?;
+                    self.descriptor = Some(next);
+                }
+                if args["clear"] == true {
+                    self.engine.clear_scene()?;
+                    self.descriptor = None;
+                }
+                if args["camera"].is_array() {
+                    self.camera = wire::camera(&args["camera"])?;
+                    self.engine.set_camera(Some(self.camera))?;
+                    self.orbit.camera = self.camera;
+                    let world = Mat4::from_cols_array(&self.camera.world_matrix);
+                    let p = world.w_axis.truncate();
+                    let target = args["cameraTarget"]
+                        .as_array()
+                        .filter(|v| v.len() == 3)
+                        .map(|v| {
+                            glam::Vec3::new(
+                                v[0].as_f64().unwrap_or(0.) as f32,
+                                v[1].as_f64().unwrap_or(0.) as f32,
+                                v[2].as_f64().unwrap_or(0.) as f32,
+                            )
+                        })
+                        .unwrap_or(p - world.z_axis.truncate() * self.orbit.radius);
+                    self.orbit.look_at(p, target);
+                }
+            }
+            "settled" => {
+                self.engine.update()?;
+                return Ok(Some(json!(self.render_loop.as_ref().is_some_and(
+                    |l| l.status() == api::RenderLoopStatus::Finished
+                        && l.final_render().status() == api::RenderStatus::Finished
+                        && !self.engine.diagnostics().preparing
+                        && !self.engine.diagnostics().compiling
+                ))));
+            }
+            "artifact" => {
+                ensure!(self.workflow, "Evidence driver is disabled");
+                let label = args["label"].as_str().context("Artifact name")?;
                 ensure!(
-                    data.len() <= (128 * 1024 * 1024usize).div_ceil(3) * 4,
-                    "Prototype model upload is limited to 128 MiB"
+                    !label.is_empty()
+                        && label
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+                    "Invalid artifact name"
                 );
-                let bytes = STANDARD.decode(data)?;
-                self.replace_model(scene::Model::bytes(
-                    &bytes,
-                    args["name"].as_str().unwrap_or("model.glb"),
-                )?)?;
+                let kind = args["kind"].as_str().context("Artifact type")?;
+                ensure!(
+                    ["png", "f32", "json"].contains(&kind),
+                    "Invalid artifact type"
+                );
+                let bytes = self
+                    .binary
+                    .lock()
+                    .unwrap()
+                    .take(args["blob"].as_str().context("Artifact payload")?)?;
+                let dir = self.evidence.as_ref().unwrap();
+                std::fs::create_dir_all(dir)?;
+                std::fs::write(dir.join(format!("{label}.{kind}")), bytes)?;
+            }
+            "workflowDone" => {
+                ensure!(self.workflow, "Evidence driver is disabled");
+                let dir = self.evidence.as_ref().unwrap();
+                std::fs::create_dir_all(dir)?;
+                std::fs::write(dir.join("workflow.json"), serde_json::to_vec_pretty(args)?)?;
+                self.closing = true;
+            }
+            "uiBounds" => {
+                self.webview.set_bounds(wry::Rect {
+                    position: wry::dpi::LogicalPosition::new(0., 0.).into(),
+                    size: wry::dpi::LogicalSize::new(
+                        args["width"].as_f64().unwrap_or(900.),
+                        args["height"].as_f64().unwrap_or(800.),
+                    )
+                    .into(),
+                })?;
+            }
+            "quit" => self.closing = true,
+            "device" => {
+                self.restart = Some(args.clone());
             }
             "viewport" => {
-                let dpr = self.window.scale_factor();
-                let size = self.window.inner_size();
-                let number = |name: &str| -> Result<f64> {
-                    let v = args[name].as_f64().context("Invalid viewport coordinate")?;
-                    ensure!(v.is_finite() && v >= 0., "Invalid viewport coordinate");
-                    Ok(v)
-                };
-                let x = (number("x")? * dpr).round() as u32;
-                let y = (number("y")? * dpr).round() as u32;
-                let width =
-                    ((number("width")? * dpr).round() as u32).min(size.width.saturating_sub(x));
-                let height =
-                    ((number("height")? * dpr).round() as u32).min(size.height.saturating_sub(y));
-                self.logical_height = number("height")? as f32;
-                if width > 0 && height > 0 && self.rect != [x, y, width, height] {
-                    self.rect = [x, y, width, height];
-                    self.engine.display().set_size(width, height)?;
-                }
-            }
-            "material" => {
-                let key = args["materialId"].as_str().context("Missing material ID")?;
-                self.model.edit(key, &args["values"])?;
-                self.engine.set_scene_object(&self.model.scene)?;
-                self.event("material", self.model.material_snapshot(key)?)?;
-                self.pending_edit = Some((
-                    args["sentAt"].as_f64().unwrap_or(0.),
-                    received,
-                    self.render_loop.presentations(),
-                ));
-                self.material_edits += 1;
-            }
-            "resetMaterial" => {
-                let key = args["materialId"].as_str().context("Missing material ID")?;
-                self.model.reset(key)?;
-                self.engine.set_scene_object(&self.model.scene)?;
-                self.event("material", self.model.material_snapshot(key)?)?;
-            }
-            "visible" => {
-                let key = args["objectId"].as_str().context("Missing mesh ID")?;
-                let id = *self.model.meshes.get(key).context("Unknown mesh")?;
-                self.model
-                    .scene
-                    .set_mesh_visible(id, args["visible"].as_bool().context("Missing visible")?)?;
-                self.engine.set_scene_object(&self.model.scene)?;
-            }
-            "fit" => {
-                self.orbit.target = self.model.center;
-                self.orbit.radius = self.model.radius * 3.;
-                self.engine.set_camera(Some(self.orbit.camera()))?;
-            }
-            "lookAt" => {
-                let vector = |name: &str| -> Result<Vec3> {
-                    let values = args[name].as_array().context("Expected vector")?;
-                    ensure!(values.len() == 3, "Expected XYZ");
-                    Ok(Vec3::new(
-                        values[0].as_f64().context("Expected number")? as f32,
-                        values[1].as_f64().context("Expected number")? as f32,
-                        values[2].as_f64().context("Expected number")? as f32,
-                    ))
-                };
-                self.orbit.look_at(vector("position")?, vector("target")?);
-                self.engine.set_camera(Some(self.orbit.camera()))?;
-            }
-            "settings" => self.settings(args)?,
-            "pause" => self.paused = args["paused"].as_bool().context("Expected pause bool")?,
-            "capture" => {
-                return Ok(json!(
-                    STANDARD.encode(
-                        self.engine
-                            .display()
-                            .encode_png(self.render_loop.final_render())?
-                    )
-                ));
-            }
-            "savePng" => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PNG", &["png"])
-                    .set_file_name("mutracer.png")
-                    .save_file()
+                #[cfg(target_os = "linux")]
                 {
-                    std::fs::write(
-                        path,
-                        self.engine
-                            .display()
-                            .encode_png(self.render_loop.final_render())?,
-                    )?;
+                    return Ok(Some(Value::Null));
                 }
-            }
-            "readPixels" => {
-                let kind = match args["kind"].as_str().unwrap_or("hdr") {
-                    "hdr" => api::PixelKind::Hdr,
-                    "denoised" => api::PixelKind::Denoised,
-                    "normal" => api::PixelKind::Normal,
-                    "albedo" => api::PixelKind::Albedo,
-                    _ => anyhow::bail!(
-                        "Prototype readback supports HDR, denoised, normal and albedo"
-                    ),
+                let dpr = self.window.scale_factor();
+                let s = self.window.inner_size();
+                let n = |k: &str| -> Result<u32> {
+                    let value = args[k].as_f64().context("Viewport coordinate")?;
+                    ensure!(value.is_finite() && value >= 0., "Invalid viewport");
+                    Ok((value * dpr).round() as u32)
                 };
-                let image = self.render_loop.final_render().read_pixels(kind)?;
-                return Ok(json!({"width":image.width,"height":image.height,"data":image.data}));
+                let x = n("x")?;
+                let y = n("y")?;
+                self.rect = [
+                    x,
+                    y,
+                    n("width")?.min(s.width.saturating_sub(x)),
+                    n("height")?.min(s.height.saturating_sub(y)),
+                ];
+                self.logical_height = args["height"].as_f64().unwrap_or(1.) as f32;
             }
-            "measurement" => {
-                self.latencies.push(args.clone());
-                eprintln!("IPC latency: {args}");
+            "pause" => self.paused = args["paused"].as_bool().context("Pause bool")?,
+            "sky" => {
+                let width = args["width"].as_u64().context("Sky width")? as u32;
+                let height = args["height"].as_u64().context("Sky height")? as u32;
+                ensure!(
+                    width > 0
+                        && height > 0
+                        && width <= self.gpu.device.limits().max_texture_dimension_2d
+                        && height <= self.gpu.device.limits().max_texture_dimension_2d,
+                    "Sky dimensions exceed device limits"
+                );
+                let time = args["sky"]["time"].as_f64().context("Sky time")? as f32;
+                let intensity = args["intensity"].as_f64().context("Sky intensity")? as f32;
+                let ambient = args["ambient"].as_array().context("Sky ambient")?;
+                ensure!(ambient.len() == 3, "Sky RGB ambient");
+                let ambient = ambient
+                    .iter()
+                    .map(|n| n.as_f64().context("Ambient number").map(|v| v as f32))
+                    .collect::<Result<Vec<_>>>()?;
+                let pixels = self.sky.bake(time, width, height)?;
+                let bytes = pixels
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, v)| {
+                        if i % 4 == 3 {
+                            1f32
+                        } else {
+                            v * intensity + ambient[i % 4]
+                        }
+                        .to_le_bytes()
+                    })
+                    .collect();
+                let blob = self.binary.lock().unwrap().put(bytes);
+                return Ok(Some(json!({"blob":blob})));
             }
-            "frontendError" => anyhow::bail!("Frontend: {}", args["message"]),
-            unknown => anyhow::bail!("Unknown prototype command: {unknown}"),
-        }
-        Ok(Value::Null)
-    }
-    fn settings(&mut self, patch: &Value) -> Result<()> {
-        let mut render = self.render_loop.final_render().settings()?;
-        let mut display = self.engine.display().settings();
-        let mut camera = self.orbit.camera;
-        let mut env = self.model.scene.environment_settings();
-        let mut env_changed = false;
-        for (key, value) in patch.as_object().context("Expected settings object")? {
-            let number = || -> Result<f64> { value.as_f64().context("Expected numeric setting") };
-            match key.as_str() {
-                "maxSamples" => render.max_samples = number()? as u32,
-                "bounces" => render.bounces = number()? as u32,
-                "clamping" => render.clamping = number()?,
-                "resolutionScale" => render.size = api::RenderSize::Scale(number()?),
-                "samplingPattern" => {
-                    render.sampling_pattern = match value.as_str() {
-                        Some("sobol") => api::SamplingPattern::Sobol,
-                        Some("zsobol") => api::SamplingPattern::ZSobol,
-                        Some("random") => api::SamplingPattern::Random,
-                        _ => anyhow::bail!("Unknown sampling pattern"),
+            "save" => {
+                let bytes = self
+                    .binary
+                    .lock()
+                    .unwrap()
+                    .take(args["blob"].as_str().context("Missing binary")?)?;
+                let path = rfd::FileDialog::new()
+                    .set_file_name(args["name"].as_str().unwrap_or("mutracer.png"))
+                    .save_file();
+                if let Some(path) = path {
+                    std::fs::write(path, bytes)?;
+                    return Ok(Some(json!(true)));
+                }
+                return Ok(Some(json!(false)));
+            }
+            "pixels" => {
+                let kind = wire::pixel(args["kind"].as_str().unwrap_or("hdr"))?;
+                let mut image = self.target(args)?.read_pixels(kind)?;
+                if kind == api::PixelKind::Normal {
+                    // Browser readPixels('normal') exposes encoded RGB plus guide
+                    // coverage; the SDK's normal guide is signed, with alpha 1.
+                    let coverage = self.target(args)?.read_pixels(api::PixelKind::Albedo)?;
+                    for (normal, albedo) in image
+                        .data
+                        .chunks_exact_mut(4)
+                        .zip(coverage.data.chunks_exact(4))
+                    {
+                        if albedo[3] > 0. {
+                            for value in &mut normal[..3] {
+                                *value = *value * 0.5 + 0.5;
+                            }
+                            normal[3] = albedo[3];
+                        } else {
+                            normal.fill(0.);
+                        }
                     }
                 }
-                "fov" => camera.fov = number()? as f32,
-                "fStop" => camera.f_stop = number()? as f32,
-                "focusDistance" => camera.focus_distance = number()? as f32,
-                "exposure" => display.tone_mapping_exposure = number()? as f32,
-                "contrast" => display.contrast = number()? as f32,
-                "saturation" => display.saturation = number()? as f32,
-                "temperature" => display.temperature = number()? as f32,
-                "tint" => display.tint = number()? as f32,
-                "bloomIntensity" => display.bloom_intensity = number()? as f32,
-                "bloomThreshold" => display.bloom_threshold = number()? as f32,
-                "bloomRadius" => display.bloom_radius = number()? as f32,
-                "vignette" => display.vignette = number()? as f32,
-                "toneMapping" => {
-                    display.tone_mapping = match value.as_str() {
-                        Some("agx") => api::ToneMapping::Agx,
-                        Some("aces") => api::ToneMapping::Aces,
-                        Some("cineon") => api::ToneMapping::Cineon,
-                        Some("reinhard") => api::ToneMapping::Reinhard,
-                        Some("linear") => api::ToneMapping::Linear,
-                        _ => anyhow::bail!("Unknown tone mapper"),
-                    }
-                }
-                "envIntensity" => {
-                    env.intensity = number()? as f32;
-                    env_changed = true;
-                }
-                "envRotation" => {
-                    env.rotation = (number()? as f32).to_radians();
-                    env_changed = true;
-                }
-                _ => anyhow::bail!("Native prototype: setting {key} is not available yet"),
+                let bytes = if kind == api::PixelKind::Id {
+                    image
+                        .id_data
+                        .unwrap_or_default()
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect()
+                } else {
+                    image.data.iter().flat_map(|v| v.to_le_bytes()).collect()
+                };
+                let blob = self.binary.lock().unwrap().put(bytes);
+                return Ok(Some(
+                    json!({"width":image.width,"height":image.height,"blob":blob}),
+                ));
             }
+            "image" => {
+                let bytes = self.engine.display().encode_png(self.target(args)?)?;
+                let blob = self.binary.lock().unwrap().put(bytes);
+                return Ok(Some(json!({"blob":blob})));
+            }
+            "pick" => {
+                let result = self.engine.pick_surface(
+                    args["x"].as_f64().context("Pick X")? as f32,
+                    args["y"].as_f64().context("Pick Y")? as f32,
+                )?;
+                return Ok(Some(match result {
+                    api::SurfacePick::Unavailable => json!("unavailable"),
+                    api::SurfacePick::Background => json!(null),
+                    api::SurfacePick::Hit(hit) => {
+                        json!({"object":hit.object,"material":hit.material,"instance":hit.instance})
+                    }
+                }));
+            }
+            "depth" => {
+                let depth = self.engine.read_depth_samples(api::DepthSampleArea {
+                    x: args["x"].as_f64().unwrap_or(0.5) as f32,
+                    y: args["y"].as_f64().unwrap_or(0.5) as f32,
+                    size: args["size"].as_f64().unwrap_or(0.004) as f32,
+                })?;
+                return Ok(Some(json!(depth.map(|a| a.to_vec()))));
+            }
+            "graphs" => {
+                self.engine.update()?;
+                let d = self.engine.diagnostics();
+                return Ok(Some(
+                    json!({"outcome":"settled","state":{"revision":d.scene_revision,"installedRevision":d.scene_revision,"status":if d.compiling||d.preparing{"compiling"}else if d.material_graphs.is_empty(){"ready"}else{"failed"},"diagnostics":d.material_graphs,"topologyCount":d.cached_pipelines}}),
+                ));
+            }
+            "converge" => {
+                ensure!(self.export.is_none(), "Export already running");
+                let target = self.target(args)?;
+                let mut settings = target.settings()?;
+                settings.max_samples = args["samples"].as_u64().context("Samples")? as u32;
+                target.set_settings(settings.clone())?;
+                let camera = self.camera;
+                if args["camera"].is_array() {
+                    self.engine
+                        .set_camera(Some(wire::camera(&args["camera"])?))?;
+                }
+                self.engine.update()?;
+                self.export = Some(Export {
+                    request: request.clone(),
+                    target: args["target"].as_u64().unwrap(),
+                    samples: settings.max_samples,
+                    completed: false,
+                    camera,
+                });
+                return Ok(None);
+            }
+            "cancel" => {
+                if let Some(job) = self.export.take() {
+                    self.engine.set_camera(Some(job.camera))?;
+                    self.send(json!({"id":job.request["id"],"error":"Export cancelled"}))?;
+                }
+            }
+            "dropTarget" => {
+                if let Some(id) = args["target"].as_u64() {
+                    if self.export.as_ref().is_some_and(|job| job.target == id) {
+                        let job = self.export.take().unwrap();
+                        self.engine.set_camera(Some(job.camera))?;
+                    }
+                    self.sample_subscriptions.remove(&id);
+                    self.targets.remove(&id);
+                    self.target_configs.remove(&id);
+                }
+            }
+            "frontendError" => bail!("Frontend: {}", args["message"]),
+            name => bail!("Unknown Engine command: {name}"),
         }
-        self.render_loop.final_render().set_settings(render)?;
-        self.engine.display().set_settings(display)?;
-        self.orbit.camera = camera;
-        self.engine.set_camera(Some(self.orbit.camera()))?;
-        if env_changed {
-            self.model.scene.set_environment_settings(env)?;
-            self.engine.set_scene_object(&self.model.scene)?;
-        }
-        Ok(())
+        self.dirty = true;
+        Ok(Some(Value::Null))
     }
     fn message(&mut self, message: Message) -> Result<()> {
         if message.body.starts_with('~') {
-            self.camera_packets += 1;
+            if self.export.is_some() {
+                return Ok(());
+            }
             if self.orbit.packet(&message.body, self.logical_height)? {
-                self.engine.set_camera(Some(self.orbit.camera()))?;
+                self.camera = self.orbit.camera();
+                self.engine.set_camera(Some(self.camera))?;
+                self.event("camera",json!({"matrix":self.camera.world_matrix,"target":self.orbit.target.to_array(),"zoom":self.camera.zoom}))?;
+                self.dirty = true;
             }
             return Ok(());
         }
-        ensure!(message.body.len() <= 180_001_000, "IPC message too large");
         let request: Value = serde_json::from_str(&message.body)?;
-        let reply = match self.command(&request, message.received) {
-            Ok(result) => json!({"id":request["id"],"result":result}),
+        match self.command(&request) {
+            Ok(Some(result)) => self.send(json!({"id":request["id"],"result":result})),
+            Ok(None) => Ok(()),
             Err(error) => {
-                eprintln!("Command error: {error:#}");
-                json!({"id":request["id"],"error":format!("{error:#}")})
+                eprintln!("Engine command: {error:#}");
+                self.send(json!({"id":request["id"],"error":format!("{error:#}")}))
             }
-        };
-        self.send(reply)
+        }
     }
     fn frame(&mut self) -> Result<()> {
-        if !self.paused {
-            self.render_loop.tick()?;
+        if let Some(job) = self.export.as_ref().filter(|job| !job.completed) {
+            let target = &self.targets[&job.target];
+            let status = target.refine()?;
+            let samples = target.samples();
+            self.event("exportProgress",json!({"target":job.target,"stage":if target.denoising(){"denoising"}else{"final"},"samples":samples,"targetSamples":job.samples}))?;
+            if status == api::RenderStatus::Error {
+                let job = self.export.take().unwrap();
+                self.engine.set_camera(Some(job.camera))?;
+                self.send(json!({"id":job.request["id"],"error":self.engine.last_error()}))?;
+            } else if status == api::RenderStatus::Finished {
+                let request_id = self.export.as_ref().unwrap().request["id"].clone();
+                self.export.as_mut().unwrap().completed = true;
+                self.send(json!({"id":request_id,"result":{"samples":samples,"averageSamplesPerPixel":samples,"pilotSamples":0,"adaptiveSampling":false}}))?;
+            }
+        } else if self.export.is_none() && !self.paused {
+            if let Some(render_loop) = &mut self.render_loop {
+                self.phase = format!("{:?}", render_loop.tick()?).to_lowercase();
+            }
         }
-        if self.window.inner_size().width == 0 || self.window.inner_size().height == 0 {
-            return Ok(());
+        for (id, config) in &self.target_configs {
+            if config["denoiser"]["type"] == "jnlm" {
+                wire::denoiser(&self.targets[id], &config["denoiser"])?;
+            }
         }
-        self.gpu
-            .present(&self.window, self.engine.display().texture(), self.rect)?;
-        if !self.ready {
-            return Ok(());
-        }
-        let events: Vec<_> = self.engine_events.lock().unwrap().drain(..).collect();
+        let events = self.events.lock().unwrap().drain(..).collect::<Vec<_>>();
         for event in events {
             self.send(event)?;
         }
-        let samples = self.render_loop.final_render().samples();
-        if samples < self.last_samples || samples == 0 {
-            self.accumulation_start = Instant::now();
+        let hdr = self
+            .gpu
+            .set_hdr(self.engine.display().settings().hdr_output_enabled);
+        let image = if hdr {
+            if let Some(loop_) = &self.render_loop {
+                if let Some(render) = loop_.presented_render() {
+                    self.engine.display().compose_hdr(render)?
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            self.engine.display().texture()
+        };
+        self.gpu.present(&self.window, image, self.rect)?;
+        if self.ready
+            && (self.last_publish.elapsed() > Duration::from_millis(100) || !self.needs_tick())
+        {
+            let states=self.targets.iter().map(|(id,r)|(id.to_string(),json!({"samples":r.samples(),"aovSamples":r.aov_samples_rendered(),"width":r.width(),"height":r.height(),"status":format!("{:?}",r.status()).to_lowercase(),"denoising":r.denoising(),"frameTimeMs":r.gpu_sample_time_ms()}))).collect::<serde_json::Map<_,_>>();
+            let d = self.engine.diagnostics();
+            let graphs = json!({"revision":d.scene_revision,"installedRevision":d.scene_revision,"status":if d.compiling||d.preparing{"compiling"}else if d.material_graphs.is_empty(){"ready"}else{"failed"},"diagnostics":d.material_graphs,"topologyCount":d.cached_pipelines});
+            self.event("state",json!({"phase":if self.paused{"paused"}else{&self.phase},"targets":states,"viewportSize":self.engine.display().size(),"diagnostics":{"backend":"webgpu","adapterName":d.info.adapter_name,"width":self.engine.display().size()[0],"height":self.engine.display().size()[1],"lastError":d.last_error,"materialGraphs":graphs}}))?;
+            self.last_publish = Instant::now();
         }
-        if samples != self.last_samples {
-            self.sample_elapsed = self.accumulation_start.elapsed().as_secs_f64();
-        }
-        self.last_samples = samples;
-        if samples > 0 {
-            if self
-                .pending_edit
-                .as_ref()
-                .is_some_and(|(_, _, presentations)| {
-                    self.render_loop.presentations() > *presentations
-                })
-                && matches!(
-                    self.render_loop.status(),
-                    api::RenderLoopStatus::Converging | api::RenderLoopStatus::Finished
-                )
+        self.dirty = false;
+        if let (Some(dir), Some(loop_)) = (&self.evidence, &self.render_loop) {
+            if loop_.status() == api::RenderLoopStatus::Finished
+                && !dir.join("final.hdr.f32").exists()
             {
-                let (sent_at, received, _) = self.pending_edit.take().unwrap();
-                self.event(
-                    "presented",
-                    json!({"sentAt":sent_at,"hostMs":received.elapsed().as_secs_f64()*1000.}),
+                std::fs::create_dir_all(dir)?;
+                let render = loop_.final_render();
+                let image = render.read_pixels(api::PixelKind::Hdr)?;
+                std::fs::write(
+                    dir.join("final.hdr.f32"),
+                    image
+                        .data
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                )?;
+                std::fs::write(
+                    dir.join("final.png"),
+                    self.engine.display().encode_png(render)?,
+                )?;
+                std::fs::write(
+                    dir.join("run.json"),
+                    serde_json::to_vec_pretty(
+                        &json!({"width":image.width,"height":image.height,"samples":render.samples(),"seed":render.settings()?.seed,"presentations":self.gpu.presentations}),
+                    )?,
                 )?;
             }
         }
-        let times: Vec<_> = self.frame_times.lock().unwrap().drain(..).collect();
-        if let Some(time) = times.last() {
-            self.sample_ms = *time;
-        }
-        for time in &times {
-            self.event(
-                "sample",
-                json!({"samples":samples,"isFirstFrame":samples==1,"frameTimeMs":time}),
-            )?;
-        }
-        if self.last_publish.elapsed() > Duration::from_millis(120) {
-            let render = self.render_loop.final_render();
-            let size = render.settings()?.size;
-            let scale = match size {
-                api::RenderSize::Scale(scale) => scale,
-                _ => 1.,
-            };
-            let phase = if self.paused {
-                "paused".into()
-            } else {
-                format!("{:?}", self.render_loop.status()).to_lowercase()
-            };
-            self.event("stats",json!({"phase":phase,"samples":samples,"elapsed":self.sample_elapsed,"msPerSample":self.sample_ms,"width":(self.rect[2] as f64*scale).round() as u32,"height":(self.rect[3] as f64*scale).round() as u32}))?;
-            self.last_publish = Instant::now();
-        }
         Ok(())
     }
-    fn save(&self, dir: &std::path::Path, label: &str) -> Result<()> {
-        std::fs::create_dir_all(dir)?;
-        let render = self.render_loop.final_render();
-        std::fs::write(
-            dir.join(format!("{label}.png")),
-            self.engine.display().encode_png(render)?,
-        )?;
-        let image = render.read_pixels(api::PixelKind::Hdr)?;
-        let bytes: Vec<u8> = image.data.iter().flat_map(|v| v.to_le_bytes()).collect();
-        std::fs::write(dir.join(format!("{label}.hdr.f32")), bytes)?;
-        std::fs::write(
-            dir.join(format!("{label}.json")),
-            serde_json::to_vec_pretty(
-                &json!({"width":image.width,"height":image.height,"samples":render.samples(),"seed":render.settings()?.seed,"camera":self.orbit.camera().world_matrix,"scene":self.model.snapshot()?}),
-            )?,
-        )?;
-        Ok(())
+    fn needs_tick(&self) -> bool {
+        self.dirty
+            || self.export.as_ref().is_some_and(|job| !job.completed)
+            || !self.paused
+                && self
+                    .render_loop
+                    .as_ref()
+                    .is_some_and(api::RenderLoop::needs_tick)
     }
 }
 struct App {
@@ -485,157 +829,239 @@ struct App {
     proxy: EventLoopProxy<Message>,
     model: Option<PathBuf>,
     evidence: Option<PathBuf>,
-    started: Instant,
+    workflow: bool,
     error: Option<String>,
 }
 impl ApplicationHandler<Message> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn resumed(&mut self, e: &ActiveEventLoop) {
         if self.host.is_none() {
-            match Host::new(event_loop, self.proxy.clone(), self.model.as_deref()) {
-                Ok(host) => {
-                    if self.evidence.is_some() {
-                        let mut settings = host.render_loop.final_render().settings().unwrap();
-                        settings.max_samples = 16;
-                        if let Err(error) = host.render_loop.final_render().set_settings(settings) {
-                            self.error = Some(error.to_string());
-                            event_loop.exit();
-                            return;
-                        }
-                    }
-                    self.host = Some(host);
-                }
+            match Host::new(
+                e,
+                self.proxy.clone(),
+                self.model.as_deref(),
+                self.evidence.clone(),
+                self.workflow,
+            ) {
+                Ok(h) => self.host = Some(h),
                 Err(error) => {
                     self.error = Some(format!("{error:#}"));
-                    event_loop.exit();
+                    e.exit();
                 }
             }
         }
     }
-    fn user_event(&mut self, _: &ActiveEventLoop, message: Message) {
+    fn user_event(&mut self, e: &ActiveEventLoop, message: Message) {
         if let Some(host) = &mut self.host {
             if let Err(error) = host.message(message) {
-                eprintln!("IPC error: {error:#}");
+                eprintln!("IPC: {error:#}");
+            }
+            host.window.request_redraw();
+            if host.closing {
+                e.exit();
+            }
+            if let Some(options) = host.restart.take() {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                if let Some(gpu) = options["gpu"].as_str() {
+                    command.env("MUTRACER_VIEWER_GPU", gpu);
+                }
+                if let Some(backend) = options["backend"].as_str() {
+                    command.env("MUTRACER_VIEWER_BACKEND", backend);
+                }
+                match command.spawn() {
+                    Ok(_) => e.exit(),
+                    Err(error) => {
+                        eprintln!("Restart failed: {error}");
+                    }
+                }
             }
         }
     }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, e: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let Some(host) = &mut self.host else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        {
+            use winit::event::{ElementState, MouseButton, MouseScrollDelta};
+            let input = match &event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    host.cursor = [position.x as f32, position.y as f32];
+                    Some([1., host.cursor[0], host.cursor[1], 0., 0.])
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    let button = match button {
+                        MouseButton::Left => 0.,
+                        MouseButton::Right => 2.,
+                        MouseButton::Middle => 1.,
+                        _ => 3.,
+                    };
+                    if *state == ElementState::Pressed {
+                        host.down = Some(host.cursor);
+                    } else if button == 0.
+                        && host.down.take().is_some_and(|p| {
+                            (p[0] - host.cursor[0]).hypot(p[1] - host.cursor[1]) < 4.
+                        })
+                    {
+                        let size = host.window.inner_size();
+                        let _=host.event("viewportClick",json!({"x":(host.cursor[0]-host.rect[0] as f32)/host.rect[2].max(1) as f32,"y":(host.cursor[1]-host.rect[1] as f32)/host.rect[3].max(1) as f32}));
+                    }
+                    Some([
+                        if *state == ElementState::Pressed {
+                            0.
+                        } else {
+                            2.
+                        },
+                        host.cursor[0],
+                        host.cursor[1],
+                        button,
+                        0.,
+                    ])
+                }
+                WindowEvent::MouseWheel { delta, .. } => Some([
+                    3.,
+                    match delta {
+                        MouseScrollDelta::LineDelta(_, y) => -y * 16.,
+                        MouseScrollDelta::PixelDelta(p) => -p.y as f32,
+                    },
+                    0.,
+                    0.,
+                    0.,
+                ]),
+                _ => None,
+            };
+            if let Some(packet) = input {
+                match host.orbit.input(packet, host.logical_height) {
+                    Ok(true) => {
+                        host.camera = host.orbit.camera();
+                        let _ = host.engine.set_camera(Some(host.camera));
+                        let _=host.event("camera",json!({"matrix":host.camera.world_matrix,"target":host.orbit.target.to_array(),"zoom":host.camera.zoom}));
+                        host.dirty = true;
+                        host.window.request_redraw();
+                    }
+                    Err(error) => eprintln!("Input: {error}"),
+                    _ => {}
+                }
+            }
+        }
         let result = match event {
             WindowEvent::CloseRequested => {
-                event_loop.exit();
+                e.exit();
                 Ok(())
             }
             WindowEvent::Resized(size) => {
                 host.gpu.resize(size.width, size.height);
-                host.webview
-                    .set_bounds(wry::Rect {
-                        position: wry::dpi::PhysicalPosition::new(0, 0).into(),
-                        size: wry::dpi::PhysicalSize::new(size.width, size.height).into(),
-                    })
-                    .map_err(Into::into)
+                host.dirty = true;
+                #[cfg(not(target_os = "linux"))]
+                {
+                    host.webview
+                        .set_bounds(wry::Rect {
+                            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                            size: wry::dpi::PhysicalSize::new(size.width, size.height).into(),
+                        })
+                        .map_err(Into::into)
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    host.native_bounds()
+                }
+            }
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                host.dirty = true;
+                host.window.request_redraw();
+                Ok(())
             }
             WindowEvent::RedrawRequested => host.frame(),
             _ => Ok(()),
         };
         if let Err(error) = result {
             self.error = Some(format!("{error:#}"));
-            event_loop.exit();
+            e.exit();
         }
     }
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, e: &ActiveEventLoop) {
         #[cfg(target_os = "linux")]
         while gtk::events_pending() {
             gtk::main_iteration_do(false);
         }
-        if let Some(host) = &mut self.host {
-            host.window.request_redraw();
-            if let Some(dir) = &self.evidence {
-                if host.ready
-                    && host.render_loop.final_render().samples() >= 16
-                    && host.smoke_phase == 0
-                {
-                    if let Err(error) = host.save(dir, "baseline") {
-                        self.error = Some(format!("{error:#}"));
-                        event_loop.exit();
-                    }
-                    host.smoke_phase = 1;
-                }
-                if host.render_loop.final_render().samples() == 16
-                    && host.material_edits > 0
-                    && host.smoke_phase == 1
-                {
-                    if let Err(error) = host.save(dir, "material-edited") {
-                        self.error = Some(format!("{error:#}"));
-                        event_loop.exit();
-                    }
-                    host.smoke_phase = 2;
-                }
-                if host.render_loop.final_render().samples() == 16
-                    && host.camera_packets >= 3
-                    && host.smoke_phase == 2
-                {
-                    if let Err(error) = host.save(dir, "orbit") {
-                        self.error = Some(format!("{error:#}"));
-                        event_loop.exit();
-                    }
-                    host.smoke_phase = 3;
-                }
-                if self.started.elapsed() > Duration::from_secs(120) {
-                    event_loop.exit();
+        if let Some(host) = &self.host {
+            if host.needs_tick() {
+                host.window.request_redraw();
+                e.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(16),
+                ));
+            } else {
+                e.set_control_flow(ControlFlow::Wait);
+            }
+            if !host.workflow
+                && host.evidence.is_some()
+                && std::env::var("MUTRACER_NATIVE_GPU_VALIDATION").as_deref() == Ok("1")
+                && host
+                    .evidence
+                    .as_ref()
+                    .is_some_and(|dir| dir.join("run.json").is_file())
+            {
+                e.exit();
+            }
+            if host.evidence.is_some() {
+                if host.started.elapsed() > Duration::from_secs(120) {
+                    e.exit();
+                } else {
+                    e.set_control_flow(ControlFlow::WaitUntil(
+                        Instant::now() + Duration::from_millis(16),
+                    ));
                 }
             }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
+        #[cfg(target_os = "linux")]
+        e.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
         ));
     }
 }
 fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        ensure!(
-            std::env::var_os("DISPLAY").is_some(),
-            "Prototype child WebView requires X11; Wayland is not implemented"
-        );
-        gtk::init()?;
-    }
+    gtk::init()?;
     let mut model = None;
     let mut evidence = None;
+    let mut workflow = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--evidence" {
-            evidence = Some(PathBuf::from(
-                args.next().context("--evidence needs a directory")?,
+        if arg == "--package-smoke" {
+            return smoke::run(&PathBuf::from(
+                args.next().context("Package output directory")?,
             ));
+        }
+        if arg == "--workflow-evidence" {
+            workflow = true;
+            evidence = Some(PathBuf::from(
+                args.next().context("Workflow evidence directory")?,
+            ));
+        } else if arg == "--evidence" {
+            evidence = Some(PathBuf::from(args.next().context("Evidence directory")?));
+        } else if arg == "--startup-smoke" {
+            let report = PathBuf::from(args.next().context("Startup report")?);
+            evidence = Some(
+                report
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("startup-window"),
+            );
         } else {
             model = Some(PathBuf::from(arg));
         }
     }
     let event_loop = EventLoop::<Message>::with_user_event().build()?;
-    let proxy = event_loop.create_proxy();
     let mut app = App {
         host: None,
-        proxy,
+        proxy: event_loop.create_proxy(),
         model,
         evidence,
-        started: Instant::now(),
+        workflow,
         error: None,
     };
     event_loop.run_app(&mut app)?;
-    if let (Some(host), Some(dir)) = (&app.host, &app.evidence) {
-        std::fs::create_dir_all(dir)?;
-        host.save(dir, "final")?;
-        std::fs::write(
-            dir.join("run.json"),
-            serde_json::to_vec_pretty(
-                &json!({"adapter":host.engine.info().adapter_name,"hardwareRayQuery":host.engine.info().hardware_ray_query,"backend":format!("{:?}",host.render_loop.final_render().backend()?.0),"presentations":host.gpu.presentations,"cameraPackets":host.camera_packets,"materialEdits":host.material_edits,"latencies":host.latencies,"viewport":host.rect,"error":app.error}),
-            )?,
-        )?;
-    }
     if let Some(error) = app.error {
-        anyhow::bail!(error);
+        bail!(error);
     }
     Ok(())
 }

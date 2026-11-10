@@ -3,13 +3,13 @@ export interface NativeReply { id?: number; result?: unknown; error?: string; ev
 export class NativeTransport {
   private serial = 0;
   private disposed = false;
-  private pending = new Map<number, {resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>}>();
+  private pending = new Map<number, {resolve(value: unknown): void; reject(error: Error): void; timer?: ReturnType<typeof setTimeout>}>();
   constructor(private send: (message: string) => void, private event: (name: string, value: unknown) => void) {}
-  request<T = void>(command: string, args: unknown = {}): Promise<T> {
+  request<T = void>(command: string, args: unknown = {}, timeoutMs = 120_000): Promise<T> {
     if (this.disposed) return Promise.reject(new Error('Native viewer disposed'));
     const id = ++this.serial;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Native request timed out: ${command}`)); }, 120_000);
+      const timer = timeoutMs > 0 ? setTimeout(() => { this.pending.delete(id); reject(new Error(`Native request timed out: ${command}`)); }, timeoutMs) : undefined;
       this.pending.set(id, {resolve: value => resolve(value as T), reject, timer});
       try { this.send(JSON.stringify({version: 1, id, command, args})); }
       catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
@@ -36,10 +36,4 @@ export function pointerPacket(operation: number, x: number, y: number, button = 
   const bytes = new Uint8Array(20), view = new DataView(bytes.buffer);
   [operation, x, y, button, modifiers].forEach((value, i) => view.setFloat32(i * 4, value, true));
   return '~' + btoa(String.fromCharCode(...bytes));
-}
-export async function blobBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const chunks: string[] = [];
-  for (let i = 0; i < bytes.length; i += 8192) chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
-  return btoa(chunks.join(''));
 }

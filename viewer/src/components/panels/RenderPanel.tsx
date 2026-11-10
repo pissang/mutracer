@@ -10,6 +10,8 @@ import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/co
 export function RenderPanel() {
   const s = useViewer((state) => state.settings);
   const backend = useViewer((state) => state.backend.name);
+  const native=useViewer(state=>state.nativeCapabilities);
+  const rr=useViewer(state=>state.nativeRayReconstruction);
   const bvhBusy = useViewer((state) => state.stats.phase === 'preparing' || state.loading !== null || state.export !== null);
   const webgl = backend === 'WebGL 2';
   const jnlm = webgl || s.denoiseModel === 'jnlm';
@@ -18,6 +20,7 @@ export function RenderPanel() {
 
   return (
     <>
+      {native?.dlssRR&&<Section title="Native"><Switch label="DLSS Ray Reconstruction" checked={!!rr} onChange={value=>useViewer.setState({nativeRayReconstruction:value})}><span className="field-label">DLSS Ray Reconstruction</span></Switch></Section>}
       <Section title="Quality" icon={<Aperture size={14} />}>
         <Scrub label="Max samples" value={s.maxSamples} min={4} max={16384} log onChange={(v) => update({ maxSamples: v })} />
         <Scrub label="Bounces" value={s.bounces} min={1} max={webgl ? MAX_PATH_EVENTS_WEBGL : MAX_PATH_EVENTS_WGPU} step={1} onChange={(v) => update({ bounces: v })} />
@@ -36,7 +39,7 @@ export function RenderPanel() {
             onChange={(v) => update({ samplingPattern: v })}
           />
         </Field>
-        <Field label="BVH builder">
+        {!native&&<Field label="BVH builder">
           <Segmented
             label="BVH builder"
             value={s.bvhBuilder}
@@ -44,7 +47,7 @@ export function RenderPanel() {
             disabled={bvhBusy}
             onChange={(v) => update({ bvhBuilder: v })}
           />
-        </Field>
+        </Field>}
         <Scrub label="Clamping" value={s.clamping} min={0} max={100} step={1} format={(v) => (v === 0 ? 'Off' : String(v))} onChange={(v) => update({ clamping: v })} />
       </Section>
 
@@ -116,7 +119,7 @@ export function RenderPanel() {
       </Section>
 
       <Section title="Color" icon={<Palette size={14} />}>
-        <Switch label="HDR output" checked={!webgl && s.hdrOutputEnabled} disabled={backend !== 'WebGPU'} onChange={(v) => update({ hdrOutputEnabled: v })}>
+        <Switch label="HDR output" checked={!webgl && s.hdrOutputEnabled} disabled={native?!native.hdrWindow:backend !== 'WebGPU'} onChange={(v) => update({ hdrOutputEnabled: v })}>
           <span className="field-label">HDR output</span>
         </Switch>
         <Hint>{webgl ? 'HDR output requires WebGPU.' : 'Requires an HDR display and a compatible browser; falls back to SDR when unsupported.'}</Hint>

@@ -54,6 +54,10 @@ impl Orbit {
             f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
         });
         ensure!(p.iter().all(|v| v.is_finite()), "Non-finite pointer packet");
+        self.input(p, height)
+    }
+    pub fn input(&mut self, p: [f32; 5], height: f32) -> Result<bool> {
+        ensure!(p.iter().all(|v| v.is_finite()), "Non-finite input");
         match p[0] as u32 {
             0 => self.held = Some(p),
             1 => {
@@ -61,8 +65,14 @@ impl Orbit {
                     let (dx, dy) = (p[1] - last[1], p[2] - last[2]);
                     if last[3] != 0. || p[4] != 0. {
                         let world = Mat4::from_cols_array(&self.camera().world_matrix);
-                        let scale = 2. * self.radius * (self.camera.fov.to_radians() / 2.).tan()
-                            / height.max(1.);
+                        let scale = if self.camera.projection == 1 {
+                            (self.camera.top - self.camera.bottom)
+                                / self.camera.zoom
+                                / height.max(1.)
+                        } else {
+                            2. * self.radius * (self.camera.fov.to_radians() / 2.).tan()
+                                / height.max(1.)
+                        };
                         self.target +=
                             (-world.x_axis.truncate() * dx + world.y_axis.truncate() * dy) * scale;
                     } else {
@@ -75,6 +85,11 @@ impl Orbit {
             }
             2 => self.held = None,
             3 => {
+                if self.camera.projection == 1 {
+                    self.camera.zoom = (self.camera.zoom * (-p[1] * 0.001).clamp(-1., 1.).exp())
+                        .clamp(0.0001, 1e8);
+                    return Ok(true);
+                }
                 self.radius =
                     (self.radius * (p[1] * 0.001).clamp(-1., 1.).exp()).clamp(0.0001, 1e8);
                 return Ok(true);

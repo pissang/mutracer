@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[features]
+dlss-rr = ["dep:ash", "dep:libloading"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
@@ -13,16 +16,23 @@ mutracer-native = { path = "../host", features = ["viewer-support"] }
 pollster = "=0.4.0"
 rfd = "=0.15.4"
 serde_json = "1"
-winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11"] }
-wry = "=0.57.2"
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+percent-encoding = "2"
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+wry = { version = "=0.57.2", features = ["linux-body"] }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std", "loaded"], optional = true }
+libloading = { version = "=0.8.9", optional = true }
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan"] }
 gtk = "0.18"
+
+[dev-dependencies]
+naga = { version = "=30.0.1", features = ["spv-out"] }

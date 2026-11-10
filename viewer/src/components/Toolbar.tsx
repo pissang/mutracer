@@ -1,3 +1,4 @@
+import {changeNativeDevice} from '../engine/nativeCapabilities';
 import { useRef, useState } from 'react';
 import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
@@ -194,6 +195,7 @@ function UrlDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open:
 
 function BackendMenu({ name, adapter }: { name: string | null; adapter: string }) {
   const webgl = name === 'WebGL 2';
+  const native=useViewer(state=>state.nativeCapabilities);
   return (
     <MenuTrigger>
       <Button className="backend-pill hide-m" aria-label="Rendering backend">
@@ -202,15 +204,22 @@ function BackendMenu({ name, adapter }: { name: string | null; adapter: string }
       </Button>
       <Popover className="popover menu" offset={8} placement="bottom end" style={{ width: 260 }}>
         <Menu className="menu-list" aria-label="Backend" onAction={(key) => {
+          if(native){void changeNativeDevice(String(key).startsWith('gpu:')?{gpu:String(key).slice(4)}:{backend:key==='hardware'?'hardware':'software'});return;}
           const url = new URL(location.href);
           if (key === 'webgl') url.searchParams.set('webgl', '');
           else url.searchParams.delete('webgl');
           location.href = url.toString();
         }}>
+          {native?<>
+            <MenuItem id="hardware" className="menu-item" isDisabled={!native.hwrt}>Hardware ray tracing<kbd>{native.backend==='hardware'?'active':''}</kbd></MenuItem>
+            <MenuItem id="software" className="menu-item">Software traversal<kbd>{native.backend==='software'?'active':''}</kbd></MenuItem>
+            {native.gpuSelection&&native.adapters.map(adapter=><MenuItem key={adapter} id={`gpu:${adapter}`} className="menu-item">{adapter}</MenuItem>)}
+          </>:<>
           <MenuItem id="webgpu" className="menu-item">WebGPU<kbd>{!webgl && name ? 'active' : ''}</kbd></MenuItem>
           <MenuItem id="webgl" className="menu-item">WebGL 2 fallback<kbd>{webgl ? 'active' : ''}</kbd></MenuItem>
+          </>}
         </Menu>
-        <div className="menu-note">Switching reloads the page. OIDN and auto exposure need WebGPU.</div>
+        <div className="menu-note">{native?'Changing the device or traversal restarts the app.':'Switching reloads the page. OIDN and auto exposure need WebGPU.'}</div>
       </Popover>
     </MenuTrigger>
   );

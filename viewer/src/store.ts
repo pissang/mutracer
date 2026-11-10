@@ -1,3 +1,4 @@
+import type {NativeCapabilities} from './engine/nativeCapabilities';
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel, AovKind, AovIdComponent } from '@meimu/mutracer';
@@ -284,6 +285,8 @@ export type InspectorTab = 'environment' | 'material' | 'camera' | 'render';
 export type ToastTone = 'info' | 'success' | 'warning' | 'error';
 
 export interface ViewerState {
+  nativeCapabilities?:NativeCapabilities;
+  nativeRayReconstruction?:boolean;
   settings: Settings;
   stats: Stats;
   backend: { name: 'WebGPU' | 'WebGL 2' | 'Native' | null; adapter: string };

@@ -28,6 +28,6 @@ export function bakeDisplacement(request:Omit<BakeRequest,'id'>):Promise<BakedHe
   const id=++serial;
   return new Promise((resolve,reject)=>{
     pending.set(id,{resolve,reject});
-    worker!.postMessage({...request,graph:{nodes:request.graph.nodes,terminal:request.graph.terminal},id});
+    worker!.postMessage({...request,cpuOnly:import.meta.env.MODE==='native',graph:{nodes:request.graph.nodes,terminal:request.graph.terminal},id});
   });
 }

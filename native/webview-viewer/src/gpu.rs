@@ -20,11 +20,20 @@ impl Gpu {
             Box::new(event_loop.owned_display_handle()),
         ));
         let surface = instance.create_surface(window.clone())?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))?;
+        let default_adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            }))?;
+        let adapter = if let Ok(name) = std::env::var("MUTRACER_VIEWER_GPU") {
+            pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+                .into_iter()
+                .find(|a| a.get_info().name == name && a.is_surface_supported(&surface))
+                .ok_or_else(|| anyhow::anyhow!("Requested GPU unavailable: {name}"))?
+        } else {
+            default_adapter
+        };
         let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -34,10 +43,29 @@ impl Gpu {
                 experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
                 ..Default::default()
             }))?;
+        Self::from_parts(window, instance, adapter, device, queue, surface)
+    }
+    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+    pub fn from_device(
+        window: &Arc<Window>,
+        parts: (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue),
+    ) -> Result<Self> {
+        let (instance, adapter, device, queue) = parts;
+        let surface = instance.create_surface(window.clone())?;
+        Self::from_parts(window, instance, adapter, device, queue, surface)
+    }
+    fn from_parts(
+        window: &Arc<Window>,
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<Self> {
         let caps = surface.get_capabilities(&adapter);
         ensure!(
             caps.usages.contains(wgpu::TextureUsages::COPY_DST),
-            "Prototype surface requires COPY_DST"
+            "Native viewport surface requires COPY_DST"
         );
         // Display already encodes SDR. An unorm surface avoids another sRGB transfer.
         let format = [
@@ -72,6 +100,43 @@ impl Gpu {
             intermediate: None,
             presentations: 0,
         })
+    }
+    pub fn hdr_supported(&self) -> bool {
+        self.surface
+            .get_capabilities(&self.adapter)
+            .color_spaces(wgpu::TextureFormat::Rgba16Float)
+            .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+    }
+    pub fn set_hdr(&mut self, requested: bool) -> bool {
+        let active = requested && self.hdr_supported();
+        let format = if active {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Bgra8Unorm
+        };
+        let format = if !active
+            && !self
+                .surface
+                .get_capabilities(&self.adapter)
+                .formats
+                .contains(&format)
+        {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else {
+            format
+        };
+        if format != self.config.format {
+            self.config.format = format;
+            self.config.color_space = if active {
+                wgpu::SurfaceColorSpace::ExtendedSrgbLinear
+            } else {
+                wgpu::SurfaceColorSpace::Auto
+            };
+            self.surface.configure(&self.device, &self.config);
+            self.blitter = wgpu::util::TextureBlitter::new(&self.device, format);
+            self.intermediate = None;
+        }
+        active
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -182,7 +247,13 @@ impl Gpu {
             &self.adapter,
             &self.device,
             &self.queue,
-            api::EngineOptions::default(),
+            api::EngineOptions {
+                backend: if std::env::var("MUTRACER_VIEWER_BACKEND").as_deref() == Ok("software") {
+                    api::Backend::Software
+                } else {
+                    api::Backend::Hardware
+                },
+            },
             None,
         );
         let notify = engine.device_loss_notifier();
