@@ -3,13 +3,13 @@
 //! The wrapper intentionally keeps native ownership with the host.  wgpu-hal's
 //! Vulkan external-memory texture path is used only after the engine has
 //! imported the exact host VkDevice.
-use super::{error, Engine, OutputKind, PixelKind, Render, Result, Status};
+use super::{Engine, OutputKind, PixelKind, Render, Result, Status, error};
 use ash::vk;
 use ash::vk::Handle;
 use std::collections::{HashMap, HashSet};
 use std::sync::{
+    Arc, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
 };
 use wgpu::hal::api::Vulkan;
 use wgpu::util::DeviceExt;
@@ -21,8 +21,9 @@ fn unavailable() -> super::Error {
     error(Status::Unavailable, "Vulkan GPU export is unavailable")
 }
 
-fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64) -> Result<()> {
+fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64, observed: u64) -> Result<()> {
     let mut last = last_signal.lock().unwrap();
+    *last = (*last).max(observed);
     if value == 0 || value == u64::MAX || value <= *last {
         return Err(invalid("Vulkan timeline value is not strictly increasing"));
     }
@@ -53,7 +54,7 @@ pub(crate) struct State {
     pub(super) completed: u64,
     pending: Vec<Pending>,
     pub(super) pipelines: HashMap<(wgpu::TextureFormat, u8, bool), wgpu::ComputePipeline>,
-    pub(super) timelines: HashMap<u64, Arc<Mutex<u64>>>,
+    pub(super) timelines: HashMap<u64, Weak<Mutex<u64>>>,
 }
 impl State {
     pub(super) fn new() -> Self {
@@ -78,6 +79,7 @@ struct Pending {
     _images: Vec<wgpu::Texture>,
     _sources: Vec<Source>,
     _ready: Option<vk::Semaphore>,
+    _signal_state: Arc<Mutex<u64>>,
 }
 enum Source {
     Hdr([wgpu::Buffer; 3], [u32; 4]),
@@ -113,7 +115,12 @@ impl Engine {
     /// retain both through all accepted exports and until the wrapper is
     /// released; storage usage, one mip/layer/sample and an initial layout of
     /// UNDEFINED or GENERAL are required. The library returns the image to
-    /// GENERAL after an accepted export. A host consumer on another queue must use concurrent
+    /// GENERAL after an accepted export. Formats are RGBA32F or RGBA16F for HDR,
+    /// R32F or RGBA32F for either depth kind, and RGBA8Unorm for display.
+    /// Width/height are 1 through the maximum 2D texture dimension, with no
+    /// defaults. Invalid dimensions/layout are [`Status::InvalidArgument`];
+    /// unavailable backend/format is [`Status::Unavailable`].
+    /// A host consumer on another queue must use concurrent
     /// sharing or explicit queue-family ownership transfers around the
     /// imported ready/done timeline values.
     ///
@@ -172,7 +179,7 @@ impl Engine {
             _ => {
                 return Err(invalid(
                     "Vulkan imported image layout must be UNDEFINED or GENERAL",
-                ))
+                ));
             }
         };
         let texture = unsafe {
@@ -233,13 +240,16 @@ impl Engine {
             },
         )?;
         let mut state = self.inner.vulkan.lock().unwrap();
-        let last_signal = state
-            .as_mut()
-            .ok_or_else(unavailable)?
-            .timelines
-            .entry(semaphore.as_raw())
-            .or_insert_with(|| Arc::new(Mutex::new(value)))
-            .clone();
+        let timelines = &mut state.as_mut().ok_or_else(unavailable)?.timelines;
+        timelines.retain(|_, value| value.strong_count() != 0);
+        let last_signal = timelines
+            .get(&semaphore.as_raw())
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let shared = Arc::new(Mutex::new(value));
+                timelines.insert(semaphore.as_raw(), Arc::downgrade(&shared));
+                shared
+            });
         Ok(VulkanTimeline {
             engine: self.clone(),
             semaphore,
@@ -260,6 +270,14 @@ impl Render {
     /// the returned sequence is polled with [`Engine::poll_vulkan_exports`].
     /// Calls use the engine's ordinary exclusive thread rule and retain the
     /// imported wrappers until the sequence retires.
+    /// Supply 1..=8 distinct native destinations. `done` values are 1 through
+    /// `u64::MAX - 1`, strictly greater than previous and observed values; ready
+    /// values may also be zero. At 32 pending batches this returns
+    /// [`Status::Busy`]. Invalid arguments return [`Status::InvalidArgument`]
+    /// before external waits/signals; missing sources return
+    /// [`Status::InvalidState`]. Device/submission failure is
+    /// [`Status::Unavailable`] with unknown outcome. Cancellation and resize do
+    /// not revoke accepted work. Drain exports before disposing the engine.
     pub fn export_vulkan(
         &self,
         images: &[(VulkanImage, u32, u32)],
@@ -493,7 +511,25 @@ impl Render {
             let complete = Arc::new(AtomicBool::new(false));
             let flag = complete.clone();
             let hal = unsafe { queue.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
-            reserve_timeline_value(&done.0.last_signal, done.1)?;
+            let observed = {
+                let device = unsafe { gpu.device.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
+                unsafe {
+                    device
+                        .raw_device()
+                        .get_semaphore_counter_value(done.0.semaphore)
+                }
+            }
+            .map_err(|cause| {
+                if cause == vk::Result::ERROR_DEVICE_LOST {
+                    gpu.loss
+                        .notify("Vulkan device lost before export timeline reservation");
+                }
+                error(
+                    Status::Unavailable,
+                    format!("Vulkan timeline query failed: {cause}"),
+                )
+            })?;
+            reserve_timeline_value(&done.0.last_signal, done.1, observed)?;
             if let Some((r, value)) = ready {
                 hal.add_wait_semaphore(
                     r.semaphore,
@@ -511,6 +547,7 @@ impl Render {
                 _images: retained_images,
                 _sources: sources,
                 _ready: ready.map(|(r, _)| r.semaphore),
+                _signal_state: done.0.last_signal.clone(),
             };
             state.pending.push(pending);
             hal.add_signal_semaphore(done.0.semaphore, Some(done.1));
@@ -532,9 +569,10 @@ mod tests {
     fn duplicate_import_wrappers_share_signal_reservation() {
         let canonical = Arc::new(Mutex::new(0));
         let second_wrapper = canonical.clone();
-        assert!(reserve_timeline_value(&canonical, 1).is_ok());
-        assert!(reserve_timeline_value(&second_wrapper, 1).is_err());
-        assert!(reserve_timeline_value(&second_wrapper, 2).is_ok());
+        assert!(reserve_timeline_value(&canonical, 1, 0).is_ok());
+        assert!(reserve_timeline_value(&second_wrapper, 1, 0).is_err());
+        assert!(reserve_timeline_value(&second_wrapper, 2, 2).is_err());
+        assert!(reserve_timeline_value(&second_wrapper, 3, 2).is_ok());
     }
 }
 
@@ -567,6 +605,10 @@ impl Engine {
             {
                 Ok(value) => value,
                 Err(vk::Result::ERROR_DEVICE_LOST) => {
+                    self.inner
+                        .gpu
+                        .loss
+                        .notify("Vulkan device lost while polling export timeline");
                     return Err(error(
                         Status::Unavailable,
                         "Vulkan device lost while polling export timeline",

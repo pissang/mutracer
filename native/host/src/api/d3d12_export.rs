@@ -1,24 +1,25 @@
 //! Same-device D3D12 resource and fence imports.
 #![cfg(target_os = "windows")]
-use super::{error, Engine, Result, Status};
-use std::collections::{HashMap, HashSet};
+use super::{Engine, Result, Status, error};
+use std::collections::HashMap;
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::sync::{
+    Arc, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
 };
 use wgpu::hal::api::Dx12;
-use windows::core::Interface;
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{CompareObjectHandles, HANDLE};
 use windows::Win32::Graphics::Direct3D12::{
-    ID3D12Fence, ID3D12Fence1, ID3D12Resource, D3D12_FENCE_FLAG_SHARED,
-    D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_SHARED,
-    D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT,
-    D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+    D3D12_FENCE_FLAG_SHARED, D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAG_SHARED,
+    D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAGS, D3D12_HEAP_PROPERTIES,
+    D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, ID3D12Fence, ID3D12Fence1, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
-    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+    DXGI_FORMAT_R32G32B32A32_FLOAT,
 };
+use windows::core::Interface;
 
 fn invalid(message: &str) -> super::Error {
     error(Status::InvalidArgument, message)
@@ -27,8 +28,9 @@ fn unavailable() -> super::Error {
     error(Status::Unavailable, "D3D12 GPU export is unavailable")
 }
 
-fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64) -> Result<()> {
+fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64, observed: u64) -> Result<()> {
     let mut last = last_signal.lock().unwrap();
+    *last = (*last).max(observed);
     if value == 0 || value == u64::MAX || value <= *last {
         return Err(invalid("D3D12 timeline value is not strictly increasing"));
     }
@@ -41,7 +43,7 @@ fn reserve_timeline_value(last_signal: &Arc<Mutex<u64>>, value: u64) -> Result<(
 pub struct D3d12Image {
     pub(super) engine: Engine,
     pub(super) texture: wgpu::Texture,
-    pub(super) raw_id: usize,
+    identity: Arc<OwnedHandle>,
 }
 /// Borrowed wrapper for a host-owned same-device shared fence.
 #[derive(Clone)]
@@ -49,6 +51,14 @@ pub struct D3d12Timeline {
     pub(super) engine: Engine,
     pub(super) fence: ID3D12Fence,
     pub(super) last_signal: Arc<Mutex<u64>>,
+    identity: Arc<FenceIdentity>,
+}
+
+// OpenSharedHandle can return distinct COM objects for one shared fence. An
+// owned NT-handle duplicate keeps its identity valid through pending work.
+struct FenceIdentity {
+    handle: OwnedHandle,
+    last_signal: Arc<Mutex<u64>>,
 }
 
 pub(crate) struct State {
@@ -56,7 +66,7 @@ pub(crate) struct State {
     pub(super) completed: u64,
     pending: Vec<Pending>,
     pub(super) pipelines: HashMap<(wgpu::TextureFormat, u32, bool), wgpu::ComputePipeline>,
-    pub(super) timelines: HashMap<usize, Arc<Mutex<u64>>>,
+    timelines: Vec<Weak<FenceIdentity>>,
 }
 struct Pending {
     sequence: u64,
@@ -66,7 +76,8 @@ struct Pending {
     failed: bool,
     _images: Vec<wgpu::Texture>,
     _sources: Vec<wgpu::Texture>,
-    _ready: Option<ID3D12Fence>,
+    _ready: Option<(ID3D12Fence, Arc<FenceIdentity>)>,
+    _signal_state: Arc<FenceIdentity>,
 }
 impl State {
     pub(super) fn new() -> Self {
@@ -75,7 +86,7 @@ impl State {
             completed: 0,
             pending: vec![],
             pipelines: HashMap::new(),
-            timelines: HashMap::new(),
+            timelines: Vec::new(),
         }
     }
 
@@ -123,7 +134,12 @@ impl Engine {
     /// The returned wrapper borrows the resource. It does not close the NT
     /// handle or release the host's resource on behalf of the caller. The
     /// resource must be a same-adapter, shared DEFAULT-heap 2D UAV texture with
-    /// one mip/sample and the exact declared format and extent.
+    /// one mip/layer/sample and the exact positive declared extent. Formats are
+    /// RGBA32F or RGBA16F for HDR, R32F or RGBA32F for either depth kind, and
+    /// RGBA8Unorm for display. Publish COMMON before the first export; accepted
+    /// exports return COMMON. Restore COMMON after host use, before ready.
+    /// Invalid records/handles are [`Status::InvalidArgument`]; an unavailable
+    /// backend/format is [`Status::Unavailable`]. No format or extent defaults.
     ///
     /// # Safety
     /// `handle` must be a valid NT handle created for the exact raw device
@@ -180,7 +196,11 @@ impl Engine {
                 "D3D12 shared resource must be a same-adapter 2D single-sample UAV texture matching the descriptor",
             ));
         }
-        let raw_id = resource.as_raw() as usize;
+        let identity = Arc::new(
+            unsafe { BorrowedHandle::borrow_raw(handle.0) }
+                .try_clone_to_owned()
+                .map_err(|e| invalid(&format!("D3D12 resource handle duplication failed: {e}")))?,
+        );
         let size = wgpu::Extent3d {
             width,
             height,
@@ -216,7 +236,7 @@ impl Engine {
         Ok(D3d12Image {
             engine: self.clone(),
             texture,
-            raw_id,
+            identity,
         })
     }
 
@@ -267,25 +287,34 @@ impl Engine {
                 "D3D12 fence reports device removal while importing",
             ));
         }
-        let identity = fence.cast::<windows::core::IUnknown>().map_err(|e| {
-            error(
-                Status::InvalidArgument,
-                format!("D3D12 fence identity query failed: {e}"),
-            )
-        })?;
-        let key = identity.as_raw() as usize;
         let mut state = self.inner.d3d12.lock().unwrap();
-        let last_signal = state
-            .as_mut()
-            .ok_or_else(unavailable)?
-            .timelines
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(value)))
-            .clone();
+        let timelines = &mut state.as_mut().ok_or_else(unavailable)?.timelines;
+        timelines.retain(|value| value.strong_count() != 0);
+        let existing = timelines
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|shared| unsafe {
+                CompareObjectHandles(HANDLE(shared.handle.as_raw_handle()), handle).as_bool()
+            });
+        let identity = if let Some(shared) = existing {
+            shared
+        } else {
+            let owned = unsafe { BorrowedHandle::borrow_raw(handle.0) }
+                .try_clone_to_owned()
+                .map_err(|e| invalid(&format!("D3D12 fence handle duplication failed: {e}")))?;
+            let shared = Arc::new(FenceIdentity {
+                handle: owned,
+                last_signal: Arc::new(Mutex::new(value)),
+            });
+            timelines.push(Arc::downgrade(&shared));
+            shared
+        };
+        let last_signal = identity.last_signal.clone();
         Ok(D3d12Timeline {
             engine: self.clone(),
             fence,
             last_signal,
+            identity,
         })
     }
 }
@@ -302,6 +331,14 @@ impl super::Render {
     /// returned sequence is polled with [`Engine::poll_d3d12_exports`]. Calls
     /// use the engine's ordinary exclusive thread rule and retain imported
     /// wrappers until the sequence retires.
+    /// Supply 1..=8 distinct native destinations. `done` values are 1 through
+    /// `u64::MAX - 1`, strictly greater than previous and observed values; ready
+    /// values may also be zero. At 32 pending batches this returns
+    /// [`Status::Busy`]. Invalid arguments return [`Status::InvalidArgument`]
+    /// before external waits/signals; missing sources return
+    /// [`Status::InvalidState`]. Device/submission failure is terminal
+    /// [`Status::Unavailable`] with unknown outcome. Cancellation and resize do
+    /// not revoke accepted work. Drain exports before disposing the engine.
     pub fn export_d3d12(
         &self,
         images: &[(D3d12Image, u32, u32)],
@@ -322,25 +359,32 @@ impl super::Render {
             if !Arc::ptr_eq(&engine.inner, &r.engine.inner) || value == u64::MAX {
                 return Err(invalid("Invalid D3D12 ready timeline"));
             }
-            if r.fence.as_raw() == done.0.fence.as_raw() && value >= done.1 {
+            if Arc::ptr_eq(&r.identity, &done.0.identity) && value >= done.1 {
                 return Err(invalid(
                     "D3D12 ready value must be less than done on the same timeline",
                 ));
             }
         }
         let mut sources = Vec::new();
-        let mut destination_ids = HashSet::new();
+        let mut destinations: Vec<&D3d12Image> = Vec::new();
         for (image, kind, rows) in images {
             if !Arc::ptr_eq(&engine.inner, &image.engine.inner) || *rows > 1 {
                 return Err(invalid(
                     "D3D12 image belongs to another engine or has invalid row order",
                 ));
             }
-            if !destination_ids.insert(image.raw_id) {
+            if destinations.iter().any(|other| unsafe {
+                CompareObjectHandles(
+                    HANDLE(other.identity.as_raw_handle()),
+                    HANDLE(image.identity.as_raw_handle()),
+                )
+                .as_bool()
+            }) {
                 return Err(invalid(
                     "D3D12 export destinations must be distinct resources",
                 ));
             }
+            destinations.push(image);
             let source = match *kind {
                 0 => self
                     .get_output_texture(super::OutputKind::Hdr)?
@@ -470,12 +514,31 @@ impl super::Render {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(source.width().div_ceil(8), source.height().div_ceil(8), 1);
         }
+        // DX12 PRESENT maps to native COMMON. Keep the exported resource in
+        // COMMON for host copies and for the next export's tracked state.
+        encoder.transition_resources(
+            std::iter::empty(),
+            images.iter().map(|(image, _, _)| wgpu::TextureTransition {
+                texture: &image.texture,
+                selector: None,
+                state: wgpu::TextureUses::PRESENT,
+            }),
+        );
         let command = encoder.finish();
         let sequence = state
             .sequence
             .checked_add(1)
             .ok_or_else(|| error(Status::Error, "GPU sequence exhausted"))?;
-        reserve_timeline_value(&done.0.last_signal, done.1)?;
+        let observed = unsafe { done.0.fence.GetCompletedValue() };
+        if observed == u64::MAX {
+            gpu.loss
+                .notify("D3D12 device removed before export timeline reservation");
+            return Err(error(
+                Status::Unavailable,
+                "D3D12 fence reports device removal",
+            ));
+        }
+        reserve_timeline_value(&done.0.last_signal, done.1, observed)?;
         let complete = Arc::new(AtomicBool::new(false));
         let flag = complete.clone();
         let mut pending = Pending {
@@ -486,7 +549,8 @@ impl super::Render {
             failed: false,
             _images: images.iter().map(|(i, _, _)| i.texture.clone()).collect(),
             _sources: sources,
-            _ready: ready.map(|(r, _)| r.fence.clone()),
+            _ready: ready.map(|(r, _)| (r.fence.clone(), r.identity.clone())),
+            _signal_state: done.0.identity.clone(),
         };
         let mut submitted = false;
         let result = gpu.queue.exclusive_submit(|queue| -> Result<()> {
@@ -513,6 +577,11 @@ impl super::Render {
             if submitted {
                 // The command is in flight but the completion signal is unknown;
                 // retain all resources and never credit this sequence as done.
+                engine
+                    .inner
+                    .gpu
+                    .loss
+                    .notify("D3D12 export signal failed after submit; outcome unknown");
                 pending.failed = true;
                 state.sequence = sequence;
                 state.pending.push(pending);
@@ -546,6 +615,10 @@ impl Engine {
         self.check_device()?;
         let hal = unsafe { self.inner.gpu.device.as_hal::<Dx12>() }.ok_or_else(unavailable)?;
         unsafe { hal.raw_device().GetDeviceRemovedReason() }.map_err(|e| {
+            self.inner
+                .gpu
+                .loss
+                .notify(format!("D3D12 device removed while polling export: {e}"));
             error(
                 Status::Unavailable,
                 format!("D3D12 device removed; export outcome is unknown: {e}"),
@@ -574,6 +647,12 @@ impl Engine {
                 break;
             }
             let completed = unsafe { work.done.GetCompletedValue() };
+            if completed == u64::MAX {
+                self.inner
+                    .gpu
+                    .loss
+                    .notify("D3D12 fence returned UINT64_MAX while polling export");
+            }
             if !fence_completed(completed, work.value)? {
                 break;
             }
@@ -605,9 +684,10 @@ mod tests {
     fn duplicate_import_wrappers_share_signal_reservation() {
         let canonical = Arc::new(Mutex::new(0));
         let second_wrapper = canonical.clone();
-        assert!(reserve_timeline_value(&canonical, 1).is_ok());
-        assert!(reserve_timeline_value(&second_wrapper, 1).is_err());
-        assert!(reserve_timeline_value(&second_wrapper, 2).is_ok());
+        assert!(reserve_timeline_value(&canonical, 1, 0).is_ok());
+        assert!(reserve_timeline_value(&second_wrapper, 1, 0).is_err());
+        assert!(reserve_timeline_value(&second_wrapper, 2, 2).is_err());
+        assert!(reserve_timeline_value(&second_wrapper, 3, 2).is_ok());
     }
 }
 
@@ -623,10 +703,10 @@ mod gpu_tests {
     use std::mem::ManuallyDrop;
     use std::time::Instant;
     use wgpu::hal::api::Dx12;
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Graphics::Direct3D12::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
+    use windows::core::PCWSTR;
 
     unsafe fn shared_texture(
         device: &ID3D12Device,
