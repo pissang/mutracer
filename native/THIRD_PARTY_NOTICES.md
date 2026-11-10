@@ -85,3 +85,19 @@ and viewer. Ryū's license exempts object code from reproducing its text.
 The embedded `rt_hdr_alb_nrm` model is from
 [OIDN weights](../oidn/weights/README.md), Apache License 2.0
 ([text](./LICENSES/OIDN-weights-Apache-2.0.txt)).
+
+## WebView prototype
+
+The independent `webview-viewer` application uses [wry 0.57.2](https://github.com/tauri-apps/wry)
+(MIT OR Apache-2.0) with winit and the operating system's WebView. It does not
+embed a browser engine. WKWebView is supplied by macOS; Windows needs the
+Microsoft WebView2 runtime; Linux needs WebKitGTK 4.1 and GTK 3.
+
+The additional cross-platform Rust dependency licenses, including the WebView
+bindings and their transitive dependencies, are reproduced in
+[WebView-dependencies.txt](./LICENSES/WebView-dependencies.txt). The MPL-2.0
+components retain their original license; their versioned upstream sources are
+linked in that file. Shared native SDK and renderer licenses still apply.
+The embedded React frontend is the repository's web viewer and retains the
+[repository notices](../THIRD_PARTY_NOTICES.md). Its offline chess model is the
+repository's generated CC0 example (`examples/assets/chess.glb`).

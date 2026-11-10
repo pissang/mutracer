@@ -5,7 +5,7 @@ import { autoGroundedSkybox, setSettings, useViewer } from '../../store';
 import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS } from '../../engine/presets';
 import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engine/studio';
 import { getEngine } from '../../engine/ViewerEngine';
-import { toPathedFiles } from '../../engine/loadModel';
+import { toPathedFiles } from '../../engine/droppedFiles';
 import { ColorField, Field, Hint, Scrub, Section, Segmented, Switch } from '../ui/controls';
 import { SunTime } from './SunTime';
 

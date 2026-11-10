@@ -914,3 +914,30 @@ The reported GPU timeline interval includes CPU submission gaps; only the option
 `metalExportGpuMs` pass timestamps measure kernels. Record measurement windows and
 other GPU/build workloads. Neither this host nor the injected loss-notification
 Rust test validates physical GPU removal or a real Hgi/Hydra consumer.
+
+## WebView UI prototype
+
+`native/webview-viewer` is an independent wry/winit host for the shared React UI;
+[usage and current limits](webview-viewer/README.md). Build it with
+`node native/scripts/webview-viewer-build.mjs --build-only`. It uses the normal
+native build variables and a separate viewer Cargo target. `MUTRACER_AOT_PREBUILT`
+can reuse a current AOT archive. Frontend assets are gzip-compressed in the build
+output and embedded by Cargo; no generated assets belong in source control.
+
+For focused checks, set `MUTRACER_WEBVIEW_ASSETS` to that build's `ui/` directory
+and run the crate's tests with `MUTRACER_AOT_ARCHIVE` and the viewer target set.
+The ignored `native_scene_matches_egui_descriptor_at_fixed_seed_and_spp` test
+compares the SDK scene importer with the retained egui indexed-descriptor path
+on Software and HWRT at seed 12345 and 16 spp; set
+`MUTRACER_WEBVIEW_GPU_EVIDENCE` outside the checkout for images and differences.
+It compares those render paths, not OS compositing. The executable's
+`--evidence DIR` mode uses 16 spp and records baseline/edited/orbit images, input counts
+and edit-to-presentation timing, and closes after two minutes. Real mouse and
+Inspector input, transparency, resizing and each system WebView still need
+real-window checks. `native:ci` does not include this independent crate.
+
+The host routes compact base64-encoded pointer records to Rust camera controls;
+low-frequency commands use versioned JSON requests and correlated replies. The
+SDR display texture is copied into the viewport rectangle with wgpu's existing
+TextureBlitter; no renderer shader or sampling code is replaced. The independent
+crate has no eframe/egui dependency.

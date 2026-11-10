@@ -286,7 +286,7 @@ export type ToastTone = 'info' | 'success' | 'warning' | 'error';
 export interface ViewerState {
   settings: Settings;
   stats: Stats;
-  backend: { name: 'WebGPU' | 'WebGL 2' | null; adapter: string };
+  backend: { name: 'WebGPU' | 'WebGL 2' | 'Native' | null; adapter: string };
   model: { name: string; presetId: string | null; credit: string | null; sourceUrl: string | null } | null;
   tree: TreeNode[];
   sceneInfo: { meshes: number; triangles: number; materials: number };

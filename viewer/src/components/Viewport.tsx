@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { MATERIALX_IMPORT, getEngine, setEngine } from '../engine/ViewerEngine';
-import { WebEngine } from '../engine/WebEngine';
+import { createEngine } from '#viewer-engine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
 import { hashModelPreset, setUi, showToast, useViewer } from '../store';
@@ -22,7 +22,7 @@ export function Viewport() {
   const inspectorOpen = useViewer((s) => s.ui.right);
 
   useEffect(() => {
-    const engine = new WebEngine(canvasRef.current!);
+    const engine = createEngine(canvasRef.current!);
     setEngine(engine);
     if (location.hash.slice(1).split('&').includes(HANDOFF_HASH)) {
       // Files dropped on the home page (the hash is rewritten after the first settings change).

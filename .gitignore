@@ -19,3 +19,6 @@ native/host/target/
 
 .cache/
 native/toolchain/node_modules
+
+dist-viewer-native/
+native/webview-viewer/target/

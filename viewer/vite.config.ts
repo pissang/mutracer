@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { gpuOpenDevProxy } from './gpuopenDevProxy';
 import { shaderFormattingPlugin } from '../scripts/shader-formatting.mjs';
@@ -58,15 +58,16 @@ function thumbnailWriter(): Plugin {
   };
 }
 
-export default defineConfig({
+export function createViewerConfig(native = false): UserConfig { return {
   root: __dirname,
-  publicDir: path.join(repoRoot, 'site/public'),
+  publicDir: native ? false : path.join(repoRoot, 'site/public'),
   base: './',
-  plugins: [gpuOpenDevProxy(), react(), shaderFormattingPlugin(), oidnWeights(), thumbnailWriter()],
+  plugins: [gpuOpenDevProxy(), react(), shaderFormattingPlugin(), ...(native ? [] : [oidnWeights()]), thumbnailWriter()],
   resolve: {
     alias: [
+      { find: '#viewer-engine', replacement: path.join(__dirname, native ? 'src/engine/createNativeEngine.ts' : 'src/engine/createEngine.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
-      { find: /^@meimu\/mutracer$/, replacement: path.join(repoRoot, 'src/main.ts') }
+      { find: /^@meimu\/mutracer$/, replacement: path.join(repoRoot, native ? 'viewer/src/engine/nativeData.ts' : 'src/main.ts') }
     ]
   },
   server: {
@@ -75,7 +76,7 @@ export default defineConfig({
     fs: { allow: [repoRoot] }
   },
   build: {
-    outDir: path.join(repoRoot, 'dist-viewer'),
+    outDir: path.join(repoRoot, native ? 'dist-viewer-native' : 'dist-viewer'),
     emptyOutDir: true,
     target: 'es2022'
   },
@@ -83,4 +84,5 @@ export default defineConfig({
   optimizeDeps: {
     esbuildOptions: { target: 'es2022' }
   }
-});
+}; }
+export default defineConfig(({mode}) => createViewerConfig(mode === 'native'));

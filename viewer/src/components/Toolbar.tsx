@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
-import { toPathedFiles } from '../engine/loadModel';
+import { toPathedFiles } from '../engine/droppedFiles';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
 import { ExamplesMenu } from './ExamplesBrowser';

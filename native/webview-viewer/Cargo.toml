@@ -1,0 +1,28 @@
+[package]
+name = "mutracer-webview-viewer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+flate2 = "1"
+glam = "=0.30.9"
+mutracer-native = { path = "../host", features = ["viewer-support"] }
+pollster = "=0.4.0"
+rfd = "=0.15.4"
+serde_json = "1"
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11"] }
+wry = "=0.57.2"
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan"] }
+gtk = "0.18"

@@ -10,6 +10,7 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "baseUrl": "..",
     "paths": {
+      "#viewer-engine": ["viewer/src/engine/createEngine.ts"],
       "@meimu/mutracer": ["src/main.ts"],
       "@meimu/mutracer/oidn": ["src/oidn.ts"]
     },

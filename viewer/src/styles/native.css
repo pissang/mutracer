@@ -1,0 +1,4 @@
+/* The native surface is behind the WebView. Only the canvas slot is a hole. */
+html, body, #root, .app, .workspace, .workspace--desktop, .desktop-workspace,
+.viewport, .viewport__canvas, .viewport-slot, .dock-panel[data-panel="viewport"] { background: transparent !important; }
+.ws-tabset:has(.viewport-slot) { background: transparent !important; }
