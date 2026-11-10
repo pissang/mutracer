@@ -408,6 +408,20 @@ fn external_vulkan_device_images_and_native_post_process() {
         .values(&[1]);
     unsafe { device.wait_semaphores(&wait_info, u64::MAX) }.unwrap();
     assert!(engine.poll_vulkan_exports(export_sequence).unwrap());
+    // Reuse the same imported image and both timelines for a second accepted
+    // export; done values remain strictly increasing.
+    let export_sequence2 = render
+        .export_vulkan(
+            &[(imported_export.clone(), 0, 0)],
+            Some((&imported_ready, 1)),
+            (&imported_done, 2),
+        )
+        .unwrap();
+    let wait_info2 = vk::SemaphoreWaitInfo::default()
+        .semaphores(std::slice::from_ref(&export_done))
+        .values(&[2]);
+    unsafe { device.wait_semaphores(&wait_info2, u64::MAX) }.unwrap();
+    assert!(engine.poll_vulkan_exports(export_sequence2).unwrap());
     let exported_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
     let export_buffer = unsafe {
         device
