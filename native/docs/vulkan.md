@@ -1,109 +1,133 @@
 # Vulkan hosts
 
-The C API in [mutracer-vulkan.h](../include/mutracer-vulkan.h) can share a host's
-Vulkan device, borrow rendered images and record custom display passes. It is
-available on Linux and Windows. macOS builds need the `vulkan-interop` Cargo
-feature and a Vulkan portability driver.
+本指南说明如何把宿主 Vulkan 设备接入 MuTracer，以及如何把宿主拥有的
+`VkImage` 作为 HDR、depth、display 或 center-depth 的导出目标。设备创建、结构体布局、
+格式、默认值和错误码以 [`mutracer-vulkan.h`](../include/mutracer-vulkan.h) 与
+[`mutracer-gpu.h`](../include/mutracer-gpu.h) 为准；本页只描述调用顺序和会影响宿主决策的
+行为。
 
-## Share a device
+## Usage
 
-Arrange the required extensions and features **before** creating the host's
-instance and device:
+### Share a device
 
-1. Call `mt_vk_instance_extensions` with the driver's `vkGetInstanceProcAddr`.
-   Enable the returned extensions when creating the instance, then choose a
-   physical device.
-2. Fill `mt_vk_host_desc`, including its retirement callback, and call
-   `mt_vk_device_plan_create` with ordinary `mt_engine_options`.
-3. Use the returned feature values, feature chain and device extensions in
-   `vkCreateDevice`. Create a graphics-and-compute queue.
-4. Pass the device, queue family/index and device retirement callback through
-   `mt_vk_device_desc` to `mt_engine_create_vulkan`. The plan can now be destroyed.
-5. Use the usual [scene and render workflow](engine.md#render-offline). Query
-   `mt_engine_vulkan_info` once to get the shared native device and queue.
+在创建宿主 instance/device 之前准备 MuTracer 所需的扩展和 features：
 
-For example, after choosing queue priorities and obtaining `requirements`:
+1. 用 `mt_vk_instance_extensions` 查询并启用 instance extensions，然后选择
+   `VkPhysicalDevice`。
+2. 填写 `mt_vk_host_desc`（包括 retirement callback），调用
+   `mt_vk_device_plan_create`。
+3. 将返回的 features、feature chain 和 device extensions 用于 `vkCreateDevice`，并启用
+   MuTracer 要求的 graphics+compute queue。
+4. 用创建出的 device、queue family/index 和 retirement callback 填写
+   `mt_vk_device_desc`，调用 `mt_engine_create_vulkan`。此后可以销毁 device plan。
+5. 按通常的 [scene/render workflow](engine.md#render-offline) 创建场景和 render；需要
+   native 句柄时调用 `mt_engine_vulkan_info`。
+
+宿主继续拥有 instance、physical device、device、queue 和驱动。它们必须一直存活到
+retirement callback 通知完成；callback 可在任意线程运行，不能在 callback 中重入 MuTracer。
+每个 native device 只导入一个 MuTracer engine；同一 engine 可以拥有多个 render。
+
+### Export host-owned images
+
+宿主可以在传给 `mt_engine_create_vulkan` 的同一 `VkDevice` 上创建 storage-capable
+`VkImage` 和 timeline `VkSemaphore`，然后用 `mt_engine_import_vulkan_image` 与
+`mt_engine_import_vulkan_timeline` 导入。MuTracer 不会销毁这些宿主句柄。一个 export
+descriptor 可以包含多张目标图像，并由一个 `done` timeline value 覆盖整批图像。
+
+典型流程如下（结构体初始化、格式选择和默认值请直接查 C headers）：
 
 ```c
-VkDeviceCreateInfo create = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-create.pEnabledFeatures = requirements.features;
-create.pNext = requirements.features_next;
-create.enabledExtensionCount = (uint32_t)requirements.extension_count;
-create.ppEnabledExtensionNames = requirements.extensions;
-create.queueCreateInfoCount = 1;
-create.pQueueCreateInfos = &queue_info;
-/* vkCreateDevice, then mt_engine_create_vulkan with that device and queue. */
+/* Host creates VkImage(s) and timeline semaphores on the imported VkDevice. */
+mt_gpu_image hdr, depth, center;
+mt_gpu_timeline ready, done;
+mt_engine_import_vulkan_image(engine, &hdr_desc, &hdr, error, capacity);
+mt_engine_import_vulkan_image(engine, &depth_desc, &depth, error, capacity);
+mt_engine_import_vulkan_image(engine, &center_desc, &center, error, capacity);
+mt_engine_import_vulkan_timeline(engine, &ready_desc, &ready, error, capacity);
+mt_engine_import_vulkan_timeline(engine, &done_desc, &done, error, capacity);
+
+mt_gpu_export_image outputs[] = {
+    { .image = hdr,    .kind = MT_GPU_OUTPUT_HDR },
+    { .image = depth,  .kind = MT_GPU_OUTPUT_DEPTH },
+    { .image = center, .kind = MT_GPU_OUTPUT_CENTER_DEPTH },
+};
+mt_gpu_export_desc export = {
+    .images = outputs, .image_count = 3,
+    .ready = ready, .ready_value = next_ready,
+    .done = done, .done_value = next_done,
+};
+uint64_t sequence = 0;
+mt_render_export_gpu(render, &export, &sequence, error, capacity);
+
+/* Poll without blocking MuTracer's API thread. */
+uint32_t complete = 0;
+while (!complete)
+    mt_engine_gpu_poll(engine, sequence, &complete, error, capacity);
+
+/* Host waits/observes done, consumes every image, restores GENERAL, then
+ * signals ready before requesting the next export. */
 ```
 
-An existing device works only if it was created with the required features and
-extensions. They cannot be added afterward. Each native device belongs to one
-MuTracer engine; use multiple renders on that engine.
+For each accepted export, wait for `done` before host reads or copies the images. Restore every
+image to the declared host-return layout (`GENERAL`) after consumption, then signal the next
+`ready` value. Cancellation does not revoke an accepted export. A rejected call sets its sequence
+output to zero and does not touch external synchronization; a device-loss or post-submit failure
+has unknown outcome, so stop waiting and rebuild the affected engine/device as described by the
+header.
 
-The host retains ownership of the native instance, device, queue and driver.
-Keep them alive until their retirement callbacks arrive, which can happen after
-engine or plan destruction. These callbacks can run on any thread; record the
-notification and destroy native devices before their instance. Do not call
-MuTracer from a retirement callback.
+### Use queues and display images
 
-## Use the queue and images
+Host `vkQueue*` calls on the exact queue imported into MuTracer require
+`mt_engine_vulkan_acquire_queue`; submit the host work and call `mt_vk_lease_release` promptly
+after the CPU calls return. The lease also covers host work before the first rendered image and
+must not be held while doing unrelated CPU work.
 
-Host `vkQueue*` calls on the shared queue need a lease. Call
-`mt_engine_vulkan_acquire_queue`, submit host work, then call
-`mt_vk_lease_release` as soon as those calls return on the CPU. This also works
-before the first image exists, for example while MuTracer prepares a scene.
-Creating host resources does not require a queue lease.
+The host-owned export path is different: host work on another queue that was enabled on the same
+device does not use the library-queue lease. It must instead obey the imported `ready`/`done`
+timeline values and perform queue-family ownership transfers when the queues belong to different
+families. The library queue remains serialized by the export timeline contract.
 
-To consume an image:
+For the existing borrowed-image path, call `mt_render_vulkan_acquire_image`, use the returned
+image only on the exact leased library queue, restore the declared layout, and release the lease.
+The image is read-only to the host and must not be destroyed or used on another queue.
 
-1. Complete a render. For a display image, also compose with
-   `mt_display_present`.
-2. Call `mt_render_vulkan_acquire_image`. It returns a native `VkImage` and a
-   lease, with the image ready for sampled reads.
-3. Record and submit read-only use on the shared queue. If temporarily changing
-   its layout for a copy, restore the returned layout before ending the commands.
-4. Release the lease. The host need not wait for GPU completion to return it.
+### Add a display post-process
 
-A lease pauses library submissions, so keep it only while recording/submitting
-host work. Other calls on this engine must wait until release, except render
-cancellation. Do not write or destroy the image, or record/submit new uses after
-release. Host command pools, views, descriptors and pipelines remain the host's responsibility;
-keep them alive until its fences complete.
+Register a callback with `mt_display_add_vulkan_post_process` and keep its subscription handle.
+The callback records into the supplied command buffer, fully writes its output, restores the
+specified layouts, and returns `MT_OK`. It must not end, submit or reset the command buffer, call
+MuTracer, or destroy borrowed handles. Remove future calls with `mt_vk_post_process_remove`.
+Callbacks run in registration order with other display passes; a failed callback discards that
+composition and reports an engine error.
 
-## Add a display pass
+## Options
 
-Register a C callback with `mt_display_add_vulkan_post_process` and keep its
-subscription handle. The callback records Vulkan commands into the supplied
-command buffer. Input is read-only; fully write the output and restore the
-specified layouts. Return `MT_OK` to accept the pass. The callback must not end,
-submit or reset the command buffer, or call MuTracer.
+- `mt_vk_device_plan_create` selects the required device features/extensions. A host may enable
+  additional features, but must not duplicate feature structures in the `pNext` chain.
+- `mt_vk_instance_extensions` accepts API version 1.1 or newer for enumeration. The currently
+  validated wgpu shader path requires a Vulkan 1.3 host/device; lower-version paths are not an
+  unconditional promise of this interop contract.
+- `mt_gpu_export_image.kind` selects HDR, depth, display, or center-depth, and `row_order`
+  selects top-first or bottom-first output. `ready` is optional; `done` is required and one done
+  value covers all images in the descriptor. Exact accepted formats, dimensions, usage flags,
+  struct defaults, and valid ranges are declared in the C headers linked above.
+- Depth and center-depth require the corresponding render AOV to be enabled. Display export
+  requires a completed `mt_display_present` composition. Export does not change refinement or
+  sample counts and does not perform CPU pixel readback.
 
-Passes run in registration order with other display passes. A failed callback
-discards the entire chain for that composition and reports an engine error.
-Remove future calls with `mt_vk_post_process_remove`. Callback resources must
-belong to the shared device and survive GPU execution. The header specifies
-SDR and HDR-window formats and the exact layouts.
+## Caveats and costs
 
-## Costs and limits
-
-- Image borrowing does not read pixels to the CPU. HDR resolution and display
-  composition still allocate the [usual GPU images](display.md#gpu-images-rust).
-- Queue/image leases synchronize CPU submission access without waiting for GPU
-  completion; long leases stall rendering and background uploads. Display passes
-  add intermediate images and GPU work.
-- Sharing requires the same device. Windows also accepts host-owned `VkImage`
-  and timeline `VkSemaphore` records created by the exact `VkDevice` passed to
-  `mt_engine_create_vulkan`; wgpu-hal wraps the image with external memory and
-  the library queue submits native timeline waits/signals. MuTracer never
-  destroys these handles. The host remains responsible for queue-family
-  ownership transfers and resource lifetime until the done value has passed.
-  The image must be storage-capable and created with the negotiated timeline
-  semaphore feature (`VK_KHR_timeline_semaphore` on pre-1.2 devices). The host
-  may consume the image on a different queue when it uses a concurrent image or
-  explicit queue-family ownership transfers around the ready/done values; the
-  queue imported into MuTracer remains the library submission queue.
-  Cross-device external-memory import is not part of this contract. Metal hosts
-  with an already-created device can use the independent [texture export path](metal.md).
-- Native handles and Vulkan feature declarations are trusted caller inputs;
-  invalid handles or queue/layout/lifetime violations cannot be made safe by
-  argument validation.
-- Linux driver interoperability remains runtime-unverified.
+- All imported images, semaphores, memory, command resources and host synchronization objects
+  remain host-owned. Keep backing objects alive until the done value has passed and all retirement
+  notifications have arrived. Cross-device import is not supported.
+- Same-queue leases serialize CPU submission access and can stall rendering or uploads if held too
+  long. A separate host queue avoids that lease but costs explicit timeline and, where applicable,
+  queue-family ownership synchronization. Exporting multiple AOVs shares one GPU completion
+  signal, while each destination still needs compatible storage and transfer usage.
+- `mt_engine_destroy` returns BUSY while accepted exports are pending; poll and drain before
+  releasing host backing storage. Device loss is terminal and may leave done unsignaled. Do not
+  retry a failed export as if it had completed.
+- The Vulkan host-owned image/timeline import API is available on Linux and Windows. macOS keeps
+  the existing device-sharing, queue-lease and display post-process paths, but the new C
+  host-owned image import functions return `UNAVAILABLE`; this report contains no macOS hardware
+  validation. Linux driver interoperability is likewise runtime-unverified here.
