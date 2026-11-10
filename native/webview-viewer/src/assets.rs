@@ -4,7 +4,7 @@ pub fn response(path: &str) -> wry::http::Response<Cow<'static, [u8]>> {
     let name = path.trim_start_matches('/');
     let name = if name.is_empty() { "index.html" } else { name };
     let mut response = wry::http::Response::builder()
-        .header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https: http:; font-src 'self'; object-src 'none'; frame-src 'none'")
+        .header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https: http:; font-src 'self'; object-src 'none'; frame-src 'none'")
         .header("X-Content-Type-Options", "nosniff");
     if let Some((mime, gzip)) = embedded(name) {
         let mut bytes = Vec::new();

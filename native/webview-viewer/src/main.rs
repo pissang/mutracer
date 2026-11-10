@@ -166,12 +166,13 @@ impl Host {
         }
         let size = window.inner_size();
         let protocol = move |_: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-            if let Some(key) = request.uri().path().strip_prefix("/bridge/") {
-                let result = if request.method() == wry::http::Method::POST {
+            let (parts, body) = request.into_parts();
+            if let Some(key) = parts.uri.path().strip_prefix("/bridge/") {
+                let result = if parts.method == wry::http::Method::POST {
                     mailbox
                         .lock()
                         .unwrap()
-                        .receive(key, request.body().clone())
+                        .receive(key, body)
                         .map(|_| Vec::new())
                 } else {
                     mailbox.lock().unwrap().take(key)
@@ -188,7 +189,7 @@ impl Host {
                         .unwrap(),
                 };
             }
-            assets::response(request.uri().path())
+            assets::response(parts.uri.path())
         };
         let init = format!(
             "window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
