@@ -314,6 +314,8 @@ export interface ViewerState {
     /** Viewport debug overlay expanded. */
     debug: boolean;
     exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; materialBrowser: boolean; sampleBrowser: boolean;
+    /** The material node graph editor drawer is open. */
+    graphEditor: boolean;
     examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
     mobileTab: InspectorTab | 'scene';
   };
@@ -443,6 +445,7 @@ export const useViewer = create<ViewerState>(() => ({
     textureBrowser: false,
     materialBrowser: false,
     sampleBrowser: false,
+    graphEditor: false,
     examplesPinned: storedUi.examplesPinned === true,
     examplesOpen: false,
     examplesCollection: null,

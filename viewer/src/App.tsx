@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Toast } from './components/Toast';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
@@ -13,6 +13,8 @@ import { GpuOpenBrowser } from './components/GpuOpenBrowser';
 import { MaterialXSamplesBrowser } from './components/MaterialXSamplesBrowser';
 import { TextureBrowser } from './components/TextureBrowser';
 import { ExamplesPanel } from './components/ExamplesBrowser';
+
+const GraphEditor = lazy(() => import('./components/graphEditor/GraphEditor'));
 
 const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
@@ -44,6 +46,8 @@ function useShortcuts() {
         else undo();
         return;
       }
+      // The node graph handles its own keys, such as Delete.
+      if (target.closest('.graph-editor')) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const state = useViewer.getState();
       const key = event.key.toLowerCase();
@@ -93,6 +97,7 @@ export function App() {
         {materials && <GpuOpenBrowser />}
         {samples && <MaterialXSamplesBrowser />}
         {examples && <ExamplesPanel />}
+        {ui.graphEditor && !mobile && !ui.hidden && <Suspense fallback={null}><GraphEditor /></Suspense>}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
         {mobile && ui.right && !ui.hidden && <Inspector mobile />}

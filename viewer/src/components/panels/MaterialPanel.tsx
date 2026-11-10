@@ -23,6 +23,7 @@ export function MaterialPanel() {
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
   const sampleBrowsing = useViewer((s) => s.ui.sampleBrowser);
+  const graphEditing = useViewer((s) => s.ui.graphEditor);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
   const graphState = useGraphDiagnostics();
@@ -119,6 +120,11 @@ export function MaterialPanel() {
           </button>
           <MaterialXImport materialId={material.id} />
         </>}
+        <button className="btn" aria-pressed={graphEditing} data-on={graphEditing || undefined}
+          title={graphEditing ? 'Hide the node graph' : 'Edit the material node graph'}
+          onClick={() => setUi({ graphEditor: !graphEditing })}>
+          <Workflow size={14} />Graph
+        </button>
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
@@ -364,7 +370,7 @@ type GraphInput = NonNullable<SelectedMaterial['graph']>['inputs'][number];
 type GraphState = NonNullable<ReturnType<NonNullable<ReturnType<typeof getEngine>>['engine']['getDiagnostics']>>['materialGraphs'];
 
 /** Engine-wide graph compilation state, refreshed whenever the selection or render phase changes. */
-function useGraphDiagnostics(){
+export function useGraphDiagnostics(){
   const [state,setState]=useState<GraphState>();
   const material = useViewer(s => s.material);
   const phase = useViewer(s => s.stats.phase);
