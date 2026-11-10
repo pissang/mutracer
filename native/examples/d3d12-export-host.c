@@ -218,7 +218,11 @@ int main(void) {
   OK(mt_engine_d3d12_info(engine, &info, error_text, sizeof error_text));
   ID3D12Device *d = (ID3D12Device *)info.device;
   ID3D12CommandQueue *q = (ID3D12CommandQueue *)info.queue;
-  const uint32_t w = 8, h = 6;
+#ifdef MT_PERF_720P
+  const uint32_t w = 1280, h = 720, samples = 4;
+#else
+  const uint32_t w = 8, h = 6, samples = 1;
+#endif
   ID3D12Resource *hdr = NULL, *dep = NULL;
   HANDLE hh = NULL, dh = NULL;
   ID3D12Fence *done = NULL;
@@ -251,28 +255,33 @@ int main(void) {
   OK(mt_render_options_default(&ro));
   ro.width = w;
   ro.height = h;
-  ro.max_samples = 1;
+  ro.max_samples = samples;
   ro.aovs = MT_AOV_DEPTH;
   mt_render render = 0;
   OK(mt_render_create(engine, &ro, &render, error_text, sizeof error_text));
   OK(mt_engine_update(engine, NULL, error_text, sizeof error_text));
   mt_converge_options co;
-  OK(mt_converge_options_default(1, &co));
+  OK(mt_converge_options_default(samples, &co));
+  ULONGLONG render_begin = GetTickCount64();
   OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+  double render_ms = (double)(GetTickCount64() - render_begin);
   size_t hb = (size_t)w * h * 16, db = (size_t)w * h * 4,
          depth_cpu_bytes = (size_t)w * h * 16, written = 0;
   float *ch = (float *)malloc(hb), *cd = (float *)malloc(depth_cpu_bytes);
   if (!ch || !cd)
     FAIL("CPU allocation");
+  ULONGLONG cpu_begin = GetTickCount64();
   OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text,
                            sizeof error_text));
   OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
                            &written, error_text, sizeof error_text));
+  double cpu_ms = (double)(GetTickCount64() - cpu_begin);
   mt_gpu_export_image ims[2] = {
       {sizeof ims[0], MT_GPU_OUTPUT_HDR, NULL, hih, MT_GPU_TOP_FIRST, 0},
       {sizeof ims[1], MT_GPU_OUTPUT_DEPTH, NULL, dih, MT_GPU_TOP_FIRST, 0}};
   mt_gpu_export_desc ex = {sizeof ex, 2, NULL, ims, 0, 0, th, 1};
   uint64_t seq = 0;
+  ULONGLONG export_begin = GetTickCount64();
   OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
   uint32_t complete = 0;
   for (unsigned wait = 0; wait < 30000; wait++) {
@@ -290,6 +299,7 @@ int main(void) {
     FAIL("mt_engine_gpu_poll export");
   if (!complete)
     FAIL("export not complete");
+  double export_submit_ms = (double)(GetTickCount64() - export_begin);
   float *gh = (float *)malloc(hb), *gd = (float *)malloc(db);
   ID3D12Fence *copy = NULL;
   DX(d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&copy)));
@@ -328,6 +338,10 @@ int main(void) {
   fwrite(gh, 1, hb, f);
   fwrite(gd, 1, db, f);
   fclose(f);
+  printf("D3D12 metrics: samples=%u render=%.0fms (%.2f spp/s) CPU "
+         "readback=%.0fms export submit+fence=%.0fms\n",
+         samples, render_ms, render_ms > 0 ? 1000.0 * samples / render_ms : 0.0,
+         cpu_ms, export_submit_ms);
   printf("PASS D3D12 C host: sequences=%llu,%llu HDR/depth byte-identical "
          "twice; wrote d3d12-export-output.bin\n",
          (unsigned long long)seq, (unsigned long long)seq2);
