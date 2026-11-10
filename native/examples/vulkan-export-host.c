@@ -15,6 +15,12 @@
 #include <vulkan/vulkan.h>
 #include <windows.h>
 static char error_text[4096];
+static double clock_ms(void) {
+  LARGE_INTEGER frequency, counter;
+  QueryPerformanceFrequency(&frequency);
+  QueryPerformanceCounter(&counter);
+  return (double)counter.QuadPart * 1000.0 / (double)frequency.QuadPart;
+}
 #define FAIL(msg)                                                              \
   do {                                                                         \
     fprintf(stderr, "FAIL %s:%d: %s (%s)\n", __FILE__, __LINE__, (msg),        \
@@ -98,6 +104,16 @@ static int depth_matches(const float *rgba, const float *r32, uint32_t pixels) {
     if (memcmp(&rgba[i * 4], &r32[i], sizeof(float)) != 0)
       return 0;
   return 1;
+}
+static int poll_export(mt_engine engine, uint64_t sequence) {
+  for (unsigned wait = 0; wait < 30000; wait++) {
+    uint32_t complete = 0;
+    OK(mt_engine_gpu_poll(engine, sequence, &complete, error_text, sizeof error_text));
+    if (complete)
+      return 0;
+    Sleep(1);
+  }
+  FAIL("GPU export timeout");
 }
 static int host_copy(VkDevice d, VkPhysicalDevice physical, VkQueue q,
                      uint32_t family, VkImage image, VkFormat format,
@@ -311,18 +327,23 @@ int main(void) {
     OK(mt_engine_import_vulkan_image(engine, &id, &imports[k], error_text,
                                      sizeof error_text));
   }
-  VkSemaphore sem;
+  VkSemaphore sem, ready_sem;
   VkSemaphoreTypeCreateInfo ti = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
   ti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
   VkSemaphoreCreateInfo sci = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   sci.pNext = &ti;
   VK(vkCreateSemaphore(d, &sci, NULL, &sem));
+  VK(vkCreateSemaphore(d, &sci, NULL, &ready_sem));
   mt_vk_gpu_timeline_desc td = {sizeof td, 0, NULL, sem};
+  mt_vk_gpu_timeline_desc ready_desc = {sizeof ready_desc, 0, NULL, ready_sem};
   mt_gpu_timeline timeline = 0;
   mt_gpu_timeline timeline_duplicate = 0;
+  mt_gpu_timeline ready_timeline = 0;
   OK(mt_engine_import_vulkan_timeline(engine, &td, &timeline, error_text,
                                       sizeof error_text));
   OK(mt_engine_import_vulkan_timeline(engine, &td, &timeline_duplicate,
+                                      error_text, sizeof error_text));
+  OK(mt_engine_import_vulkan_timeline(engine, &ready_desc, &ready_timeline,
                                       error_text, sizeof error_text));
   mt_scene scene = 0;
   void *scene_data = NULL;
@@ -356,36 +377,56 @@ int main(void) {
                            &written, error_text, sizeof error_text));
   OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
                            error_text, sizeof error_text));
+  mt_gpu_export_image batch[3];
+  for (int k = 0; k < 3; k++)
+    batch[k] = {sizeof batch[k], kinds[k], NULL, imports[k], MT_GPU_TOP_FIRST, 0};
+  mt_gpu_export_desc ex = {sizeof ex, 3, NULL, batch, ready_timeline, 1, timeline, 1};
+  uint64_t seq = 0;
+  OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+  if (mt_engine_destroy(engine, error_text, sizeof error_text) != MT_ERROR_BUSY)
+    FAIL("unsignaled ready must keep engine destruction BUSY");
+  mt_gpu_export_desc rejected = ex;
+  rejected.done = timeline_duplicate;
+  uint64_t rejected_sequence = 99;
+  if (mt_render_export_gpu(render, &rejected, &rejected_sequence,
+                           error_text, sizeof error_text) != MT_ERROR_INVALID_ARGUMENT ||
+      rejected_sequence != 0)
+    FAIL("duplicate native timeline must reject done=1");
+  rejected = ex;
+  rejected.ready = timeline;
+  rejected.ready_value = rejected.done_value = 2;
+  rejected_sequence = 99;
+  if (mt_render_export_gpu(render, &rejected, &rejected_sequence,
+                           error_text, sizeof error_text) != MT_ERROR_INVALID_ARGUMENT ||
+      rejected_sequence != 0)
+    FAIL("same-event ready>=done must be rejected");
+  PFN_vkGetSemaphoreCounterValue get_counter =
+      (PFN_vkGetSemaphoreCounterValue)vkGetDeviceProcAddr(d, "vkGetSemaphoreCounterValue");
+  PFN_vkSignalSemaphore signal_timeline =
+      (PFN_vkSignalSemaphore)vkGetDeviceProcAddr(d, "vkSignalSemaphore");
+  if (!get_counter || !signal_timeline)
+    FAIL("Vulkan timeline functions unavailable");
+  uint64_t native_value = UINT64_MAX;
+  VK(get_counter(d, sem, &native_value));
+  if (native_value != 0)
+    FAIL("rejected exports touched the external timeline");
+  OK(mt_render_cancel(render, error_text, sizeof error_text));
+  mt_render_options resized = ro;
+  resized.width = w + 1;
+  resized.height = h + 1;
+  OK(mt_render_set_options(render, &resized, error_text, sizeof error_text));
+  for (int k = 0; k < 3; k++)
+    OK(mt_gpu_image_destroy(imports[k], error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(timeline_duplicate, error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(ready_timeline, error_text, sizeof error_text));
+  VkSemaphoreSignalInfo ready_signal = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+  ready_signal.semaphore = ready_sem;
+  ready_signal.value = 1;
+  VK(signal_timeline(d, &ready_signal));
+  if (poll_export(engine, seq))
+    return 1;
   for (int k = 0; k < 3; k++) {
-    mt_gpu_export_image im = {sizeof im,        kinds[k], NULL, imports[k],
-                              MT_GPU_TOP_FIRST, 0};
-    mt_gpu_export_desc ex = {sizeof ex, 1, NULL,     &im,
-                             0,         0, timeline, (uint64_t)(k + 1)};
-    uint64_t seq = 0;
-    OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
-    if (k == 0) {
-      mt_gpu_export_desc duplicate = ex;
-      duplicate.done = timeline_duplicate;
-      uint64_t rejected_sequence = 99;
-      if (mt_render_export_gpu(render, &duplicate, &rejected_sequence,
-                               error_text, sizeof error_text) !=
-          MT_ERROR_INVALID_ARGUMENT)
-        FAIL("duplicate imported timeline value must be rejected");
-      if (rejected_sequence != 0)
-        FAIL("rejected duplicate export touched sequence");
-    }
-    uint32_t complete = 0;
-    for (unsigned wait = 0; wait < 10000; wait++) {
-      mt_status s = mt_engine_gpu_poll(engine, seq, &complete, error_text,
-                                       sizeof error_text);
-      if (s != MT_OK)
-        FAIL("poll export");
-      if (complete)
-        break;
-      Sleep(1);
-    }
-    if (!complete)
-      FAIL("export timeout");
     mt_vk_lease lease = 0;
     OK(mt_engine_vulkan_acquire_queue(engine, &lease, error_text,
                                       sizeof error_text));
@@ -399,9 +440,39 @@ int main(void) {
   if (memcmp(ch, gh, hb) || memcmp(cc, gc, hb) ||
       !depth_matches(cd, gd, w * h))
     FAIL("CPU/export pixel mismatch");
+  printf("PASS pending export survives cancel/resize/import destruction\n");
+  for (int k = 0; k < 3; k++) {
+    mt_vk_gpu_image_desc id = {sizeof id, 0, NULL, images[k], formats[k], w, h,
+                               VK_IMAGE_LAYOUT_GENERAL};
+    OK(mt_engine_import_vulkan_image(engine, &id, &imports[k], error_text,
+                                     sizeof error_text));
+    batch[k].image = imports[k];
+  }
+  OK(mt_engine_import_vulkan_timeline(engine, &td, &timeline, error_text, sizeof error_text));
+  OK(mt_engine_import_vulkan_timeline(engine, &ready_desc, &ready_timeline,
+                                      error_text, sizeof error_text));
+  ex.ready = ready_timeline; ex.done = timeline; ex.done_value = 2;
+  OK(mt_render_set_options(render, &ro, error_text, sizeof error_text));
+  OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+  OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text, sizeof error_text));
+  OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes, &written, error_text, sizeof error_text));
+  OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written, error_text, sizeof error_text));
+  OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+  if (poll_export(engine, seq))
+    return 1;
+  for (int k = 0; k < 3; k++) {
+    mt_vk_lease lease = 0;
+    OK(mt_engine_vulkan_acquire_queue(engine, &lease, error_text, sizeof error_text));
+    if (host_copy(d, vi.physical_device, vi.queue, vi.queue_family, images[k],
+                  formats[k], w, h, k == 0 ? gh : (k == 1 ? gd : gc), k == 1 ? db : hb))
+      return 1;
+    OK(mt_vk_lease_release(lease, error_text, sizeof error_text));
+  }
+  if (memcmp(ch, gh, hb) || memcmp(cc, gc, hb) || !depth_matches(cd, gd, w * h))
+    FAIL("reimported CPU/export pixel mismatch");
 #ifdef MT_PERF_720P
   const unsigned warm_frames = 5;
-  ULONGLONG warm_cpu_begin = GetTickCount64();
+  double warm_cpu_begin = clock_ms();
   for (unsigned frame = 0; frame < warm_frames; frame++) {
     OK(mt_render_restart(render, error_text, sizeof error_text));
     OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
@@ -409,38 +480,24 @@ int main(void) {
                              sizeof error_text));
     OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
                              &written, error_text, sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
+                             error_text, sizeof error_text));
   }
-  double warm_cpu_ms = (double)(GetTickCount64() - warm_cpu_begin) /
+  double warm_cpu_ms = (clock_ms() - warm_cpu_begin) /
                        (double)warm_frames;
-  ULONGLONG warm_gpu_begin = GetTickCount64();
+  double warm_gpu_begin = clock_ms();
   for (unsigned frame = 0; frame < warm_frames; frame++) {
     OK(mt_render_restart(render, error_text, sizeof error_text));
     OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
-    for (int k = 0; k < 3; k++) {
-      mt_gpu_export_image im = {sizeof im, kinds[k], NULL, imports[k],
-                                MT_GPU_TOP_FIRST, 0};
-      mt_gpu_export_desc ex = {sizeof ex, 1, NULL, &im, 0, 0, timeline,
-                               (uint64_t)(3 + frame * 3 + k)};
-      uint64_t seq = 0;
-      OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
-      uint32_t complete = 0;
-      for (unsigned wait = 0; wait < 30000; wait++) {
-        mt_status s = mt_engine_gpu_poll(engine, seq, &complete, error_text,
-                                         sizeof error_text);
-        if (s != MT_OK)
-          FAIL("poll Vulkan warm export");
-        if (complete)
-          break;
-        Sleep(1);
-      }
-      if (!complete)
-        FAIL("Vulkan warm export timeout");
-    }
+    ex.done_value = 3 + frame;
+    OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+    if (poll_export(engine, seq))
+      return 1;
   }
-  double warm_gpu_ms = (double)(GetTickCount64() - warm_gpu_begin) /
+  double warm_gpu_ms = (clock_ms() - warm_gpu_begin) /
                        (double)warm_frames;
-  printf("Vulkan warm metrics: frames=%u samples=%u CPU frame=%.0fms (%.2f spp/s) "
-         "GPU export frame=%.0fms (%.2f spp/s)\n",
+  printf("Vulkan warm metrics: frames=%u samples=%u CPU frame=%.3fms (%.2f spp/s) "
+         "GPU export frame=%.3fms (%.2f spp/s)\n",
          warm_frames, perf_samples, warm_cpu_ms,
          1000.0 * perf_samples / warm_cpu_ms, warm_gpu_ms,
          1000.0 * perf_samples / warm_gpu_ms);
@@ -459,13 +516,14 @@ int main(void) {
   OK(mt_gpu_image_destroy(imports[1], error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(imports[2], error_text, sizeof error_text));
   OK(mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text));
-  OK(mt_gpu_timeline_destroy(timeline_duplicate, error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(ready_timeline, error_text, sizeof error_text));
   OK(mt_scene_destroy(scene, error_text, sizeof error_text));
   for (int k = 0; k < 3; k++) {
     vkDestroyImage(d, images[k], NULL);
     vkFreeMemory(d, image_memory[k], NULL);
   }
   vkDestroySemaphore(d, sem, NULL);
+  vkDestroySemaphore(d, ready_sem, NULL);
   OK(mt_engine_destroy(engine, error_text, sizeof error_text));
   free(scene_data);
   free(ch);
