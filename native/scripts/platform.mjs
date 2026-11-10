@@ -14,7 +14,10 @@ export const cLinkFlags = windows
 
 export function cCompilerArgs(args,platform=process.platform) {
   if(platform!=='win32')return args;
-  const result=['/nologo','/std:c11','/MD','/W3','/WX','/D_CRT_SECURE_NO_WARNINGS','/D_CRT_NONSTDC_NO_WARNINGS'];
+  // Public headers contain UTF-8 TSDoc (including non-ASCII examples). Force
+  // MSVC's source and execution character sets so /WX does not turn C4819 into
+  // a consumer build failure on systems using a legacy code page.
+  const result=['/nologo','/std:c11','/MD','/utf-8','/W3','/WX','/D_CRT_SECURE_NO_WARNINGS','/D_CRT_NONSTDC_NO_WARNINGS'];
   const libraries=[];let directory;
   for(let i=0;i<args.length;i++) {
     const arg=args[i];
