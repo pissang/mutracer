@@ -1,0 +1,51 @@
+# Native viewer contributor checks
+
+The app runs WebEngine and the React UI unchanged at the business layer. The
+private NativeRenderHost subclasses the library data/settings containers but
+replaces device initialization, commits, target execution, readback and display
+export. No browser GPU is created. NativeSceneEncoder uses the generated v8
+layout, material IDs and existing graph normalization. SceneChangeDetector
+accepts its pending state only after host acknowledgement. Custom-protocol POST
+and one-shot GET mailboxes carry binary scene deltas and pixels; only commands,
+settings and events use JSON. Wry requires its `linux-body` feature for uploads.
+
+Build with `npm run native:viewer:build`. Direct Cargo iteration needs
+`MUTRACER_AOT_ARCHIVE`, a separate `CARGO_TARGET_DIR` and
+`MUTRACER_WEBVIEW_ASSETS` pointing at the build's `ui/` directory. Run
+`cargo test --locked --manifest-path native/webview-viewer/Cargo.toml`.
+
+For real-GPU scene comparisons, first run
+`node native/validation/webview-scene-reference.mjs /absolute/evidence`, then
+set `MUTRACER_WEBVIEW_REFERENCE` to that directory and run the ignored
+`shared_web_scenes_render_with_native_engine` test. It uses GLTFLoader,
+THREESync, MaterialX parsing, seed 0 and 16 spp on both native backends. The
+browser uses seed 0; the SDK's ordinary default is 12345. Normal guide encodings
+and accumulation precision differ; compare raw HDR and inspect residuals.
+Keep GPU work sequential. `--evidence DIR` uses an ephemeral WebView session,
+16 spp, saves the converged image/HDR and exits after two minutes. Use a real,
+unlocked desktop for compositing and input; never unlock or change power settings.
+
+## Manual platform validation
+
+Record OS, WebView runtime, GPU/driver, backend, scale factors and package hash.
+Keep evidence outside the checkout.
+
+| Check | Windows / WebView2 | Linux / Wayland and X11 |
+| --- | --- | --- |
+| Startup | Run packaged app after relocation; no developer PATH or source files. Check WebView2 installation/missing-runtime message. Test DX12 and the optional Vulkan/DLSS build. | Install GTK 3 and WebKitGTK 4.1 >= 2.40. Test fresh Wayland and X11 sessions independently. Run the relocated package. |
+| Composition | Confirm the native image is visible beneath the transparent UI, including floating controls, panel resize and window minimize/restore. | Confirm both the GTK controls and native wgpu viewport appear. Place side by side; resizing either window must not resize the other. Closing either must exit the app. |
+| DPI | Test 100/150/200%, move between monitors, resize/maximize; check viewport bounds and picker coordinates. | Test fractional Wayland scaling and X11 scale changes; check viewport physical dimensions and mouse coordinates. |
+| Input | Orbit, right-pan, wheel, orthographic zoom, click selection, focus picking, keyboard shortcuts and text editing. UI overlays must capture their own input. | Repeat directly in the native viewport. Confirm GTK keyboard/text/file dialogs and native pointer input remain responsive while rendering. |
+| Features | GLB, external-resource glTF, MaterialX graph and heights, HDR+studio, animation, visibility/material undo, AOVs, OIDN/JNLM, export and export cancellation. | Same; also check binary POST uploads through WebKitGTK and large scenes above 128 MiB. |
+| HDR | Enable HDR on an HDR-capable surface, then test an SDR display and moving the window between displays. Check reported capability/fallback and unchanged SDR PNG. | Check extended-linear-sRGB capability and SDR fallback under each compositor; record unsupported driver/compositor paths. |
+| GPU | Change GPU/traversal; app restarts and scene cache restores. Optional DLSS: use matching SDK/runtime, check pinhole and animated scenes, history reset and OIDN fallback. | Change GPU/traversal where multiple adapters exist. Confirm software fallback and idle rendering after convergence. |
+| Packaging | Verify MSVC CRT, DXC, all OIDN weights and notices; package should run without Node/Rust. Test offline startup. | Check system WebKitGTK dependencies, OIDN weights and notices, executable permissions and offline startup. |
+
+The Windows cross-check on macOS needs Windows SDK headers and an MSVC-compatible
+C++ environment; a missing `windows.h` is an environment block. Linux checks need
+a Linux Rust target, system development libraries and a desktop to validate UI.
+
+`--workflow-evidence DIR MODEL.glb` runs the real-window import, MaterialX, HDR,
+studio, OIDN and independent-export workflow through WebEngine's public actions.
+It writes `workflow.json` and per-stage captures, then exits. It is opt-in and
+uses an ephemeral WebView session; it does not alter the normal app cache.

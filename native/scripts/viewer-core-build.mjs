@@ -39,7 +39,6 @@ export async function prepareViewerCore(out,target,environment=process.env) {
     run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
   run(process.execPath,['native/scripts/generate-display.mjs','--check']);
   run(process.execPath,['native/scripts/generate-sky.mjs','--check']);
-  run(process.execPath,['native/scripts/generate-viewer-spheres.mjs','--check']);
   await prepareTinyBvh();
   return {env,run};
 }

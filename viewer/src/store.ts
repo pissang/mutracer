@@ -29,6 +29,11 @@ export interface Settings {
   studioAmbient: number;
   /** Tint of the ambient fill and the studio backdrop. */
   studioAmbientColor: string;
+  nativeKeyEnabled: boolean;
+  nativeKeyIntensity: number;
+  nativeKeyColor: string;
+  nativeKeyAzimuth: number;
+  nativeKeyElevation: number;
   envId: string;
   envIntensity: number;
   envRotation: number;
@@ -113,6 +118,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lighting: 'environment',
   studioPreset: 'three-point',
   studioIntensity: 1,
+  nativeKeyEnabled: false, nativeKeyIntensity: 1, nativeKeyColor: '#ffffff', nativeKeyAzimuth: 45, nativeKeyElevation: 45,
   studioRotation: 0,
   studioAmbient: 0.1,
   studioAmbientColor: '#ffffff',
@@ -386,6 +392,11 @@ function validateSettings(settings: Settings): Settings {
     lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
     studioIntensity: number('studioIntensity', 0, 20),
+    nativeKeyEnabled: settings.nativeKeyEnabled === true,
+    nativeKeyIntensity: number('nativeKeyIntensity', 0, 10),
+    nativeKeyAzimuth: number('nativeKeyAzimuth', 0, 360),
+    nativeKeyElevation: number('nativeKeyElevation', 5, 85),
+    nativeKeyColor: /^#[0-9a-f]{6}$/i.test(settings.nativeKeyColor) ? settings.nativeKeyColor : DEFAULT_SETTINGS.nativeKeyColor,
     studioAmbient: number('studioAmbient', 0, 2),
     studioSize: number('studioSize', 0.1, 4),
     skyTime: number('skyTime', SKY_TIME_RANGE[0], SKY_TIME_RANGE[1]),

@@ -86,7 +86,7 @@ The embedded `rt_hdr_alb_nrm` model is from
 [OIDN weights](../oidn/weights/README.md), Apache License 2.0
 ([text](./LICENSES/OIDN-weights-Apache-2.0.txt)).
 
-## WebView prototype
+## Native WebView viewer
 
 The independent `webview-viewer` application uses [wry 0.57.2](https://github.com/tauri-apps/wry)
 (MIT OR Apache-2.0) with winit and the operating system's WebView. It does not
@@ -101,3 +101,14 @@ linked in that file. Shared native SDK and renderer licenses still apply.
 The embedded React frontend is the repository's web viewer and retains the
 [repository notices](../THIRD_PARTY_NOTICES.md). Its offline chess model is the
 repository's generated CC0 example (`examples/assets/chess.glb`).
+
+Wayland support additionally activates the platform crates listed with their
+license texts in [WebView-additional-dependencies.txt](LICENSES/WebView-additional-dependencies.txt).
+The optional Windows NGX adapter and runtime remain subject to the NVIDIA DLSS
+SDK license; optional packages include its supplied text in `licenses/NVIDIA-DLSS/`.
+Windows packages include the DirectX Shader Compiler and MSVC runtime notices
+under `licenses/DXC/` and `licenses/MSVC/`.
+
+The native GPUOpen catalog gateway uses ureq 3.4.2 with rustls. Its selected
+license texts and copyright notices are in
+[WebView-HTTP-TLS.txt](LICENSES/WebView-HTTP-TLS.txt).

@@ -1,8 +1,9 @@
 # MuTracer native SDK
 
 An experimental Rust and C SDK for the MuTracer path tracer, plus a standalone
-glTF viewer. It renders with wgpu and needs no JavaScript engine or Node at
-runtime. It covers a subset of the browser library's features. The APIs and the
+viewer. The SDK renders with wgpu without a JavaScript runtime; the viewer
+uses the operating system's WebView. The SDK covers a subset of the browser
+library's features. The APIs and the
 C ABI can change between versions.
 
 ## Platforms
@@ -18,8 +19,9 @@ and optional OIDN with a caller-supplied runtime.
 
 ## Native viewer
 
-`npm run native:viewer` builds and opens a standalone glTF/GLB viewer. See
-[viewer downloads, controls and limits](viewer/README.md).
+`npm run native:viewer` builds and opens the default native viewer, with model,
+MaterialX, environment, animation and export controls. See
+[viewer usage and limits](webview-viewer/README.md).
 
 ## APIs
 
@@ -204,7 +206,7 @@ int main(void) {
 | [examples/job-host.c](examples/job-host.c) | Polling jobs and cancellation |
 | [examples/denoise-host.c](examples/denoise-host.c) | Standalone OIDN denoiser |
 | [examples/window-host.c](examples/window-host.c) | C window presentation (macOS glue in `window-appkit.m`) |
-| [viewer/examples/surface.rs](viewer/examples/surface.rs) | Rust window and HDR presentation |
+| [webview-viewer/examples/surface.rs](webview-viewer/examples/surface.rs) | Rust window and HDR presentation |
 
 `npm run native:engine`, `native:context` and `native:jobs` build the C hosts and
 check them on the validation scenes; they need a GPU and are described in the

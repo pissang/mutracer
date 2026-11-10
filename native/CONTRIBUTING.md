@@ -5,7 +5,7 @@ Per-call and per-field API details belong on the declarations (C headers and
 Rust doc comments); workflows, behavior across calls, costs and limits belong in
 [README.md](README.md) and [docs/](docs). License notices are separate for the
 [native library](THIRD_PARTY_NOTICES.md) and the
-[viewer](viewer/THIRD_PARTY_NOTICES.md).
+[viewer](THIRD_PARTY_NOTICES.md#native-webview-viewer).
 
 ## Layout
 
@@ -20,7 +20,7 @@ Rust doc comments); workflows, behavior across calls, costs and limits belong in
   C module test harness.
 - `validation/`: render and contract checks and browser reference tools;
   `validation/compiler/` holds whole-browser-API and async compilation probes.
-- `viewer/`: standalone app; `toolchain/`: pinned compiler; `LICENSES/`:
+- `webview-viewer/`: default standalone app; `toolchain/`: pinned compiler; `LICENSES/`:
   license texts.
 
 ## Setup
@@ -92,9 +92,8 @@ viewer packaging command does not create DLSS packages.
 The build checks the pinned loader/runtime SHA-256 values and writes
 `dlss-build.json` with binary and adapter-source hashes.
 
-Run `mutracer-viewer.exe --dlss-smoke C:/evidence/rr` from the produced app for a
-headless GPU check through the same custom filter, result publication and Display
-path. Add `--dlss-preset D` to test the older model. Set `MUTRACER_DLSS_LOG=1` for
+Use the optional package on an NVIDIA Vulkan device and follow the
+[DLSS and platform checks](webview-viewer/CONTRIBUTING.md#manual-platform-validation). Set `MUTRACER_DLSS_LOG=1` for
 verbose NGX diagnostics. This check does not establish glass or animation quality;
 inspect fixed-sample images separately.
 
@@ -115,9 +114,8 @@ inspect fixed-sample images separately.
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
 | `node native/validation/matrix-verify.mjs`, `vector-verify.mjs` | No | Precision checks |
 | `npm run native:viewer:build` | No | Full AOT graph and platform app |
-| `npm run native:viewer:dev` | Yes | Interactive viewer with Subsecond UI hot reload |
-| `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and linked denoising runtime |
-| `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, all AOVs and real-window startup |
+| `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks embedded UI and denoising weights |
+| `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, denoising and real-window startup |
 | `npm run native:sdk:package` | No | Packages the SDK and checks C/CMake shared and static linking after relocation |
 | `npm run native:check` | No | Compiler capability probe; reports the incomplete browser API port and exits with status 1 |
 
@@ -137,7 +135,7 @@ host/viewer Cargo targets, run the affected Rust tests directly:
 
 ```sh
 cargo test --locked --manifest-path native/host/Cargo.toml --lib TEST_FILTER
-cargo test --locked --manifest-path native/viewer/Cargo.toml TEST_FILTER
+cargo test --locked --manifest-path native/webview-viewer/Cargo.toml TEST_FILTER
 ```
 
 Set `CARGO_TARGET_DIR` to the appropriate target before each command. Reuse it
@@ -199,7 +197,6 @@ regressions.
 | `MUTRACER_GLTF_EVIDENCE` | glTF material fixture and native values for `validation/gltf-material-reference.mjs` |
 | `MUTRACER_ANIMATION_EVIDENCE` | Animation test fixtures, poses, images and report |
 | `MUTRACER_TEST_VULKAN_LIBRARY` | Optional Vulkan driver/loader library for the interop GPU test |
-| `MUTRACER_VIEWER_METRICS` | [Real-window viewer metrics](#viewer) |
 | `MUTRACER_NATIVE_GUI_SMOKE=1` | Same as `native:viewer:package -- --gpu` |
 
 ## CI and releases
@@ -211,8 +208,8 @@ software and hardware WGSL. Reports mark GPU rendering and windows as
 **not validated**. Finding a software adapter cannot turn CPU checks into a
 rendering gate.
 
-`native:ci:gpu` adds the ignored host GPU tests, animated-pose rendering, all 33
-rendered fixtures, ray-query execution, the `viewer/examples/surface.rs` window,
+`native:ci:gpu` adds the ignored host GPU tests, shared viewer scene comparisons, all 33
+rendered fixtures, ray-query execution, the `webview-viewer/examples/surface.rs` window,
 HDR negotiation and lifecycle smoke, and the packaged render/AOV and
 window-startup checks. Software or unknown adapters and missing ray-query
 support are errors. GitHub-hosted CI does not run it.
@@ -468,76 +465,12 @@ heights and output; archive those differences rather than claiming pixel parity.
 
 ### Viewer
 
-#### UI hot reload
-
-After the [native setup](#setup), install the matching Dioxus CLI and start the
-development viewer from the repository root:
-
-```sh
-cargo install dioxus-cli --version 0.7.10 --locked
-npm run native:viewer:dev
-```
-
-Save UI function or layout edits to update the open window. Successful UI patches
-keep the loaded model, camera, accumulated samples and GPU resources. The command
-also wakes a converged viewer when a patch arrives. Compilation errors leave the
-previous code running; fix the error and save again.
-
-Pass a model path to open it at launch, including paths with spaces:
-`npm run native:viewer:dev -- "/absolute/path/my model.glb"`. Add `--port 9012`
-to choose the devserver port; otherwise dx chooses an available local port.
-`MUTRACER_DX` selects an existing dx executable. Its version must be 0.7.10,
-matching the pinned Subsecond and devtools crates.
-
-The command prepares the AOT core once at startup and uses a separate development
-build in `.native-build/viewer-dev/`. `MUTRACER_NATIVE_OUTPUT` changes that directory;
-`CARGO_TARGET_DIR` overrides its Cargo cache. It finds the bundled scriptc unless
-`MUTRACER_SCRIPTC` is set. `MUTRACER_AOT_PREBUILT` reuses an archive you have already
-built from the current AOT inputs.
-
-Subsecond is experimental. Patching covers the viewer binary's UI call chain
-rooted at `Viewer::panels`; startup code and dependency crates are outside it.
-Stop the command before changing state struct layouts, then relaunch: existing
-state is not migrated to a new layout. Relaunch for SDK, TS/AOT or GPU setup
-changes as well. Development-only hot reload is disabled in release builds.
-
-#### Implementation
-
-`npm run native:viewer:build` builds the full AOT graph and app with locked
-dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
-`src/display-shader.ts` generates the display WGSL through the Web generator;
-`scripts/generate-display.mjs --check` detects stale output.
-Bloom and OIDN preparation use the shared TS shader generators through AOT,
-like JNLM; `native/validation/postprocess-shaders.mjs` compares the complete JS
-and AOT packets. Native stores no independent Bloom/OIDN WGSL copies.
-The primary-surface fields live in `src/renderer/sceneLayoutSchema.ts`; the existing
-layout generator emits the Rust record and all field-offset/type assertions.
-The trace hook and AOT resolve generator use that same schema. Solar position
-and studio placement/ambient math also use TS through the existing AOT runtime;
-host clock and callback scheduling remain local Rust adapters.
-The examples catalog is `viewer/src/engine/model-presets.json`, shared by both
-viewers. `scripts/generate-sky.mjs` emits the shared sky WGSL and
-`scripts/generate-viewer-spheres.mjs` converts the web procedural example; both
-support `--check` and run in the root typecheck and native app build.
-
-- Preview capture, tone mapping, denoising and presentation stay on the GPU;
-  export reads pixels back.
-- The viewer renders through `api::Engine::on_device`, a `RenderLoop` with its
-  default preview, and the engine `Display`. Descriptor assembly and full
-  preparation run off the UI thread.
-- New input waits until the selected channel's batch in flight is collected and
-  shown (`Render::collect`) and while a full preparation runs, so held edits
-  keep updating without cancelling preparations.
-- Native queue submissions pause outside the UI callback so eframe can
-  reconfigure the shared surface; CPU preparation continues.
-- The immutable picking BVH is built on a worker while a model loads. Autofocus
-  uses it, with no GPU readback or alpha-texture inspection.
-- The viewer uses the published `oidn-webgpu-native = 0.2.0` Rust crate on the
-  rendering device. Cargo verifies and links its bundled platform core; no
-  upstream checkout, planner build or private FFI is needed. The adapter follows
-  `native/README.md` upstream: load a Model, create a checked Denoiser, prepare
-  host buffers, then encode into the host's command encoder. `denoise.rs` and
-  `mt_denoiser_*` retain the optional caller-supplied OIDN SDK path.
+The default app is `native/webview-viewer`; see its
+[contributor guide](webview-viewer/CONTRIBUTING.md) for Engine-boundary contracts,
+scene comparisons and manual platform checks. React UI and scene construction
+run in the system WebView. The native SDK owns rendering, denoising and display.
+The sky shader still comes from `scripts/generate-sky.mjs --check`; display,
+Bloom and OIDN generators remain shared with the SDK.
 
 ## Validation
 
@@ -566,59 +499,18 @@ streams depend on traversal order.
 
 ### Viewer
 
-The ignored `all_shared_examples_download_and_import` test downloads and imports
-both catalogs. Set `MUTRACER_VIEWER_CACHE` outside the checkout; optionally filter
-with comma-separated `MUTRACER_EXAMPLE_IDS` and write results to
-`MUTRACER_EXAMPLE_EVIDENCE`. The ignored
-`catalog_views_and_authored_lighting_render_on_both_backends` test writes images
-and a report to `MUTRACER_EXAMPLE_RENDER_EVIDENCE`.
+Run the shared viewer suite with `npm run test:viewer` and the WebView crate's
+CPU tests through `native:ci`. `native:ci:gpu` adds shared glTF, MaterialX,
+HDR/studio and OIDN scene comparisons on Software and HWRT, the SDK surface
+probe and the relocated app check. Keep GPU checks sequential.
 
-`viewer_panels_examples_and_debug_use_the_shared_gpu_image` renders the actual
-egui panels offscreen and checks loading, camera selection, output switching,
-preview disabling and overlay gestures. Set `MUTRACER_VIEWER_UI_EVIDENCE` for its
-screenshots. This test does not establish OS-window input or presentation;
-`--startup-smoke` and the surface example still require an unlocked desktop.
-
-The packaged executable accepts these smoke modes. GPU modes require actual
-HWRT where noted and compare against fresh contexts on Software and HWRT.
-
-| Flag | Checks |
-| --- | --- |
-| `[MODEL] --package-smoke DIR` | Portable CPU package |
-| `--startup-smoke REPORT.json` | Opens a window, resizes it and presents frames; the report must confirm success |
-| `[MODEL] --smoke-out DIR` | Load and render, editing, cancellation, HDR environments, backend assertions and native denoising (actual HWRT) |
-| `--interaction-smoke DIR` | Continuous camera and held edits, retained previews, resize, stale-denoise rejection |
-| `--material-smoke`, `--environment-smoke`, `--light-smoke`, `--transform-smoke`, `--geometry-smoke DIR` | Incremental commits against full preparation |
-| `--parity-smoke DIR` | Camera and render settings against fresh contexts, retention after edits and backend replacement, display controls, transparent PNG, denoising alpha and guide channels |
-| `--texture-smoke DIR` | All nine S/T wrap combinations and negative, zero and large repeats (needs an imported texture) |
-| `--texture-editor-smoke DIR` | Shared material presets; upload, replacement, removal and sampling of all nine slots, including displacement scale and bias |
-| `--studio-smoke DIR` | Rect lights against `node native/validation/viewer-studio-reference.mjs DIR` output; preset and parameter edits |
-| `--focus-smoke DIR` | Autofocus against `node native/validation/viewer-focus-reference.mjs DIR` output: depth clusters, focus pulls, opaque geometry, stale queries, misses, manual overrides, orthographic views, all three AOVs, invalid input, rollback |
-| `[MODEL] --edit-bench DIR` | Descriptor build and commit times of material, transform, camera, light and environment edits at 1280×720 on both backends, through a bare L0 context (`"path": "l0"`) and the engine (`"path": "l1"`), in `edit-bench.jsonl` |
-
-The packaging script sets `MUTRACER_NATIVE_GPU_VALIDATION=1` only in its GPU
-mode. Run the ignored `live_polyhaven_catalog_and_texture_download` test to
-check the live Poly Haven service, and the ignored animation test with the
-archive and viewer Cargo target configured:
-
-```sh
-cargo test --release --locked --manifest-path native/viewer/Cargo.toml \
-  gpu_animated_poses -- --ignored --nocapture
-```
-
-It compares animated HDR, normal and albedo with fresh scenes on Software and
-actual HWRT, then exercises playback, pause, seeking and clip switching.
-
-Headless smokes do not cover file dialogs, panel changes, orbit/pan/zoom/fit,
-pause/restart, resolution/exposure and PNG export; check those in the real
-window. `MUTRACER_VIEWER_METRICS=/absolute/result.json` runs a 1280×720
-real-window interaction and three-full-commit sequence, reports UI, picking and
-frame intervals, and closes. Use the LEGO model, keep the Mac unlocked and
-thermally nominal, and keep outliers.
-
-To validate a package, copy the app to a new location and run all demo models
-and Sponza without Node or build paths; inspect dependencies, licenses and the
-signature.
+The packaged executable accepts `--package-smoke DIR` for CPU resource checks;
+`MUTRACER_NATIVE_GPU_VALIDATION=1` adds GPU rendering and OIDN to that mode.
+`--evidence DIR` captures a real native window. The full import, material,
+lighting, denoising and independent-export workflow uses
+`--workflow-evidence DIR MODEL.glb`. Both window modes need an unlocked desktop.
+See the [platform checklist](webview-viewer/CONTRIBUTING.md#manual-platform-validation)
+for input, compositing, DPI, HDR and package validation.
 
 ### OIDN
 
@@ -679,15 +571,6 @@ Validation reports the first error in descriptor order, and each bounds reductio
 retains its vertex order. `MUTRACER_NATIVE_GEOMETRY_SCANS=serial` selects the serial
 path for same-binary performance comparisons.
 
-Run the viewer with `MODEL_OR_FOLDER --load-profile-out /absolute/evidence/load`
-to measure a real async drop over an already rendered scene, then replacement
-with the bundled model. `MUTRACER_SCENE_BACKEND=0|1` selects Software or HWRT
-(default 1). At 96×64 and 8 samples, the headless probe writes receive/tick
-durations, loading states, first-image time, replacement/destruction time and
-HDR/normal/albedo captures.
-It measures the viewer's loading path; window event delivery and presentation
-need a separate real-window check. `MUTRACER_NATIVE_PROFILE=1` also splits viewer
-scene assembly from descriptor encoding.
 
 ### glTF import profiling
 
@@ -914,30 +797,3 @@ The reported GPU timeline interval includes CPU submission gaps; only the option
 `metalExportGpuMs` pass timestamps measure kernels. Record measurement windows and
 other GPU/build workloads. Neither this host nor the injected loss-notification
 Rust test validates physical GPU removal or a real Hgi/Hydra consumer.
-
-## WebView UI prototype
-
-`native/webview-viewer` is an independent wry/winit host for the shared React UI;
-[usage and current limits](webview-viewer/README.md). Build it with
-`node native/scripts/webview-viewer-build.mjs --build-only`. It uses the normal
-native build variables and a separate viewer Cargo target. `MUTRACER_AOT_PREBUILT`
-can reuse a current AOT archive. Frontend assets are gzip-compressed in the build
-output and embedded by Cargo; no generated assets belong in source control.
-
-For focused checks, set `MUTRACER_WEBVIEW_ASSETS` to that build's `ui/` directory
-and run the crate's tests with `MUTRACER_AOT_ARCHIVE` and the viewer target set.
-The ignored `native_scene_matches_egui_descriptor_at_fixed_seed_and_spp` test
-compares the SDK scene importer with the retained egui indexed-descriptor path
-on Software and HWRT at seed 12345 and 16 spp; set
-`MUTRACER_WEBVIEW_GPU_EVIDENCE` outside the checkout for images and differences.
-It compares those render paths, not OS compositing. The executable's
-`--evidence DIR` mode uses 16 spp and records baseline/edited/orbit images, input counts
-and edit-to-presentation timing, and closes after two minutes. Real mouse and
-Inspector input, transparency, resizing and each system WebView still need
-real-window checks. `native:ci` does not include this independent crate.
-
-The host routes compact base64-encoded pointer records to Rust camera controls;
-low-frequency commands use versioned JSON requests and correlated replies. The
-SDR display texture is copied into the viewport rectangle with wgpu's existing
-TextureBlitter; no renderer shader or sampling code is replaced. The independent
-crate has no eframe/egui dependency.

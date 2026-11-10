@@ -1,4 +1,5 @@
 // Reproducible native CI, with outputs isolated from the Web install/build.
+import {buildWebviewUI} from './webview-ui-build.mjs';
 import {ciOptions,steps} from './ci-options.mjs';
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {finalizeHostLibrary} from './finalize-host-library.mjs';
@@ -82,7 +83,8 @@ await run('scene-picking',process.execPath,['native/validation/scene-picking.mjs
  {CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:resolve(out,'picking')});
 // Separate target dirs avoid an unhashed multi-crate-type rlib being reused with
 // a different wgpu feature graph by the independent viewer manifest.
-await run('viewer-tests','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml'],{CARGO_TARGET_DIR:viewerTarget});
+if(enabled('viewer-tests'))env.MUTRACER_WEBVIEW_ASSETS=buildWebviewUI(root,resolve(out,'viewer-ui'),env);
+await run('viewer-tests','cargo',['test','--locked','--manifest-path','native/webview-viewer/Cargo.toml'],{CARGO_TARGET_DIR:viewerTarget});
 // CPU-only work runs beside the GPU steps; no GPU work ever runs concurrently.
 const lane=work=>work().then(()=>null,error=>error);
 const modulesLane=lane(async()=>{
@@ -105,10 +107,11 @@ let hostGpuTests;
 if(hostGpuValidation&&enabled('host-tests'))hostGpuTests=await runHostGpuTests();
 if(gpuValidation){
  if(process.platform==='darwin')await run('metal-gpu-host',process.execPath,['native/validation/metal-render.mjs'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'metal-host'),MTL_DEBUG_LAYER:'1'});
- await run('viewer-gpu-animation','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml','gpu_animated_poses','--','--ignored','--nocapture'],{CARGO_TARGET_DIR:viewerTarget});
+ await run('viewer-gpu-scenes',process.execPath,['native/validation/webview-scene-reference.mjs'],{MUTRACER_WEBVIEW_REFERENCE:resolve(out,'webview-reference')});
+ await run('viewer-gpu-scenes','cargo',['test','--locked','--manifest-path','native/webview-viewer/Cargo.toml','shared_web_scenes_render_with_native_engine','--','--ignored','--nocapture'],{CARGO_TARGET_DIR:viewerTarget,MUTRACER_WEBVIEW_REFERENCE:resolve(out,'webview-reference')});
  await run('raw-gpu-fixtures','npm',['run','native:scene'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8',...prebuilt},{timeout:1800000});
- // A standalone window uses the SDK surface path, separate from egui's surface.
- const surfaceArgs=['run','--locked','--manifest-path','native/viewer/Cargo.toml','--example','surface','--',resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'surface/summary.json')];
+ // Keep the standalone SDK surface/HDR lifecycle probe alongside the WebView app.
+ const surfaceArgs=['run','--locked','--manifest-path','native/webview-viewer/Cargo.toml','--example','surface','--',resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'surface/summary.json')];
  const surfaceEnv={CARGO_TARGET_DIR:viewerTarget,MUTRACER_NATIVE_GPU_VALIDATION:'1'};
  if(process.platform==='linux'&&!env.XDG_RUNTIME_DIR){surfaceEnv.XDG_RUNTIME_DIR=resolve(out,'surface/runtime');mkdirSync(surfaceEnv.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});}
  await run('viewer-gpu-surface',process.platform==='linux'?'xvfb-run':'cargo',process.platform==='linux'?['-a','cargo',...surfaceArgs]:surfaceArgs,surfaceEnv);

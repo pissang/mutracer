@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {nativeToolchainEnv} from './platform.mjs';
 if(process.platform!=='win32'||process.arch!=='x64')throw Error('The DLSS viewer currently supports Windows x64 Vulkan.');
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
-const required=name=>{if(!process.env[name])throw Error(`Set ${name}. See native/viewer/README.md.`);return resolve(process.env[name]);};
+const required=name=>{if(!process.env[name])throw Error(`Set ${name}. See native/webview-viewer/README.md.`);return resolve(process.env[name]);};
 const sdk=required('MUTRACER_DLSS_SDK');
 const runtime=required('MUTRACER_DLSS_RUNTIME');
 const vulkan=required('MUTRACER_VULKAN_INCLUDE');
@@ -24,20 +24,18 @@ const env={...nativeToolchainEnv(),MUTRACER_NATIVE_OUTPUT:out,MUTRACER_VIEWER_DL
 function run(command,args) {const result=spawnSync(command,args,{cwd:root,env,stdio:'inherit',timeout:30*60*1000});if(result.error||result.status!==0)throw Error(`${command} failed: ${result.error??result.status}`);}
 // Separate /MT DLL isolates the SDK loader's CRT from the Rust app's /MD CRT.
 const shim=resolve(out,'mutracer_ngx.dll');
-run('cl.exe',['/nologo','/std:c++20','/O2','/MT','/EHsc','/LD',`/I${resolve(sdk,'include')}`,`/I${vulkan}`,resolve(root,'native/viewer/src/dlss/ngx.cpp'),library,`/Fo${resolve(out,'ngx.obj')}`,`/Fe${shim}`,'/link','advapi32.lib','user32.lib','shell32.lib','ole32.lib','version.lib','shlwapi.lib']);
+run('cl.exe',['/nologo','/std:c++20','/O2','/MT','/EHsc','/LD',`/I${resolve(sdk,'include')}`,`/I${vulkan}`,resolve(root,'native/webview-viewer/src/dlss/ngx.cpp'),library,`/Fo${resolve(out,'ngx.obj')}`,`/Fe${shim}`,'/link','advapi32.lib','user32.lib','shell32.lib','ole32.lib','version.lib','shlwapi.lib']);
 run(process.execPath,['native/scripts/viewer-build.mjs','--build-only']);
 const app=resolve(out,'MuTracer');
 copyFileSync(shim,resolve(app,'mutracer_ngx.dll'));
 copyFileSync(resolve(runtime,'nvngx_dlssd.dll'),resolve(app,'nvngx_dlssd.dll'));
 const notices=resolve(app,'licenses/NVIDIA-DLSS');mkdirSync(notices,{recursive:true});
 copyFileSync(resolve(sdk,'LICENSE.txt'),resolve(notices,'LICENSE.txt'));
-writeFileSync(resolve(app,'MuTracer-DLSS.cmd'),'@echo off\r\n"%~dp0mutracer-viewer.exe" --dlss-rr %*\r\nif errorlevel 1 pause\r\n');
+writeFileSync(resolve(app,'MuTracer-DLSS.cmd'),'@echo off\r\nset MUTRACER_VIEWER_DLSS=1\r\n"%~dp0mutracer-viewer.exe" %*\r\nif errorlevel 1 pause\r\n');
 const binaries=['mutracer-viewer.exe','mutracer_ngx.dll','nvngx_dlssd.dll'];
-const sources=['native/host/src/api/temporal.rs','native/viewer/src/main.rs','native/viewer/src/dlss/mod.rs',
-  'native/viewer/src/ui.rs','native/viewer/src/denoiser.rs','native/viewer/src/dlss/smoke.rs',
-  'native/host/src/api/render_loop.rs','native/viewer/src/live_denoise_smoke.rs',
-  'native/viewer/src/dlss/ffi.rs','native/viewer/src/dlss/gpu.rs','native/viewer/src/dlss/ngx.cpp',
-  'native/viewer/src/dlss/prepare.wgsl','native/viewer/src/dlss/resolve.wgsl','native/scripts/dlss-build.mjs'];
+const sources=['native/host/src/api/temporal.rs','native/webview-viewer/src/main.rs','native/webview-viewer/src/wire.rs',
+ 'native/webview-viewer/src/dlss/mod.rs','native/webview-viewer/src/dlss/ffi.rs','native/webview-viewer/src/dlss/gpu.rs',
+ 'native/webview-viewer/src/dlss/ngx.cpp','native/webview-viewer/src/dlss/prepare.wgsl','native/webview-viewer/src/dlss/resolve.wgsl','native/scripts/dlss-build.mjs'];
 writeFileSync(resolve(app,'dlss-build.json'),JSON.stringify({sdk:'310.9.16',
   gitRevision:spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout?.trim(),
   binaries:Object.fromEntries(binaries.map(file=>[file,sha256(resolve(app,file))])),

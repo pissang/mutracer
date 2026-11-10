@@ -15,6 +15,7 @@ const SKY_SWATCH = 'linear-gradient(180deg,#3c6fc4 0%,#b9c9dc 48%,#5a524b 52%,#2
 
 export function EnvironmentPanel() {
   const s = useViewer((state) => state.settings);
+  const native = useViewer(state => state.nativeCapabilities);
   const envLoading = useViewer((state) => state.envLoading);
   const modelRadius = useViewer((state) => state.modelRadius);
   const modelLighting = useViewer((state) => state.modelLighting);
@@ -105,6 +106,14 @@ export function EnvironmentPanel() {
       </Section>}
       {!!modelLighting?.warnings.length && <details><summary>{modelLighting.warnings.length} scene warnings</summary>{modelLighting.warnings.map((warning, i) => <Hint key={i}>{warning}</Hint>)}</details>}
 
+      {native && <Section title="Key light" icon={<Sun size={14} />} actions={<Switch label="Directional light" checked={s.nativeKeyEnabled} onChange={nativeKeyEnabled => setSettings({nativeKeyEnabled})} />}>
+        {s.nativeKeyEnabled && <>
+          <Scrub label="Intensity" value={s.nativeKeyIntensity} min={0} max={10} onChange={nativeKeyIntensity => setSettings({nativeKeyIntensity})} />
+          <ColorField label="Color" value={s.nativeKeyColor} onChange={nativeKeyColor => setSettings({nativeKeyColor})} />
+          <Scrub label="Azimuth" value={s.nativeKeyAzimuth} min={0} max={360} unit="°" onChange={nativeKeyAzimuth => setSettings({nativeKeyAzimuth})} />
+          <Scrub label="Elevation" value={s.nativeKeyElevation} min={5} max={85} unit="°" onChange={nativeKeyElevation => setSettings({nativeKeyElevation})} />
+        </>}
+      </Section>}
       <Section title="Background" icon={<Image size={14} />}>
         <div className="bg-cards" data-count={backgrounds.length} role="radiogroup" aria-label="Background">
           {backgrounds.map(([id, label, style]) => (

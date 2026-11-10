@@ -12,6 +12,10 @@ export function RenderPanel() {
   const backend = useViewer((state) => state.backend.name);
   const native=useViewer(state=>state.nativeCapabilities);
   const rr=useViewer(state=>state.nativeRayReconstruction);
+  const imageWidth = useViewer(state => state.stats.width);
+  const imageHeight = useViewer(state => state.stats.height);
+  const pixelHeight = Math.max(1, s.resolutionHeight ?? imageHeight);
+  const pixelWidth = Math.max(1, Math.round(pixelHeight * (s.outputAspect ?? imageWidth / Math.max(1, imageHeight))));
   const bvhBusy = useViewer((state) => state.stats.phase === 'preparing' || state.loading !== null || state.export !== null);
   const webgl = backend === 'WebGL 2';
   const jnlm = webgl || s.denoiseModel === 'jnlm';
@@ -27,6 +31,12 @@ export function RenderPanel() {
         <Field label="Resolution">
           <ResolutionSelect />
         </Field>
+        {native && <>
+          <Scrub label="Width" unit="px" value={pixelWidth} min={1} max={native.maxImageDimension} step={1}
+            onChange={width => update({resolutionHeight: pixelHeight, outputAspect: width / pixelHeight})} />
+          <Scrub label="Height" unit="px" value={pixelHeight} min={1} max={native.maxImageDimension} step={1}
+            onChange={height => update({resolutionHeight: height, outputAspect: pixelWidth / height})} />
+        </>}
         <Field label="Sampling">
           <Select
             label="Sampling pattern"

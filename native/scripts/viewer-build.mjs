@@ -2,13 +2,16 @@ import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync,readFileSync,rmSy
 import {resolve} from 'node:path';
 import {executable,viewerPlatform} from './platform.mjs';
 import {prepareViewerCore,viewerRoot as root} from './viewer-core-build.mjs';
+import {buildWebviewUI} from './webview-ui-build.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {bundleWindowsRuntime} from './windows-redist.mjs';
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
 const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target'));
 const platform=viewerPlatform(),mac=platform==='macos-arm64';
-const {run}=await prepareViewerCore(out,target);
-run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml',...(process.env.MUTRACER_VIEWER_DLSS==='1'?['--features','dlss-rr']:[])]);
+const {run,env}=await prepareViewerCore(out,target);
+const assets=buildWebviewUI(root,out,env);
+env.MUTRACER_WEBVIEW_ASSETS=assets;
+run('cargo',['build','--release','--locked','--manifest-path','native/webview-viewer/Cargo.toml',...(process.env.MUTRACER_VIEWER_DLSS==='1'?['--features','dlss-rr']:[])]);
 const app=resolve(out,mac?'MuTracer.app':'MuTracer'),contents=mac?resolve(app,'Contents'):app;
 const bin=mac?resolve(contents,'MacOS'):contents,resources=mac?resolve(contents,'Resources'):contents;
 mkdirSync(bin,{recursive:true});mkdirSync(resources,{recursive:true});
@@ -18,10 +21,10 @@ mkdirSync(bin,{recursive:true});mkdirSync(resources,{recursive:true});
 for(const name of ['mutracer_ngx.dll','nvngx_dlssd.dll','MuTracer-DLSS.cmd','dlss-build.json'])
   rmSync(resolve(bin,name),{force:true});
 const staged=resolve(bin,'.mutracer-viewer.build');
-copyFileSync(resolve(target,'release',executable('mutracer-viewer')),staged);
+copyFileSync(resolve(target,'release',executable('mutracer-webview-viewer')),staged);
 renameSync(staged,resolve(bin,executable('mutracer-viewer')));
-copyFileSync(resolve(root,'native/viewer/assets/sample.glb'),resolve(resources,'sample.glb'));
-for (const name of ['rt_hdr_alb_nrm_small.tza','rt_hdr_calb_cnrm_large.tza','rt_alb_large.tza','rt_nrm_large.tza'])
+
+for (const name of ['rt_hdr_alb_nrm.tza','rt_hdr_alb_nrm_small.tza','rt_hdr_calb_cnrm_large.tza','rt_alb_large.tza','rt_nrm_large.tza'])
   copyFileSync(resolve(root,'oidn/weights',name),resolve(resources,name));
 if(mac) {
   // Modern macOS masks the full-bleed artwork itself. An icon stack avoids
@@ -29,13 +32,13 @@ if(mac) {
   const document=resolve(out,'MuTracer.icon');
   mkdirSync(resolve(document,'Assets'),{recursive:true});
   try {
-    copyFileSync(resolve(root,'native/viewer/assets/macos-icon.json'),resolve(document,'icon.json'));
+    copyFileSync(resolve(root,'native/webview-viewer/assets/macos-icon.json'),resolve(document,'icon.json'));
     copyFileSync(resolve(root,'site/src/assets/mutracer-logo-render.png'),resolve(document,'Assets/artwork.png'));
     run('/usr/bin/xcrun',['actool',document,'--compile',resources,'--platform','macosx',
       '--minimum-deployment-target','14.0','--app-icon','MuTracer',
       '--output-partial-info-plist',resolve(out,'icon-info.plist')]);
   } finally {rmSync(document,{recursive:true,force:true});}
-  const icon=resolve(root,'native/viewer/assets/macos-icon.png'),png=readFileSync(icon);
+  const icon=resolve(root,'native/webview-viewer/assets/macos-icon.png'),png=readFileSync(icon);
   if(png.readUInt32BE(16)!==1024||png.readUInt32BE(20)!==1024)throw new Error('macOS app icon requires a 1024px master.');
   // Supply both standard and Retina representations, including small Finder icons.
   // https://developer.apple.com/library/archive/documentation/Xcode/Reference/xcode_ref-Asset_Catalog_Format/IconSetType.html
@@ -68,7 +71,7 @@ else for(const name of readdirSync(contents))if(/^(?:lib)?OpenImageDenoise|^tbb|
 // standalone package.
 const licenses=resolve(resources,'licenses');
 rmSync(licenses,{recursive:true,force:true});
-for(const component of ['', 'native', 'native/viewer']) {
+for(const component of ['', 'native']) {
   const destination=resolve(licenses,component);mkdirSync(destination,{recursive:true});
   cpSync(resolve(root,component,'LICENSES'),resolve(destination,'LICENSES'),{recursive:true});
   copyFileSync(resolve(root,component,'THIRD_PARTY_NOTICES.md'),resolve(destination,'THIRD_PARTY_NOTICES.md'));
@@ -83,6 +86,6 @@ if(process.platform==='win32') {
 if(mac)run('/usr/bin/codesign',['--force','--sign','-',app]);
 console.log(`Native app: ${app}`);
 const args=process.argv.slice(2);if(!args.includes('--build-only')) {
-  if(mac)run('/usr/bin/open',['-n',app,...(args.length?['--args',...args.map(a=>resolve(a))]:[])]);
+  if(mac)run('/usr/bin/open',['-n',app,...(args.length?['--args',...args]:[])]);
   else run(resolve(bin,executable('mutracer-viewer')),args);
 }

@@ -24,7 +24,7 @@ people and coding agents changing the library. For using it, read
 - `site/`: home page of the deployed site (`npm run site`). `npm run build:site`
   builds it with the viewer and the examples into `dist-site/` for Cloudflare.
 - `native/`: experimental Rust/C SDK (shared TypeScript AOT core, Rust/wgpu host)
-  and standalone egui-wgpu viewer; usage starts at `native/llms.txt`, checks are
+  and the default `native/webview-viewer` app; usage starts at `native/llms.txt`, checks are
   in `native/CONTRIBUTING.md`.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`: third-party attributions.
 

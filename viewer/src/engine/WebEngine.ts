@@ -89,6 +89,7 @@ export class WebEngine implements ViewerEngine {
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
+  private readonly nativeKey = new THREE.DirectionalLight();
   private sync: THREESync;
   private model: LoadedModel | null = null;
   private modelController?: AbortController;
@@ -164,6 +165,7 @@ export class WebEngine implements ViewerEngine {
     this.scene.add(this.modelGroup);
     this.studioRig.name = 'Studio lights';
     this.scene.add(this.studioRig);
+    if (this.engine instanceof NativeRenderHost) { this.nativeKey.name = 'Key light'; this.scene.add(this.nativeKey); }
     this.scene.environment = this.environment.texture;
     const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 1 });
     groundMaterial.userData.mutracerShadowCatcher = true;
@@ -746,6 +748,14 @@ export class WebEngine implements ViewerEngine {
     }
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
+    if (this.engine instanceof NativeRenderHost && (['nativeKeyEnabled', 'nativeKeyIntensity', 'nativeKeyColor', 'nativeKeyAzimuth', 'nativeKeyElevation'] as const).some(changed)) {
+      const azimuth = THREE.MathUtils.degToRad(s.nativeKeyAzimuth), elevation = THREE.MathUtils.degToRad(s.nativeKeyElevation);
+      this.nativeKey.visible = s.nativeKeyEnabled;
+      this.nativeKey.intensity = s.nativeKeyIntensity;
+      this.nativeKey.color.set(s.nativeKeyColor);
+      this.nativeKey.position.set(Math.sin(azimuth) * Math.cos(elevation), Math.sin(elevation), Math.cos(azimuth) * Math.cos(elevation));
+      this.nativeKey.updateMatrixWorld();
+    }
     this.engine.bvhBuilder = s.bvhBuilder;
     r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = renderResolutionScale(s, display.canvas.height);

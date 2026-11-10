@@ -1,9 +1,10 @@
 # MuTracer native SDK
 
-> Experimental Rust (`mutracer_native`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS 14.0+ arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
+> Experimental Rust (`mutracer_native`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone viewer using the system WebView. The SDK needs no JavaScript runtime. macOS 14.0+ arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
 
 ## Essentials
 
+- Default app: `npm run native:viewer`; shared viewer controls, native rendering, system WebView requirements and limits: [native viewer](webview-viewer/README.md).
 - Build: `npm ci`, `npm ci --prefix native/toolchain --include=optional`, `export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"`, `npm run native:scene:static`; Rust needs `MUTRACER_AOT_ARCHIVE`, C links `mutracer`; [build and link](README.md#build-and-link).
 - Pick an API: Scene + Engine for most apps; Context for one low-level accumulation and polling jobs; descriptors for binary scenes; [API table](README.md#apis).
 - Minimal program: build a Scene, `Engine::new`, `Render::new`, `set_scene_object`, `update`, `converge`, `read_pixels`; the default scene is unlit and black; [quick start](README.md#quick-start).
@@ -16,7 +17,7 @@
 - Edits: change the Scene, then `set_scene_object` + `update`; incremental vs full preparation and `pending_commit_kind`: [edit a scene](docs/scene.md#edit-a-scene).
 - glTF/GLB: `Scene::import_gltf` / `mt_scene_import_gltf`, names via `ImportedScene::names` / `mt_scene_find`; [support and limits](docs/gltf.md).
 - Picking: `Scene::picker().raycast` / `mt_scene_picker_create` + `mt_scene_picker_raycast`; immutable CPU snapshots with mesh/instance/material hits; [usage and limits](docs/scene.md#pick-scene-objects).
-- Binary v4 descriptors, record layouts and scene limits: [scene format](docs/scene-format.md).
+- Binary v8 descriptors, record layouts and scene limits: [scene format](docs/scene-format.md).
 
 ## Rendering
 

@@ -62,10 +62,10 @@ const summary=JSON.parse(readFileSync(resolve(out,'package-smoke/summary.json'),
 if(!summary.passed||summary.denoiser!=='oidn-webgpu')throw new Error('Incomplete relocated package smoke');
 if(gpuValidation) {
   if(!summary.gpu||summary.gpuValidation!=='passed'||summary.denoisingValidation!=='passed')throw new Error('Packaged GPU rendering was not validated');
-  const args=[binary,'--startup-smoke',resolve(out,'startup-smoke-summary.json')];
+  const args=[binary,'--evidence',resolve(out,'startup-window')];
   const command=process.platform==='linux'?'xvfb-run':args.shift();
   if(process.platform==='linux')args.unshift('-a');
-  const window=spawnSync(command,args,{cwd:relocated,env,encoding:'utf8',timeout:120000,maxBuffer:4*1024*1024});
+  const window=spawnSync(command,args,{cwd:relocated,env,encoding:'utf8',timeout:180000,maxBuffer:4*1024*1024});
   writeFileSync(resolve(out,'startup-smoke.log'),(window.stdout??'')+(window.stderr??''));
   if(window.error||window.status!==0)throw window.error??new Error(`Window startup failed; see ${out}/startup-smoke.log`);
 }

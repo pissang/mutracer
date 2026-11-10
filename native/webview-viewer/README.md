@@ -1,43 +1,52 @@
-# Native WebView prototype
+# MuTracer native viewer
 
-Run from the repository root after the [native setup](../CONTRIBUTING.md#setup):
+From the repository root, after the [native build setup](../README.md#build-from-source):
 
 ```sh
-node native/scripts/webview-viewer-build.mjs
-node native/scripts/webview-viewer-build.mjs /absolute/path/model.glb
+npm run native:viewer
+npm run native:viewer -- /absolute/path/model.glb
+npm run native:viewer:build
 ```
 
-The app opens the bundled CC0 chess scene without a server. **Open** accepts a
-GLB or a glTF with embedded resources; dropped GLBs work too. Select a mesh in
-**Scene**, edit material numbers/colors in **Material**, drag the viewport to
-orbit, right-drag to pan and scroll to zoom. Progress and spp appear in the
-viewport. The original egui viewer remains available. **Reset all** reloads the bundled chess scene.
+The app opens without a local server. Use **Open**, drop files or a folder, or
+choose an example. A command-line `.gltf` also loads its referenced local buffers
+and images. URLs need the remote server's CORS permission.
 
-The build needs Node and Rust; the resulting executable embeds the compressed
-frontend and uses the system WebView. macOS uses WKWebView; Windows requires
-WebView2; Linux requires GTK 3/WebKitGTK 4.1 and an X11 session. Windows and Linux
-presentation have not been verified. Wayland is not supported by this prototype.
+The controls match the [web viewer](../../viewer/README.md): model and MaterialX
+imports, editable material graphs and textures, Poly Haven and GPUOpen catalogs,
+HDR environments, studio lighting, animation, authored cameras, picking,
+undo/redo, denoising, AOVs and independent image export. Drag to orbit,
+right-drag to pan, scroll to zoom and press **F** to fit. Exports use an OS save
+dialog. Code export produces a JavaScript scene setup.
 
 ## Options
 
-- `--build-only` builds without opening a window.
-- A model path opens a local glTF and its local resources through the native importer.
-- **Material** supports scalar, color, boolean and enum edits and reset.
-- Supported settings: sample cap, bounces, clamp, sampling sequence, resolution
-  scale, FOV, aperture/focus distance, exposure, tone mapping/color adjustments,
-  bloom/vignette, and constant-environment intensity/rotation. Pause and fit work.
-- Viewport PNG export uses a native save dialog. The export dialog's preview
-  and HDR/normal/albedo readback use the native image.
+- The rendering backend menu offers hardware ray tracing where supported,
+  software traversal and available GPUs. Changing device or traversal restarts
+  the app. Unsupported HWRT scenes can fall back to software.
+- HDR output is available when the window surface supports extended linear
+  sRGB. Unsupported surfaces stay SDR; PNG exports stay SDR.
+- JNLM and OIDN run on the native renderer. The optional Windows DLSS RR package
+  exposes Ray Reconstruction when its NVIDIA runtime is active. Independent exports use OIDN when Ray Reconstruction is selected.
+- `--build-only` on the build script creates the app without opening it.
 
-## Limits
+## Requirements and limits
 
-This is a UI integration prototype. HDR environment loading, studio lights,
-MaterialX/graph/texture edits, animation, authored cameras, selection/focus
-picking, undo for material edits, fixed-height/aspect controls, AOV selection,
-HDR window output, denoising controls and independent image export are not
-connected. Unsupported commands show an error. Settings shown in those panels
-are not a claim of native support. In-memory model uploads are limited to
-128 MiB; local command-line imports follow the SDK's import limits.
+macOS uses WKWebView. Windows needs Microsoft WebView2 Runtime. Linux needs
+GTK 3 and WebKitGTK 4.1 version 2.40 or later, with either Wayland or X11.
+macOS and Windows place the controls over the native viewport. Linux uses a
+separate control window and viewport; place them side by side.
 
-The prototype displays SDR, uses a constant environment, and initially renders
-at 50% of the viewport dimensions.
+MaterialX height baking uses CPU workers and can take longer than on WebGPU.
+The native renderer uses TinyBVH; the web-only builder selector is hidden.
+Environment/background rotations follow the SDK's yaw-only scene format.
+Scene transfers have no 128 MiB upload cap; the SDK's
+[scene and texture limits](../docs/scene-format.md#limits) still apply. GPUOpen
+retains the web viewer's package download limit. Image and denoising output can
+differ between the browser and native backends. See the
+[known native rendering limits](../README.md#limitations).
+
+Windows/WebView2, Linux desktops and the optional DLSS runtime require validation
+on their target hardware; building the application does not establish their
+presentation or input behavior. Maintainers can use the
+[platform checklist](CONTRIBUTING.md#manual-platform-validation).

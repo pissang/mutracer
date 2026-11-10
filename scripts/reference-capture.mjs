@@ -35,8 +35,8 @@ export function buildLibrary(source, directory) {
   mkdirSync(directory, {recursive: true});
   command('npm', ['run', 'build:lib'], source, process.env, resolve(directory, 'build-lib.log'));
 }
-export async function serve(source, directory, fixture) {
-  const server = await createServer({root: source, configFile: false,
+export async function serve(source, directory, fixture, resolveOptions) {
+  const server = await createServer({root: source, configFile: false, resolve: resolveOptions,
     optimizeDeps: {entries: [], noDiscovery: true}, server: {host: '127.0.0.1', port: 0, hmr: false, watch: {ignored: ['**/.native-build/**']},
       fs: {allow: [source, root, directory, ...(process.env.MUTRACER_NATIVE_DISPLAY_PNG ? [dirname(process.env.MUTRACER_NATIVE_DISPLAY_PNG)] : []), ...(process.env.MUTRACER_OIDN_DISPLAY_INPUT ? [process.env.MUTRACER_OIDN_DISPLAY_INPUT] : [])]}}, plugins: [{name: 'reference-fixture', configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
