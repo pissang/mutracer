@@ -100,8 +100,8 @@ Device loss is terminal and allows engine destruction without guaranteeing done.
   a small queue while withholding ready can block the producer on the CPU.
 
 The [Objective-C host](../examples/metal-host.m) shows GPU consumers and timeline
-reuse. Existing Vulkan hosts use the separate
-[negotiated same-queue API](vulkan.md). Vulkan foreign-image/timeline imports and
-DX12 shared-resource/fence imports remain unavailable until their HAL ownership
-and validation layers are implemented; unsupported calls must leave external
-handles and synchronization untouched.
+reuse. Existing Vulkan hosts use the separate [negotiated device API](vulkan.md),
+and Windows hosts can use the Vulkan foreign-image/timeline and DX12
+shared-resource/fence imports described in those platform guides. Metal does
+not share those native handle types; unsupported Metal formats still leave
+external handles and synchronization untouched.

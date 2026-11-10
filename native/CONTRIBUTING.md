@@ -875,6 +875,14 @@ and retirement notifications. A portability-driver pass does not validate
 Linux/Windows drivers or Vulkan HWRT. C callers also need their Vulkan SDK headers
 when including `mutracer-vulkan.h`; the ordinary headers do not require them.
 
+On Windows, compile `examples/vulkan-export-host.c` with the SDK Vulkan headers
+and `examples/d3d12-export-host.c` with the Windows SDK. These are minimal host
+integration harnesses: create the native image/resource and two timeline
+objects on the device returned by the corresponding `*_info` call, fill the
+descriptor handles, then submit `mt_render_export_gpu` and poll
+`mt_engine_gpu_poll`. Run the resulting host only through `gpu-lock.ps1 W3`.
+The host retains and destroys native objects; MuTracer only retains wrappers.
+
 ## glTF material comparison
 
 Set `MUTRACER_GLTF_EVIDENCE` outside the checkout and run the host CPU test

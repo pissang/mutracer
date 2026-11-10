@@ -204,6 +204,8 @@ int main(void) {
 | [examples/job-host.c](examples/job-host.c) | Polling jobs and cancellation |
 | [examples/denoise-host.c](examples/denoise-host.c) | Standalone OIDN denoiser |
 | [examples/window-host.c](examples/window-host.c) | C window presentation (macOS glue in `window-appkit.m`) |
+| [examples/vulkan-export-host.c](examples/vulkan-export-host.c) | Vulkan same-device image/timeline export host harness |
+| [examples/d3d12-export-host.c](examples/d3d12-export-host.c) | D3D12 same-device shared-resource/fence export host harness |
 | [viewer/examples/surface.rs](viewer/examples/surface.rs) | Rust window and HDR presentation |
 
 `npm run native:engine`, `native:context` and `native:jobs` build the C hosts and
