@@ -244,11 +244,14 @@ int main(void) {
   const uint32_t w = 8, h = 6, perf_samples = 1;
 #endif
   VkDevice d = vi.device;
-  VkImage images[2];
-  VkDeviceMemory image_memory[2];
-  VkFormat formats[2] = {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32_SFLOAT};
-  mt_gpu_image imports[2] = {0};
-  for (int k = 0; k < 2; k++) {
+  VkImage images[3];
+  VkDeviceMemory image_memory[3];
+  VkFormat formats[3] = {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32_SFLOAT,
+                         VK_FORMAT_R32G32B32A32_SFLOAT};
+  const uint32_t kinds[3] = {MT_GPU_OUTPUT_HDR, MT_GPU_OUTPUT_DEPTH,
+                             MT_GPU_OUTPUT_CENTER_DEPTH};
+  mt_gpu_image imports[3] = {0};
+  for (int k = 0; k < 3; k++) {
     VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = formats[k];
@@ -305,7 +308,7 @@ int main(void) {
   ro.width = w;
   ro.height = h;
   ro.max_samples = perf_samples;
-  ro.aovs = MT_AOV_DEPTH;
+  ro.aovs = MT_AOV_DEPTH | MT_AOV_CENTER_DEPTH;
   mt_render render = 0;
   OK(mt_render_create(engine, &ro, &render, error_text, sizeof error_text));
   OK(mt_engine_update(engine, NULL, error_text, sizeof error_text));
@@ -315,15 +318,18 @@ int main(void) {
   size_t hb = (size_t)w * h * 16, db = (size_t)w * h * 4,
          depth_cpu_bytes = (size_t)w * h * 16, written = 0;
   float *ch = (float *)malloc(hb), *cd = (float *)malloc(depth_cpu_bytes),
-        *gh = (float *)malloc(hb), *gd = (float *)malloc(db);
-  if (!ch || !cd || !gh || !gd)
+        *cc = (float *)malloc(hb), *gh = (float *)malloc(hb),
+        *gd = (float *)malloc(db), *gc = (float *)malloc(hb);
+  if (!ch || !cd || !cc || !gh || !gd || !gc)
     FAIL("pixel allocation");
   OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text,
                            sizeof error_text));
   OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
                            &written, error_text, sizeof error_text));
-  for (int k = 0; k < 2; k++) {
-    mt_gpu_export_image im = {sizeof im,        k, NULL, imports[k],
+  OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
+                           error_text, sizeof error_text));
+  for (int k = 0; k < 3; k++) {
+    mt_gpu_export_image im = {sizeof im,        kinds[k], NULL, imports[k],
                               MT_GPU_TOP_FIRST, 0};
     mt_gpu_export_desc ex = {sizeof ex, 1, NULL,     &im,
                              0,         0, timeline, (uint64_t)(k + 1)};
@@ -355,12 +361,15 @@ int main(void) {
     mt_vk_lease lease = 0;
     OK(mt_engine_vulkan_acquire_queue(engine, &lease, error_text,
                                       sizeof error_text));
+    float *dst = k == 0 ? gh : (k == 1 ? gd : gc);
+    size_t dst_bytes = k == 1 ? db : hb;
     if (host_copy(d, vi.physical_device, vi.queue, vi.queue_family, images[k],
-                  formats[k], w, h, k ? gd : gh, k ? db : hb))
+                  formats[k], w, h, dst, dst_bytes))
       return 1;
     OK(mt_vk_lease_release(lease, error_text, sizeof error_text));
   }
-  if (memcmp(ch, gh, hb) || !depth_matches(cd, gd, w * h))
+  if (memcmp(ch, gh, hb) || memcmp(cc, gc, hb) ||
+      !depth_matches(cd, gd, w * h))
     FAIL("CPU/export pixel mismatch");
 #ifdef MT_PERF_720P
   const unsigned warm_frames = 5;
@@ -379,11 +388,11 @@ int main(void) {
   for (unsigned frame = 0; frame < warm_frames; frame++) {
     OK(mt_render_restart(render, error_text, sizeof error_text));
     OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
-    for (int k = 0; k < 2; k++) {
-      mt_gpu_export_image im = {sizeof im, (uint32_t)k, NULL, imports[k],
+    for (int k = 0; k < 3; k++) {
+      mt_gpu_export_image im = {sizeof im, kinds[k], NULL, imports[k],
                                 MT_GPU_TOP_FIRST, 0};
       mt_gpu_export_desc ex = {sizeof ex, 1, NULL, &im, 0, 0, timeline,
-                               (uint64_t)(3 + frame * 2 + k)};
+                               (uint64_t)(3 + frame * 3 + k)};
       uint64_t seq = 0;
       OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
       uint32_t complete = 0;
@@ -413,16 +422,18 @@ int main(void) {
     FAIL("output file");
   fwrite(gh, 1, hb, f);
   fwrite(gd, 1, db, f);
+  fwrite(gc, 1, hb, f);
   fclose(f);
-  printf("PASS Vulkan C host: HDR/depth byte-identical; wrote "
+  printf("PASS Vulkan C host: HDR/depth/center-depth byte-identical; wrote "
          "vulkan-export-output.bin\n");
   OK(mt_render_destroy(render, error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(imports[0], error_text, sizeof error_text));
   OK(mt_gpu_image_destroy(imports[1], error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(imports[2], error_text, sizeof error_text));
   OK(mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text));
   OK(mt_gpu_timeline_destroy(timeline_duplicate, error_text, sizeof error_text));
   OK(mt_scene_destroy(scene, error_text, sizeof error_text));
-  for (int k = 0; k < 2; k++) {
+  for (int k = 0; k < 3; k++) {
     vkDestroyImage(d, images[k], NULL);
     vkFreeMemory(d, image_memory[k], NULL);
   }
@@ -431,7 +442,9 @@ int main(void) {
   free(scene_data);
   free(ch);
   free(cd);
+  free(cc);
   free(gh);
   free(gd);
+  free(gc);
   return 0;
 }

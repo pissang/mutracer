@@ -482,15 +482,6 @@ fn external_vulkan_device_images_and_native_post_process() {
     let imported_ready = unsafe { engine.import_vulkan_timeline(export_ready) }.unwrap();
     let imported_done = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
     let imported_done_duplicate = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
-    // A second wrapper for the same native semaphore must share the canonical
-    // reservation state: reusing value 1 is rejected before any queue submit.
-    assert!(render
-        .export_vulkan(
-            &[(imported_export.clone(), 0, 0)],
-            None,
-            (&imported_done_duplicate, 1),
-        )
-        .is_err());
     let export_begin = Instant::now();
     let export_sequence = render
         .export_vulkan(
@@ -502,6 +493,15 @@ fn external_vulkan_device_images_and_native_post_process() {
             (&imported_done, 1),
         )
         .unwrap();
+    // A second wrapper for the same native semaphore must share the canonical
+    // reservation state: reusing value 1 is rejected before any queue submit.
+    assert!(render
+        .export_vulkan(
+            &[(imported_export.clone(), 0, 0)],
+            None,
+            (&imported_done_duplicate, 1),
+        )
+        .is_err());
     let wait_info = vk::SemaphoreWaitInfo::default()
         .semaphores(std::slice::from_ref(&export_done))
         .values(&[1]);
