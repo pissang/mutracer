@@ -357,6 +357,8 @@ pub(super) struct Inner {
     pub(super) metal: Mutex<Option<super::metal::State>>,
     #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
     pub(super) vulkan: Mutex<Option<super::vulkan_export::State>>,
+    #[cfg(target_os = "windows")]
+    pub(super) d3d12: Mutex<Option<super::d3d12_export::State>>,
     pub(super) adapter: Option<wgpu::Adapter>,
     pub(super) backend: Backend,
 }
@@ -460,6 +462,11 @@ impl Engine {
                 metal: Mutex::new(None),
                 #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
                 vulkan: Mutex::new(None),
+                #[cfg(target_os = "windows")]
+                d3d12: Mutex::new(adapter.as_ref().and_then(|a| {
+                    (a.get_info().backend == wgpu::Backend::Dx12)
+                        .then(super::d3d12_export::State::new)
+                })),
                 adapter,
                 backend: options.backend,
             }),

@@ -130,14 +130,40 @@ pub unsafe extern "C" fn mt_render_export_gpu(
         }
         if !desc.next.is_null() { return Err(invalid("Unsupported Vulkan GPU export extension")); }
         let entries = unsafe { std::slice::from_raw_parts(desc.images, desc.image_count as usize) };
-        let mut images = Vec::with_capacity(entries.len());
+        let mut vk_images = Vec::with_capacity(entries.len());
+        #[cfg(target_os = "windows")]
+        let mut dx_images = Vec::with_capacity(entries.len());
+        let mut mode = 0u8;
         for item in entries {
             if item.struct_size as usize != std::mem::size_of::<ExportImage>() || !item.next.is_null() || item.reserved != 0 { return Err(invalid("Invalid Vulkan export image record")); }
-            images.push((image(item.image)?, item.kind, item.row_order));
+            if let Ok(value) = image(item.image) {
+                if mode == 2 { return Err(invalid("Cannot mix Vulkan and D3D12 export images")); }
+                mode = 1; vk_images.push((value, item.kind, item.row_order));
+            } else {
+                #[cfg(target_os = "windows")]
+                {
+                    let value = super::d3d12_export_abi::image(item.image)?;
+                    if mode == 1 { return Err(invalid("Cannot mix Vulkan and D3D12 export images")); }
+                    mode = 2; dx_images.push((value, item.kind, item.row_order));
+                }
+                #[cfg(not(target_os = "windows"))]
+                return Err(invalid("Unknown Vulkan image handle"));
+            }
         }
-        let ready = if desc.ready == 0 { None } else { Some((timeline(desc.ready)?, desc.ready_value)) };
-        let done = timeline(desc.done)?;
-        let id = render_of(render)?.export_vulkan(&images, ready.as_ref().map(|(t, v)| (t, *v)), (&done, desc.done_value))?;
+        let id = if mode == 1 {
+            let ready = if desc.ready == 0 { None } else { Some((timeline(desc.ready)?, desc.ready_value)) };
+            let done = timeline(desc.done)?;
+            render_of(render)?.export_vulkan(&vk_images, ready.as_ref().map(|(t, v)| (t, *v)), (&done, desc.done_value))?
+        } else if mode == 2 {
+            #[cfg(target_os = "windows")]
+            {
+                let ready = if desc.ready == 0 { None } else { Some((super::d3d12_export_abi::timeline(desc.ready)?, desc.ready_value)) };
+                let done = super::d3d12_export_abi::timeline(desc.done)?;
+                render_of(render)?.export_d3d12(&dx_images, ready.as_ref().map(|(t, v)| (t, *v)), (&done, desc.done_value))?
+            }
+            #[cfg(not(target_os = "windows"))]
+            return Err(invalid("D3D12 export is unavailable on this platform"));
+        } else { return Err(invalid("No export images")); };
         unsafe { sequence.write(id) };
         Ok(())
     })
@@ -156,6 +182,9 @@ pub unsafe extern "C" fn mt_engine_gpu_poll(
             return Err(invalid("Null completion output"));
         }
         unsafe { complete.write(0) };
+        #[cfg(target_os = "windows")]
+        let value = if engine_of(engine)?.is_d3d12() { engine_of(engine)?.poll_d3d12_exports(sequence)? } else { engine_of(engine)?.poll_vulkan_exports(sequence)? };
+        #[cfg(not(target_os = "windows"))]
         let value = engine_of(engine)?.poll_vulkan_exports(sequence)?;
         unsafe { complete.write(value as u32) };
         Ok(())

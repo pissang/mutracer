@@ -19,6 +19,13 @@ typedef struct mt_d3d12_timeline_desc {
   const void *next;
   void *fence_handle;
 } mt_d3d12_timeline_desc;
+typedef struct mt_d3d12_device_info {
+  uint32_t struct_size, reserved;
+  void *device;
+  void *queue;
+} mt_d3d12_device_info;
+int32_t mt_engine_d3d12_info(mt_engine engine, mt_d3d12_device_info *output,
+  char *error, size_t error_capacity);
 int32_t mt_engine_import_d3d12_image(mt_engine engine, const mt_d3d12_image_desc *desc,
   mt_gpu_image *output, char *error, size_t error_capacity);
 int32_t mt_engine_import_d3d12_timeline(mt_engine engine, const mt_d3d12_timeline_desc *desc,

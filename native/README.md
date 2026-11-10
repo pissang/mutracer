@@ -11,7 +11,7 @@ C ABI can change between versions.
 | --- | --- | --- |
 | macOS arm64 (14.0+) | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
-| Windows x64 | DX12 or Vulkan | MSVC build; same-device Vulkan/D3D12 zero-copy output and native timelines are available; GPU behavior requires the Windows GPU gate |
+| Windows x64 | DX12 or Vulkan | MSVC build; same-device Vulkan/D3D12 zero-copy output, raw-device query and native timelines are available; GPU behavior requires the Windows GPU gate |
 
 [Built-in denoising](docs/denoising.md) supports oidn-webgpu on the rendering GPU
 and optional OIDN with a caller-supplied runtime.

@@ -10,7 +10,7 @@ mod vulkan;
 mod vulkan_export_abi;
 #[cfg(target_os = "windows")]
 #[path = "abi_d3d12_export.rs"]
-mod d3d12_export_abi;
+pub(super) mod d3d12_export_abi;
 use super::*;
 use crate::status;
 use std::collections::HashMap;
