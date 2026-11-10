@@ -239,7 +239,15 @@ impl Engine {
 }
 
 impl Render {
-    pub(super) fn export_vulkan(
+    /// Submit imported Vulkan images on this render.
+    ///
+    /// Each image tuple is `(image, kind, row_order)`, where `kind` is `0` for
+    /// HDR RGBA32F and `1` for depth, and `row_order` is `0` for top-first.
+    /// `ready`, when present, must be less than `done` on the same timeline;
+    /// the returned sequence is polled with [`Engine::poll_vulkan_exports`].
+    /// Calls use the engine's ordinary exclusive thread rule and retain the
+    /// imported wrappers until the sequence retires.
+    pub fn export_vulkan(
         &self,
         images: &[(VulkanImage, u32, u32)],
         ready: Option<(&VulkanTimeline, u64)>,
@@ -518,7 +526,10 @@ mod tests {
 }
 
 impl Engine {
-    pub(super) fn poll_vulkan_exports(&self, sequence: u64) -> Result<bool> {
+    /// Poll a Vulkan export sequence. `sequence == 0` means the latest engine
+    /// sequence. `Ok(false)` means not complete; device loss is
+    /// [`Status::Unavailable`] and never credits completion.
+    pub fn poll_vulkan_exports(&self, sequence: u64) -> Result<bool> {
         self.poll_device();
         self.check_device()?;
         let mut guard = self.inner.vulkan.lock().unwrap();

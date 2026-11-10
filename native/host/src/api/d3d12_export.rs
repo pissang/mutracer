@@ -287,7 +287,15 @@ impl Engine {
 }
 
 impl super::Render {
-    pub(super) fn export_d3d12(
+    /// Submit imported D3D12 images on this render.
+    ///
+    /// Each image tuple is `(image, kind, row_order)`, where `kind` is `0` for
+    /// HDR RGBA32F and `1` for depth, and `row_order` is `0` for top-first.
+    /// `ready`, when present, must be less than `done` on the same fence; the
+    /// returned sequence is polled with [`Engine::poll_d3d12_exports`]. Calls
+    /// use the engine's ordinary exclusive thread rule and retain imported
+    /// wrappers until the sequence retires.
+    pub fn export_d3d12(
         &self,
         images: &[(D3d12Image, u32, u32)],
         ready: Option<(&D3d12Timeline, u64)>,
@@ -511,7 +519,11 @@ impl super::Render {
 }
 
 impl Engine {
-    pub(super) fn poll_d3d12_exports(&self, sequence: u64) -> Result<bool> {
+    /// Poll a D3D12 export sequence. `sequence == 0` means the latest engine
+    /// sequence. `Ok(false)` means not complete; device loss, including a
+    /// fence value of `UINT64_MAX`, is [`Status::Unavailable`] and never
+    /// credits completion.
+    pub fn poll_d3d12_exports(&self, sequence: u64) -> Result<bool> {
         self.poll_device();
         self.check_device()?;
         let hal = unsafe { self.inner.gpu.device.as_hal::<Dx12>() }.ok_or_else(unavailable)?;
