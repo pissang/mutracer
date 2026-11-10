@@ -173,7 +173,7 @@ function revalidateConsumers(nodes: Map<string, Node>, terminal: Record<string, 
 }
 
 /** A unique node ID derived from `base`. */
-export function uniqueId(graph: MaterialGraph, base: string) {
+export function uniqueId(graph: Pick<MaterialGraph, 'nodes'>, base: string) {
   const ids = new Set(graph.nodes.map(node => node.id));
   for (let i = 1; ; i++) if (!ids.has(`${base}${i}`)) return `${base}${i}`;
 }
@@ -184,6 +184,84 @@ export function addNode(graph: MaterialGraph, category: string, type?: Type) {
   if (!types.length) throw Error(`Unsupported node category ${category}`);
   const id = uniqueId(graph, category);
   return { graph: edit(graph, nodes => { nodes.set(id, { id, category, type: type && types.includes(type) ? type : defaultType(types), inputs: {} }); }), id };
+}
+
+/** A wire dragged from an output, or backwards from an input. */
+export type AddAnchor = { source: Edge } | { target: Target };
+export interface NodeChoice { category: string; type: Type; port?: string }
+
+/** Compatible node variants; the named port is the input/output joined on creation. */
+export function nodeChoices(graph: MaterialGraph, anchor?: AddAnchor): NodeChoice[] {
+  const choices: NodeChoice[] = [];
+  for (const entry of PALETTE) {
+    const types = [defaultType(entry.types), ...entry.types.filter(t => t !== defaultType(entry.types))];
+    if (!anchor) { choices.push({ category: entry.category, type: types[0] }); continue; }
+    for (const type of types) {
+      const added = addNode(graph, entry.category, type);
+      const node = added.graph.nodes.find(n => n.id === added.id)!;
+      const ports = 'source' in anchor ? Object.keys(nodePorts(node)) : nodeOutputs(node);
+      for (const port of ports) {
+        const source = 'source' in anchor ? anchor.source : { node: added.id, output: port };
+        const target = 'target' in anchor ? anchor.target : { node: added.id, port };
+        if (!connectionError(added.graph, source, target)) choices.push({ category: entry.category, type, port });
+      }
+    }
+  }
+  return choices;
+}
+
+/** Adds and optionally wires a node as a single graph replacement / undo step. */
+export function addConnectedNode(graph: MaterialGraph, choice: NodeChoice, anchor?: AddAnchor) {
+  const added = addNode(graph, choice.category, choice.type);
+  if (!anchor) return added;
+  if (!choice.port) throw Error('Choose a compatible port');
+  const source = 'source' in anchor ? anchor.source : { node: added.id, output: choice.port };
+  const target = 'target' in anchor ? anchor.target : { node: added.id, port: choice.port };
+  return { id: added.id, graph: connect(added.graph, source, target) };
+}
+
+/** Copies a closed selection: internal wires and values, with external inputs reset. */
+export function copyNodes(graph: MaterialGraph, ids: Iterable<string>): readonly Node[] {
+  const selected = new Set(ids);
+  return new MaterialGraph({ nodes: graph.nodes.filter(n => selected.has(n.id)).map(n => ({
+    ...n, inputs: Object.fromEntries(Object.entries(n.inputs ?? {}).filter(([, input]) => !input.connection || selected.has(input.connection.node)))
+  })) }).nodes;
+}
+
+/** Inserts a copied selection with fresh IDs and remapped internal wires, leaving terminals alone. */
+export function pasteNodes(graph: MaterialGraph, copied: readonly Node[]) {
+  const mapping = new Map<string, string>();
+  const next = edit(graph, nodes => {
+    for (const node of copied) {
+      const id = uniqueId({ nodes: [...nodes.values()] }, node.category);
+      mapping.set(node.id, id);
+      nodes.set(id, { ...node, id, inputs: {} });
+    }
+    for (const node of copied) {
+      const id = mapping.get(node.id)!;
+      const inputs = Object.fromEntries(Object.entries(node.inputs ?? {}).flatMap(([port, input]) => {
+        if (!input.connection) return [[port, input]];
+        const source = mapping.get(input.connection.node);
+        return source ? [[port, { ...input, connection: { ...input.connection, node: source } }]] : [];
+      }));
+      nodes.set(id, { ...node, id, inputs });
+    }
+  });
+  return { graph: next, mapping };
+}
+
+/** Snapshot equality for retaining unchanged React Flow node views across immutable graph copies. */
+export function sameNode(a: Node, b: Node) {
+  if (a === b) return true;
+  if (a.id !== b.id || a.category !== b.category || a.type !== b.type) return false;
+  const left = Object.entries(a.inputs ?? {}), right = b.inputs ?? {};
+  if (left.length !== Object.keys(right).length) return false;
+  return left.every(([port, input]) => {
+    const other = right[port];
+    if (!other || input.type !== other.type || input.connection?.node !== other.connection?.node || input.connection?.output !== other.connection?.output) return false;
+    return input.value === other.value || (Array.isArray(input.value) && Array.isArray(other.value) &&
+      input.value.length === other.value.length && input.value.every((v, i) => v === (other.value as readonly number[])[i]));
+  });
 }
 
 /** Removes nodes; inputs and terminals that read them return to their defaults. */
@@ -277,8 +355,8 @@ export interface GraphLayout {
   surface: { x: number; y: number };
 }
 
-export const NODE_WIDTH = 210;
-const COLUMN = NODE_WIDTH + 70, ROW = 22, HEADER = 34, GAP = 22;
+export const NODE_WIDTH = 280;
+const COLUMN = NODE_WIDTH + 70, ROW = 32, HEADER = 44, GAP = 22;
 /** Estimated rendered node height, for stacking. */
 export const nodeHeight = (node: Node) => HEADER + ROW * (Object.keys(nodePorts(node)).length + nodeOutputs(node).length) + 8;
 
