@@ -304,6 +304,228 @@ fn external_vulkan_device_images_and_native_post_process() {
         Status::InvalidState as i32
     );
     render.converge(ConvergeOptions::new(1)).unwrap();
+
+    // Exercise the new foreign-image export path on the imported device. The
+    // target is host-owned and the done semaphore is a real Vulkan timeline;
+    // only the host queue performs the independent copy/readback below.
+    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
+    let export_image = unsafe {
+        device
+            .create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .extent(vk::Extent3D {
+                        width: 8,
+                        height: 6,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+                None,
+            )
+            .unwrap()
+    };
+    let export_requirements = unsafe { device.get_image_memory_requirements(export_image) };
+    let export_memory_type = memory
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, t)| {
+            export_requirements.memory_type_bits & (1 << i) != 0
+                && t.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        })
+        .unwrap() as u32;
+    let export_memory = unsafe {
+        device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(export_requirements.size)
+                    .memory_type_index(export_memory_type),
+                None,
+            )
+            .unwrap()
+    };
+    unsafe { device.bind_image_memory(export_image, export_memory, 0) }.unwrap();
+    let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let export_done = unsafe {
+        device
+            .create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info),
+                None,
+            )
+            .unwrap()
+    };
+    let imported_export = unsafe {
+        engine
+            .import_vulkan_image(
+                export_image,
+                vk::Format::R32G32B32A32_SFLOAT,
+                8,
+                6,
+                vk::ImageLayout::UNDEFINED,
+            )
+            .unwrap()
+    };
+    let imported_done = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
+    let export_sequence = render
+        .export_vulkan(&[(imported_export, 0, 0)], None, (&imported_done, 1))
+        .unwrap();
+    let wait_info = vk::SemaphoreWaitInfo::default()
+        .semaphores(std::slice::from_ref(&export_done))
+        .values(&[1]);
+    unsafe { device.wait_semaphores(&wait_info, u64::MAX) }.unwrap();
+    assert!(engine.poll_vulkan_exports(export_sequence).unwrap());
+    let exported_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let export_buffer = unsafe {
+        device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size((8 * 6 * 16) as u64)
+                    .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+            .unwrap()
+    };
+    let export_buffer_requirements = unsafe { device.get_buffer_memory_requirements(export_buffer) };
+    let export_buffer_type = memory
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, t)| {
+            export_buffer_requirements.memory_type_bits & (1 << i) != 0
+                && t.property_flags.contains(
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+        })
+        .unwrap() as u32;
+    let export_buffer_memory = unsafe {
+        device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(export_buffer_requirements.size)
+                    .memory_type_index(export_buffer_type),
+                None,
+            )
+            .unwrap()
+    };
+    unsafe { device.bind_buffer_memory(export_buffer, export_buffer_memory, 0) }.unwrap();
+    let export_pool = unsafe {
+        device
+            .create_command_pool(
+                &vk::CommandPoolCreateInfo::default().queue_family_index(family),
+                None,
+            )
+            .unwrap()
+    };
+    let export_range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let export_command = unsafe {
+        device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(export_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .unwrap()[0]
+    };
+    let mut export_lease = 0;
+    ok(
+        unsafe {
+            mt_engine_vulkan_acquire_queue(
+                handle,
+                &mut export_lease,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        },
+        &error,
+    );
+    unsafe {
+        device
+            .begin_command_buffer(export_command, &vk::CommandBufferBeginInfo::default())
+            .unwrap();
+        device.cmd_pipeline_barrier(
+            export_command,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .image(export_image)
+                .subresource_range(export_range)
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+        );
+        device.cmd_copy_image_to_buffer(
+            export_command,
+            export_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            export_buffer,
+            &[vk::BufferImageCopy::default()
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: 8,
+                    height: 6,
+                    depth: 1,
+                })],
+        );
+        device.end_command_buffer(export_command).unwrap();
+        device
+            .queue_submit(
+                info.queue,
+                &[vk::SubmitInfo::default().command_buffers(&[export_command])],
+                vk::Fence::null(),
+            )
+            .unwrap();
+    }
+    ok(
+        mt_vk_lease_release(export_lease, error.as_mut_ptr(), error.len()),
+        &error,
+    );
+    unsafe { device.queue_wait_idle(info.queue) }.unwrap();
+    let export_mapped = unsafe {
+        device
+            .map_memory(export_buffer_memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+            .unwrap()
+    };
+    let exported_pixels = unsafe {
+        std::slice::from_raw_parts(export_mapped.cast::<f32>(), exported_reference.len())
+    };
+    assert_eq!(exported_pixels, exported_reference.as_slice());
+    unsafe {
+        device.unmap_memory(export_buffer_memory);
+        device.destroy_command_pool(export_pool, None);
+        device.destroy_buffer(export_buffer, None);
+        device.free_memory(export_buffer_memory, None);
+        device.destroy_semaphore(export_done, None);
+        device.destroy_image(export_image, None);
+        device.free_memory(export_memory, None);
+    }
     let before = engine.inner.gpu.queue.readback_count();
     let mut image = std::mem::MaybeUninit::uninit();
     ok(
@@ -373,7 +595,6 @@ fn external_vulkan_device_images_and_native_post_process() {
     }
     .unwrap();
     let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
     let memory_type = memory
         .memory_types_as_slice()
         .iter()
