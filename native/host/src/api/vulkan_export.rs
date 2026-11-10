@@ -158,10 +158,13 @@ impl Engine {
                 wgpu::hal::vulkan::TextureMemory::External,
             )
         };
-        let initial = if initial_layout == vk::ImageLayout::UNDEFINED {
-            wgpu::TextureUses::UNINITIALIZED
-        } else {
-            wgpu::TextureUses::RESOURCE
+        let initial = match initial_layout {
+            vk::ImageLayout::UNDEFINED => wgpu::TextureUses::UNINITIALIZED,
+            // wgpu-hal derives GENERAL for storage usage. RESOURCE would
+            // derive SHADER_READ_ONLY_OPTIMAL and is not a valid declaration
+            // for a host image published in GENERAL.
+            vk::ImageLayout::GENERAL => wgpu::TextureUses::STORAGE_WRITE_ONLY,
+            _ => wgpu::TextureUses::RESOURCE,
         };
         let texture = unsafe {
             self.inner.gpu.device.create_texture_from_hal::<Vulkan>(
