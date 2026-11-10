@@ -49,6 +49,13 @@ export MUTRACER_NATIVE_OUTPUT=/absolute/evidence/directory
 Windows builds use the x64 MSVC Developer environment, Windows SDK, Rust's
 `stable-x86_64-pc-windows-msvc` toolchain and Zig 0.15.2 for scriptc's archiver.
 C/C++ consumers compile with `/MD`; no MinGW CRT or GCC C++ runtime is linked.
+
+The existing Vulkan validation host borrows MuTracer-owned images on the exact
+queue negotiated during device creation. Foreign `VkImage`/timeline-semaphore
+and D3D12 shared-resource/fence output are not accepted by the current wgpu HAL;
+do not add a handle-taking API that returns success without ownership and fence
+validation. Record a design and use `MT_ERROR_UNAVAILABLE` until the dedicated
+HAL ownership layer and debug-layer tests are available.
 SDK packaging converts rustc's `/DEFAULTLIB:msvcrt` and `/DEFAULTLIB:oldnames`
 directives to relocatable library names for both direct C and CMake consumers.
 Other default-library directives, including static or debug CRT variants, are

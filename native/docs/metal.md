@@ -101,5 +101,7 @@ Device loss is terminal and allows engine destruction without guaranteeing done.
 
 The [Objective-C host](../examples/metal-host.m) shows GPU consumers and timeline
 reuse. Existing Vulkan hosts use the separate
-[negotiated same-queue API](vulkan.md); Vulkan external-memory and DX12 output
-imports are not implemented.
+[negotiated same-queue API](vulkan.md). Vulkan foreign-image/timeline imports and
+DX12 shared-resource/fence imports remain unavailable until their HAL ownership
+and validation layers are implemented; unsupported calls must leave external
+handles and synchronization untouched.
