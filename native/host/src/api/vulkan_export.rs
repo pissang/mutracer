@@ -3,13 +3,13 @@
 //! The wrapper intentionally keeps native ownership with the host.  wgpu-hal's
 //! Vulkan external-memory texture path is used only after the engine has
 //! imported the exact host VkDevice.
-use super::{Engine, OutputKind, PixelKind, Render, Result, Status, error};
+use super::{error, Engine, OutputKind, PixelKind, Render, Result, Status};
 use ash::vk;
 use ash::vk::Handle;
 use std::collections::{HashMap, HashSet};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use wgpu::hal::api::Vulkan;
 use wgpu::util::DeviceExt;
@@ -65,15 +65,19 @@ impl State {
             timelines: HashMap::new(),
         }
     }
+
+    pub(super) fn pending_is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
 }
 struct Pending {
     sequence: u64,
     complete: Arc<AtomicBool>,
-    done: VulkanTimeline,
+    done: vk::Semaphore,
     value: u64,
     _images: Vec<wgpu::Texture>,
     _sources: Vec<Source>,
-    _ready: Option<VulkanTimeline>,
+    _ready: Option<vk::Semaphore>,
 }
 enum Source {
     Hdr([wgpu::Buffer; 3], [u32; 4]),
@@ -107,8 +111,9 @@ impl Engine {
     ///
     /// The wrapper does not destroy the image or its memory. The host must
     /// retain both through all accepted exports and until the wrapper is
-    /// released; storage usage, one mip/layer/sample and the declared layout
-    /// are required. A host consumer on another queue must use concurrent
+    /// released; storage usage, one mip/layer/sample and an initial layout of
+    /// UNDEFINED or GENERAL are required. The library returns the image to
+    /// GENERAL after an accepted export. A host consumer on another queue must use concurrent
     /// sharing or explicit queue-family ownership transfers around the
     /// imported ready/done timeline values.
     ///
@@ -144,7 +149,7 @@ impl Engine {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUses::STORAGE_WRITE_ONLY | wgpu::TextureUses::RESOURCE,
+            usage: wgpu::TextureUses::STORAGE_WRITE_ONLY,
             memory_flags: wgpu::hal::MemoryFlags::empty(),
             view_formats: vec![],
         };
@@ -164,7 +169,11 @@ impl Engine {
             // derive SHADER_READ_ONLY_OPTIMAL and is not a valid declaration
             // for a host image published in GENERAL.
             vk::ImageLayout::GENERAL => wgpu::TextureUses::STORAGE_WRITE_ONLY,
-            _ => wgpu::TextureUses::RESOURCE,
+            _ => {
+                return Err(invalid(
+                    "Vulkan imported image layout must be UNDEFINED or GENERAL",
+                ))
+            }
         };
         let texture = unsafe {
             self.inner.gpu.device.create_texture_from_hal::<Vulkan>(
@@ -180,8 +189,7 @@ impl Engine {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::STORAGE_BINDING
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    usage: wgpu::TextureUsages::STORAGE_BINDING,
                     view_formats: &[],
                 },
                 initial,
@@ -212,16 +220,18 @@ impl Engine {
             return Err(invalid("Null Vulkan timeline semaphore"));
         }
         let hal = unsafe { self.inner.gpu.device.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
-        let value = unsafe { hal.raw_device().get_semaphore_counter_value(semaphore) }
-            .map_err(|e| match e {
-                vk::Result::ERROR_DEVICE_LOST => {
-                    error(Status::Unavailable, "Vulkan device lost while importing timeline")
-                }
+        let value = unsafe { hal.raw_device().get_semaphore_counter_value(semaphore) }.map_err(
+            |e| match e {
+                vk::Result::ERROR_DEVICE_LOST => error(
+                    Status::Unavailable,
+                    "Vulkan device lost while importing timeline",
+                ),
                 other => error(
                     Status::InvalidArgument,
                     format!("Vulkan semaphore is not a timeline: {other}"),
                 ),
-            })?;
+            },
+        )?;
         let mut state = self.inner.vulkan.lock().unwrap();
         let last_signal = state
             .as_mut()
@@ -241,8 +251,11 @@ impl Engine {
 impl Render {
     /// Submit imported Vulkan images on this render.
     ///
-    /// Each image tuple is `(image, kind, row_order)`, where `kind` is `0` for
-    /// HDR RGBA32F and `1` for depth, and `row_order` is `0` for top-first.
+    /// Each image tuple is `(image, kind, row_order)`. `kind` is `0` for HDR,
+    /// `1` for depth, `2` for display RGBA8 and `3` for center-depth. HDR and
+    /// center-depth use RGBA float output; depth/center-depth also accept R32F
+    /// (the center value is written to `.x`). `row_order` is `0` top-first or
+    /// `1` bottom-first; it defaults to `0` in the C record.
     /// `ready`, when present, must be less than `done` on the same timeline;
     /// the returned sequence is polled with [`Engine::poll_vulkan_exports`].
     /// Calls use the engine's ordinary exclusive thread rule and retain the
@@ -493,11 +506,11 @@ impl Render {
             let pending = Pending {
                 sequence,
                 complete,
-                done: done.0.clone(),
+                done: done.0.semaphore,
                 value: done.1,
                 _images: retained_images,
                 _sources: sources,
-                _ready: ready.map(|(r, _)| r.clone()),
+                _ready: ready.map(|(r, _)| r.semaphore),
             };
             state.pending.push(pending);
             hal.add_signal_semaphore(done.0.semaphore, Some(done.1));
@@ -531,6 +544,17 @@ impl Engine {
     /// [`Status::Unavailable`] and never credits completion.
     pub fn poll_vulkan_exports(&self, sequence: u64) -> Result<bool> {
         self.poll_device();
+        if let Some(reason) = self.inner.gpu.loss.reason().map(str::to_owned) {
+            if let Ok(mut guard) = self.inner.vulkan.lock() {
+                if let Some(state) = guard.as_mut() {
+                    state.pending.clear();
+                }
+            }
+            return Err(error(
+                Status::Unavailable,
+                format!("Vulkan device lost while polling export timeline: {reason}"),
+            ));
+        }
         self.check_device()?;
         let mut guard = self.inner.vulkan.lock().unwrap();
         let state = guard.as_mut().ok_or_else(unavailable)?;
@@ -539,10 +563,8 @@ impl Engine {
         }
         let hal = unsafe { self.inner.gpu.device.as_hal::<Vulkan>() }.ok_or_else(unavailable)?;
         while let Some(work) = state.pending.first() {
-            let signaled = match unsafe {
-                hal.raw_device()
-                    .get_semaphore_counter_value(work.done.semaphore)
-            } {
+            let signaled = match unsafe { hal.raw_device().get_semaphore_counter_value(work.done) }
+            {
                 Ok(value) => value,
                 Err(vk::Result::ERROR_DEVICE_LOST) => {
                     return Err(error(
@@ -584,7 +606,7 @@ fn shader(format: wgpu::TextureFormat, kind: u8, flip: bool) -> String {
     } else {
         "@group(0) @binding(0) var input: texture_2d<f32>;"
     };
-    let convert = if kind == 1 {
+    let convert = if kind == 1 || kind == 3 {
         if format == wgpu::TextureFormat::R32Float {
             "vec4f(v.x,0,0,1)"
         } else {

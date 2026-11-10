@@ -1,24 +1,24 @@
 //! Same-device D3D12 resource and fence imports.
 #![cfg(target_os = "windows")]
-use super::{Engine, Result, Status, error};
+use super::{error, Engine, Result, Status};
 use std::collections::{HashMap, HashSet};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use wgpu::hal::api::Dx12;
+use windows::core::Interface;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_FENCE_FLAG_SHARED, D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAG_SHARED,
-    D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAGS, D3D12_HEAP_PROPERTIES,
-    D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, ID3D12Fence, ID3D12Fence1, ID3D12Resource,
+    ID3D12Fence, ID3D12Fence1, ID3D12Resource, D3D12_FENCE_FLAG_SHARED,
+    D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_SHARED,
+    D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT,
+    D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
-    DXGI_FORMAT_R32G32B32A32_FLOAT,
+    DXGI_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
+    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
 };
-use windows::core::Interface;
 
 fn invalid(message: &str) -> super::Error {
     error(Status::InvalidArgument, message)
@@ -61,12 +61,12 @@ pub(crate) struct State {
 struct Pending {
     sequence: u64,
     complete: Arc<AtomicBool>,
-    done: D3d12Timeline,
+    done: ID3D12Fence,
     value: u64,
     failed: bool,
     _images: Vec<wgpu::Texture>,
     _sources: Vec<wgpu::Texture>,
-    _ready: Option<D3d12Timeline>,
+    _ready: Option<ID3D12Fence>,
 }
 impl State {
     pub(super) fn new() -> Self {
@@ -77,6 +77,10 @@ impl State {
             pipelines: HashMap::new(),
             timelines: HashMap::new(),
         }
+    }
+
+    pub(super) fn pending_is_empty(&self) -> bool {
+        self.pending.is_empty()
     }
 }
 
@@ -289,8 +293,11 @@ impl Engine {
 impl super::Render {
     /// Submit imported D3D12 images on this render.
     ///
-    /// Each image tuple is `(image, kind, row_order)`, where `kind` is `0` for
-    /// HDR RGBA32F and `1` for depth, and `row_order` is `0` for top-first.
+    /// Each image tuple is `(image, kind, row_order)`. `kind` is `0` for HDR,
+    /// `1` for depth, `2` for display RGBA8 and `3` for center-depth. HDR and
+    /// center-depth use RGBA float output; depth/center-depth also accept R32F
+    /// (the center value is written to `.x`). `row_order` is `0` top-first or
+    /// `1` bottom-first; it defaults to `0` in the C record.
     /// `ready`, when present, must be less than `done` on the same fence; the
     /// returned sequence is polled with [`Engine::poll_d3d12_exports`]. Calls
     /// use the engine's ordinary exclusive thread rule and retain imported
@@ -474,12 +481,12 @@ impl super::Render {
         let mut pending = Pending {
             sequence,
             complete,
-            done: done.0.clone(),
+            done: done.0.fence.clone(),
             value: done.1,
             failed: false,
             _images: images.iter().map(|(i, _, _)| i.texture.clone()).collect(),
             _sources: sources,
-            _ready: ready.map(|(r, _)| r.clone()),
+            _ready: ready.map(|(r, _)| r.fence.clone()),
         };
         let mut submitted = false;
         let result = gpu.queue.exclusive_submit(|queue| -> Result<()> {
@@ -525,6 +532,17 @@ impl Engine {
     /// credits completion.
     pub fn poll_d3d12_exports(&self, sequence: u64) -> Result<bool> {
         self.poll_device();
+        if let Some(reason) = self.inner.gpu.loss.reason().map(str::to_owned) {
+            if let Ok(mut guard) = self.inner.d3d12.lock() {
+                if let Some(state) = guard.as_mut() {
+                    state.pending.clear();
+                }
+            }
+            return Err(error(
+                Status::Unavailable,
+                format!("D3D12 device lost while polling export fence: {reason}"),
+            ));
+        }
         self.check_device()?;
         let hal = unsafe { self.inner.gpu.device.as_hal::<Dx12>() }.ok_or_else(unavailable)?;
         unsafe { hal.raw_device().GetDeviceRemovedReason() }.map_err(|e| {
@@ -555,7 +573,7 @@ impl Engine {
             if !work.complete.load(Ordering::Acquire) {
                 break;
             }
-            let completed = unsafe { work.done.fence.GetCompletedValue() };
+            let completed = unsafe { work.done.GetCompletedValue() };
             if !fence_completed(completed, work.value)? {
                 break;
             }
@@ -605,10 +623,10 @@ mod gpu_tests {
     use std::mem::ManuallyDrop;
     use std::time::Instant;
     use wgpu::hal::api::Dx12;
+    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Graphics::Direct3D12::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
-    use windows::core::PCWSTR;
 
     unsafe fn shared_texture(
         device: &ID3D12Device,

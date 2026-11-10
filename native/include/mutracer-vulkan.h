@@ -56,7 +56,10 @@ int32_t mt_engine_import_vulkan_timeline(mt_engine engine, const mt_vk_gpu_timel
   mt_gpu_timeline *output, char *error, size_t error_capacity);
 /* Query before vkCreateInstance. Enable every returned extension. NULL/0 queries
  * count; too little capacity returns BUFFER_TOO_SMALL without array writes.
- * Strings are process-lifetime, immutable. api_version must be >= Vulkan 1.1.
+ * Strings are process-lifetime, immutable. api_version must be >= Vulkan 1.1
+ * for enumeration; the current wgpu 30 shader path emits SPIR-V 1.6 and
+ * therefore requires a Vulkan 1.3 host/device for validated operation. Lower
+ * version host paths are not claimed by this interop contract.
  * A portability instance must also set ENUMERATE_PORTABILITY_BIT_KHR. */
 int32_t mt_vk_instance_extensions(PFN_vkGetInstanceProcAddr get_proc, uint32_t api_version,
   const char **output, size_t capacity, size_t *required, char *error, size_t error_capacity);

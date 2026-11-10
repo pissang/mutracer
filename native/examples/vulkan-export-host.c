@@ -255,7 +255,8 @@ int main(void) {
     ci.arrayLayers = 1;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VK(vkCreateImage(d, &ci, NULL, &images[k]));
@@ -271,7 +272,7 @@ int main(void) {
     VK(vkAllocateMemory(d, &ma, NULL, &image_memory[k]));
     VK(vkBindImageMemory(d, images[k], image_memory[k], 0));
     mt_vk_gpu_image_desc id = {sizeof id,  0, NULL, images[k],
-                               formats[k], w, h,    VK_IMAGE_LAYOUT_GENERAL};
+                               formats[k], w, h,    VK_IMAGE_LAYOUT_UNDEFINED};
     OK(mt_engine_import_vulkan_image(engine, &id, &imports[k], error_text,
                                      sizeof error_text));
   }
@@ -351,17 +352,17 @@ int main(void) {
   fclose(f);
   printf("PASS Vulkan C host: HDR/depth byte-identical; wrote "
          "vulkan-export-output.bin\n");
-  mt_render_destroy(render, error_text, sizeof error_text);
-  mt_gpu_image_destroy(imports[0], error_text, sizeof error_text);
-  mt_gpu_image_destroy(imports[1], error_text, sizeof error_text);
-  mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text);
-  mt_scene_destroy(scene, error_text, sizeof error_text);
+  OK(mt_render_destroy(render, error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(imports[0], error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(imports[1], error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(timeline, error_text, sizeof error_text));
+  OK(mt_scene_destroy(scene, error_text, sizeof error_text));
   for (int k = 0; k < 2; k++) {
     vkDestroyImage(d, images[k], NULL);
     vkFreeMemory(d, image_memory[k], NULL);
   }
   vkDestroySemaphore(d, sem, NULL);
-  mt_engine_destroy(engine, error_text, sizeof error_text);
+  OK(mt_engine_destroy(engine, error_text, sizeof error_text));
   free(scene_data);
   free(ch);
   free(cd);

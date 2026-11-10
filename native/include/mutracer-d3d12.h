@@ -47,7 +47,11 @@ int32_t mt_engine_d3d12_info(mt_engine engine, mt_d3d12_device_info *output,
  * display accepts R8G8B8A8_UNORM. The image must be a same-adapter,
  * single-sample, one-mip 2D shared DEFAULT-heap UAV resource with exact
  * width/height. The host remains responsible for D3D12 resource-state
- * transitions and for keeping the resource alive through the done value.
+ * transitions and for keeping the resource alive through the done value. The
+ * resource must be in COMMON before the first accepted export; MuTracer's
+ * current export leaves it in COMMON after its UAV write. Before host copy
+ * readback, transition COMMON -> COPY_SOURCE and restore COPY_SOURCE -> COMMON
+ * before signaling the ready fence. Do not assume ownership of the resource.
  * Invalid descriptors or a non-DX12 engine return an error without taking
  * ownership or touching external synchronization. */
 int32_t mt_engine_import_d3d12_image(mt_engine engine, const mt_d3d12_image_desc *desc,

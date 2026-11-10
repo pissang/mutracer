@@ -191,6 +191,11 @@ static int depth_matches(const float *rgba, const float *r32, uint32_t pixels) {
 }
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
+  ID3D12Debug *debug = NULL;
+  int debug_enabled = SUCCEEDED(D3D12GetDebugInterface(
+      IID_ID3D12Debug, (void **)&debug));
+  if (debug_enabled)
+    debug->EnableDebugLayer();
   size_t n = 0;
   OK(mt_gpu_adapters(NULL, 0, &n, error_text, sizeof error_text));
   mt_gpu_adapter_info *as = (mt_gpu_adapter_info *)calloc(n, sizeof *as);
@@ -282,6 +287,8 @@ int main(void) {
   uint64_t seq = 0;
   ULONGLONG export_begin = GetTickCount64();
   OK(mt_render_export_gpu(render, &ex, &seq, error_text, sizeof error_text));
+  if (mt_engine_destroy(engine, error_text, sizeof error_text) != MT_ERROR_BUSY)
+    FAIL("pending export must make engine_destroy return BUSY");
   uint32_t complete = 0;
   for (unsigned wait = 0; wait < 30000; wait++) {
     if (done->GetCompletedValue() == UINT64_MAX)
@@ -332,6 +339,52 @@ int main(void) {
     FAIL("reused readback");
   if (memcmp(ch, gh, hb) || !depth_matches(cd, gd, w * h))
     FAIL("reused CPU/export pixel mismatch");
+#ifdef MT_PERF_720P
+  const unsigned warm_frames = 5;
+  ULONGLONG warm_cpu_begin = GetTickCount64();
+  for (unsigned frame = 0; frame < warm_frames; frame++) {
+    OK(mt_render_restart(render, error_text, sizeof error_text));
+    OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_HDR, ch, hb, &written, error_text,
+                             sizeof error_text));
+    OK(mt_render_read_pixels(render, MT_IMAGE_DEPTH, cd, depth_cpu_bytes,
+                             &written, error_text, sizeof error_text));
+  }
+  double warm_cpu_ms =
+      (double)(GetTickCount64() - warm_cpu_begin) / (double)warm_frames;
+  ULONGLONG warm_gpu_begin = GetTickCount64();
+  for (unsigned frame = 0; frame < warm_frames; frame++) {
+    OK(mt_render_restart(render, error_text, sizeof error_text));
+    OK(mt_render_converge(render, &co, NULL, error_text, sizeof error_text));
+    ex.done_value = 3 + frame;
+    uint64_t warm_sequence = 0;
+    OK(mt_render_export_gpu(render, &ex, &warm_sequence, error_text,
+                            sizeof error_text));
+    ULONGLONG warm_deadline = GetTickCount64() + 30000;
+    for (;;) {
+      UINT64 completed = done->GetCompletedValue();
+      if (completed == UINT64_MAX)
+        FAIL("D3D12 warm timeline device removal");
+      if (completed >= ex.done_value)
+        break;
+      if (GetTickCount64() >= warm_deadline)
+        FAIL("D3D12 warm timeline timeout");
+      Sleep(1);
+    }
+    complete = 0;
+    if (mt_engine_gpu_poll(engine, warm_sequence, &complete, error_text,
+                           sizeof error_text) != MT_OK ||
+        !complete)
+      FAIL("poll warm export");
+  }
+  double warm_gpu_ms =
+      (double)(GetTickCount64() - warm_gpu_begin) / (double)warm_frames;
+  printf("D3D12 warm metrics: frames=%u samples=%u CPU frame=%.0fms "
+         "(%.2f spp/s) GPU export frame=%.0fms (%.2f spp/s)\n",
+         warm_frames, samples, warm_cpu_ms,
+         1000.0 * samples / warm_cpu_ms, warm_gpu_ms,
+         1000.0 * samples / warm_gpu_ms);
+#endif
   FILE *f = fopen("d3d12-export-output.bin", "wb");
   if (!f)
     FAIL("output file");
@@ -345,10 +398,39 @@ int main(void) {
   printf("PASS D3D12 C host: sequences=%llu,%llu HDR/depth byte-identical "
          "twice; wrote d3d12-export-output.bin\n",
          (unsigned long long)seq, (unsigned long long)seq2);
-  mt_render_destroy(render, error_text, sizeof error_text);
-  mt_gpu_image_destroy(hih, error_text, sizeof error_text);
-  mt_gpu_image_destroy(dih, error_text, sizeof error_text);
-  mt_gpu_timeline_destroy(th, error_text, sizeof error_text);
+  UINT debug_errors = 0;
+  if (debug_enabled) {
+    ID3D12InfoQueue *queue_info = NULL;
+    if (SUCCEEDED(d->QueryInterface(IID_ID3D12InfoQueue,
+                                    (void **)&queue_info))) {
+      UINT64 count = queue_info->GetNumStoredMessages();
+      for (UINT64 i = 0; i < count; i++) {
+        SIZE_T bytes = 0;
+        if (SUCCEEDED(queue_info->GetMessage(i, NULL, &bytes)) && bytes) {
+          D3D12_MESSAGE *message = (D3D12_MESSAGE *)malloc(bytes);
+          if (message &&
+              SUCCEEDED(queue_info->GetMessage(i, message, &bytes))) {
+            if (message->Severity == D3D12_MESSAGE_SEVERITY_ERROR ||
+                message->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) {
+              debug_errors++;
+              fprintf(stderr, "D3D12 debug ERROR id=%u: %s\n", message->ID,
+                      message->pDescription ? message->pDescription : "(none)");
+            }
+            free(message);
+          }
+        }
+      }
+      queue_info->Release();
+    }
+  }
+  printf("D3D12 debug layer=%s ERROR/CORRUPTION=%u\n",
+         debug_enabled ? "enabled" : "unavailable", debug_errors);
+  if (debug_errors)
+    FAIL("D3D12 debug layer reported ERROR/CORRUPTION");
+  OK(mt_render_destroy(render, error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(hih, error_text, sizeof error_text));
+  OK(mt_gpu_image_destroy(dih, error_text, sizeof error_text));
+  OK(mt_gpu_timeline_destroy(th, error_text, sizeof error_text));
   CloseHandle(hh);
   CloseHandle(dh);
   CloseHandle(fh);
@@ -356,12 +438,14 @@ int main(void) {
   dep->Release();
   done->Release();
   copy->Release();
-  mt_scene_destroy(scene, error_text, sizeof error_text);
-  mt_engine_destroy(engine, error_text, sizeof error_text);
+  OK(mt_scene_destroy(scene, error_text, sizeof error_text));
+  OK(mt_engine_destroy(engine, error_text, sizeof error_text));
   free(scene_data);
   free(ch);
   free(cd);
   free(gh);
   free(gd);
+  if (debug)
+    debug->Release();
   return 0;
 }
