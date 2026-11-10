@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Shapes, Workflow, X } from 'lucide-react';
+import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -13,6 +13,7 @@ import { PolyHavenLogo } from '../PolyHavenLogo';
 import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
 import { togglePanel } from '../layout/panels';
 import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
+import { MATERIALX_SAMPLES, materialXSampleFiles } from '../../engine/materialxSamples';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -23,7 +24,6 @@ export function MaterialPanel() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
-  const sampleBrowsing = useViewer((s) => s.ui.sampleBrowser);
   const graphEditing = useViewer((s) => s.ui.graphEditor);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
@@ -92,10 +92,16 @@ export function MaterialPanel() {
           onClick={() => getEngine()?.clearMaterialGraph(material.id, 'Use values for all')}>Use values for all</button>
       </div>}
       <div className="mat-presets">
-        <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
+        <Segmented label="Preset category" value={presetCategory}
+          options={MATERIALX_IMPORT ? MATERIAL_PRESET_CATEGORIES : MATERIAL_PRESET_CATEGORIES.filter((c) => c.value !== 'materialx')}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
         <div className="preset-grid" aria-label="Material presets">
-          {MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
+          {presetCategory === 'materialx' ? MATERIALX_SAMPLES.map((sample) => (
+            <button key={sample.id} className="preset" title={`Import ${sample.label} MaterialX`}
+              onClick={() => getEngine()?.importMaterialX(material.id, materialXSampleFiles(sample))}>
+              <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
+            </button>
+          )) : MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
             <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
               <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
             </button>
@@ -113,11 +119,6 @@ export function MaterialPanel() {
             title={materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen MaterialX materials'}
             onClick={() => togglePanel('gpuopen')}>
             <Download size={14} />GPUOpen
-          </button>
-          <button className="btn" aria-pressed={sampleBrowsing} data-on={sampleBrowsing || undefined}
-            title={sampleBrowsing ? 'Hide MaterialX samples' : 'Browse bundled MaterialX samples'}
-            onClick={() => togglePanel('samples')}>
-            <Shapes size={14} />Samples
           </button>
           <MaterialXImport materialId={material.id} />
         </>}

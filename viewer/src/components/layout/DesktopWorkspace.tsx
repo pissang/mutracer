@@ -3,12 +3,11 @@ import {
   Separator, TabCloseButton, Workspace, useWorkspaceCallbackRef,
   type TabNode, type TabRenderProps, type WorkspaceChangedMeta, type WorkspaceImperativeHandle
 } from 'react-resizable-panels';
-import { Aperture, Box, Camera, Download, Globe, Monitor, Palette, Shapes, Sparkles, Workflow, X, type LucideIcon } from 'lucide-react';
+import { Aperture, Box, Camera, Download, Globe, Monitor, Palette, Sparkles, Workflow, X, type LucideIcon } from 'lucide-react';
 import { setUi, useViewer, type InspectorTab } from '../../store';
 import { SceneTree } from '../SceneTree';
 import { TextureBrowser } from '../TextureBrowser';
 import { GpuOpenBrowser } from '../GpuOpenBrowser';
-import { MaterialXSamplesBrowser } from '../MaterialXSamplesBrowser';
 import { ExamplesPanel } from '../ExamplesBrowser';
 import { InspectorPanel } from '../Inspector';
 import { PolyHavenLogo } from '../PolyHavenLogo';
@@ -31,7 +30,7 @@ type Ui = ReturnType<typeof useViewer.getState>['ui'];
 
 const ICONS: Record<PanelId, LucideIcon | typeof PolyHavenLogo> = {
   viewport: Monitor, scene: Box, environment: Globe, material: Palette, camera: Camera, render: Aperture,
-  textures: PolyHavenLogo, gpuopen: Download, samples: Shapes, examples: Sparkles, graph: Workflow
+  textures: PolyHavenLogo, gpuopen: Download, examples: Sparkles, graph: Workflow
 };
 
 function content(tab: TabNode<null>): ReactNode {
@@ -41,7 +40,6 @@ function content(tab: TabNode<null>): ReactNode {
     case 'scene': return <SceneTree />;
     case 'textures': return <TextureBrowser />;
     case 'gpuopen': return <GpuOpenBrowser />;
-    case 'samples': return <MaterialXSamplesBrowser />;
     case 'examples': return <ExamplesPanel />;
     case 'graph': return <Suspense fallback={null}><GraphEditor /></Suspense>;
     default: return <InspectorPanel tab={id} />;
@@ -154,7 +152,7 @@ export function DesktopWorkspace() {
       if (ui[flag] && !present) openPanel(handle, id);
       else if (!ui[flag] && present) handle.closeTab(id);
     }
-  }, [handle, ui.textureBrowser, ui.materialBrowser, ui.sampleBrowser, ui.examplesPinned, ui.graphEditor]);
+  }, [handle, ui.textureBrowser, ui.materialBrowser, ui.examplesPinned, ui.graphEditor]);
 
   useEffect(() => {
     if (!handle) return;

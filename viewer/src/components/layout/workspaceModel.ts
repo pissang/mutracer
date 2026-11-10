@@ -16,16 +16,15 @@ export const INSPECTOR: InspectorTab[] = ['environment', 'material', 'camera', '
 export const TRANSIENT = {
   textures: 'textureBrowser',
   gpuopen: 'materialBrowser',
-  samples: 'sampleBrowser',
   examples: 'examplesPinned',
   graph: 'graphEditor'
 } as const;
-const BROWSERS: PanelId[] = ['textures', 'gpuopen', 'samples', 'examples'];
+const BROWSERS: PanelId[] = ['textures', 'gpuopen', 'examples'];
 const FIXED: PanelId[] = ['viewport', 'scene', ...INSPECTOR];
 
 export const PANEL_TITLES: Record<PanelId, string> = {
   viewport: 'Viewport', scene: 'Scene', environment: 'Lighting', material: 'Material', camera: 'Camera', render: 'Render',
-  textures: 'Poly Haven', gpuopen: 'GPUOpen', samples: 'Samples', examples: 'Examples', graph: 'Node graph'
+  textures: 'Poly Haven', gpuopen: 'GPUOpen', examples: 'Examples', graph: 'Node graph'
 };
 
 export const isPanel = (id: string): id is PanelId => id in PANEL_TITLES;
