@@ -28,7 +28,7 @@ pub struct D3d12Timeline {
 pub struct State {
     pub(super) sequence: u64,
     pub(super) completed: u64,
-    pub(super) pending: Vec<Pending>,
+    pending: Vec<Pending>,
     pub(super) pipelines: HashMap<(wgpu::TextureFormat, u32, bool), wgpu::ComputePipeline>,
 }
 struct Pending {

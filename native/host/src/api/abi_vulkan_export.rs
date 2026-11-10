@@ -100,7 +100,7 @@ struct ExportImage {
     reserved: u32,
 }
 #[repr(C)]
-struct ExportDesc {
+pub struct ExportDesc {
     struct_size: u32,
     image_count: u32,
     next: *const c_void,

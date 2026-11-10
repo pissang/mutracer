@@ -37,7 +37,7 @@ pub struct VulkanTimeline {
 pub struct State {
     pub(super) sequence: u64,
     pub(super) completed: u64,
-    pub(super) pending: Vec<Pending>,
+    pending: Vec<Pending>,
     pub(super) pipelines: HashMap<(wgpu::TextureFormat, u8, bool), wgpu::ComputePipeline>,
     pub(super) timelines: HashMap<u64, Arc<Mutex<u64>>>,
 }
