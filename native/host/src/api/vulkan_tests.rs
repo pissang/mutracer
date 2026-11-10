@@ -355,10 +355,21 @@ fn external_vulkan_device_images_and_native_post_process() {
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
         .semaphore_type(vk::SemaphoreType::TIMELINE)
         .initial_value(0);
-    let export_done = unsafe {
+    let export_ready = unsafe {
         device
             .create_semaphore(
                 &vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info),
+                None,
+            )
+            .unwrap()
+    };
+    let mut done_timeline_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let export_done = unsafe {
+        device
+            .create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut done_timeline_info),
                 None,
             )
             .unwrap()
@@ -374,9 +385,23 @@ fn external_vulkan_device_images_and_native_post_process() {
             )
             .unwrap()
     };
+    let imported_ready = unsafe { engine.import_vulkan_timeline(export_ready) }.unwrap();
     let imported_done = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
+    unsafe {
+        device
+            .signal_semaphore(
+                &vk::SemaphoreSignalInfo::default()
+                    .semaphore(export_ready)
+                    .value(1),
+            )
+            .unwrap();
+    }
     let export_sequence = render
-        .export_vulkan(&[(imported_export.clone(), 0, 0)], None, (&imported_done, 1))
+        .export_vulkan(
+            &[(imported_export.clone(), 0, 0)],
+            Some((&imported_ready, 1)),
+            (&imported_done, 1),
+        )
         .unwrap();
     let wait_info = vk::SemaphoreWaitInfo::default()
         .semaphores(std::slice::from_ref(&export_done))
@@ -522,11 +547,13 @@ fn external_vulkan_device_images_and_native_post_process() {
         device.destroy_command_pool(export_pool, None);
         device.destroy_buffer(export_buffer, None);
         device.free_memory(export_buffer_memory, None);
+        device.destroy_semaphore(export_ready, None);
         device.destroy_semaphore(export_done, None);
         device.destroy_image(export_image, None);
         device.free_memory(export_memory, None);
     }
     drop(imported_export);
+    drop(imported_ready);
     drop(imported_done);
     let before = engine.inner.gpu.queue.readback_count();
     let mut image = std::mem::MaybeUninit::uninit();
