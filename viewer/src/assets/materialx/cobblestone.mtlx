@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<!--
+  Cobblestone: OpenPBR with scalar height displacement. Worley F1/F2 in UV
+  space cut stones from mortar, F1 rounds them, and a fractal roughens
+  their tops. The same height shades the surface. The height uses only
+  UV0, so the viewer bakes it into a height map. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_cobblestone">
+    <input name="stone_color" type="color3" value="0.19, 0.17, 0.15" uiname="Stone" />
+    <input name="stone_variation" type="color3" value="0.3, 0.28, 0.24" uiname="Stone variation" />
+    <input name="mortar_color" type="color3" value="0.09, 0.08, 0.07" uiname="Mortar" />
+    <input name="tiles" type="vector2" value="16, 8" uiname="Stones per UV" />
+    <input name="mortar_width" type="float" value="0.08" uiname="Mortar width" />
+    <input name="surface_detail" type="float" value="0.12" uiname="Surface detail" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="stone_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <worleynoise2d name="cells" type="vector2">
+      <input name="texcoord" type="vector2" nodename="stone_uv" />
+      <input name="jitter" type="float" value="0.85" />
+    </worleynoise2d>
+    <separate2 name="cell_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="cells" />
+    </separate2>
+    <!-- F2 - F1 is zero on cell borders: the mortar lines. -->
+    <subtract name="border_distance" type="float">
+      <input name="in1" type="float" nodename="cell_distances" output="outy" />
+      <input name="in2" type="float" nodename="cell_distances" output="outx" />
+    </subtract>
+    <multiply name="mortar_soft" type="float">
+      <input name="in1" type="float" interfacename="mortar_width" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <smoothstep name="stone_mask" type="float">
+      <input name="in" type="float" nodename="border_distance" />
+      <input name="low" type="float" interfacename="mortar_width" />
+      <input name="high" type="float" nodename="mortar_soft" />
+    </smoothstep>
+    <!-- Domed tops: highest at the feature point. -->
+    <remap name="dome" type="float">
+      <input name="in" type="float" nodename="cell_distances" output="outx" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="0.9" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <multiply name="stone_height" type="float">
+      <input name="in1" type="float" nodename="stone_mask" />
+      <input name="in2" type="float" nodename="dome" />
+    </multiply>
+
+    <!-- Fractal detail in UV space; a 3D position from UV keeps displacement UV-only. -->
+    <multiply name="detail_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <separate2 name="detail_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="detail_uv" />
+    </separate2>
+    <combine3 name="detail_position" type="vector3">
+      <input name="in1" type="float" nodename="detail_parts" output="outx" />
+      <input name="in2" type="float" nodename="detail_parts" output="outy" />
+      <input name="in3" type="float" value="0.5" />
+    </combine3>
+    <fractal3d name="detail" type="float">
+      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="amplitude" type="float" interfacename="surface_detail" />
+    </fractal3d>
+    <multiply name="stone_detail" type="float">
+      <input name="in1" type="float" nodename="detail" />
+      <input name="in2" type="float" nodename="stone_mask" />
+    </multiply>
+    <add name="height" type="float">
+      <input name="in1" type="float" nodename="stone_height" />
+      <input name="in2" type="float" nodename="stone_detail" />
+    </add>
+
+    <!-- Shading from the same fields. -->
+    <multiply name="stone_shift" type="color3">
+      <input name="in1" type="color3" interfacename="stone_variation" />
+      <input name="in2" type="float" nodename="detail" />
+    </multiply>
+    <add name="stone_tone" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="color3" nodename="stone_shift" />
+    </add>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="mortar_color" />
+      <input name="fg" type="color3" nodename="stone_tone" />
+      <input name="mix" type="float" nodename="stone_mask" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.95" />
+      <input name="fg" type="float" value="0.62" />
+      <input name="mix" type="float" nodename="stone_height" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="height_out" type="float" nodename="height" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_cobblestone" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_cobblestone" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_cobblestone" output="roughness_out" />
+  </open_pbr_surface>
+  <displacement name="DS_cobblestone" type="displacementshader">
+    <input name="displacement" type="float" nodegraph="NG_cobblestone" output="height_out" />
+    <input name="scale" type="float" value="0.04" />
+  </displacement>
+  <surfacematerial name="Cobblestone" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_cobblestone" />
+    <input name="displacementshader" type="displacementshader" nodename="DS_cobblestone" />
+  </surfacematerial>
+</materialx>

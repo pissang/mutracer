@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { ViewerOrbitControls } from './orbitControls';
 import {
   Engine, Render, RenderLoop, Sync, ProceduralSky, OpenPBRMaterial, createEasuPass,
-  THREESync, type DisplaySettings,
+  THREESync, type DisplaySettings, type MaterialGraph,
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, setUi, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
@@ -1309,6 +1309,16 @@ export class ViewerEngine {
   disconnectMaterialGraphInput(materialId: string, terminal: string, label: string) {
     const graph = this.materials.graph(materialId);
     if (graph && terminal in graph.terminal) this.materials.setGraph(materialId, disconnectGraphInput(graph, terminal), label);
+  }
+
+  /** The material's current graph; replace it with {@link setMaterialGraph}, never edit it in place. */
+  materialGraph(materialId: string) {
+    return this.materials.graph(materialId);
+  }
+
+  /** Replaces the material graph; one undo step, merged with quick edits of the same `mergeKey`. */
+  setMaterialGraph(materialId: string, graph: MaterialGraph | null, label: string, mergeKey?: string) {
+    this.materials.setGraph(materialId, graph, label, mergeKey);
   }
 
   /** Removes the material graph so every material value applies; one undo step. */

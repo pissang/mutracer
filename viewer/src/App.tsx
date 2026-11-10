@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Toast } from './components/Toast';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
@@ -10,8 +10,11 @@ import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
 import { GpuOpenBrowser } from './components/GpuOpenBrowser';
+import { MaterialXSamplesBrowser } from './components/MaterialXSamplesBrowser';
 import { TextureBrowser } from './components/TextureBrowser';
 import { ExamplesPanel } from './components/ExamplesBrowser';
+
+const GraphEditor = lazy(() => import('./components/graphEditor/GraphEditor'));
 
 const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
@@ -43,6 +46,8 @@ function useShortcuts() {
         else undo();
         return;
       }
+      // The node graph handles its own keys, such as Delete.
+      if (target.closest('.graph-editor')) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const state = useViewer.getState();
       const key = event.key.toLowerCase();
@@ -77,9 +82,10 @@ export function App() {
   const left = ui.left && !ui.hidden && !mobile;
   const right = ui.right && !ui.hidden && !mobile;
   const materials = right && ui.materialBrowser && ui.tab === 'material';
-  const textures = right && ui.textureBrowser && !materials && ui.tab === 'material';
-  const examples = right && ui.examplesPinned && !textures && !materials;
-  const browse = textures || materials || examples;
+  const samples = right && ui.sampleBrowser && !materials && ui.tab === 'material';
+  const textures = right && ui.textureBrowser && !materials && !samples && ui.tab === 'material';
+  const examples = right && ui.examplesPinned && !textures && !materials && !samples;
+  const browse = textures || materials || samples || examples;
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar mobile={mobile} />}
@@ -89,7 +95,9 @@ export function App() {
         <Viewport />
         {textures && <TextureBrowser />}
         {materials && <GpuOpenBrowser />}
+        {samples && <MaterialXSamplesBrowser />}
         {examples && <ExamplesPanel />}
+        {ui.graphEditor && !mobile && !ui.hidden && <Suspense fallback={null}><GraphEditor /></Suspense>}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
         {mobile && ui.right && !ui.hidden && <Inspector mobile />}

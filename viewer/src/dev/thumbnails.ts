@@ -1,11 +1,12 @@
 /**
- * Development tool: renders material preset thumbnails
+ * Development tool: renders material preset and MaterialX sample thumbnails
  * with MuTracer. Run `await generateThumbnails()` in the console of
  * `npm run viewer`; the dev server writes them to src/assets/thumbnails/.
  */
 import * as THREE from 'three';
 import { getEngine } from '../engine/ViewerEngine';
 import { MATERIAL_PRESETS } from '../engine/materialParams';
+import { MATERIALX_SAMPLES, materialXSampleFiles } from '../engine/materialxSamples';
 import type { LoadedModel } from '../engine/loadModel';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type TreeNode } from '../store';
 
@@ -58,7 +59,7 @@ function cycloramaGeometry() {
 }
 
 /** Material preview stage after DropMesh's: a sphere in front of a checker cyclorama. */
-function materialStage(): { model: LoadedModel; sphere: THREE.Mesh } {
+export function materialStage(): { model: LoadedModel; sphere: THREE.Mesh } {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
   const context = canvas.getContext('2d')!;
@@ -107,6 +108,14 @@ async function generateThumbnails() {
     console.log(`Rendering ${preset.label}`);
     engine.setMaterialValues(materialId, preset.values);
     shots.push([`material-${preset.id}`, await engine.renderImage({ ...MATERIAL_SIZE, transparent: false }, 'image/webp', 0.9)]);
+  }
+  for (const sample of MATERIALX_SAMPLES) {
+    console.log(`Rendering ${sample.label}`);
+    if (!await engine.importMaterialX(materialId, materialXSampleFiles(sample))) throw new Error(`Could not import ${sample.label}`);
+    // Material edits commit on the next frame; then wait for the graph program.
+    await new Promise(requestAnimationFrame);
+    await engine.engine.waitForMaterialGraphs();
+    shots.push([`materialx-${sample.id}`, await engine.renderImage({ ...MATERIAL_SIZE, transparent: false }, 'image/webp', 0.9)]);
   }
 
   // Save last: new files make Vite reload the page.

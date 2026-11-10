@@ -1,0 +1,26 @@
+import type { PathedFile } from './droppedFiles';
+
+/** Procedural MaterialX documents bundled with the viewer as demos and import fixtures. */
+export interface MaterialXSample {
+  id: string;
+  label: string;
+  text: string;
+}
+
+const sources = import.meta.glob<string>('../assets/materialx/*.mtlx', { query: '?raw', import: 'default', eager: true });
+
+// Browser order and labels.
+const LABELS: Record<string, string> = {
+  'car-paint': 'Flake paint', 'weathered-steel': 'Rusted steel', 'varnished-wood': 'Wood grain',
+  'candle-wax': 'Candle wax', 'tartan-velvet': 'Tartan velvet', 'cobblestone': 'Cobblestone'
+};
+const order = Object.keys(LABELS);
+
+export const MATERIALX_SAMPLES: MaterialXSample[] = Object.entries(sources).map(([path, text]) => {
+  const id = path.slice(path.lastIndexOf('/') + 1).replace(/\.mtlx$/, '');
+  return { id, label: LABELS[id] ?? id, text };
+}).sort((a, b) => (order.indexOf(a.id) >>> 0) - (order.indexOf(b.id) >>> 0) || a.id.localeCompare(b.id));
+
+/** The sample as an import package, as if its `.mtlx` file had been dropped. */
+export const materialXSampleFiles = (sample: MaterialXSample): PathedFile[] =>
+  [{ file: new File([sample.text], `${sample.id}.mtlx`, { type: 'application/xml' }), path: `${sample.id}.mtlx` }];

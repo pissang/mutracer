@@ -737,7 +737,7 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .tex-browser__filters .search { margin: 0; }
 .tex-browser .ph-grid { margin: 0; padding: 2px 10px 10px; }
 .tex-browser__foot { padding: 8px 12px 10px; border-top: 1px solid var(--cv-divider-subtle); }
-.material-panel > .tex-browse { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding-top: 0; }
+.material-panel > .tex-browse { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding-top: 0; }
 .tex-browse .btn { min-width: 0; height: 30px; padding: 0 8px; gap: 6px; font-weight: 500; color: var(--cv-text-2); }
 .tex-browse .btn:hover { color: var(--cv-text); }
 .tex-browse .btn svg { flex: none; opacity: 0.8; }

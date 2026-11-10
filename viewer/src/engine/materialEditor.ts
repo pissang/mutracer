@@ -193,9 +193,9 @@ export class MaterialEditor {
     return (this.entries.get(materialId)?.converted.values().next().value as OpenPBRMaterial | undefined)?.graph;
   }
 
-  /** Replaces the material graph as one undo step; `null` removes it. */
-  setGraph(materialId: string, graph: MaterialGraph | null, label: string) {
-    this.commit(materialId, { values: {}, textures: {}, graph }, label);
+  /** Replaces the material graph as one undo step; `null` removes it. Calls with the same `mergeKey` in quick succession collapse. */
+  setGraph(materialId: string, graph: MaterialGraph | null, label: string, mergeKey?: string) {
+    this.commit(materialId, { values: {}, textures: {}, graph }, label, mergeKey);
   }
 
   /**
@@ -219,6 +219,10 @@ export class MaterialEditor {
       texture.colorSpace = old.colorSpace; texture.flipY = old.flipY;
       texture.uvScale = [...old.uvScale]; texture.uvOffset = [...old.uvOffset]; texture.uvChannel = old.uvChannel;
       texture.wrapS = old.wrapS; texture.wrapT = old.wrapT;
+    } else {
+      // A new image node: glTF orientation, color data only on color nodes.
+      texture.flipY = true;
+      texture.colorSpace = graph.nodes.find(n => n.id === node)?.type.startsWith('color') ? 'srgb' : 'linear';
     }
     rememberGraphImage(texture, file);
     this.setGraph(materialId, withGraphInput(graph, node, port, texture), label);

@@ -507,6 +507,12 @@ more download time and texture memory. Cancel, closing the browser,
 or selecting another target stops the pending import and keeps the existing
 material. Download or import failures also keep the existing material.
 
+Choose **Samples** in the material panel to apply small procedural samples to
+the selected material: car paint with flakes and a coat, weathered steel,
+varnished wood, candle wax, tartan velvet, and cobblestone with height
+displacement. They use only graph nodes and no images, so they need WebGPU to
+show their patterns; WebGL 2 renders their constant fallback.
+
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and
 fallback maps are saved with the viewer's cached model and participate in
