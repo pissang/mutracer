@@ -4,7 +4,12 @@ use super::{Engine, Result, Status, error};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D12::{ID3D12Fence, ID3D12Resource};
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_FLAGS,
+    D3D12_FENCE_FLAG_SHARED, D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER, D3D12_HEAP_PROPERTIES,
+    D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, ID3D12Fence, ID3D12Fence1, ID3D12Resource,
+};
 use windows::core::Interface;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM};
 use wgpu::hal::api::Dx12;
@@ -70,6 +75,25 @@ impl Engine {
         let mut resource: Option<ID3D12Resource> = None;
         unsafe { hal.raw_device().OpenSharedHandle(handle, &mut resource) }.map_err(|e| error(Status::InvalidArgument, format!("D3D12 OpenSharedHandle(resource) failed: {e}")))?;
         let resource = resource.ok_or_else(|| invalid("D3D12 shared resource returned null"))?;
+        let native_desc = unsafe { resource.GetDesc() };
+        let mut heap = D3D12_HEAP_PROPERTIES::default();
+        let mut heap_flags = D3D12_HEAP_FLAGS::default();
+        unsafe { resource.GetHeapProperties(Some(&mut heap), Some(&mut heap_flags)) }
+            .map_err(|e| error(Status::InvalidArgument, format!("D3D12 resource properties failed: {e}")))?;
+        if native_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            || native_desc.Width != width as u64
+            || native_desc.Height != height
+            || native_desc.DepthOrArraySize != 1
+            || native_desc.MipLevels != 1
+            || native_desc.SampleDesc.Count != 1
+            || native_desc.Format.0 as u32 != format_value
+            || !native_desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+            || heap.Type != D3D12_HEAP_TYPE_DEFAULT
+            || !heap_flags.contains(D3D12_HEAP_FLAG_SHARED)
+            || heap_flags.contains(D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER)
+        {
+            return Err(invalid("D3D12 shared resource must be a same-adapter 2D single-sample UAV texture matching the descriptor"));
+        }
         let raw_id = resource.as_raw() as usize;
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let raw = unsafe { wgpu::hal::dx12::Device::texture_from_raw(resource, format, wgpu::TextureDimension::D2, size, 1, 1) };
@@ -85,6 +109,17 @@ impl Engine {
         let mut fence: Option<ID3D12Fence> = None;
         unsafe { hal.raw_device().OpenSharedHandle(handle, &mut fence) }.map_err(|e| error(Status::InvalidArgument, format!("D3D12 OpenSharedHandle(fence) failed: {e}")))?;
         let fence = fence.ok_or_else(|| invalid("D3D12 shared fence returned null"))?;
+        let flags = unsafe {
+            fence
+                .cast::<ID3D12Fence1>()
+                .map_err(|e| error(Status::InvalidArgument, format!("D3D12 shared fence query failed: {e}")))?
+                .GetCreationFlags()
+        };
+        if !flags.contains(D3D12_FENCE_FLAG_SHARED)
+            || flags.contains(D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER)
+        {
+            return Err(invalid("D3D12 fence must be shared on the same adapter"));
+        }
         let value = unsafe { fence.GetCompletedValue() };
         Ok(D3d12Timeline { engine: self.clone(), fence, last_signal: Arc::new(Mutex::new(value)) })
     }
