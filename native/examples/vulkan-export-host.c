@@ -192,6 +192,7 @@ static int host_copy(VkDevice d, VkPhysicalDevice physical, VkQueue q,
   return 0;
 }
 int main(void) {
+  setvbuf(stdout, NULL, _IONBF, 0);
   size_t adapter_count = 0;
   OK(mt_gpu_adapters(NULL, 0, &adapter_count, error_text, sizeof error_text));
   mt_gpu_adapter_info *adapters =
