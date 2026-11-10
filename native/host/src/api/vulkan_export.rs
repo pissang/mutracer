@@ -293,5 +293,8 @@ impl Engine {
 fn shader(format: wgpu::TextureFormat, kind: u8, flip: bool) -> String {
     let output = match format { wgpu::TextureFormat::Rgba32Float => "rgba32float", wgpu::TextureFormat::Rgba16Float => "rgba16float", wgpu::TextureFormat::R32Float => "r32float", _ => "rgba8unorm" };
     let input = if kind == 0 { include_str!("metal-hdr-resolve.wgsl") } else { "@group(0) @binding(0) var input: texture_2d<f32>;" };
-    format!("{input}\n@group(0) @binding(4) var output: texture_storage_2d<{output},write>;\n@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {{ let size=textureDimensions(output); if(any(id.xy>=size)){{return;}} let src=vec2u(id.x,{}); let v={}; textureStore(output,vec2i(id.xy),{}); }}", if flip { "size.y-1u-id.y" } else { "id.y" }, if kind == 0 { "loadHdr(src)" } else { "textureLoad(input,vec2i(src),0)" }, if kind == 1 { "vec4f(v.x,0,0,v.y)" } else { "v" })
+    let convert = if kind == 1 {
+        if format == wgpu::TextureFormat::R32Float { "v.x" } else { "vec4f(v.x,0,0,v.y)" }
+    } else { "v" };
+    format!("{input}\n@group(0) @binding(4) var output: texture_storage_2d<{output},write>;\n@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id: vec3u) {{ let size=textureDimensions(output); if(any(id.xy>=size)){{return;}} let src=vec2u(id.x,{}); let v={}; textureStore(output,vec2i(id.xy),{}); }}", if flip { "size.y-1u-id.y" } else { "id.y" }, if kind == 0 { "loadHdr(src)" } else { "textureLoad(input,vec2i(src),0)" }, convert)
 }

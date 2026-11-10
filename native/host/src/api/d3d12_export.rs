@@ -530,6 +530,283 @@ mod tests {
     }
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod gpu_tests {
+    use super::*;
+    use crate::api::{Backend, ConvergeOptions, EngineOptions, PixelKind, Render, RenderSettings, RenderSize};
+    use crate::scene_api::{Environment, Geometry, Mesh, OpenPbrMaterial, Scene};
+    use glam::{Mat4, Vec3};
+    use std::ffi::c_void;
+    use std::mem::ManuallyDrop;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Graphics::Direct3D12::*;
+    use windows::Win32::Graphics::Dxgi::Common::*;
+    use windows::Win32::Graphics::Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE};
+    use wgpu::hal::api::Dx12;
+
+    unsafe fn shared_texture(
+        device: &ID3D12Device,
+        format: DXGI_FORMAT,
+    ) -> (ID3D12Resource, HANDLE) {
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            ..Default::default()
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: 8,
+            Height: 6,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: format,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            ..Default::default()
+        };
+        let mut resource = None;
+        unsafe {
+            device
+                .CreateCommittedResource::<ID3D12Resource>(
+                    &heap,
+                    D3D12_HEAP_FLAG_SHARED,
+                    &desc,
+                    D3D12_RESOURCE_STATE_COMMON,
+                    None,
+                    &mut resource,
+                )
+                .unwrap();
+        }
+        let resource = resource.unwrap();
+        let handle = unsafe {
+            device
+                .CreateSharedHandle(
+                    &resource,
+                    None,
+                    DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+                    PCWSTR::null(),
+                )
+                .unwrap()
+        };
+        (resource, handle)
+    }
+
+    unsafe fn copy_texture_readback(
+        device: &ID3D12Device,
+        queue: &ID3D12CommandQueue,
+        source: &ID3D12Resource,
+        bytes: u64,
+    ) -> Vec<f32> {
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            ..Default::default()
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Width: bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            ..Default::default()
+        };
+        let mut readback = None;
+        unsafe {
+            device
+                .CreateCommittedResource::<ID3D12Resource>(
+                    &heap,
+                    D3D12_HEAP_FLAG_NONE,
+                    &desc,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut readback,
+                )
+                .unwrap();
+        }
+        let readback = readback.unwrap();
+        let allocator: ID3D12CommandAllocator = unsafe {
+            device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+        }
+        .unwrap();
+        let list: ID3D12GraphicsCommandList = unsafe {
+            device
+                .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+        }
+        .unwrap();
+        let mut barrier = D3D12_RESOURCE_BARRIER {
+            Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                    pResource: ManuallyDrop::new(Some(source.clone())),
+                    Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    StateBefore: D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    StateAfter: D3D12_RESOURCE_STATE_COPY_SOURCE,
+                }),
+            },
+        };
+        unsafe {
+            list.ResourceBarrier(std::slice::from_ref(&barrier));
+            list.CopyResource(&readback, source);
+            list.Close().unwrap();
+            ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
+            queue.ExecuteCommandLists(&[Some(list.cast().unwrap())]);
+        }
+        let completion: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        unsafe { queue.Signal(&completion, 1).unwrap() };
+        for _ in 0..100_000 {
+            if unsafe { completion.GetCompletedValue() } >= 1 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(unsafe { completion.GetCompletedValue() }, 1);
+        let mut ptr: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            readback
+                .Map(
+                    0,
+                    Some(&D3D12_RANGE {
+                        Begin: 0,
+                        End: bytes as usize,
+                    }),
+                    Some(&mut ptr),
+                )
+                .unwrap();
+        }
+        let values = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<f32>(), (bytes / 4) as usize).to_vec()
+        };
+        unsafe {
+            readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+        }
+        values
+    }
+
+    #[test]
+    #[ignore = "requires RTX-class D3D12 hardware"]
+    fn d3d12_foreign_export_hdr_and_depth_match_readback() {
+        let _lock = crate::abi_test_lock();
+        let adapter = Engine::adapters()
+            .into_iter()
+            .find(|a| {
+                let info = a.get_info();
+                info.backend == wgpu::Backend::Dx12
+                    && info.name.to_ascii_lowercase().contains("rtx 4060")
+            })
+            .or_else(|| {
+                Engine::adapters().into_iter().find(|a| {
+                    a.get_info().backend == wgpu::Backend::Dx12
+                })
+            })
+            .expect("D3D12 adapter");
+        let engine = Engine::on_adapter(
+            &adapter,
+            EngineOptions {
+                backend: Backend::Hardware,
+            },
+        )
+        .unwrap();
+        let mut scene = Scene::new();
+        let geometry = scene
+            .add_geometry(Geometry::new(
+                vec![-1., -1., -2., 1., -1., -2., 0., 1., -2.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        let mut mesh = Mesh::new(geometry, material);
+        mesh.transform = Mat4::from_translation(Vec3::new(100., 0., 0.));
+        scene.add_mesh(mesh).unwrap();
+        scene
+            .set_environment(Environment {
+                color: [0.25, 0.5, 1., 1.],
+                ..Default::default()
+            })
+            .unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 1,
+                aovs: PixelKind::Depth.aov_mask(),
+                aov_samples: 1,
+                size: RenderSize::Fixed {
+                    width: 8,
+                    height: 6,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let hal = unsafe { engine.inner.gpu.device.as_hal::<Dx12>() }.unwrap();
+        let device = hal.raw_device().clone();
+        let queue = hal.raw_queue().clone();
+        let (hdr_resource, hdr_handle) = unsafe { shared_texture(&device, DXGI_FORMAT_R32G32B32A32_FLOAT) };
+        let (depth_resource, depth_handle) = unsafe { shared_texture(&device, DXGI_FORMAT_R32_FLOAT) };
+        let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }.unwrap();
+        let fence_handle = unsafe {
+            device
+                .CreateSharedHandle(&fence, None, 0x10000000, PCWSTR::null())
+                .unwrap()
+        };
+        let hdr = unsafe {
+            engine
+                .import_d3d12_image(hdr_handle, DXGI_FORMAT_R32G32B32A32_FLOAT.0 as u32, 8, 6)
+                .unwrap()
+        };
+        let depth = unsafe {
+            engine
+                .import_d3d12_image(depth_handle, DXGI_FORMAT_R32_FLOAT.0 as u32, 8, 6)
+                .unwrap()
+        };
+        let done = unsafe { engine.import_d3d12_timeline(fence_handle) }.unwrap();
+        let sequence = render
+            .export_d3d12(&[(hdr.clone(), 0, 0), (depth.clone(), 1, 0)], None, (&done, 1))
+            .unwrap();
+        for _ in 0..5000 {
+            if engine.poll_d3d12_exports(sequence).unwrap() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(unsafe { fence.GetCompletedValue() }, 1);
+        assert!(engine.poll_d3d12_exports(sequence).unwrap());
+        let hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
+        let depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+        assert_eq!(hdr_reference.len(), 8 * 6 * 4);
+        assert_eq!(depth_reference.len(), 8 * 6 * 4);
+        let hdr_exported = unsafe {
+            copy_texture_readback(&device, &queue, &hdr_resource, (8 * 6 * 16) as u64)
+        };
+        let depth_exported = unsafe {
+            copy_texture_readback(&device, &queue, &depth_resource, (8 * 6 * 16) as u64)
+        };
+        assert_eq!(hdr_exported, hdr_reference);
+        assert_eq!(depth_exported, depth_reference);
+        // The imported resources are kept alive through polling and host
+        // readback, then all borrowed wrappers and handles are released in
+        // host order.
+        drop(hdr);
+        drop(depth);
+        drop(done);
+        unsafe {
+            CloseHandle(hdr_handle).unwrap();
+            CloseHandle(depth_handle).unwrap();
+            CloseHandle(fence_handle).unwrap();
+        }
+        drop(hdr_resource);
+        drop(depth_resource);
+        drop(fence);
+        drop(queue);
+    }
+}
+
 fn shader(format: wgpu::TextureFormat, kind: u32, flip: bool) -> String {
     let output = match format {
         wgpu::TextureFormat::Rgba32Float => "rgba32float",
@@ -538,7 +815,11 @@ fn shader(format: wgpu::TextureFormat, kind: u32, flip: bool) -> String {
         _ => "rgba8unorm",
     };
     let convert = if kind == 1 || kind == 3 {
-        "vec4f(v.x,0,0,v.y)"
+        if format == wgpu::TextureFormat::R32Float {
+            "v.x"
+        } else {
+            "vec4f(v.x,0,0,v.y)"
+        }
     } else {
         "v"
     };
