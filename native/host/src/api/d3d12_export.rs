@@ -698,7 +698,6 @@ mod gpu_tests {
         Backend, ConvergeOptions, EngineOptions, PixelKind, Render, RenderSettings, RenderSize,
     };
     use crate::scene_api::{Environment, Geometry, Mesh, OpenPbrMaterial, Scene};
-    use glam::{Mat4, Vec3};
     use std::ffi::c_void;
     use std::mem::ManuallyDrop;
     use std::time::Instant;
@@ -824,7 +823,7 @@ mod gpu_tests {
                 Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
                     pResource: ManuallyDrop::new(Some(source.clone())),
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                    StateBefore: D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    StateBefore: D3D12_RESOURCE_STATE_COMMON,
                     StateAfter: D3D12_RESOURCE_STATE_COPY_SOURCE,
                 }),
             },
@@ -942,9 +941,7 @@ mod gpu_tests {
             ))
             .unwrap();
         let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
-        let mut mesh = Mesh::new(geometry, material);
-        mesh.transform = Mat4::from_translation(Vec3::new(100., 0., 0.));
-        scene.add_mesh(mesh).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
         scene
             .set_environment(Environment {
                 color: [0.25, 0.5, 1., 1.],
@@ -971,6 +968,12 @@ mod gpu_tests {
         let cpu_begin = Instant::now();
         let hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
         let depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+        assert!(
+            depth_reference
+                .chunks_exact(4)
+                .any(|pixel| pixel[0] > 0.0 && pixel[3] > 0.0),
+            "the depth fixture must include visible geometry"
+        );
         println!(
             "D3D12 CPU read_pixels same scene: {:.3} ms",
             cpu_begin.elapsed().as_secs_f64() * 1000.0
@@ -1024,9 +1027,28 @@ mod gpu_tests {
         let hdr_exported =
             unsafe { copy_texture_readback(&device, &queue, &hdr_resource, (8 * 6 * 16) as u64) };
         let depth_exported =
-            unsafe { copy_texture_readback(&device, &queue, &depth_resource, (8 * 6 * 16) as u64) };
-        assert_eq!(hdr_exported, hdr_reference);
-        assert_eq!(depth_exported, depth_reference);
+            unsafe { copy_texture_readback(&device, &queue, &depth_resource, (8 * 6 * 4) as u64) };
+        assert_eq!(
+            hdr_exported
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            hdr_reference
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(depth_exported.len(), 8 * 6);
+        assert_eq!(
+            depth_exported
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            depth_reference
+                .chunks_exact(4)
+                .map(|pixel| pixel[0].to_bits())
+                .collect::<Vec<_>>()
+        );
         // The imported resources are kept alive through polling and host
         // readback, then all borrowed wrappers and handles are released in
         // host order.

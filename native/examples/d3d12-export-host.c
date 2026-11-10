@@ -300,6 +300,13 @@ int main(void) {
   OK(mt_render_read_pixels(render, MT_IMAGE_CENTER_DEPTH, cc, hb, &written,
                            error_text, sizeof error_text));
   double cpu_ms = clock_ms() - cpu_begin;
+  int depth_hit = 0, center_hit = 0;
+  for (uint32_t pixel = 0; pixel < w * h; pixel++) {
+    depth_hit |= cd[pixel * 4] > 0 && cd[pixel * 4 + 3] > 0;
+    center_hit |= cc[pixel * 4] > 0 && cc[pixel * 4 + 3] > 0;
+  }
+  if (!depth_hit || !center_hit)
+    FAIL("depth fixtures must contain visible geometry");
   mt_gpu_export_image ims[3] = {
       {sizeof ims[0], MT_GPU_OUTPUT_HDR, NULL, hih, MT_GPU_TOP_FIRST, 0},
       {sizeof ims[1], MT_GPU_OUTPUT_DEPTH, NULL, dih, MT_GPU_TOP_FIRST, 0},
