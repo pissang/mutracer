@@ -66,7 +66,14 @@ static float *readback(mt_render render,uint32_t kind,size_t bytes) {
 /* format: 0 RGBA32, 1 depth RGBA32, 2 depth R32, 3 half RGBA, 4 display bytes. */
 static id<MTLComputePipelineState> checker(id<MTLDevice> device) {
   NSString *source=@"#include <metal_stdlib>\nusing namespace metal;\nkernel void check(texture2d<float,access::read> image [[texture(0)]], device const uint4 *expected [[buffer(0)]], device atomic_uint *errors [[buffer(1)]], constant uint4 &p [[buffer(2)]], uint2 id [[thread_position_in_grid]]) { if(any(id>=p.xy))return; uint2 src=uint2(id.x,p.w?p.y-1-id.y:id.y); uint4 e=expected[src.x+src.y*p.x];float4 v=image.read(id);uint4 a=as_type<uint4>(v); if(p.z==2){a=uint4(a.x,0,0,0);e=uint4(e.x,0,0,0);} if(p.z==3){e=as_type<uint4>(float4(half4(as_type<float4>(e))));} if(p.z==4){a=uint4(round(v*255.0f));e=uint4(as_type<float4>(e));} if(any(a!=e)){uint old=atomic_fetch_add_explicit(errors,1,memory_order_relaxed);if(old==0){for(uint c=0;c<4;c++){atomic_store_explicit(errors+1+c,a[c],memory_order_relaxed);atomic_store_explicit(errors+5+c,e[c],memory_order_relaxed);}}} }";
-  NSError *err=nil;MTLCompileOptions *compile=[MTLCompileOptions new];compile.mathMode=MTLMathModeSafe;compile.mathFloatingPointFunctions=MTLMathFloatingPointFunctionsPrecise;id<MTLLibrary> lib=[device newLibraryWithSource:source options:compile error:&err];REQUIRE(lib);
+  NSError *err=nil;MTLCompileOptions *compile=[MTLCompileOptions new];
+  if (@available(macOS 15.0, *)) {
+    compile.mathMode=MTLMathModeSafe;
+    compile.mathFloatingPointFunctions=MTLMathFloatingPointFunctionsPrecise;
+  } else {
+    compile.fastMathEnabled=NO;
+  }
+  id<MTLLibrary> lib=[device newLibraryWithSource:source options:compile error:&err];REQUIRE(lib);
   id<MTLComputePipelineState> pipeline=[device newComputePipelineStateWithFunction:[lib newFunctionWithName:@"check"] error:&err];REQUIRE(pipeline);return pipeline;
 }
 static double check_gpu(id<MTLDevice> device,id<MTLCommandQueue> queue,id<MTLComputePipelineState> pipeline,id<MTLTexture> t,const float *expected,uint32_t format,uint32_t flip,id<MTLSharedEvent> done,uint64_t dv,id<MTLSharedEvent> ready,uint64_t rv) {
@@ -89,7 +96,7 @@ static mt_render_snapshot info(mt_render render) {
   mt_render_snapshot s={0};s.struct_size=sizeof s;CHECK(mt_render_info(render,&s,error,sizeof error));return s;
 }
 int main(int argc,char **argv) { @autoreleasepool {
-  REQUIRE(mt_abi_version()==MT_ABI_VERSION && MT_ABI_VERSION==11);
+  REQUIRE(mt_abi_version()==MT_ABI_VERSION);
   unsigned backend=argc>1?(unsigned)atoi(argv[1]):0;BOOL gpu_timing=argc>2&&!strcmp(argv[2],"--gpu-timing");BOOL bench=gpu_timing||(argc>2&&!strcmp(argv[2],"--bench"));BOOL shared=argc>2&&!strcmp(argv[2],"--shared");
   if(bench)CHECK(mt_set_log_callback(log_message,NULL));
   id<MTLDevice> device=MTLCreateSystemDefaultDevice();REQUIRE(device);id<MTLCommandQueue> host=[device newCommandQueueWithMaxCommandBufferCount:4096];id<MTLCommandQueue> producer=[device newCommandQueue];REQUIRE(host&&producer);
