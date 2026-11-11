@@ -29,6 +29,15 @@ export interface TargetState {
 }
 const renderKeys = ['maxSamples', 'bounces', 'clamping', 'samplingPattern', 'alphaBlendStrategy', 'directLightCandidates', 'bevel', 'bevelSamples', 'dispersionWavelengths', 'transmissiveOutputAlphaMin', 'timeBudgetMs', 'batchSamples', 'resolutionScale', 'adaptiveResolution', 'aovs', 'aovSamples', 'aovResolution', 'caustics'] as const;
 const displayKeys = ['toneMapping', 'toneMappingExposure', 'contrast', 'saturation', 'temperature', 'tint', 'channel', 'vignette', 'bloomIntensity', 'bloomThreshold', 'bloomRadius', 'shadowCatcherColor', 'shadowCatcherAlpha', 'hdrOutputEnabled', 'aovDepthRange', 'aovPositionScale', 'aovMotionScale', 'aovIdComponent'] as const;
+// Three.js decomposes the native matrix to keep the camera inspector current.
+// Recomposition can perturb the unit rotation, including entries near zero.
+// Compare those entries at f32 precision; lens fields and translation stay exact.
+function matchesNativeCamera(words: number[], native: Uint32Array | undefined) {
+    if (!native) return false;
+    const floats = new Float32Array(new Uint32Array(words).buffer), other = new Float32Array(native.buffer);
+    return words.every((word, i) => i < 16 ? word === native[i] :
+        word === native[i] || i < 28 && Math.abs(floats[i] - other[i]) <= 8 * 2 ** -23);
+}
 /** Viewer-private remote Engine. The inherited data/settings objects allocate no GPU. */
 export class NativeRenderHost extends Engine {
     readonly transport: NativeTransport;
@@ -49,6 +58,8 @@ export class NativeRenderHost extends Engine {
     private previous?: Uint32Array;
     cameraTarget?: number[];
     private lastCamera = '';
+    private nativeCamera?: Uint32Array;
+    private nativeCameraRevision = 0;
     private lastSettings = '';
     private serial = 0;
     private targetSerial = 0;
@@ -148,7 +159,11 @@ export class NativeRenderHost extends Engine {
                 matrix: number[];
                 target: number[];
                 zoom: number;
+                words?: number[];
+                revision?: number;
             };
+            if (camera.words?.length === 32) this.nativeCamera = Uint32Array.from(camera.words);
+            if (camera.revision !== undefined) this.nativeCameraRevision = camera.revision;
             this.onCamera?.(camera.matrix, camera.target, camera.zoom);
         }
         else if (name === 'viewportClick') {
@@ -238,8 +253,9 @@ export class NativeRenderHost extends Engine {
         const camera = Array.from(cameraWords(this.camera)), cameraKey = JSON.stringify(camera);
         const settings = { targets: [...this.targets.values()].map(t => t.configuration()), display: Object.fromEntries(displayKeys.map(k => [k, this.display[k]])), size: [this.display.canvas.width, this.display.canvas.height], upscale: this.upscale, aspect: useViewer.getState().settings?.outputAspect, bvhBuilder: this.bvhBuilder, preview: this.previewId, final: this.finalId, selection: this.requestedSelection, coalesce: this.coalesce, changing: this.changing };
         const key = JSON.stringify(settings);
+        if (matchesNativeCamera(camera, this.nativeCamera)) this.lastCamera = cameraKey;
         if (blob || sceneChanged || cameraKey !== this.lastCamera || key !== this.lastSettings) {
-            await this.transport.request('commit', { blob, clear: sceneChanged && !this.scene?.meshes.length, camera: cameraKey !== this.lastCamera ? camera : undefined, cameraTarget: this.cameraTarget, settings: key !== this.lastSettings ? settings : undefined });
+            await this.transport.request('commit', { blob, clear: sceneChanged && !this.scene?.meshes.length, camera: cameraKey !== this.lastCamera ? camera : undefined, cameraTarget: this.cameraTarget, cameraRevision: this.nativeCameraRevision, settings: key !== this.lastSettings ? settings : undefined });
             if (next)
                 this.previous = next;
             if (sceneChanged)

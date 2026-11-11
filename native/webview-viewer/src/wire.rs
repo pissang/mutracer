@@ -3,6 +3,13 @@ use anyhow::{Context, Result, bail, ensure};
 use mutracer_native::api;
 use serde_json::Value;
 
+pub fn camera_words(camera: &api::Camera) -> Vec<u32> {
+    camera
+        .to_bytes()
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect()
+}
 pub fn camera(value: &Value) -> Result<api::Camera> {
     let values = value.as_array().context("Expected camera words")?;
     ensure!(values.len() == 32, "Camera is 32 words");

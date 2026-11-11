@@ -13,7 +13,6 @@ mod sky;
 mod smoke;
 mod wire;
 use anyhow::{Context, Result, bail, ensure};
-use glam::Mat4;
 use mutracer_native::api;
 use serde_json::{Value, json};
 use std::{
@@ -26,7 +25,7 @@ use std::{
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{StartCause, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
 };
@@ -82,6 +81,7 @@ struct Host {
     export: Option<Export>,
     evidence: Option<PathBuf>,
     started: Instant,
+    last_surface: Option<(u64, [u32; 4], [u32; 2], bool)>,
 }
 impl Host {
     #[cfg(target_os = "linux")]
@@ -328,6 +328,7 @@ impl Host {
             export: None,
             evidence,
             started: Instant::now(),
+            last_surface: None,
         })
     }
     fn send(&self, value: Value) -> Result<()> {
@@ -429,6 +430,7 @@ impl Host {
                             .and_then(|id| self.targets.get(&id))
                             .map(|t| api::LoopRender::Render(t.clone())),
                         final_render: api::LoopRender::Render(final_target.clone()),
+                        syncs: vec![self.orbit.activity.clone()],
                         coalesce_scene_updates: v["coalesce"].as_bool().unwrap_or(false),
                         ..Default::default()
                     },
@@ -473,22 +475,20 @@ impl Host {
                     None
                 };
                 if args["settings"].is_object() {
+                    self.last_surface = None;
                     self.settings(&args["settings"])?;
                 }
                 if let Some(next) = next {
+                    self.last_surface = None;
                     self.engine.set_scene_shared(next.clone())?;
                     self.descriptor = Some(next);
                 }
                 if args["clear"] == true {
+                    self.last_surface = None;
                     self.engine.clear_scene()?;
                     self.descriptor = None;
                 }
                 if args["camera"].is_array() {
-                    self.camera = wire::camera(&args["camera"])?;
-                    self.engine.set_camera(Some(self.camera))?;
-                    self.orbit.camera = self.camera;
-                    let world = Mat4::from_cols_array(&self.camera.world_matrix);
-                    let p = world.w_axis.truncate();
                     let target = args["cameraTarget"]
                         .as_array()
                         .filter(|v| v.len() == 3)
@@ -498,9 +498,13 @@ impl Host {
                                 v[1].as_f64().unwrap_or(0.) as f32,
                                 v[2].as_f64().unwrap_or(0.) as f32,
                             )
-                        })
-                        .unwrap_or(p - world.z_axis.truncate() * self.orbit.radius);
-                    self.orbit.look_at(p, target);
+                        });
+                    self.camera = self.orbit.sync_camera(
+                        wire::camera(&args["camera"])?,
+                        target,
+                        args["cameraRevision"].as_u64(),
+                    );
+                    self.engine.set_camera(Some(self.camera))?;
                 }
             }
             "settled" => {
@@ -775,7 +779,7 @@ impl Host {
             if self.orbit.packet(&message.body, self.logical_height)? {
                 self.camera = self.orbit.camera();
                 self.engine.set_camera(Some(self.camera))?;
-                self.event("camera",json!({"matrix":self.camera.world_matrix,"target":self.orbit.target.to_array(),"zoom":self.camera.zoom}))?;
+                self.event("camera",json!({"matrix":self.camera.world_matrix,"target":self.orbit.target.to_array(),"zoom":self.camera.zoom,"revision":self.orbit.revision,"words":wire::camera_words(&self.camera)}))?;
                 self.dirty = true;
             }
             return Ok(());
@@ -822,20 +826,33 @@ impl Host {
         let hdr = self
             .gpu
             .set_hdr(self.engine.display().settings().hdr_output_enabled);
-        let image = if hdr {
-            if let Some(loop_) = &self.render_loop {
-                if let Some(render) = loop_.presented_render() {
-                    self.engine.display().compose_hdr(render)?
+        let surface_key = (
+            self.render_loop.as_ref().map_or(0, |l| l.presentations()),
+            self.rect,
+            [self.gpu.config.width, self.gpu.config.height],
+            hdr,
+        );
+        // Acquiring a FIFO frame can block. Poll GPU completion without
+        // acquiring another surface frame until the composed output changes.
+        if self.last_surface != Some(surface_key) {
+            let image = if hdr {
+                if let Some(loop_) = &self.render_loop {
+                    if let Some(render) = loop_.presented_render() {
+                        self.engine.display().compose_hdr(render)?
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             } else {
-                None
-            }
-        } else {
-            self.engine.display().texture()
-        };
-        self.gpu.present(&self.window, image, self.rect)?;
+                self.engine.display().texture()
+            };
+            self.last_surface = self
+                .gpu
+                .present(&self.window, image, self.rect)?
+                .then_some(surface_key);
+        }
         if self.ready
             && (self.last_publish.elapsed() > Duration::from_millis(100) || !self.needs_tick())
         {
@@ -877,6 +894,7 @@ impl Host {
     }
     fn needs_tick(&self) -> bool {
         self.dirty
+            || self.last_surface.is_none()
             || self.export.as_ref().is_some_and(|job| !job.completed)
             || !self.paused
                 && self
@@ -995,7 +1013,7 @@ impl ApplicationHandler<Message> for App {
                     Ok(true) => {
                         host.camera = host.orbit.camera();
                         let _ = host.engine.set_camera(Some(host.camera));
-                        let _=host.event("camera",json!({"matrix":host.camera.world_matrix,"target":host.orbit.target.to_array(),"zoom":host.camera.zoom}));
+                        let _=host.event("camera",json!({"matrix":host.camera.world_matrix,"target":host.orbit.target.to_array(),"zoom":host.camera.zoom,"revision":host.orbit.revision,"words":wire::camera_words(&host.camera)}));
                         host.dirty = true;
                         host.window.request_redraw();
                     }
@@ -1026,7 +1044,11 @@ impl ApplicationHandler<Message> for App {
                     host.native_bounds()
                 }
             }
-            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::Focused(true)
+            | WindowEvent::Occluded(false)
+            | WindowEvent::Moved(_)
+            | WindowEvent::ScaleFactorChanged { .. } => {
+                host.last_surface = None;
                 host.dirty = true;
                 host.window.request_redraw();
                 Ok(())
@@ -1039,6 +1061,13 @@ impl ApplicationHandler<Message> for App {
             e.exit();
         }
     }
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            if let Some(host) = self.host.as_ref().filter(|h| h.needs_tick()) {
+                host.window.request_redraw();
+            }
+        }
+    }
     fn about_to_wait(&mut self, e: &ActiveEventLoop) {
         #[cfg(target_os = "linux")]
         while gtk::events_pending() {
@@ -1046,9 +1075,8 @@ impl ApplicationHandler<Message> for App {
         }
         if let Some(host) = &self.host {
             if host.needs_tick() {
-                host.window.request_redraw();
                 e.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + Duration::from_millis(16),
+                    Instant::now() + Duration::from_millis(1),
                 ));
             } else {
                 e.set_control_flow(ControlFlow::Wait);

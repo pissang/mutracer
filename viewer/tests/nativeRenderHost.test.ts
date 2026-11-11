@@ -1,6 +1,8 @@
+import { Matrix4, Vector3, Quaternion } from 'three';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Camera, Mesh, Geometry, OpenPBRMaterial } from '../../src/main';
 import { Attribute } from '../../src/scene/Geometry';
+import { cameraWords } from '../src/engine/nativeScene';
 import { NativeRenderHost, NativeRender } from '../src/engine/NativeRenderHost';
 vi.mock('../src/store', () => ({ useViewer: { subscribe: () => () => { }, setState: () => { }, getState: () => ({ nativeRayReconstruction: false }) } }));
 const hosts: NativeRenderHost[] = [];
@@ -47,6 +49,30 @@ describe('native Engine boundary', () => {
         expect(uploads).toHaveLength(1);
         expect(commands.filter(c => c.command === 'commit')).toHaveLength(2);
         expect(gpu).not.toHaveBeenCalled();
+    });
+    it('acknowledges native camera updates without echoing them and sends inspector edits with their revision', async () => {
+        const { host, commands } = setup();
+        await host.flush();
+        host.camera!.position = [2,3,4];
+        host.camera!.lookAt([0,0,0]);
+        const words = Array.from(cameraWords(host.camera!));
+        window.mutracerNativeReceive?.({event:'camera',value:{matrix:host.camera!.transform,target:[0,0,0],zoom:1,words,revision:2}});
+        await host.flush();
+        expect(commands.filter(c=>c.command==='commit')).toHaveLength(1);
+        // This is the same matrix -> inspector values -> matrix round trip as WebEngine.
+        const matrix=new Matrix4().fromArray(host.camera!.transform),position=new Vector3(),rotation=new Quaternion(),scale=new Vector3();
+        matrix.decompose(position,rotation,scale);
+        host.camera!.transform=Float32Array.from(matrix.compose(position,rotation,scale).elements) as NonNullable<typeof host.camera>['transform'];
+        await host.flush();
+        expect(commands.filter(c=>c.command==='commit')).toHaveLength(1);
+        host.camera!.fov += 1;
+        await host.flush();
+        const edits = commands.filter(c=>c.command==='commit');
+        expect(edits).toHaveLength(2);
+        expect(edits[1].args.cameraRevision).toBe(2);
+        host.camera!.position = [5,6,7];
+        await host.flush();
+        expect(commands.filter(c=>c.command==='commit')).toHaveLength(3);
     });
     it('sends retained material deltas and retries a rejected scene with a complete descriptor', async () => {
         const { host, uploads, setFailure } = setup();

@@ -34,7 +34,22 @@ impl Gpu {
         } else {
             default_adapter
         };
-        let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+        // OIDN selects its inference path from the enabled device features.
+        // Request the supported native fast paths as well as ray queries.
+        let features = adapter.features()
+            & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                | wgpu::Features::SHADER_F16
+                | wgpu::Features::SUBGROUP
+                | wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX);
+        let textures = wgpu::Features::TEXTURE_BINDING_ARRAY
+            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+        let features = features
+            | if adapter.features().contains(textures) {
+                textures
+            } else {
+                wgpu::Features::empty()
+            };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer WebView"),
@@ -151,21 +166,21 @@ impl Gpu {
         window: &Arc<Window>,
         image: Option<wgpu::Texture>,
         rect: [u32; 4],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface = self.instance.create_surface(window.clone())?;
                 self.surface.configure(&self.device, &self.config);
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Validation => anyhow::bail!("Surface validation failed"),
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = frame.texture.create_view(&Default::default());
@@ -240,7 +255,7 @@ impl Gpu {
         window.pre_present_notify();
         self.queue.present(frame);
         self.presentations += 1;
-        Ok(())
+        Ok(true)
     }
     pub fn engine(&self) -> api::Engine {
         let engine = api::Engine::on_device(
