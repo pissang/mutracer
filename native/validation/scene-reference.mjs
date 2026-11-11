@@ -149,7 +149,8 @@ export async function referenceScene(bytes, sourceRoot) {
         LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};
     updateSceneShaderCapabilities(constants);
     constants.SCENE_CAPABILITIES = retainedShaderCapabilities(constants).SCENE_CAPABILITIES;
-    const nativeShader = wgpuShaderSource(constants, {compactVertices:true, hasDisplacement:pass._hasDisplacement, hasAlpha:false,
+    const nativeShader = wgpuShaderSource(constants, {channelIndependentRis:Boolean(constants.SPECTRAL),
+        shareSpectralPrefix:Boolean(constants.SPECTRAL)&&!!(flags&2),compactVertices:true, hasDisplacement:pass._hasDisplacement, hasAlpha:false,
         hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
         hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),analyticLightStorage:true,blasLayoutMask:1}, true);
     return { device, pass, camera, nativeShader, nativeResources };

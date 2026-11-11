@@ -1,4 +1,4 @@
-// Browser-only checkpoint source. Native and nonspectral generation omit it.
+// Spectral checkpoint source shared by browser and native generation.
 // Structured-sample caches are pure dimension lookups; only PCG, hashed draws
 // and the two current-bounce indices need restoring.
 export function spectralPrefixWgsl(shareSecondary = true) { return /* wgsl */ `

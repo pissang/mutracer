@@ -2715,14 +2715,29 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
         );
     }
+    fn spectral_input() -> Vec<u8> {
+        let mut words: Vec<u32> = input()
+            .chunks_exact(4)
+            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .collect();
+        let material = words[h::MATERIAL_OFFSET] as usize;
+        words[h::QUALITY_FLAGS] = 2;
+        words[material + mat::TRANSMISSION] = 1f32.to_bits();
+        words[material + mat::EXTENSION_COUNT] = 1;
+        words[material + mat::EXTENSION_OFFSET] = words.len() as u32;
+        // Frozen material-property ID 15: transmissionDispersionScale.
+        words.extend_from_slice(&[15, 1f32.to_bits(), 0, 0]);
+        words[h::LENGTH] = words.len() as u32;
+        words.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
+
     #[test]
     fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {
         let _test = crate::abi_test_lock();
         let _entry = crate::entry_lock();
-        for (hardware, bytes) in [false, true]
-            .into_iter()
-            .flat_map(|hardware| [input(), displacement_input()].map(|bytes| (hardware, bytes)))
-        {
+        for (hardware, bytes) in [false, true].into_iter().flat_map(|hardware| {
+            [input(), displacement_input(), spectral_input()].map(|bytes| (hardware, bytes))
+        }) {
             let (scene, assets, _) = prepare_retained(&bytes, hardware).unwrap();
             let source = std::str::from_utf8(&assets[&scene.shader]).unwrap();
             let module = naga::front::wgsl::parse_str(source).unwrap();

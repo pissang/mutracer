@@ -104,7 +104,7 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[];
   bvhCapacityBytes: number; attributeCapacityBytes: number; instanceCapacity: number;
   shader: SceneShader}>();
-/** Inputs of the production shader, retained so targets can request pattern/bevel-sample variants. */
+/** Inputs of the production shader, retained for target quality and sampling variants. */
 interface SceneShader {
   graphs?: NativeGraphPlan;
   constants: Record<string, boolean | number>; features: Parameters<typeof wgpuShaderSource>[1];
@@ -267,7 +267,8 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // with blend coverage. The shared scene retains the stochastic base shader.
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
     const frameInputs=(configuration.variants & 16)!==0;
-    const frameFeatures = nativeGraphFeatures({...state.shader.features,hasAlpha}, state.shader.graphs);
+    const frameFeatures = nativeGraphFeatures({...state.shader.features, hasAlpha,
+      shareSpectralPrefix: Boolean(constants.SPECTRAL) && !!(qualityFlags & 2)}, state.shader.graphs);
     const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
     const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections({...frameFeatures, materialHooks: {}},state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
     // Independently traced frame guides use the original PT scene bindings.
@@ -285,7 +286,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
       frameFeatures.photonDirectSubset=frameFeatures.photonMapping&&!frameFeatures.lightTracing;
       rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
     }
-    const variant=!!caustics||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
+    const variant=!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
       (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
         shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs?.key??'');
@@ -681,6 +682,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     ...nativeMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
   const features: Parameters<typeof wgpuShaderSource>[1] = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
+    // Match the browser spectral reservoir even for one-wavelength previews.
+    // Only three-wavelength targets replay RGB prefixes; the source feature is
+    // part of nativeShaderVariant's key and the host caches the resulting WGSL.
+    channelIndependentRis: Boolean(constants.SPECTRAL),
+    shareSpectralPrefix: Boolean(constants.SPECTRAL) && !!(qualityFlags & 2),
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};

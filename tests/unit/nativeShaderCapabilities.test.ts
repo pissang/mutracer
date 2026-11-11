@@ -1,6 +1,6 @@
 import {expect, it, vi} from 'vitest';
-import {retainedSceneParameters, sceneMaterialParameters, sceneLightListParameters, acceptSceneLighting, releaseSceneParameters} from '../../native/src/scene-core';
-import {HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, CAMERA as C, LIGHT as L, VERSION} from '../../native/src/layout';
+import {retainedSceneParameters, sceneMaterialParameters, sceneLightListParameters, acceptSceneLighting, releaseSceneParameters, sceneTargetParameters} from '../../native/src/scene-core';
+import {HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, CAMERA as C, LIGHT as L, VERSION, SETTINGS as S, EXTENSION as E} from '../../native/src/layout';
 import * as shaderSource from '../../src/renderer/wgpuShaderSource';
 import {MATERIAL_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
 import {PACKET_ENTRY as PE, PACKET_HEADER as PH, WRITE_ENTRY as WE, RESOURCE} from '../../native/src/layout';
@@ -121,4 +121,44 @@ it('rejects missing layer/transport support and leaves accepted parameters intac
     const unchanged = sceneMaterialParameters(patch, token);
     expect(packetResource(unchanged, RESOURCE.MATERIALS, true)).toEqual(packetResource(initial, RESOURCE.MATERIALS));
   } finally {releaseSceneParameters(token);}
+});
+
+// Exercise the target packet contract: settings must specialize the source even
+// when sampling, bevel and the committed scene remain unchanged.
+it('selects spectral prefix variants per target, including previews and frame inputs', () => {
+  const base = triangleScene(), scene = new Uint8Array(base.length + E.WORDS * 4);
+  scene.set(base);
+  const u = new Uint32Array(scene.buffer), f = new Float32Array(scene.buffer);
+  const material = u[H.MATERIAL_OFFSET], extension = base.length / 4;
+  u[H.LENGTH] = scene.length; u[H.QUALITY_FLAGS] = 2;
+  u[material + MAT.EXTENSION_COUNT] = 1; u[material + MAT.EXTENSION_OFFSET] = extension;
+  u[extension + E.ID] = 15; f[extension + E.X] = 1;
+  const token = 4891, generate = vi.spyOn(shaderSource, 'wgpuShaderSource');
+  try {
+    retainedSceneParameters(scene, token);
+    expect(generate.mock.calls[0][1]).toMatchObject({channelIndependentRis: true, shareSpectralPrefix: true});
+    const request = new Uint8Array((S.WORDS + 8 + C.WORDS) * 4);
+    const ru = new Uint32Array(request.buffer), rf = new Float64Array(request.buffer, 0, S.WORDS / 2);
+    ru[S.STRUCT_SIZE] = S.WORDS * 4; ru[S.MAX_SAMPLES] = 64;
+    ru[S.SEED] = 12345; ru[S.VARIANTS] = 1;
+    rf[S.BOUNCES / 2] = 6; rf[S.DIRECT_LIGHT_CANDIDATES / 2] = 2;
+    rf[S.BEVEL_SAMPLES / 2] = 8; rf[S.TRANSMISSIVE_ALPHA_MIN / 2] = 1;
+    ru.set([8, 8, 2, RESOURCE.SOFTWARE_SHADER], S.WORDS);
+    request.set(scene.subarray(u[H.CAMERA_OFFSET] * 4, (u[H.CAMERA_OFFSET] + C.WORDS) * 4), (S.WORDS + 8) * 4);
+    const target = () => sceneTargetParameters(request, token);
+    expect(new Uint32Array(target().buffer, 0, 4)[1]).toBe(0); // committed three-wavelength shader
+    ru[S.WORDS + 2] = 0;
+    const preview = target();
+    expect(new Uint32Array(preview.buffer, 0, 4)[1]).toBeGreaterThan(0);
+    expect(generate.mock.calls.at(-1)![1]).toMatchObject({channelIndependentRis: true, shareSpectralPrefix: false});
+    expect(target()).toEqual(preview); // same AOT cache variant
+    ru[S.WORDS + 2] = 2;
+    expect(new Uint32Array(target().buffer, 0, 4)[1]).toBe(0);
+    ru[S.VARIANTS] = 17;
+    expect(new Uint32Array(target().buffer, 0, 4)[1]).toBeGreaterThan(0);
+    expect(generate.mock.calls.at(-1)![1]).toMatchObject({channelIndependentRis: true, shareSpectralPrefix: true});
+    ru[S.WORDS + 2] = 0;
+    target();
+    expect(generate.mock.calls.at(-1)![1]).toMatchObject({channelIndependentRis: true, shareSpectralPrefix: false});
+  } finally {releaseSceneParameters(token); vi.restoreAllMocks();}
 });
