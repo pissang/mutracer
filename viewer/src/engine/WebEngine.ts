@@ -37,6 +37,7 @@ import { cameraSettings, readCameraState, writeCameraState } from './cameraState
 import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
+import {hostMaterials,hostThreeGeometries} from './nativeResources';
 import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
@@ -153,13 +154,16 @@ export class WebEngine implements ViewerEngine {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    if((window as Window & {mutracerEvidence?:boolean}).mutracerEvidence)setSettings({maxSamples:16},{record:false});
+    const benchmark=(window as Window&{mutracerBenchmark?:{target?:number}}).mutracerBenchmark;
+    if(benchmark)setSettings({maxSamples:benchmark.target??16,previewEnabled:false,denoise:false,autoRotate:false,fStop:0,autoFocus:false,displayUpscale:false,bounces:6,clamping:0},{record:false});
+    else if((window as Window & {mutracerEvidence?:boolean}).mutracerEvidence)setSettings({maxSamples:16},{record:false});
     this.settings = get().settings;
     this.engine = createRenderEngine(canvas);
     this.engine._bvhCache = new ViewerBvhCache();
     this.preview = createRender(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
     this.final = createRender(this.engine, {fallback: this.preview, batchSamples: true});
+    if(benchmark)Object.assign(this.final,{directLightCandidates:2,bevel:false,dispersionWavelengths:1});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
@@ -177,6 +181,7 @@ export class WebEngine implements ViewerEngine {
     this.controls.enableDamping = true;
     if(this.engine instanceof NativeRenderHost){
       this.controls.disconnect();
+      this.engine.onOpenModel=path=>{void this.loadHostPath(path);};
       this.engine.onResize=()=>{this.needsResize=true;};
       this.engine.onViewportClick=(x,y)=>{if(get().pickingFocus){set({pickingFocus:false});this.pickFocus(x,y);}else void this.pickAt(x,y,++this.pickRequest);};
       this.engine.onCamera=(matrix,target,zoom)=>{
@@ -284,6 +289,24 @@ export class WebEngine implements ViewerEngine {
 
   // ---------------------------------------------------------------- loading
 
+  openFiles() {
+    const host=this.engine;
+    if(!(host instanceof NativeRenderHost)){document.getElementById('open-files')?.click();return;}
+    void host.transport.request<string[]>('openFiles').then(async paths=>{
+      if(!paths.length)return;
+      const model=paths.find(path=>/\.(glb|gltf)$/i.test(path));
+      if(model){await this.loadHostPath(model);return;}
+      const files=await host.transport.request<import('./NativeRenderHost').NativeModelFiles>('readFiles',{paths});
+      await this.loadFiles((await host.readModelSource(files)).files);
+    }).catch(error=>showToast(`Could not open files: ${String(error)}`,'error'));
+  }
+
+  private loadHostPath(path:string) {
+    const host=this.engine;
+    if(!(host instanceof NativeRenderHost))return Promise.resolve(false);
+    return this.load(path.split(/[\\/]/).pop()!,async(progress,signal)=>host.loadHostModel(await host.modelSource(path),progress,signal),{presetId:null,credit:null,sourceUrl:null});
+  }
+
   /** Explicit links win; otherwise reopen the sole cached model. */
   async loadInitialModel(presetId: string | null) {
     if(this.engine instanceof NativeRenderHost){
@@ -297,21 +320,21 @@ export class WebEngine implements ViewerEngine {
       const initial=bridgeWindow.mutracerInitialModel;
       if(initial){
         delete bridgeWindow.mutracerInitialModel;
-        const source = await this.engine.readModelSource(initial);
-        return this.load(source.files[0].file.name, (progress, signal) => loadModelFromSource(source, progress, signal, this.modelBackend),
+        const source = await this.engine.modelSource(initial);
+        return this.load(source.mainPath.split('/').pop()!, (progress, signal) => this.loadSource(source, progress, signal),
           {presetId:null,credit:null,sourceUrl:null});
       }
     }
     const token = ++this.loadToken;
     const host = this.engine;
-    const cached = await readModelCache(host instanceof NativeRenderHost ? path => host.readModelSource(path) : undefined);
+    const cached = await readModelCache(host instanceof NativeRenderHost ? path => host.modelSource(path) : undefined);
     if (token !== this.loadToken) return;
     this.bareLink = !!presetId && !Object.keys(this.initialURLSettings ?? {}).length;
     this.cachedPresetId = cached?.meta.presetId ?? null;
     if (cached && (!presetId || cached.meta.presetId === presetId)) {
       const { meta } = cached;
       const loaded = await this.load(meta.name, (progress, signal) => cached.source
-        ? loadModelFromSource(cached.source, progress, signal, this.modelBackend)
+        ? this.loadSource(cached.source, progress, signal)
         : Promise.resolve(createMaterialSpheres()), meta, cached, false);
       if (loaded || token + 1 !== this.loadToken) return;
       await clearModelCache();
@@ -387,6 +410,12 @@ export class WebEngine implements ViewerEngine {
     // Referenced HDRs also belong to the model's lighting and cached source.
     return this.load(main.file.name, (progress, signal) => loadModelFromFiles(files, progress, signal, this.modelBackend),
       { presetId: null, credit: null, sourceUrl: null });
+  }
+
+  private loadSource(source: import('./loadModel').ModelSource, progress: import('./loadModel').LoadProgress, signal: AbortSignal) {
+    return this.engine instanceof NativeRenderHost && source.hostPath
+      ? this.engine.loadHostModel(source,progress,signal)
+      : loadModelFromSource(source,progress,signal,this.modelBackend);
   }
 
   private modelBackend = async () => this.engine.backend ?? (await this.engine.init()).backend;
@@ -471,6 +500,7 @@ export class WebEngine implements ViewerEngine {
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
     });
     this.awaitingFirstSample = true;
+    if (model.lighting?.warnings.length) showToast(model.lighting.warnings.join(' '), 'warning', [{ label: 'Details', onClick: () => setUi({ right: true, tab: 'environment' }) }]);
     if (model.pbrt?.warnings.length) showToast(`${model.pbrt.warnings.length} PBRT import warnings`, 'warning', [{ label: 'Details', onClick: () => setUi({ right: true, tab: 'environment' }) }]);
     writeHash(this.settings, meta.presetId);
     this.saveCamera();
@@ -490,7 +520,8 @@ export class WebEngine implements ViewerEngine {
     const root = model.root;
     this.materials.setModel(root, edits);
     // Stand the model on the ground at the origin; keep its units.
-    groundModel(root);
+    if(model.groundOffset) root.position.sub(new THREE.Vector3(...model.groundOffset));
+    else groundModel(root);
     this.modelGroup.add(root);
     root.updateMatrixWorld(true);
     this.hiddenAtLoad.clear();
@@ -627,7 +658,10 @@ export class WebEngine implements ViewerEngine {
       scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
       get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
+      convertMaterial: source => hostMaterials.get(source),
       onMeshConverted: (mesh, source, group) => {
+        const retained=hostThreeGeometries.get(source.geometry);
+        if(retained)mesh.geometry=retained.geometry;
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
         this.pickObjects.set(mesh.aovId, source.uuid);
@@ -1869,6 +1903,8 @@ function isVisible(object: THREE.Object3D) {
 
 function triangleCount(mesh: THREE.Mesh) {
   const geometry = mesh.geometry;
+  const retained=hostThreeGeometries.get(geometry);
+  if(retained)return Math.floor(retained.reference.indices/3);
   return Math.floor((geometry.index ? geometry.index.count : geometry.getAttribute('position')?.count ?? 0) / 3);
 }
 

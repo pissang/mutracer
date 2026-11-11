@@ -31,7 +31,7 @@ function useShortcuts() {
       if (target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault();
-        document.getElementById('open-files')?.click();
+        getEngine()?.openFiles();
         return;
       }
       if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {

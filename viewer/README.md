@@ -3,7 +3,8 @@
 A browser app for trying MuTracer: drop a glTF/GLB (or a folder with a .gltf,
 its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
-export PNGs.
+export PNGs. If a glTF image fails to load, the model still opens with a warning;
+open the Lighting panel for import warnings.
 
 PBRT scenes can be opened from a `.pbrt` URL, by dropping a folder, or by
 selecting the scene together with its assets. Relative paths follow the main

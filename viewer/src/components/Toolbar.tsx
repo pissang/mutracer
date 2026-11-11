@@ -141,7 +141,7 @@ function OpenMenu() {
         <Button className="btn" aria-label="Open"><Upload size={15} /><span className="hide-xs">Open</span><ChevronDown size={13} className="chev" /></Button>
         <Popover className="popover menu" offset={8} style={{ width: 250 }}>
           <Menu className="menu-list" aria-label="Open" onAction={(key) => {
-            if (key === 'files') files.current?.click();
+            if (key === 'files') getEngine()?.openFiles();
             if (key === 'folder') folder.current?.click();
             if (key === 'hdr') hdr.current?.click();
             if (key === 'url') setUrlOpen(true);

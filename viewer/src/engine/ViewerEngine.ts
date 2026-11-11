@@ -23,6 +23,7 @@ export interface ViewerEngine {
   readonly viewportSize: {width: number; height: number};
   readonly maxImageDimension: number;
   dispose(): void;
+  openFiles(): void;
   loadInitialModel(presetId: string | null): Promise<boolean | void>;
   openURL(presetId: string | null): Promise<boolean | void>;
   loadPreset(id: string, restoreCamera?: boolean): Promise<boolean | void>;

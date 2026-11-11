@@ -1,13 +1,15 @@
-import { Matrix4, Vector3, Quaternion } from 'three';
+import { Matrix4, Vector3, Quaternion, Scene as ThreeScene } from 'three';
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { Camera, Mesh, Geometry, OpenPBRMaterial } from '../../src/main';
+import { Camera, Mesh, Geometry, OpenPBRMaterial, fromTHREEScene } from '../../src/main';
 import { Attribute } from '../../src/scene/Geometry';
-import { cameraWords } from '../src/engine/nativeScene';
+import {hostMaterials,hostThreeGeometries} from '../src/engine/nativeResources';
+import {HEADER as H} from '../../native/src/layout';
+import { cameraWords,NativeSceneEncoder } from '../src/engine/nativeScene';
 import { NativeRenderHost, NativeRender } from '../src/engine/NativeRenderHost';
 vi.mock('../src/store', () => ({ useViewer: { subscribe: () => () => { }, setState: () => { }, getState: () => ({ nativeRayReconstruction: false }) } }));
 const hosts: NativeRenderHost[] = [];
 afterEach(() => { hosts.splice(0).forEach(h => h.dispose()); vi.unstubAllGlobals(); });
-function setup() {
+function setup(responses:Record<string,unknown>={}) {
     const commands: {
         command: string;
         args: Record<string, unknown>;
@@ -22,7 +24,7 @@ function setup() {
     const gpu = vi.fn(() => { throw Error('Browser GPU must not be initialized'); });
     vi.stubGlobal('navigator', { gpu: { requestAdapter: gpu } });
     const window = { ipc: { postMessage: (message: string) => { if (message.startsWith('~'))
-                return; const request = JSON.parse(message); commands.push(request); queueMicrotask(() => window.mutracerNativeReceive?.(request.command === 'commit' && failCommit ? { id: request.id, error: 'rejected descriptor' } : { id: request.id, result: request.command === 'ready' ? { adapterName: 'Test native GPU', maxImageDimension: 8192, layout: 'overlay', hwrt: true, dlssRR: false, gpuSelection: false, hdrWindow: false, adapters: [], backend: 'hardware' } : null })); } }, mutracerNativeReceive: undefined as ((value: unknown) => void) | undefined };
+                return; const request = JSON.parse(message); commands.push(request); queueMicrotask(() => window.mutracerNativeReceive?.(request.command === 'commit' && failCommit ? { id: request.id, error: 'rejected descriptor' } : { id: request.id, result: request.command === 'ready' ? { adapterName: 'Test native GPU', maxImageDimension: 8192, layout: 'overlay', hwrt: true, dlssRR: false, gpuSelection: false, hdrWindow: false, adapters: [], backend: 'hardware' } : responses[request.command]??null })); } }, mutracerNativeReceive: undefined as ((value: unknown) => void) | undefined };
     vi.stubGlobal('window', window);
     const canvas = { width: 96, height: 64, getBoundingClientRect: () => ({ x: 0, y: 0, width: 96, height: 64 }), addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLCanvasElement;
     const uploads: Uint8Array[] = [];
@@ -49,6 +51,26 @@ describe('native Engine boundary', () => {
         expect(uploads).toHaveLength(1);
         expect(commands.filter(c => c.command === 'commit')).toHaveLength(2);
         expect(gpu).not.toHaveBeenCalled();
+    });
+    it('waits for the imported model geometry before replacing the previous scene',async()=>{
+        const replies:Record<string,unknown>={};
+        const {host,commands}=setup(replies);
+        const descriptor=await new NativeSceneEncoder(async()=>{throw Error('Unexpected sky');}).encode(host.scene!,host.camera!,[96,64]);
+        descriptor[H.TEXTURE_COUNT]=0;
+        const manifest={id:7,document:{nodes:[{mesh:0}],scenes:[{nodes:[0]}]},descriptor:'compact',groundOffset:[0,0,0],warnings:[],materialNames:['Paint'],textures:[],
+            geometries:[{min:[-1,0,0],max:[1,1,0],vertices:3,indices:0,uv:false,uv1:false}],meshes:[{node:0,name:'Triangle',geometry:0,material:0,first:0,count:1}]};
+        replies.importGltf={id:7,manifest:'manifest',descriptor:'compact'};
+        host.download=async key=>key==='manifest'?new TextEncoder().encode(JSON.stringify(manifest)).buffer:descriptor.buffer;
+        const model=await host.loadHostModel({mainPath:'scene.glb',hostPath:'/scene.glb',files:[],base:''},()=>{},new AbortController().signal);
+        await host.flush();
+        expect(commands.filter(c=>c.command==='commit')).toHaveLength(0);
+        const root=new ThreeScene();root.add(model.root);
+        host.scene=fromTHREEScene(root,{convertMaterial:source=>hostMaterials.get(source),onMeshConverted:(mesh,source)=>{mesh.geometry=hostThreeGeometries.get(source.geometry)!.geometry;}});
+        await host.flush();
+        const commits=commands.filter(c=>c.command==='commit');
+        expect(commits).toHaveLength(1);
+        expect(commits[0].args.refs).toMatchObject({geometries:[{model:7,id:0,index:0}]});
+        model.revoke();
     });
     it('acknowledges native camera updates without echoing them and sends inspector edits with their revision', async () => {
         const { host, commands } = setup();

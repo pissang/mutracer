@@ -1,3 +1,4 @@
+import {hostTextures} from './nativeResources';
 import {archiveGraph,graphImageName,rememberGraphImage,restoreGraph} from './materialxGraphArchive';
 import {summarizeMaterialGraph,withGraphInput} from './materialGraphSummary';
 import {materialSlotPlan} from '../../../src/renderer/materialGraph/slotTextures';
@@ -245,6 +246,8 @@ export class MaterialEditor {
 
   private withSampling(texture: Texture, sampling: TextureSampling) {
     const copy = new Texture(texture.image);
+    if(texture.udim)Object.defineProperty(copy,'udim',{value:true});
+    const retained=hostTextures.get(texture);if(retained)hostTextures.set(copy,retained);
     copy.source = texture.source; copy.flipY = texture.flipY; copy.colorSpace = texture.colorSpace;
     copy.uvOffset = [...texture.uvOffset]; copy.uvChannel = texture.uvChannel;
     copy.uvScale = [...sampling.uvScale]; copy.wrapS = sampling.wrapS; copy.wrapT = sampling.wrapT;
@@ -449,7 +452,9 @@ export class MaterialEditor {
     const cached = this.thumbs.get(texture);
     if (cached !== undefined) return cached;
     let url = '';
-    const image = texture.image as unknown;
+    let image = texture.image as unknown;
+    const retained=hostTextures.get(texture);
+    if(retained){const preview=retained.preview,canvas=document.createElement('canvas');canvas.width=preview.width;canvas.height=preview.height;canvas.getContext('2d')?.putImageData(new ImageData(Uint8ClampedArray.from(preview.data),preview.width,preview.height),0,0);image=canvas;}
     if (image instanceof ImageBitmap || image instanceof HTMLImageElement || image instanceof HTMLCanvasElement) {
       const canvas = document.createElement('canvas');
       canvas.width = canvas.height = THUMB_SIZE;

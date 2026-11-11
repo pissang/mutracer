@@ -88,6 +88,15 @@ describe('current model OPFS cache', () => {
     expect(await readModelCache(async () => {throw Error('File removed');})).toBeNull();
   });
 
+  it('restores a host manifest without fetching or caching source file bytes', async () => {
+    const fs=filesystem(),original=model();
+    const source={...original.source!,hostPath:'/scene.gltf',files:[],hostFiles:original.source!.files.map(({path,file})=>({path,size:file.size,lastModified:file.lastModified}))};
+    await saveModelCache({...original,source});
+    const restored=await readModelCache(async()=>source);
+    expect(restored?.source).toBe(source);expect(restored?.source?.files).toEqual([]);
+    expect(fs.files.get('current.model')!.size).toBeLessThan(1024);
+  });
+
   it('serializes replacements and keeps only the latest model', async () => {
     const fs = filesystem();
     await Promise.all([saveModelCache(model('old')), saveModelCache(model('current'))]);

@@ -46,7 +46,7 @@ export function saveModelCache(model: CachedModel): Promise<void> {
         version: 1, id: model.id, meta: model.meta,
         source: source && {
           mainPath: source.mainPath, base: source.base, hostPath: source.hostPath,
-          files: source.files.map(({ file, path }) => ({ path, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))
+          files: source.hostFiles?.map(file=>({...file,name:file.path.split('/').pop(),type:''})) ?? source.files.map(({ file, path }) => ({ path, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))
         }
       }));
       const length = new ArrayBuffer(4);
@@ -85,7 +85,7 @@ export function readModelCache(resolveHostSource?: (path: string) => Promise<Mod
         source = data.hostPath ? await resolveHostSource!(data.hostPath) : { mainPath: data.mainPath, base: data.base, files: [] };
         for (const entry of data.files) {
           if (data.hostPath) {
-            const current = source.files.find(file => file.path === entry.path)?.file;
+            const current = source.hostFiles?.find(file=>file.path===entry.path) ?? source.files.find(file => file.path === entry.path)?.file;
             if (!current || current.size !== entry.size || current.lastModified !== entry.lastModified) return null;
             continue;
           }
@@ -96,7 +96,7 @@ export function readModelCache(resolveHostSource?: (path: string) => Promise<Mod
           });
           offset += entry.size;
         }
-        if (!source.files.some(({ path }) => path === source!.mainPath)) return null;
+        if (!(source.hostFiles ?? source.files).some(({ path }) => path === source!.mainPath)) return null;
       } else if (!header.meta.presetId) return null;
       if (offset !== file.size) return null;
       return { id: header.id, meta: header.meta, source };

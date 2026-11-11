@@ -13,6 +13,8 @@ export { isHDRFile, isModelFile, readDroppedItems, toPathedFiles, type PathedFil
 
 export interface LoadedModel {
   name: string;
+  /** Exact imported world-space grounding offset when vertex data stays native. */
+  groundOffset?: [number,number,number];
   root: THREE.Object3D;
   animations: THREE.AnimationClip[];
   lighting?: ModelLighting;
@@ -26,6 +28,7 @@ export interface LoadedModel {
 export interface ModelSource {
   /** Native host file used to reopen without duplicating source bytes in OPFS. */
   hostPath?: string;
+  hostFiles?: {path:string;size:number;lastModified:number}[];
   files: PathedFile[];
   mainPath: string;
   base: string;
@@ -156,6 +159,10 @@ async function parseModelSource(source: ModelSource, onProgress: LoadProgress, s
     if (!blobs.has(file.name)) blobs.set(file.name, url);
   }
   const manager = new THREE.LoadingManager();
+  // GLTFLoader keeps the geometry when an image fails. Preserve that fallback,
+  // but surface the failure instead of accepting an apparently complete import.
+  const failedImages = new Set<string>();
+  manager.onError = url => {failedImages.add(url);};
   manager.setURLModifier((url) => {
     if (blobs.has(url)) return blobs.get(url)!;
     if (url.startsWith('data:') || url.startsWith('blob:') || /^https?:/.test(url)) return url;
@@ -188,6 +195,7 @@ async function parseModelSource(source: ModelSource, onProgress: LoadProgress, s
       if (failures.has(address.href)) throw failures.get(address.href);
       throw new Error('Include the environment map with the dropped folder');
     });
+    if (failedImages.size) lighting.warnings.push(`${failedImages.size} model ${failedImages.size === 1 ? 'image could' : 'images could'} not be loaded.`);
     signal?.throwIfAborted();
     return {
       name: main.file.name,

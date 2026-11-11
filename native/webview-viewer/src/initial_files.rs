@@ -1,30 +1,14 @@
 //! Register resources referenced by a host glTF without staging their bytes. Parsing
-//! and scene conversion still run through GLTFLoader inside WebEngine.
+//! and scene conversion run only when the selected import path needs them.
 use super::*;
 pub fn stage(path: &std::path::Path, mailbox: &binary::Shared) -> Result<Value> {
-    use std::io::{Read, Seek, SeekFrom};
     let path = path.canonicalize()?;
     let name = path
         .file_name()
         .context("Model file name")?
         .to_string_lossy()
         .into_owned();
-    let mut file = std::fs::File::open(&path)?;
-    let mut header = [0; 20];
-    let read = file.read(&mut header)?;
-    file.seek(SeekFrom::Start(0))?;
-    let document: Value = if read >= 4 && &header[..4] == b"glTF" {
-        ensure!(read == 20, "Truncated GLB header");
-        let length = u32::from_le_bytes(header[12..16].try_into()?) as u64;
-        ensure!(
-            length <= file.metadata()?.len().saturating_sub(20),
-            "Truncated GLB JSON"
-        );
-        file.seek(SeekFrom::Start(20))?;
-        serde_json::from_reader(file.take(length))?
-    } else {
-        serde_json::from_reader(file)?
-    };
+    let document = read_document(&path)?;
     let record = |path: &std::path::Path, name: &str| -> Result<Value> {
         // glTF URIs use URL-style lexical parent resolution, even if a cancelled
         // path component (for example source/..) does not exist on disk.
@@ -85,6 +69,27 @@ pub fn stage(path: &std::path::Path, mailbox: &binary::Shared) -> Result<Value> 
         }
     }
     Ok(json!({"hostPath":path,"files":files}))
+}
+
+pub fn read_document(path: &std::path::Path) -> Result<Value> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0; 20];
+    let read = file.read(&mut header)?;
+    file.seek(SeekFrom::Start(0))?;
+    let document: Value = if read >= 4 && &header[..4] == b"glTF" {
+        ensure!(read == 20, "Truncated GLB header");
+        let length = u32::from_le_bytes(header[12..16].try_into()?) as u64;
+        ensure!(
+            length <= file.metadata()?.len().saturating_sub(20),
+            "Truncated GLB JSON"
+        );
+        file.seek(SeekFrom::Start(20))?;
+        serde_json::from_reader(std::io::BufReader::new(file).take(length))?
+    } else {
+        serde_json::from_reader(std::io::BufReader::new(file))?
+    };
+    Ok(document)
 }
 
 #[cfg(test)]

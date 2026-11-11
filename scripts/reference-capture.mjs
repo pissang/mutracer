@@ -1,6 +1,6 @@
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {appendFileSync,statSync,existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
@@ -35,10 +35,10 @@ export function buildLibrary(source, directory) {
   mkdirSync(directory, {recursive: true});
   command('npm', ['run', 'build:lib'], source, process.env, resolve(directory, 'build-lib.log'));
 }
-export async function serve(source, directory, fixture, resolveOptions) {
+export async function serve(source, directory, fixture, resolveOptions, allowedPaths = []) {
   const server = await createServer({root: source, configFile: false, resolve: resolveOptions,
     optimizeDeps: {entries: [], noDiscovery: true}, server: {host: '127.0.0.1', port: 0, hmr: false, watch: {ignored: ['**/.native-build/**']},
-      fs: {allow: [source, root, directory, ...(process.env.MUTRACER_NATIVE_DISPLAY_PNG ? [dirname(process.env.MUTRACER_NATIVE_DISPLAY_PNG)] : []), ...(process.env.MUTRACER_OIDN_DISPLAY_INPUT ? [process.env.MUTRACER_OIDN_DISPLAY_INPUT] : [])]}}, plugins: [{name: 'reference-fixture', configureServer(server) {
+      fs: {allow: [source, root, directory, ...allowedPaths, ...(process.env.MUTRACER_NATIVE_DISPLAY_PNG ? [dirname(process.env.MUTRACER_NATIVE_DISPLAY_PNG)] : []), ...(process.env.MUTRACER_OIDN_DISPLAY_INPUT ? [process.env.MUTRACER_OIDN_DISPLAY_INPUT] : [])]}}, plugins: [{name: 'reference-fixture', configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url, 'http://localhost');
         if (request.method === 'POST' && url.pathname.startsWith('/evidence/')) {
@@ -46,7 +46,13 @@ export async function serve(source, directory, fixture, resolveOptions) {
           if (!/^[\w.-]+$/.test(name)) {response.statusCode = 400; response.end(); return;}
           const chunks = [];
           for await (const chunk of request) chunks.push(chunk);
-          writeFileSync(resolve(directory, name), Buffer.concat(chunks));
+          const path = resolve(directory, name), offset = request.headers['x-mutracer-offset'];
+          if (offset !== undefined && offset !== '0') {
+            if (!/^\d+$/.test(offset) || !existsSync(path) || statSync(path).size !== Number(offset)) {
+              response.statusCode = 400; response.end('Invalid evidence offset'); return;
+            }
+            appendFileSync(path, Buffer.concat(chunks));
+          } else writeFileSync(path, Buffer.concat(chunks));
           response.end('ok');
           return;
         }

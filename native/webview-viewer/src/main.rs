@@ -7,6 +7,7 @@ mod dlss;
 mod gpu;
 mod initial_files;
 mod input;
+mod model_import;
 #[cfg(test)]
 mod reference_tests;
 mod sky;
@@ -19,7 +20,10 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use winit::{
@@ -66,6 +70,12 @@ struct Host {
     gpu: gpu::Gpu,
     window: Arc<Window>,
     binary: binary::Shared,
+    models: model_import::Shared,
+    active_models: std::collections::BTreeSet<u64>,
+    import_serial: Arc<AtomicU64>,
+    import_gate: Arc<Mutex<()>>,
+    import_session: u64,
+    proxy: EventLoopProxy<Message>,
     sky: sky::Baker,
     descriptor: Option<Arc<Vec<u8>>>,
     camera: api::Camera,
@@ -79,6 +89,12 @@ struct Host {
     last_publish: Instant,
     publish_first_sample: bool,
     last_loop_frame: Instant,
+    profile: bool,
+    commit_started: Option<Instant>,
+    import_started: Option<Instant>,
+    benchmark_camera: Option<api::Camera>,
+    sample_started: Option<Instant>,
+    sample_milestones: std::collections::BTreeSet<u32>,
     upscale: Option<api::PostProcessSubscription>,
     export: Option<Export>,
     evidence: Option<PathBuf>,
@@ -161,6 +177,8 @@ impl Host {
         });
         let sky = sky::Baker::new(gpu.device.clone(), gpu.queue.clone());
         let binary = binary::Shared::default();
+        let models = model_import::Shared::default();
+        let command_proxy = proxy.clone();
         let mailbox = binary.clone();
         let mut initial_model = Value::Null;
         if let Some(path) = path {
@@ -217,8 +235,44 @@ impl Host {
             assets::response(parts.uri.path())
         });
         let import_only = std::env::var_os("MUTRACER_VIEWER_IMPORT_ONLY").is_some();
+        let benchmark: Value = if workflow {
+            std::env::var_os("MUTRACER_VIEWER_BENCHMARK")
+                .map(|path| {
+                    std::fs::read(path)
+                        .context("Read benchmark camera")
+                        .and_then(|data| {
+                            serde_json::from_slice(&data).context("Benchmark camera JSON")
+                        })
+                })
+                .transpose()?
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let benchmark_camera = if benchmark.is_object() {
+            let c = &benchmark["camera"];
+            let mut camera = api::Camera::default();
+            camera.fov = c["fov"].as_f64().context("Benchmark FOV")? as f32;
+            camera.near_clip = c["near"].as_f64().context("Benchmark near plane")? as f32;
+            camera.far_clip = c["far"].as_f64().context("Benchmark far plane")? as f32;
+            for index in 0..16 {
+                camera.world_matrix[index] =
+                    c["matrix"][index].as_f64().context("Benchmark matrix")? as f32;
+            }
+            for axis in 0..3 {
+                camera.world_matrix[12 + axis] -= c["groundOffset"][axis]
+                    .as_f64()
+                    .context("Benchmark grounding")?
+                    as f32;
+            }
+            Some(camera)
+        } else {
+            None
+        };
+        let native_profile = std::env::var("MUTRACER_NATIVE_PROFILE").as_deref() == Ok("1");
+        let js_import = std::env::var_os("MUTRACER_VIEWER_JS_IMPORT").is_some();
         let init = format!(
-            "window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
+            "window.mutracerBenchmark={benchmark};window.mutracerNativeProfile={native_profile};window.mutracerJSImport={js_import};window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
             evidence.is_some()
         );
         #[cfg(target_os = "linux")]
@@ -259,6 +313,37 @@ impl Host {
                     || url.starts_with("http://mutracer.localhost/")
             })
             .with_url("mutracer://localhost/index.html");
+        #[cfg(not(target_os = "windows"))]
+        let builder = {
+            let drop_proxy = command_proxy.clone();
+            builder.with_drag_drop_handler(move |event| {
+                let model = |paths: &[PathBuf]| {
+                    paths.iter().position(|path| {
+                        path.extension().is_some_and(|ext| {
+                            ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf")
+                        })
+                    })
+                };
+                match event {
+                    wry::DragDropEvent::Enter { paths, .. } => model(&paths).is_some(),
+                    wry::DragDropEvent::Drop { paths, .. } => {
+                        if let Some(index) = model(&paths) {
+                            let path = &paths[index];
+                            let _ = drop_proxy.send_event(Message {
+                                body: format!(
+                                    "@model-path:{}",
+                                    serde_json::to_string(path).unwrap()
+                                ),
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            })
+        };
         #[cfg(target_os = "macos")]
         let builder = {
             use wry::WebViewBuilderExtDarwin;
@@ -316,6 +401,12 @@ impl Host {
             gpu,
             window,
             binary,
+            models,
+            active_models: Default::default(),
+            import_serial: Arc::new(AtomicU64::new(0)),
+            import_gate: Arc::default(),
+            import_session: 0,
+            proxy: command_proxy,
             sky,
             descriptor: None,
             camera: api::Camera::default(),
@@ -329,6 +420,12 @@ impl Host {
             last_publish: Instant::now(),
             publish_first_sample: false,
             last_loop_frame: Instant::now(),
+            profile: std::env::var("MUTRACER_NATIVE_PROFILE").as_deref() == Ok("1"),
+            commit_started: None,
+            import_started: None,
+            benchmark_camera,
+            sample_started: None,
+            sample_milestones: Default::default(),
             upscale: None,
             export: None,
             evidence,
@@ -469,6 +566,106 @@ impl Host {
                     json!({"adapterName":self.engine.info().adapter_name,"maxImageDimension":self.gpu.device.limits().max_texture_dimension_2d.min(8192),"hwrt":self.engine.info().hardware_ray_query,"dlssRR":self.dlss_available(),"gpuSelection":!self.dlss_available(),"adapters":pollster::block_on(self.gpu.instance.enumerate_adapters(wgpu::Backends::all())).iter().filter(|a|a.is_surface_supported(&self.gpu.surface)).map(|a|a.get_info().name).collect::<Vec<_>>(),"backend":if self.engine.info().backend==api::Backend::Software{"software"}else{"hardware"},"hdrWindow":self.gpu.hdr_supported(),"layout":if cfg!(target_os="linux"){"split"}else{"overlay"}}),
                 ));
             }
+            "openFiles" => {
+                return Ok(Some(json!(
+                    rfd::FileDialog::new().pick_files().unwrap_or_default()
+                )));
+            }
+            "readFiles" => {
+                let paths = args["paths"]
+                    .as_array()
+                    .context("File paths")?
+                    .iter()
+                    .map(|v| v.as_str().map(PathBuf::from).context("File path"))
+                    .collect::<Result<Vec<_>>>()?;
+                let first = paths.first().context("No files")?;
+                let root = first.parent().context("File directory")?;
+                let mut files = Vec::new();
+                for path in &paths {
+                    let metadata = std::fs::metadata(path)?;
+                    let name = path
+                        .strip_prefix(root)
+                        .unwrap_or(path.file_name().context("File name")?.as_ref())
+                        .to_string_lossy();
+                    let blob = self.binary.lock().unwrap().put_file(path.clone());
+                    files.push(json!({"path":name,"blob":blob,"size":metadata.len(),"lastModified":metadata.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64}));
+                }
+                return Ok(Some(json!({"hostPath":first,"files":files})));
+            }
+            "beginImport" => {
+                if self.profile {
+                    self.import_started = Some(Instant::now());
+                }
+                return Ok(Some(Value::Null));
+            }
+            "importGltf" => {
+                let path = PathBuf::from(args["path"].as_str().context("Model path")?);
+                let models = self.models.clone();
+                let mailbox = self.binary.clone();
+                let proxy = self.proxy.clone();
+                let id = request["id"].clone();
+                let serial = self.import_serial.fetch_add(1, Ordering::SeqCst) + 1;
+                let latest = self.import_serial.clone();
+                let gate = self.import_gate.clone();
+                let session = self.import_session;
+                std::thread::spawn(move || {
+                    // Decode one large source at a time. Superseded requests may
+                    // finish their decoder call, but cannot retain or publish it.
+                    let _guard = gate.lock().unwrap();
+                    let result = (|| -> Result<Value> {
+                        ensure!(latest.load(Ordering::SeqCst) == serial, "Import cancelled");
+                        let started = Instant::now();
+                        let document = initial_files::read_document(&path)?;
+                        if model_import::requires_js(&document) {
+                            return Ok(json!({"fallback":true}));
+                        }
+                        let load_started = Instant::now();
+                        let model = mutracer_native::scene_api::viewer_support::Model::load(&path)?;
+                        let load_ms = load_started.elapsed().as_secs_f64() * 1000.;
+                        let manifest_started = Instant::now();
+                        let mut pool = models.lock().unwrap();
+                        ensure!(latest.load(Ordering::SeqCst) == serial, "Import cancelled");
+                        let result = pool.insert(model, document, &mailbox);
+                        if std::env::var("MUTRACER_NATIVE_PROFILE").as_deref() == Ok("1") {
+                            eprintln!(
+                                "{}",
+                                json!({"clientImportProfile":{"modelMs":load_ms,"manifestMs":manifest_started.elapsed().as_secs_f64()*1000.,"totalMs":started.elapsed().as_secs_f64()*1000.}})
+                            );
+                        }
+                        result
+                    })();
+                    let reply = match result {
+                        Ok(result) if result["fallback"] != true => {
+                            // Large documents/previews must not become a megabyte
+                            // evaluate_script expression on the UI thread.
+                            let manifest = mailbox
+                                .lock()
+                                .unwrap()
+                                .put(serde_json::to_vec(&result).unwrap());
+                            json!({"id":id,"result":{"manifest":manifest,"id":result["id"],"descriptor":result["descriptor"]}})
+                        }
+                        Ok(result) => json!({"id":id,"result":result}),
+                        Err(error) => json!({"id":id,"error":format!("{error:#}")}),
+                    };
+                    let _ = proxy.send_event(Message {
+                        body: format!("@import-reply:{}", json!({"session":session,"reply":reply})),
+                    });
+                });
+                return Ok(None);
+            }
+            "releaseModel" => {
+                for field in ["descriptor", "manifest"] {
+                    if let Some(key) = args[field].as_str() {
+                        self.binary.lock().unwrap().discard(key);
+                    }
+                }
+                self.models
+                    .lock()
+                    .unwrap()
+                    .release(args["id"].as_u64().context("Model id")?);
+                self.models.lock().unwrap().collect(&self.active_models);
+                return Ok(Some(Value::Null));
+            }
             "files" => {
                 return Ok(Some(initial_files::stage(
                     std::path::Path::new(args["path"].as_str().context("Model path")?),
@@ -490,8 +687,33 @@ impl Host {
                     self.settings(&args["settings"])?;
                 }
                 if let Some(next) = next {
+                    self.commit_started = Some(Instant::now());
+                    self.sample_started = None;
+                    self.sample_milestones.clear();
                     self.last_surface = None;
-                    self.engine.set_scene_shared(next.clone())?;
+                    let retained = args["refs"]["geometries"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty())
+                        || args["refs"]["textures"]
+                            .as_array()
+                            .is_some_and(|a| !a.is_empty());
+                    if retained {
+                        let hydrate_started = Instant::now();
+                        let (bytes, active) =
+                            self.models.lock().unwrap().hydrate(&next, &args["refs"])?;
+                        if self.profile {
+                            eprintln!(
+                                "{}",
+                                json!({"clientHydrateProfile":{"ms":hydrate_started.elapsed().as_secs_f64()*1000.,"bytes":bytes.len()}})
+                            );
+                        }
+                        self.engine.set_scene_shared(Arc::new(bytes))?;
+                        self.active_models = active;
+                    } else {
+                        self.engine.set_scene_shared(next.clone())?;
+                        self.active_models.clear();
+                    }
+                    self.models.lock().unwrap().collect(&self.active_models);
                     self.publish_first_sample = true;
                     self.descriptor = Some(next);
                 }
@@ -499,6 +721,8 @@ impl Host {
                     self.last_surface = None;
                     self.engine.clear_scene()?;
                     self.descriptor = None;
+                    self.active_models.clear();
+                    self.models.lock().unwrap().collect(&self.active_models);
                 }
                 if args["camera"].is_array() {
                     let target = args["cameraTarget"]
@@ -516,11 +740,21 @@ impl Host {
                         target,
                         args["cameraRevision"].as_u64(),
                     );
+                    if let Some(camera) = self.benchmark_camera {
+                        self.camera = camera;
+                    }
                     self.engine.set_camera(Some(self.camera))?;
                 }
             }
             "settled" => {
                 self.engine.update()?;
+                if let Some(loop_) = &self.render_loop {
+                    ensure!(
+                        loop_.status() != api::RenderLoopStatus::Error,
+                        "Render failed: {:?}",
+                        self.engine.last_error()
+                    );
+                }
                 return Ok(Some(json!(self.render_loop.as_ref().is_some_and(
                     |l| l.status() == api::RenderLoopStatus::Finished
                         && l.final_render().status() == api::RenderStatus::Finished
@@ -760,10 +994,25 @@ impl Host {
         Ok(Some(Value::Null))
     }
     fn message(&mut self, message: Message) -> Result<()> {
+        if let Some(path) = message.body.strip_prefix("@model-path:") {
+            return self.event(
+                "openModel",
+                json!({"path":serde_json::from_str::<String>(path)?}),
+            );
+        }
+        if let Some(reply) = message.body.strip_prefix("@import-reply:") {
+            let reply: Value = serde_json::from_str(reply)?;
+            if reply["session"].as_u64() == Some(self.import_session) {
+                return self.send(reply["reply"].clone());
+            }
+            return Ok(());
+        }
         if message.body == "__content_process_terminated" {
             // A new document has fresh target/request IDs. Drop all session state
             // and incomplete uploads before it reconnects; never replay the import
             // that terminated the process from initialization scripts or cache.
+            self.import_serial.fetch_add(1, Ordering::SeqCst);
+            self.import_session += 1;
             self.ready = false;
             self.paused = false;
             self.orbit = input::Orbit::default();
@@ -777,6 +1026,8 @@ impl Host {
             self.engine.clear_scene()?;
             self.engine.update()?;
             self.descriptor = None;
+            self.active_models.clear();
+            self.models.lock().unwrap().clear();
             self.binary.lock().unwrap().clear();
             self.events.lock().unwrap().clear();
             self.webview
@@ -806,6 +1057,43 @@ impl Host {
             }
         }
     }
+    fn profile_samples(&mut self) {
+        if !self.profile {
+            return;
+        }
+        let Some(loop_) = self.render_loop.as_ref() else {
+            return;
+        };
+        if !matches!(
+            loop_.status(),
+            api::RenderLoopStatus::Converging
+                | api::RenderLoopStatus::Denoising
+                | api::RenderLoopStatus::Finished
+        ) {
+            return;
+        }
+        let samples = loop_.final_render().samples();
+        if samples == 0 {
+            return;
+        }
+        let now = Instant::now();
+        let first = self.sample_started.is_none();
+        let start = *self.sample_started.get_or_insert(now);
+        if first {
+            eprintln!(
+                "{}",
+                json!({"clientFirstSampleProfile":{"commitMs":self.commit_started.map(|t|t.elapsed().as_secs_f64()*1000.),"fromImportMs":self.import_started.map(|t|t.elapsed().as_secs_f64()*1000.),"samples":samples}})
+            );
+        }
+        for target in [16, 256] {
+            if samples >= target && self.sample_milestones.insert(target) {
+                eprintln!(
+                    "{}",
+                    json!({"clientSamplesProfile":{"target":target,"samples":samples,"fromFirstMs":now.duration_since(start).as_secs_f64()*1000.,"size":[loop_.final_render().width(),loop_.final_render().height()],"gpuMs":loop_.final_render().gpu_sample_time_ms(),"retainedModels":self.active_models.len(),"camera":self.camera.world_matrix,"settings":format!("{:?}",loop_.final_render().settings())}})
+                );
+            }
+        }
+    }
     fn refill(&mut self) -> Result<bool> {
         // Stationary final batches do not need a FIFO surface acquisition. Input
         // and commits mark the host dirty or revoke the RenderLoop refill lease.
@@ -819,6 +1107,7 @@ impl Host {
                 .is_some_and(api::RenderLoop::needs_refill)
         {
             self.render_loop.as_mut().unwrap().refill()?;
+            self.profile_samples();
             return Ok(true);
         }
         Ok(false)
@@ -844,6 +1133,7 @@ impl Host {
                 self.phase = format!("{:?}", render_loop.tick()?).to_lowercase();
             }
         }
+        self.profile_samples();
         for (id, config) in &self.target_configs {
             if config["denoiser"]["type"] == "jnlm" {
                 wire::denoiser(&self.targets[id], &config["denoiser"])?;
@@ -1166,6 +1456,9 @@ impl ApplicationHandler<Message> for App {
     }
 }
 fn main() -> Result<()> {
+    if std::env::var("MUTRACER_NATIVE_PROFILE").as_deref() == Ok("1") {
+        mutracer_native::logging::stderr();
+    }
     #[cfg(target_os = "linux")]
     gtk::init()?;
     let mut model = None;

@@ -2,9 +2,11 @@ import Engine, { type EngineInfo, type EngineDiagnostics, type WaitForMaterialGr
 import Render, { type RenderOptions, type DenoiserOptions, type RenderStatus, type SampleEvent, type ConvergeOptions, type ConvergeResult } from '../../../src/Render';
 import RenderLoop, { type RenderLoopOptions, type RenderLoopStatus } from '../../../src/RenderLoop';
 import type Sync from '../../../src/Sync';
-import type { ModelSource } from './loadModel';
+import type { ModelSource, LoadedModel, LoadProgress } from './loadModel';
+import type { NativeGltfManifest } from './nativeGltf';
 import type { DepthSampleArea } from '../../../src/renderer/depthQuery';
 import { SceneChangeDetector } from '../../../src/renderer/sceneChangeDetector';
+import {hostGeometries} from './nativeResources';
 import { NativeSceneEncoder, cameraWords } from './nativeScene';
 import { NativeTransport, type NativeReply, pointerPacket } from './nativeTransport';
 import type { PixelKind } from './ViewerEngine';
@@ -68,6 +70,9 @@ export class NativeRenderHost extends Engine {
     private serial = 0;
     private targetSerial = 0;
     private stopped = false;
+    private awaitingModel?: number;
+    private modelImportToken=0;
+    private waitingForModel = Boolean((window as Window&{mutracerInitialModel?:unknown}).mutracerInitialModel);
     private off: (() => void)[] = [];
     private nativeDiagnostics?: EngineDiagnostics;
     private upscale = false;
@@ -76,6 +81,7 @@ export class NativeRenderHost extends Engine {
     changing = false;
     previewId?: number;
     finalId?: number;
+    onOpenModel?: (path:string)=>void;
     onCamera?: (matrix: number[], target: number[], zoom: number) => void;
     nativeSize?: [
         number,
@@ -158,6 +164,7 @@ export class NativeRenderHost extends Engine {
             if (state.diagnostics)
                 this.nativeDiagnostics = state.diagnostics;
         }
+        else if(name==='openModel') this.onOpenModel?.((value as {path:string}).path);
         else if (name === 'camera') {
             const camera = value as {
                 matrix: number[];
@@ -251,6 +258,37 @@ export class NativeRenderHost extends Engine {
     }
     async download(id: string) { const response = await fetch(new URL(`bridge/${id}`, document.baseURI)); if (!response.ok)
         throw Error(`Native binary download: ${response.status}`); return response.arrayBuffer(); }
+    async modelSource(input: string | NativeModelFiles): Promise<ModelSource> {
+        const model = typeof input === 'string' ? await this.transport.request<NativeModelFiles>('files', {path: input}) : input;
+        return {hostPath:model.hostPath, hostFiles:model.files.map(({path,size,lastModified})=>({path,size,lastModified})), mainPath:model.files[0].path, base:'', files:[]};
+    }
+    async loadHostModel(source: ModelSource, progress: LoadProgress, signal: AbortSignal): Promise<LoadedModel> {
+        const token=++this.modelImportToken;
+        this.awaitingModel=undefined;
+        signal.throwIfAborted(); progress('parse');
+        if((window as Window&{mutracerNativeProfile?:boolean}).mutracerNativeProfile)await this.transport.request('beginImport');
+        const reply = (window as Window&{mutracerJSImport?:boolean}).mutracerJSImport ? {fallback:true as const} : await this.transport.request<{manifest:string;id:number;descriptor:string} | {fallback:true}>('importGltf', {path:source.hostPath});
+        if ('fallback' in reply) {
+            const {loadModelFromSource} = await import('./loadModel');
+            return loadModelFromSource(await this.readModelSource(source.hostPath!),progress,signal,'webgpu');
+        }
+        const modelId=reply.id, descriptorKey=reply.descriptor, manifestKey=reply.manifest;
+        if(token===this.modelImportToken)this.awaitingModel=modelId;
+        const release=()=>this.command('releaseModel',{id:modelId,descriptor:descriptorKey,manifest:manifestKey});
+        try {
+            signal.throwIfAborted();
+            const result:NativeGltfManifest=JSON.parse(new TextDecoder().decode(await this.download(manifestKey)));
+            const {buildNativeGltf} = await import('./nativeGltf');
+            const model = await buildNativeGltf(result,source,await this.download(result.descriptor),async path=>{
+                const files=await this.transport.request<NativeModelFiles>('files',{path:source.hostPath});
+                const key=new URL(path,'https://model.local/').href;
+                const entry=files.files.find(file=>new URL(file.path,'https://model.local/').href===key);
+                if(!entry)throw Error('Include the environment map with the model');
+                return this.download(entry.blob);
+            },release);
+            signal.throwIfAborted();return model;
+        } catch(error){if(token===this.modelImportToken)this.awaitingModel=undefined;release();throw error;}
+    }
     async readModelSource(input: string | NativeModelFiles): Promise<ModelSource> {
         const model = typeof input === 'string' ? await this.transport.request<NativeModelFiles>('files', {path: input}) : input;
         const files = await Promise.all(model.files.map(async entry => {
@@ -265,6 +303,15 @@ export class NativeRenderHost extends Engine {
     register(target: NativeRender) { const id = ++this.targetSerial; this.targets.set(id, target); return id; }
     selectRemote(selection: 'preview' | 'final') { this.requestedSelection = selection; }
     override update(): boolean {
+        const diagnostic=window as Window&{mutracerBenchmark?:unknown;mutracerBenchmarkReady?:boolean};
+        if(diagnostic.mutracerBenchmark&&!diagnostic.mutracerBenchmarkReady)return false;
+        // The model store can publish before THREESync replaces its previous
+        // scene. Never prepare a temporary floor/environment in that interval.
+        if(this.awaitingModel!==undefined){
+            if(!this.scene?.meshes.some(mesh=>hostGeometries.get(mesh.geometry)?.model===this.awaitingModel))return false;
+            this.awaitingModel=undefined;
+        }
+        if(this.waitingForModel){if(!useViewer.getState().model)return false;this.waitingForModel=false;}
         if (this.stopped || this.updating || !this.remoteInfo)
             return false;
         this.updating = this.synchronize().catch(error => { this.syncError = error; this.phase = 'error'; this.detector.reset(); this.encoder.reset(); this.lastCamera = ''; this.lastSettings = ''; this._notifyError(error); }).finally(() => { this.updating = undefined; });
@@ -287,7 +334,7 @@ export class NativeRenderHost extends Engine {
         const key = JSON.stringify(settings);
         if (matchesNativeCamera(camera, this.nativeCamera)) this.lastCamera = cameraKey;
         if (blob || sceneChanged || cameraKey !== this.lastCamera || key !== this.lastSettings) {
-            await this.transport.request('commit', { blob, clear: sceneChanged && !this.scene?.meshes.length, camera: cameraKey !== this.lastCamera ? camera : undefined, cameraTarget: this.cameraTarget, cameraRevision: this.nativeCameraRevision, settings: key !== this.lastSettings ? settings : undefined });
+            await this.transport.request('commit', { blob, refs:encoded?.refs, clear: sceneChanged && !this.scene?.meshes.length, camera: cameraKey !== this.lastCamera ? camera : undefined, cameraTarget: this.cameraTarget, cameraRevision: this.nativeCameraRevision, settings: key !== this.lastSettings ? settings : undefined });
             encoded?.accept();
             if (sceneChanged && !this.scene?.meshes.length) this.encoder.reset();
             if (sceneChanged)

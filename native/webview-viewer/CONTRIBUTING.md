@@ -1,13 +1,34 @@
 # Native viewer contributor checks
 
-The app runs WebEngine and the React UI unchanged at the business layer. The
+The app shares WebEngine and the React UI with the web viewer. The
 private NativeRenderHost subclasses the library data/settings containers but
 replaces device initialization, commits, target execution, readback and display
 export. No browser GPU is created. NativeSceneEncoder uses the generated v8
 layout, material IDs and existing graph normalization. SceneChangeDetector
 accepts its pending state only after host acknowledgement. Custom-protocol POST
-and one-shot GET mailboxes carry binary scene deltas and pixels; only commands,
-settings and events use JSON. Wry requires its `linux-body` feature for uploads.
+and one-shot GET mailboxes carry scene deltas, pixels and large glTF manifests;
+commands, settings and events use JSON. Wry requires its `linux-body` feature for uploads.
+
+Local glTF imports retain geometry and decoded images in `model_import::Pool`.
+The manifest carries the node tree, compact material/mesh records, bounds and
+small texture previews. `nativeResources.ts` associates editable UI objects with
+host identities; commits hydrate those references before entering the SDK.
+Animation, browser-only codecs and remote resources keep the GLTFLoader path.
+Import workers are serialized; superseded imports cannot replace a newer model
+or reply into a recovered WebView document.
+
+To compare the two glTF import paths without a window, set
+`MUTRACER_NATIVE_GLTF_MODEL` to a local model and
+`MUTRACER_NATIVE_GLTF_REFERENCE` to an external evidence directory. Run the ignored
+`export_native_gltf_reference` Cargo test, then
+`node native/validation/native-gltf-reference.mjs`, then the ignored
+`native_gltf_matches_browser_import` test. Both descriptors render on the same
+native backend at seed 0 and 64 spp. The fixture uses the authored camera and
+lighting when present, otherwise a common fitted view and environment. It does
+not time imports or exercise the window. Set
+`MUTRACER_NATIVE_GLTF_NATIVE_ONLY=1` for a native-only smoke when the
+JS reference cannot load the source; that result does not establish image parity.
+Keep this GPU work sequential.
 
 Build with `npm run native:viewer:build`. Direct Cargo iteration needs
 `MUTRACER_AOT_ARCHIVE`, a separate `CARGO_TARGET_DIR` and

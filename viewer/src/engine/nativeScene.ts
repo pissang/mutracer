@@ -11,6 +11,8 @@ import { generateEnvMapFromSceneComponents, generateBackgroundMapFromSceneBackgr
 import { normalizeGraph } from '../../../src/renderer/materialGraph/normalize';
 import { flattenGraph } from '../../../src/renderer/materialGraph/flatten';
 import { textureWrapIndex } from '../../../src/scene/TextureState';
+import {hostGeometries,hostTextures} from './nativeResources';
+const EMPTY_PIXELS = new Uint8Array();
 const NONE = 0xffffffff;
 const colorMaps = new Set(['map', 'emissiveMap', 'fuzzColorMap', 'specularColorMap']);
 const aliases: Record<string, string> = { opacity: 'geometryOpacity', thinWalled: 'geometryThinWalled' };
@@ -136,7 +138,9 @@ export class NativeSceneEncoder {
             catch (error) {if (!(error instanceof LayoutChanged)) throw error; w = await this.build(scene, camera, size); parts = w.fullParts();}
         } else {w = await this.build(scene, camera, size); parts = w.fullParts();}
         const snapshot = w.snapshot();
-        return {parts, accept: () => {this.committed = snapshot;}};
+        const geometries=[...new Set(scene.meshes.map(mesh=>mesh.geometry))].flatMap((geometry,index)=>{const ref=hostGeometries.get(geometry);return ref?[{index,model:ref.model,id:ref.id}]:[];});
+        const textures=snapshot.textureOrder.flatMap((texture,index)=>{const ref=hostTextures.get(texture);return ref?[{index,model:ref.model,id:ref.id}]:[];});
+        return {parts, refs:{geometries,textures}, accept: () => {this.committed = snapshot;}};
     }
     async encode(scene: Scene, camera: Camera, size: [number, number]): Promise<Uint32Array> {
         return (await this.build(scene, camera, size)).finish();
@@ -195,7 +199,7 @@ export class NativeSceneEncoder {
             const old = ids.get(usage);
             if (old !== undefined)
                 return old;
-            const raw = this.readPixels(texture);
+            const raw = hostTextures.has(texture) ? EMPTY_PIXELS : this.readPixels(texture);
             let pixels = raw;
             // v8 has implicit sRGB bytes / linear floats for color slots. Canonicalize
             // each use separately so a shared color+data image preserves both meanings.
@@ -285,6 +289,8 @@ export class NativeSceneEncoder {
         h[H.CAMERA_OFFSET] = w.append(cameraWords(camera));
         geometries.forEach((g, i) => {
             const o = i * G.WORDS;
+            const retained=hostGeometries.get(g);
+            if(retained){gs.u[o+G.VERTEX_COUNT]=retained.vertices;gs.u[o+G.INDEX_COUNT]=retained.indices;return;}
             gs.u[o + G.VERTEX_COUNT] = g.position.array.length / g.position.itemSize;
             gs.u[o + G.INDEX_COUNT] = g.indices.array.length;
             for (const [key, field] of [['position', G.POSITION], ['indices', G.INDICES], ['normal', G.NORMAL], ['uv', G.UV], ['uv1', G.UV1], ['color', G.COLOR], ['tangent', G.TANGENT], ['materialIndex', G.MATERIAL_INDEX]] as const) {

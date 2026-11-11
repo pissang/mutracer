@@ -90,6 +90,19 @@ describe('viewer cached model loading', () => {
     expect(names).not.toContain('scene.glb');
     model.revoke(); read.mockRestore();
   });
+  it('reports failed model images while preserving the geometry fallback', async () => {
+    network(JSON.stringify(json));
+    vi.mocked(createImageBitmap).mockRejectedValue(new Error('Image decode failed'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const model = await loadModelFromURL('https://example.com/scene.gltf', vi.fn());
+    const mesh = model.root.children[0] as THREE.Mesh;
+    expect(mesh.geometry.getAttribute('position').count).toBe(3);
+    expect((mesh.material as THREE.MeshStandardMaterial).map).toBeNull();
+    expect(model.lighting?.warnings).toContain('1 model image could not be loaded.');
+    expect(error).toHaveBeenCalled();
+    model.revoke();
+  });
+
   it('preserves dropped folder paths and resolves nested texture files', async () => {
     const requests = network('unexpected network');
     const files = [
