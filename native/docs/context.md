@@ -55,9 +55,14 @@ without crediting its
 in-flight batch, including when cancellation is pending. Earlier completed
 counts remain available, but the image may contain partial writes. With the
 Context API, commit the scene again to restart accumulation before reading or
-rendering. With the Engine API, discard the failed `Render` and create a new
-one. There is no automatic retry. A host-created wgpu device shared through
-`Engine::on_device` cannot provide this native execution check. A successful command buffer still does not rule out the
+rendering. With the Engine API, discard the failed `Render` and create a new one.
+On Windows D3D12/Vulkan devices, wgpu reports device loss through its callback:
+the job becomes failed and its in-flight batch is not credited. Device loss is
+terminal and returns `MT_ERROR_UNAVAILABLE`; recreate the device and engine or
+context. A scene commit cannot repair a lost device. No path retries failed
+batches automatically. A host-created wgpu device shared through
+`Engine::on_device` cannot provide the Metal command-buffer status check; the
+host must forward device-loss notifications. A successful command buffer still does not rule out the
 [known HWRT image inconsistencies](../README.md#ray-tracing-backends).
 
 Large blocking batches use more temporary memory on Metal. Polling with smaller

@@ -8,6 +8,8 @@
 #include "pxr/imaging/hgi/blitCmdsOps.h"
 #include "pxr/imaging/hgi/hgi.h"
 #include "pxr/usd/usd/stage.h"
+#include "pxr/usd/usd/primRange.h"
+#include "pxr/usd/usdGeom/camera.h"
 #include "pxr/usd/usdGeom/imageable.h"
 #include "pxr/usd/usdGeom/mesh.h"
 #include "pxr/usd/usdGeom/xformCommonAPI.h"
@@ -15,12 +17,17 @@
 #include "pxr/usd/usdShade/materialBindingAPI.h"
 #include "pxr/usd/usdShade/shader.h"
 #include "pxr/usdImaging/usdImagingGL/engine.h"
+#include "glContext.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 PXR_NAMESPACE_USING_DIRECTIVE
 using namespace mtHydra;
 void DelayHostConsumers(Hgi *);
@@ -43,6 +50,7 @@ int main(int argc, char **argv) {
       height = argc > 5 ? std::stoi(argv[5]) : 256,
       samples = argc > 6 ? std::stoi(argv[6]) : 16;
   TfErrorMark errors;
+  TestGLContext context;
   bool timing = std::getenv("MUTRACER_HYDRA_TIMELINE") != nullptr;
   if (timing)
     TraceCollector::GetInstance().SetEnabled(true);
@@ -91,6 +99,12 @@ int main(int argc, char **argv) {
                         camera.GetFrustum().ComputeProjectionMatrix());
   if (stage->GetPrimAtPath(SdfPath("/Camera")))
     engine.SetCameraPath(SdfPath("/Camera"));
+  else
+    for (auto prim : stage->Traverse())
+      if (prim.IsA<UsdGeomCamera>()) {
+        engine.SetCameraPath(prim.GetPath());
+        break;
+      }
   UsdImagingGLRenderParams params;
   if (std::getenv("MUTRACER_HYDRA_GRAPH_EDITS"))
     params.frame = UsdTimeCode(1.);
@@ -266,7 +280,13 @@ int main(int argc, char **argv) {
       // Edit copies of the tiles so the checked-in fixtures stay unchanged.
       auto fixtureDir = std::filesystem::path(argv[1]).parent_path();
       auto tileDir = std::filesystem::temp_directory_path() /
-                     ("mutracer-hydra-udim-" + std::to_string(::getpid()));
+                     ("mutracer-hydra-udim-" + std::to_string(
+#ifdef _WIN32
+                         ::_getpid()
+#else
+                         ::getpid()
+#endif
+                         ));
       std::filesystem::create_directories(tileDir);
       for (auto tile : {"checker-update.1001.png", "checker-update.1002.png"})
         std::filesystem::copy_file(

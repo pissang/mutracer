@@ -108,7 +108,7 @@ unsafe fn create_window_engine(
         return Err(invalid("Null engine output"));
     }
     let backend = backend_from(options.backend)?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let surface = unsafe { window_surface(&instance, window)? };
     let adapter = if let Some(index) = adapter_index {
         let adapter = selected_adapter(&instance, index)?;

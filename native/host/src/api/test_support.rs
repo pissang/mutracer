@@ -56,3 +56,31 @@ pub(super) fn l0_blocking(
         }
     }
 }
+// Capture only existing CPU readbacks; do not insert GPU work or change the
+// sample stream while diagnosing strict image comparisons.
+pub(super) fn capture_hdr_readback(render: u64, image: &super::Image) {
+    let Some(root) = std::env::var_os("MUTRACER_TEST_READBACKS") else {
+        return;
+    };
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::path::PathBuf::from(root);
+    std::fs::create_dir_all(&root).expect("Create readback evidence directory");
+    // Retain the last comparisons without multiplying 720p readbacks by every
+    // parameter in a long matrix. A failed comparison stops with these frames
+    // intact; the OpenPBR comparison helper also saves its named failure pairs.
+    let stem = format!("readback-{:02}", index % 16);
+    let bytes: Vec<u8> = image
+        .data
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    std::fs::write(root.join(format!("{stem}.rgba32f")), bytes).expect("Write HDR evidence");
+    let metadata = serde_json::json!({
+        "sequence": index, "render": render, "width": image.width, "height": image.height,
+        "format": "RGBA32Float little-endian", "rowOrder": "top-first",
+        "test": std::thread::current().name(), "backend": std::env::var("WGPU_BACKEND").ok(),
+    });
+    std::fs::write(root.join(format!("{stem}.json")), metadata.to_string())
+        .expect("Write HDR metadata");
+}

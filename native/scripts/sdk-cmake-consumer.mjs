@@ -1,15 +1,15 @@
-import {existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, symlinkSync, writeFileSync} from 'node:fs';
 import {delimiter, resolve} from 'node:path';
 import {executable, macosDeploymentTarget, nativeTar, windows} from './platform.mjs';
 
 const excluded = /^(?:node|nodejs|npm|npx|cargo|rustc|rustup|scriptc)(?:\.(?:exe|cmd|bat|com))?$/i;
 
-function findTool(name, env) {
+export function findTool(name, env) {
   const extensions = windows ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')] : [''];
   for (const directory of env.PATH.split(delimiter).filter(Boolean)) {
     for (const extension of extensions) {
       const path = resolve(directory, name + extension);
-      if (existsSync(path)) return path;
+      if (statSync(path, {throwIfNoEntry: false})?.isFile()) return path;
     }
   }
   return undefined;

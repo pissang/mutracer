@@ -23,11 +23,21 @@ export function checkSdkExports(expected, actual) {
   }
 }
 
-export function nativeLinkArguments(output) {
+export function nativeLinkArguments(output, platform = process.platform) {
   const match = /native-static-libs: ([^\r\n]+)/.exec(stripVTControlCharacters(output));
   if (!match) throw Error('rustc did not report native-static-libs');
   // rustc emits linker arguments (including repeated framework/library flags).
   // Keep order and quoted Windows SDK paths; never send this text to a shell.
   return [...match[1].matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)]
-    .map(part => part[1] ?? part[2] ?? part[3]);
+    .map(part => {
+      const value = part[1] ?? part[2] ?? part[3];
+      if (platform !== 'win32' || !/^\/defaultlib:/i.test(value)) return value;
+      // Rust's MSVC target uses the DLL CRT, matching the SDK's /MD consumers.
+      // Convert only its known default-library directives to library inputs:
+      // cl does not accept linker switches outside /link, and CMake needs a
+      // relocatable library name. Reject other CRT modes and path directives.
+      const name = /^\/defaultlib:(msvcrt|oldnames)(?:\.lib)?$/i.exec(value)?.[1];
+      if (!name) throw Error(`Unsupported native SDK default library: ${value}`);
+      return `${name.toLowerCase()}.lib`;
+    });
 }

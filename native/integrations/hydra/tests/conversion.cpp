@@ -6,6 +6,7 @@
 #include "pxr/imaging/hgi/blitCmds.h"
 #include "pxr/imaging/hgi/blitCmdsOps.h"
 #include "pxr/imaging/hgi/computeCmds.h"
+#include "glContext.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -32,6 +33,14 @@ struct GpuOutputTestAccess {
         hdr[i][3] = 1;
       distance[i] = GfVec4f(std::exp2(exponent(random)), 0, 0, i % 5 ? 1 : 0);
     }
+    // Exercise half ties, subnormals and overflow through the same CPU oracle.
+    float boundaries[] = {1.f + std::ldexp(1.f, -11),
+                          1.f + std::ldexp(3.f, -11),
+                          std::ldexp(1.f, -25), std::ldexp(3.f, -25),
+                          std::ldexp(1.f, -24), std::ldexp(1.f, -14),
+                          65504.f, 65520.f};
+    for (size_t i = 0; i < sizeof boundaries / sizeof boundaries[0]; ++i)
+      hdr[i] = GfVec4f(boundaries[i], -boundaries[i], boundaries[i], 1.f);
     auto upload = gpu.hgi->CreateBlitCmds();
     for (auto pair : {std::pair{slot.hdr, &hdr}, {slot.distance, &distance}}) {
       HgiTextureCpuToGpuOp op;
@@ -55,7 +64,7 @@ struct GpuOutputTestAccess {
       float scale[4], clear[4];
       double z[2], w[2];
     } constants{{w, h, rw, rh},
-                {scale, 0, hasDepth ? 1.f : 0.f, 0},
+                {scale, 0, hasDepth ? 1.f : 0.f, format == HdFormatFloat16Vec4 ? 1.f : 0.f},
                 {clear[0], clear[1], clear[2], clear[3]},
                 {projection[2][2], projection[3][2]},
                 {projection[2][3], projection[3][3]}};
@@ -107,6 +116,13 @@ struct GpuOutputTestAccess {
           for (int k = 0; k < 4; ++k)
             half[k] = expected[k];
           if (std::memcmp(color.data() + dst * 8, half, 8) != 0) {
+            if (colorErrors < 3) {
+              auto actual = reinterpret_cast<GfHalf const *>(color.data() + dst * 8);
+              std::cerr << "half color " << dst << " expected " << float(half[0])
+                        << ',' << float(half[1]) << ',' << float(half[2]) << ',' << float(half[3])
+                        << " actual " << float(actual[0]) << ',' << float(actual[1])
+                        << ',' << float(actual[2]) << ',' << float(actual[3]) << '\n';
+            }
             colorErrors++;
             errors++;
           }
@@ -130,7 +146,9 @@ struct GpuOutputTestAccess {
     if (errors)
       throw std::runtime_error(
           "GPU conversion mismatch color=" + std::to_string(colorErrors) +
-          " depth=" + std::to_string(depthErrors));
+          " depth=" + std::to_string(depthErrors) + " format=" + std::to_string(format) +
+          " scale=" + std::to_string(scale) + " ortho=" + std::to_string(ortho) +
+          " hasDepth=" + std::to_string(hasDepth));
   }
 };
 } // namespace mtHydra
@@ -138,14 +156,20 @@ PXR_NAMESPACE_CLOSE_SCOPE
 PXR_NAMESPACE_USING_DIRECTIVE
 int main() {
   try {
+    TestGLContext context;
     auto hgi = Hgi::CreatePlatformDefaultHgi();
+    if (!hgi) throw std::runtime_error("No supported platform Hgi");
+    std::cout << "Hgi API: " << hgi->GetAPIName() << '\n';
     mt_engine engine = 0;
     mt_engine_options options;
     mt_engine_options_default(&options);
     char error[2048] = {};
-    mtHydra::Check(mtHydra::CreateHostEngine(hgi.get(), options, &engine, error,
-                                             sizeof error),
-                   error);
+    auto status = mtHydra::CreateHostEngine(hgi.get(), options, &engine, error,
+                                            sizeof error);
+    if (status == MT_ERROR_UNAVAILABLE)
+      status = mt_engine_create(&options, &engine, error, sizeof error);
+    mtHydra::Check(status, error);
+    context.MakeCurrent();
     {
       mtHydra::GpuOutput gpu(hgi.get(), engine);
       for (auto f : {HdFormatFloat32Vec4, HdFormatFloat16Vec4})

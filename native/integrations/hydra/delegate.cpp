@@ -16,6 +16,9 @@
 #include "pxr/imaging/hd/sceneDelegate.h"
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/imaging/hgi/tokens.h"
+#ifdef _WIN32
+#include "pxr/imaging/glf/glContext.h"
+#endif
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -363,6 +366,11 @@ static float FloatSetting(HdRenderDelegate *d, char const *name,
 }
 void Pass::_Execute(HdRenderPassStateSharedPtr const &state,
                     TfTokenVector const &) {
+#ifdef _WIN32
+  // SDK adapter discovery and lazy resource initialization may change the
+  // current context. Hdx's following AOV upload must use the host's GL context.
+  GlfGLContextScopeHolder context(GlfGLContext::GetCurrentGLContext());
+#endif
   std::lock_guard<std::mutex> lock(param->mutex);
   if (param->stopped)
     return;

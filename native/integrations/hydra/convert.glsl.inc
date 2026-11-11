@@ -114,11 +114,39 @@ float add32(float a,float b){return uintBitsToFloat(to32(plus64(from32(floatBits
 float mul32(float a,float b){return uintBitsToFloat(to32(times64(from32(floatBitsToUint(a)),from32(floatBitsToUint(b)))));}
 float fma32(float a,float b,float c){return uintBitsToFloat(to32(sum64(times64(from32(floatBitsToUint(a)),from32(floatBitsToUint(b))),from32(floatBitsToUint(c)),true)));}
 U64 join64(uvec2 p){return U64(p.x)|(U64(p.y)<<32);}
+#if !defined(ARCH_GFX_METAL)
+float roundHalf(float value) {
+  uint raw=floatBitsToUint(value),sign=raw&0x80000000u,bits=raw&0x7fffffffu;
+  uint exponent=bits>>23;
+  if(exponent==255u)return value;
+  if(exponent>=113u) {
+    bits=(bits+4095u+((bits>>13)&1u))&0xffffe000u;
+    if(bits>=0x47800000u)bits=0x7f800000u;
+    return uintBitsToFloat(sign|bits);
+  }
+  if(exponent<102u)return uintBitsToFloat(sign);
+  uint shift=126u-exponent,mantissa=(bits&0x7fffffu)|0x800000u;
+  uint q=mantissa>>shift,r=mantissa&((1u<<shift)-1u),halfway=1u<<(shift-1u);
+  if(r>halfway || (r==halfway && (q&1u)!=0u))q++;
+  float rounded=float(q)*0.000000059604644775390625;
+  return uintBitsToFloat(sign|floatBitsToUint(rounded));
+}
+#endif
+void storeColor(ivec2 dst,vec4 color) {
+#if !defined(ARCH_GFX_METAL)
+  // GL imageStore conversion may truncate float16. Round explicitly before
+  // storage so the output follows the CPU half conversion used by this AOV.
+  if(scaleValue.w!=0.0)
+    color=vec4(roundHalf(color.x),roundHalf(color.y),
+               roundHalf(color.z),roundHalf(color.w));
+#endif
+  HgiSet_color(dst,color);
+}
 void main() {
   ivec2 dst=ivec2(hd_GlobalInvocationID.xy);
   if(any(greaterThanEqual(dst,ivec2(dimensions.xy))))return;
   if(scaleValue.y!=0.0) {
-    HgiSet_color(dst,vec4(mul32(clearValue.x,clearValue.w),mul32(clearValue.y,clearValue.w),
+    storeColor(dst,vec4(mul32(clearValue.x,clearValue.w),mul32(clearValue.y,clearValue.w),
                           mul32(clearValue.z,clearValue.w),clearValue.w));
     HgiSet_depth(dst,vec4(1,0,0,0));return;
   }
@@ -131,7 +159,7 @@ void main() {
   c.y=fma32(v.y,a,mul32(mul32(clearValue.y,clearValue.w),inverse));
   c.z=fma32(v.z,a,mul32(mul32(clearValue.z,clearValue.w),inverse));
   c.w=fma32(clearValue.w,inverse,a);
-  HgiSet_color(dst,c);
+  storeColor(dst,c);
   vec4 z=vec4(0);
   if(scaleValue.z!=0.0)z=HgiTexelFetch_distance(src);
   float depth=1.0;

@@ -209,10 +209,32 @@ impl Batch {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn injected_execution_failure_is_context_failed_and_never_success() {
+        let batch = Batch {
+            #[cfg(target_os = "macos")]
+            buffers: Vec::new(),
+            injected_error: Some("VK_ERROR_DEVICE_LOST".into()),
+        };
+        let error = batch.check("windows test flight").unwrap_err();
+        assert_eq!(
+            crate::status::classify(error.as_ref(), crate::Status::Error),
+            crate::Status::ContextFailed
+        );
+        assert!(error.to_string().contains("VK_ERROR_DEVICE_LOST"));
+    }
+
+    #[test]
+    fn an_empty_completed_batch_is_successful() {
+        let batch = Batch::default();
+        assert!(batch.check("completed test flight").unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn invalid_device_requests_keep_wgpu_validation() {
@@ -245,6 +267,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    #[cfg(target_os = "macos")]
     fn records_submission_of_preencoded_buffers_and_excludes_discarded_buffers() {
         let gpu = crate::GpuDevice::with_backend(0).unwrap();
         assert_eq!(gpu.info.backend, wgpu::Backend::Metal);

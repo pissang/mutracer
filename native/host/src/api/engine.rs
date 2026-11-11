@@ -355,6 +355,10 @@ pub(super) struct Inner {
     pub(super) gpu: GpuDevice,
     #[cfg(target_os = "macos")]
     pub(super) metal: Mutex<Option<super::metal::State>>,
+    #[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+    pub(super) vulkan: Mutex<Option<super::vulkan_export::State>>,
+    #[cfg(target_os = "windows")]
+    pub(super) d3d12: Mutex<Option<super::d3d12_export::State>>,
     pub(super) adapter: Option<wgpu::Adapter>,
     pub(super) backend: Backend,
 }
@@ -374,7 +378,8 @@ pub struct Engine {
     pub(super) inner: Arc<Inner>,
 }
 impl Engine {
-    /// Creates a device of its own.
+    /// Creates a device of its own. `WGPU_BACKEND` selects its graphics API;
+    /// when unset, wgpu chooses its default. `options.backend` selects traversal.
     pub fn new(options: EngineOptions) -> Result<Self> {
         let gpu = GpuDevice::with_backend(options.backend.code())
             .map_err(|e| error(Status::Unavailable, format!("GPU device unavailable: {e}")))?;
@@ -383,8 +388,10 @@ impl Engine {
     /// Available adapters in a deterministic order (backend, vendor, device, name).
     /// Enumeration creates no devices and can return an empty list. Retain an
     /// adapter and use [`Engine::on_adapter`] to select that exact device.
+    /// `WGPU_BACKEND`, when set, restricts the enumerated graphics APIs.
     pub fn adapters() -> Vec<wgpu::Adapter> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         crate::GpuDevice::adapters(&instance)
     }
     /// Creates its own device on the selected adapter; failure returns Unavailable
@@ -456,6 +463,20 @@ impl Engine {
                 gpu,
                 #[cfg(target_os = "macos")]
                 metal: Mutex::new(None),
+                #[cfg(any(
+                    target_os = "windows",
+                    target_os = "linux",
+                    feature = "vulkan-interop"
+                ))]
+                vulkan: Mutex::new(adapter.as_ref().and_then(|a| {
+                    (a.get_info().backend == wgpu::Backend::Vulkan)
+                        .then(super::vulkan_export::State::new)
+                })),
+                #[cfg(target_os = "windows")]
+                d3d12: Mutex::new(adapter.as_ref().and_then(|a| {
+                    (a.get_info().backend == wgpu::Backend::Dx12)
+                        .then(super::d3d12_export::State::new)
+                })),
                 adapter,
                 backend: options.backend,
             }),

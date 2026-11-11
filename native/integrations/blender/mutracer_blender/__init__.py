@@ -1,6 +1,9 @@
 # Copyright 2026 MuTracer contributors. SPDX-License-Identifier: MIT
 """MuTracer's independently authored Blender Hydra adapter."""
 from pathlib import Path
+import ctypes
+import os
+import sys
 
 import bpy
 from bpy.props import EnumProperty, FloatProperty, IntProperty, PointerProperty
@@ -60,7 +63,10 @@ class MuTracerEngine(bpy.types.HydraRenderEngine):
     bl_label = "MuTracer"
     bl_delegate_id = "HdMuTracerRendererPlugin"
     bl_use_materialx = True
-    bl_use_gpu_context = True
+    # Blender's OpenGL GPU task renders directly to its framebuffer and omits
+    # Hydra render-buffer bindings. Request its CPU-buffer task on Windows;
+    # MuTracer still renders on its own GPU, including hardware ray tracing.
+    bl_use_gpu_context = sys.platform != "win32"
     bl_use_preview = False
 
     def update(self, data, depsgraph):
@@ -108,6 +114,10 @@ _PANEL_NAMES = (
     "EEVEE_MATERIAL_PT_context_material", "EEVEE_MATERIAL_PT_surface",
 )
 _enabled_panels = []
+# USD keeps plugins resident until process exit, so keep their DLL search
+# directories alive across add-on disable/re-enable as well.
+_dll_directories = {}
+_native_libraries = {}
 
 
 def register():
@@ -118,6 +128,14 @@ def register():
     resources = Path(__file__).parent / "plugin" / "hdMuTracer" / "resources"
     if not (resources / "plugInfo.json").is_file():
         raise RuntimeError("MuTracer's native plugin is missing; install the packaged add-on zip")
+    if os.name == "nt":
+        directory = str(resources.parent.resolve())
+        if directory not in _dll_directories:
+            _dll_directories[directory] = os.add_dll_directory(directory)
+        # USD uses the legacy Windows loader. Preload the sibling SDK by its
+        # absolute path so its lookup does not depend on the process directory.
+        if directory not in _native_libraries:
+            _native_libraries[directory] = ctypes.WinDLL(str(resources.parent / "mutracer.dll"))
     Plug.Registry().RegisterPlugins(str(resources))
     plugin = Plug.Registry().GetPluginWithName("hdMuTracer")
     if not plugin or not plugin.Load():

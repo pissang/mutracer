@@ -164,7 +164,10 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * counts remain in job info, but the accumulation cannot be read or continued
  * until a successful full commit restarts it. Batches are not retried.
  * Host-owned wgpu devices do not expose this Metal execution check.
- * Device-loss recovery remains unavailable.
+ * D3D12/Vulkan device loss is reported through wgpu's device-lost callback;
+ * the in-flight batch is not credited and MT_ERROR_UNAVAILABLE is returned.
+ * Device loss is terminal: recreate the device and context, rather than commit
+ * to a lost device. Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset
  * or commit, or context destruction; an expired handle returns MT_ERROR_INVALID_HANDLE.
