@@ -2,6 +2,7 @@ import Engine, { type EngineInfo, type EngineDiagnostics, type WaitForMaterialGr
 import Render, { type RenderOptions, type DenoiserOptions, type RenderStatus, type SampleEvent, type ConvergeOptions, type ConvergeResult } from '../../../src/Render';
 import RenderLoop, { type RenderLoopOptions, type RenderLoopStatus } from '../../../src/RenderLoop';
 import type Sync from '../../../src/Sync';
+import type { ModelSource } from './loadModel';
 import type { DepthSampleArea } from '../../../src/renderer/depthQuery';
 import { SceneChangeDetector } from '../../../src/renderer/sceneChangeDetector';
 import { NativeSceneEncoder, cameraWords, descriptorDeltaParts } from './nativeScene';
@@ -18,6 +19,10 @@ declare global {
     }
 }
 import { bindNativeDeviceChange, type NativeCapabilities } from './nativeCapabilities';
+export interface NativeModelFiles {
+    hostPath: string;
+    files: { path: string; blob: string; size: number; lastModified: number }[];
+}
 export interface TargetState {
     samples: number;
     aovSamples: number;
@@ -230,6 +235,17 @@ export class NativeRenderHost extends Engine {
     }
     async download(id: string) { const response = await fetch(new URL(`bridge/${id}`, document.baseURI)); if (!response.ok)
         throw Error(`Native binary download: ${response.status}`); return response.arrayBuffer(); }
+    async readModelSource(input: string | NativeModelFiles): Promise<ModelSource> {
+        const model = typeof input === 'string' ? await this.transport.request<NativeModelFiles>('files', {path: input}) : input;
+        const files = await Promise.all(model.files.map(async entry => {
+            const response = await fetch(new URL(`bridge/${entry.blob}`, document.baseURI));
+            if (!response.ok) throw Error(`Native model read: ${response.status}`);
+            const blob = await response.blob();
+            if (blob.size !== entry.size) throw Error('Host model resource changed while reading');
+            return {path: entry.path, file: new File([blob], entry.path.split('/').pop()!, {lastModified: entry.lastModified})};
+        }));
+        return {hostPath: model.hostPath, mainPath: files[0].path, base: '', files};
+    }
     register(target: NativeRender) { const id = ++this.targetSerial; this.targets.set(id, target); return id; }
     selectRemote(selection: 'preview' | 'final') { this.requestedSelection = selection; }
     override update(): boolean {

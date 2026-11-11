@@ -10,7 +10,9 @@ npm run native:viewer:build
 
 The app opens without a local server. Use **Open**, drop files or a folder, or
 choose an example. A command-line `.gltf` also loads its referenced local buffers
-and images. URLs need the remote server's CORS permission.
+and images. To restore a command-line model after restarting, keep the model and
+its referenced files unchanged at their original paths. URLs need the remote
+server's CORS permission.
 
 The controls match the [web viewer](../../viewer/README.md): model and MaterialX
 imports, editable material graphs and textures, Poly Haven and GPUOpen catalogs,

@@ -72,6 +72,22 @@ describe('current model OPFS cache', () => {
     }
   });
 
+  it('persists only host path and metadata and validates files on native restore', async () => {
+    const fs = filesystem(), original = model();
+    original.source!.hostPath = '/models/scene.gltf';
+    original.source!.files[0].file = new File([new Uint8Array(2 * 1024 * 1024)], 'scene.gltf', {lastModified: 42}) as unknown as globalThis.File;
+    await saveModelCache(original);
+    expect(fs.files.get('current.model')!.size).toBeLessThan(1024);
+    expect(await readModelCache()).toBeNull();
+    const resolve = vi.fn(async () => original.source!);
+    const restored = await readModelCache(resolve);
+    expect(resolve).toHaveBeenCalledWith('/models/scene.gltf');
+    expect(restored?.source).toBe(original.source);
+    const changed = {...original.source!, files: original.source!.files.slice(1)};
+    expect(await readModelCache(async () => changed)).toBeNull();
+    expect(await readModelCache(async () => {throw Error('File removed');})).toBeNull();
+  });
+
   it('serializes replacements and keeps only the latest model', async () => {
     const fs = filesystem();
     await Promise.all([saveModelCache(model('old')), saveModelCache(model('current'))]);

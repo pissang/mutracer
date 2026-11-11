@@ -77,6 +77,7 @@ struct Host {
     dirty: bool,
     phase: String,
     last_publish: Instant,
+    publish_first_sample: bool,
     last_loop_frame: Instant,
     upscale: Option<api::PostProcessSubscription>,
     export: Option<Export>,
@@ -166,7 +167,7 @@ impl Host {
             initial_model = initial_files::stage(path, &binary)?;
         }
         let size = window.inner_size();
-        let protocol = move |_: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+        let protocol = Arc::new(move |request: wry::http::Request<Vec<u8>>| {
             let (parts, body) = request.into_parts();
             if let Some(key) = parts.uri.path().strip_prefix("/bridge/") {
                 let result = if parts.method == wry::http::Method::POST {
@@ -214,7 +215,7 @@ impl Host {
                 };
             }
             assets::response(parts.uri.path())
-        };
+        });
         let import_only = std::env::var_os("MUTRACER_VIEWER_IMPORT_ONLY").is_some();
         let init = format!(
             "window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
@@ -231,7 +232,7 @@ impl Host {
                 position: wry::dpi::PhysicalPosition::new(0, 0).into(),
                 size: wry::dpi::PhysicalSize::new(size.width, size.height).into(),
             })
-            .with_asynchronous_custom_protocol("mutracer".into(), move |id, request, responder| {
+            .with_asynchronous_custom_protocol("mutracer".into(), move |_id, request, responder| {
                 if request.uri().path().starts_with("/api/gpuopen/")
                     && request.method() == wry::http::Method::GET
                 {
@@ -243,7 +244,8 @@ impl Host {
                         .to_owned();
                     std::thread::spawn(move || responder.respond(catalog::response(&path)));
                 } else {
-                    responder.respond(protocol(id, request));
+                    let protocol = protocol.clone();
+                    std::thread::spawn(move || responder.respond(protocol(request)));
                 }
             })
             .with_initialization_script(&init)
@@ -325,6 +327,7 @@ impl Host {
             dirty: true,
             phase: "preparing".into(),
             last_publish: Instant::now(),
+            publish_first_sample: false,
             last_loop_frame: Instant::now(),
             upscale: None,
             export: None,
@@ -466,6 +469,12 @@ impl Host {
                     json!({"adapterName":self.engine.info().adapter_name,"maxImageDimension":self.gpu.device.limits().max_texture_dimension_2d.min(8192),"hwrt":self.engine.info().hardware_ray_query,"dlssRR":self.dlss_available(),"gpuSelection":!self.dlss_available(),"adapters":pollster::block_on(self.gpu.instance.enumerate_adapters(wgpu::Backends::all())).iter().filter(|a|a.is_surface_supported(&self.gpu.surface)).map(|a|a.get_info().name).collect::<Vec<_>>(),"backend":if self.engine.info().backend==api::Backend::Software{"software"}else{"hardware"},"hdrWindow":self.gpu.hdr_supported(),"layout":if cfg!(target_os="linux"){"split"}else{"overlay"}}),
                 ));
             }
+            "files" => {
+                return Ok(Some(initial_files::stage(
+                    std::path::Path::new(args["path"].as_str().context("Model path")?),
+                    &self.binary,
+                )?));
+            }
             "commit" => {
                 let next = if let Some(key) = args["blob"].as_str() {
                     let bytes = self.binary.lock().unwrap().take(key)?;
@@ -483,6 +492,7 @@ impl Host {
                 if let Some(next) = next {
                     self.last_surface = None;
                     self.engine.set_scene_shared(next.clone())?;
+                    self.publish_first_sample = true;
                     self.descriptor = Some(next);
                 }
                 if args["clear"] == true {
@@ -873,14 +883,29 @@ impl Host {
                 .present(&self.window, image, self.rect)?
                 .then_some(surface_key);
         }
+        let first_sample = self.publish_first_sample
+            && self.render_loop.as_ref().is_some_and(|l| {
+                l.final_render().samples() > 0
+                    && matches!(
+                        l.status(),
+                        api::RenderLoopStatus::Converging
+                            | api::RenderLoopStatus::Denoising
+                            | api::RenderLoopStatus::Finished
+                    )
+            });
         if self.ready
-            && (self.last_publish.elapsed() > Duration::from_millis(100) || !self.needs_tick())
+            && (first_sample
+                || self.last_publish.elapsed() > Duration::from_millis(100)
+                || !self.needs_tick())
         {
             let states=self.targets.iter().map(|(id,r)|(id.to_string(),json!({"samples":r.samples(),"aovSamples":r.aov_samples_rendered(),"width":r.width(),"height":r.height(),"status":format!("{:?}",r.status()).to_lowercase(),"denoising":r.denoising(),"frameTimeMs":r.gpu_sample_time_ms()}))).collect::<serde_json::Map<_,_>>();
             let d = self.engine.diagnostics();
             let graphs = json!({"revision":d.scene_revision,"installedRevision":d.scene_revision,"status":if d.compiling||d.preparing{"compiling"}else if d.material_graphs.is_empty(){"ready"}else{"failed"},"diagnostics":d.material_graphs,"topologyCount":d.cached_pipelines});
             self.event("state",json!({"phase":if self.paused{"paused"}else{&self.phase},"targets":states,"viewportSize":self.engine.display().size(),"diagnostics":{"backend":"webgpu","adapterName":d.info.adapter_name,"width":self.engine.display().size()[0],"height":self.engine.display().size()[1],"lastError":d.last_error,"materialGraphs":graphs}}))?;
             self.last_publish = Instant::now();
+            if first_sample {
+                self.publish_first_sample = false;
+            }
         }
         self.dirty = false;
         if let (Some(dir), Some(loop_)) = (&self.evidence, &self.render_loop) {

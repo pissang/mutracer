@@ -293,12 +293,18 @@ export class WebEngine implements ViewerEngine {
         showToast('The interface restarted after its content process stopped. The interrupted import was not reopened.', 'error');
         return loaded;
       }
-      const bridgeWindow=window as Window & {mutracerInitialModel?:{files:{path:string;blob:string}[]}};
+      const bridgeWindow=window as Window & {mutracerInitialModel?:import('./NativeRenderHost').NativeModelFiles};
       const initial=bridgeWindow.mutracerInitialModel;
-      if(initial){delete bridgeWindow.mutracerInitialModel;const host=this.engine;return this.loadFiles(await Promise.all(initial.files.map(async file=>({path:file.path,file:new File([await host.download(file.blob)],file.path.split('/').pop()!)}))));}
+      if(initial){
+        delete bridgeWindow.mutracerInitialModel;
+        const source = await this.engine.readModelSource(initial);
+        return this.load(source.files[0].file.name, (progress, signal) => loadModelFromSource(source, progress, signal, this.modelBackend),
+          {presetId:null,credit:null,sourceUrl:null});
+      }
     }
     const token = ++this.loadToken;
-    const cached = await readModelCache();
+    const host = this.engine;
+    const cached = await readModelCache(host instanceof NativeRenderHost ? path => host.readModelSource(path) : undefined);
     if (token !== this.loadToken) return;
     this.bareLink = !!presetId && !Object.keys(this.initialURLSettings ?? {}).length;
     this.cachedPresetId = cached?.meta.presetId ?? null;

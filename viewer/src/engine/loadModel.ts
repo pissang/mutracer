@@ -24,6 +24,8 @@ export interface LoadedModel {
 }
 
 export interface ModelSource {
+  /** Native host file used to reopen without duplicating source bytes in OPFS. */
+  hostPath?: string;
   files: PathedFile[];
   mainPath: string;
   base: string;

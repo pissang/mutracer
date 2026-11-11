@@ -4,10 +4,14 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+enum Payload {
+    Bytes(Vec<u8>),
+    File(std::path::PathBuf),
+}
 #[derive(Default)]
 pub struct Store {
     serial: u64,
-    values: HashMap<String, Vec<u8>>,
+    values: HashMap<String, Payload>,
     uploads: HashMap<String, (usize, Vec<u8>)>,
 }
 pub type Shared = Arc<Mutex<Store>>;
@@ -15,13 +19,24 @@ impl Store {
     pub fn put(&mut self, bytes: Vec<u8>) -> String {
         self.serial += 1;
         let key = format!("host-{}", self.serial);
-        self.values.insert(key.clone(), bytes);
+        self.values.insert(key.clone(), Payload::Bytes(bytes));
+        key
+    }
+    pub fn put_file(&mut self, path: std::path::PathBuf) -> String {
+        self.serial += 1;
+        let key = format!("host-{}", self.serial);
+        self.values.insert(key.clone(), Payload::File(path));
         key
     }
     pub fn take(&mut self, key: &str) -> Result<Vec<u8>> {
-        self.values
+        match self
+            .values
             .remove(key)
-            .context("Unknown or consumed binary payload")
+            .context("Unknown or consumed binary payload")?
+        {
+            Payload::Bytes(bytes) => Ok(bytes),
+            Payload::File(path) => std::fs::read(path).context("Read host model resource"),
+        }
     }
     pub fn clear(&mut self) {
         self.values.clear();
@@ -62,7 +77,7 @@ impl Store {
         data.extend_from_slice(&bytes);
         if data.len() == total {
             let (_, data) = self.uploads.remove(key).unwrap();
-            self.values.insert(key.to_owned(), data);
+            self.values.insert(key.to_owned(), Payload::Bytes(data));
         }
         Ok(())
     }
@@ -72,7 +87,7 @@ impl Store {
             "Invalid upload key"
         );
         ensure!(!self.values.contains_key(key), "Duplicate upload key");
-        self.values.insert(key.to_owned(), bytes);
+        self.values.insert(key.to_owned(), Payload::Bytes(bytes));
         Ok(())
     }
 }

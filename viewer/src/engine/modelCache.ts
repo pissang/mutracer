@@ -45,7 +45,7 @@ export function saveModelCache(model: CachedModel): Promise<void> {
       const header = new TextEncoder().encode(JSON.stringify({
         version: 1, id: model.id, meta: model.meta,
         source: source && {
-          mainPath: source.mainPath, base: source.base,
+          mainPath: source.mainPath, base: source.base, hostPath: source.hostPath,
           files: source.files.map(({ file, path }) => ({ path, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))
         }
       }));
@@ -53,7 +53,7 @@ export function saveModelCache(model: CachedModel): Promise<void> {
       new DataView(length).setUint32(0, header.byteLength, true);
       const handle = await dir.getFileHandle(CURRENT, { create: true });
       writable = await handle.createWritable();
-      await writable.write(new Blob([length, header, ...(source?.files.map(({ file }) => file) ?? [])]));
+      await writable.write(new Blob([length, header, ...(source?.hostPath ? [] : source?.files.map(({ file }) => file) ?? [])]));
       await writable.close();
     } catch {
       await writable?.abort().catch(() => {});
@@ -63,7 +63,7 @@ export function saveModelCache(model: CachedModel): Promise<void> {
   });
 }
 
-export function readModelCache(): Promise<CachedModel | null> {
+export function readModelCache(resolveHostSource?: (path: string) => Promise<ModelSource>): Promise<CachedModel | null> {
   return enqueue(async () => {
     try {
       const dir = await directory();
@@ -81,8 +81,14 @@ export function readModelCache(): Promise<CachedModel | null> {
       if (header.source) {
         const data = header.source;
         if (typeof data.mainPath !== 'string' || typeof data.base !== 'string' || !Array.isArray(data.files)) return null;
-        source = { mainPath: data.mainPath, base: data.base, files: [] };
+        if (data.hostPath !== undefined && (typeof data.hostPath !== 'string' || !resolveHostSource)) return null;
+        source = data.hostPath ? await resolveHostSource!(data.hostPath) : { mainPath: data.mainPath, base: data.base, files: [] };
         for (const entry of data.files) {
+          if (data.hostPath) {
+            const current = source.files.find(file => file.path === entry.path)?.file;
+            if (!current || current.size !== entry.size || current.lastModified !== entry.lastModified) return null;
+            continue;
+          }
           if (typeof entry.path !== 'string' || typeof entry.name !== 'string' || !Number.isSafeInteger(entry.size) || entry.size < 0 || offset + entry.size > file.size) return null;
           source.files.push({
             path: entry.path,
