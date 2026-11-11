@@ -77,6 +77,7 @@ struct Host {
     dirty: bool,
     phase: String,
     last_publish: Instant,
+    last_loop_frame: Instant,
     upscale: Option<api::PostProcessSubscription>,
     export: Option<Export>,
     evidence: Option<PathBuf>,
@@ -324,6 +325,7 @@ impl Host {
             dirty: true,
             phase: "preparing".into(),
             last_publish: Instant::now(),
+            last_loop_frame: Instant::now(),
             upscale: None,
             export: None,
             evidence,
@@ -794,7 +796,25 @@ impl Host {
             }
         }
     }
+    fn refill(&mut self) -> Result<bool> {
+        // Stationary final batches do not need a FIFO surface acquisition. Input
+        // and commits mark the host dirty or revoke the RenderLoop refill lease.
+        if !self.paused
+            && self.export.is_none()
+            && !self.dirty
+            && self.last_loop_frame.elapsed() < Duration::from_millis(16)
+            && self
+                .render_loop
+                .as_ref()
+                .is_some_and(api::RenderLoop::needs_refill)
+        {
+            self.render_loop.as_mut().unwrap().refill()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
     fn frame(&mut self) -> Result<()> {
+        self.last_loop_frame = Instant::now();
         if let Some(job) = self.export.as_ref().filter(|job| !job.completed) {
             let target = &self.targets[&job.target];
             let status = target.refine()?;
@@ -1061,10 +1081,19 @@ impl ApplicationHandler<Message> for App {
             e.exit();
         }
     }
-    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+    fn new_events(&mut self, e: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
-            if let Some(host) = self.host.as_ref().filter(|h| h.needs_tick()) {
-                host.window.request_redraw();
+            if let Some(host) = self.host.as_mut().filter(|h| h.needs_tick()) {
+                // RedrawRequested itself can be display-paced on macOS. Refill
+                // on the timer wakeup, without waiting for another redraw.
+                match host.refill() {
+                    Ok(true) => {}
+                    Ok(false) => host.window.request_redraw(),
+                    Err(error) => {
+                        self.error = Some(format!("{error:#}"));
+                        e.exit();
+                    }
+                }
             }
         }
     }
@@ -1094,17 +1123,21 @@ impl ApplicationHandler<Message> for App {
             if host.evidence.is_some() {
                 if host.started.elapsed() > Duration::from_secs(120) {
                     e.exit();
-                } else {
+                } else if !host.needs_tick() {
                     e.set_control_flow(ControlFlow::WaitUntil(
                         Instant::now() + Duration::from_millis(16),
                     ));
                 }
             }
+            // GTK still needs polling when the renderer is idle. Do not replace
+            // the 1 ms refill wakeup while rendering.
+            #[cfg(target_os = "linux")]
+            if !host.needs_tick() {
+                e.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(16),
+                ));
+            }
         }
-        #[cfg(target_os = "linux")]
-        e.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(16),
-        ));
     }
 }
 fn main() -> Result<()> {
