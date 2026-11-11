@@ -115,14 +115,34 @@ fn create_pipelines(
 /// display-resolution storage variant.
 fn display_source(source: &str) -> Result<String> {
     let [default, display] = &crate::postprocess::sources()?.aov_trace;
+    // Material graphs specialize aovSurface's material call alongside the
+    // beauty shader. Keep that function verbatim when changing AOV storage;
+    // the surrounding shared template must still match exactly.
+    let surface = |template: &str| -> Result<(usize, usize)> {
+        let start = template
+            .find("fn aovSurface(")
+            .ok_or("The shared AOV template has no surface function")?;
+        let end = start
+            + template[start..]
+                .find("\n@compute")
+                .ok_or("The shared AOV template has no trace entry point")?;
+        Ok((start, end))
+    };
+    let (surface_start, surface_end) = surface(default)?;
+    let (display_start, display_end) = surface(display)?;
     let start = source
-        .rfind(default.as_str())
+        .rfind(&default[..surface_start])
         .ok_or("The path tracer source has no shared AOV entry points")?;
+    let specialized_surface = source[start + surface_start..]
+        .strip_suffix(&default[surface_end..])
+        .filter(|s| s.starts_with("fn aovSurface("))
+        .ok_or("The path tracer source has incompatible AOV entry points")?;
     Ok(format!(
-        "{}{}{}",
+        "{}{}{}{}",
         &source[..start],
-        display,
-        &source[start + default.len()..]
+        &display[..display_start],
+        specialized_surface,
+        &display[display_end..]
     ))
 }
 /// Size, storage and shader variant of one AOV accumulation.

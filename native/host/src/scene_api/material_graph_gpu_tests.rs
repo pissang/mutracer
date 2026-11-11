@@ -28,6 +28,67 @@ fn center(render: &crate::api::Render) -> f32 {
 }
 #[test]
 #[ignore = "requires a real GPU; run separately"]
+fn material_graph_display_aovs_preserve_graph_surface() {
+    use crate::api::{
+        AovResolution, Backend, ConvergeOptions, EasuOptions, Engine, EngineOptions, PixelKind,
+        Render, RenderSettings, RenderSize,
+    };
+    let _lock = crate::abi_test_lock();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let (mut scene, material) = scene();
+        let values = scene.material_mut(material).unwrap();
+        values.values.emission_strength = 1.;
+        let mut graph = emission_graph(0.2, false);
+        graph.terminals.push(GraphTerminal {
+            port: terminal::BASE_COLOR,
+            node: 0,
+            output: output::OUT,
+        });
+        values.graph = Some(graph);
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        let display = engine.display();
+        display.set_size(48, 32).unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 8,
+                size: RenderSize::Scale(0.5),
+                aovs: 1 | 8 | 16,
+                aov_resolution: AovResolution::Display,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert!((center(&render) - 0.2).abs() < 1e-6, "{backend:?}");
+        let depth = render.read_pixels(PixelKind::Depth).unwrap();
+        assert_eq!([depth.width, depth.height], [48, 32]);
+        assert!(depth.data.iter().all(|v| v.is_finite()));
+        assert!(depth.data.chunks_exact(4).any(|p| p[0] > 0. && p[3] > 0.));
+        let diffuse = render.read_pixels(PixelKind::DiffuseAlbedo).unwrap();
+        let center = ((diffuse.height / 2) * diffuse.width + diffuse.width / 2) as usize * 4;
+        for value in &diffuse.data[center..center + 3] {
+            assert!(
+                (*value - 0.2).abs() < 2e-3,
+                "graph display albedo: {backend:?}"
+            );
+        }
+        let _upscale = display
+            .add_upscale(EasuOptions {
+                albedo_detail: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let (width, height, pixels) = display.read_rgba8(&render).unwrap();
+        assert_eq!([width, height], [48, 32]);
+        assert!(pixels.chunks_exact(4).any(|p| p[0] > 0));
+        assert!(engine.last_error().is_none());
+    }
+}
+#[test]
+#[ignore = "requires a real GPU; run separately"]
 fn material_graph_gpu_incremental_retention_and_superseded_installations() {
     use crate::api::{
         Backend, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
