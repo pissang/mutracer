@@ -102,7 +102,8 @@ describe('native Engine boundary', () => {
         expect(bodies.reduce((n, b) => n + b.byteLength, 0)).toBe(data.length);
         expect(bodies[0][0]).toBe(7);
         expect(bodies.at(-1)!.at(-1)).toBe(9);
-        expect((requests[1].headers as Record<string, string>)['X-Mutracer-Offset']).toBe('4');
+        expect(requests).toHaveLength(3);
+        expect((requests[1].headers as Record<string, string>)['X-Mutracer-Offset']).toBe(String(8 * 1024 * 1024));
         vi.stubGlobal('fetch', vi.fn(async (_url: URL, init: RequestInit) => {
             requests.push(init); return { ok: init.method === 'DELETE', status: 400 };
         }));

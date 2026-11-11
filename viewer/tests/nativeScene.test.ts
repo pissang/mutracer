@@ -1,3 +1,4 @@
+import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -64,6 +65,54 @@ describe('native scene v8 boundary', () => {
         expect(new Float32Array(cameraWords(camera).buffer)[9]).toBeCloseTo(2.8);
         expect(words[words[words[H.MATERIAL_OFFSET] + M.GRAPH]]).toBe(1);
         save('graph-instances', words);
+    });
+    it('applies incremental edits exactly like a fresh descriptor without resending geometry', async () => {
+        const {scene, camera, geometry, material} = fixture(), enc = encoder(), detector = new SceneChangeDetector();
+        let committed: Uint32Array | undefined;
+        const check = async (delta?: boolean) => {
+            const update = await enc.prepare(scene, camera, [320,192], detector.detect(scene));
+            const packet = new Uint8Array(update.parts.reduce((n,p) => n + p.byteLength, 0));
+            let at = 0; for (const part of update.parts) {packet.set(part,at); at += part.byteLength;}
+            const u = new Uint32Array(packet.buffer);
+            if (delta !== undefined) expect(u[1]).toBe(delta ? 0 : 1);
+            const next = u[1] ? new Uint32Array(u[2]) : committed!.slice();
+            at = 4; for (let i = 0; i < u[3]; i++) {const offset=u[at++], length=u[at++]; next.set(u.subarray(at,at+length),offset); at+=length;}
+            expect(next).toEqual(await encoder().encode(scene,camera,[320,192]));
+            update.accept(); detector.commit(); committed = next;
+            return packet.byteLength;
+        };
+        await check(false);
+        material.specularRoughness = .7;
+        expect(await check(true)).toBeLessThan(128);
+        scene.meshes[0].position = [1,2,3]; await check(true);
+        scene.meshes[0].visible = false; await check(true);
+        scene.lights[1].intensity = 7; await check(true);
+        const texture = material.map!;
+        (texture.image as {data:Uint8Array}).data[0] = 29; texture.markUpdated(); await check(true);
+        material.graph = new MaterialGraph({nodes:[{id:'color',category:'constant',type:'color3',inputs:{value:{type:'color3',value:[.3,.4,.5]}}}],terminal:{baseColor:{node:'color'}}}); await check(false);
+        material.graph.setInput('color','value',{type:'color3',value:[.1,.2,.3]}); await check(true);
+        geometry.position.array[0] = -2; geometry.markUpdated(); await check(true);
+        const instances = new InstancedMesh(geometry, material, {count:2, colors:new Float32Array([1,1,1,1,1,1])});
+        scene.meshes = [instances]; await check(false);
+        instances.transforms[12] = 3; instances.markTransformsUpdated(); await check(true);
+        instances.colors![1] = .25; instances.markColorsUpdated(); await check(true);
+        material.map = new Texture({width:1,height:1,data:new Uint8Array([2,3,4,255])}); await check(false);
+        material.baseColor = [.9,.8,.7]; await check(true);
+        scene.lights = []; await check(false);
+        material.baseMetalness = .33; await check(true);
+    });
+    it('keeps a material edit packet bounded for a large geometry and image', async () => {
+        const {scene,camera,material} = fixture(), enc = encoder(), detector = new SceneChangeDetector();
+        scene.meshes[0].geometry = new Geometry({position:new Attribute(new Float32Array(3 * 300000),3)});
+        material.map = new Texture({width:1024,height:1024,data:new Uint8Array(1024*1024*4)});
+        material.map.colorSpace = 'linear';
+        const initial = await enc.prepare(scene,camera,[32,32],detector.detect(scene));
+        expect(initial.parts.some(part => part.buffer === scene.meshes[0].geometry.position.array.buffer)).toBe(true);
+        initial.accept(); detector.commit();
+        material.baseMetalness = .9;
+        const edited = await enc.prepare(scene,camera,[32,32],detector.detect(scene));
+        expect(new Uint32Array(edited.parts[0].buffer)[1]).toBe(0);
+        expect(edited.parts.reduce((n,p)=>n+p.byteLength,0)).toBeLessThan(128);
     });
     it('streams full descriptors as views without duplicating the payload', () => {
         const next = new Uint32Array([3, 7, 11, 19]);

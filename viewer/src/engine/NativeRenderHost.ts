@@ -5,7 +5,7 @@ import type Sync from '../../../src/Sync';
 import type { ModelSource } from './loadModel';
 import type { DepthSampleArea } from '../../../src/renderer/depthQuery';
 import { SceneChangeDetector } from '../../../src/renderer/sceneChangeDetector';
-import { NativeSceneEncoder, cameraWords, descriptorDeltaParts } from './nativeScene';
+import { NativeSceneEncoder, cameraWords } from './nativeScene';
 import { NativeTransport, type NativeReply, pointerPacket } from './nativeTransport';
 import type { PixelKind } from './ViewerEngine';
 import { Events } from '../../../src/util/events';
@@ -60,7 +60,6 @@ export class NativeRenderHost extends Engine {
     private ready?: Promise<EngineInfo>;
     private updating?: Promise<void>;
     private syncError?: Error;
-    private previous?: Uint32Array;
     cameraTarget?: number[];
     private lastCamera = '';
     private nativeCamera?: Uint32Array;
@@ -214,8 +213,25 @@ export class NativeRenderHost extends Engine {
         try {
             // WebKit copies a BufferSource into FormData. Bound that copy and
             // retain views of descriptor spans rather than another whole packet.
-            for (const part of parts) for (let at = 0; at < part.byteLength; at += 8 * 1024 * 1024) {
-                const body = part.subarray(at, at + 8 * 1024 * 1024);
+            let index = 0, at = 0;
+            while (offset < total) {
+                while (at === parts[index].byteLength) {index++; at = 0;}
+                const length = Math.min(8 * 1024 * 1024, total - offset), part = parts[index];
+                let body: Uint8Array;
+                if (part.byteLength - at >= length) {
+                    body = part.subarray(at, at + length); at += length;
+                } else {
+                    // Pack small records and span headers into one bounded upload.
+                    // Large contiguous payloads above still use their existing view.
+                    body = new Uint8Array(length);
+                    let written = 0;
+                    while (written < length) {
+                        const count = Math.min(length - written, parts[index].byteLength - at);
+                        body.set(parts[index].subarray(at, at + count), written);
+                        written += count; at += count;
+                        if (at === parts[index].byteLength) {index++; at = 0;}
+                    }
+                }
                 const response = await fetch(new URL(`bridge/${id}`, document.baseURI), {
                     method: 'POST', headers: { 'X-Mutracer-Offset': String(offset), 'X-Mutracer-Length': String(total) },
                     body: body as Uint8Array<ArrayBuffer>
@@ -251,7 +267,7 @@ export class NativeRenderHost extends Engine {
     override update(): boolean {
         if (this.stopped || this.updating || !this.remoteInfo)
             return false;
-        this.updating = this.synchronize().catch(error => { this.syncError = error; this.phase = 'error'; this.detector.reset(); this.previous = undefined; this.lastCamera = ''; this.lastSettings = ''; this._notifyError(error); }).finally(() => { this.updating = undefined; });
+        this.updating = this.synchronize().catch(error => { this.syncError = error; this.phase = 'error'; this.detector.reset(); this.encoder.reset(); this.lastCamera = ''; this.lastSettings = ''; this._notifyError(error); }).finally(() => { this.updating = undefined; });
         return true;
     }
     private async synchronize() {
@@ -261,10 +277,10 @@ export class NativeRenderHost extends Engine {
         const changes = this.scene ? this.detector.detect(this.scene) : undefined;
         const sceneChanged = changes && (changes.meshes !== 'none' || changes.lights || changes.background);
         let blob: string | undefined;
-        let next: Uint32Array | undefined;
+        let encoded: Awaited<ReturnType<NativeSceneEncoder['prepare']>> | undefined;
         if (sceneChanged && this.scene?.meshes.length) {
-            next = await this.encoder.encode(this.scene, this.camera, [this.display.canvas.width, this.display.canvas.height]);
-            blob = await this.upload(descriptorDeltaParts(this.previous, next));
+            encoded = await this.encoder.prepare(this.scene, this.camera, [this.display.canvas.width, this.display.canvas.height], changes);
+            blob = await this.upload(encoded.parts);
         }
         const camera = Array.from(cameraWords(this.camera)), cameraKey = JSON.stringify(camera);
         const settings = { targets: [...this.targets.values()].map(t => t.configuration()), display: Object.fromEntries(displayKeys.map(k => [k, this.display[k]])), size: [this.display.canvas.width, this.display.canvas.height], upscale: this.upscale, aspect: useViewer.getState().settings?.outputAspect, bvhBuilder: this.bvhBuilder, preview: this.previewId, final: this.finalId, selection: this.requestedSelection, coalesce: this.coalesce, changing: this.changing };
@@ -272,8 +288,8 @@ export class NativeRenderHost extends Engine {
         if (matchesNativeCamera(camera, this.nativeCamera)) this.lastCamera = cameraKey;
         if (blob || sceneChanged || cameraKey !== this.lastCamera || key !== this.lastSettings) {
             await this.transport.request('commit', { blob, clear: sceneChanged && !this.scene?.meshes.length, camera: cameraKey !== this.lastCamera ? camera : undefined, cameraTarget: this.cameraTarget, cameraRevision: this.nativeCameraRevision, settings: key !== this.lastSettings ? settings : undefined });
-            if (next)
-                this.previous = next;
+            encoded?.accept();
+            if (sceneChanged && !this.scene?.meshes.length) this.encoder.reset();
             if (sceneChanged)
                 this.detector.commit();
             this.lastCamera = cameraKey;

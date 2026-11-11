@@ -1,6 +1,7 @@
 // Private viewer adapter. Wire offsets and property IDs are the SDK's frozen contracts.
 import { HEADER as H, GEOMETRY as G, MATERIAL as M, MESH, TEXTURE as T, LIGHT as L, GRAPH, VERSION } from '../../../native/src/layout';
 import properties from '../../../native/schemas/material-properties.json';
+import type { SceneChanges } from '../../../src/renderer/sceneChangeDetector';
 import type { Scene } from '../../../src/scene/Scene';
 import Camera from '../../../src/scene/Camera';
 import Texture, { isTextureDataSource } from '../../../src/scene/Texture';
@@ -13,27 +14,109 @@ import { textureWrapIndex } from '../../../src/scene/TextureState';
 const NONE = 0xffffffff;
 const colorMaps = new Set(['map', 'emissiveMap', 'fuzzColorMap', 'specularColorMap']);
 const aliases: Record<string, string> = { opacity: 'geometryOpacity', thinWalled: 'geometryThinWalled' };
+interface Encoding {
+    length: number;
+    records: Map<number, Uint32Array>;
+    payloads: Map<number, { source: ArrayLike<number>; length: number }>;
+    materials: OpenPBRMaterial[];
+    textureOrder: Texture[];
+    materialRanges: {start: number; end: number}[];
+    environment?: EnvironmentMapSource;
+    background?: EnvironmentMapSource;
+}
+class LayoutChanged extends Error {}
 class Words {
-    chunks: Uint32Array[] = [];
+    chunks: {at: number; data: Uint32Array}[] = [];
+    records: Map<number, Uint32Array>;
+    payloads = new Map<number, {source: ArrayLike<number>; length: number}>();
     length = 0;
-    reserve(length: number) { const data = new Uint32Array(length); const at = this.length; this.chunks.push(data); this.length += length; return { at, u: data, f: new Float32Array(data.buffer) }; }
-    append(data: ArrayLike<number>, floats = false) {
-        if (floats && data instanceof Float32Array || !floats && data instanceof Uint32Array) {
-            const at = this.length;
-            this.chunks.push(new Uint32Array(data.buffer, data.byteOffset, data.length));
-            this.length += data.length;
-            return at;
-        }
-        const part = this.reserve(data.length);
-        (floats ? part.f : part.u).set(data);
-        return part.at;
+    materials: OpenPBRMaterial[] = [];
+    textureOrder: Texture[] = [];
+    materialRanges: {start: number; end: number}[] = [];
+    environment?: EnvironmentMapSource;
+    background?: EnvironmentMapSource;
+    constructor(readonly previous?: Encoding) { this.records = new Map(previous?.records); }
+    reserve(length: number) {
+        const at = this.length, old = this.previous?.records.get(at);
+        const data = old?.length === length ? old.slice() : new Uint32Array(length);
+        if (length) {this.records.set(at, data); this.chunks.push({at, data});}
+        this.length += length;
+        return {at, u: data, f: new Float32Array(data.buffer)};
     }
-    bytes(data: Uint8Array) { const part = this.reserve(Math.ceil(data.byteLength / 4)); new Uint8Array(part.u.buffer).set(data); return part.at; }
-    finish() { if (this.length > NONE)
-        throw new Error('Scene exceeds the SDK descriptor word limit'); const u = new Uint32Array(this.length); let at = 0; for (const c of this.chunks) {
-        u.set(c, at);
-        at += c.length;
-    } return u; }
+    append(data: ArrayLike<number>, floats = false, payload = false, reuse = true) {
+        const at = this.length;
+        if (payload) {
+            this.payloads.set(at, {source: data, length: data.length});
+            const old = this.previous?.payloads.get(at);
+            if (reuse && old?.source === data && old.length === data.length) {this.length += data.length; return at;}
+        }
+        let words: Uint32Array;
+        if (floats && data instanceof Float32Array || !floats && data instanceof Uint32Array)
+            words = new Uint32Array(data.buffer, data.byteOffset, data.length);
+        else { words = new Uint32Array(data.length); (floats ? new Float32Array(words.buffer) : words).set(data); }
+        this.chunks.push({at, data: words}); this.length += words.length;
+        if (!payload) this.records.set(at, words);
+        return at;
+    }
+    bytes(data: Uint8Array, payload = false) {
+        const at = this.length, length = Math.ceil(data.byteLength / 4);
+        if (payload) {
+            this.payloads.set(at, {source: data, length});
+            const old = this.previous?.payloads.get(at);
+            if (old?.source === data && old.length === length) {this.length += length; return at;}
+        }
+        const aligned = data.byteOffset % 4 === 0 && data.byteLength % 4 === 0;
+        const words = aligned ? new Uint32Array(data.buffer, data.byteOffset, length) : new Uint32Array(length);
+        if (!aligned) new Uint8Array(words.buffer).set(data);
+        this.chunks.push({at, data: words}); this.length += length;
+        if (!payload) this.records.set(at, words);
+        return at;
+    }
+    // Geometry is unchanged according to the detector. Preserve its allocation
+    // without walking attributes or retaining a second serialized copy.
+    reusePayload(length: number) {
+        const at = this.length, old = this.previous?.payloads.get(at);
+        if (!old || old.length !== length) throw new LayoutChanged();
+        this.payloads.set(at, old); this.length += length; return at;
+    }
+    snapshot(): Encoding {
+        return {length: this.length, records: this.records, payloads: this.payloads,
+            materials: this.materials, textureOrder: this.textureOrder, materialRanges: this.materialRanges,
+            environment: this.environment, background: this.background};
+    }
+    finish() {
+        if (this.length > NONE) throw new Error('Scene exceeds the SDK descriptor word limit');
+        const u = new Uint32Array(this.length);
+        for (const {at, data} of this.chunks) u.set(data, at);
+        return u;
+    }
+    fullParts(): Uint8Array[] {
+        if (this.length > NONE) throw new Error('Scene exceeds the SDK descriptor word limit');
+        const bytes = (u:Uint32Array) => new Uint8Array(u.buffer,u.byteOffset,u.byteLength);
+        // The wire has one full span; its body can be streamed from the existing
+        // record/attribute/image buffers without allocating a scene-sized array.
+        return [bytes(new Uint32Array([1,1,this.length,1])), bytes(new Uint32Array([0,this.length])),
+            ...this.chunks.slice().sort((a,b)=>a.at-b.at).map(chunk=>bytes(chunk.data))];
+    }
+    deltaParts(): Uint8Array[] {
+        if (this.length !== this.previous?.length) throw new LayoutChanged();
+        const spans: {at:number; data:Uint32Array}[] = [];
+        for (const chunk of this.chunks) {
+            const old = this.previous.records.get(chunk.at), next = chunk.data;
+            if (!next.length) continue;
+            if (!old || old.length !== next.length) {spans.push(chunk); continue;}
+            for (let at = 0; at < next.length;) {
+                if (old[at] === next[at]) {at++; continue;}
+                const start = at++;
+                while (at < next.length && old[at] !== next[at]) at++;
+                spans.push({at:chunk.at + start, data:next.subarray(start, at)});
+            }
+        }
+        spans.sort((a,b) => a.at - b.at);
+        const bytes = (u:Uint32Array) => new Uint8Array(u.buffer, u.byteOffset, u.byteLength);
+        return [bytes(new Uint32Array([1, 0, this.length, spans.length])),
+            ...spans.flatMap(span => [bytes(new Uint32Array([span.at, span.data.length])), bytes(span.data)])];
+    }
 }
 export function cameraWords(camera: Camera) {
     const u = new Uint32Array(32), f = new Float32Array(u.buffer);
@@ -44,11 +127,27 @@ export function cameraWords(camera: Camera) {
 }
 export type SkyResolver = (source: ProceduralEnvironmentSource) => Promise<EnvironmentMapSource>;
 export class NativeSceneEncoder {
+    private committed?: Encoding;
+    reset() {this.committed = undefined;}
+    async prepare(scene: Scene, camera: Camera, size: [number, number], changes: SceneChanges) {
+        let w: Words, parts: Uint8Array[];
+        if (this.committed && changes.meshes !== 'full') {
+            try {w = await this.build(scene, camera, size, this.committed, changes); parts = w.deltaParts();}
+            catch (error) {if (!(error instanceof LayoutChanged)) throw error; w = await this.build(scene, camera, size); parts = w.fullParts();}
+        } else {w = await this.build(scene, camera, size); parts = w.fullParts();}
+        const snapshot = w.snapshot();
+        return {parts, accept: () => {this.committed = snapshot;}};
+    }
+    async encode(scene: Scene, camera: Camera, size: [number, number]): Promise<Uint32Array> {
+        return (await this.build(scene, camera, size)).finish();
+    }
     private pixels = new WeakMap<object, {
         image: object;
         version: number;
         pixels: Uint8Array | Float32Array;
     }>();
+    private graphs = new WeakMap<OpenPBRMaterial, {graph: NonNullable<OpenPBRMaterial['graph']>; revision: number; normalized: ReturnType<typeof normalizeGraph>; ir: ReturnType<typeof flattenGraph>}>();
+    private canonicalPixels = new WeakMap<Texture, Map<string, {raw: Uint8Array | Float32Array; linear: boolean; data: Uint8Array | Float32Array}>>();
     private skyCache = new Map<string, Promise<EnvironmentMapSource>>();
     constructor(private sky: SkyResolver) { }
     private readPixels(texture: Texture): Uint8Array | Float32Array {
@@ -58,25 +157,28 @@ export class NativeSceneEncoder {
         const image = texture.image;
         let pixels: Uint8Array | Float32Array;
         if (isTextureDataSource(image))
-            pixels = image.data instanceof Uint8Array || image.data instanceof Uint8ClampedArray ? new Uint8Array(image.data) : Float32Array.from(image.data);
+            pixels = image.data instanceof Uint8Array || image.data instanceof Uint8ClampedArray
+                ? new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength)
+                : image.data instanceof Float32Array ? new Float32Array(image.data.buffer, image.data.byteOffset, image.data.length) : Float32Array.from(image.data);
         else {
             const canvas = document.createElement('canvas');
             canvas.width = image.width;
             canvas.height = image.height;
             const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
             ctx.drawImage(image as CanvasImageSource, 0, 0);
-            pixels = new Uint8Array(ctx.getImageData(0, 0, image.width, image.height).data);
+            const data = ctx.getImageData(0, 0, image.width, image.height).data;
+            pixels = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         }
         this.pixels.set(texture, { image, version: texture.version, pixels });
         return pixels;
     }
-    async encode(scene: Scene, camera: Camera, size: [
-        number,
-        number
-    ]): Promise<Uint32Array> {
-        const w = new Words(), header = w.reserve(H.WORDS), h = header.u;
+    private async build(scene: Scene, camera: Camera, size: [number, number], previous?: Encoding, changes?: SceneChanges): Promise<Words> {
+        const w = new Words(previous), header = w.reserve(H.WORDS), h = header.u;
         const geometries = [...new Set(scene.meshes.map(mesh => mesh.geometry))];
         const materials = [...new Set(scene.meshes.flatMap(mesh => mesh.materials))] as OpenPBRMaterial[];
+        w.materials = materials;
+        if (previous && (materials.length !== previous.materials.length || materials.some((m,i) => m !== previous.materials[i]))) throw new LayoutChanged();
+        const geometryIds = new Map(geometries.map((g,i) => [g,i])), materialIds = new Map(materials.map((m,i) => [m,i]));
         const lights = scene.lights.filter(light => light.type !== 'AmbientLight' && light.type !== 'EnvironmentLight');
         const textures: {
             texture: Texture;
@@ -93,14 +195,20 @@ export class NativeSceneEncoder {
             const old = ids.get(usage);
             if (old !== undefined)
                 return old;
-            let pixels = this.readPixels(texture);
+            const raw = this.readPixels(texture);
+            let pixels = raw;
             // v8 has implicit sRGB bytes / linear floats for color slots. Canonicalize
             // each use separately so a shared color+data image preserves both meanings.
             const linear = texture.colorSpace ? texture.colorSpace === 'linear' : pixels instanceof Float32Array;
-            if (color && linear && !(pixels instanceof Float32Array))
+            let cache = this.canonicalPixels.get(texture);
+            if (!cache) this.canonicalPixels.set(texture, cache = new Map());
+            const cached = cache.get(usage);
+            if (cached?.raw === raw && cached.linear === linear) pixels = cached.data;
+            else if (color && linear && !(pixels instanceof Float32Array))
                 pixels = Float32Array.from(pixels, v => v / 255);
             else if (color && !linear && pixels instanceof Float32Array)
                 pixels = pixels.map((v, i) => i % 4 === 3 ? v : v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4));
+            cache.set(usage, {raw, linear, data:pixels});
             const id = textures.length;
             textures.push({ texture, pixels });
             ids.set(usage, id);
@@ -109,7 +217,13 @@ export class NativeSceneEncoder {
         const graphData = materials.map(material => {
             if (!material.graph)
                 return;
-            const normalized = normalizeGraph(material.graph), ir = flattenGraph(normalized);
+            let cached = this.graphs.get(material);
+            if (cached?.graph !== material.graph || cached.revision !== material.graph.revision) {
+                const normalized = normalizeGraph(material.graph);
+                cached = {graph:material.graph, revision:material.graph.revision, normalized, ir:flattenGraph(normalized)};
+                this.graphs.set(material,cached);
+            }
+            const {normalized,ir} = cached;
             const slots = normalized.parameters.map(value => value instanceof Texture ? textureId(value, true) : NONE);
             for (let i = 0; i < slots.length; i++)
                 if (slots[i] !== NONE)
@@ -123,6 +237,8 @@ export class NativeSceneEncoder {
         for (const light of lights)
             if (light.type === 'RectLight')
                 textureId(light.texture as Texture | undefined);
+        w.textureOrder = textures.map(entry => entry.texture);
+        if (previous && (w.textureOrder.length !== previous.textureOrder.length || w.textureOrder.some((t,i) => t !== previous.textureOrder[i]))) throw new LayoutChanged();
         const resolve = async (source: EnvironmentSource) => {
             if (!('sky' in source))
                 return source;
@@ -137,7 +253,8 @@ export class NativeSceneEncoder {
             }
             return pending;
         };
-        const env = await resolve(generateEnvMapFromSceneComponents(scene.lights.filter(l => l.type === 'AmbientLight'), scene.lights.filter(l => l.type === 'EnvironmentLight')));
+        const env = !changes?.lights && previous?.environment ? previous.environment : await resolve(generateEnvMapFromSceneComponents(scene.lights.filter(l => l.type === 'AmbientLight'), scene.lights.filter(l => l.type === 'EnvironmentLight')));
+        w.environment = env;
         const background = scene.background;
         const envTexture = new Texture(env), envId = textures.length;
         textures.push({ texture: envTexture, pixels: env.data instanceof Float32Array ? env.data : Float32Array.from(env.data) });
@@ -146,7 +263,8 @@ export class NativeSceneEncoder {
             const source = generateBackgroundMapFromSceneBackground(background);
             if (!source)
                 throw new Error('Native background requires decoded RGBA pixels');
-            const map = await resolve(source);
+            const map = !changes?.background && previous?.background ? previous.background : await resolve(source);
+            w.background = map;
             backgroundId = textures.length;
             textures.push({ texture: new Texture(map), pixels: map.data instanceof Float32Array ? map.data : Float32Array.from(map.data) });
         }
@@ -175,23 +293,31 @@ export class NativeSceneEncoder {
                     continue;
                 const n = key === 'tangent' ? 4 : key === 'color' || key === 'position' || key === 'normal' ? 3 : key === 'uv' || key === 'uv1' ? 2 : 1;
                 const count = attr.array.length / attr.itemSize;
+                if (previous && !changes?.geometries.includes(g)) {gs.u[o + field] = w.reusePayload(count * n); continue;}
                 const values = attr.itemSize === n ? attr.array : Array.from({ length: count * n }, (_, j) => j % n < attr.itemSize ? attr.array[Math.floor(j / n) * attr.itemSize + j % n] : 1);
-                gs.u[o + field] = w.append(values, key !== 'indices' && key !== 'materialIndex');
+                gs.u[o + field] = w.append(values, key !== 'indices' && key !== 'materialIndex', true, false);
+                w.payloads.set(gs.u[o + field], {source:attr.array, length:values.length});
             }
         });
-        scene.meshes.forEach((mesh, i) => { const o = i * MESH.WORDS; ms.u[o + MESH.GEOMETRY] = geometries.indexOf(mesh.geometry); ms.u[o + MESH.MATERIAL] = materials.indexOf(mesh.materials[0] as OpenPBRMaterial); ms.f.set(mesh.transform, o + MESH.TRANSFORM); ms.u[o + MESH.FLAGS] = Number(!mesh.visible); ms.u[o + MESH.MATERIAL_COUNT] = mesh.materials.length; ms.u[o + MESH.MATERIAL_TABLE] = w.append(mesh.materials.map(m => materials.indexOf(m as OpenPBRMaterial))); });
+        scene.meshes.forEach((mesh, i) => { const o = i * MESH.WORDS; ms.u[o + MESH.GEOMETRY] = geometryIds.get(mesh.geometry)!; ms.u[o + MESH.MATERIAL] = materialIds.get(mesh.materials[0] as OpenPBRMaterial)!; ms.f.set(mesh.transform, o + MESH.TRANSFORM); ms.u[o + MESH.FLAGS] = Number(!mesh.visible); ms.u[o + MESH.MATERIAL_COUNT] = mesh.materials.length; ms.u[o + MESH.MATERIAL_TABLE] = w.append(mesh.materials.map(m => materialIds.get(m as OpenPBRMaterial)!)); });
         h[H.MESH_AOV_IDS] = w.append(scene.meshes.map(m => m.aovId));
         h[H.MATERIAL_AOV_IDS] = w.append(materials.map(m => m.aovId));
         if (scene.meshes.some(m => m.instanceData)) {
             const batches = w.reserve(scene.meshes.length * 4);
             h[H.BATCH_OFFSET] = batches.at;
             scene.meshes.forEach((mesh, i) => { const data = mesh.instanceData, o = i * 4; batches.u[o] = data?.count ?? NONE; if (data) {
-                batches.u[o + 1] = w.append(data.transforms, true);
+                batches.u[o + 1] = w.append(data.transforms, true, true, !changes?.transforms.includes(mesh));
                 if (data.colors)
-                    batches.u[o + 2] = w.append(data.colors, true);
+                    batches.u[o + 2] = w.append(data.colors, true, true, !changes?.colors.includes(mesh as never));
             } });
         }
         materials.forEach((material, i) => {
+            const start = w.length;
+            const old = previous?.materialRanges[i];
+            if (previous && !changes?.materials.includes(material)) {
+                if (!old || old.start !== start) throw new LayoutChanged();
+                w.length = old.end; w.materialRanges.push(old); return;
+            }
             const o = i * M.WORDS;
             for (const [key, field] of [['baseColor', M.BASE_COLOR], ['specularRoughness', M.ROUGHNESS], ['baseMetalness', M.METALNESS], ['transmissionWeight', M.TRANSMISSION], ['specularIor', M.IOR], ['emissionColor', M.EMISSION_COLOR], ['emissionLuminance', M.EMISSION_LUMINANCE], ['coatWeight', M.COAT_WEIGHT], ['coatRoughness', M.COAT_ROUGHNESS], ['geometryOpacity', M.OPACITY]] as const) {
                 const value = material[key];
@@ -228,10 +354,11 @@ export class NativeSceneEncoder {
                 u[GRAPH.AUTHOR_IDS] = ids.at;
                 graph.normalized.nodes.forEach((node, j) => { const text = new TextEncoder().encode(node.id); ids.u[j * 2] = w.bytes(text); ids.u[j * 2 + 1] = text.length; });
             }
+            w.materialRanges.push({start, end:w.length});
         });
         const pixelOffsets = new Map<Uint8Array | Float32Array, number>();
         textures.forEach(({ texture, pixels }, i) => { const o = i * T.WORDS; ts.u[o + T.WIDTH] = texture.image.width; ts.u[o + T.HEIGHT] = texture.image.height; ts.u[o + T.STORAGE] = Number(pixels instanceof Float32Array); let offset = pixelOffsets.get(pixels); if (offset === undefined) {
-            offset = pixels instanceof Float32Array ? w.append(pixels, true) : w.bytes(pixels);
+            offset = pixels instanceof Float32Array ? w.append(pixels, true, true) : w.bytes(pixels, true);
             pixelOffsets.set(pixels, offset);
         } ts.u[o + T.PIXELS] = offset; ts.u[o + T.FLIP_Y] = Number(texture.flipY); ts.u[o + T.UV_CHANNEL] = texture.uvChannel; ts.f.set(texture.uvScale, o + T.UV_SCALE); ts.f.set(texture.uvOffset, o + T.UV_OFFSET); ts.u[o + T.WRAP_S] = textureWrapIndex(texture.wrapS); ts.u[o + T.WRAP_T] = textureWrapIndex(texture.wrapT); ts.u[o + T.UDIM] = Number(!!texture.udim); });
         lights.forEach((light, i) => {
@@ -276,7 +403,7 @@ export class NativeSceneEncoder {
         if (described?.type === 'GroundedSkybox')
             h[H.GROUNDED_BACKGROUND] = w.append([described.height, described.radius, described.groundHeight ?? 0, ...described.center ?? [0, 0], 0], true);
         h[H.LENGTH] = w.length;
-        return w.finish();
+        return w;
     }
 }
 // Transport deltas operate on byte ranges of the SDK descriptor. The SDK still
