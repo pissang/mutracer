@@ -2299,6 +2299,21 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
 mod target_tests;
 
 #[cfg(test)]
+pub(crate) fn inject_flight_failure(handle: u64, message: &str) -> bool {
+    let mut registry = REGISTRY.lock().unwrap();
+    let Some(flight) = registry
+        .contexts
+        .get_mut(&handle)
+        .and_then(|c| c.job.as_mut())
+        .and_then(|j| j.flight.as_mut())
+    else {
+        return false;
+    };
+    flight.native.injected_error = Some(message.into());
+    true
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

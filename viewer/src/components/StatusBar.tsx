@@ -1,5 +1,6 @@
 import { Button, Dialog, DialogTrigger, Heading, Popover } from 'react-aria-components';
-import { Check, Pause, Play, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Pause, Play, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
+import { changeNativeDevice } from '../engine/nativeCapabilities';
 import { VIEWER_AOVS, setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
 import { ResolutionSelect } from './ResolutionSelect';
@@ -57,6 +58,7 @@ export function StatusBar() {
   const settings = useViewer((s) => s.settings);
   const paused = useViewer((s) => s.paused);
   const playing = useViewer((s) => s.animation?.playing ?? false);
+  const native = useViewer((s) => s.nativeCapabilities);
   const { phase, samples, elapsed, msPerSample } = stats;
   const { maxSamples } = settings;
   const sampleTarget = settings.output === 'id' || settings.output === 'motion' ? 1
@@ -76,7 +78,8 @@ export function StatusBar() {
           <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
           <span className="mono"><span className="dock__spp">{samples}</span><span className="dock__unit"> spp</span>{time && <span className="dock__time"> · {time}</span>}</span>
         </div>
-        {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
+        {phase === 'error' && native ? <button className="icon-btn icon-btn--bare" aria-label="Restart renderer" title="Restart renderer"
+          onClick={() => { void changeNativeDevice({}); }}><RotateCcw size={14} /></button> : phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
           title={paused ? 'Resume (Space)' : 'Pause accumulation (Space)'} data-active={paused || undefined}
           onClick={() => useViewer.setState({ paused: !paused })}>
           {paused ? <Play size={14} /> : <Pause size={14} />}

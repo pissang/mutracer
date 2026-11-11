@@ -20,6 +20,87 @@ pub(super) fn fixture() -> (Engine, Arc<Render>) {
     );
     (engine, render)
 }
+
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn execution_failure_is_reported_and_a_new_render_recovers() {
+    let _lock = crate::abi_test_lock();
+    for blocking in [false, true] {
+        let (engine, render) = fixture();
+        engine.set_scene(&crate::scene::tests::input()).unwrap();
+        engine.update().unwrap();
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink = errors.clone();
+        let _subscription = engine.on(move |event| {
+            if let EngineEvent::Error { message } = event {
+                sink.lock().unwrap().push(message.clone());
+            }
+        });
+        let other = render.clone();
+        let injection = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let state = other.engine().lock();
+                let context = state.renders[&other.id()].context();
+                if crate::context::inject_flight_failure(
+                    context,
+                    "controlled Metal execution failure",
+                ) {
+                    break;
+                }
+                drop(state);
+                assert!(std::time::Instant::now() < deadline, "no flight to inject");
+                std::thread::yield_now();
+            }
+        });
+        if blocking {
+            let error = render.converge(ConvergeOptions::new(2)).unwrap_err();
+            assert_eq!(error.status, Status::ContextFailed);
+        } else {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while render.refine().unwrap() != RenderStatus::Error {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        injection.join().unwrap();
+        assert_eq!(render.status(), RenderStatus::Error);
+        assert_eq!(render.samples(), 0, "failed flight credited samples");
+        assert!(
+            engine
+                .last_error()
+                .unwrap()
+                .contains("controlled Metal execution failure")
+        );
+        assert!(
+            errors
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.contains("controlled Metal execution failure"))
+        );
+        drop(render);
+        let recovered = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        recovered.converge(ConvergeOptions::new(2)).unwrap();
+        assert_eq!(recovered.status(), RenderStatus::Finished);
+        assert_eq!(recovered.samples(), 2);
+        assert!(
+            recovered
+                .read_pixels(PixelKind::Hdr)
+                .unwrap()
+                .data
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+}
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn backlog_compile_status_is_observable_on_actual_miss() {

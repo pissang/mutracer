@@ -2914,8 +2914,8 @@ impl Render {
         .flatten()
     }
     /// Renders exactly `options.samples` samples, blocking until they complete.
-    /// The engine lock is released between batches, so the progress callback may
-    /// use the API; refine on this render is rejected meanwhile.
+    /// Progress callbacks may use the API; refine on this render is rejected meanwhile.
+    /// Execution-error reporting and recovery follow [`Render::refine`].
     pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
         self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
@@ -2958,6 +2958,15 @@ impl Render {
         })?;
         let result = self.run_converge(&mut options, key, started, timeout, batch);
         let _ = self.with(|state, id| {
+            if let Err(e) = &result {
+                if e.status == Status::ContextFailed {
+                    state.report(e.message.clone());
+                    let render = state.renders.get_mut(&id).unwrap();
+                    render.error = true;
+                    render.output.invalidate();
+                    render.needs_capture = false;
+                }
+            }
             let render = state.renders.get_mut(&id).unwrap();
             render.busy = false;
             match &result {
@@ -2976,7 +2985,9 @@ impl Render {
                     }
                     // L0 keeps a cancelled batch that had already finished; the
                     // partial accumulation stays valid for the same key.
-                    if render.published.is_some() {
+                    if render.published.is_some()
+                        && !matches!(&result, Err(e) if e.status == Status::ContextFailed)
+                    {
                         render.samples =
                             context_blocking(|| context::info(render.context))?.samples;
                         render.needs_capture = render.samples > 0;

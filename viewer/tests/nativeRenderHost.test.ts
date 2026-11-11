@@ -6,6 +6,7 @@ import {hostMaterials,hostThreeGeometries} from '../src/engine/nativeResources';
 import {HEADER as H} from '../../native/src/layout';
 import { cameraWords,NativeSceneEncoder } from '../src/engine/nativeScene';
 import { NativeRenderHost, NativeRender } from '../src/engine/NativeRenderHost';
+import { changeNativeDevice } from '../src/engine/nativeCapabilities';
 vi.mock('../src/store', () => ({ useViewer: { subscribe: () => () => { }, setState: () => { }, getState: () => ({ nativeRayReconstruction: false }) } }));
 const hosts: NativeRenderHost[] = [];
 afterEach(() => { hosts.splice(0).forEach(h => h.dispose()); vi.unstubAllGlobals(); });
@@ -36,6 +37,25 @@ function setup(responses:Record<string,unknown>={}) {
     return { host, commands, uploads, gpu, setFailure: (fail: boolean) => { failCommit = fail; } };
 }
 describe('native Engine boundary', () => {
+    it('keeps context failure, sample counters and restart available through the native bridge', async () => {
+        const {host, commands} = setup();
+        const render = new NativeRender(host, {maxSamples: 256});
+        await host.init();
+        const errors = vi.fn();
+        const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+        host.on('error', errors);
+        const message = 'GPU execution failed: MTLCommandBufferErrorDomain code 2';
+        window.mutracerNativeReceive?.({event:'state', value:{phase:'error', targets:{[render.id]:{samples:32,aovSamples:0,width:724,height:744,status:'error',denoising:false}},diagnostics:{backend:'webgpu',adapterName:'Test native GPU',width:724,height:744,lastError:message}}});
+        window.mutracerNativeReceive?.({event:'error', value:message});
+        expect(host.phase).toBe('error');
+        expect(render.status).toBe('error');
+        expect(render.samples).toBe(32);
+        expect(host.getDiagnostics()?.lastError).toBe(message);
+        expect(errors).toHaveBeenCalledWith(expect.objectContaining({message}));
+        await changeNativeDevice({});
+        expect(commands.at(-1)).toMatchObject({command:'device',args:{}});
+        logged.mockRestore();
+    });
     it('commits a full scene once and sends camera-only edits without geometry or browser GPU work', async () => {
         const { host, commands, uploads, gpu } = setup();
         const render = new NativeRender(host, { maxSamples: 16 });

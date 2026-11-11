@@ -51,3 +51,7 @@ differ between the browser and native backends. See the
 If the interface crashes on macOS, the app restores the default scene and shows
 an error. Unsaved edits are lost, and the interrupted file is not reopened
 automatically.
+
+If GPU rendering fails, accumulation stops and the viewer shows the error.
+Use **Restart renderer** beside the sample count to restart the app. You can
+also choose Software traversal from the backend menu.

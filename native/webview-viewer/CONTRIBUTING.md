@@ -76,3 +76,36 @@ material-edit first-sample timing and `captureScene` for compact scene, resource
 reference and camera/settings replay artifacts. Rehydrate native references and
 apply the captured host camera before SDK replay. Captures and RSS sampling can
 perturb timings; use separate runs for acceptance benchmarks.
+
+## Metal HWRT hang regression
+
+`native/validation/hwrt-hang-regression.mjs` runs the captured chess scene at
+4096 spp three times and the SanMiguel window replay at 724×744/256 spp five
+times, each in a separate process. It also renders each input with Software,
+rejects nonfinite/black images and traversal fallback, and compares successful
+Hardware images against Software (relative RGB L1 below 0.1). It records wall
+time per sample, errors and HDR/PNG outputs. This is a manual regression, not
+part of hosted CI; successful runs alone do not establish a hang fix.
+
+Build the current AOT archive and embedded UI first, then set the ordinary
+`MUTRACER_AOT_ARCHIVE`, `MUTRACER_WEBVIEW_ASSETS` and viewer `CARGO_TARGET_DIR`.
+Provide external captures and assets:
+
+```sh
+MUTRACER_HWRT_CHESS=/absolute/chess/gltf.bin \
+MUTRACER_HWRT_SANMIGUEL=/absolute/sdk-window-replay/run1 \
+MUTRACER_HWRT_MODEL=/absolute/sanmiguel.glb \
+MUTRACER_HWRT_OUTPUT=/absolute/evidence/hwrt \
+node native/validation/hwrt-hang-regression.mjs
+```
+
+Pass `chess` or `sanmiguel` as the script's optional argument to run one scene.
+The SanMiguel directory contains `native-ui.bin` and `refs.json`; its descriptor
+must already include the captured host camera. Keep other GPU tests stopped.
+Metal execution-error checks are always active on these SDK-created devices;
+`MUTRACER_NATIVE_COMMAND_STATUS=1` adds per-buffer logs and can change timing.
+For focused isolation, run the ignored `hwrt_hang_replay` test directly with
+`MUTRACER_HWRT_SCENE`, optional `MUTRACER_HWRT_MODEL`/`MUTRACER_HWRT_REFS`,
+`MUTRACER_HWRT_OUTPUT`, `WIDTH`, `HEIGHT`, `SPP`, `BOUNCES`, `BATCH`, `CANDIDATES`,
+`BEVEL`, `WAVELENGTHS` and `BACKEND=Hardware|Software`. Unset values use the chess
+settings above, with eight samples per batch and Hardware traversal.

@@ -5,6 +5,8 @@ mod catalog;
 #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
 mod dlss;
 mod gpu;
+#[cfg(test)]
+mod hwrt_regression;
 mod initial_files;
 mod input;
 mod model_import;
@@ -86,6 +88,7 @@ struct Host {
     paused: bool,
     dirty: bool,
     phase: String,
+    render_failure: Option<String>,
     last_publish: Instant,
     publish_first_sample: bool,
     last_loop_frame: Instant,
@@ -417,6 +420,7 @@ impl Host {
             paused: false,
             dirty: true,
             phase: "preparing".into(),
+            render_failure: None,
             last_publish: Instant::now(),
             publish_first_sample: false,
             last_loop_frame: Instant::now(),
@@ -747,6 +751,9 @@ impl Host {
                 }
             }
             "settled" => {
+                if let Some(message) = &self.render_failure {
+                    bail!("{message}");
+                }
                 self.engine.update()?;
                 if let Some(loop_) = &self.render_loop {
                     ensure!(
@@ -1097,7 +1104,8 @@ impl Host {
     fn refill(&mut self) -> Result<bool> {
         // Stationary final batches do not need a FIFO surface acquisition. Input
         // and commits mark the host dirty or revoke the RenderLoop refill lease.
-        if !self.paused
+        if self.render_failure.is_none()
+            && !self.paused
             && self.export.is_none()
             && !self.dirty
             && self.last_loop_frame.elapsed() < Duration::from_millis(16)
@@ -1107,12 +1115,21 @@ impl Host {
                 .is_some_and(api::RenderLoop::needs_refill)
         {
             self.render_loop.as_mut().unwrap().refill()?;
+            if self.render_loop.as_ref().unwrap().status() == api::RenderLoopStatus::Error {
+                if let Some(message) = self.execution_failure() {
+                    self.fail_render(message)?;
+                    return Ok(true);
+                }
+            }
             self.profile_samples();
             return Ok(true);
         }
         Ok(false)
     }
     fn frame(&mut self) -> Result<()> {
+        if self.render_failure.is_some() {
+            return Ok(());
+        }
         self.last_loop_frame = Instant::now();
         if let Some(job) = self.export.as_ref().filter(|job| !job.completed) {
             let target = &self.targets[&job.target];
@@ -1131,6 +1148,11 @@ impl Host {
         } else if self.export.is_none() && !self.paused {
             if let Some(render_loop) = &mut self.render_loop {
                 self.phase = format!("{:?}", render_loop.tick()?).to_lowercase();
+            }
+        }
+        if self.phase == "error" {
+            if let Some(message) = self.execution_failure() {
+                return self.fail_render(message);
             }
         }
         self.profile_samples();
@@ -1227,7 +1249,32 @@ impl Host {
         }
         Ok(())
     }
+    fn execution_failure(&self) -> Option<String> {
+        self.engine.last_error().filter(|message| {
+            message.starts_with("GPU execution failed") || message.starts_with("GPU device lost")
+        })
+    }
+    fn fail_render(&mut self, message: String) -> Result<()> {
+        if self.render_failure.is_some() {
+            return Ok(());
+        }
+        eprintln!("Native rendering failed: {message}");
+        self.render_failure = Some(message.clone());
+        self.phase = "error".into();
+        self.dirty = false;
+        if let Some(job) = self.export.take() {
+            self.send(json!({"id":job.request["id"],"error":message}))?;
+        }
+        // Keep the WebView alive so its device command can restart the process
+        // with a fresh device. Never compose or credit another failed GPU frame.
+        let targets = self.targets.iter().map(|(id, r)| (id.to_string(), json!({"samples":r.samples(),"aovSamples":r.aov_samples_rendered(),"width":r.width(),"height":r.height(),"status":"error","denoising":false}))).collect::<serde_json::Map<_,_>>();
+        self.event("state", json!({"phase":"error","targets":targets,"diagnostics":{"backend":"webgpu","adapterName":self.engine.info().adapter_name,"width":self.gpu.config.width,"height":self.gpu.config.height,"lastError":message}}))?;
+        self.event("error", json!(message))
+    }
     fn needs_tick(&self) -> bool {
+        if self.render_failure.is_some() {
+            return false;
+        }
         self.dirty
             || self.last_surface.is_none()
             || self.export.as_ref().is_some_and(|job| !job.completed)
@@ -1392,8 +1439,10 @@ impl ApplicationHandler<Message> for App {
             _ => Ok(()),
         };
         if let Err(error) = result {
-            self.error = Some(format!("{error:#}"));
-            e.exit();
+            if let Err(report) = host.fail_render(format!("{error:#}")) {
+                self.error = Some(format!("{report:#}"));
+                e.exit();
+            }
         }
     }
     fn new_events(&mut self, e: &ActiveEventLoop, cause: StartCause) {
@@ -1405,8 +1454,10 @@ impl ApplicationHandler<Message> for App {
                     Ok(true) => {}
                     Ok(false) => host.window.request_redraw(),
                     Err(error) => {
-                        self.error = Some(format!("{error:#}"));
-                        e.exit();
+                        if let Err(report) = host.fail_render(format!("{error:#}")) {
+                            self.error = Some(format!("{report:#}"));
+                            e.exit();
+                        }
                     }
                 }
             }

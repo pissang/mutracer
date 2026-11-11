@@ -50,14 +50,16 @@ impl Gpu {
             } else {
                 wgpu::Features::empty()
             };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = mutracer_native::scene_api::viewer_support::request_device(
+            &adapter,
+            &wgpu::DeviceDescriptor {
                 label: Some("MuTracer WebView"),
                 required_limits: adapter.limits(),
                 required_features: features,
                 experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
                 ..Default::default()
-            }))?;
+            },
+        )?;
         Self::from_parts(window, instance, adapter, device, queue, surface)
     }
     #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
