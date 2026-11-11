@@ -35,6 +35,10 @@ mod easu;
 mod engine;
 #[cfg(target_os = "macos")]
 pub mod metal;
+#[cfg(any(target_os = "windows", target_os = "linux", feature = "vulkan-interop"))]
+pub mod vulkan_export;
+#[cfg(target_os = "windows")]
+pub mod d3d12_export;
 mod post_process;
 mod render;
 mod render_loop;

@@ -1,9 +1,25 @@
 import {execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {resolve} from 'node:path';
+import {delimiter, resolve} from 'node:path';
 import {expect, it} from 'vitest';
 import {cmakeDependencies, sdkCmakeConfig, sdkVersion, sdkVersionHeader} from '../../native/scripts/sdk-cmake.mjs';
+import {findTool} from '../../native/scripts/sdk-cmake-consumer.mjs';
+
+it('finds a CMake executable after an SDK lib/cmake directory on PATH', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'mutracer tools '));
+  try {
+    const sdkLib = resolve(directory, 'sdk/lib'), tools = resolve(directory, 'tools');
+    mkdirSync(resolve(sdkLib, 'cmake'), {recursive: true});
+    mkdirSync(tools);
+    const filename = process.platform === 'win32' ? 'cmake.exe' : 'cmake';
+    writeFileSync(resolve(tools, filename), 'test executable fixture');
+    expect(findTool('cmake', {PATH: [sdkLib, tools].join(delimiter), PATHEXT: '.exe'}))
+      .toBe(resolve(tools, filename));
+  } finally {
+    rmSync(directory, {recursive: true, force: true});
+  }
+});
 
 it('uses the native package version rather than a dependency version', () => {
   expect(sdkVersion('[package]\nname = "sdk"\nversion = "0.0.0"\n\n[dependencies]\nversion = "3.2.1"\n'))
@@ -24,7 +40,7 @@ it.each([
   {platform: 'linux', shared: 'libmutracer.so', static_: 'libmutracer.a',
     libraries: ['-lgcc_s', '-lutil', '-lrt', '-lpthread', '-lm', '-ldl', '-lc'], expected: '-lgcc_s;-lutil;-lrt;-lpthread;-lm;-ldl;-lc'},
   {platform: 'win32', shared: 'mutracer.dll', static_: 'mutracer.lib',
-    libraries: ['kernel32.lib', 'C:\\SDK path\\runtime.lib', 'kernel32.lib'], expected: 'kernel32.lib;runtime.lib;kernel32.lib'},
+    libraries: ['msvcrt.lib', 'oldnames.lib', 'kernel32.lib', 'C:\\SDK path\\runtime.lib', 'kernel32.lib'], expected: 'msvcrt.lib;oldnames.lib;kernel32.lib;runtime.lib;kernel32.lib'},
 ])('exposes relocatable imported targets for $platform', ({platform, shared, static_, libraries, expected}) => {
   const directory = mkdtempSync(resolve(tmpdir(), 'mutracer cmake '));
   try {

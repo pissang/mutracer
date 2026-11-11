@@ -26,9 +26,15 @@ std::string Text(JsValue const &v, std::string fallback = "") {
   return v.IsString() ? v.GetString() : fallback;
 }
 JsValue const &Schema() {
-  static JsValue schema = JsParseString(
+  static JsValue schema = [] {
+    static char const *const chunks[] = {
 #include "materialGraphSchema.inc"
-  );
+    };
+    std::string json;
+    for (auto chunk : chunks)
+      json += chunk;
+    return JsParseString(json);
+  }();
   return schema;
 }
 uint32_t Id(char const *group, std::string const &name) {

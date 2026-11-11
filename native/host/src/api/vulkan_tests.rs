@@ -2,6 +2,7 @@ use super::*;
 use crate::scene_api::{Environment, Geometry, Mesh, OpenPbrMaterial, Scene};
 use glam::{Mat4, Vec3};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 extern "C" fn retired(user: *mut c_void) {
     unsafe { &*user.cast::<AtomicU32>() }.fetch_add(1, Ordering::Relaxed);
 }
@@ -48,6 +49,17 @@ extern "C" fn clear_pass(context: *const PassContext, user: *mut c_void) -> i32 
 #[test]
 #[ignore = "requires a real Vulkan GPU (macOS: vulkan-interop feature + MUTRACER_TEST_VULKAN_LIBRARY)"]
 fn external_vulkan_device_images_and_native_post_process() {
+    external_vulkan_device_images_and_native_post_process_impl(false);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires a real Windows Vulkan GPU with two queues"]
+fn external_vulkan_device_images_and_native_post_process_two_queue() {
+    external_vulkan_device_images_and_native_post_process_impl(true);
+}
+
+fn external_vulkan_device_images_and_native_post_process_impl(two_queue: bool) {
     let _lock = crate::abi_test_lock();
     let instance_retired = Box::new(AtomicU32::new(0));
     let device_retired = Box::new(AtomicU32::new(0));
@@ -61,7 +73,7 @@ fn external_vulkan_device_images_and_native_post_process() {
     let version = unsafe { entry.try_enumerate_instance_version() }
         .unwrap()
         .unwrap_or(vk::API_VERSION_1_0)
-        .min(vk::API_VERSION_1_2);
+        .min(vk::API_VERSION_1_3);
     let mut error = [0; 2048];
     let get_proc = Some(entry.static_fn().get_instance_proc_addr);
     let mut count = 0;
@@ -112,16 +124,37 @@ fn external_vulkan_device_images_and_native_post_process() {
         )
     }
     .unwrap();
-    let physical = unsafe { instance.enumerate_physical_devices() }
-        .unwrap()
-        .into_iter()
+    let physical_devices = unsafe { instance.enumerate_physical_devices() }.unwrap();
+    let has_graphics_compute_queue = |p: vk::PhysicalDevice| {
+        unsafe { instance.get_physical_device_queue_family_properties(p) }
+            .iter()
+            .any(|q| {
+                (!two_queue || q.queue_count >= 2)
+                    && q.queue_flags
+                        .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+            })
+    };
+    let physical = physical_devices
+        .iter()
+        .copied()
         .find(|p| {
-            matches!(
-                unsafe { instance.get_physical_device_properties(*p) }.device_type,
-                vk::PhysicalDeviceType::DISCRETE_GPU | vk::PhysicalDeviceType::INTEGRATED_GPU
-            )
+            unsafe { instance.get_physical_device_properties(*p) }.device_type
+                == vk::PhysicalDeviceType::DISCRETE_GPU
+                && has_graphics_compute_queue(*p)
         })
-        .expect("hardware Vulkan adapter");
+        .or_else(|| {
+            physical_devices.iter().copied().find(|p| {
+                matches!(
+                    unsafe { instance.get_physical_device_properties(*p) }.device_type,
+                    vk::PhysicalDeviceType::DISCRETE_GPU | vk::PhysicalDeviceType::INTEGRATED_GPU
+                ) && has_graphics_compute_queue(*p)
+            })
+        })
+        .expect(if two_queue {
+            "hardware Vulkan adapter with two graphics/compute queues"
+        } else {
+            "hardware Vulkan adapter with a graphics/compute queue"
+        });
     let properties = unsafe { instance.get_physical_device_properties(physical) };
     println!(
         "Vulkan host: {}",
@@ -135,6 +168,9 @@ fn external_vulkan_device_images_and_native_post_process() {
                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
         })
         .unwrap() as u32;
+    if two_queue {
+        assert!(queues[family as usize].queue_count >= 2);
+    }
     let host = HostDesc {
         struct_size: 64,
         api_version: version,
@@ -166,10 +202,11 @@ fn external_vulkan_device_images_and_native_post_process() {
         &error,
     );
     let requirements: Requirements = unsafe { requirements.assume_init() };
-    let priorities = [1.];
-    let queue_infos = [vk::DeviceQueueCreateInfo::default()
+    let priorities = [1., 1.];
+    let mut queue_infos = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(family)
         .queue_priorities(&priorities)];
+    queue_infos[0].queue_count = if two_queue { 2 } else { 1 };
     let names = unsafe {
         std::slice::from_raw_parts(requirements.extensions, requirements.extension_count)
     };
@@ -182,7 +219,7 @@ fn external_vulkan_device_images_and_native_post_process() {
     let mut imported = DeviceDesc {
         struct_size: 40,
         queue_family: u32::MAX,
-        queue_index: 0,
+        queue_index: if two_queue { 1 } else { 0 },
         reserved: 0,
         device: device.handle(),
         retired: Some(retired),
@@ -237,6 +274,14 @@ fn external_vulkan_device_images_and_native_post_process() {
     assert_eq!(info.instance, instance.handle());
     assert_eq!(info.physical_device, physical);
     assert_eq!(info.queue_family, family);
+    let host_queue = unsafe { device.get_device_queue(family, 0) };
+    if two_queue {
+        assert_ne!(host_queue, info.queue);
+        println!("Vulkan two-queue export: library queue index=1, host queue index=0");
+    } else {
+        assert_eq!(host_queue, info.queue);
+        println!("Vulkan single-queue export: library and host queue index=0");
+    }
     let mut queue_lease = 0;
     ok(
         unsafe {
@@ -304,6 +349,522 @@ fn external_vulkan_device_images_and_native_post_process() {
         Status::InvalidState as i32
     );
     render.converge(ConvergeOptions::new(1)).unwrap();
+    let cpu_begin = Instant::now();
+    let cpu_hdr_reference = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let cpu_depth_reference = render.read_pixels(PixelKind::Depth).unwrap().data;
+    println!(
+        "Vulkan CPU read_pixels same scene: {:.3} ms",
+        cpu_begin.elapsed().as_secs_f64() * 1000.0
+    );
+
+    // Exercise the new foreign-image export path on the imported device. The
+    // target is host-owned and the done semaphore is a real Vulkan timeline;
+    // only the host queue performs the independent copy/readback below.
+    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
+    let export_image = unsafe {
+        device
+            .create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .extent(vk::Extent3D {
+                        width: 8,
+                        height: 6,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(
+                        vk::ImageUsageFlags::STORAGE
+                            | vk::ImageUsageFlags::SAMPLED
+                            | vk::ImageUsageFlags::TRANSFER_SRC,
+                    )
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+                None,
+            )
+            .unwrap()
+    };
+    let depth_image = unsafe {
+        device
+            .create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::R32_SFLOAT)
+                    .extent(vk::Extent3D {
+                        width: 8,
+                        height: 6,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(
+                        vk::ImageUsageFlags::STORAGE
+                            | vk::ImageUsageFlags::SAMPLED
+                            | vk::ImageUsageFlags::TRANSFER_SRC,
+                    )
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+                None,
+            )
+            .unwrap()
+    };
+    let export_requirements = unsafe { device.get_image_memory_requirements(export_image) };
+    let export_memory_type = memory
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, t)| {
+            export_requirements.memory_type_bits & (1 << i) != 0
+                && t.property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        })
+        .unwrap() as u32;
+    let export_memory = unsafe {
+        device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(export_requirements.size)
+                    .memory_type_index(export_memory_type),
+                None,
+            )
+            .unwrap()
+    };
+    unsafe { device.bind_image_memory(export_image, export_memory, 0) }.unwrap();
+    let depth_requirements = unsafe { device.get_image_memory_requirements(depth_image) };
+    let depth_memory_type = memory
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, t)| {
+            depth_requirements.memory_type_bits & (1 << i) != 0
+                && t.property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        })
+        .unwrap() as u32;
+    let depth_memory = unsafe {
+        device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(depth_requirements.size)
+                    .memory_type_index(depth_memory_type),
+                None,
+            )
+            .unwrap()
+    };
+    unsafe { device.bind_image_memory(depth_image, depth_memory, 0) }.unwrap();
+    let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let export_ready = unsafe {
+        device
+            .create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info),
+                None,
+            )
+            .unwrap()
+    };
+    let mut done_timeline_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let export_done = unsafe {
+        device
+            .create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut done_timeline_info),
+                None,
+            )
+            .unwrap()
+    };
+    let imported_export = unsafe {
+        engine
+            .import_vulkan_image(
+                export_image,
+                vk::Format::R32G32B32A32_SFLOAT,
+                8,
+                6,
+                vk::ImageLayout::UNDEFINED,
+            )
+            .unwrap()
+    };
+    let imported_depth = unsafe {
+        engine
+            .import_vulkan_image(
+                depth_image,
+                vk::Format::R32_SFLOAT,
+                8,
+                6,
+                vk::ImageLayout::UNDEFINED,
+            )
+            .unwrap()
+    };
+    let imported_ready = unsafe { engine.import_vulkan_timeline(export_ready) }.unwrap();
+    let imported_done = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
+    let imported_done_duplicate = unsafe { engine.import_vulkan_timeline(export_done) }.unwrap();
+    let export_begin = Instant::now();
+    let export_sequence = render
+        .export_vulkan(
+            &[
+                (imported_export.clone(), 0, 0),
+                (imported_depth.clone(), 1, 0),
+            ],
+            None,
+            (&imported_done, 1),
+        )
+        .unwrap();
+    // A second wrapper for the same native semaphore must share the canonical
+    // reservation state: reusing value 1 is rejected before any queue submit.
+    assert!(render
+        .export_vulkan(
+            &[(imported_export.clone(), 0, 0)],
+            None,
+            (&imported_done_duplicate, 1),
+        )
+        .is_err());
+    let wait_info = vk::SemaphoreWaitInfo::default()
+        .semaphores(std::slice::from_ref(&export_done))
+        .values(&[1]);
+    unsafe { device.wait_semaphores(&wait_info, u64::MAX) }.unwrap();
+    assert!(engine.poll_vulkan_exports(export_sequence).unwrap());
+    println!(
+        "Vulkan export submit+timeline: {:.3} ms",
+        export_begin.elapsed().as_secs_f64() * 1000.0
+    );
+    let exported_reference = cpu_hdr_reference;
+    let exported_depth_reference = cpu_depth_reference;
+    let export_buffer = unsafe {
+        device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size((8 * 6 * 16) as u64)
+                    .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+            .unwrap()
+    };
+    let export_buffer_requirements =
+        unsafe { device.get_buffer_memory_requirements(export_buffer) };
+    let export_buffer_type = memory
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, t)| {
+            export_buffer_requirements.memory_type_bits & (1 << i) != 0
+                && t.property_flags.contains(
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+        })
+        .unwrap() as u32;
+    let export_buffer_memory = unsafe {
+        device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(export_buffer_requirements.size)
+                    .memory_type_index(export_buffer_type),
+                None,
+            )
+            .unwrap()
+    };
+    unsafe { device.bind_buffer_memory(export_buffer, export_buffer_memory, 0) }.unwrap();
+    let export_pool = unsafe {
+        device
+            .create_command_pool(
+                &vk::CommandPoolCreateInfo::default().queue_family_index(family),
+                None,
+            )
+            .unwrap()
+    };
+    let export_range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let export_command = unsafe {
+        device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(export_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .unwrap()[0]
+    };
+    unsafe {
+        device
+            .begin_command_buffer(export_command, &vk::CommandBufferBeginInfo::default())
+            .unwrap();
+        device.cmd_pipeline_barrier(
+            export_command,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .image(export_image)
+                .subresource_range(export_range)
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+        );
+        device.cmd_copy_image_to_buffer(
+            export_command,
+            export_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            export_buffer,
+            &[vk::BufferImageCopy::default()
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: 8,
+                    height: 6,
+                    depth: 1,
+                })],
+        );
+        device.cmd_pipeline_barrier(
+            export_command,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .image(export_image)
+                .subresource_range(export_range)
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)],
+        );
+        device.end_command_buffer(export_command).unwrap();
+        let wait_values = [1_u64];
+        let signal_values = [2_u64];
+        let mut timeline_submit = vk::TimelineSemaphoreSubmitInfo::default()
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values);
+        let host_commands = [export_command];
+        let submit = vk::SubmitInfo::default()
+            .command_buffers(&host_commands)
+            .wait_semaphores(std::slice::from_ref(&export_done))
+            .wait_dst_stage_mask(&[vk::PipelineStageFlags::TRANSFER])
+            .signal_semaphores(std::slice::from_ref(&export_ready))
+            .push_next(&mut timeline_submit);
+        let host_fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .unwrap();
+        let mut host_copy_lease = 0;
+        if !two_queue {
+            ok(
+                unsafe {
+                    mt_engine_vulkan_acquire_queue(
+                        handle,
+                        &mut host_copy_lease,
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                },
+                &error,
+            );
+        }
+        device
+            .queue_submit(host_queue, &[submit], host_fence)
+            .unwrap();
+        device
+            .wait_for_fences(&[host_fence], true, 10_000_000_000)
+            .unwrap();
+        device.destroy_fence(host_fence, None);
+        if !two_queue {
+            ok(
+                mt_vk_lease_release(host_copy_lease, error.as_mut_ptr(), error.len()),
+                &error,
+            );
+        }
+    }
+    println!("Vulkan two-queue host copy: queue0 returned GENERAL and signaled ready=2");
+    // Reuse the same imported image and both timelines for a second accepted
+    // export only after queue0 has published ready=2; this is the actual
+    // cross-queue hand-off rather than a CPU-side signal.
+    let export_sequence2 = render
+        .export_vulkan(
+            &[(imported_depth.clone(), 1, 0)],
+            Some((&imported_ready, 2)),
+            (&imported_done, 2),
+        )
+        .unwrap();
+    println!("Vulkan two-queue export: accepted ready=2 done=2");
+    let wait_info2 = vk::SemaphoreWaitInfo::default()
+        .semaphores(std::slice::from_ref(&export_done))
+        .values(&[2]);
+    unsafe { device.wait_semaphores(&wait_info2, u64::MAX) }.unwrap();
+    assert!(engine.poll_vulkan_exports(export_sequence2).unwrap());
+    let export_mapped = unsafe {
+        device
+            .map_memory(
+                export_buffer_memory,
+                0,
+                vk::WHOLE_SIZE,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap()
+    };
+    let exported_pixels = unsafe {
+        std::slice::from_raw_parts(export_mapped.cast::<f32>(), exported_reference.len())
+    };
+    assert_eq!(exported_pixels, exported_reference.as_slice());
+    unsafe {
+        device.unmap_memory(export_buffer_memory);
+    }
+    // The depth AOV uses a single-channel R32_SFLOAT storage image.  Read it
+    // back through the host queue as well, so the test covers the format
+    // conversion path independently of the four-channel HDR image.
+    let depth_command = unsafe {
+        device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(export_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .unwrap()[0]
+    };
+    unsafe {
+        device
+            .begin_command_buffer(depth_command, &vk::CommandBufferBeginInfo::default())
+            .unwrap();
+        device.cmd_pipeline_barrier(
+            depth_command,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .image(depth_image)
+                .subresource_range(export_range)
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+        );
+        device.cmd_copy_image_to_buffer(
+            depth_command,
+            depth_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            export_buffer,
+            &[vk::BufferImageCopy::default()
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: 8,
+                    height: 6,
+                    depth: 1,
+                })],
+        );
+        device.cmd_pipeline_barrier(
+            depth_command,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .image(depth_image)
+                .subresource_range(export_range)
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)],
+        );
+        device.end_command_buffer(depth_command).unwrap();
+        let depth_fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .unwrap();
+        let mut depth_lease = 0;
+        if !two_queue {
+            ok(
+                unsafe {
+                    mt_engine_vulkan_acquire_queue(
+                        handle,
+                        &mut depth_lease,
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                },
+                &error,
+            );
+        }
+        device
+            .queue_submit(
+                host_queue,
+                &[vk::SubmitInfo::default().command_buffers(&[depth_command])],
+                depth_fence,
+            )
+            .unwrap();
+        device
+            .wait_for_fences(&[depth_fence], true, 10_000_000_000)
+            .unwrap();
+        device.destroy_fence(depth_fence, None);
+        if !two_queue {
+            ok(
+                mt_vk_lease_release(depth_lease, error.as_mut_ptr(), error.len()),
+                &error,
+            );
+        }
+    }
+    let depth_mapped = unsafe {
+        device
+            .map_memory(
+                export_buffer_memory,
+                0,
+                vk::WHOLE_SIZE,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap()
+    };
+    let exported_depth = unsafe { std::slice::from_raw_parts(depth_mapped.cast::<f32>(), 8 * 6) };
+    for (index, value) in exported_depth.iter().enumerate() {
+        assert_eq!(*value, exported_depth_reference[index * 4]);
+    }
+    unsafe {
+        device.unmap_memory(export_buffer_memory);
+        device.destroy_command_pool(export_pool, None);
+        device.destroy_buffer(export_buffer, None);
+        device.free_memory(export_buffer_memory, None);
+        device.destroy_semaphore(export_ready, None);
+        device.destroy_semaphore(export_done, None);
+        device.destroy_image(export_image, None);
+        device.free_memory(export_memory, None);
+        device.destroy_image(depth_image, None);
+        device.free_memory(depth_memory, None);
+    }
+    drop(imported_export);
+    drop(imported_depth);
+    drop(imported_ready);
+    drop(imported_done);
+    drop(imported_done_duplicate);
     let before = engine.inner.gpu.queue.readback_count();
     let mut image = std::mem::MaybeUninit::uninit();
     ok(
@@ -373,7 +934,6 @@ fn external_vulkan_device_images_and_native_post_process() {
     }
     .unwrap();
     let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
     let memory_type = memory
         .memory_types_as_slice()
         .iter()
@@ -494,14 +1054,12 @@ fn external_vulkan_device_images_and_native_post_process() {
     assert_eq!(engine.inner.gpu.queue.readback_count(), before);
     let ids = render.read_pixels(PixelKind::Id).unwrap();
     assert!(ids.id_data.unwrap().iter().all(|v| *v == u32::MAX));
-    assert!(
-        render
-            .read_pixels(PixelKind::Depth)
-            .unwrap()
-            .data
-            .iter()
-            .all(|v| *v == 0.)
-    );
+    assert!(render
+        .read_pixels(PixelKind::Depth)
+        .unwrap()
+        .data
+        .iter()
+        .all(|v| *v == 0.));
     render
         .set_settings(RenderSettings {
             max_samples: 1,

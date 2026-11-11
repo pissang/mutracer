@@ -12,7 +12,7 @@ C ABI can change between versions.
 | --- | --- | --- |
 | macOS arm64 (14.0+) | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
-| Windows x64 | DX12 or Vulkan | MSVC build; GPU behavior unverified; viewer from CI artifacts only |
+| Windows x64 | DX12 or Vulkan | MSVC SDK, Software/HWRT and viewer verified on RTX 4060; same-device GPU export available; strict image-parity issues remain |
 
 [Built-in denoising](docs/denoising.md) supports oidn-webgpu on the rendering GPU
 and optional OIDN with a caller-supplied runtime.
@@ -30,6 +30,7 @@ MaterialX, environment, animation and export controls. See
 | Build, edit or import a scene | `scene_api::Scene` | `mutracer-scene-api.h` | [Scenes](docs/scene.md), [glTF](docs/gltf.md) |
 | Render offline or interactively | `api::{Engine, Render, RenderLoop}` | `mutracer-engine.h` | [Engine](docs/engine.md) |
 | Tone map, export, add effects, present to a window | `api::Display` | `mutracer-engine.h` | [Display](docs/display.md) |
+| Share native GPU output | `api::{metal, vulkan_export, d3d12_export}` | `mutracer-gpu.h` and platform headers | [Metal](docs/metal.md), [Vulkan](docs/vulkan.md), [D3D12](docs/d3d12.md) |
 | Denoise renders or your own images | `Render::set_denoiser`, `CustomDenoiser` | `mutracer-engine.h`, `mutracer-denoise.h` | [Denoising](docs/denoising.md) |
 | One low-level accumulation with polling jobs | — | `mutracer-context.h` | [Context](docs/context.md) |
 | Read or write binary scene descriptors | `Scene::descriptor` | `mutracer-scene.h`, `mutracer-scene-builder.h` | [Scene format](docs/scene-format.md) |
@@ -206,6 +207,8 @@ int main(void) {
 | [examples/job-host.c](examples/job-host.c) | Polling jobs and cancellation |
 | [examples/denoise-host.c](examples/denoise-host.c) | Standalone OIDN denoiser |
 | [examples/window-host.c](examples/window-host.c) | C window presentation (macOS glue in `window-appkit.m`) |
+| [examples/vulkan-export-host.c](examples/vulkan-export-host.c) | Vulkan same-device image/timeline export host harness |
+| [examples/d3d12-export-host.c](examples/d3d12-export-host.c) | D3D12 same-device shared-resource/fence export host harness |
 | [webview-viewer/examples/surface.rs](webview-viewer/examples/surface.rs) | Rust window and HDR presentation |
 
 `npm run native:engine`, `native:context` and `native:jobs` build the C hosts and

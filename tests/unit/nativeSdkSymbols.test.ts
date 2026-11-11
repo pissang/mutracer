@@ -1,6 +1,16 @@
 import {expect, it} from 'vitest';
 import {publicApiSymbols, checkSdkExports, nativeLinkArguments} from '../../native/scripts/sdk-symbols.mjs';
 
+it('normalizes only the MSVC default libraries compatible with /MD consumers', () => {
+  expect(nativeLinkArguments('note: native-static-libs: /defaultlib:msvcrt /DEFAULTLIB:OLDNAMES.lib kernel32.lib\n', 'win32'))
+    .toEqual(['msvcrt.lib', 'oldnames.lib', 'kernel32.lib']);
+  for (const value of ['libcmt', 'msvcrtd', 'C:\\private\\msvcrt.lib', 'other']) {
+    expect(() => nativeLinkArguments(`note: native-static-libs: /defaultlib:${value}\n`, 'win32'))
+      .toThrow('Unsupported native SDK default library');
+  }
+  expect(nativeLinkArguments('note: native-static-libs: -lc -lm\n', 'linux')).toEqual(['-lc', '-lm']);
+});
+
 it('uses declarations, excluding comments, callback types and inline helpers', () => {
   expect(publicApiSymbols([`
     /* int32_t mt_private(void); */

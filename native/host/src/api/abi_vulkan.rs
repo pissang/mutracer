@@ -462,6 +462,7 @@ mod platform {
             options,
             Some(Arc::new(Default::default())),
         );
+        *engine.inner.vulkan.lock().unwrap() = Some(crate::api::vulkan_export::State::new());
         let loss = engine.device_loss_notifier();
         device.set_device_lost_callback(move |reason, message| {
             loss.notify(format!("{reason:?}: {message}"))

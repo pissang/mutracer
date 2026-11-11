@@ -19,8 +19,22 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#ifdef _WIN32
+#include "pxr/imaging/glf/glContext.h"
+#endif
 PXR_NAMESPACE_OPEN_SCOPE
 namespace mtHydra {
+static mt_status CreateFallbackEngine(mt_engine_options const *options,
+                                      mt_engine *engine, char *error,
+                                      size_t capacity) {
+#ifdef _WIN32
+  // wgpu's adapter discovery can bind an EGL context on this thread. Preserve
+  // the HgiGL host's WGL binding before returning to Hydra's AOV upload task.
+  GlfGLContextScopeHolder context(GlfGLContext::GetCurrentGLContext());
+#endif
+  auto status = mt_engine_create(options, engine, error, capacity);
+  return status;
+}
 double Milliseconds(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start)
       .count();
@@ -198,6 +212,9 @@ void Param::Cancel() {
   }
 }
 Param::~Param() {
+#ifdef _WIN32
+  GlfGLContextScopeHolder context(GlfGLContext::GetCurrentGLContext());
+#endif
   gpu.reset();
   char e[1024] = {};
   if (engine)
@@ -382,7 +399,7 @@ bool Param::Apply(int requestedBackend) {
     }
     if (!gpu) {
       Warn(std::string("CPU output: ") + e);
-      Check(mt_engine_create(&options, &engine, e, sizeof e), e);
+      Check(CreateFallbackEngine(&options, &engine, e, sizeof e), e);
     }
     backend = requestedBackend;
     Check(mt_engine_set_callback(

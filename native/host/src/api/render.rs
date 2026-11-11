@@ -1663,8 +1663,7 @@ fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
     }
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
-    let query =
-        context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
+    let query = context_result(context::aov_query(render.context))?;
     let mut layout = aov_layout(render, mask);
     if !layout.display {
         layout.size = query.size();
@@ -1739,7 +1738,11 @@ fn capture(render: &mut RenderState) -> Result<bool> {
     if !render.needs_capture || render.refine_options.defer_resolve {
         return Ok(true);
     }
-    match context::capture_display_filtered(render.context, &mut render.capture, render.jnlm) {
+    match context_result(context::capture_display_filtered(
+        render.context,
+        &mut render.capture,
+        render.jnlm,
+    )) {
         Ok(true) => {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
@@ -1760,7 +1763,7 @@ fn capture(render: &mut RenderState) -> Result<bool> {
             Ok(true)
         }
         Ok(false) => Ok(false),
-        Err(message) => Err(error(Status::Error, message)),
+        Err(error) => Err(error),
     }
 }
 fn submit(render: &mut RenderState, count: u32) -> Result<()> {
@@ -3159,7 +3162,6 @@ impl Render {
         }
         Ok(ConvergeResult { samples: target })
     }
-    #[cfg(target_os = "macos")]
     pub(super) fn metal_hdr_inputs(&self) -> Result<([wgpu::Buffer; 3], [u32; 4])> {
         self.with(|state, id| {
             if !readiness(state, id).complete {
@@ -3222,7 +3224,7 @@ impl Render {
     /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps
     /// raw per-sample averages. HDR temporarily reads 48 GPU bytes per pixel.
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
-        self.with(|state, id| {
+        let result = self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
             for event in drain(render)? {
                 state.sample_events.push((id, event));
@@ -3306,7 +3308,14 @@ impl Render {
                 data: flip_rows(&data, width, height),
                 id_data: None,
             })
-        })
+        });
+        #[cfg(test)]
+        if kind == PixelKind::Hdr {
+            if let Ok(image) = &result {
+                super::test_support::capture_hdr_readback(self.id, image);
+            }
+        }
+        result
     }
     /// Accounts a finished batch and captures it without submitting another, so a
     /// host can present the last frame before committing new input. Returns

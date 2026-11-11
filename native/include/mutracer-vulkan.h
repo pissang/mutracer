@@ -2,6 +2,7 @@
 #define MUTRACER_VULKAN_H
 #include <vulkan/vulkan.h>
 #include "mutracer-engine.h"
+#include "mutracer-gpu.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,9 +29,37 @@ typedef void (*mt_vk_retired_callback)(void *user);
 typedef uint64_t mt_vk_device_plan;
 typedef uint64_t mt_vk_lease;
 typedef uint64_t mt_vk_post_process;
+/* Host-owned GPU export records. The VkImage and timeline semaphore are not
+ * destroyed by MuTracer. They must have been created by mt_vk_device_desc's
+ * VkDevice. The image is 2D, one mip/layer/sample and storage-capable. */
+typedef struct mt_vk_gpu_image_desc {
+  uint32_t struct_size, reserved;
+  const void *next;
+  VkImage image;
+  VkFormat format;
+  uint32_t width, height;
+  uint32_t initial_layout;
+} mt_vk_gpu_image_desc;
+MT_VK_LAYOUT(mt_vk_gpu_image_desc, 40);
+typedef struct mt_vk_gpu_timeline_desc {
+  uint32_t struct_size, reserved;
+  const void *next;
+  VkSemaphore semaphore;
+} mt_vk_gpu_timeline_desc;
+MT_VK_LAYOUT(mt_vk_gpu_timeline_desc, 24);
+/* Imports retain only a wgpu wrapper; the host owns image memory and semaphore.
+ * The generic mt_render_export_gpu/mt_engine_gpu_poll functions then use the
+ * imported records with Vulkan timeline waits/signals on the library queue. */
+int32_t mt_engine_import_vulkan_image(mt_engine engine, const mt_vk_gpu_image_desc *desc,
+  mt_gpu_image *output, char *error, size_t error_capacity);
+int32_t mt_engine_import_vulkan_timeline(mt_engine engine, const mt_vk_gpu_timeline_desc *desc,
+  mt_gpu_timeline *output, char *error, size_t error_capacity);
 /* Query before vkCreateInstance. Enable every returned extension. NULL/0 queries
  * count; too little capacity returns BUFFER_TOO_SMALL without array writes.
- * Strings are process-lifetime, immutable. api_version must be >= Vulkan 1.1.
+ * Strings are process-lifetime, immutable. api_version must be >= Vulkan 1.1
+ * for enumeration; the current wgpu 30 shader path emits SPIR-V 1.6 and
+ * therefore requires a Vulkan 1.3 host/device for validated operation. Lower
+ * version host paths are not claimed by this interop contract.
  * A portability instance must also set ENUMERATE_PORTABILITY_BIT_KHR. */
 int32_t mt_vk_instance_extensions(PFN_vkGetInstanceProcAddr get_proc, uint32_t api_version,
   const char **output, size_t capacity, size_t *required, char *error, size_t error_capacity);
@@ -68,8 +97,11 @@ int32_t mt_vk_device_plan_destroy(mt_vk_device_plan plan, char *error, size_t ca
  * until their retirement callbacks run, which can be later than engine/plan
  * destruction. Destroy native devices before their instance. Import each native
  * device into only one engine (use multiple renders on that engine). No Vulkan
- * allocation callbacks are supported. Host must serialize its own queue calls
- * through queue/image acquisition below; do not submit directly at other times.
+ * allocation callbacks are supported. Operations on the library queue and
+ * library-owned render images must use the queue/image leases below; do not
+ * submit there concurrently. A host may submit its own imported images on a
+ * separately enabled queue without a library lease, but must obey imported
+ * timeline wait/signal values and keep host objects alive until completion.
  * Plan may be destroyed after this returns; device creation failure leaves it
  * reusable. Queue family/index must have been enabled in vkCreateDevice. */
 typedef struct mt_vk_device_desc {

@@ -50,6 +50,28 @@ Windows builds use the x64 MSVC Developer environment, Windows SDK, Rust's
 `stable-x86_64-pc-windows-msvc` toolchain and Zig 0.15.2 for scriptc's archiver.
 C/C++ consumers compile with `/MD`; no MinGW CRT or GCC C++ runtime is linked.
 
+The existing Vulkan validation host borrows MuTracer-owned images on the exact
+queue negotiated during device creation. Foreign `VkImage`/timeline-semaphore
+and D3D12 shared-resource/fence output are not accepted by the current wgpu HAL;
+do not add a handle-taking API that returns success without ownership and fence
+validation. Record a design and use `MT_ERROR_UNAVAILABLE` until the dedicated
+HAL ownership layer and debug-layer tests are available.
+SDK packaging converts rustc's `/DEFAULTLIB:msvcrt` and `/DEFAULTLIB:oldnames`
+directives to relocatable library names for both direct C and CMake consumers.
+Other default-library directives, including static or debug CRT variants, are
+rejected; do not package a `/MT` build as the `/MD` SDK.
+
+Set `WGPU_BACKEND=dx12` or `WGPU_BACKEND=vulkan` to select the native graphics
+API for SDK-created devices, adapter probes and GPU tests. Without that variable,
+wgpu chooses its usual default. Explicit platform device imports still use their
+declared API. Confirm the backend in the adapter probe before comparing runs.
+
+For D3D12 scene kernels, set `WGPU_DX12_COMPILER=dxc` before enumerating
+adapters or creating the engine. The tested Windows C hosts exceed FXC's
+instruction limits. Keep the SDK's `dxcompiler.dll` and `dxil.dll` beside the
+executable, together with the other packaged runtime DLLs. This is a process
+environment setting; the SDK does not change the system compiler configuration.
+
 The scriptc 0.4.4 runtime pack still imports several GNU-compatible interfaces.
 `windows-msvc-archive.mjs` edits only MuTracer's generated COFF archives: it
 maps constructor sections to `.CRT$XCU`, uses MSVC's stack probe, and prefixes
@@ -746,6 +768,18 @@ render resize, and exercises native plus Rust display passes, failure rollback
 and retirement notifications. A portability-driver pass does not validate
 Linux/Windows drivers or Vulkan HWRT. C callers also need their Vulkan SDK headers
 when including `mutracer-vulkan.h`; the ordinary headers do not require them.
+
+On Windows, compile `examples/vulkan-export-host.c` with the SDK Vulkan headers
+and `examples/d3d12-export-host.c` with the Windows SDK, using the C++ compiler
+mode (`/TP`) because the COM interfaces use C++ methods even though the files
+keep the `.c` extension. These are host integration harnesses: create the native
+image/resource and timeline objects on the device returned by the corresponding
+`*_info` call, fill the descriptor handles, then submit `mt_render_export_gpu`
+and poll `mt_engine_gpu_poll` with a deadline. Run the resulting host only
+through `gpu-lock.ps1 W3`. Destroy the render and MuTracer import wrappers
+before destroying host images, memory, fences or semaphores; destroy the
+borrowed engine/device last. MuTracer only retains wrappers and never releases
+the host-owned native objects.
 
 ## glTF material comparison
 

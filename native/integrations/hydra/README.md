@@ -1,6 +1,7 @@
 # MuTracer Hydra delegate
 
-Experimental OpenUSD 26.03 renderer for macOS arm64 / Metal. Select **MuTracer**
+Experimental OpenUSD 26.03 renderer for macOS arm64 / Metal and Windows x64.
+Select **MuTracer**
 in usdview, or `HdMuTracerRendererPlugin` in a Hydra host. It needs a GPU even
 when the host reads images through CPU buffers. One active view per delegate
 is supported. It is not included in MuTracer's default build.
@@ -20,7 +21,7 @@ export PXR_PLUGINPATH_NAME=/absolute/hydra-build/plugin/hdMuTracer/resources
 export PYTHONPATH=/absolute/openusd-install/lib/python
 export PATH=/absolute/openusd-install/bin:$PATH
 usdview --renderer MuTracer native/integrations/hydra/tests/rect.usda
-usdrecord --renderer MuTracer --disableGpu --camera /Camera --imageWidth 512 \
+usdrecord --renderer MuTracer --disableGpu --disableCameraLight --camera /Camera --imageWidth 512 \
   native/integrations/hydra/tests/rect.usda /absolute/render.png
 ```
 
@@ -28,6 +29,8 @@ For this `usdrecord` command, `--disableGpu` avoids the recorder's OpenGL contex
 and reads the CPU render buffer; MuTracer still renders on its own GPU. The
 recorder cannot apply GPU color correction in that mode. Pixels in Hydra AOVs
 are linear; choose the host's display transform for viewing.
+`--disableCameraLight` uses only the scene's authored lighting; otherwise
+usdrecord adds a light at the camera.
 
 `MUTRACER_LIBRARY_DIR` can override the SDK library directory at CMake configure
 time. Its default is this checkout's
@@ -36,6 +39,15 @@ libraries accessible at runtime. A Blender or Houdini host requires a separate
 build matching its USD namespace, headers, libraries and compiler ABI; this
 usdview binary is not a Blender add-on. Blender 5.2 users can install the
 separately packaged [Blender integration](../blender/README.md).
+
+On Windows, build with MSVC and the dynamic CRT (`/MD`), and add the SDK's
+`lib` directory and the OpenUSD `bin` and `lib` directories to `PATH`. Use
+semicolon-separated paths for `CMAKE_PREFIX_PATH` and `PYTHONPATH` as needed.
+The verified host is OpenUSD 26.03 with HgiGL. It reads MuTracer's CPU render
+buffers; MuTracer still renders through its own GPU backend. HgiVulkan output
+interop is not connected to this delegate. For linear EXR output, build OpenUSD
+with its OpenImageIO image plugin and keep that plugin's runtime dependencies
+on `PATH`.
 
 Mesh and instancer visibility use [whole-mesh/batch SDK visibility](../../docs/scene.md#visibility).
 Individual-instance visibility is not supported.
