@@ -6,8 +6,18 @@ fn shared_web_scenes_render_with_native_engine() {
         std::env::var_os("MUTRACER_WEBVIEW_REFERENCE")
             .expect("Run native/validation/webview-scene-reference.mjs first"),
     );
+    let samples = std::env::var("SPP")
+        .map(|v| v.parse::<u32>().expect("SPP must be an integer"))
+        .unwrap_or(16);
     let mut results = Vec::new();
-    for backend in [api::Backend::Software, api::Backend::Hardware] {
+    for backend in [api::Backend::Software, api::Backend::Hardware]
+        .into_iter()
+        .filter(|b| {
+            std::env::var("BACKENDS")
+                .map(|v| v.split(',').any(|v| v == format!("{b:?}")))
+                .unwrap_or(true)
+        })
+    {
         let engine = api::Engine::new(api::EngineOptions { backend }).unwrap();
         engine.display().set_size(96, 64).unwrap();
         let render = api::Render::new(
@@ -17,7 +27,7 @@ fn shared_web_scenes_render_with_native_engine() {
                     width: 96,
                     height: 64,
                 },
-                max_samples: 16,
+                max_samples: samples,
                 bounces: 3,
                 seed: 0,
                 ..Default::default()
@@ -41,7 +51,11 @@ fn shared_web_scenes_render_with_native_engine() {
                     }))
                     .unwrap();
             }
-            render.converge(api::ConvergeOptions::new(16)).unwrap();
+            let mut options = api::ConvergeOptions::new(samples);
+            if let Ok(value) = std::env::var("BATCH") {
+                options.samples_per_batch = value.parse().unwrap();
+            }
+            render.converge(options).unwrap();
             for (kind, label) in [
                 (api::PixelKind::Hdr, "hdr"),
                 (api::PixelKind::Normal, "normal"),

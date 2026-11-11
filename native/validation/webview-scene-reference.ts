@@ -7,6 +7,10 @@ import { parseMaterialXGraph } from '../../viewer/src/engine/materialxGraph';
 const save = async (name: string, body: BodyInit) => { const r = await fetch('/evidence/' + name, { method: 'POST', body }); if (!r.ok)
     throw Error('Evidence write failed'); };
 async function run() {
+    const params = new URLSearchParams(location.search);
+    const samples = Number(params.get("spp") ?? 16);
+    if (!Number.isInteger(samples) || samples < 1 || samples > 16384) throw Error("SPP must be 1..16384");
+    const backend = params.has("webgl") ? "webgl" : "webgpu";
     const canvas = document.querySelector('canvas')!;
     canvas.width = 96;
     canvas.height = 64;
@@ -18,7 +22,7 @@ async function run() {
     const box = new THREE.Box3().setFromObject(gltf.scene), center = box.getCenter(new THREE.Vector3()), radius = box.getBoundingSphere(new THREE.Sphere()).radius;
     camera.position.copy(center).add(new THREE.Vector3(1, .65, 1.6).normalize().multiplyScalar(radius * 3));
     camera.lookAt(center);
-    const engine = new Engine({ canvas, backend: 'webgpu' }), sync = new THREESync(engine, { scene: source, camera });
+    const engine = new Engine({ canvas, backend }), sync = new THREESync(engine, { scene: source, camera });
     sync.update();
     const env = new Texture({ width: 2, height: 2, data: new Float32Array([2, .5, .2, 1, .2, 1, 3, 1, .05, .1, .2, 1, 1, 1, 1, 1]) });
     const light = new RectLight({ size: [radius * 2, radius * 2], intensity: 2 });
@@ -26,7 +30,7 @@ async function run() {
     light.lookAt([center.x, center.y, center.z]);
     engine.scene!.lights = [new EnvironmentLight({ map: env }), light];
     engine.scene!.background = [.05, .05, .05, 1];
-    const render = new Render(engine, { width: 96, height: 64, maxSamples: 16, bounces: 3, samplingPattern: 'sobol', denoiser: null });
+    const render = new Render(engine, { width: 96, height: 64, maxSamples: samples, bounces: 3, samplingPattern: 'sobol', denoiser: null });
     const cases = ['gltf', 'materialx', 'hdr-studio', 'denoised'];
     const results = [];
     for (const name of cases) {
@@ -41,13 +45,22 @@ async function run() {
         if (name === 'denoised')
             await render.setDenoiser({ type: 'oidn', model: 'standard', schedule: 'converged', weightsBaseUrl: new URL('/oidn/weights/', location.href).href });
         engine.update();
-        await render.converge({ samples: 16 });
+        await render.converge({ samples });
         const encoder = new NativeSceneEncoder(async () => { throw Error('No sky in fixture'); });
         const words = await encoder.encode(engine.scene!, engine.camera!, [96, 64]);
         await save(name + '.bin', new Uint8Array(words.buffer));
         for (const kind of ['hdr', 'normal', 'albedo', 'denoised'] as const) {
             const image = await render.readPixels(kind);
             await save(name + '-' + kind + '.f32', new Uint8Array(image.data.buffer));
+            // These silhouette pixels have only a few geometry hits. UNORM8
+            // coverage used to round to zero and leave sum/hits in HDR readback.
+            if (kind === 'hdr' && samples >= 1024 && (name === 'gltf' || name === 'materialx')) {
+                for (const [x, y] of [[24, 27], [74, 34], [74, 50]]) {
+                    const rgb = image.data.subarray((y * 96 + x) * 4, (y * 96 + x) * 4 + 3);
+                    if (!rgb.every(v => Number.isFinite(v) && v >= 0 && v < .2))
+                        throw Error(`Unnormalized background at ${x},${y}: ${Array.from(rgb)}`);
+                }
+            }
         }
         await save(name + '.png', await engine.display.toBlob(render));
         results.push({ name, samples: render.samples, width: render.width, height: render.height });

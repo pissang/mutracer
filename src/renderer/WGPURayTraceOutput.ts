@@ -206,7 +206,10 @@ export class WGPURayTraceOutputPass {
     });
     this._albedoTexture = device.createTexture({
       ...textureDescriptor,
-      label: 'Ray Trace Albedo'
+      // Coverage may be one hit among thousands of samples. UNORM8 rounds
+      // it to zero and breaks the inverse hit normalization used by HDR readback.
+      label: 'Ray Trace Albedo',
+      format: 'rgba16float'
     });
     this._wideColor=this._wideForeground=undefined;
     if(this._hasCaustics){
@@ -284,7 +287,7 @@ export class WGPURayTraceOutputPass {
             format: 'rgba8unorm'
           },
           {
-            format: 'rgba8unorm'
+            format: 'rgba16float'
           },
           ...(this._hasCatcher&&!this._hasWideHdr ? [{format: 'rgba16float' as const}] : [])
         ],
