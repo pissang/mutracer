@@ -5,11 +5,13 @@ import {NativeRenderHost} from '../engine/NativeRenderHost';
 import {setSettings,useViewer} from '../store';
 import type {TreeNode} from '../store';
 import {undo,redo} from '../history';
+import {NativeSceneEncoder} from '../engine/nativeScene';
+import {SceneChangeDetector} from '../../../src/renderer/sceneChangeDetector';
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 export async function run(engine:WebEngine){
  if(!(engine.engine instanceof NativeRenderHost))throw Error('Native workflow needs the native host');
- const host=engine.engine,results:string[]=[],started=performance.now();
- let benchmark: {target?:number;size:[number,number];camera:{matrix:number[];target:[number,number,number];groundOffset:[number,number,number];fov:number}}|undefined;
+ const host=engine.engine,results:string[]=[],started=performance.now(),metrics:{materialEditFirstSampleMs?:number}={};
+ let benchmark: {target?:number;editOnly?:boolean;captureScene?:boolean;size:[number,number];camera:{matrix:number[];target:[number,number,number];groundOffset:[number,number,number];fov:number}}|undefined;
  const settled=async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);await host.flush();for(let i=0;i<1200;i++){if(await host.transport.request<boolean>('settled'))return;await pause(50);}throw Error('Scene did not settle');};
  const artifact=async(label:string,kind:'png'|'f32'|'json',data:Uint8Array)=>host.transport.request('artifact',{label,kind,blob:await host.upload(data)});
  const capture=async(label:string)=>{await settled();const image=await engine.readPixels('hdr');if(benchmark&&!image.data.some((value,index)=>index%4!==3&&value>0))throw Error('Benchmark image is black');await artifact(label,'f32',new Uint8Array(image.data.buffer));await artifact(label,'png',new Uint8Array(await(await engine.captureImage()).arrayBuffer()));await artifact(label,'json',new TextEncoder().encode(JSON.stringify({width:image.width,height:image.height,samples:useViewer.getState().stats.samples,seed:0})));results.push(label);};
@@ -32,6 +34,17 @@ export async function run(engine:WebEngine){
   }
   const warnings=useViewer.getState().modelLighting?.warnings??[];
   if(warnings.length)throw Error(`Incomplete model import: ${warnings.join(' ')}`);
+  if(benchmark?.captureScene){
+   await settled();
+   if(!host.scene||!host.camera)throw Error('Missing replay scene');
+   const encoder=new NativeSceneEncoder(async source=>{const result=await host.transport.request<{blob:string}>('sky',source);return {width:source.width,height:source.height,data:new Float32Array(await host.download(result.blob))};});
+   const size:[number,number]=[host.display.canvas.width,host.display.canvas.height];
+   const descriptor=await encoder.encode(host.scene,host.camera,size);
+   const encoded=await encoder.prepare(host.scene,host.camera,size,new SceneChangeDetector().detect(host.scene));
+   await artifact('window-scene','f32',new Uint8Array(descriptor.buffer));
+   await artifact('window-refs','json',new TextEncoder().encode(JSON.stringify(encoded.refs)));
+   await artifact('window-settings','json',new TextEncoder().encode(JSON.stringify({benchmark,render:{bounces:engine.final.bounces,bevel:engine.final.bevel,dispersionWavelengths:engine.final.dispersionWavelengths,directLightCandidates:engine.final.directLightCandidates}})));
+  }
   await capture('gltf');
   if((window as Window & {mutracerImportOnly?:boolean}).mutracerImportOnly) {
    await host.transport.request('workflowDone',{passed:true,cases:results,importAndRenderMs:performance.now()-started,model:useViewer.getState().model,stats:useViewer.getState().stats});return;
@@ -43,10 +56,14 @@ export async function run(engine:WebEngine){
   engine.selectMaterial(id,mesh.id);
   const before=useViewer.getState().material?.values.specularRoughness;if(typeof before!=='number')throw Error('Missing material values');
   const roughness=before<.5?.8:.2;
-  engine.setMaterialValues(id,{specularRoughness:roughness},'Workflow roughness');await capture('material-edit');
+  const editStarted=performance.now();
+  const offEdit=engine.final.on('sample',event=>{if(event.isFirstFrame&&event.samples>0&&metrics.materialEditFirstSampleMs===undefined)metrics.materialEditFirstSampleMs=performance.now()-editStarted;});
+  try{engine.setMaterialValues(id,{specularRoughness:roughness},'Workflow roughness');await capture('material-edit');}finally{offEdit();}
+  if(metrics.materialEditFirstSampleMs===undefined)throw Error('Material edit produced no first-sample event');
   undo();engine.selectMaterial(id,mesh.id);if(useViewer.getState().material?.values.specularRoughness!==before)throw Error('Material undo failed');
   redo();engine.selectMaterial(id,mesh.id);if(useViewer.getState().material?.values.specularRoughness!==roughness)throw Error('Material redo failed');
   undo();results.push('material-undo-redo');
+  if(benchmark?.editOnly){await settled();await host.transport.request('workflowDone',{passed:true,cases:results,metrics});return;}
   engine.setVisible(mesh.id,false);await capture('visibility');engine.setVisible(mesh.id,true);await settled();
   const rect=(host.display.canvas as HTMLCanvasElement).getBoundingClientRect();let picked=false;
   for(const y of [.5,.35,.65]){for(const x of [.5,.35,.65]){
@@ -65,6 +82,6 @@ export async function run(engine:WebEngine){
   setSettings({lighting:'studio'});await capture('studio');
   setSettings({denoise:true,denoiseModel:'standard',denoiseWhileConverging:false});await capture('denoised');
   const output=await engine.renderImage({width:96,height:64,samples:16,transparent:true});await artifact('independent-export','png',new Uint8Array(await output.arrayBuffer()));results.push('independent-export');
-  await host.transport.request('workflowDone',{passed:true,cases:results});
- }catch(error){await host.transport.request('workflowDone',{passed:false,cases:results,error:String(error),diagnostics:engine.getDiagnostics(),stats:useViewer.getState().stats,toast:useViewer.getState().toast});}
+  await host.transport.request('workflowDone',{passed:true,cases:results,metrics});
+ }catch(error){await host.transport.request('workflowDone',{passed:false,cases:results,metrics,error:String(error),diagnostics:engine.getDiagnostics(),stats:useViewer.getState().stats,toast:useViewer.getState().toast});}
 }

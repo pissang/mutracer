@@ -70,3 +70,9 @@ a Linux Rust target, system development libraries and a desktop to validate UI.
 studio, OIDN and independent-export workflow through WebEngine's public actions.
 It writes `workflow.json` and per-stage captures, then exits. It is opt-in and
 uses an ephemeral WebView session; it does not alter the normal app cache.
+
+The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
+material-edit first-sample timing and `captureScene` for compact scene, resource
+reference and camera/settings replay artifacts. Rehydrate native references and
+apply the captured host camera before SDK replay. Captures and RSS sampling can
+perturb timings; use separate runs for acceptance benchmarks.
