@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NativeSceneEncoder, cameraWords, descriptorDelta } from '../src/engine/nativeScene';
+import { NativeSceneEncoder, cameraWords, descriptorDelta, descriptorDeltaParts } from '../src/engine/nativeScene';
 import { Camera, Geometry, Mesh, InstancedMesh, OpenPBRMaterial, Texture, MaterialGraph, RectLight, EnvironmentLight } from '../../src/main';
 import { HEADER as H, MATERIAL as M, GEOMETRY as G, TEXTURE as T } from '../../native/src/layout';
 import { decodeMaterial, decodeGeometry, decodeTexture } from '../../native/src/scene-records';
@@ -64,6 +64,13 @@ describe('native scene v8 boundary', () => {
         expect(new Float32Array(cameraWords(camera).buffer)[9]).toBeCloseTo(2.8);
         expect(words[words[words[H.MATERIAL_OFFSET] + M.GRAPH]]).toBe(1);
         save('graph-instances', words);
+    });
+    it('streams full descriptors as views without duplicating the payload', () => {
+        const next = new Uint32Array([3, 7, 11, 19]);
+        const parts = descriptorDeltaParts(undefined, next);
+        expect(parts[2].buffer).toBe(next.buffer);
+        expect(Array.from(parts[2])).toEqual(Array.from(new Uint8Array(next.buffer)));
+        expect(parts.reduce((n, p) => n + p.length, 0)).toBe(next.byteLength + 24);
     });
     it('encodes changed ranges and full replacements without losing trailing bytes', () => {
         function apply(old: Uint32Array | undefined, p: Uint8Array) { const u = new Uint32Array(p.buffer), next = u[1] ? new Uint32Array(u[2]) : old!.slice(); let at = 4; for (let i = 0; i < u[3]; i++) {

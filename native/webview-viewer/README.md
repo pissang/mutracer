@@ -37,16 +37,15 @@ GTK 3 and WebKitGTK 4.1 version 2.40 or later, with either Wayland or X11.
 macOS and Windows place the controls over the native viewport. Linux uses a
 separate control window and viewport; place them side by side.
 
-MaterialX height baking uses CPU workers and can take longer than on WebGPU.
-The native renderer uses TinyBVH; the web-only builder selector is hidden.
-Environment/background rotations follow the SDK's yaw-only scene format.
-Scene transfers have no 128 MiB upload cap; the SDK's
-[scene and texture limits](../docs/scene-format.md#limits) still apply. GPUOpen
+MaterialX height baking can take longer than in the web viewer.
+The BVH builder selector is unavailable. Environment and background rotations
+support yaw only. Imports are limited by available memory and the
+[scene and texture limits](../docs/scene-format.md#limits). Large models can
+need substantially more RAM than their file size. GPUOpen
 retains the web viewer's package download limit. Image and denoising output can
 differ between the browser and native backends. See the
 [known native rendering limits](../README.md#limitations).
 
-Windows/WebView2, Linux desktops and the optional DLSS runtime require validation
-on their target hardware; building the application does not establish their
-presentation or input behavior. Maintainers can use the
-[platform checklist](CONTRIBUTING.md#manual-platform-validation).
+If the interface crashes on macOS, the app restores the default scene and shows
+an error. Unsaved edits are lost, and the interrupted file is not reopened
+automatically.

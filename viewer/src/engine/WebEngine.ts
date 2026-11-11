@@ -288,6 +288,11 @@ export class WebEngine implements ViewerEngine {
   async loadInitialModel(presetId: string | null) {
     if(this.engine instanceof NativeRenderHost){
       await this.engine.init();
+      if (new URLSearchParams(location.search).has('recovered')) {
+        const loaded = await this.loadPreset('spheres');
+        showToast('The interface restarted after its content process stopped. The interrupted import was not reopened.', 'error');
+        return loaded;
+      }
       const bridgeWindow=window as Window & {mutracerInitialModel?:{files:{path:string;blob:string}[]}};
       const initial=bridgeWindow.mutracerInitialModel;
       if(initial){delete bridgeWindow.mutracerInitialModel;const host=this.engine;return this.loadFiles(await Promise.all(initial.files.map(async file=>({path:file.path,file:new File([await host.download(file.blob)],file.path.split('/').pop()!)}))));}

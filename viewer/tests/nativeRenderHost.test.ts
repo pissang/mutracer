@@ -26,7 +26,7 @@ function setup() {
     const uploads: Uint8Array[] = [];
     const host = new NativeRenderHost(canvas);
     hosts.push(host);
-    host.upload = async (bytes) => { uploads.push(bytes); return String(uploads.length); };
+    host.upload = async (bytes) => { const parts = bytes instanceof Uint8Array ? [bytes] : bytes; const joined = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0; for (const part of parts) { joined.set(part, at); at += part.length; } uploads.push(joined); return String(uploads.length); };
     host.camera = new Camera({ projection: 'perspective' });
     host.scene = { meshes: [new Mesh(new Geometry({ position: new Attribute(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0]), 3) }), new OpenPBRMaterial())], lights: [] };
     return { host, commands, uploads, gpu, setFailure: (fail: boolean) => { failCommit = fail; } };
@@ -61,6 +61,27 @@ describe('native Engine boundary', () => {
         setFailure(false);
         await host.flush();
         expect(new Uint32Array(uploads[3].buffer)[1]).toBe(1);
+    });
+    it('bounds binary requests and discards an interrupted upload', async () => {
+        const { host } = setup();
+        const requests: RequestInit[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_url: URL, init: RequestInit) => {
+            requests.push(init); return { ok: true };
+        }));
+        const data = new Uint8Array(17 * 1024 * 1024);
+        data[0] = 7; data[data.length - 1] = 9;
+        await NativeRenderHost.prototype.upload.call(host, [data.subarray(0, 4), data.subarray(4)]);
+        const bodies = requests.map(r => r.body as Uint8Array);
+        expect(bodies.every(b => b.byteLength <= 8 * 1024 * 1024)).toBe(true);
+        expect(bodies.reduce((n, b) => n + b.byteLength, 0)).toBe(data.length);
+        expect(bodies[0][0]).toBe(7);
+        expect(bodies.at(-1)!.at(-1)).toBe(9);
+        expect((requests[1].headers as Record<string, string>)['X-Mutracer-Offset']).toBe('4');
+        vi.stubGlobal('fetch', vi.fn(async (_url: URL, init: RequestInit) => {
+            requests.push(init); return { ok: init.method === 'DELETE', status: 400 };
+        }));
+        await expect(NativeRenderHost.prototype.upload.call(host, data)).rejects.toThrow('400');
+        expect(requests.at(-1)?.method).toBe('DELETE');
     });
     it('keeps independent targets and publishes host sample counts and sizes', () => {
         const { host } = setup();

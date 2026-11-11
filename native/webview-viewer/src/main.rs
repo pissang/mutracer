@@ -169,11 +169,34 @@ impl Host {
             let (parts, body) = request.into_parts();
             if let Some(key) = parts.uri.path().strip_prefix("/bridge/") {
                 let result = if parts.method == wry::http::Method::POST {
-                    mailbox
-                        .lock()
-                        .unwrap()
-                        .receive(key, body)
-                        .map(|_| Vec::new())
+                    let number = |key: &str| -> Result<usize> {
+                        Ok(parts
+                            .headers
+                            .get(key)
+                            .context("Missing upload header")?
+                            .to_str()?
+                            .parse()?)
+                    };
+                    if parts.headers.contains_key("X-Mutracer-Offset") {
+                        (|| {
+                            mailbox.lock().unwrap().receive_chunk(
+                                key,
+                                number("X-Mutracer-Offset")?,
+                                number("X-Mutracer-Length")?,
+                                body,
+                            )?;
+                            Ok(Vec::new())
+                        })()
+                    } else {
+                        mailbox
+                            .lock()
+                            .unwrap()
+                            .receive(key, body)
+                            .map(|_| Vec::new())
+                    }
+                } else if parts.method == wry::http::Method::DELETE {
+                    mailbox.lock().unwrap().discard(key);
+                    Ok(Vec::new())
                 } else {
                     mailbox.lock().unwrap().take(key)
                 };
@@ -191,12 +214,15 @@ impl Host {
             }
             assets::response(parts.uri.path())
         };
+        let import_only = std::env::var_os("MUTRACER_VIEWER_IMPORT_ONLY").is_some();
         let init = format!(
-            "window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
+            "window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
             evidence.is_some()
         );
         #[cfg(target_os = "linux")]
         let ui_proxy = proxy.clone();
+        #[cfg(target_os = "macos")]
+        let recovery_proxy = proxy.clone();
         let builder = WebViewBuilder::new()
             .with_incognito(evidence.is_some())
             .with_transparent(true)
@@ -230,6 +256,16 @@ impl Host {
                     || url.starts_with("http://mutracer.localhost/")
             })
             .with_url("mutracer://localhost/index.html");
+        #[cfg(target_os = "macos")]
+        let builder = {
+            use wry::WebViewBuilderExtDarwin;
+            builder.with_on_web_content_process_terminate_handler(move || {
+                eprintln!("WebView content process terminated; restoring UI");
+                let _ = recovery_proxy.send_event(Message {
+                    body: "__content_process_terminated".into(),
+                });
+            })
+        };
         #[cfg(not(target_os = "linux"))]
         let webview = builder.build_as_child(&*window)?;
         #[cfg(target_os = "linux")]
@@ -429,9 +465,9 @@ impl Host {
             "commit" => {
                 let next = if let Some(key) = args["blob"].as_str() {
                     let bytes = self.binary.lock().unwrap().take(key)?;
-                    Some(Arc::new(wire::delta(
+                    Some(Arc::new(wire::delta_owned(
                         self.descriptor.as_deref().map(Vec::as_slice),
-                        &bytes,
+                        bytes,
                     )?))
                 } else {
                     None
@@ -708,6 +744,30 @@ impl Host {
         Ok(Some(Value::Null))
     }
     fn message(&mut self, message: Message) -> Result<()> {
+        if message.body == "__content_process_terminated" {
+            // A new document has fresh target/request IDs. Drop all session state
+            // and incomplete uploads before it reconnects; never replay the import
+            // that terminated the process from initialization scripts or cache.
+            self.ready = false;
+            self.paused = false;
+            self.orbit = input::Orbit::default();
+            self.phase = "preparing".into();
+            self.render_loop = None;
+            self.export = None;
+            self.sample_subscriptions.clear();
+            self.targets.clear();
+            self.target_configs.clear();
+            self.upscale = None;
+            self.engine.clear_scene()?;
+            self.engine.update()?;
+            self.descriptor = None;
+            self.binary.lock().unwrap().clear();
+            self.events.lock().unwrap().clear();
+            self.webview
+                .load_url("mutracer://localhost/index.html?recovered=1#model=spheres")?;
+            self.dirty = true;
+            return Ok(());
+        }
         if message.body.starts_with('~') {
             if self.export.is_some() {
                 return Ok(());

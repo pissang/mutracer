@@ -18,6 +18,12 @@ class Words {
     length = 0;
     reserve(length: number) { const data = new Uint32Array(length); const at = this.length; this.chunks.push(data); this.length += length; return { at, u: data, f: new Float32Array(data.buffer) }; }
     append(data: ArrayLike<number>, floats = false) {
+        if (floats && data instanceof Float32Array || !floats && data instanceof Uint32Array) {
+            const at = this.length;
+            this.chunks.push(new Uint32Array(data.buffer, data.byteOffset, data.length));
+            this.length += data.length;
+            return at;
+        }
         const part = this.reserve(data.length);
         (floats ? part.f : part.u).set(data);
         return part.at;
@@ -275,7 +281,7 @@ export class NativeSceneEncoder {
 }
 // Transport deltas operate on byte ranges of the SDK descriptor. The SDK still
 // classifies scene changes itself; this wire layer never chooses a render plan.
-export function descriptorDelta(previous: Uint32Array | undefined, next: Uint32Array): Uint8Array {
+export function descriptorDeltaParts(previous: Uint32Array | undefined, next: Uint32Array): Uint8Array[] {
     const spans: {
         at: number;
         data: Uint32Array;
@@ -293,13 +299,14 @@ export function descriptorDelta(previous: Uint32Array | undefined, next: Uint32A
                 at++;
             spans.push({ at: start, data: next.subarray(start, at) });
         }
-    const words = new Uint32Array(4 + spans.reduce((n, s) => n + 2 + s.data.length, 0));
-    words.set([1, Number(!previous || previous.length !== next.length), next.length, spans.length]);
-    let at = 4;
-    for (const span of spans) {
-        words.set([span.at, span.data.length], at);
-        words.set(span.data, at + 2);
-        at += 2 + span.data.length;
-    }
-    return new Uint8Array(words.buffer);
+    const bytes = (words: Uint32Array) => new Uint8Array(words.buffer, words.byteOffset, words.byteLength);
+    return [bytes(new Uint32Array([1, Number(!previous || previous.length !== next.length), next.length, spans.length])),
+        ...spans.flatMap(span => [bytes(new Uint32Array([span.at, span.data.length])), bytes(span.data)])];
+}
+export function descriptorDelta(previous: Uint32Array | undefined, next: Uint32Array): Uint8Array {
+    const parts = descriptorDeltaParts(previous, next);
+    const packet = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
+    let offset = 0;
+    for (const part of parts) { packet.set(part, offset); offset += part.byteLength; }
+    return packet;
 }

@@ -20,6 +20,26 @@ pub fn camera(value: &Value) -> Result<api::Camera> {
         .collect();
     api::Camera::from_bytes(&bytes).context("Invalid camera")
 }
+// Full imports already own the upload allocation. Remove just its framing instead
+// of holding a second multi-GB descriptor while the SDK admits the new scene.
+pub fn delta_owned(previous: Option<&[u8]>, mut packet: Vec<u8>) -> Result<Vec<u8>> {
+    if packet.len() >= 24 && packet.len() % 4 == 0 {
+        let word =
+            |i: usize| u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
+        if word(0) == 1
+            && word(1) == 1
+            && word(3) == 1
+            && word(4) == 0
+            && word(5) == word(2)
+            && word(2).checked_mul(4).and_then(|n| n.checked_add(24)) == Some(packet.len())
+        {
+            packet.copy_within(24.., 0);
+            packet.truncate(packet.len() - 24);
+            return Ok(packet);
+        }
+    }
+    delta(previous, &packet)
+}
 pub fn delta(previous: Option<&[u8]>, packet: &[u8]) -> Result<Vec<u8>> {
     ensure!(
         packet.len() % 4 == 0 && packet.len() >= 16,
@@ -273,6 +293,15 @@ mod tests {
     use super::*;
     fn packet(words: &[u32]) -> Vec<u8> {
         words.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+    #[test]
+    fn full_upload_reuses_its_allocation_and_rejects_bad_framing() {
+        let full = packet(&[1, 1, 3, 1, 0, 3, 1, 2, 3]);
+        let allocation = full.as_ptr();
+        let decoded = delta_owned(None, full).unwrap();
+        assert_eq!(decoded.as_ptr(), allocation);
+        assert_eq!(decoded, packet(&[1, 2, 3]));
+        assert!(delta_owned(None, packet(&[1, 1, 3, 1, 0, 3, 1, 2])).is_err());
     }
     #[test]
     fn patches_are_transactional_and_validate_ranges() {

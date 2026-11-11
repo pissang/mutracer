@@ -4,7 +4,7 @@ import RenderLoop, { type RenderLoopOptions, type RenderLoopStatus } from '../..
 import type Sync from '../../../src/Sync';
 import type { DepthSampleArea } from '../../../src/renderer/depthQuery';
 import { SceneChangeDetector } from '../../../src/renderer/sceneChangeDetector';
-import { NativeSceneEncoder, cameraWords, descriptorDelta } from './nativeScene';
+import { NativeSceneEncoder, cameraWords, descriptorDeltaParts } from './nativeScene';
 import { NativeTransport, type NativeReply, pointerPacket } from './nativeTransport';
 import type { PixelKind } from './ViewerEngine';
 import { Events } from '../../../src/util/events';
@@ -186,8 +186,33 @@ export class NativeRenderHost extends Engine {
             return this.remoteInfo;
         });
     }
-    async upload(data: Uint8Array) { const id = String(++this.serial); const response = await fetch(new URL(`bridge/${id}`, document.baseURI), { method: 'POST', body: data as Uint8Array<ArrayBuffer> }); if (!response.ok)
-        throw Error(`Native binary upload: ${response.status}`); return id; }
+    async upload(data: Uint8Array | readonly Uint8Array[]) {
+        const id = String(++this.serial);
+        const parts = data instanceof Uint8Array ? [data] : data;
+        const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+        let offset = 0;
+        try {
+            // WebKit copies a BufferSource into FormData. Bound that copy and
+            // retain views of descriptor spans rather than another whole packet.
+            for (const part of parts) for (let at = 0; at < part.byteLength; at += 8 * 1024 * 1024) {
+                const body = part.subarray(at, at + 8 * 1024 * 1024);
+                const response = await fetch(new URL(`bridge/${id}`, document.baseURI), {
+                    method: 'POST', headers: { 'X-Mutracer-Offset': String(offset), 'X-Mutracer-Length': String(total) },
+                    body: body as Uint8Array<ArrayBuffer>
+                });
+                if (!response.ok) throw Error(`Native binary upload: ${response.status}`);
+                offset += body.byteLength;
+            }
+            if (total === 0) {
+                const response = await fetch(new URL(`bridge/${id}`, document.baseURI), { method: 'POST', body: new Uint8Array() });
+                if (!response.ok) throw Error(`Native binary upload: ${response.status}`);
+            }
+            return id;
+        } catch (error) {
+            await fetch(new URL(`bridge/${id}`, document.baseURI), { method: 'DELETE' }).catch(() => {});
+            throw error;
+        }
+    }
     async download(id: string) { const response = await fetch(new URL(`bridge/${id}`, document.baseURI)); if (!response.ok)
         throw Error(`Native binary download: ${response.status}`); return response.arrayBuffer(); }
     register(target: NativeRender) { const id = ++this.targetSerial; this.targets.set(id, target); return id; }
@@ -208,7 +233,7 @@ export class NativeRenderHost extends Engine {
         let next: Uint32Array | undefined;
         if (sceneChanged && this.scene?.meshes.length) {
             next = await this.encoder.encode(this.scene, this.camera, [this.display.canvas.width, this.display.canvas.height]);
-            blob = await this.upload(descriptorDelta(this.previous, next));
+            blob = await this.upload(descriptorDeltaParts(this.previous, next));
         }
         const camera = Array.from(cameraWords(this.camera)), cameraKey = JSON.stringify(camera);
         const settings = { targets: [...this.targets.values()].map(t => t.configuration()), display: Object.fromEntries(displayKeys.map(k => [k, this.display[k]])), size: [this.display.canvas.width, this.display.canvas.height], upscale: this.upscale, aspect: useViewer.getState().settings?.outputAspect, bvhBuilder: this.bvhBuilder, preview: this.previewId, final: this.finalId, selection: this.requestedSelection, coalesce: this.coalesce, changing: this.changing };
