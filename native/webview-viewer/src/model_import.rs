@@ -542,7 +542,11 @@ fn native_gltf_matches_browser_import() {
     }
     cases.push(("native", native));
     let engine = api::Engine::new(api::EngineOptions {
-        backend: api::Backend::Hardware,
+        backend: if std::env::var("BACKEND").as_deref() == Ok("Software") {
+            api::Backend::Software
+        } else {
+            api::Backend::Hardware
+        },
     })
     .unwrap();
     let size: [u32; 2] = std::env::var("MUTRACER_NATIVE_GLTF_SIZE")
