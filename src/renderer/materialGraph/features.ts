@@ -1,3 +1,4 @@
+import {LIGHT_SHADER_CAPABILITIES} from '../shaderCapabilities.js';
 import type Geometry from '../../scene/Geometry.js';
 import type {GraphPlan} from './state.js';
 
@@ -16,7 +17,10 @@ export function materialGraphConstants(constants:Record<string,boolean|number>,p
     }
     if(terminal('normal'))result.USE_COAT_NORMAL_FRAMES=true;
     // texcoord.index is editable data, so both UV sets must remain available.
-    if(plan.structures.some(g=>g.nodes.some(n=>n.category==='texcoord')))result.USE_UV1=geometry?.uv1!=null;
+    // Compact WebGPU geometry has no UV metadata on its layout facade; the
+    // packed UV1 offset aliases UV0 when a mesh has no secondary coordinates.
+    if(plan.structures.some(g=>g.nodes.some(n=>n.category==='texcoord')))result.USE_UV1=true;
+    if(terminal('emissionColor','emissionLuminance'))result.LIGHT_CAPABILITIES=Number(result.LIGHT_CAPABILITIES ?? 0)|LIGHT_SHADER_CAPABILITIES.emissive;
     if(terminal('opacity')){result.HAS_ALPHA=true;result.HAS_ALPHA_MASK=true;result.HAS_ALPHA_BLEND=true;}
     if(terminal('coatWeight'))result.HAS_COAT=true;
     if(terminal('fuzzWeight'))result.HAS_FUZZ=true;

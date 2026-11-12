@@ -453,13 +453,19 @@ UV-dependent opacity requires the material's `uvProjection: 'none'`; use graph
 coordinates for procedural coverage. Complex coverage networks also increase
 shadow-ray evaluation cost.
 
-Emission color and luminance graphs currently require `unlit: true`; graph coat
-absorption on an emissive surface has the same restriction. These unsupported material contexts
-use the constant fallback. Displacement, volume, subsurface and tangent terminals
-are not supported. With WebGPU light tracing or photon mapping, graphs that
-still require graph evaluation use their constant fallback and report
-`unsupported-transport`. This API takes an authored
-graph; it does not load `.mtlx`/USD files or convert other surface models.
+On WebGPU, emission color and luminance graphs also work on lit materials and
+light nearby surfaces. Lit emission and its coat absorption can use UVs and
+object/world position; shading-frame dependencies produce a located diagnostic
+and use the constant fallback. UV-dependent lit emission requires
+`uvProjection: 'none'`. Unlit emission graphs remain unrestricted by this
+light-point context and do not light other surfaces. Choose a representative
+constant emission fallback to help light sampling; a black fallback still works,
+but small, bright graph features can need more samples. Complex emission
+networks increase direct-light sampling cost. Displacement, volume, subsurface
+and tangent terminals are not supported. With WebGPU light tracing or photon
+mapping, graphs that still require graph evaluation use their constant fallback
+and report `unsupported-transport`. This API takes an authored graph; it does not
+load `.mtlx`/USD files or convert other surface models.
 
 Parameter edits update without a graph compile while the installed graph program
 or a compatible texture-slot plan can represent them. An edit that makes a slot
@@ -535,8 +541,8 @@ can also be baked into ordinary material maps, those maps remain the
 fallback during compilation, after rejection and on WebGL 2.
 Disney Principled and Simple Hair surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
-Subsurface and tangent graph inputs and lit emission graphs retain
-the limits described above. To load `.mtlx` files, use the viewer; the library's
+Subsurface, tangent and lit-emission graph inputs retain the limits described
+above. To load `.mtlx` files, use the viewer; the library's
 graph API accepts typed nodes and loaded textures.
 
 If the material has no displacement connection, the viewer also detects package

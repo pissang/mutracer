@@ -539,6 +539,15 @@ function getTLASRefitMetadata(flattened: FlattendBVH, ints: Int32Array) {
   return metadata;
 }
 
+/** Maps source-order instances to the GPU records stored in TLAS leaf order. */
+export function tlasInstanceSlots(flattened: FlattendBVH): Map<number, number> {
+  const slots=new Map<number,number>();
+  if(!flattened.buffer.byteLength)return slots;
+  const metadata=getTLASRefitMetadata(flattened,new Int32Array(flattened.buffer));
+  for(const entries of metadata.instancesByLeaf.values())for(const {source,target} of entries)slots.set(source,target);
+  return slots;
+}
+
 export function mergeRefitRanges(ranges: TLASRefitRange[]) {
   const sorted = ranges
     .filter(({ size }) => size > 0)

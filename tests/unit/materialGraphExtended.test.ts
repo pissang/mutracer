@@ -115,7 +115,7 @@ describe('opacity graph commits',()=>{
         const key=normalizeGraph(graph).key;graph.setInput('a','value',f(0.9));expect(normalizeGraph(graph).key).toBe(key);
     });
     it.each(['emission','projection','frame'])('revalidates a retained graph when an invalid replacement also changes %s context',kind=>{
-        const frame=kind==='frame';
+        const frame=kind==='frame'||kind==='emission';
         const graph=new MaterialGraph({nodes:[{id:'source',category:frame?'normal':'texcoord',type:frame?'vector3':'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:frame?'vector3':'vector2',connection:{node:'source'}}}}],terminal:{[kind==='emission'?'emissionLuminance':'opacity']:{node:'a'}}});
         const material=new OpenPBRMaterial({graph,unlit:kind==='emission',alphaMode:frame?'opaque':'auto'}),state=new MaterialGraphState();
         state.request([material]);expect(state.diagnostics).toEqual([]);state.install(state.requested,state.revision);const installed=state.active.graphs[0];

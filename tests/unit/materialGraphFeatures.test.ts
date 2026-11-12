@@ -31,6 +31,8 @@ describe('graph shader capabilities',()=>{
   const geometry=new Geometry({position:new GeometryAttribute(new Float32Array(9),3)});geometry.uv1=new GeometryAttribute(new Float32Array(6),2);
   const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'c',category:'convert',type:'color3',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}],terminal:{baseColor:{node:'c'}}});
   const s=new MaterialGraphState();s.request([new OpenPBRMaterial({graph})]);expect(materialGraphConstants(base,s.requested,geometry).USE_UV1).toBe(true);
+  expect(materialGraphConstants(base,s.requested).USE_UV1).toBe(true);
+  expect(materialGraphConstants({...base,USE_UV1:true},s.requested).USE_UV1).toBe(true);
   const image=new MaterialGraph({nodes:[{id:'i',category:'image',type:'color3'}],terminal:{baseColor:{node:'i'}}});s.request([new OpenPBRMaterial({graph:image})]);expect(materialGraphConstants(base,s.requested,geometry).USE_UV1).toBe(false);
  });
  it('selects transport and alpha support by terminal',()=>{

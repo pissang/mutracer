@@ -128,7 +128,7 @@ it('samples all emissive instances and invalidates the batch cache on matrix/cou
   const binding = {mesh, geometry: mesh.geometry, materialIndices: [0]}, cache = new EmissiveTriangleCache();
   const actual = collectEmissiveTriangles([binding], mesh.materials);
   const reference = collectEmissiveTriangles(expanded(mesh).map(single => ({...binding, mesh: single})), mesh.materials);
-  expect(actual).toEqual(reference); expect(actual).toHaveLength(4);
+  expect(actual).toEqual(reference.map((triangle,i)=>({...triangle,instanceIndex:Math.floor(i/2)}))); expect(actual).toHaveLength(4);
   const first = cache.collect([binding], mesh.materials)[0];
   mesh.colors = new Float32Array(6).fill(.2); mesh.markColorsUpdated();
   expect(cache.collect([binding], mesh.materials)[0]).toBe(first);

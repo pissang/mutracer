@@ -30,6 +30,8 @@ const component=(v:number[],i:number)=>v[i%v.length];
 export function planDirectMaterial(graph:MaterialGraph, images:Map<string,ImageInfo>,material:MaterialValues={},diagnose?:(reason:string)=>void):DirectMaterial|undefined {
   const reject=(reason:string)=>{diagnose?.(reason);return undefined;};
   const g=normalizeGraph(graph);if(g.diagnostics.length)return reject('invalid-graph');
+  // Emitters need the installed graph proposal as well as their evaluated coat.
+  if(!material.unlit && (['emissionColor','emissionLuminance'].some(p=>p in g.terminal) || (material.emissionLuminance ?? 0)>0 && ['coatColor','coatWeight'].some(p=>p in g.terminal)))return reject('emission-context');
   const values:(Value|undefined)[]=[],failures:(string|undefined)[]=[];
   const read=(input:GraphInput):Value|undefined=>{
     if(input.geometry)return input.geometry==='texcoord'?uv0():undefined;

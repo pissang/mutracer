@@ -104,9 +104,15 @@ describe('library graph slot lowering',()=>{
         material.specularAnisotropy=0;graph.setTerminal({transmissionWeight:{node:'gain'}});material.transmissionDepth=1;
         expect(lowering.lower(material)).toBeUndefined();material.thinWalled=true;expect(lowering.lower(material)).toBeDefined();
     });
+    it('keeps emissive coat images on the graph path with a matching light proposal',()=>{
+        const {material,graph}=fixture();material.emissionLuminance=2;material.coatWeight=1;material.coatColor=[0,0,0];graph.setTerminal({coatWeight:{node:'gain'}});
+        expect(materialSlotPlan(material)).toBeUndefined();
+        const state=new MaterialGraphState();state.request([material]);state.install(state.requested,state.revision);
+        expect(state.active.graphs[0]).toBeDefined();expect(state.emissionProposal(material)).toEqual([2,2,2]);
+    });
     it('does not retain direct slots when an emission context forces constant fallback',()=>{
         const {material,graph}=fixture(),state=new MaterialGraphState();state.request([material]);
-        material.emissionLuminance=1;graph.setTerminal({emissionLuminance:{node:'gain'}});state.request([material]);
+        material.emissionLuminance=1;graph.setNode({id:'frame',category:'normal',type:'vector3'}).setNode({id:'scalar',category:'extract',type:'float',inputs:{in:{type:'vector3',connection:{node:'frame'}}}}).setTerminal({emissionLuminance:{node:'scalar'}});state.request([material]);
         expect(state.status).toBe('failed');expect(state.renderMaterials([material])[0]).toBe(material);
     });
     it('lowers zero-bias image blends with uniform weights',()=>{

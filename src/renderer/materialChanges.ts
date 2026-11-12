@@ -12,6 +12,8 @@ interface MaterialSnapshot {
   emissive: string;
   emissiveMap: string;
   slots?: string;
+  graph: OpenPBRMaterial['graph'];
+  graphRevision?: number;
 }
 const textureIds = new WeakMap<object, number>();
 let nextTextureId = 1;
@@ -26,7 +28,9 @@ function key(material: OpenPBRMaterial, keys: readonly (keyof OpenPBRMaterial)[]
   return JSON.stringify(keys.map(k => material[k]));
 }
 function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
+  const graph=material.graph && Object.keys(material.graph.terminal).some(p=>p==='emissionColor'||p==='emissionLuminance'||material.emissionLuminance>0&&(p==='coatWeight'||p==='coatColor')) ? material.graph : undefined;
   return {
+    graph, graphRevision: graph?.revision,
     slots: material.graph ? JSON.stringify(materialSlotPlan(material)?.plan.maps) : undefined,
     paramKey: key(material, materialParamKeys),
     textureKey: (material.graph?.nodes.flatMap(node => Object.values(node.inputs ?? {}).map(input => input.value instanceof Texture ? textureKey(input.value) : '')).join('|') ?? '') + '|' + materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
@@ -55,7 +59,7 @@ export class MaterialChangeTracker {
     for (const material of materials) {
       const previous = this._snapshots.get(material);
       const next = snapshot(material);
-      const emissionChanged = !previous || previous.emissive !== next.emissive;
+      const emissionChanged = !previous || previous.emissive !== next.emissive || previous.graph!==next.graph || previous.graphRevision!==next.graphRevision;
       emission ||= emissionChanged;
       emissiveMap ||= !previous || previous.emissiveMap !== next.emissiveMap;
       const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey

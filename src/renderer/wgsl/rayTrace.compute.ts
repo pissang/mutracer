@@ -23,7 +23,7 @@ import createIntersectionWgsl from './chunks/intersect.wgsl.js';
 import randomWgsl from './chunks/random.wgsl.js';
 import randWgsl from './chunks/rand.wgsl.js';
 import { createSampleMaterialWgsl } from './chunks/sampleMaterial.wgsl.js';
-import sampleLightWgsl from './chunks/sampleLight.wgsl.js';
+import {createSampleLightWgsl} from './chunks/sampleLight.wgsl.js';
 import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
 import {spectrumWgsl} from '../spectrum.js';
@@ -60,6 +60,8 @@ export interface RayTraceShaderOptions {
   cameraProjectionInverse?: boolean;
   /** Browser analytic lights use a dynamically sized storage buffer. Default false preserves native. */
   analyticLightStorage?: boolean;
+  /** Browser light records carry a GPU instance slot. Default false. */
+  emissiveInstanceIndices?: boolean;
   compactVertices?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
@@ -200,7 +202,7 @@ ${envMapWgsl}
 ${samplingWgsl}
 ${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks)}
-${sampleLightWgsl}${inputHooks?.declarations ?? ''}
+${createSampleLightWgsl(options.emissiveInstanceIndices, !!materialHooks.graph?.emission)}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
 var<private> bounceIndex: u32 = 0u;

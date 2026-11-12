@@ -1,7 +1,7 @@
 /** Internal shader-generation inputs shared by browser and native AOT.
  * Templates own the flag word and all material/shadow function boundaries. */
 export interface MaterialShaderHooks {
-  graph?: {declarations: string; evaluate: string; opacity: boolean};
+  graph?: {declarations: string; evaluate: string; opacity: boolean; emission?: boolean};
   materialXNormals?: boolean;
 }
 

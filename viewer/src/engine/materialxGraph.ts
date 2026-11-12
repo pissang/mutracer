@@ -1,3 +1,6 @@
+import {graphContextDiagnostics} from '../../../src/renderer/materialGraph/context';
+import {flattenGraphUnchecked} from '../../../src/renderer/materialGraph/flatten';
+import {graphTerminals} from '../../../src/renderer/materialGraph/ir';
 import {MaterialGraph, OpenPBRMaterial, type MaterialGraphInput as Input, type MaterialGraphNode as Node, type MaterialGraphType as Type, type MaterialGraphConnection as Edge} from '@meimu/mutracer';
 import {normalizeGraph} from '../../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../../src/renderer/materialGraph/evaluate';
@@ -276,7 +279,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         const state=new OpenPBRMaterial();Object.assign(state,values);state.graph=graph;
         const normalized=normalizeGraph(graph);
         warnings.push(...normalized.diagnostics.map(d=>`${d.node??''}${d.port?'.'+d.port:''}: ${d.message}`));
-        if(!state.unlit && (['emissionColor','emissionLuminance'].some(p=>p in normalized.terminal)||state.emissionLuminance>0&&['coatColor','coatWeight'].some(p=>p in normalized.terminal)))warnings.push('Lit emission graphs use the constant material fallback.');
+        warnings.push(...graphContextDiagnostics(flattenGraphUnchecked(normalized),state.unlit,state.emissionLuminance>0,state.alphaMode==='opaque',state.uvProjection!=='none',true).map(d=>`${normalized.nodes[d.node]?.id??''}.${graphTerminals[d.port]}: ${d.message}`));
         if(!normalized.diagnostics.length)generateGraph(normalized);
     }
     const displacement=r.displacement(material,shader);
