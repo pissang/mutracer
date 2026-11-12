@@ -5,8 +5,8 @@ import type { PresetStage, PresetRenderSettings } from '../presetSettings';
 import { PUBLIC_MODEL_PRESETS } from './publicModelPresets';
 import { RESEARCH_MODEL_PRESETS } from './researchModelPresets';
 
-// Material swatches stay local.
-const THUMBNAILS = import.meta.glob<string>(['../assets/thumbnails/material-*.webp', '../assets/thumbnails/materialx-*.webp'], { eager: true, query: '?url', import: 'default' });
+// Material swatches and the thumbnails of scenes built in code stay local.
+const THUMBNAILS = import.meta.glob<string>(['../assets/thumbnails/material-*.webp', '../assets/thumbnails/materialx-*.webp', '../assets/thumbnails/model-*.webp'], { eager: true, query: '?url', import: 'default' });
 export const thumbnailUrl = (name: string): string | undefined => THUMBNAILS[`../assets/thumbnails/${name}.webp`];
 
 export interface ModelPreset {
@@ -14,7 +14,7 @@ export interface ModelPreset {
   name: string;
   /** What the model is good for showing. */
   tag: string;
-  /** `null` builds the procedural material-sphere scene. */
+  /** `null` builds the scene in code. */
   url: string | null;
   thumbnail?: string;
   license: 'CC0' | 'CC-BY 3.0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0' | 'Mixed (see source)';
@@ -34,7 +34,8 @@ export interface ModelPreset {
   category?: 'research';
 }
 
-export const MODEL_PRESETS: ModelPreset[] = [...PUBLIC_MODEL_PRESETS, ...RESEARCH_MODEL_PRESETS];
+export const MODEL_PRESETS: ModelPreset[] = [...PUBLIC_MODEL_PRESETS, ...RESEARCH_MODEL_PRESETS]
+  .map((preset) => ({ ...preset, thumbnail: preset.thumbnail ?? thumbnailUrl(`model-${preset.id}`) }));
 
 export interface EnvironmentPreset {
   id: string;

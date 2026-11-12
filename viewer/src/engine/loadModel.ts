@@ -8,6 +8,7 @@ import * as meshopt from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { fetchWithProgress } from './fetchWithProgress';
 import type { PathedFile } from './droppedFiles';
 import { loadModelLighting, modelEnvironmentPaths, type ModelLighting } from './modelLighting';
+import { createShaderBall } from './shaderBall';
 
 export { isHDRFile, isModelFile, readDroppedItems, toPathedFiles, type PathedFile } from './droppedFiles';
 
@@ -235,3 +236,7 @@ export function createMaterialSpheres(): LoadedModel {
   add('Jade', jade, 0.475, -1.05);
   return { name: 'Material spheres', root, animations: [], revoke() {} };
 }
+
+/** Scenes built in code: the presets without a URL. */
+export const createProceduralModel = (presetId: string | null): LoadedModel =>
+  presetId === 'shader-ball' ? createShaderBall() : createMaterialSpheres();

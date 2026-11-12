@@ -173,7 +173,7 @@ user view takes precedence. Invalid camera metadata falls back to automatic fit.
 
 Example models are loaded on demand. Downloads retry temporary network or server
 failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
-Material spheres are procedural; Toy Car
+Material spheres and the shader ball are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
 (CC0). Additional model previews and credits are available in
 [mutracer-assets](https://github.com/pissang/mutracer-assets).
@@ -184,5 +184,5 @@ author, source, license and full credits/change notes; these assets are not
 covered by the library's MIT license. Yamaha and Gelatinous Cube require
 noncommercial use, and Yamaha adaptations retain ShareAlike. Jaguar and the
 octopus remain local previews and are excluded from the public list. HDRIs come
-from [Poly Haven](https://polyhaven.com/hdris) (CC0). The material spheres and the
-procedural sky work offline.
+from [Poly Haven](https://polyhaven.com/hdris) (CC0). The material spheres, the shader ball and
+the procedural sky work offline.

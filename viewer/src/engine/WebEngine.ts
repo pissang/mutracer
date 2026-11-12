@@ -14,7 +14,7 @@ import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScal
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
-  createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
+  createProceduralModel, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
@@ -335,7 +335,7 @@ export class WebEngine implements ViewerEngine {
       const { meta } = cached;
       const loaded = await this.load(meta.name, (progress, signal) => cached.source
         ? this.loadSource(cached.source, progress, signal)
-        : Promise.resolve(createMaterialSpheres()), meta, cached, false);
+        : Promise.resolve(createProceduralModel(meta.presetId)), meta, cached, false);
       if (loaded || token + 1 !== this.loadToken) return;
       await clearModelCache();
       if (token + 1 !== this.loadToken) return;
@@ -361,7 +361,7 @@ export class WebEngine implements ViewerEngine {
     const meta = { presetId: preset.id, credit: preset.license !== 'CC0' ? `${preset.name} · ${preset.credit}` : null, sourceUrl: preset.sourceUrl };
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
     return this.load(preset.name, async (progress, signal) => {
-      const model = preset.url ? await loadModelFromURL(preset.url, progress, signal, this.modelBackend) : createMaterialSpheres();
+      const model = preset.url ? await loadModelFromURL(preset.url, progress, signal, this.modelBackend) : createProceduralModel(preset.id);
       if (preset.category === 'research' && model.lighting) model.lighting.useByDefault = true;
       if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
       return model;

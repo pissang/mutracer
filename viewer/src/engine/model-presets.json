@@ -18,6 +18,22 @@
     }
   },
   {
+    "id": "shader-ball",
+    "name": "Shader ball",
+    "tag": "Material test",
+    "url": null,
+    "license": "CC0",
+    "credit": "Procedural scene by Yi Shen",
+    "sourceUrl": "https://github.com/pissang/mutracer",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "camera": {
+      "position": [2.4, 2.4, 6.1],
+      "target": [0.0, 1.1, 0.0],
+      "fov": 28,
+      "space": "grounded"
+    }
+  },
+  {
     "id": "toycar",
     "name": "Toy Car",
     "tag": "Coat · transmission",
