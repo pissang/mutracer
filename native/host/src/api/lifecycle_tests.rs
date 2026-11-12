@@ -21,6 +21,134 @@ pub(super) fn fixture() -> (Engine, Arc<Render>) {
     (engine, render)
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn partial_flight_recovery_matches_clean_converge_on_both_backends() {
+    let _lock = crate::abi_test_lock();
+    for backend in [Backend::Software, Backend::Hardware] {
+        let engine = Engine::new(EngineOptions { backend }).unwrap();
+        engine.display().set_size(32, 24).unwrap();
+        engine.set_scene(&crate::scene::tests::input()).unwrap();
+        engine.update().unwrap();
+        let settings = RenderSettings {
+            max_samples: 8,
+            seed: 12345,
+            ..Default::default()
+        };
+        let clean = Render::new(&engine, settings.clone()).unwrap();
+        clean.converge(ConvergeOptions::new(8)).unwrap();
+        let expected: Vec<_> = [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
+            .into_iter()
+            .map(|kind| {
+                clean
+                    .read_pixels(kind)
+                    .unwrap()
+                    .data
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for partial in [0, 2, 7] {
+            let render = Render::new(&engine, settings.clone()).unwrap();
+            engine
+                .inner
+                .gpu
+                .recovery_test
+                .lock()
+                .unwrap()
+                .partial_sample = Some(partial);
+            let mut options = ConvergeOptions::new(8);
+            options.samples_per_batch = 8;
+            render.converge(options).unwrap();
+            assert_eq!(render.samples(), 8);
+            assert_eq!(render.status(), RenderStatus::Finished);
+            assert_eq!(
+                render.gpu_sample_time_ms(),
+                None,
+                "repaired-only job fabricated a timing"
+            );
+            for (i, kind) in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(
+                    render
+                        .read_pixels(kind)
+                        .unwrap()
+                        .data
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected[i],
+                    "backend={backend:?} partial={partial}"
+                );
+            }
+            assert!(engine.display().present(&render).unwrap().is_some());
+            assert!(engine.last_error().is_none());
+        }
+        assert_eq!(engine.inner.gpu.recovery_test.lock().unwrap().repairs, 3);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn persistent_repair_failure_keeps_error_and_sample_accounting() {
+    let _lock = crate::abi_test_lock();
+    for blocking in [false, true] {
+        let (engine, render) = fixture();
+        engine.display().set_size(32, 24).unwrap();
+        engine.set_scene(&crate::scene::tests::input()).unwrap();
+        engine.update().unwrap();
+        {
+            let mut hook = engine.inner.gpu.recovery_test.lock().unwrap();
+            hook.partial_sample = Some(0);
+            hook.repair_failures = 100;
+        }
+        if blocking {
+            assert_eq!(
+                render.converge(ConvergeOptions::new(2)).unwrap_err().status,
+                Status::ContextFailed
+            );
+        } else {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while render.refine().unwrap() != RenderStatus::Error {
+                assert!(std::time::Instant::now() < deadline);
+            }
+        }
+        assert_eq!(render.samples(), 0, "unrepairable flight credited samples");
+        assert_eq!(render.status(), RenderStatus::Error);
+        let error = engine.last_error().unwrap();
+        assert!(
+            error.contains("controlled partial flight failure")
+                && error.contains("controlled persistent repair failure"),
+            "{error}"
+        );
+        assert_eq!(engine.inner.gpu.recovery_test.lock().unwrap().repairs, 1);
+        engine
+            .inner
+            .gpu
+            .recovery_test
+            .lock()
+            .unwrap()
+            .repair_failures = 0;
+        drop(render);
+        let fresh = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        fresh.converge(ConvergeOptions::new(2)).unwrap();
+        assert_eq!(fresh.samples(), 2);
+        assert_eq!(fresh.status(), RenderStatus::Finished);
+    }
+}
+
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn execution_failure_is_reported_and_a_new_render_recovers() {

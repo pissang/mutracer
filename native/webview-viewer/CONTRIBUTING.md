@@ -102,8 +102,17 @@ node native/validation/hwrt-hang-regression.mjs
 Pass `chess` or `sanmiguel` as the script's optional argument to run one scene.
 The SanMiguel directory contains `native-ui.bin` and `refs.json`; its descriptor
 must already include the captured host camera. Keep other GPU tests stopped.
-Metal execution-error checks are always active on these SDK-created devices;
+Metal execution-error checks are always active on these SDK-created devices.
+Retryable sampling errors are repaired automatically, including during RenderLoop
+tick/refill; repair temporarily blocks that caller. Queue replacement preserves
+the viewer's wgpu device, display textures and surface configuration. Only a
+failed or unsupported repair reaches the error state and Restart renderer action.
+See [sampling recovery limits](../CONTRIBUTING.md#metal-hwrt-sample-miss).
 `MUTRACER_NATIVE_COMMAND_STATUS=1` adds per-buffer logs and can change timing.
+The regression summary counts completed runs and records every recovery's range,
+retry count, queue replacement and duration. Runs without a recovery establish
+completion only; compare real-hang images separately from the known intermittent
+HWRT excess-energy state.
 For focused isolation, run the ignored `hwrt_hang_replay` test directly with
 `MUTRACER_HWRT_SCENE`, optional `MUTRACER_HWRT_MODEL`/`MUTRACER_HWRT_REFS`,
 `MUTRACER_HWRT_OUTPUT`, `WIDTH`, `HEIGHT`, `SPP`, `BOUNCES`, `BATCH`, `CANDIDATES`,

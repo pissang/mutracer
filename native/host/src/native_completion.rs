@@ -1,7 +1,7 @@
 //! wgpu's queue callback also fires for failed Metal command buffers. Retain
 //! each buffer submitted while recording a batch, then check execution
 //! before credit. Metal queue forwarding avoids mixing wgpu and raw encoding.
-//! No handlers, extra GPU work, or waits are added to the polling path.
+//! Successful polling adds no handlers, extra GPU work, or waits.
 #[derive(Default)]
 pub(crate) struct Batch {
     #[cfg(target_os = "macos")]
@@ -9,6 +9,8 @@ pub(crate) struct Batch {
         Vec<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>>,
     #[cfg(test)]
     pub(crate) injected_error: Option<String>,
+    #[cfg(test)]
+    pub(crate) injected_kind: Option<FailureKind>,
 }
 
 // SAFETY: the retained Metal objects are never encoded or committed through
@@ -87,6 +89,67 @@ pub(crate) fn observe_queue(queue: MetalQueue) -> MetalQueue {
     }
 }
 
+/// Retained with GpuQueue, including queues cloned into an embedding viewer.
+#[derive(Clone, Default)]
+pub(crate) struct ObservedQueue {
+    #[cfg(target_os = "macos")]
+    queue: Option<MetalQueue>,
+}
+impl ObservedQueue {
+    pub(crate) fn new(queue: &wgpu::Queue) -> Self {
+        #[cfg(target_os = "macos")]
+        if let Some(hal) = unsafe { queue.as_hal::<wgpu::hal::api::Metal>() } {
+            use objc2::Message;
+            unsafe extern "C" {
+                fn mt_native_is_observed_metal_queue(queue: *mut std::ffi::c_void) -> bool;
+            }
+            let raw = hal.as_raw();
+            if unsafe {
+                mt_native_is_observed_metal_queue(
+                    (raw as *const objc2::runtime::ProtocolObject<
+                        dyn objc2_metal::MTLCommandQueue,
+                    >)
+                        .cast_mut()
+                        .cast(),
+                )
+            } {
+                return Self {
+                    queue: Some(raw.retain()),
+                };
+            }
+        }
+        let _ = queue;
+        Self::default()
+    }
+    pub(crate) fn available(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.queue.is_some();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+    pub(crate) fn renew(&self) -> crate::Result<()> {
+        #[cfg(target_os = "macos")]
+        if let Some(queue) = &self.queue {
+            unsafe extern "C" {
+                fn mt_native_renew_metal_queue(queue: *mut std::ffi::c_void) -> bool;
+            }
+            if unsafe {
+                mt_native_renew_metal_queue(objc2::rc::Retained::as_ptr(queue).cast_mut().cast())
+            } {
+                return Ok(());
+            }
+        }
+        Err("Cannot replace this Metal command queue".into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureKind {
+    Retry,
+    SubmissionsIgnored,
+    Unrecoverable,
+}
+
 pub(crate) fn request_device(
     adapter: &wgpu::Adapter,
     descriptor: &wgpu::DeviceDescriptor<'_>,
@@ -128,6 +191,38 @@ pub(crate) fn request_device(
 }
 
 impl Batch {
+    /// NSError domain/code, independent of localized descriptions and logging.
+    /// An unrelated failure in the same batch always prevents replay.
+    pub(crate) fn failure_kind(&self) -> FailureKind {
+        #[cfg(test)]
+        if self.injected_error.is_some() {
+            return self.injected_kind.unwrap_or(FailureKind::Unrecoverable);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+            let mut kind = FailureKind::Unrecoverable;
+            for buffer in &self.buffers {
+                if buffer.status() != MTLCommandBufferStatus::Error {
+                    continue;
+                }
+                let Some(error) = buffer.error() else {
+                    return FailureKind::Unrecoverable;
+                };
+                let next = classify_metal_error(&error.domain().to_string(), error.code());
+                match next {
+                    FailureKind::Unrecoverable => return next,
+                    FailureKind::SubmissionsIgnored => kind = next,
+                    FailureKind::Retry if kind != FailureKind::SubmissionsIgnored => kind = next,
+                    _ => {}
+                }
+            }
+            return kind;
+        }
+        #[cfg(not(target_os = "macos"))]
+        FailureKind::Unrecoverable
+    }
+
     /// False means native execution is still pending, even if wgpu's callback
     /// has run. Scan every buffer so a later error cannot hide behind a wait.
     pub(crate) fn check(&self, identity: &str) -> crate::Result<bool> {
@@ -209,6 +304,15 @@ impl Batch {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn classify_metal_error(domain: &str, code: isize) -> FailureKind {
+    match (domain, code) {
+        ("MTLCommandBufferErrorDomain", 1 | 2) => FailureKind::Retry,
+        ("MTLCommandBufferErrorDomain", 4) => FailureKind::SubmissionsIgnored,
+        _ => FailureKind::Unrecoverable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +323,7 @@ mod tests {
             #[cfg(target_os = "macos")]
             buffers: Vec::new(),
             injected_error: Some("VK_ERROR_DEVICE_LOST".into()),
+            injected_kind: None,
         };
         let error = batch.check("windows test flight").unwrap_err();
         assert_eq!(
@@ -229,9 +334,78 @@ mod tests {
     }
 
     #[test]
+    fn metal_error_classification_uses_domain_and_code() {
+        assert_eq!(
+            classify_metal_error("MTLCommandBufferErrorDomain", 4),
+            FailureKind::SubmissionsIgnored
+        );
+        assert_eq!(
+            classify_metal_error("MTLCommandBufferErrorDomain", 2),
+            FailureKind::Retry
+        );
+        assert_eq!(
+            classify_metal_error("MTLCommandBufferErrorDomain", 3),
+            FailureKind::Unrecoverable
+        );
+        assert_eq!(
+            classify_metal_error("OtherDomain", 4),
+            FailureKind::Unrecoverable
+        );
+    }
+
+    #[test]
     fn an_empty_completed_batch_is_successful() {
         let batch = Batch::default();
         assert!(batch.check("completed test flight").unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn renewal_preserves_inflight_callbacks_and_only_replaces_one_queue() {
+        use objc2::rc::Retained;
+        use objc2_metal::MTLCommandBuffer;
+        let first = crate::GpuDevice::with_backend(0).unwrap();
+        let second = crate::GpuDevice::with_backend(0).unwrap();
+        let submit = |gpu: &crate::GpuDevice| {
+            let recording = Recording::new();
+            gpu.queue.submit([]);
+            recording.finish()
+        };
+        let old = submit(&first);
+        let other = submit(&second);
+        let (tx, rx) = std::sync::mpsc::channel();
+        first.queue.on_submitted_work_done(move || {
+            tx.send(()).unwrap();
+        });
+        first.queue.renew().unwrap();
+        let new = submit(&first);
+        let other_after = submit(&second);
+        crate::GpuDevice::wait(&first.device).unwrap();
+        crate::GpuDevice::wait(&second.device).unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        for batch in [&old, &new, &other, &other_after] {
+            batch.require_success("queue renewal").unwrap();
+        }
+        assert_ne!(
+            Retained::as_ptr(&old.buffers[0].commandQueue()),
+            Retained::as_ptr(&new.buffers[0].commandQueue())
+        );
+        assert_eq!(
+            Retained::as_ptr(&other.buffers[0].commandQueue()),
+            Retained::as_ptr(&other_after.buffers[0].commandQueue())
+        );
+        let failed = Batch {
+            injected_error: Some("post-renewal observed failure".into()),
+            ..new
+        };
+        assert!(
+            failed
+                .check("renewed queue")
+                .unwrap_err()
+                .to_string()
+                .contains("post-renewal observed failure")
+        );
     }
 
     #[cfg(target_os = "macos")]

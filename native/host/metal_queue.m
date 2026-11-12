@@ -51,38 +51,50 @@ static void registerForwarders(Class cls, Protocol *protocol) {
 @end
 
 @interface MuTracerObservedQueue : NSObject {
-    id<MTLCommandQueue> _queue;
     MuTracerRecord _record;
 }
+@property (atomic, strong) id<MTLCommandQueue> live;
 - (instancetype)initWithQueue:(id<MTLCommandQueue>)queue record:(MuTracerRecord)record;
+- (BOOL)renew;
 @end
 
 @implementation MuTracerObservedQueue
+// Existing command buffers retain their original queue and completion handlers.
+// Only future command buffers use the replacement, on the same Metal device.
+- (BOOL)renew {
+    @synchronized(self) {
+        id<MTLCommandQueue> next = [[self.live device] newCommandQueue];
+        if (!next) return NO;
+        next.label = self.live.label;
+        self.live = next;
+        return YES;
+    }
+}
 + (void)initialize { registerForwarders(self, @protocol(MTLCommandQueue)); }
 - (instancetype)initWithQueue:(id<MTLCommandQueue>)queue record:(MuTracerRecord)record {
     self = [super init];
-    if (self) { _queue = queue; _record = record; }
+    if (self) { self.live = queue; _record = record; }
     return self;
 }
-- (id)forwardingTargetForSelector:(SEL)selector { return _queue; }
+- (id)forwardingTargetForSelector:(SEL)selector { return self.live; }
 - (BOOL)respondsToSelector:(SEL)selector {
-    return [_queue respondsToSelector:selector];
+    return [self.live respondsToSelector:selector];
 }
 - (BOOL)conformsToProtocol:(Protocol *)protocol {
-    return [_queue conformsToProtocol:protocol] || [super conformsToProtocol:protocol];
+    return [self.live conformsToProtocol:protocol] || [super conformsToProtocol:protocol];
 }
 - (id<MTLCommandBuffer>)commandBuffer {
-    id<MTLCommandBuffer> buffer = [_queue commandBuffer];
+    id<MTLCommandBuffer> buffer = [self.live commandBuffer];
     return buffer ? (id<MTLCommandBuffer>)[[MuTracerObservedCommandBuffer alloc]
         initWithBuffer:buffer record:_record] : nil;
 }
 - (id<MTLCommandBuffer>)commandBufferWithUnretainedReferences {
-    id<MTLCommandBuffer> buffer = [_queue commandBufferWithUnretainedReferences];
+    id<MTLCommandBuffer> buffer = [self.live commandBufferWithUnretainedReferences];
     return buffer ? (id<MTLCommandBuffer>)[[MuTracerObservedCommandBuffer alloc]
         initWithBuffer:buffer record:_record] : nil;
 }
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)descriptor {
-    id<MTLCommandBuffer> buffer = [_queue commandBufferWithDescriptor:descriptor];
+    id<MTLCommandBuffer> buffer = [self.live commandBufferWithDescriptor:descriptor];
     return buffer ? (id<MTLCommandBuffer>)[[MuTracerObservedCommandBuffer alloc]
         initWithBuffer:buffer record:_record] : nil;
 }
@@ -93,4 +105,15 @@ __attribute__((visibility("hidden")))
 void *mt_native_observe_metal_queue(void *queue, MuTracerRecord record) {
     return (__bridge_retained void *)[[MuTracerObservedQueue alloc]
         initWithQueue:(__bridge id<MTLCommandQueue>)queue record:record];
+}
+
+// The caller retains the wrapper stored in this particular wgpu queue; never
+// enumerate or replace queues belonging to another device or engine.
+__attribute__((visibility("hidden")))
+bool mt_native_is_observed_metal_queue(void *queue) {
+    return [(__bridge id)queue isKindOfClass:[MuTracerObservedQueue class]];
+}
+__attribute__((visibility("hidden")))
+bool mt_native_renew_metal_queue(void *queue) {
+    return [(__bridge MuTracerObservedQueue *)queue renew];
 }

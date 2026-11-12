@@ -76,6 +76,7 @@ enum JobState {
 }
 struct Flight {
     start: u32,
+    repaired: bool,
     native: crate::native_completion::Batch,
     end: u32,
     done: Arc<AtomicBool>,
@@ -94,6 +95,7 @@ struct RenderJob {
     cancelled: bool,
     flight: Option<Flight>,
     gpu_ms: Option<f64>,
+    gpu_samples: u32,
 }
 impl RenderJob {
     fn active(&self) -> bool {
@@ -2021,6 +2023,7 @@ pub(crate) fn submit(handle: u64, additional: u32) -> Result<u64> {
             cancelled: false,
             flight: None,
             gpu_ms: Some(0.),
+            gpu_samples: 0,
         });
         registry.next = next;
         Ok(id)
@@ -2041,10 +2044,14 @@ pub unsafe extern "C" fn mt_context_submit(
     };
     write_result(error, capacity, result)
 }
-/// GPU trace time of the most recently completed job; no readback waits.
-pub(crate) fn job_gpu_time(handle: u64) -> Option<f64> {
+/// GPU trace time per measured sample; repaired flights have neither a time nor
+/// a sample denominator. No readback waits, and no fabricated zero for all-repair jobs.
+pub(crate) fn job_gpu_sample_time(handle: u64) -> Option<f64> {
     let slot = REGISTRY.try_lock().ok()?;
-    slot.contexts.get(&handle)?.job.as_ref()?.gpu_ms
+    let job = slot.contexts.get(&handle)?.job.as_ref()?;
+    (job.gpu_samples > 0)
+        .then_some(job.gpu_ms?)
+        .map(|ms| ms / f64::from(job.gpu_samples))
 }
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
@@ -2084,10 +2091,27 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
         let flight = job.flight.as_ref().unwrap();
-        match flight.native.check(&format!(
+        let mut checked = flight.native.check(&format!(
             "context={context_id} job={} flight={}..{}",
             job.id, flight.start, flight.end
-        )) {
+        ));
+        if let Err(error) = checked {
+            // Retirement can collect a linked target without borrowing its scene
+            // owner. If replay resources are unavailable, preserve the original
+            // execution failure and let the ordinary failed-job path handle it.
+            checked = match (owner.or(own.as_ref()), target.as_ref()) {
+                (Some(scene), Some(target)) => scene
+                    .repair_target(target, flight.start, flight.end, &flight.native, error)
+                    .map(|()| {
+                        let flight = job.flight.as_mut().unwrap();
+                        flight.timer = None;
+                        flight.repaired = true;
+                        true
+                    }),
+                _ => Err(error),
+            };
+        }
+        match checked {
             Ok(true) => {}
             Ok(false) => return Ok(()),
             Err(error) => {
@@ -2108,7 +2132,10 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         let measured = flight
             .timer
             .and_then(|(timer, _)| timer.mapped_milliseconds(&gpu.queue));
-        job.gpu_ms = job.gpu_ms.zip(measured).map(|(sum, ms)| sum + ms);
+        if !flight.repaired {
+            job.gpu_samples += flight.end - flight.start;
+            job.gpu_ms = job.gpu_ms.zip(measured).map(|(sum, ms)| sum + ms);
+        }
         #[cfg(test)]
         if std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
             == Some(std::ffi::OsStr::new("1"))
@@ -2183,6 +2210,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     job.submitted += count;
     job.flight = Some(Flight {
         start,
+        repaired: false,
         native,
         end: job.base + job.submitted,
         done,
@@ -2295,6 +2323,8 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
     write_result(error, capacity, cancel_job(id))
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod recovery_tests;
 #[cfg(test)]
 mod target_tests;
 

@@ -1719,8 +1719,7 @@ fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
             });
             render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
-            render.gpu_sample_ms =
-                context::job_gpu_time(render.context).map(|ms| ms / count.max(1) as f64);
+            render.gpu_sample_ms = context::job_gpu_sample_time(render.context);
             render.needs_capture = true;
             update_aovs(render)?;
             let event = SampleEvent {

@@ -84,6 +84,7 @@ mod material_properties;
 mod native_completion;
 mod postprocess;
 mod profiling;
+mod recovery;
 mod runtime;
 mod scene;
 pub mod scene_api;
@@ -381,6 +382,8 @@ struct CachedPipeline {
 struct GpuDevice {
     /// Clones share this identity; a recreated device never accepts old frames.
     frame_device: denoiser_inputs::DeviceKey,
+    #[cfg(test)]
+    recovery_test: Arc<Mutex<recovery::Injection>>,
     custom_snapshot_pipeline: Arc<std::sync::OnceLock<wgpu::ComputePipeline>>,
     loss: device_loss::DeviceLossNotifier,
     device: wgpu::Device,
@@ -433,6 +436,8 @@ impl GpuDevice {
     ) -> Self {
         Self {
             frame_device: denoiser_inputs::DeviceKey::new(),
+            #[cfg(test)]
+            recovery_test: Default::default(),
             custom_snapshot_pipeline: Default::default(),
             loss: Default::default(),
             device: device.clone(),
@@ -555,6 +560,8 @@ impl GpuDevice {
         });
         Ok(Self {
             frame_device: denoiser_inputs::DeviceKey::new(),
+            #[cfg(test)]
+            recovery_test: Default::default(),
             custom_snapshot_pipeline: Default::default(),
             loss,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
@@ -1215,9 +1222,22 @@ impl GpuScene {
         let completion =
             self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         crate::GpuDevice::wait(&self.gpu.device)?;
-        completion.require_success("blocking render")?;
+        let repaired = match completion.require_success("blocking render") {
+            Ok(()) => false,
+            Err(error) => {
+                self.repair_target(
+                    target,
+                    target.samples,
+                    target.samples + additional,
+                    &completion,
+                    error,
+                )?;
+                true
+            }
+        };
         if profiling::gpu_enabled() {
             let gpu_ms = timer
+                .filter(|_| !repaired)
                 .as_ref()
                 .and_then(|t| t.optional_milliseconds(&self.gpu.device, &self.gpu.queue));
             native_log!(
@@ -1454,7 +1474,19 @@ impl GpuScene {
         let uniform = &target.buffers[&layout::resource::TRACE_UNIFORM];
         let pipeline = target.pipeline.as_ref().unwrap_or(&self.pipeline);
         let completion = native_completion::Recording::new();
+        #[cfg(test)]
+        let partial = {
+            let mut injection = self.gpu.recovery_test.lock().unwrap();
+            injection
+                .partial_sample
+                .filter(|s| (start..end).contains(s))
+                .inspect(|_| injection.partial_sample = None)
+        };
         for sample in samples {
+            #[cfg(test)]
+            if partial.is_some_and(|s| sample > s) {
+                continue;
+            }
             let frame = &target.frames[sample as usize];
             queue.write_buffer(
                 uniform,
@@ -1502,7 +1534,16 @@ impl GpuScene {
                 }
                 pass.dispatch_workgroups(
                     target.width.div_ceil(target.workgroup_size),
-                    target.height.div_ceil(target.workgroup_size),
+                    {
+                        let rows = target.height.div_ceil(target.workgroup_size);
+                        #[cfg(test)]
+                        let rows = if partial == Some(sample) {
+                            rows / 2
+                        } else {
+                            rows
+                        };
+                        rows
+                    },
                     1,
                 );
             }
@@ -1532,8 +1573,19 @@ impl GpuScene {
                 }
             }
             queue.submit([encoder.finish()]);
+            #[cfg(test)]
+            {
+                self.gpu.recovery_test.lock().unwrap().submissions += 1;
+            }
         }
-        Ok(completion.finish())
+        #[allow(unused_mut)]
+        let mut batch = completion.finish();
+        #[cfg(test)]
+        if partial.is_some() {
+            batch.injected_error = Some("controlled partial flight failure".into());
+            batch.injected_kind = Some(crate::native_completion::FailureKind::Retry);
+        }
+        Ok(batch)
     }
     fn read_target(&self, target: &Target, kind: u32) -> Result<Vec<u8>> {
         if target.samples == 0 {

@@ -34,9 +34,12 @@ function run(c,backend,index){
  try{result=spawnSync(binary,['hwrt_regression::hwrt_hang_replay','--ignored','--nocapture'],{env,stdio:['ignore',fd,fd],timeout:900000});}finally{closeSync(fd);}
  let report;
  try{report=JSON.parse(readFileSync(join(directory,'result.json'),'utf8'));}catch{}
- const row={scene:c.name,backend,index,exitCode:result.status,error:result.error?.message,report};
- summary.runs.push(row);if(result.status!==0)summary.passed=false;save();console.log(JSON.stringify(row));
- return result.status===0?directory:undefined;
+ const recoveries=readFileSync(join(directory,'run.log'),'utf8').split('\n')
+  .flatMap(line=>{const match=line.match(/\{"nativeFlightRecovery":\{.*\}\}/);return match?[JSON.parse(match[0]).nativeFlightRecovery]:[];});
+ const completed=result.status===0&&report?.samples===Number(c.env.SPP)&&report?.error==null;
+ const row={scene:c.name,backend,index,completed,recoveryCount:recoveries.filter(r=>r.recovered).length,recoveries,exitCode:result.status,error:result.error?.message,report};
+ summary.runs.push(row);if(!completed)summary.passed=false;save();console.log(JSON.stringify(row));
+ return completed?directory:undefined;
 }
 function compare(a,b,c){
  const x=readFileSync(join(a,'hdr.f32')),y=readFileSync(join(b,'hdr.f32'));assert.equal(x.length,y.length);

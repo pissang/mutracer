@@ -44,7 +44,7 @@ describe('native Engine boundary', () => {
         const errors = vi.fn();
         const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
         host.on('error', errors);
-        const message = 'GPU execution failed: MTLCommandBufferErrorDomain code 2';
+        const message = 'GPU execution failed: MTLCommandBufferErrorDomain code 2; flight repair failed: retry limit reached';
         window.mutracerNativeReceive?.({event:'state', value:{phase:'error', targets:{[render.id]:{samples:32,aovSamples:0,width:724,height:744,status:'error',denoising:false}},diagnostics:{backend:'webgpu',adapterName:'Test native GPU',width:724,height:744,lastError:message}}});
         window.mutracerNativeReceive?.({event:'error', value:message});
         expect(host.phase).toBe('error');

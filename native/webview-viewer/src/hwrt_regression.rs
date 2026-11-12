@@ -4,6 +4,7 @@ use super::*;
 #[test]
 #[ignore = "requires a captured scene, external assets and a real Metal GPU"]
 fn hwrt_hang_replay() {
+    mutracer_native::logging::stderr();
     let scene = PathBuf::from(std::env::var_os("MUTRACER_HWRT_SCENE").expect("scene descriptor"));
     let out = PathBuf::from(std::env::var_os("MUTRACER_HWRT_OUTPUT").expect("evidence directory"));
     std::fs::create_dir_all(&out).unwrap();

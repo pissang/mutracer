@@ -74,6 +74,7 @@ impl Drop for Submission<'_> {
 #[derive(Clone)]
 pub(crate) struct GpuQueue {
     queue: wgpu::Queue,
+    pub(crate) observed: crate::native_completion::ObservedQueue,
     submit_lock: Arc<Mutex<()>>,
     #[cfg(target_os = "macos")]
     metal_barrier: Arc<Mutex<Option<(MetalSharedEvent, u64)>>>,
@@ -84,6 +85,7 @@ pub(crate) struct GpuQueue {
 impl GpuQueue {
     pub(crate) fn new(queue: wgpu::Queue, gate: Option<Arc<SubmissionGate>>) -> Self {
         Self {
+            observed: crate::native_completion::ObservedQueue::new(&queue),
             queue,
             submit_lock: Default::default(),
             #[cfg(target_os = "macos")]
@@ -92,6 +94,9 @@ impl GpuQueue {
             #[cfg(test)]
             readbacks: Default::default(),
         }
+    }
+    pub(crate) fn renew(&self) -> crate::Result<()> {
+        self.exclusive_submit(|_| self.observed.renew())
     }
     // DownloadBuffer submits through the raw queue, so enter the same gate as submit.
     pub(crate) fn read_buffer(

@@ -650,17 +650,35 @@ For native Metal command-buffer status, set
 record status, NSError domain/code/description and the context/job/flight range
 for sampling submissions; retained raw TLAS updates are also checked. Status 4
 means Completed and 5 means Error. The option enables JSON status records;
-execution errors are returned regardless. This adds no GPU markers or
-readback, but logging and retaining buffers can perturb timing. It does not
-prove every pixel's correctness. `Engine::on_device` cannot observe an existing
-host-owned wgpu queue; diagnostics report unavailable coverage there.
+unrecoverable execution errors are returned regardless. This adds no GPU markers
+or readback, but logging and retaining buffers can perturb timing. It does not
+prove every pixel's correctness. `Engine::on_device` retains observation for
+queues created by `viewer_support::request_device`; other host-owned wgpu queues
+report unavailable coverage.
 
 The observer forwards a private Metal queue wrapper to wgpu-hal, retaining
 buffers submitted on the recording thread through their completion check. It
 includes wgpu's upload/barrier buffers without changing encoding or queue
 ordering. Do not call `CommandEncoder::as_hal_mut` after wgpu encoding: wgpu 30
-rejects mixed encoding APIs even for a read-only inspection. Failures invalidate
-the accumulation instead of attempting to undo partially executed GPU writes.
+rejects mixed encoding APIs even for a read-only inspection.
+
+Ordinary sampling flights automatically repair retryable Metal execution errors
+before crediting their samples. Missing pixels are replayed with the original
+sample records; a SubmissionsIgnored error replaces only the observed queue's
+underlying Metal queue on the same device. Repair blocks the polling/converge
+caller for up to a 10-second wait/backoff budget and allows at most 12 retries
+across the flight. A repaired flight contributes no GPU timing; previous valid
+flight timings are retained. `nativeFlightRecovery` log records include the
+flight range, retries, queue replacement, elapsed time and original error.
+
+Caustics targets, device loss, unobserved host-owned queues and other Metal
+error codes retain the existing failure path. Failed repair marks the context
+failed without crediting the flight; create a new render or recommit to recover.
+Independent frame-input producers, surface AOV/depth/picking passes and hit
+diagnostics are outside sampling repair coverage. Pixel output stores are not
+atomic across buffers, so exact partial-invocation recovery after a real driver
+reset is not guaranteed; keep
+real-hang image comparisons separate from deterministic missing-row injection.
 
 For `api::Render` command-buffer diagnostics, set
 `MUTRACER_NATIVE_DISPATCH_AUDIT=1` when running a `cfg(test)` GPU test. Each
