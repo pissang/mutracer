@@ -507,11 +507,14 @@ more download time and texture memory. Cancel, closing the browser,
 or selecting another target stops the pending import and keeps the existing
 material. Download or import failures also keep the existing material.
 
-The **MaterialX** preset category imports small procedural samples: car paint
-with flakes and a coat, weathered steel, varnished wood, candle wax, tartan
-velvet, and cobblestone with height displacement. They use only graph nodes and
-no images, so they need WebGPU to show their patterns; WebGL 2 renders their
-constant fallback.
+The **MaterialX** preset category imports procedural samples: flake car paint,
+weathered steel, varnished wood, marble, terrazzo, leather, tartan, cobblestone
+with height displacement, zellige tile, wax, hammered copper, carbon fibre,
+Damascus steel, kintsugi, heat-tinted titanium, abalone and hex plating. They
+use only graph nodes and no images, so they need WebGPU to show their patterns;
+WebGL 2 renders their constant fallback. Wood, stone, metal and leather
+patterns use object-space position and follow the model's size; the woven,
+tiled and plated ones use UV0 and expose their repeat count.
 
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and

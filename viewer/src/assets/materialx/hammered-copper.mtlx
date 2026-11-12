@@ -1,0 +1,177 @@
+<?xml version="1.0"?>
+<!--
+  Hammered copper: OpenPBR metal with hammer dents. Each object-space
+  Worley cell is one bowl-shaped dent, F1 squared, and forward
+  differences of that height tilt the normal. A fractal and the ridges
+  between dents carry a darker, rougher tarnish. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_hammered_copper">
+    <input name="copper_color" type="color3" value="0.95, 0.52, 0.36" uiname="Copper" />
+    <input name="tarnish_color" type="color3" value="0.3, 0.1, 0.055" uiname="Tarnish" />
+    <input name="dent_scale" type="float" value="10" uiname="Dent scale" />
+    <input name="dent_depth" type="float" value="0.45" uiname="Dent depth" uimin="0" uimax="1" />
+    <input name="tarnish" type="float" value="0.5" uiname="Tarnish" uimin="0" uimax="1" />
+    <input name="polish_roughness" type="float" value="0.14" uiname="Polished roughness" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="dent_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="dent_scale" />
+    </multiply>
+
+    <!-- Dent height: a bowl around each Worley feature point. -->
+    <worleynoise3d name="dent_distance" type="float">
+      <input name="position" type="vector3" nodename="dent_position" />
+      <input name="jitter" type="float" value="0.85" />
+    </worleynoise3d>
+    <multiply name="dent_height" type="float">
+      <input name="in1" type="float" nodename="dent_distance" />
+      <input name="in2" type="float" nodename="dent_distance" />
+    </multiply>
+
+    <!-- Tarnish in fractal patches and on the ridges between dents. -->
+    <multiply name="tarnish_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.1" />
+    </multiply>
+    <fractal3d name="tarnish_fractal" type="float">
+      <input name="position" type="vector3" nodename="tarnish_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <smoothstep name="tarnish_patches" type="float">
+      <input name="in" type="float" nodename="tarnish_fractal" />
+      <input name="low" type="float" value="-0.3" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <smoothstep name="ridges" type="float">
+      <input name="in" type="float" nodename="dent_height" />
+      <input name="low" type="float" value="0.12" />
+      <input name="high" type="float" value="0.34" />
+    </smoothstep>
+    <multiply name="ridge_tarnish" type="float">
+      <input name="in1" type="float" nodename="ridges" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <add name="tarnish_sum" type="float">
+      <input name="in1" type="float" nodename="tarnish_patches" />
+      <input name="in2" type="float" nodename="ridge_tarnish" />
+    </add>
+    <multiply name="tarnish_amount" type="float">
+      <input name="in1" type="float" nodename="tarnish_sum" />
+      <input name="in2" type="float" interfacename="tarnish" />
+    </multiply>
+    <clamp name="tarnish_mask" type="float">
+      <input name="in" type="float" nodename="tarnish_amount" />
+    </clamp>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="copper_color" />
+      <input name="fg" type="color3" interfacename="tarnish_color" />
+      <input name="mix" type="float" nodename="tarnish_mask" />
+    </mix>
+    <multiply name="tarnish_roughness" type="float">
+      <input name="in1" type="float" nodename="tarnish_mask" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" interfacename="polish_roughness" />
+      <input name="in2" type="float" nodename="tarnish_roughness" />
+    </add>
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" interfacename="dent_depth" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="dent_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_position" />
+      <input name="in2" type="vector3" value="0.03, 0, 0" />
+    </add>
+    <worleynoise3d name="dent_distance_x" type="float">
+      <input name="position" type="vector3" nodename="dent_normal_position_x" />
+      <input name="jitter" type="float" value="0.85" />
+    </worleynoise3d>
+    <multiply name="dent_height_x" type="float">
+      <input name="in1" type="float" nodename="dent_distance_x" />
+      <input name="in2" type="float" nodename="dent_distance_x" />
+    </multiply>
+    <add name="dent_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_position" />
+      <input name="in2" type="vector3" value="0, 0.03, 0" />
+    </add>
+    <worleynoise3d name="dent_distance_y" type="float">
+      <input name="position" type="vector3" nodename="dent_normal_position_y" />
+      <input name="jitter" type="float" value="0.85" />
+    </worleynoise3d>
+    <multiply name="dent_height_y" type="float">
+      <input name="in1" type="float" nodename="dent_distance_y" />
+      <input name="in2" type="float" nodename="dent_distance_y" />
+    </multiply>
+    <add name="dent_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.03" />
+    </add>
+    <worleynoise3d name="dent_distance_z" type="float">
+      <input name="position" type="vector3" nodename="dent_normal_position_z" />
+      <input name="jitter" type="float" value="0.85" />
+    </worleynoise3d>
+    <multiply name="dent_height_z" type="float">
+      <input name="in1" type="float" nodename="dent_distance_z" />
+      <input name="in2" type="float" nodename="dent_distance_z" />
+    </multiply>
+    <combine3 name="dent_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="dent_height_x" />
+      <input name="in2" type="float" nodename="dent_height_y" />
+      <input name="in3" type="float" nodename="dent_height_z" />
+    </combine3>
+    <subtract name="dent_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_normal_ahead" />
+      <input name="in2" type="float" nodename="dent_height" />
+    </subtract>
+    <multiply name="dent_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_normal_delta" />
+      <input name="in2" type="float" value="33.33333" />
+    </multiply>
+    <dotproduct name="dent_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="dent_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="dent_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="dent_normal_along_normal" />
+    </multiply>
+    <subtract name="dent_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_normal_gradient" />
+      <input name="in2" type="vector3" nodename="dent_normal_normal_part" />
+    </subtract>
+    <multiply name="dent_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="dent_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="dent_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="dent_normal_offset" />
+    </subtract>
+    <transformnormal name="dent_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="dent_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="dent_normal" type="vector3">
+      <input name="in" type="vector3" nodename="dent_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="dent_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_hammered_copper" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_hammered_copper" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_hammered_copper" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_hammered_copper" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Hammered_Copper" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_hammered_copper" />
+  </surfacematerial>
+</materialx>

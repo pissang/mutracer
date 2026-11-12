@@ -1,0 +1,247 @@
+<?xml version="1.0"?>
+<!--
+  Veined marble: OpenPBR polished stone with shallow subsurface
+  scattering. A vector fractal warps object space; veins lie where a
+  fractal crosses zero, bold ones fading in and out and a finer network
+  between them. Soft grey clouding shades the body, and a warm accent
+  stains the stone beside the bold veins. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_marble">
+    <input name="body_color" type="color3" value="0.68, 0.67, 0.64" uiname="Body" />
+    <input name="cloud_color" type="color3" value="0.5, 0.52, 0.55" uiname="Clouding" />
+    <input name="vein_color" type="color3" value="0.1, 0.105, 0.12" uiname="Veins" />
+    <input name="accent_color" type="color3" value="0.5, 0.3, 0.09" uiname="Accent stain" />
+    <input name="scale" type="float" value="1.5" uiname="Scale" />
+    <input name="warp" type="float" value="0.45" uiname="Vein warp" />
+    <input name="vein_width" type="float" value="0.1" uiname="Vein width" uimin="0.01" uimax="0.5" />
+    <input name="accent_amount" type="float" value="0.45" uiname="Accent amount" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <multiply name="marble_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="marble_position" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <fractal3d name="warp_noise" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" interfacename="warp" />
+    </fractal3d>
+    <add name="warped_position" type="vector3">
+      <input name="in1" type="vector3" nodename="marble_position" />
+      <input name="in2" type="vector3" nodename="warp_noise" />
+    </add>
+
+    <!-- Bold veins: the zero crossing of a stretched fractal, a sharp core
+         inside a soft halo, fading in and out along their length. -->
+    <multiply name="bold_position" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0.45, 1.2, 0.7" />
+    </multiply>
+    <fractal3d name="bold_fractal" type="float">
+      <input name="position" type="vector3" nodename="bold_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <absval name="bold_distance" type="float">
+      <input name="in" type="float" nodename="bold_fractal" />
+    </absval>
+    <multiply name="fade_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="marble_position" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <add name="fade_position" type="vector3">
+      <input name="in1" type="vector3" nodename="fade_scaled" />
+      <input name="in2" type="vector3" value="11.3, -4.1, 6.7" />
+    </add>
+    <noise3d name="fade_noise" type="float">
+      <input name="position" type="vector3" nodename="fade_position" />
+    </noise3d>
+    <smoothstep name="bold_fade" type="float">
+      <input name="in" type="float" nodename="fade_noise" />
+      <input name="low" type="float" value="-0.4" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <multiply name="core_width" type="float">
+      <input name="in1" type="float" interfacename="vein_width" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <smoothstep name="bold_core_edge" type="float">
+      <input name="in" type="float" nodename="bold_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="core_width" />
+    </smoothstep>
+    <invert name="bold_core" type="float">
+      <input name="in" type="float" nodename="bold_core_edge" />
+    </invert>
+    <multiply name="halo_width" type="float">
+      <input name="in1" type="float" interfacename="vein_width" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <smoothstep name="bold_halo_edge" type="float">
+      <input name="in" type="float" nodename="bold_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="halo_width" />
+    </smoothstep>
+    <invert name="bold_halo" type="float">
+      <input name="in" type="float" nodename="bold_halo_edge" />
+    </invert>
+    <multiply name="core_part" type="float">
+      <input name="in1" type="float" nodename="bold_core" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="halo_part" type="float">
+      <input name="in1" type="float" nodename="bold_halo" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="bold_profile" type="float">
+      <input name="in1" type="float" nodename="core_part" />
+      <input name="in2" type="float" nodename="halo_part" />
+    </add>
+    <multiply name="bold_vein" type="float">
+      <input name="in1" type="float" nodename="bold_profile" />
+      <input name="in2" type="float" nodename="bold_fade" />
+    </multiply>
+
+    <!-- Fine veins cross them at a higher frequency, only in some regions. -->
+    <multiply name="fine_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="2.6, 1.1, 1.7" />
+    </multiply>
+    <add name="fine_position" type="vector3">
+      <input name="in1" type="vector3" nodename="fine_scaled" />
+      <input name="in2" type="vector3" value="-8.2, 5.5, 3.1" />
+    </add>
+    <fractal3d name="fine_fractal" type="float">
+      <input name="position" type="vector3" nodename="fine_position" />
+      <input name="octaves" type="integer" value="2" />
+    </fractal3d>
+    <absval name="fine_distance" type="float">
+      <input name="in" type="float" nodename="fine_fractal" />
+    </absval>
+    <add name="region_position" type="vector3">
+      <input name="in1" type="vector3" nodename="marble_position" />
+      <input name="in2" type="vector3" value="4.4, 1.9, -7.3" />
+    </add>
+    <noise3d name="region_noise" type="float">
+      <input name="position" type="vector3" nodename="region_position" />
+    </noise3d>
+    <smoothstep name="fine_region" type="float">
+      <input name="in" type="float" nodename="region_noise" />
+      <input name="low" type="float" value="-0.1" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="fine_width" type="float">
+      <input name="in1" type="float" interfacename="vein_width" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <smoothstep name="fine_edge" type="float">
+      <input name="in" type="float" nodename="fine_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="fine_width" />
+    </smoothstep>
+    <invert name="fine_core" type="float">
+      <input name="in" type="float" nodename="fine_edge" />
+    </invert>
+    <multiply name="fine_line" type="float">
+      <input name="in1" type="float" nodename="fine_core" />
+      <input name="in2" type="float" nodename="fine_region" />
+    </multiply>
+    <multiply name="fine_vein" type="float">
+      <input name="in1" type="float" nodename="fine_line" />
+      <input name="in2" type="float" value="0.55" />
+    </multiply>
+    <max name="veins" type="float">
+      <input name="in1" type="float" nodename="bold_vein" />
+      <input name="in2" type="float" nodename="fine_vein" />
+    </max>
+
+    <!-- Clouding and the accent stain beside the bold veins. -->
+    <multiply name="cloud_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <add name="cloud_position" type="vector3">
+      <input name="in1" type="vector3" nodename="cloud_scaled" />
+      <input name="in2" type="vector3" value="3.9, 9.4, -6.6" />
+    </add>
+    <fractal3d name="cloud_fractal" type="float">
+      <input name="position" type="vector3" nodename="cloud_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="cloud" type="float">
+      <input name="in" type="float" nodename="cloud_fractal" />
+      <input name="low" type="float" value="-0.3" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <multiply name="cloud_amount" type="float">
+      <input name="in1" type="float" nodename="cloud" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <mix name="clouded_body" type="color3">
+      <input name="bg" type="color3" interfacename="body_color" />
+      <input name="fg" type="color3" interfacename="cloud_color" />
+      <input name="mix" type="float" nodename="cloud_amount" />
+    </mix>
+    <multiply name="stain_width" type="float">
+      <input name="in1" type="float" interfacename="vein_width" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <smoothstep name="stain_edge" type="float">
+      <input name="in" type="float" nodename="bold_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="stain_width" />
+    </smoothstep>
+    <invert name="stain_reach" type="float">
+      <input name="in" type="float" nodename="stain_edge" />
+    </invert>
+    <multiply name="stain_near" type="float">
+      <input name="in1" type="float" nodename="stain_reach" />
+      <input name="in2" type="float" nodename="bold_fade" />
+    </multiply>
+    <multiply name="stain" type="float">
+      <input name="in1" type="float" nodename="stain_near" />
+      <input name="in2" type="float" interfacename="accent_amount" />
+    </multiply>
+    <multiply name="stain_strength" type="float">
+      <input name="in1" type="float" nodename="stain" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <mix name="stained_body" type="color3">
+      <input name="bg" type="color3" nodename="clouded_body" />
+      <input name="fg" type="color3" interfacename="accent_color" />
+      <input name="mix" type="float" nodename="stain_strength" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="stained_body" />
+      <input name="fg" type="color3" interfacename="vein_color" />
+      <input name="mix" type="float" nodename="veins" />
+    </mix>
+    <remap name="roughness" type="float">
+      <input name="in" type="float" nodename="veins" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.07" />
+      <input name="outhigh" type="float" value="0.22" />
+    </remap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_marble" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_marble" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_marble" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.55" />
+    <input name="subsurface_weight" type="float" value="0.3" />
+    <input name="subsurface_color" type="color3" value="0.95, 0.93, 0.9" />
+    <input name="subsurface_radius" type="float" value="0.06" />
+    <input name="subsurface_radius_scale" type="color3" value="1, 0.9, 0.75" />
+  </open_pbr_surface>
+  <surfacematerial name="Veined_Marble" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_marble" />
+  </surfacematerial>
+</materialx>

@@ -1,21 +1,24 @@
 <?xml version="1.0"?>
 <!--
   Weathered steel: OpenPBR brushed metal with rust patches. A fractal mask
-  blends a two-tone rust over the metal with `mix`; the rust is rough,
-  dielectric and pitted, the bare metal keeps anisotropic brushing noise.
-  Procedural, CC0.
+  with ragged edges blends rust over the metal: bright orange where it
+  starts, dark brown in the core, with a brown stain bleeding into the
+  surrounding steel. Rust is rough, dielectric and pitted; the bare metal
+  keeps anisotropic brushing. Procedural, CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_weathered_steel">
-    <input name="metal_color" type="color3" value="0.62, 0.62, 0.6" uiname="Metal color" />
-    <input name="rust_dark" type="color3" value="0.1, 0.028, 0.01" uiname="Dark rust" />
-    <input name="rust_light" type="color3" value="0.48, 0.16, 0.045" uiname="Light rust" />
-    <input name="rust_amount" type="float" value="0.45" uiname="Rust amount" uimin="0" uimax="1" />
+    <input name="metal_color" type="color3" value="0.56, 0.57, 0.58" uiname="Metal color" />
+    <input name="rust_dark" type="color3" value="0.04, 0.013, 0.006" uiname="Dark rust" />
+    <input name="rust_light" type="color3" value="0.26, 0.07, 0.016" uiname="Light rust" />
+    <input name="rust_amount" type="float" value="0.42" uiname="Rust amount" uimin="0" uimax="1" />
     <input name="rust_scale" type="float" value="2.2" uiname="Rust scale" />
-    <input name="edge_width" type="float" value="0.06" uiname="Edge width" />
-    <input name="pitting" type="float" value="0.35" uiname="Pitting" uimin="0" uimax="1" />
+    <input name="edge_width" type="float" value="0.04" uiname="Edge width" uimin="0.005" uimax="0.3" />
+    <input name="pitting" type="float" value="0.5" uiname="Pitting" uimin="0" uimax="1" />
+    <input name="brushing" type="float" value="0.6" uiname="Brushing" uimin="0" uimax="1" />
 
     <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
     <multiply name="rust_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
       <input name="in2" type="float" interfacename="rust_scale" />
@@ -25,12 +28,28 @@
       <input name="octaves" type="integer" value="5" />
       <input name="diminish" type="float" value="0.55" />
     </fractal3d>
-    <!-- Fractal output is roughly [-1, 1]; move it to [0, 1]. -->
-    <remap name="rust_field" type="float">
+
+    <!-- Fractal output is roughly [-1, 1]; move it to [0, 1] and fray the
+         edge. -->
+    <remap name="rust_base_field" type="float">
       <input name="in" type="float" nodename="rust_fractal" />
       <input name="inlow" type="float" value="-0.7" />
       <input name="inhigh" type="float" value="0.7" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
     </remap>
+    <multiply name="detail_position" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_position" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise3d name="edge_fray" type="float">
+      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="amplitude" type="float" value="0.07" />
+    </noise3d>
+    <add name="rust_field" type="float">
+      <input name="in1" type="float" nodename="rust_base_field" />
+      <input name="in2" type="float" nodename="edge_fray" />
+    </add>
     <subtract name="rust_threshold" type="float">
       <input name="in1" type="float" value="1" />
       <input name="in2" type="float" interfacename="rust_amount" />
@@ -48,27 +67,67 @@
       <input name="low" type="float" nodename="edge_low" />
       <input name="high" type="float" nodename="edge_high" />
     </smoothstep>
+    <add name="core_high" type="float">
+      <input name="in1" type="float" nodename="rust_threshold" />
+      <input name="in2" type="float" value="0.28" />
+    </add>
+    <smoothstep name="rust_core" type="float">
+      <input name="in" type="float" nodename="rust_field" />
+      <input name="low" type="float" nodename="rust_threshold" />
+      <input name="high" type="float" nodename="core_high" />
+    </smoothstep>
+    <subtract name="stain_low" type="float">
+      <input name="in1" type="float" nodename="rust_threshold" />
+      <input name="in2" type="float" value="0.2" />
+    </subtract>
+    <smoothstep name="stain_halo" type="float">
+      <input name="in" type="float" nodename="rust_field" />
+      <input name="low" type="float" nodename="stain_low" />
+      <input name="high" type="float" nodename="rust_threshold" />
+    </smoothstep>
 
-    <!-- Two-tone rust from finer noise. -->
-    <multiply name="detail_position" type="vector3">
-      <input name="in1" type="vector3" nodename="rust_position" />
-      <input name="in2" type="float" value="7" />
-    </multiply>
+    <!-- Rust color: mottled two-tone, darker toward the core of each patch. -->
+    <add name="tone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="detail_position" />
+      <input name="in2" type="vector3" value="7.1, 3.3, -5.2" />
+    </add>
     <noise3d name="rust_detail" type="float">
-      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="position" type="vector3" nodename="tone_position" />
       <input name="amplitude" type="float" value="0.5" />
       <input name="pivot" type="float" value="0.5" />
     </noise3d>
     <clamp name="rust_tone" type="float">
       <input name="in" type="float" nodename="rust_detail" />
     </clamp>
-    <mix name="rust_color" type="color3">
+    <mix name="rust_mottled" type="color3">
       <input name="bg" type="color3" interfacename="rust_dark" />
       <input name="fg" type="color3" interfacename="rust_light" />
       <input name="mix" type="float" nodename="rust_tone" />
     </mix>
-    <mix name="base_color_mix" type="color3">
+    <multiply name="core_darkening" type="float">
+      <input name="in1" type="float" nodename="rust_core" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <mix name="rust_color" type="color3">
+      <input name="bg" type="color3" nodename="rust_mottled" />
+      <input name="fg" type="color3" interfacename="rust_dark" />
+      <input name="mix" type="float" nodename="core_darkening" />
+    </mix>
+    <multiply name="stain_color" type="color3">
+      <input name="in1" type="color3" interfacename="metal_color" />
+      <input name="in2" type="color3" value="0.6, 0.4, 0.27" />
+    </multiply>
+    <multiply name="stain_amount" type="float">
+      <input name="in1" type="float" nodename="stain_halo" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <mix name="stained_metal" type="color3">
       <input name="bg" type="color3" interfacename="metal_color" />
+      <input name="fg" type="color3" nodename="stain_color" />
+      <input name="mix" type="float" nodename="stain_amount" />
+    </mix>
+    <mix name="base_color_mix" type="color3">
+      <input name="bg" type="color3" nodename="stained_metal" />
       <input name="fg" type="color3" nodename="rust_color" />
       <input name="mix" type="float" nodename="rust_mask" />
     </mix>
@@ -83,58 +142,51 @@
     </multiply>
     <noise3d name="brush_noise" type="float">
       <input name="position" type="vector3" nodename="brush_position" />
-      <input name="amplitude" type="float" value="0.06" />
-      <input name="pivot" type="float" value="0.24" />
+      <input name="amplitude" type="float" value="0.07" />
+      <input name="pivot" type="float" value="0.26" />
     </noise3d>
+    <multiply name="stain_roughness" type="float">
+      <input name="in1" type="float" nodename="stain_halo" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="metal_roughness" type="float">
+      <input name="in1" type="float" nodename="brush_noise" />
+      <input name="in2" type="float" nodename="stain_roughness" />
+    </add>
     <mix name="roughness_mix" type="float">
-      <input name="bg" type="float" nodename="brush_noise" />
-      <input name="fg" type="float" value="0.82" />
+      <input name="bg" type="float" nodename="metal_roughness" />
+      <input name="fg" type="float" value="0.86" />
       <input name="mix" type="float" nodename="rust_mask" />
     </mix>
     <multiply name="anisotropy" type="float">
       <input name="in1" type="float" nodename="metalness" />
-      <input name="in2" type="float" value="0.6" />
+      <input name="in2" type="float" interfacename="brushing" />
     </multiply>
 
-    <!-- Pitted rust: tangent-space tilt from two decorrelated noises. -->
+    <!-- Pitted rust: a vector noise tilts the object-space normal. -->
+    <noise3d name="pit_noise" type="vector3">
+      <input name="position" type="vector3" nodename="detail_position" />
+    </noise3d>
     <multiply name="pit_strength" type="float">
       <input name="in1" type="float" nodename="rust_mask" />
       <input name="in2" type="float" interfacename="pitting" />
     </multiply>
-    <add name="pit_position_y" type="vector3">
-      <input name="in1" type="vector3" nodename="detail_position" />
-      <input name="in2" type="vector3" value="19.1, -7.3, 3.9" />
-    </add>
-    <noise3d name="pit_x" type="float">
-      <input name="position" type="vector3" nodename="detail_position" />
-    </noise3d>
-    <noise3d name="pit_y" type="float">
-      <input name="position" type="vector3" nodename="pit_position_y" />
-    </noise3d>
-    <multiply name="tilt_x" type="float">
-      <input name="in1" type="float" nodename="pit_x" />
+    <multiply name="pit_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_noise" />
       <input name="in2" type="float" nodename="pit_strength" />
     </multiply>
-    <multiply name="tilt_y" type="float">
-      <input name="in1" type="float" nodename="pit_y" />
-      <input name="in2" type="float" nodename="pit_strength" />
-    </multiply>
-    <combine3 name="tilt" type="vector3">
-      <input name="in1" type="float" nodename="tilt_x" />
-      <input name="in2" type="float" nodename="tilt_y" />
-      <input name="in3" type="float" value="1" />
-    </combine3>
-    <multiply name="tilt_half" type="vector3">
-      <input name="in1" type="vector3" nodename="tilt" />
-      <input name="in2" type="float" value="0.5" />
-    </multiply>
-    <add name="tilt_encoded" type="vector3">
-      <input name="in1" type="vector3" nodename="tilt_half" />
-      <input name="in2" type="float" value="0.5" />
+    <add name="pitted_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="pit_offset" />
     </add>
-    <normalmap name="pitted_normal" type="vector3">
-      <input name="in" type="vector3" nodename="tilt_encoded" />
-    </normalmap>
+    <transformnormal name="pitted_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="pitted_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="pitted_normal" type="vector3">
+      <input name="in" type="vector3" nodename="pitted_normal_world" />
+    </normalize>
 
     <output name="base_color_out" type="color3" nodename="base_color_mix" />
     <output name="metalness_out" type="float" nodename="metalness" />
@@ -146,6 +198,7 @@
   <open_pbr_surface name="SR_weathered_steel" type="surfaceshader">
     <input name="base_color" type="color3" nodegraph="NG_weathered_steel" output="base_color_out" />
     <input name="base_metalness" type="float" nodegraph="NG_weathered_steel" output="metalness_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.6" />
     <input name="specular_roughness" type="float" nodegraph="NG_weathered_steel" output="roughness_out" />
     <input name="specular_roughness_anisotropy" type="float" nodegraph="NG_weathered_steel" output="anisotropy_out" />
     <input name="geometry_normal" type="vector3" nodegraph="NG_weathered_steel" output="normal_out" />

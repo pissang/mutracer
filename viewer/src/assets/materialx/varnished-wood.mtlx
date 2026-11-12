@@ -1,27 +1,33 @@
 <?xml version="1.0"?>
 <!--
-  Varnished wood: OpenPBR with growth rings around the object Y axis. A
-  fractal warps the ring distance; modulo and smoothstep shape early and
-  late wood, a three-stop ramp colors it. Fine grain noise becomes a bump:
-  its gradient comes from finite differences and tilts the object-space
-  normal, which is then transformed to world space. A clear varnish coat
-  sits on top. Procedural, CC0.
+  Varnished wood: OpenPBR with growth rings around an off-centre trunk
+  axis along object Y. A fractal warps the ring distance; each ring ends
+  in a dark latewood line whose strength varies from ring to ring. Fibres
+  and pores are noise stretched along the trunk; the fibre height becomes
+  a bump by forward differences, transformed to world space. A clear
+  amber varnish coat sits on top. Procedural, CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_varnished_wood">
-    <input name="earlywood" type="color3" value="0.52, 0.29, 0.13" uiname="Earlywood" />
-    <input name="latewood" type="color3" value="0.2, 0.08, 0.025" uiname="Latewood" />
-    <input name="heartwood" type="color3" value="0.36, 0.17, 0.065" uiname="Heartwood tint" />
-    <input name="ring_density" type="float" value="9" uiname="Rings per unit" />
-    <input name="distortion" type="float" value="0.3" uiname="Ring distortion" />
-    <input name="grain_bump" type="float" value="0.004" uiname="Grain bump" />
+    <input name="earlywood" type="color3" value="0.36, 0.17, 0.06" uiname="Earlywood" />
+    <input name="latewood" type="color3" value="0.11, 0.04, 0.013" uiname="Latewood" />
+    <input name="ring_density" type="float" value="20" uiname="Rings per unit" />
+    <input name="distortion" type="float" value="0.18" uiname="Ring distortion" />
+    <input name="fibre_contrast" type="float" value="0.3" uiname="Fibre contrast" uimin="0" uimax="1" />
+    <input name="pore_amount" type="float" value="0.45" uiname="Pores" uimin="0" uimax="1" />
+    <input name="grain_bump" type="float" value="0.003" uiname="Grain bump" />
 
     <position name="object_position" type="vector3" />
     <normal name="object_normal" type="vector3" />
 
-    <!-- Ring distance from the Y axis, warped by fractal noise. -->
-    <multiply name="radial_mask" type="vector3">
+    <!-- Ring distance from a trunk axis beside the object, tilted and warped
+         by fractal noise. -->
+    <add name="trunk_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.55, 0, 0.35" />
+    </add>
+    <multiply name="radial_mask" type="vector3">
+      <input name="in1" type="vector3" nodename="trunk_position" />
       <input name="in2" type="vector3" value="1, 0, 1" />
     </multiply>
     <dotproduct name="radius_squared" type="float">
@@ -31,17 +37,25 @@
     <sqrt name="radius" type="float">
       <input name="in" type="float" nodename="radius_squared" />
     </sqrt>
+    <dotproduct name="taper" type="float">
+      <input name="in1" type="vector3" nodename="trunk_position" />
+      <input name="in2" type="vector3" value="0, 0.22, 0" />
+    </dotproduct>
     <multiply name="warp_position" type="vector3">
-      <input name="in1" type="vector3" nodename="object_position" />
-      <input name="in2" type="vector3" value="1.2, 0.25, 1.2" />
+      <input name="in1" type="vector3" nodename="trunk_position" />
+      <input name="in2" type="vector3" value="1.1, 0.3, 1.1" />
     </multiply>
     <fractal3d name="warp" type="float">
       <input name="position" type="vector3" nodename="warp_position" />
       <input name="octaves" type="integer" value="4" />
       <input name="amplitude" type="float" interfacename="distortion" />
     </fractal3d>
-    <add name="warped_radius" type="float">
+    <add name="tapered_radius" type="float">
       <input name="in1" type="float" nodename="radius" />
+      <input name="in2" type="float" nodename="taper" />
+    </add>
+    <add name="warped_radius" type="float">
+      <input name="in1" type="float" nodename="tapered_radius" />
       <input name="in2" type="float" nodename="warp" />
     </add>
     <multiply name="ring_phase" type="float">
@@ -52,125 +66,190 @@
       <input name="in1" type="float" nodename="ring_phase" />
       <input name="in2" type="float" value="1" />
     </modulo>
-    <smoothstep name="late_mask" type="float">
+    <smoothstep name="late_rise" type="float">
       <input name="in" type="float" nodename="ring" />
-      <input name="low" type="float" value="0.6" />
-      <input name="high" type="float" value="0.92" />
+      <input name="low" type="float" value="0.4" />
+      <input name="high" type="float" value="0.93" />
     </smoothstep>
-
-    <!-- Three-stop ramp: earlywood, heartwood tint, latewood. -->
-    <smoothstep name="ramp_low" type="float">
-      <input name="in" type="float" nodename="late_mask" />
-      <input name="low" type="float" value="0" />
-      <input name="high" type="float" value="0.5" />
-    </smoothstep>
-    <smoothstep name="ramp_high" type="float">
-      <input name="in" type="float" nodename="late_mask" />
-      <input name="low" type="float" value="0.5" />
+    <smoothstep name="late_fall" type="float">
+      <input name="in" type="float" nodename="ring" />
+      <input name="low" type="float" value="0.93" />
       <input name="high" type="float" value="1" />
     </smoothstep>
-    <mix name="ramp_first" type="color3">
-      <input name="bg" type="color3" interfacename="earlywood" />
-      <input name="fg" type="color3" interfacename="heartwood" />
-      <input name="mix" type="float" nodename="ramp_low" />
+    <subtract name="late_mask" type="float">
+      <input name="in1" type="float" nodename="late_rise" />
+      <input name="in2" type="float" nodename="late_fall" />
+    </subtract>
+
+    <!-- One random value per ring varies how dark its latewood is. -->
+    <combine3 name="ring_cell" type="vector3">
+      <input name="in1" type="float" nodename="ring_phase" />
+      <input name="in2" type="float" value="0.5" />
+      <input name="in3" type="float" value="0.5" />
+    </combine3>
+    <cellnoise3d name="ring_id" type="float">
+      <input name="position" type="vector3" nodename="ring_cell" />
+    </cellnoise3d>
+    <mix name="ring_strength" type="float">
+      <input name="bg" type="float" value="0.35" />
+      <input name="fg" type="float" value="0.9" />
+      <input name="mix" type="float" nodename="ring_id" />
     </mix>
+    <multiply name="late_strength" type="float">
+      <input name="in1" type="float" nodename="late_mask" />
+      <input name="in2" type="float" nodename="ring_strength" />
+    </multiply>
     <mix name="ring_color" type="color3">
-      <input name="bg" type="color3" nodename="ramp_first" />
+      <input name="bg" type="color3" interfacename="earlywood" />
       <input name="fg" type="color3" interfacename="latewood" />
-      <input name="mix" type="float" nodename="ramp_high" />
+      <input name="mix" type="float" nodename="late_strength" />
     </mix>
 
-    <!-- Grain: noise stretched along the trunk axis. -->
+    <!-- Fibres: noise stretched along the trunk axis. Pores are short dark
+         dashes. -->
     <multiply name="grain_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
-      <input name="in2" type="vector3" value="70, 3, 70" />
+      <input name="in2" type="vector3" value="90, 2.5, 90" />
     </multiply>
     <noise3d name="grain" type="float">
       <input name="position" type="vector3" nodename="grain_position" />
     </noise3d>
-    <remap name="grain_shade" type="float">
-      <input name="in" type="float" nodename="grain" />
-      <input name="inlow" type="float" value="-1" />
-      <input name="inhigh" type="float" value="1" />
-      <input name="outlow" type="float" value="0.8" />
-      <input name="outhigh" type="float" value="1.1" />
-    </remap>
-    <multiply name="base_color" type="color3">
-      <input name="in1" type="color3" nodename="ring_color" />
-      <input name="in2" type="float" nodename="grain_shade" />
+    <multiply name="fibre_half" type="float">
+      <input name="in1" type="float" interfacename="fibre_contrast" />
+      <input name="in2" type="float" value="0.5" />
     </multiply>
-    <mix name="roughness" type="float">
-      <input name="bg" type="float" value="0.55" />
-      <input name="fg" type="float" value="0.38" />
+    <multiply name="fibre_offset" type="float">
+      <input name="in1" type="float" nodename="grain" />
+      <input name="in2" type="float" nodename="fibre_half" />
+    </multiply>
+    <add name="fibre_shade" type="float">
+      <input name="in1" type="float" nodename="fibre_offset" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="figure_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="2.5, 0.6, 2.5" />
+    </multiply>
+    <noise3d name="figure" type="float">
+      <input name="position" type="vector3" nodename="figure_position" />
+      <input name="amplitude" type="float" value="0.14" />
+      <input name="pivot" type="float" value="1" />
+    </noise3d>
+    <multiply name="pore_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="240, 6, 240" />
+    </multiply>
+    <noise3d name="pore_noise" type="float">
+      <input name="position" type="vector3" nodename="pore_position" />
+    </noise3d>
+    <smoothstep name="pore_mask" type="float">
+      <input name="in" type="float" nodename="pore_noise" />
+      <input name="low" type="float" value="0.35" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="pores" type="float">
+      <input name="in1" type="float" nodename="pore_mask" />
+      <input name="in2" type="float" interfacename="pore_amount" />
+    </multiply>
+    <remap name="pore_shade" type="float">
+      <input name="in" type="float" nodename="pores" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.45" />
+    </remap>
+    <multiply name="fibre_figure" type="float">
+      <input name="in1" type="float" nodename="fibre_shade" />
+      <input name="in2" type="float" nodename="figure" />
+    </multiply>
+    <multiply name="shade" type="float">
+      <input name="in1" type="float" nodename="fibre_figure" />
+      <input name="in2" type="float" nodename="pore_shade" />
+    </multiply>
+    <multiply name="lit_color" type="color3">
+      <input name="in1" type="color3" nodename="ring_color" />
+      <input name="in2" type="float" nodename="shade" />
+    </multiply>
+    <mix name="ring_roughness" type="float">
+      <input name="bg" type="float" value="0.5" />
+      <input name="fg" type="float" value="0.36" />
       <input name="mix" type="float" nodename="late_mask" />
     </mix>
+    <multiply name="pore_roughness" type="float">
+      <input name="in1" type="float" nodename="pores" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" nodename="ring_roughness" />
+      <input name="in2" type="float" nodename="pore_roughness" />
+    </add>
 
-    <!-- Bump from the grain height: forward differences in noise space. -->
-    <add name="grain_position_x" type="vector3">
+    <!-- Bump from the fibre height: forward differences in noise space, scaled
+         by the stretch. -->
+    <add name="bumped_normal_position_x" type="vector3">
       <input name="in1" type="vector3" nodename="grain_position" />
       <input name="in2" type="vector3" value="0.05, 0, 0" />
     </add>
-    <add name="grain_position_y" type="vector3">
+    <noise3d name="grain_x" type="float">
+      <input name="position" type="vector3" nodename="bumped_normal_position_x" />
+    </noise3d>
+    <add name="bumped_normal_position_y" type="vector3">
       <input name="in1" type="vector3" nodename="grain_position" />
       <input name="in2" type="vector3" value="0, 0.05, 0" />
     </add>
-    <add name="grain_position_z" type="vector3">
+    <noise3d name="grain_y" type="float">
+      <input name="position" type="vector3" nodename="bumped_normal_position_y" />
+    </noise3d>
+    <add name="bumped_normal_position_z" type="vector3">
       <input name="in1" type="vector3" nodename="grain_position" />
       <input name="in2" type="vector3" value="0, 0, 0.05" />
     </add>
-    <noise3d name="grain_x" type="float">
-      <input name="position" type="vector3" nodename="grain_position_x" />
-    </noise3d>
-    <noise3d name="grain_y" type="float">
-      <input name="position" type="vector3" nodename="grain_position_y" />
-    </noise3d>
     <noise3d name="grain_z" type="float">
-      <input name="position" type="vector3" nodename="grain_position_z" />
+      <input name="position" type="vector3" nodename="bumped_normal_position_z" />
     </noise3d>
-    <combine3 name="grain_ahead" type="vector3">
+    <combine3 name="bumped_normal_ahead" type="vector3">
       <input name="in1" type="float" nodename="grain_x" />
       <input name="in2" type="float" nodename="grain_y" />
       <input name="in3" type="float" nodename="grain_z" />
     </combine3>
-    <subtract name="grain_delta" type="vector3">
-      <input name="in1" type="vector3" nodename="grain_ahead" />
+    <subtract name="bumped_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="bumped_normal_ahead" />
       <input name="in2" type="float" nodename="grain" />
     </subtract>
-    <!-- d(noise)/d(position) = delta / step * stretch. -->
-    <multiply name="grain_gradient" type="vector3">
-      <input name="in1" type="vector3" nodename="grain_delta" />
-      <input name="in2" type="vector3" value="1400, 60, 1400" />
+    <multiply name="bumped_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="bumped_normal_delta" />
+      <input name="in2" type="vector3" value="1800, 50, 1800" />
     </multiply>
-    <dotproduct name="gradient_along_normal" type="float">
-      <input name="in1" type="vector3" nodename="grain_gradient" />
+    <dotproduct name="bumped_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="bumped_normal_gradient" />
       <input name="in2" type="vector3" nodename="object_normal" />
     </dotproduct>
-    <multiply name="gradient_normal_part" type="vector3">
+    <multiply name="bumped_normal_normal_part" type="vector3">
       <input name="in1" type="vector3" nodename="object_normal" />
-      <input name="in2" type="float" nodename="gradient_along_normal" />
+      <input name="in2" type="float" nodename="bumped_normal_along_normal" />
     </multiply>
-    <subtract name="surface_gradient" type="vector3">
-      <input name="in1" type="vector3" nodename="grain_gradient" />
-      <input name="in2" type="vector3" nodename="gradient_normal_part" />
+    <subtract name="bumped_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="bumped_normal_gradient" />
+      <input name="in2" type="vector3" nodename="bumped_normal_normal_part" />
     </subtract>
-    <multiply name="bump_offset" type="vector3">
-      <input name="in1" type="vector3" nodename="surface_gradient" />
+    <multiply name="bumped_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="bumped_normal_surface_gradient" />
       <input name="in2" type="float" interfacename="grain_bump" />
     </multiply>
-    <subtract name="bumped_object_normal" type="vector3">
+    <subtract name="bumped_normal_object" type="vector3">
       <input name="in1" type="vector3" nodename="object_normal" />
-      <input name="in2" type="vector3" nodename="bump_offset" />
+      <input name="in2" type="vector3" nodename="bumped_normal_offset" />
     </subtract>
-    <transformnormal name="bumped_world_normal" type="vector3">
-      <input name="in" type="vector3" nodename="bumped_object_normal" />
+    <transformnormal name="bumped_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="bumped_normal_object" />
       <input name="fromspace" type="string" value="object" />
       <input name="tospace" type="string" value="world" />
     </transformnormal>
     <normalize name="bumped_normal" type="vector3">
-      <input name="in" type="vector3" nodename="bumped_world_normal" />
+      <input name="in" type="vector3" nodename="bumped_normal_world" />
     </normalize>
 
-    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="base_color_out" type="color3" nodename="lit_color" />
     <output name="roughness_out" type="float" nodename="roughness" />
     <output name="normal_out" type="vector3" nodename="bumped_normal" />
   </nodegraph>
@@ -180,7 +259,7 @@
     <input name="specular_roughness" type="float" nodegraph="NG_varnished_wood" output="roughness_out" />
     <input name="coat_weight" type="float" value="0.85" />
     <input name="coat_roughness" type="float" value="0.06" />
-    <input name="coat_color" type="color3" value="0.96, 0.9, 0.78" />
+    <input name="coat_color" type="color3" value="0.97, 0.88, 0.72" />
     <input name="geometry_normal" type="vector3" nodegraph="NG_varnished_wood" output="normal_out" />
   </open_pbr_surface>
   <surfacematerial name="Varnished_Wood" type="material">

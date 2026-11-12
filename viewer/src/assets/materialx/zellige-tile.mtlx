@@ -1,0 +1,287 @@
+<?xml version="1.0"?>
+<!--
+  Zellige tile: OpenPBR glazed handmade tiles. Texture coordinates are cut
+  into square tiles; cellnoise gives each one its own hue, saturation,
+  value and a slight tilt, so every tile catches the light differently.
+  The glaze thins toward the bevelled edges and shows the clay body, and
+  matte grout fills the joints. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_zellige_tile">
+    <input name="glaze_color" type="color3" value="0.01, 0.13, 0.1" uiname="Glaze" />
+    <input name="body_color" type="color3" value="0.45, 0.33, 0.2" uiname="Clay body" />
+    <input name="grout_color" type="color3" value="0.27, 0.26, 0.24" uiname="Grout" />
+    <input name="tiles" type="vector2" value="24, 12" uiname="Tiles per UV" />
+    <input name="glaze_variation" type="float" value="0.6" uiname="Glaze variation" uimin="0" uimax="1" />
+    <input name="grout_width" type="float" value="0.022" uiname="Grout width" uimin="0" uimax="0.2" />
+    <input name="unevenness" type="float" value="0.3" uiname="Unevenness" uimin="0" uimax="1" />
+    <input name="bevel" type="float" value="0.5" uiname="Bevel" uimin="0" uimax="1" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="tile_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="tile_index" type="vector2">
+      <input name="in" type="vector2" nodename="tile_uv" />
+    </floor>
+    <subtract name="tile_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_uv" />
+      <input name="in2" type="vector2" nodename="tile_index" />
+    </subtract>
+    <subtract name="tile_centred" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="tile_distance" type="vector2">
+      <input name="in" type="vector2" nodename="tile_centred" />
+    </absval>
+    <separate2 name="distance_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="tile_distance" />
+    </separate2>
+    <max name="edge_max" type="float">
+      <input name="in1" type="float" nodename="distance_parts" output="outx" />
+      <input name="in2" type="float" nodename="distance_parts" output="outy" />
+    </max>
+    <subtract name="edge_distance" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="edge_max" />
+    </subtract>
+    <add name="joint_soft" type="float">
+      <input name="in1" type="float" interfacename="grout_width" />
+      <input name="in2" type="float" value="0.02" />
+    </add>
+    <smoothstep name="tile_mask" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" interfacename="grout_width" />
+      <input name="high" type="float" nodename="joint_soft" />
+    </smoothstep>
+
+    <!-- Three random values per tile. -->
+    <cellnoise2d name="tile_random_1" type="float">
+      <input name="texcoord" type="vector2" nodename="tile_uv" />
+    </cellnoise2d>
+    <add name="tile_uv_2" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_uv" />
+      <input name="in2" type="vector2" value="37.2, 11.7" />
+    </add>
+    <cellnoise2d name="tile_random_2" type="float">
+      <input name="texcoord" type="vector2" nodename="tile_uv_2" />
+    </cellnoise2d>
+    <add name="tile_uv_3" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_uv" />
+      <input name="in2" type="vector2" value="-5.3, 71.9" />
+    </add>
+    <cellnoise2d name="tile_random_3" type="float">
+      <input name="texcoord" type="vector2" nodename="tile_uv_3" />
+    </cellnoise2d>
+
+    <!-- Glaze: per-tile HSV shift, mottling, and thinning toward the edges. -->
+    <subtract name="hue_centred" type="float">
+      <input name="in1" type="float" nodename="tile_random_1" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="hue_range" type="float">
+      <input name="in1" type="float" interfacename="glaze_variation" />
+      <input name="in2" type="float" value="0.07" />
+    </multiply>
+    <multiply name="hue_shift" type="float">
+      <input name="in1" type="float" nodename="hue_centred" />
+      <input name="in2" type="float" nodename="hue_range" />
+    </multiply>
+    <subtract name="saturation_centred" type="float">
+      <input name="in1" type="float" nodename="tile_random_2" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="saturation_range" type="float">
+      <input name="in1" type="float" interfacename="glaze_variation" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="saturation_shift" type="float">
+      <input name="in1" type="float" nodename="saturation_centred" />
+      <input name="in2" type="float" nodename="saturation_range" />
+    </multiply>
+    <add name="saturation" type="float">
+      <input name="in1" type="float" nodename="saturation_shift" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <subtract name="value_centred" type="float">
+      <input name="in1" type="float" nodename="tile_random_3" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="value_range" type="float">
+      <input name="in1" type="float" interfacename="glaze_variation" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <multiply name="value_shift" type="float">
+      <input name="in1" type="float" nodename="value_centred" />
+      <input name="in2" type="float" nodename="value_range" />
+    </multiply>
+    <add name="value" type="float">
+      <input name="in1" type="float" nodename="value_shift" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <combine3 name="hsv_amount" type="vector3">
+      <input name="in1" type="float" nodename="hue_shift" />
+      <input name="in2" type="float" nodename="saturation" />
+      <input name="in3" type="float" nodename="value" />
+    </combine3>
+    <hsvadjust name="tile_glaze" type="color3">
+      <input name="in" type="color3" interfacename="glaze_color" />
+      <input name="amount" type="vector3" nodename="hsv_amount" />
+    </hsvadjust>
+    <multiply name="mottle_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_uv" />
+      <input name="in2" type="float" value="3.3" />
+    </multiply>
+    <noise2d name="mottle" type="float">
+      <input name="texcoord" type="vector2" nodename="mottle_uv" />
+      <input name="amplitude" type="float" value="0.22" />
+      <input name="pivot" type="float" value="1" />
+    </noise2d>
+    <add name="thin_far" type="float">
+      <input name="in1" type="float" interfacename="grout_width" />
+      <input name="in2" type="float" value="0.14" />
+    </add>
+    <smoothstep name="thin_reach" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" interfacename="grout_width" />
+      <input name="high" type="float" nodename="thin_far" />
+    </smoothstep>
+    <invert name="thin_edge" type="float">
+      <input name="in" type="float" nodename="thin_reach" />
+    </invert>
+    <multiply name="glaze_thin" type="float">
+      <input name="in1" type="float" nodename="thin_edge" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="mottled_glaze" type="color3">
+      <input name="in1" type="color3" nodename="tile_glaze" />
+      <input name="in2" type="float" nodename="mottle" />
+    </multiply>
+    <mix name="glazed" type="color3">
+      <input name="bg" type="color3" nodename="mottled_glaze" />
+      <input name="fg" type="color3" interfacename="body_color" />
+      <input name="mix" type="float" nodename="glaze_thin" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="grout_color" />
+      <input name="fg" type="color3" nodename="glazed" />
+      <input name="mix" type="float" nodename="tile_mask" />
+    </mix>
+    <remap name="glaze_roughness" type="float">
+      <input name="in" type="float" nodename="tile_random_2" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.04" />
+      <input name="outhigh" type="float" value="0.12" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.9" />
+      <input name="fg" type="float" nodename="glaze_roughness" />
+      <input name="mix" type="float" nodename="tile_mask" />
+    </mix>
+
+    <!-- Normal: each tile tilts as a whole, the glaze waves slightly and the
+         edges are bevelled. -->
+    <combine2 name="tilt_random" type="vector2">
+      <input name="in1" type="float" nodename="tile_random_1" />
+      <input name="in2" type="float" nodename="tile_random_3" />
+    </combine2>
+    <subtract name="tilt_centred" type="vector2">
+      <input name="in1" type="vector2" nodename="tilt_random" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="tilt_range" type="float">
+      <input name="in1" type="float" interfacename="unevenness" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="tile_tilt" type="vector2">
+      <input name="in1" type="vector2" nodename="tilt_centred" />
+      <input name="in2" type="float" nodename="tilt_range" />
+    </multiply>
+    <multiply name="wave_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_uv" />
+      <input name="in2" type="float" value="2.3" />
+    </multiply>
+    <noise2d name="glaze_wave" type="vector2">
+      <input name="texcoord" type="vector2" nodename="wave_uv" />
+      <input name="amplitude" type="float" value="0.05" />
+    </noise2d>
+    <subtract name="bevel_start" type="float">
+      <input name="in1" type="float" value="0.42" />
+      <input name="in2" type="float" interfacename="grout_width" />
+    </subtract>
+    <subtract name="bevel_end" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" interfacename="grout_width" />
+    </subtract>
+    <smoothstep name="bevel_mask" type="vector2">
+      <input name="in" type="vector2" nodename="tile_distance" />
+      <input name="low" type="float" nodename="bevel_start" />
+      <input name="high" type="float" nodename="bevel_end" />
+    </smoothstep>
+    <sign name="tile_side" type="vector2">
+      <input name="in" type="vector2" nodename="tile_centred" />
+    </sign>
+    <multiply name="bevel_side" type="vector2">
+      <input name="in1" type="vector2" nodename="bevel_mask" />
+      <input name="in2" type="vector2" nodename="tile_side" />
+    </multiply>
+    <multiply name="bevel_slope" type="vector2">
+      <input name="in1" type="vector2" nodename="bevel_side" />
+      <input name="in2" type="float" interfacename="bevel" />
+    </multiply>
+    <add name="tilt_and_wave" type="vector2">
+      <input name="in1" type="vector2" nodename="tile_tilt" />
+      <input name="in2" type="vector2" nodename="glaze_wave" />
+    </add>
+    <add name="tilt_sum" type="vector2">
+      <input name="in1" type="vector2" nodename="tilt_and_wave" />
+      <input name="in2" type="vector2" nodename="bevel_slope" />
+    </add>
+    <multiply name="tile_slope" type="vector2">
+      <input name="in1" type="vector2" nodename="tilt_sum" />
+      <input name="in2" type="float" nodename="tile_mask" />
+    </multiply>
+    <separate2 name="tilt_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="tile_slope" />
+    </separate2>
+    <remap name="tile_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_parts" output="outx" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="tile_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_parts" output="outy" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="tile_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="tile_normal_encoded_x" />
+      <input name="in2" type="float" nodename="tile_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="tile_normal" type="vector3">
+      <input name="in" type="vector3" nodename="tile_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="tile_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_zellige_tile" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_zellige_tile" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_zellige_tile" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_zellige_tile" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Zellige_Tile" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_zellige_tile" />
+  </surfacematerial>
+</materialx>

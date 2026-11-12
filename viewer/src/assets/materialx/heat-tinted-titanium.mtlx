@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<!--
+  Heat-tinted titanium: OpenPBR brushed metal under an oxide thin film.
+  The film thickness rises along object Y and wanders with a fractal, so
+  interference runs through straw, purple and blue bands as on a heated
+  exhaust. Stretched noise brushes the roughness. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_heat_tinted_titanium">
+    <input name="film_thickness" type="float" value="0.36" uiname="Film thickness (um)" uimin="0" uimax="1" />
+    <input name="film_gradient" type="float" value="0.24" uiname="Thickness gradient" />
+    <input name="film_variation" type="float" value="0.07" uiname="Thickness variation" />
+    <input name="band_scale" type="float" value="1.3" uiname="Band scale" />
+    <input name="roughness" type="float" value="0.16" uiname="Roughness" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+
+    <!-- Oxide thickness in micrometres: a gradient along Y plus fractal drift. -->
+    <dotproduct name="height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 1, 0" />
+    </dotproduct>
+    <multiply name="gradient_offset" type="float">
+      <input name="in1" type="float" nodename="height" />
+      <input name="in2" type="float" interfacename="film_gradient" />
+    </multiply>
+    <multiply name="film_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="band_scale" />
+    </multiply>
+    <fractal3d name="film_noise" type="float">
+      <input name="position" type="vector3" nodename="film_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="amplitude" type="float" interfacename="film_variation" />
+    </fractal3d>
+    <add name="film_base" type="float">
+      <input name="in1" type="float" nodename="gradient_offset" />
+      <input name="in2" type="float" interfacename="film_thickness" />
+    </add>
+    <add name="film_sum" type="float">
+      <input name="in1" type="float" nodename="film_base" />
+      <input name="in2" type="float" nodename="film_noise" />
+    </add>
+    <max name="film_thickness_um" type="float">
+      <input name="in1" type="float" nodename="film_sum" />
+      <input name="in2" type="float" value="0" />
+    </max>
+
+    <!-- Brushing: noise stretched along object X. -->
+    <multiply name="brush_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="1.5, 110, 110" />
+    </multiply>
+    <noise3d name="brush_noise" type="float">
+      <input name="position" type="vector3" nodename="brush_position" />
+      <input name="amplitude" type="float" value="0.06" />
+    </noise3d>
+    <add name="brushed_roughness" type="float">
+      <input name="in1" type="float" nodename="brush_noise" />
+      <input name="in2" type="float" interfacename="roughness" />
+    </add>
+
+    <output name="roughness_out" type="float" nodename="brushed_roughness" />
+    <output name="thin_film_out" type="float" nodename="film_thickness_um" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_heat_tinted_titanium" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.26, 0.25, 0.24" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_heat_tinted_titanium" output="roughness_out" />
+    <input name="specular_roughness_anisotropy" type="float" value="0.4" />
+    <input name="thin_film_weight" type="float" value="1" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_heat_tinted_titanium" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="2.6" />
+  </open_pbr_surface>
+  <surfacematerial name="Heat_Tinted_Titanium" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_heat_tinted_titanium" />
+  </surfacematerial>
+</materialx>

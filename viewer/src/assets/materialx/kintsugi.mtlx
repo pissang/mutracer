@@ -1,0 +1,296 @@
+<?xml version="1.0"?>
+<!--
+  Kintsugi: OpenPBR glazed ceramic mended with gold. Warped object-space
+  Worley cells are the shards: the cell value shifts each shard's glaze
+  and tilts it slightly out of line, and F2 - F1 draws the gold seams
+  between them as raised metal beads. Iron speckles dot the glaze.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_kintsugi">
+    <input name="glaze_color" type="color3" value="0.008, 0.024, 0.09" uiname="Glaze" />
+    <input name="gold_color" type="color3" value="1, 0.7, 0.28" uiname="Gold" />
+    <input name="speckle_color" type="color3" value="0.12, 0.05, 0.02" uiname="Speckle" />
+    <input name="shard_scale" type="float" value="2.2" uiname="Shard scale" />
+    <input name="seam_width" type="float" value="0.045" uiname="Seam width" uimin="0.005" uimax="0.3" />
+    <input name="misalignment" type="float" value="0.22" uiname="Shard misalignment" uimin="0" uimax="1" />
+    <input name="glaze_variation" type="float" value="0.5" uiname="Glaze variation" uimin="0" uimax="1" />
+    <input name="speckle" type="float" value="0.5" uiname="Speckle" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="shard_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="shard_scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="shard_position" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <noise3d name="warp_noise" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+      <input name="amplitude" type="float" value="0.3" />
+    </noise3d>
+    <add name="warped_position" type="vector3">
+      <input name="in1" type="vector3" nodename="shard_position" />
+      <input name="in2" type="vector3" nodename="warp_noise" />
+    </add>
+    <multiply name="seam_core" type="float">
+      <input name="in1" type="float" interfacename="seam_width" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+
+    <!-- Gold seam: 1 on the crack between two shards, falling to 0 at the seam
+         width. -->
+    <worleynoise3d name="shard_cells" type="vector2">
+      <input name="position" type="vector3" nodename="warped_position" />
+    </worleynoise3d>
+    <separate2 name="shard_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="shard_cells" />
+    </separate2>
+    <subtract name="crack_distance" type="float">
+      <input name="in1" type="float" nodename="shard_distances" output="outy" />
+      <input name="in2" type="float" nodename="shard_distances" output="outx" />
+    </subtract>
+    <smoothstep name="seam_edge" type="float">
+      <input name="in" type="float" nodename="crack_distance" />
+      <input name="low" type="float" nodename="seam_core" />
+      <input name="high" type="float" interfacename="seam_width" />
+    </smoothstep>
+    <invert name="seam" type="float">
+      <input name="in" type="float" nodename="seam_edge" />
+    </invert>
+
+    <!-- Shards: the Worley cell value shifts the glaze and tilts the shard. -->
+    <worleynoise3d name="shard_id" type="vector3">
+      <input name="position" type="vector3" nodename="warped_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate3 name="shard_values" type="multioutput">
+      <input name="in" type="vector3" nodename="shard_id" />
+    </separate3>
+    <subtract name="shard_centred" type="float">
+      <input name="in1" type="float" nodename="shard_values" output="outx" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="shard_shift" type="float">
+      <input name="in1" type="float" nodename="shard_centred" />
+      <input name="in2" type="float" interfacename="glaze_variation" />
+    </multiply>
+    <add name="shard_value" type="float">
+      <input name="in1" type="float" nodename="shard_shift" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="cloud_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <noise3d name="glaze_cloud" type="float">
+      <input name="position" type="vector3" nodename="cloud_position" />
+      <input name="amplitude" type="float" value="0.25" />
+      <input name="pivot" type="float" value="1" />
+    </noise3d>
+    <multiply name="speck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="70" />
+    </multiply>
+    <noise3d name="speck_noise" type="float">
+      <input name="position" type="vector3" nodename="speck_position" />
+    </noise3d>
+    <smoothstep name="speck_mask" type="float">
+      <input name="in" type="float" nodename="speck_noise" />
+      <input name="low" type="float" value="0.45" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="specks" type="float">
+      <input name="in1" type="float" nodename="speck_mask" />
+      <input name="in2" type="float" interfacename="speckle" />
+    </multiply>
+    <multiply name="glaze_shade" type="float">
+      <input name="in1" type="float" nodename="shard_value" />
+      <input name="in2" type="float" nodename="glaze_cloud" />
+    </multiply>
+    <multiply name="shard_glaze" type="color3">
+      <input name="in1" type="color3" interfacename="glaze_color" />
+      <input name="in2" type="float" nodename="glaze_shade" />
+    </multiply>
+    <mix name="speckled_glaze" type="color3">
+      <input name="bg" type="color3" nodename="shard_glaze" />
+      <input name="fg" type="color3" interfacename="speckle_color" />
+      <input name="mix" type="float" nodename="specks" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="speckled_glaze" />
+      <input name="fg" type="color3" interfacename="gold_color" />
+      <input name="mix" type="float" nodename="seam" />
+    </mix>
+    <multiply name="gold_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <noise3d name="gold_roughness" type="float">
+      <input name="position" type="vector3" nodename="gold_position" />
+      <input name="amplitude" type="float" value="0.06" />
+      <input name="pivot" type="float" value="0.26" />
+    </noise3d>
+    <remap name="glaze_roughness" type="float">
+      <input name="in" type="float" nodename="specks" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.05" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="glaze_roughness" />
+      <input name="fg" type="float" nodename="gold_roughness" />
+      <input name="mix" type="float" nodename="seam" />
+    </mix>
+
+    <!-- Normal: tilted shards, then the raised seam by forward differences. -->
+    <subtract name="tilt_centred" type="vector3">
+      <input name="in1" type="vector3" nodename="shard_id" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <invert name="off_seam" type="float">
+      <input name="in" type="float" nodename="seam" />
+    </invert>
+    <multiply name="tilt_amount" type="float">
+      <input name="in1" type="float" nodename="off_seam" />
+      <input name="in2" type="float" interfacename="misalignment" />
+    </multiply>
+    <multiply name="shard_tilt" type="vector3">
+      <input name="in1" type="vector3" nodename="tilt_centred" />
+      <input name="in2" type="float" nodename="tilt_amount" />
+    </multiply>
+    <add name="tilted_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="shard_tilt" />
+    </add>
+    <normalize name="shard_normal" type="vector3">
+      <input name="in" type="vector3" nodename="tilted_normal" />
+    </normalize>
+    <add name="seam_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0.02, 0, 0" />
+    </add>
+    <worleynoise3d name="shard_cells_x" type="vector2">
+      <input name="position" type="vector3" nodename="seam_normal_position_x" />
+    </worleynoise3d>
+    <separate2 name="shard_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="shard_cells_x" />
+    </separate2>
+    <subtract name="crack_distance_x" type="float">
+      <input name="in1" type="float" nodename="shard_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="shard_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="seam_edge_x" type="float">
+      <input name="in" type="float" nodename="crack_distance_x" />
+      <input name="low" type="float" nodename="seam_core" />
+      <input name="high" type="float" interfacename="seam_width" />
+    </smoothstep>
+    <invert name="seam_x" type="float">
+      <input name="in" type="float" nodename="seam_edge_x" />
+    </invert>
+    <add name="seam_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0, 0.02, 0" />
+    </add>
+    <worleynoise3d name="shard_cells_y" type="vector2">
+      <input name="position" type="vector3" nodename="seam_normal_position_y" />
+    </worleynoise3d>
+    <separate2 name="shard_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="shard_cells_y" />
+    </separate2>
+    <subtract name="crack_distance_y" type="float">
+      <input name="in1" type="float" nodename="shard_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="shard_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="seam_edge_y" type="float">
+      <input name="in" type="float" nodename="crack_distance_y" />
+      <input name="low" type="float" nodename="seam_core" />
+      <input name="high" type="float" interfacename="seam_width" />
+    </smoothstep>
+    <invert name="seam_y" type="float">
+      <input name="in" type="float" nodename="seam_edge_y" />
+    </invert>
+    <add name="seam_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.02" />
+    </add>
+    <worleynoise3d name="shard_cells_z" type="vector2">
+      <input name="position" type="vector3" nodename="seam_normal_position_z" />
+    </worleynoise3d>
+    <separate2 name="shard_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="shard_cells_z" />
+    </separate2>
+    <subtract name="crack_distance_z" type="float">
+      <input name="in1" type="float" nodename="shard_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="shard_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="seam_edge_z" type="float">
+      <input name="in" type="float" nodename="crack_distance_z" />
+      <input name="low" type="float" nodename="seam_core" />
+      <input name="high" type="float" interfacename="seam_width" />
+    </smoothstep>
+    <invert name="seam_z" type="float">
+      <input name="in" type="float" nodename="seam_edge_z" />
+    </invert>
+    <combine3 name="seam_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="seam_x" />
+      <input name="in2" type="float" nodename="seam_y" />
+      <input name="in3" type="float" nodename="seam_z" />
+    </combine3>
+    <subtract name="seam_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_normal_ahead" />
+      <input name="in2" type="float" nodename="seam" />
+    </subtract>
+    <multiply name="seam_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_normal_delta" />
+      <input name="in2" type="float" value="50" />
+    </multiply>
+    <dotproduct name="seam_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="seam_normal_gradient" />
+      <input name="in2" type="vector3" nodename="shard_normal" />
+    </dotproduct>
+    <multiply name="seam_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="shard_normal" />
+      <input name="in2" type="float" nodename="seam_normal_along_normal" />
+    </multiply>
+    <subtract name="seam_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_normal_gradient" />
+      <input name="in2" type="vector3" nodename="seam_normal_normal_part" />
+    </subtract>
+    <multiply name="seam_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_normal_surface_gradient" />
+      <input name="in2" type="float" value="0.07" />
+    </multiply>
+    <subtract name="seam_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="shard_normal" />
+      <input name="in2" type="vector3" nodename="seam_normal_offset" />
+    </subtract>
+    <transformnormal name="seam_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="seam_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="seam_normal" type="vector3">
+      <input name="in" type="vector3" nodename="seam_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="seam" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="seam_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_kintsugi" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_kintsugi" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_kintsugi" output="metalness_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_kintsugi" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_kintsugi" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Kintsugi" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_kintsugi" />
+  </surfacematerial>
+</materialx>

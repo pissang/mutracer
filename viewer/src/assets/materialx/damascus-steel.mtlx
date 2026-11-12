@@ -1,0 +1,152 @@
+<?xml version="1.0"?>
+<!--
+  Damascus steel: OpenPBR metal with folded layers. Layers stack along
+  object Y; a fractal folds them and Worley bumps raise the concentric
+  eyes of a raindrop pattern. A sine of the layer coordinate alternates
+  bright polished and dark etched steel, and the etched layers sit
+  slightly lower. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_damascus_steel">
+    <input name="bright_color" type="color3" value="0.62, 0.61, 0.6" uiname="Bright layers" />
+    <input name="dark_color" type="color3" value="0.14, 0.14, 0.15" uiname="Etched layers" />
+    <input name="layers" type="float" value="30" uiname="Layers per unit" />
+    <input name="fold" type="float" value="0.3" uiname="Fold distortion" />
+    <input name="eyes" type="float" value="0.14" uiname="Raindrop eyes" />
+    <input name="eye_scale" type="float" value="2.6" uiname="Eye scale" />
+    <input name="etch" type="float" value="0.5" uiname="Etch depth" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Layer coordinate: height along a slightly leaning axis, folded and
+         dimpled. -->
+    <dotproduct name="layer_height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.25, 1, 0.1" />
+    </dotproduct>
+    <multiply name="fold_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.2" />
+    </multiply>
+    <fractal3d name="fold_noise" type="float">
+      <input name="position" type="vector3" nodename="fold_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" interfacename="fold" />
+    </fractal3d>
+    <multiply name="eye_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="eye_scale" />
+    </multiply>
+    <worleynoise3d name="eye_distance" type="float">
+      <input name="position" type="vector3" nodename="eye_position" />
+    </worleynoise3d>
+    <smoothstep name="eye_falloff" type="float">
+      <input name="in" type="float" nodename="eye_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.65" />
+    </smoothstep>
+    <invert name="eye" type="float">
+      <input name="in" type="float" nodename="eye_falloff" />
+    </invert>
+    <multiply name="eye_lift" type="float">
+      <input name="in1" type="float" nodename="eye" />
+      <input name="in2" type="float" interfacename="eyes" />
+    </multiply>
+    <add name="folded_height" type="float">
+      <input name="in1" type="float" nodename="layer_height" />
+      <input name="in2" type="float" nodename="fold_noise" />
+    </add>
+    <add name="layer_coordinate" type="float">
+      <input name="in1" type="float" nodename="folded_height" />
+      <input name="in2" type="float" nodename="eye_lift" />
+    </add>
+    <multiply name="layer_phase" type="float">
+      <input name="in1" type="float" nodename="layer_coordinate" />
+      <input name="in2" type="float" interfacename="layers" />
+    </multiply>
+    <multiply name="layer_angle" type="float">
+      <input name="in1" type="float" nodename="layer_phase" />
+      <input name="in2" type="float" value="6.283185" />
+    </multiply>
+    <sin name="layer_wave" type="float">
+      <input name="in" type="float" nodename="layer_angle" />
+    </sin>
+    <smoothstep name="bright_band" type="float">
+      <input name="in" type="float" nodename="layer_wave" />
+      <input name="low" type="float" value="-0.3" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="dark_color" />
+      <input name="fg" type="color3" interfacename="bright_color" />
+      <input name="mix" type="float" nodename="bright_band" />
+    </mix>
+    <remap name="etched_roughness" type="float">
+      <input name="in" type="float" interfacename="etch" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.16" />
+      <input name="outhigh" type="float" value="0.5" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="etched_roughness" />
+      <input name="fg" type="float" value="0.09" />
+      <input name="mix" type="float" nodename="bright_band" />
+    </mix>
+
+    <!-- Relief: the normal leans along the layer axis at each transition. -->
+    <invert name="dark_band" type="float">
+      <input name="in" type="float" nodename="bright_band" />
+    </invert>
+    <multiply name="band_edge" type="float">
+      <input name="in1" type="float" nodename="bright_band" />
+      <input name="in2" type="float" nodename="dark_band" />
+    </multiply>
+    <cos name="layer_slope" type="float">
+      <input name="in" type="float" nodename="layer_angle" />
+    </cos>
+    <multiply name="transition" type="float">
+      <input name="in1" type="float" nodename="band_edge" />
+      <input name="in2" type="float" nodename="layer_slope" />
+    </multiply>
+    <multiply name="etch_slope" type="float">
+      <input name="in1" type="float" interfacename="etch" />
+      <input name="in2" type="float" value="-1.6" />
+    </multiply>
+    <multiply name="lean_amount" type="float">
+      <input name="in1" type="float" nodename="transition" />
+      <input name="in2" type="float" nodename="etch_slope" />
+    </multiply>
+    <multiply name="lean" type="vector3">
+      <input name="in1" type="vector3" value="0.25, 1, 0.1" />
+      <input name="in2" type="float" nodename="lean_amount" />
+    </multiply>
+    <add name="etched_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="lean" />
+    </add>
+    <transformnormal name="etched_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="etched_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="etched_normal" type="vector3">
+      <input name="in" type="vector3" nodename="etched_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="etched_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_damascus_steel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_damascus_steel" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_damascus_steel" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_damascus_steel" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Damascus_Steel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_damascus_steel" />
+  </surfacematerial>
+</materialx>

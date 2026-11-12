@@ -1,0 +1,257 @@
+<?xml version="1.0"?>
+<!--
+  Terrazzo: OpenPBR polished cement with stone chips. Two object-space
+  Worley layers of different size place the chips: a cell becomes a chip
+  when its random value passes the density, shaped by the cell borders
+  and a distance cut-off. The cell value also picks one of three chip
+  colors. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_terrazzo">
+    <input name="matrix_color" type="color3" value="0.47, 0.45, 0.41" uiname="Cement" />
+    <input name="chip_a" type="color3" value="0.42, 0.12, 0.06" uiname="Chip A" />
+    <input name="chip_b" type="color3" value="0.035, 0.05, 0.06" uiname="Chip B" />
+    <input name="chip_c" type="color3" value="0.72, 0.5, 0.2" uiname="Chip C" />
+    <input name="scale" type="float" value="6" uiname="Chip scale" />
+    <input name="chip_density" type="float" value="0.55" uiname="Chip density" uimin="0" uimax="1" />
+    <input name="speckle" type="float" value="0.35" uiname="Cement speckle" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+
+    <!-- Large chips. -->
+    <multiply name="large_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="scale" />
+    </multiply>
+    <worleynoise3d name="cells_large" type="vector2">
+      <input name="position" type="vector3" nodename="large_position" />
+    </worleynoise3d>
+    <separate2 name="distances_large" type="multioutput">
+      <input name="in" type="vector2" nodename="cells_large" />
+    </separate2>
+    <worleynoise3d name="cell_values_large" type="vector3">
+      <input name="position" type="vector3" nodename="large_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate3 name="chip_id_large" type="multioutput">
+      <input name="in" type="vector3" nodename="cell_values_large" />
+    </separate3>
+    <subtract name="border_large" type="float">
+      <input name="in1" type="float" nodename="distances_large" output="outy" />
+      <input name="in2" type="float" nodename="distances_large" output="outx" />
+    </subtract>
+    <smoothstep name="inside_large" type="float">
+      <input name="in" type="float" nodename="border_large" />
+      <input name="low" type="float" value="0.07" />
+      <input name="high" type="float" value="0.1" />
+    </smoothstep>
+    <smoothstep name="reach_large" type="float">
+      <input name="in" type="float" nodename="distances_large" output="outx" />
+      <input name="low" type="float" value="0.62" />
+      <input name="high" type="float" value="0.66" />
+    </smoothstep>
+    <invert name="near_large" type="float">
+      <input name="in" type="float" nodename="reach_large" />
+    </invert>
+    <ifgreater name="present_large" type="float">
+      <input name="value1" type="float" interfacename="chip_density" />
+      <input name="value2" type="float" nodename="chip_id_large" output="outx" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="shape_large" type="float">
+      <input name="in1" type="float" nodename="inside_large" />
+      <input name="in2" type="float" nodename="near_large" />
+    </multiply>
+    <multiply name="chip_large" type="float">
+      <input name="in1" type="float" nodename="shape_large" />
+      <input name="in2" type="float" nodename="present_large" />
+    </multiply>
+    <ifgreater name="pick_b_large" type="float">
+      <input name="value1" type="float" nodename="chip_id_large" output="outy" />
+      <input name="value2" type="float" value="0.4" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="two_colors_large" type="color3">
+      <input name="bg" type="color3" interfacename="chip_a" />
+      <input name="fg" type="color3" interfacename="chip_b" />
+      <input name="mix" type="float" nodename="pick_b_large" />
+    </mix>
+    <ifgreater name="pick_c_large" type="float">
+      <input name="value1" type="float" nodename="chip_id_large" output="outy" />
+      <input name="value2" type="float" value="0.72" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="three_colors_large" type="color3">
+      <input name="bg" type="color3" nodename="two_colors_large" />
+      <input name="fg" type="color3" interfacename="chip_c" />
+      <input name="mix" type="float" nodename="pick_c_large" />
+    </mix>
+    <remap name="chip_value_large" type="float">
+      <input name="in" type="float" nodename="chip_id_large" output="outz" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="chip_color_large" type="color3">
+      <input name="in1" type="color3" nodename="three_colors_large" />
+      <input name="in2" type="float" nodename="chip_value_large" />
+    </multiply>
+
+    <!-- Small chips between them. -->
+    <multiply name="small_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="large_position" />
+      <input name="in2" type="float" value="2.7" />
+    </multiply>
+    <add name="small_position" type="vector3">
+      <input name="in1" type="vector3" nodename="small_scaled" />
+      <input name="in2" type="vector3" value="5.2, -3.8, 9.1" />
+    </add>
+    <worleynoise3d name="cells_small" type="vector2">
+      <input name="position" type="vector3" nodename="small_position" />
+    </worleynoise3d>
+    <separate2 name="distances_small" type="multioutput">
+      <input name="in" type="vector2" nodename="cells_small" />
+    </separate2>
+    <worleynoise3d name="cell_values_small" type="vector3">
+      <input name="position" type="vector3" nodename="small_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate3 name="chip_id_small" type="multioutput">
+      <input name="in" type="vector3" nodename="cell_values_small" />
+    </separate3>
+    <subtract name="border_small" type="float">
+      <input name="in1" type="float" nodename="distances_small" output="outy" />
+      <input name="in2" type="float" nodename="distances_small" output="outx" />
+    </subtract>
+    <smoothstep name="inside_small" type="float">
+      <input name="in" type="float" nodename="border_small" />
+      <input name="low" type="float" value="0.07" />
+      <input name="high" type="float" value="0.1" />
+    </smoothstep>
+    <smoothstep name="reach_small" type="float">
+      <input name="in" type="float" nodename="distances_small" output="outx" />
+      <input name="low" type="float" value="0.62" />
+      <input name="high" type="float" value="0.66" />
+    </smoothstep>
+    <invert name="near_small" type="float">
+      <input name="in" type="float" nodename="reach_small" />
+    </invert>
+    <ifgreater name="present_small" type="float">
+      <input name="value1" type="float" interfacename="chip_density" />
+      <input name="value2" type="float" nodename="chip_id_small" output="outx" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="shape_small" type="float">
+      <input name="in1" type="float" nodename="inside_small" />
+      <input name="in2" type="float" nodename="near_small" />
+    </multiply>
+    <multiply name="chip_small" type="float">
+      <input name="in1" type="float" nodename="shape_small" />
+      <input name="in2" type="float" nodename="present_small" />
+    </multiply>
+    <ifgreater name="pick_b_small" type="float">
+      <input name="value1" type="float" nodename="chip_id_small" output="outy" />
+      <input name="value2" type="float" value="0.4" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="two_colors_small" type="color3">
+      <input name="bg" type="color3" interfacename="chip_a" />
+      <input name="fg" type="color3" interfacename="chip_b" />
+      <input name="mix" type="float" nodename="pick_b_small" />
+    </mix>
+    <ifgreater name="pick_c_small" type="float">
+      <input name="value1" type="float" nodename="chip_id_small" output="outy" />
+      <input name="value2" type="float" value="0.72" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="three_colors_small" type="color3">
+      <input name="bg" type="color3" nodename="two_colors_small" />
+      <input name="fg" type="color3" interfacename="chip_c" />
+      <input name="mix" type="float" nodename="pick_c_small" />
+    </mix>
+    <remap name="chip_value_small" type="float">
+      <input name="in" type="float" nodename="chip_id_small" output="outz" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="chip_color_small" type="color3">
+      <input name="in1" type="color3" nodename="three_colors_small" />
+      <input name="in2" type="float" nodename="chip_value_small" />
+    </multiply>
+
+    <!-- Cement with fine sand speckle. -->
+    <multiply name="sand_position" type="vector3">
+      <input name="in1" type="vector3" nodename="large_position" />
+      <input name="in2" type="float" value="24" />
+    </multiply>
+    <noise3d name="sand" type="float">
+      <input name="position" type="vector3" nodename="sand_position" />
+    </noise3d>
+    <multiply name="speckle_half" type="float">
+      <input name="in1" type="float" interfacename="speckle" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="sand_amount" type="float">
+      <input name="in1" type="float" nodename="sand" />
+      <input name="in2" type="float" nodename="speckle_half" />
+    </multiply>
+    <add name="sand_shade" type="float">
+      <input name="in1" type="float" nodename="sand_amount" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="cement" type="color3">
+      <input name="in1" type="color3" interfacename="matrix_color" />
+      <input name="in2" type="float" nodename="sand_shade" />
+    </multiply>
+    <mix name="with_small_chips" type="color3">
+      <input name="bg" type="color3" nodename="cement" />
+      <input name="fg" type="color3" nodename="chip_color_small" />
+      <input name="mix" type="float" nodename="chip_small" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="with_small_chips" />
+      <input name="fg" type="color3" nodename="chip_color_large" />
+      <input name="mix" type="float" nodename="chip_large" />
+    </mix>
+    <max name="chips" type="float">
+      <input name="in1" type="float" nodename="chip_large" />
+      <input name="in2" type="float" nodename="chip_small" />
+    </max>
+    <remap name="chip_polish" type="float">
+      <input name="in" type="float" nodename="chips" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.2" />
+      <input name="outhigh" type="float" value="0.09" />
+    </remap>
+    <multiply name="sand_roughness" type="float">
+      <input name="in1" type="float" nodename="sand" />
+      <input name="in2" type="float" value="0.04" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" nodename="chip_polish" />
+      <input name="in2" type="float" nodename="sand_roughness" />
+    </add>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_terrazzo" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_terrazzo" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_terrazzo" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.55" />
+  </open_pbr_surface>
+  <surfacematerial name="Terrazzo" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_terrazzo" />
+  </surfacematerial>
+</materialx>

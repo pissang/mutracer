@@ -1,0 +1,324 @@
+<?xml version="1.0"?>
+<!--
+  Pebbled leather: OpenPBR with a grain bump. Worley F2 - F1 in object
+  space draws the creases between pebbles and a ridged noise adds longer
+  wrinkles; forward differences of that height tilt the normal. Creases
+  are dark and matte, and worn patches are lighter and polished.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_leather">
+    <input name="leather_color" type="color3" value="0.07, 0.022, 0.009" uiname="Leather" />
+    <input name="crease_color" type="color3" value="0.03, 0.01, 0.005" uiname="Creases" />
+    <input name="grain_scale" type="float" value="22" uiname="Grain scale" />
+    <input name="grain_depth" type="float" value="0.3" uiname="Grain depth" uimin="0" uimax="1" />
+    <input name="wrinkles" type="float" value="0.3" uiname="Wrinkles" uimin="0" uimax="1" />
+    <input name="wear" type="float" value="0.5" uiname="Wear" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="grain_scale" />
+    </multiply>
+
+    <!-- Grain height: pebbles between Worley creases, plus longer ridged-noise
+         wrinkles. -->
+    <worleynoise3d name="grain_cells" type="vector2">
+      <input name="position" type="vector3" nodename="grain_position" />
+    </worleynoise3d>
+    <separate2 name="grain_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="grain_cells" />
+    </separate2>
+    <subtract name="crease_distance" type="float">
+      <input name="in1" type="float" nodename="grain_distances" output="outy" />
+      <input name="in2" type="float" nodename="grain_distances" output="outx" />
+    </subtract>
+    <smoothstep name="pebble" type="float">
+      <input name="in" type="float" nodename="crease_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="wrinkle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="float" value="0.13" />
+    </multiply>
+    <noise3d name="wrinkle_noise" type="float">
+      <input name="position" type="vector3" nodename="wrinkle_position" />
+    </noise3d>
+    <absval name="wrinkle_distance" type="float">
+      <input name="in" type="float" nodename="wrinkle_noise" />
+    </absval>
+    <smoothstep name="wrinkle_ridge" type="float">
+      <input name="in" type="float" nodename="wrinkle_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <multiply name="wrinkle_height" type="float">
+      <input name="in1" type="float" nodename="wrinkle_ridge" />
+      <input name="in2" type="float" interfacename="wrinkles" />
+    </multiply>
+    <add name="grain_height" type="float">
+      <input name="in1" type="float" nodename="pebble" />
+      <input name="in2" type="float" nodename="wrinkle_height" />
+    </add>
+
+    <!-- Color: dark creases, cloudy dye variation and lighter worn patches. -->
+    <multiply name="dye_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <noise3d name="dye_variation" type="float">
+      <input name="position" type="vector3" nodename="dye_position" />
+      <input name="amplitude" type="float" value="0.18" />
+      <input name="pivot" type="float" value="1" />
+    </noise3d>
+    <multiply name="wear_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <fractal3d name="wear_fractal" type="float">
+      <input name="position" type="vector3" nodename="wear_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="worn_patches" type="float">
+      <input name="in" type="float" nodename="wear_fractal" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="worn" type="float">
+      <input name="in1" type="float" nodename="worn_patches" />
+      <input name="in2" type="float" interfacename="wear" />
+    </multiply>
+    <multiply name="wear_lift" type="float">
+      <input name="in1" type="float" nodename="worn" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="dye_and_wear" type="float">
+      <input name="in1" type="float" nodename="dye_variation" />
+      <input name="in2" type="float" nodename="wear_lift" />
+    </add>
+    <multiply name="dyed" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" nodename="dye_and_wear" />
+    </multiply>
+    <multiply name="grain_half" type="float">
+      <input name="in1" type="float" nodename="grain_height" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <clamp name="grain_shade" type="float">
+      <input name="in" type="float" nodename="grain_half" />
+    </clamp>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="crease_color" />
+      <input name="fg" type="color3" nodename="dyed" />
+      <input name="mix" type="float" nodename="grain_shade" />
+    </mix>
+    <remap name="grain_roughness" type="float">
+      <input name="in" type="float" nodename="grain_height" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.68" />
+      <input name="outhigh" type="float" value="0.46" />
+    </remap>
+    <multiply name="wear_polish" type="float">
+      <input name="in1" type="float" nodename="worn" />
+      <input name="in2" type="float" value="0.16" />
+    </multiply>
+    <subtract name="roughness" type="float">
+      <input name="in1" type="float" nodename="grain_roughness" />
+      <input name="in2" type="float" nodename="wear_polish" />
+    </subtract>
+
+    <!-- Bump: forward differences of the grain height. -->
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" interfacename="grain_depth" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="grain_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="0.03, 0, 0" />
+    </add>
+    <worleynoise3d name="grain_cells_x" type="vector2">
+      <input name="position" type="vector3" nodename="grain_normal_position_x" />
+    </worleynoise3d>
+    <separate2 name="grain_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="grain_cells_x" />
+    </separate2>
+    <subtract name="crease_distance_x" type="float">
+      <input name="in1" type="float" nodename="grain_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="grain_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="pebble_x" type="float">
+      <input name="in" type="float" nodename="crease_distance_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="wrinkle_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_position_x" />
+      <input name="in2" type="float" value="0.13" />
+    </multiply>
+    <noise3d name="wrinkle_noise_x" type="float">
+      <input name="position" type="vector3" nodename="wrinkle_position_x" />
+    </noise3d>
+    <absval name="wrinkle_distance_x" type="float">
+      <input name="in" type="float" nodename="wrinkle_noise_x" />
+    </absval>
+    <smoothstep name="wrinkle_ridge_x" type="float">
+      <input name="in" type="float" nodename="wrinkle_distance_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <multiply name="wrinkle_height_x" type="float">
+      <input name="in1" type="float" nodename="wrinkle_ridge_x" />
+      <input name="in2" type="float" interfacename="wrinkles" />
+    </multiply>
+    <add name="grain_height_x" type="float">
+      <input name="in1" type="float" nodename="pebble_x" />
+      <input name="in2" type="float" nodename="wrinkle_height_x" />
+    </add>
+    <add name="grain_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="0, 0.03, 0" />
+    </add>
+    <worleynoise3d name="grain_cells_y" type="vector2">
+      <input name="position" type="vector3" nodename="grain_normal_position_y" />
+    </worleynoise3d>
+    <separate2 name="grain_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="grain_cells_y" />
+    </separate2>
+    <subtract name="crease_distance_y" type="float">
+      <input name="in1" type="float" nodename="grain_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="grain_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="pebble_y" type="float">
+      <input name="in" type="float" nodename="crease_distance_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="wrinkle_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_position_y" />
+      <input name="in2" type="float" value="0.13" />
+    </multiply>
+    <noise3d name="wrinkle_noise_y" type="float">
+      <input name="position" type="vector3" nodename="wrinkle_position_y" />
+    </noise3d>
+    <absval name="wrinkle_distance_y" type="float">
+      <input name="in" type="float" nodename="wrinkle_noise_y" />
+    </absval>
+    <smoothstep name="wrinkle_ridge_y" type="float">
+      <input name="in" type="float" nodename="wrinkle_distance_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <multiply name="wrinkle_height_y" type="float">
+      <input name="in1" type="float" nodename="wrinkle_ridge_y" />
+      <input name="in2" type="float" interfacename="wrinkles" />
+    </multiply>
+    <add name="grain_height_y" type="float">
+      <input name="in1" type="float" nodename="pebble_y" />
+      <input name="in2" type="float" nodename="wrinkle_height_y" />
+    </add>
+    <add name="grain_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.03" />
+    </add>
+    <worleynoise3d name="grain_cells_z" type="vector2">
+      <input name="position" type="vector3" nodename="grain_normal_position_z" />
+    </worleynoise3d>
+    <separate2 name="grain_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="grain_cells_z" />
+    </separate2>
+    <subtract name="crease_distance_z" type="float">
+      <input name="in1" type="float" nodename="grain_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="grain_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="pebble_z" type="float">
+      <input name="in" type="float" nodename="crease_distance_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="wrinkle_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_position_z" />
+      <input name="in2" type="float" value="0.13" />
+    </multiply>
+    <noise3d name="wrinkle_noise_z" type="float">
+      <input name="position" type="vector3" nodename="wrinkle_position_z" />
+    </noise3d>
+    <absval name="wrinkle_distance_z" type="float">
+      <input name="in" type="float" nodename="wrinkle_noise_z" />
+    </absval>
+    <smoothstep name="wrinkle_ridge_z" type="float">
+      <input name="in" type="float" nodename="wrinkle_distance_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <multiply name="wrinkle_height_z" type="float">
+      <input name="in1" type="float" nodename="wrinkle_ridge_z" />
+      <input name="in2" type="float" interfacename="wrinkles" />
+    </multiply>
+    <add name="grain_height_z" type="float">
+      <input name="in1" type="float" nodename="pebble_z" />
+      <input name="in2" type="float" nodename="wrinkle_height_z" />
+    </add>
+    <combine3 name="grain_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="grain_height_x" />
+      <input name="in2" type="float" nodename="grain_height_y" />
+      <input name="in3" type="float" nodename="grain_height_z" />
+    </combine3>
+    <subtract name="grain_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_ahead" />
+      <input name="in2" type="float" nodename="grain_height" />
+    </subtract>
+    <multiply name="grain_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_delta" />
+      <input name="in2" type="float" value="33.33333" />
+    </multiply>
+    <dotproduct name="grain_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="grain_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="grain_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="grain_normal_along_normal" />
+    </multiply>
+    <subtract name="grain_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_gradient" />
+      <input name="in2" type="vector3" nodename="grain_normal_normal_part" />
+    </subtract>
+    <multiply name="grain_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="grain_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="grain_normal_offset" />
+    </subtract>
+    <transformnormal name="grain_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="grain_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="grain_normal" type="vector3">
+      <input name="in" type="vector3" nodename="grain_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="grain_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_leather" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_leather" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" nodegraph="NG_leather" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.48" />
+    <input name="fuzz_weight" type="float" value="0.08" />
+    <input name="fuzz_color" type="color3" value="0.3, 0.15, 0.08" />
+    <input name="fuzz_roughness" type="float" value="0.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_leather" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Pebbled_Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_leather" />
+  </surfacematerial>
+</materialx>

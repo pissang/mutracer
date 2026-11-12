@@ -14,12 +14,23 @@ const sample=(id:string)=>{const s=MATERIALX_SAMPLES.find(s=>s.id===id);if(!s)th
 
 // Graph-driven OpenPBR inputs and folded constants each sample is meant to exercise.
 const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}>={
-  'car-paint':{terminals:['baseColor','baseMetalness','specularRoughness','thinFilmThickness','normal'],values:{coatRoughness:0.03,coatIor:1.5,thinFilmIor:1.45}},
+  'car-paint':{terminals:['baseColor','baseMetalness','specularRoughness','normal'],values:{coatWeight:1,coatColor:[0.55,0.012,0.03],coatRoughness:0.03,coatIor:1.5}},
   'weathered-steel':{terminals:['baseColor','baseMetalness','specularRoughness','specularAnisotropy','normal']},
   'varnished-wood':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:0.85,coatRoughness:0.06}},
-  'candle-wax':{terminals:['baseColor','specularRoughness','normal'],values:{subsurfaceWeight:0.6,subsurfaceRadius:0.25,subsurfaceColor:[0.95,0.72,0.42],transmissionWeight:0.1}},
-  'tartan-velvet':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:1,fuzzRoughness:0.45}},
-  'cobblestone':{terminals:['baseColor','specularRoughness']}
+  'marble':{terminals:['baseColor','specularRoughness'],values:{subsurfaceWeight:0.3,subsurfaceRadius:0.06}},
+  'terrazzo':{terminals:['baseColor','specularRoughness']},
+  'leather':{terminals:['baseColor','specularRoughness','normal'],values:{fuzzWeight:0.08}},
+  'tartan-velvet':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.7,fuzzRoughness:0.45}},
+  'cobblestone':{terminals:['baseColor','specularRoughness']},
+  'zellige-tile':{terminals:['baseColor','specularRoughness','normal']},
+  'candle-wax':{terminals:['baseColor','specularRoughness','normal'],values:{subsurfaceWeight:0.6,subsurfaceRadius:0.25,subsurfaceColor:[0.92,0.55,0.18],transmissionWeight:0.1}},
+  'hammered-copper':{terminals:['baseColor','specularRoughness','normal'],values:{baseMetalness:1}},
+  'carbon-fiber':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,coatRoughness:0.04}},
+  'damascus-steel':{terminals:['baseColor','specularRoughness','normal']},
+  'kintsugi':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
+  'heat-tinted-titanium':{terminals:['specularRoughness','thinFilmThickness'],values:{baseMetalness:1,specularAnisotropy:0.4,thinFilmIor:2.6}},
+  'abalone':{terminals:['specularRoughness','thinFilmThickness','normal'],values:{baseMetalness:1,thinFilmIor:2.4}},
+  'hex-plating':{terminals:['baseColor','specularRoughness','normal']}
 };
 
 describe('bundled MaterialX samples',()=>{
@@ -93,7 +104,7 @@ describe('bundled MaterialX samples',()=>{
   });
 
   it('reports a varying subsurface color, which graphs cannot drive',()=>{
-    const text=sample('candle-wax').text.replace('<input name="subsurface_color" type="color3" value="0.95, 0.72, 0.42" />',
+    const text=sample('candle-wax').text.replace('<input name="subsurface_color" type="color3" value="0.92, 0.55, 0.18" />',
       '<input name="subsurface_color" type="color3" nodegraph="NG_candle_wax" output="base_color_out" />');
     const m=parseMaterialXGraph(text);
     expect(m.warnings).toContainEqual(expect.stringContaining('Unsupported OpenPBR graph input subsurfaceColor'));

@@ -12,7 +12,11 @@ const sources = import.meta.glob<string>('../assets/materialx/*.mtlx', { query: 
 // Panel order and short labels; the documents name their materials in full.
 const LABELS: Record<string, string> = {
   'car-paint': 'Flake paint', 'weathered-steel': 'Rusty steel', 'varnished-wood': 'Wood',
-  'candle-wax': 'Wax', 'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles'
+  'marble': 'Marble', 'terrazzo': 'Terrazzo', 'leather': 'Leather',
+  'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles', 'zellige-tile': 'Zellige',
+  'candle-wax': 'Wax', 'hammered-copper': 'Copper', 'carbon-fiber': 'Carbon',
+  'damascus-steel': 'Damascus', 'kintsugi': 'Kintsugi', 'heat-tinted-titanium': 'Titanium',
+  'abalone': 'Abalone', 'hex-plating': 'Hex plate'
 };
 const order = Object.keys(LABELS);
 

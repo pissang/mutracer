@@ -1,23 +1,21 @@
 <?xml version="1.0"?>
 <!--
-  Flake car paint: Standard Surface with a clear coat over a metallic flake
-  base. Object-space cellnoise picks flake cells, tilts their normals and
-  makes them metallic; fractal noise varies a pearlescent thin film.
-  Procedural, CC0.
+  Candy flake paint: OpenPBR metallic flake base under a tinted clear
+  coat.
+  Object-space cellnoise gives every flake a random tilt; a share of them
+  are brighter, smoother sparkle flakes. The coat keeps the smooth surface
+  normal and its constant color tints the metal underneath. Procedural,
+  CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_car_paint">
-    <input name="paint_color" type="color3" value="0.42, 0.012, 0.03" uiname="Paint color" />
-    <input name="flake_color" type="color3" value="0.9, 0.5, 0.38" uiname="Flake color" />
-    <input name="flake_scale" type="float" value="140" uiname="Flake scale" />
-    <input name="flake_density" type="float" value="0.16" uiname="Flake density" uimin="0" uimax="1" />
-    <input name="flake_tilt" type="float" value="0.6" uiname="Flake tilt" uimin="0" uimax="1" />
-    <input name="film_thickness" type="float" value="380" uiname="Film thickness (nm)" />
-    <input name="film_variation" type="float" value="140" uiname="Film variation (nm)" />
+    <input name="base_color" type="color3" value="0.78, 0.66, 0.6" uiname="Metallic base" />
+    <input name="flake_color" type="color3" value="1, 0.92, 0.82" uiname="Sparkle color" />
+    <input name="flake_scale" type="float" value="520" uiname="Flake scale" />
+    <input name="flake_density" type="float" value="0.3" uiname="Sparkle density" uimin="0" uimax="1" />
+    <input name="flake_tilt" type="float" value="0.45" uiname="Flake tilt" uimin="0" uimax="1" />
 
-    <position name="object_position" type="vector3">
-      <input name="space" type="string" value="object" />
-    </position>
+    <position name="object_position" type="vector3" />
     <multiply name="flake_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
       <input name="in2" type="float" interfacename="flake_scale" />
@@ -40,110 +38,99 @@
       <input name="position" type="vector3" nodename="flake_position_y" />
     </cellnoise3d>
 
-    <!-- 1 inside a flake, 0 in the binder. -->
-    <subtract name="flake_threshold" type="float">
+    <!-- 1 in a sparkle flake, 0 in the ordinary flake bed. -->
+    <subtract name="sparkle_threshold" type="float">
       <input name="in1" type="float" value="1" />
       <input name="in2" type="float" interfacename="flake_density" />
     </subtract>
-    <ifgreater name="flake_mask" type="float">
+    <ifgreater name="sparkle_mask" type="float">
       <input name="value1" type="float" nodename="flake_cell" />
-      <input name="value2" type="float" nodename="flake_threshold" />
+      <input name="value2" type="float" nodename="sparkle_threshold" />
       <input name="in1" type="float" value="1" />
       <input name="in2" type="float" value="0" />
     </ifgreater>
-
     <mix name="base_color_mix" type="color3">
-      <input name="bg" type="color3" interfacename="paint_color" />
+      <input name="bg" type="color3" interfacename="base_color" />
       <input name="fg" type="color3" interfacename="flake_color" />
-      <input name="mix" type="float" nodename="flake_mask" />
+      <input name="mix" type="float" nodename="sparkle_mask" />
     </mix>
-    <multiply name="flake_metalness" type="float">
-      <input name="in1" type="float" nodename="flake_mask" />
-      <input name="in2" type="float" value="0.9" />
-    </multiply>
+    <mix name="flake_metalness" type="float">
+      <input name="bg" type="float" value="0.85" />
+      <input name="fg" type="float" value="1" />
+      <input name="mix" type="float" nodename="sparkle_mask" />
+    </mix>
     <mix name="flake_roughness" type="float">
-      <input name="bg" type="float" value="0.38" />
-      <input name="fg" type="float" value="0.16" />
-      <input name="mix" type="float" nodename="flake_mask" />
+      <input name="bg" type="float" value="0.4" />
+      <input name="fg" type="float" value="0.14" />
+      <input name="mix" type="float" nodename="sparkle_mask" />
     </mix>
 
-    <!-- Tangent-space flake normal: each flake gets a random tilt. -->
+    <!-- Tangent-space flake normal: every cell tilts, sparkle flakes tilt
+         most. -->
+    <mix name="tilt_weight" type="float">
+      <input name="bg" type="float" value="0.45" />
+      <input name="fg" type="float" value="1" />
+      <input name="mix" type="float" nodename="sparkle_mask" />
+    </mix>
     <multiply name="tilt_amount" type="float">
-      <input name="in1" type="float" nodename="flake_mask" />
+      <input name="in1" type="float" nodename="tilt_weight" />
       <input name="in2" type="float" interfacename="flake_tilt" />
     </multiply>
     <subtract name="tilt_x_centered" type="float">
       <input name="in1" type="float" nodename="flake_cell_x" />
       <input name="in2" type="float" value="0.5" />
     </subtract>
-    <subtract name="tilt_y_centered" type="float">
-      <input name="in1" type="float" nodename="flake_cell_y" />
-      <input name="in2" type="float" value="0.5" />
-    </subtract>
     <multiply name="tilt_x" type="float">
       <input name="in1" type="float" nodename="tilt_x_centered" />
       <input name="in2" type="float" nodename="tilt_amount" />
     </multiply>
+    <subtract name="tilt_y_centered" type="float">
+      <input name="in1" type="float" nodename="flake_cell_y" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
     <multiply name="tilt_y" type="float">
       <input name="in1" type="float" nodename="tilt_y_centered" />
       <input name="in2" type="float" nodename="tilt_amount" />
     </multiply>
-    <add name="encoded_x" type="float">
-      <input name="in1" type="float" nodename="tilt_x" />
-      <input name="in2" type="float" value="0.5" />
-    </add>
-    <add name="encoded_y" type="float">
-      <input name="in1" type="float" nodename="tilt_y" />
-      <input name="in2" type="float" value="0.5" />
-    </add>
-    <combine3 name="flake_tangent_normal" type="vector3">
-      <input name="in1" type="float" nodename="encoded_x" />
-      <input name="in2" type="float" nodename="encoded_y" />
+    <remap name="flake_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="flake_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_y" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="flake_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="flake_normal_encoded_x" />
+      <input name="in2" type="float" nodename="flake_normal_encoded_y" />
       <input name="in3" type="float" value="1" />
     </combine3>
     <normalmap name="flake_normal" type="vector3">
-      <input name="in" type="vector3" nodename="flake_tangent_normal" />
+      <input name="in" type="vector3" nodename="flake_normal_encoded" />
     </normalmap>
-
-    <!-- Pearlescent film thickness drifts slowly over the body. -->
-    <multiply name="film_position" type="vector3">
-      <input name="in1" type="vector3" nodename="object_position" />
-      <input name="in2" type="float" value="2.5" />
-    </multiply>
-    <fractal3d name="film_noise" type="float">
-      <input name="position" type="vector3" nodename="film_position" />
-      <input name="octaves" type="integer" value="3" />
-    </fractal3d>
-    <multiply name="film_offset" type="float">
-      <input name="in1" type="float" nodename="film_noise" />
-      <input name="in2" type="float" interfacename="film_variation" />
-    </multiply>
-    <add name="film_nm" type="float">
-      <input name="in1" type="float" nodename="film_offset" />
-      <input name="in2" type="float" interfacename="film_thickness" />
-    </add>
 
     <output name="base_color_out" type="color3" nodename="base_color_mix" />
     <output name="metalness_out" type="float" nodename="flake_metalness" />
     <output name="roughness_out" type="float" nodename="flake_roughness" />
     <output name="normal_out" type="vector3" nodename="flake_normal" />
-    <output name="thin_film_out" type="float" nodename="film_nm" />
   </nodegraph>
 
-  <standard_surface name="SR_car_paint" type="surfaceshader">
-    <input name="base" type="float" value="1" />
+  <open_pbr_surface name="SR_car_paint" type="surfaceshader">
     <input name="base_color" type="color3" nodegraph="NG_car_paint" output="base_color_out" />
-    <input name="metalness" type="float" nodegraph="NG_car_paint" output="metalness_out" />
-    <input name="specular" type="float" value="1" />
+    <input name="base_metalness" type="float" nodegraph="NG_car_paint" output="metalness_out" />
     <input name="specular_roughness" type="float" nodegraph="NG_car_paint" output="roughness_out" />
-    <input name="coat" type="float" value="1" />
-    <input name="coat_color" type="color3" value="1, 1, 1" />
+    <input name="coat_weight" type="float" value="1" />
+    <input name="coat_color" type="color3" value="0.55, 0.012, 0.03" />
     <input name="coat_roughness" type="float" value="0.03" />
-    <input name="coat_IOR" type="float" value="1.5" />
-    <input name="thin_film_thickness" type="float" nodegraph="NG_car_paint" output="thin_film_out" />
-    <input name="thin_film_IOR" type="float" value="1.45" />
-    <input name="normal" type="vector3" nodegraph="NG_car_paint" output="normal_out" />
-  </standard_surface>
+    <input name="coat_ior" type="float" value="1.5" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_car_paint" output="normal_out" />
+  </open_pbr_surface>
   <surfacematerial name="Car_Paint_Flakes" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="SR_car_paint" />
   </surfacematerial>

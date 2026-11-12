@@ -1,0 +1,261 @@
+<?xml version="1.0"?>
+<!--
+  Carbon fibre: OpenPBR 2/2 twill under a clear epoxy coat. Texture
+  coordinates are cut into tows; the twill decides whether the warp or
+  the weft tow is on top. Each tow rounds the normal across its width and
+  dips where it passes under its neighbours, and stretched noise draws
+  the filaments. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_carbon_fiber">
+    <input name="fibre_color" type="color3" value="0.05, 0.05, 0.055" uiname="Fibre color" />
+    <input name="tiles" type="vector2" value="110, 55" uiname="Tows per UV" />
+    <input name="tow_curve" type="float" value="0.4" uiname="Tow curvature" uimin="0" uimax="1" />
+    <input name="tow_dip" type="float" value="0.22" uiname="Tow dip" uimin="0" uimax="1" />
+    <input name="strand_contrast" type="float" value="0.5" uiname="Filament contrast" uimin="0" uimax="1" />
+    <input name="fibre_roughness" type="float" value="0.34" uiname="Fibre roughness" uimin="0" uimax="1" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="tow_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="tow_index" type="vector2">
+      <input name="in" type="vector2" nodename="tow_uv" />
+    </floor>
+    <subtract name="tow_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="tow_uv" />
+      <input name="in2" type="vector2" nodename="tow_index" />
+    </subtract>
+    <subtract name="tow_across" type="vector2">
+      <input name="in1" type="vector2" nodename="tow_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <separate2 name="index_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="tow_index" />
+    </separate2>
+    <separate2 name="across_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="tow_across" />
+    </separate2>
+    <separate2 name="uv_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="tow_uv" />
+    </separate2>
+
+    <!-- 2/2 twill: the warp tow is on top where (column + row) mod 4 < 2. -->
+    <add name="twill_sum" type="float">
+      <input name="in1" type="float" nodename="index_parts" output="outx" />
+      <input name="in2" type="float" nodename="index_parts" output="outy" />
+    </add>
+    <modulo name="twill_step" type="float">
+      <input name="in1" type="float" nodename="twill_sum" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <ifgreater name="warp_on_top" type="float">
+      <input name="value1" type="float" value="1.5" />
+      <input name="value2" type="float" nodename="twill_step" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+
+    <!-- Position along the visible float, 0 to 1 over its two cells. -->
+    <add name="warp_offset" type="float">
+      <input name="in1" type="float" nodename="index_parts" output="outx" />
+      <input name="in2" type="float" nodename="uv_parts" output="outy" />
+    </add>
+    <modulo name="warp_phase" type="float">
+      <input name="in1" type="float" nodename="warp_offset" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <multiply name="warp_run" type="float">
+      <input name="in1" type="float" nodename="warp_phase" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="weft_offset" type="float">
+      <input name="in1" type="float" nodename="uv_parts" output="outx" />
+      <input name="in2" type="float" nodename="index_parts" output="outy" />
+    </add>
+    <modulo name="weft_phase" type="float">
+      <input name="in1" type="float" nodename="weft_offset" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <multiply name="weft_half" type="float">
+      <input name="in1" type="float" nodename="weft_phase" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="weft_run" type="float">
+      <input name="in1" type="float" nodename="weft_half" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_angle" type="float">
+      <input name="in1" type="float" nodename="warp_run" />
+      <input name="in2" type="float" value="3.141593" />
+    </multiply>
+    <cos name="warp_arc" type="float">
+      <input name="in" type="float" nodename="warp_angle" />
+    </cos>
+    <multiply name="warp_dip" type="float">
+      <input name="in1" type="float" nodename="warp_arc" />
+      <input name="in2" type="float" interfacename="tow_dip" />
+    </multiply>
+    <multiply name="weft_angle" type="float">
+      <input name="in1" type="float" nodename="weft_run" />
+      <input name="in2" type="float" value="3.141593" />
+    </multiply>
+    <cos name="weft_arc" type="float">
+      <input name="in" type="float" nodename="weft_angle" />
+    </cos>
+    <multiply name="weft_dip" type="float">
+      <input name="in1" type="float" nodename="weft_arc" />
+      <input name="in2" type="float" interfacename="tow_dip" />
+    </multiply>
+
+    <!-- Tangent tilt: round across the tow, falling toward both ends of the
+         float. -->
+    <multiply name="curve_slope" type="float">
+      <input name="in1" type="float" interfacename="tow_curve" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="warp_round" type="float">
+      <input name="in1" type="float" nodename="across_parts" output="outx" />
+      <input name="in2" type="float" nodename="curve_slope" />
+    </multiply>
+    <multiply name="curve_slope_y" type="float">
+      <input name="in1" type="float" interfacename="tow_curve" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="weft_round" type="float">
+      <input name="in1" type="float" nodename="across_parts" output="outy" />
+      <input name="in2" type="float" nodename="curve_slope_y" />
+    </multiply>
+    <multiply name="weft_fall" type="float">
+      <input name="in1" type="float" nodename="weft_dip" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <mix name="tilt_x" type="float">
+      <input name="bg" type="float" nodename="weft_fall" />
+      <input name="fg" type="float" nodename="warp_round" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <multiply name="warp_fall" type="float">
+      <input name="in1" type="float" nodename="warp_dip" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <mix name="tilt_y" type="float">
+      <input name="bg" type="float" nodename="weft_round" />
+      <input name="fg" type="float" nodename="warp_fall" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <remap name="weave_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="weave_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_y" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="weave_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="weave_normal_encoded_x" />
+      <input name="in2" type="float" nodename="weave_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="weave_normal" type="vector3">
+      <input name="in" type="vector3" nodename="weave_normal_encoded" />
+    </normalmap>
+
+    <!-- Filaments: noise stretched along the tow on top. -->
+    <multiply name="warp_strand_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="tow_uv" />
+      <input name="in2" type="vector2" value="17, 0.45" />
+    </multiply>
+    <noise2d name="warp_strands" type="float">
+      <input name="texcoord" type="vector2" nodename="warp_strand_uv" />
+    </noise2d>
+    <multiply name="weft_strand_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="tow_uv" />
+      <input name="in2" type="vector2" value="0.45, 17" />
+    </multiply>
+    <noise2d name="weft_strands" type="float">
+      <input name="texcoord" type="vector2" nodename="weft_strand_uv" />
+    </noise2d>
+    <mix name="strand_noise" type="float">
+      <input name="bg" type="float" nodename="weft_strands" />
+      <input name="fg" type="float" nodename="warp_strands" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <multiply name="strand" type="float">
+      <input name="in1" type="float" nodename="strand_noise" />
+      <input name="in2" type="float" interfacename="strand_contrast" />
+    </multiply>
+    <mix name="cross_position" type="float">
+      <input name="bg" type="float" nodename="across_parts" output="outy" />
+      <input name="fg" type="float" nodename="across_parts" output="outx" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <absval name="cross_distance" type="float">
+      <input name="in" type="float" nodename="cross_position" />
+    </absval>
+    <smoothstep name="tow_gap" type="float">
+      <input name="in" type="float" nodename="cross_distance" />
+      <input name="low" type="float" value="0.4" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <add name="strand_shade" type="float">
+      <input name="in1" type="float" nodename="strand" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <remap name="gap_shade" type="float">
+      <input name="in" type="float" nodename="tow_gap" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.35" />
+    </remap>
+    <multiply name="tow_shade" type="float">
+      <input name="in1" type="float" nodename="strand_shade" />
+      <input name="in2" type="float" nodename="gap_shade" />
+    </multiply>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" interfacename="fibre_color" />
+      <input name="in2" type="float" nodename="tow_shade" />
+    </multiply>
+    <multiply name="strand_rough" type="float">
+      <input name="in1" type="float" nodename="strand" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <add name="strand_roughness" type="float">
+      <input name="in1" type="float" nodename="strand_rough" />
+      <input name="in2" type="float" interfacename="fibre_roughness" />
+    </add>
+    <multiply name="gap_roughness" type="float">
+      <input name="in1" type="float" nodename="tow_gap" />
+      <input name="in2" type="float" value="0.2" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" nodename="strand_roughness" />
+      <input name="in2" type="float" nodename="gap_roughness" />
+    </add>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="weave_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_carbon_fiber" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_carbon_fiber" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_carbon_fiber" output="roughness_out" />
+    <input name="coat_weight" type="float" value="1" />
+    <input name="coat_roughness" type="float" value="0.04" />
+    <input name="coat_ior" type="float" value="1.55" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_carbon_fiber" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Carbon_Fiber" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_carbon_fiber" />
+  </surfacematerial>
+</materialx>

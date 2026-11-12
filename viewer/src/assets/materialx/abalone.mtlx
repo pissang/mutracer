@@ -1,0 +1,145 @@
+<?xml version="1.0"?>
+<!--
+  Abalone shell: OpenPBR metallic nacre under an interference thin film. A
+  vector fractal swirls object space; the film thickness follows a
+  fractal over it, so the colors run in flowing contour bands. Fine
+  growth lines ripple the thickness and lean the normal. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_abalone">
+    <input name="film_thickness" type="float" value="0.45" uiname="Film thickness (um)" uimin="0" uimax="1" />
+    <input name="film_variation" type="float" value="0.25" uiname="Thickness variation" />
+    <input name="flow_scale" type="float" value="1.5" uiname="Flow scale" />
+    <input name="swirl" type="float" value="0.6" uiname="Swirl" />
+    <input name="growth_lines" type="float" value="36" uiname="Growth lines per unit" />
+    <input name="line_depth" type="float" value="0.35" uiname="Line depth" uimin="0" uimax="1" />
+    <input name="roughness" type="float" value="0.14" uiname="Roughness" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="swirl_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <fractal3d name="swirl_noise" type="vector3">
+      <input name="position" type="vector3" nodename="swirl_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" interfacename="swirl" />
+    </fractal3d>
+    <multiply name="scaled_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="flow_scale" />
+    </multiply>
+    <add name="flow_position" type="vector3">
+      <input name="in1" type="vector3" nodename="scaled_position" />
+      <input name="in2" type="vector3" nodename="swirl_noise" />
+    </add>
+    <fractal3d name="flow" type="float">
+      <input name="position" type="vector3" nodename="flow_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+
+    <!-- Growth lines: a sine along a leaning axis, bent by the flow. -->
+    <dotproduct name="line_height" type="float">
+      <input name="in1" type="vector3" nodename="flow_position" />
+      <input name="in2" type="vector3" value="0.3, 1, 0.2" />
+    </dotproduct>
+    <multiply name="line_bend" type="float">
+      <input name="in1" type="float" nodename="flow" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="line_coordinate" type="float">
+      <input name="in1" type="float" nodename="line_height" />
+      <input name="in2" type="float" nodename="line_bend" />
+    </add>
+    <multiply name="line_phase" type="float">
+      <input name="in1" type="float" nodename="line_coordinate" />
+      <input name="in2" type="float" interfacename="growth_lines" />
+    </multiply>
+    <multiply name="line_angle" type="float">
+      <input name="in1" type="float" nodename="line_phase" />
+      <input name="in2" type="float" value="6.283185" />
+    </multiply>
+    <sin name="line_wave" type="float">
+      <input name="in" type="float" nodename="line_angle" />
+    </sin>
+
+    <!-- Film thickness in micrometres. -->
+    <multiply name="film_drift" type="float">
+      <input name="in1" type="float" nodename="flow" />
+      <input name="in2" type="float" interfacename="film_variation" />
+    </multiply>
+    <add name="film_flow" type="float">
+      <input name="in1" type="float" nodename="film_drift" />
+      <input name="in2" type="float" interfacename="film_thickness" />
+    </add>
+    <multiply name="ripple_amount" type="float">
+      <input name="in1" type="float" interfacename="line_depth" />
+      <input name="in2" type="float" value="0.03" />
+    </multiply>
+    <multiply name="film_ripple" type="float">
+      <input name="in1" type="float" nodename="line_wave" />
+      <input name="in2" type="float" nodename="ripple_amount" />
+    </multiply>
+    <add name="film_sum" type="float">
+      <input name="in1" type="float" nodename="film_flow" />
+      <input name="in2" type="float" nodename="film_ripple" />
+    </add>
+    <max name="film_thickness_um" type="float">
+      <input name="in1" type="float" nodename="film_sum" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <cos name="line_slope" type="float">
+      <input name="in" type="float" nodename="line_angle" />
+    </cos>
+    <multiply name="lean_depth" type="float">
+      <input name="in1" type="float" interfacename="line_depth" />
+      <input name="in2" type="float" value="-0.2" />
+    </multiply>
+    <multiply name="lean_amount" type="float">
+      <input name="in1" type="float" nodename="line_slope" />
+      <input name="in2" type="float" nodename="lean_depth" />
+    </multiply>
+    <multiply name="lean" type="vector3">
+      <input name="in1" type="vector3" value="0.3, 1, 0.2" />
+      <input name="in2" type="float" nodename="lean_amount" />
+    </multiply>
+    <add name="line_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="lean" />
+    </add>
+    <transformnormal name="line_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="line_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="line_normal" type="vector3">
+      <input name="in" type="vector3" nodename="line_normal_world" />
+    </normalize>
+    <multiply name="ripple_roughness" type="float">
+      <input name="in1" type="float" nodename="line_wave" />
+      <input name="in2" type="float" value="0.03" />
+    </multiply>
+    <add name="line_roughness" type="float">
+      <input name="in1" type="float" nodename="ripple_roughness" />
+      <input name="in2" type="float" interfacename="roughness" />
+    </add>
+
+    <output name="roughness_out" type="float" nodename="line_roughness" />
+    <output name="thin_film_out" type="float" nodename="film_thickness_um" />
+    <output name="normal_out" type="vector3" nodename="line_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_abalone" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.3, 0.32, 0.36" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_abalone" output="roughness_out" />
+    <input name="thin_film_weight" type="float" value="1" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_abalone" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="2.4" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_abalone" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Abalone_Shell" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_abalone" />
+  </surfacematerial>
+</materialx>
