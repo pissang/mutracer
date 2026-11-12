@@ -1,0 +1,322 @@
+<?xml version="1.0"?>
+<!--
+  Sci-fi hex panel: OpenPBR metal plates with emissive cyan seams. Two offset rectangular grids
+  give the nearest hexagon centre in texture space; the hexagonal
+  distance cuts bevelled plates from dark grooves. Cellnoise per plate
+  varies its finish, anodizes some plates in an accent color and
+  engraves a ring into others. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_hex_panel">
+    <input name="plate_color" type="color3" value="0.055, 0.07, 0.1" uiname="Plate" />
+    <input name="accent_color" type="color3" value="0.15, 0.23, 0.3" uiname="Accent plates" />
+    <input name="tiles" type="vector2" value="16, 8" uiname="Columns per UV" />
+    <input name="groove_width" type="float" value="0.06" uiname="Groove width" uimin="0" uimax="0.3" />
+    <input name="accent_plates" type="float" value="0.14" uiname="Accent share" uimin="0" uimax="1" />
+    <input name="finish_variation" type="float" value="0.6" uiname="Finish variation" uimin="0" uimax="1" />
+    <input name="bevel" type="float" value="0.5" uiname="Bevel" uimin="0" uimax="1" />
+
+    <input name="seam_color" type="color3" value="0.015, 0.65, 1" uiname="Seam color" />
+    <input name="seam_brightness" type="float" value="3" uiname="Seam brightness" uimin="0" uimax="20" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="hex_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+
+    <!-- Nearest hexagon centre: the closer of two rectangular grids offset by
+         half a cell. -->
+    <modulo name="grid_a_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="hex_uv" />
+      <input name="in2" type="vector2" value="1, 1.732051" />
+    </modulo>
+    <subtract name="grid_a" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_a_cell" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <subtract name="grid_b_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="hex_uv" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <modulo name="grid_b_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_b_uv" />
+      <input name="in2" type="vector2" value="1, 1.732051" />
+    </modulo>
+    <subtract name="grid_b" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_b_cell" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <dotproduct name="grid_b_distance" type="float">
+      <input name="in1" type="vector2" nodename="grid_b" />
+      <input name="in2" type="vector2" nodename="grid_b" />
+    </dotproduct>
+    <dotproduct name="grid_a_distance" type="float">
+      <input name="in1" type="vector2" nodename="grid_a" />
+      <input name="in2" type="vector2" nodename="grid_a" />
+    </dotproduct>
+    <ifgreater name="hex_local" type="vector2">
+      <input name="value1" type="float" nodename="grid_b_distance" />
+      <input name="value2" type="float" nodename="grid_a_distance" />
+      <input name="in1" type="vector2" nodename="grid_a" />
+      <input name="in2" type="vector2" nodename="grid_b" />
+    </ifgreater>
+    <absval name="hex_abs" type="vector2">
+      <input name="in" type="vector2" nodename="hex_local" />
+    </absval>
+    <separate2 name="hex_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="hex_abs" />
+    </separate2>
+    <multiply name="hex_half_x" type="float">
+      <input name="in1" type="float" nodename="hex_parts" output="outx" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="hex_y" type="float">
+      <input name="in1" type="float" nodename="hex_parts" output="outy" />
+      <input name="in2" type="float" value="0.8660254" />
+    </multiply>
+    <add name="hex_slanted" type="float">
+      <input name="in1" type="float" nodename="hex_half_x" />
+      <input name="in2" type="float" nodename="hex_y" />
+    </add>
+    <max name="hex_distance" type="float">
+      <input name="in1" type="float" nodename="hex_parts" output="outx" />
+      <input name="in2" type="float" nodename="hex_slanted" />
+    </max>
+    <subtract name="edge_distance" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="hex_distance" />
+    </subtract>
+    <multiply name="groove_half" type="float">
+      <input name="in1" type="float" interfacename="groove_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="plate_soft" type="float">
+      <input name="in1" type="float" nodename="groove_half" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="plate_mask" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" nodename="groove_half" />
+      <input name="high" type="float" nodename="plate_soft" />
+    </smoothstep>
+
+    <!-- Random values per plate, from the centre scaled onto integer cells. -->
+    <subtract name="hex_centre" type="vector2">
+      <input name="in1" type="vector2" nodename="hex_uv" />
+      <input name="in2" type="vector2" nodename="hex_local" />
+    </subtract>
+    <multiply name="plate_centre" type="vector2">
+      <input name="in1" type="vector2" nodename="hex_centre" />
+      <input name="in2" type="vector2" value="2, 1.1547" />
+    </multiply>
+    <add name="plate_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_centre" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <cellnoise2d name="plate_random_1" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_cell" />
+    </cellnoise2d>
+    <add name="plate_cell_2" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_cell" />
+      <input name="in2" type="vector2" value="13, 5" />
+    </add>
+    <cellnoise2d name="plate_random_2" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_cell_2" />
+    </cellnoise2d>
+    <add name="plate_cell_3" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_cell" />
+      <input name="in2" type="vector2" value="-7, 31" />
+    </add>
+    <cellnoise2d name="plate_random_3" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_cell_3" />
+    </cellnoise2d>
+
+    <!-- Finish: value and roughness vary per plate; some plates are anodized. -->
+    <ifgreater name="is_accent" type="float">
+      <input name="value1" type="float" interfacename="accent_plates" />
+      <input name="value2" type="float" nodename="plate_random_1" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="value_centred" type="float">
+      <input name="in1" type="float" nodename="plate_random_3" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="value_shift" type="float">
+      <input name="in1" type="float" nodename="value_centred" />
+      <input name="in2" type="float" interfacename="finish_variation" />
+    </multiply>
+    <add name="plate_value" type="float">
+      <input name="in1" type="float" nodename="value_shift" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <mix name="plate_tint" type="color3">
+      <input name="bg" type="color3" interfacename="plate_color" />
+      <input name="fg" type="color3" interfacename="accent_color" />
+      <input name="mix" type="float" nodename="is_accent" />
+    </mix>
+    <multiply name="plate_finish" type="color3">
+      <input name="in1" type="color3" nodename="plate_tint" />
+      <input name="in2" type="float" nodename="plate_value" />
+    </multiply>
+
+    <!-- An engraved ring on about a third of the plates. -->
+    <smoothstep name="ring_on" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.2" />
+      <input name="high" type="float" value="0.212" />
+    </smoothstep>
+    <smoothstep name="ring_off" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.232" />
+      <input name="high" type="float" value="0.244" />
+    </smoothstep>
+    <subtract name="ring_band" type="float">
+      <input name="in1" type="float" nodename="ring_on" />
+      <input name="in2" type="float" nodename="ring_off" />
+    </subtract>
+    <ifgreater name="has_ring" type="float">
+      <input name="value1" type="float" nodename="plate_random_2" />
+      <input name="value2" type="float" value="0.66" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="ring" type="float">
+      <input name="in1" type="float" nodename="ring_band" />
+      <input name="in2" type="float" nodename="has_ring" />
+    </multiply>
+    <remap name="groove_shade" type="float">
+      <input name="in" type="float" nodename="plate_mask" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.12" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="ring_shade" type="float">
+      <input name="in" type="float" nodename="ring" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <multiply name="recess" type="float">
+      <input name="in1" type="float" nodename="groove_shade" />
+      <input name="in2" type="float" nodename="ring_shade" />
+    </multiply>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" nodename="plate_finish" />
+      <input name="in2" type="float" nodename="recess" />
+    </multiply>
+    <multiply name="roughness_range" type="float">
+      <input name="in1" type="float" interfacename="finish_variation" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="roughness_shift" type="float">
+      <input name="in1" type="float" nodename="plate_random_2" />
+      <input name="in2" type="float" nodename="roughness_range" />
+    </multiply>
+    <add name="plate_roughness" type="float">
+      <input name="in1" type="float" nodename="roughness_shift" />
+      <input name="in2" type="float" value="0.16" />
+    </add>
+    <multiply name="ring_rough" type="float">
+      <input name="in1" type="float" nodename="ring" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="ring_roughness" type="float">
+      <input name="in1" type="float" nodename="plate_roughness" />
+      <input name="in2" type="float" nodename="ring_rough" />
+    </add>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.8" />
+      <input name="fg" type="float" nodename="ring_roughness" />
+      <input name="mix" type="float" nodename="plate_mask" />
+    </mix>
+
+    <!-- Bevel: the normal leans outward near the plate edge. -->
+    <subtract name="bevel_start" type="float">
+      <input name="in1" type="float" value="0.4" />
+      <input name="in2" type="float" nodename="groove_half" />
+    </subtract>
+    <subtract name="bevel_end" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="groove_half" />
+    </subtract>
+    <smoothstep name="bevel_reach" type="float">
+      <input name="in" type="float" nodename="hex_distance" />
+      <input name="low" type="float" nodename="bevel_start" />
+      <input name="high" type="float" nodename="bevel_end" />
+    </smoothstep>
+    <multiply name="bevel_mask" type="float">
+      <input name="in1" type="float" nodename="bevel_reach" />
+      <input name="in2" type="float" nodename="plate_mask" />
+    </multiply>
+    <multiply name="bevel_amount" type="float">
+      <input name="in1" type="float" interfacename="bevel" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <multiply name="bevel_slope" type="float">
+      <input name="in1" type="float" nodename="bevel_mask" />
+      <input name="in2" type="float" nodename="bevel_amount" />
+    </multiply>
+    <multiply name="lean" type="vector2">
+      <input name="in1" type="vector2" nodename="hex_local" />
+      <input name="in2" type="float" nodename="bevel_slope" />
+    </multiply>
+    <separate2 name="lean_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="lean" />
+    </separate2>
+    <remap name="plate_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="lean_parts" output="outx" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="plate_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="lean_parts" output="outy" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="plate_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="plate_normal_encoded_x" />
+      <input name="in2" type="float" nodename="plate_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="plate_normal" type="vector3">
+      <input name="in" type="vector3" nodename="plate_normal_encoded" />
+    </normalmap>
+
+    <invert name="seams" type="float">
+      <input name="in" type="float" nodename="plate_mask" />
+    </invert>
+    <multiply name="glow_color" type="color3">
+      <input name="in1" type="color3" interfacename="seam_color" />
+      <input name="in2" type="float" nodename="seams" />
+    </multiply>
+    <multiply name="glow_luminance" type="float">
+      <input name="in1" type="float" interfacename="seam_brightness" />
+      <input name="in2" type="float" nodename="seams" />
+    </multiply>
+    <output name="emission_color_out" type="color3" nodename="glow_color" />
+    <output name="emission_luminance_out" type="float" nodename="glow_luminance" />
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="plate_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_hex_panel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_hex_panel" output="base_color_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_hex_panel" output="emission_color_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_hex_panel" output="emission_luminance_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_hex_panel" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_hex_panel" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Hex_Panel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_hex_panel" />
+  </surfacematerial>
+</materialx>

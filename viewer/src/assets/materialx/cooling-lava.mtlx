@@ -1,0 +1,107 @@
+<?xml version="1.0"?>
+<!-- Cooling lava: warped object-space cells form a rough basalt crust over
+     glowing orange cracks. Procedural, CC0. -->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_cooling_lava">
+    <input name="crust_color" type="color3" value="0.018, 0.022, 0.028" uiname="Crust" />
+    <input name="lava_color" type="color3" value="1, 0.16, 0.008" uiname="Lava" />
+    <input name="cell_scale" type="float" value="3.2" uiname="Crust scale" />
+    <input name="crack_width" type="float" value="0.09" uiname="Crack width" />
+    <input name="glow" type="float" value="4" uiname="Glow" />
+    <input name="warp" type="float" value="0.4" uiname="Flow distortion" />
+    <input name="pitting" type="float" value="0.35" uiname="Pitting" />
+    <position name="object_position" type="vector3">
+    </position>
+    <multiply name="cells_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="cell_scale" />
+    </multiply>
+    <noise3d name="flow" type="vector3">
+      <input name="position" type="vector3" nodename="cells_position" />
+      <input name="amplitude" type="float" interfacename="warp" />
+    </noise3d>
+    <add name="warped_position" type="vector3">
+      <input name="in1" type="vector3" nodename="cells_position" />
+      <input name="in2" type="vector3" nodename="flow" />
+    </add>
+    <worleynoise3d name="cells" type="vector2">
+      <input name="position" type="vector3" nodename="warped_position" />
+    </worleynoise3d>
+    <separate2 name="distances" type="multioutput">
+      <input name="in" type="vector2" nodename="cells" />
+    </separate2>
+    <subtract name="crack_distance" type="float">
+      <input name="in1" type="float" nodename="distances" output="outy" />
+      <input name="in2" type="float" nodename="distances" output="outx" />
+    </subtract>
+    <multiply name="core_width" type="float">
+      <input name="in1" type="float" interfacename="crack_width" />
+      <input name="in2" type="float" value="0.2" />
+    </multiply>
+    <smoothstep name="crust" type="float">
+      <input name="in" type="float" nodename="crack_distance" />
+      <input name="low" type="float" nodename="core_width" />
+      <input name="high" type="float" interfacename="crack_width" />
+    </smoothstep>
+    <invert name="cracks" type="float">
+      <input name="in" type="float" nodename="crust" />
+    </invert>
+    <multiply name="detail_position" type="vector3">
+      <input name="in1" type="vector3" nodename="cells_position" />
+      <input name="in2" type="float" value="13" />
+    </multiply>
+    <noise3d name="grain" type="float">
+      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="amplitude" type="float" value="0.3" />
+      <input name="pivot" type="float" value="0.7" />
+    </noise3d>
+    <multiply name="crust_shade" type="color3">
+      <input name="in1" type="color3" interfacename="crust_color" />
+      <input name="in2" type="float" nodename="grain" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="crust_shade" />
+      <input name="fg" type="color3" interfacename="lava_color" />
+      <input name="mix" type="float" nodename="cracks" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.85" />
+      <input name="fg" type="float" value="0.24" />
+      <input name="mix" type="float" nodename="cracks" />
+    </mix>
+    <multiply name="emission_color" type="color3">
+      <input name="in1" type="color3" interfacename="lava_color" />
+      <input name="in2" type="float" nodename="cracks" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" interfacename="glow" />
+      <input name="in2" type="float" nodename="cracks" />
+    </multiply>
+    <noise3d name="pit_noise" type="vector3">
+      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="amplitude" type="float" interfacename="pitting" />
+    </noise3d>
+    <add name="encoded_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_noise" />
+      <input name="in2" type="vector3" value="0.5, 0.5, 1" />
+    </add>
+    <normalmap name="crust_normal" type="vector3">
+      <input name="in" type="vector3" nodename="encoded_normal" />
+    </normalmap>
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+    <output name="normal_out" type="vector3" nodename="crust_normal" />
+  </nodegraph>
+  <open_pbr_surface name="SR_cooling_lava" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_cooling_lava" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_cooling_lava" output="roughness_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_cooling_lava" output="emission_color_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_cooling_lava" output="emission_luminance_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_cooling_lava" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Cooling_Lava" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_cooling_lava" />
+  </surfacematerial>
+</materialx>

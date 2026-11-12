@@ -516,9 +516,10 @@ material. Download or import failures also keep the existing material.
 The **MaterialX** preset category imports procedural samples: flake car paint,
 weathered steel, varnished wood, marble, terrazzo, leather, tartan, cobblestone
 with height displacement, zellige tile, wax, hammered copper, carbon fibre,
-Damascus steel, kintsugi, heat-tinted titanium, abalone and hex plating. They
-use only graph nodes and no images, so they need WebGPU to show their patterns;
-WebGL 2 renders their constant fallback. Wood, stone, metal and leather
+Damascus steel, kintsugi, heat-tinted titanium, abalone, hex plating, cooling
+lava with glowing cracks and a sci-fi hex panel with glowing seams. They use
+only graph nodes and no images, so they need WebGPU to show their patterns;
+WebGL 2 renders their constant fallback. Wood, stone, metal, leather and lava
 patterns use object-space position and follow the model's size; the woven,
 tiled and plated ones use UV0 and expose their repeat count.
 

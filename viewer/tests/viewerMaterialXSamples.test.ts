@@ -30,7 +30,9 @@ const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}
   'kintsugi':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
   'heat-tinted-titanium':{terminals:['specularRoughness','thinFilmThickness'],values:{baseMetalness:1,specularAnisotropy:0.4,thinFilmIor:2.6}},
   'abalone':{terminals:['specularRoughness','thinFilmThickness','normal'],values:{baseMetalness:1,thinFilmIor:2.4}},
-  'hex-plating':{terminals:['baseColor','specularRoughness','normal']}
+  'hex-plating':{terminals:['baseColor','specularRoughness','normal']},
+  'cooling-lava':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
+  'hex-panel':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance'],values:{baseMetalness:1}}
 };
 
 describe('bundled MaterialX samples',()=>{

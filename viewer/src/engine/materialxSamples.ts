@@ -16,7 +16,7 @@ const LABELS: Record<string, string> = {
   'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles', 'zellige-tile': 'Zellige',
   'candle-wax': 'Wax', 'hammered-copper': 'Copper', 'carbon-fiber': 'Carbon',
   'damascus-steel': 'Damascus', 'kintsugi': 'Kintsugi', 'heat-tinted-titanium': 'Titanium',
-  'abalone': 'Abalone', 'hex-plating': 'Hex plate'
+  'abalone': 'Abalone', 'hex-plating': 'Hex plate', 'cooling-lava': 'Lava', 'hex-panel': 'Hex glow'
 };
 const order = Object.keys(LABELS);
 
