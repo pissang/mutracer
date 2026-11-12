@@ -22,7 +22,9 @@ const LABELS: Record<string, string> = {
   'stained-glass': 'Stained glass', 'rain-glass': 'Rain glass', 'agate': 'Agate',
   'guilloche-enamel': 'Guilloché', 'dragon-scales': 'Scales', 'holo-glitter': 'Glitter',
   'gas-giant': 'Gas giant',
-  'cooling-lava': 'Lava', 'hex-panel': 'Hex glow'
+  'cooling-lava': 'Lava', 'hex-panel': 'Hex glow', 'embers': 'Embers', 'hot-steel': 'Hot steel',
+  'sun': 'Sun', 'neon-truchet': 'Neon', 'led-matrix': 'LED matrix', 'night-windows': 'Night windows',
+  'nebula': 'Nebula', 'bioluminescence': 'Biolume'
 };
 const order = Object.keys(LABELS);
 

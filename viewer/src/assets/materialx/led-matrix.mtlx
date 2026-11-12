@@ -1,0 +1,225 @@
+<?xml version="1.0"?>
+<!--
+  LED matrix: OpenPBR black panel with emissive pixels. Texture space is
+  cut into cells with one round LED each; the cell index runs through
+  summed sines, and hsvtorgb turns that plasma into the hue each LED
+  shows. The lens of every LED domes the normal. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_led_matrix">
+    <input name="panel_color" type="color3" value="0.015, 0.015, 0.018" uiname="Panel" />
+    <input name="tiles" type="vector2" value="72, 36" uiname="LEDs per UV" />
+    <input name="led_size" type="float" value="0.36" uiname="LED size" uimin="0.1" uimax="0.5" />
+    <input name="pattern_scale" type="float" value="0.22" uiname="Pattern scale" />
+    <input name="hue_offset" type="float" value="0.55" uiname="Hue offset" uimin="0" uimax="1" />
+    <input name="hue_range" type="float" value="0.7" uiname="Hue range" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="1.4" uiname="Brightness" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="led_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="led_index" type="vector2">
+      <input name="in" type="vector2" nodename="led_uv" />
+    </floor>
+    <subtract name="led_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="led_uv" />
+      <input name="in2" type="vector2" nodename="led_index" />
+    </subtract>
+    <subtract name="led_local" type="vector2">
+      <input name="in1" type="vector2" nodename="led_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <dotproduct name="led_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="led_local" />
+      <input name="in2" type="vector2" nodename="led_local" />
+    </dotproduct>
+    <sqrt name="led_distance" type="float">
+      <input name="in" type="float" nodename="led_distance_squared" />
+    </sqrt>
+    <multiply name="led_inner" type="float">
+      <input name="in1" type="float" interfacename="led_size" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <smoothstep name="led_edge" type="float">
+      <input name="in" type="float" nodename="led_distance" />
+      <input name="low" type="float" nodename="led_inner" />
+      <input name="high" type="float" interfacename="led_size" />
+    </smoothstep>
+    <invert name="led_mask" type="float">
+      <input name="in" type="float" nodename="led_edge" />
+    </invert>
+
+    <!-- Plasma from the LED index: four sines, of x, of y, of a diagonal and
+         of the distance to a point. -->
+    <multiply name="pixel_position" type="vector2">
+      <input name="in1" type="vector2" nodename="led_index" />
+      <input name="in2" type="float" interfacename="pattern_scale" />
+    </multiply>
+    <separate2 name="pixel" type="multioutput">
+      <input name="in" type="vector2" nodename="pixel_position" />
+    </separate2>
+    <sin name="wave_x" type="float">
+      <input name="in" type="float" nodename="pixel" output="outx" />
+    </sin>
+    <multiply name="wave_y_phase" type="float">
+      <input name="in1" type="float" nodename="pixel" output="outy" />
+      <input name="in2" type="float" value="1.7" />
+    </multiply>
+    <sin name="wave_y" type="float">
+      <input name="in" type="float" nodename="wave_y_phase" />
+    </sin>
+    <add name="diagonal" type="float">
+      <input name="in1" type="float" nodename="pixel" output="outx" />
+      <input name="in2" type="float" nodename="pixel" output="outy" />
+    </add>
+    <multiply name="diagonal_phase" type="float">
+      <input name="in1" type="float" nodename="diagonal" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <sin name="wave_diagonal" type="float">
+      <input name="in" type="float" nodename="diagonal_phase" />
+    </sin>
+    <combine2 name="pixel_vector" type="vector2">
+      <input name="in1" type="float" nodename="pixel" output="outx" />
+      <input name="in2" type="float" nodename="pixel" output="outy" />
+    </combine2>
+    <subtract name="ring_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="pixel_vector" />
+      <input name="in2" type="vector2" value="5, 2.5" />
+    </subtract>
+    <dotproduct name="ring_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="ring_offset" />
+      <input name="in2" type="vector2" nodename="ring_offset" />
+    </dotproduct>
+    <sqrt name="ring_distance" type="float">
+      <input name="in" type="float" nodename="ring_distance_squared" />
+    </sqrt>
+    <multiply name="ring_phase" type="float">
+      <input name="in1" type="float" nodename="ring_distance" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <sin name="wave_ring" type="float">
+      <input name="in" type="float" nodename="ring_phase" />
+    </sin>
+    <add name="plasma_xy" type="float">
+      <input name="in1" type="float" nodename="wave_x" />
+      <input name="in2" type="float" nodename="wave_y" />
+    </add>
+    <add name="plasma_dr" type="float">
+      <input name="in1" type="float" nodename="wave_diagonal" />
+      <input name="in2" type="float" nodename="wave_ring" />
+    </add>
+    <add name="plasma_sum" type="float">
+      <input name="in1" type="float" nodename="plasma_xy" />
+      <input name="in2" type="float" nodename="plasma_dr" />
+    </add>
+    <multiply name="plasma" type="float">
+      <input name="in1" type="float" nodename="plasma_sum" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <multiply name="hue_spread" type="float">
+      <input name="in1" type="float" nodename="plasma" />
+      <input name="in2" type="float" interfacename="hue_range" />
+    </multiply>
+    <add name="hue_shifted" type="float">
+      <input name="in1" type="float" nodename="hue_spread" />
+      <input name="in2" type="float" interfacename="hue_offset" />
+    </add>
+    <modulo name="hue" type="float">
+      <input name="in1" type="float" nodename="hue_shifted" />
+      <input name="in2" type="float" value="1" />
+    </modulo>
+    <multiply name="level_phase" type="float">
+      <input name="in1" type="float" nodename="plasma" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <sin name="level_wave" type="float">
+      <input name="in" type="float" nodename="level_phase" />
+    </sin>
+    <remap name="pixel_level" type="float">
+      <input name="in" type="float" nodename="level_wave" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.12" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="pixel_hsv" type="color3">
+      <input name="in1" type="float" nodename="hue" />
+      <input name="in2" type="float" value="0.92" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <hsvtorgb name="emission_color" type="color3">
+      <input name="in" type="color3" nodename="pixel_hsv" />
+    </hsvtorgb>
+    <multiply name="lit_led" type="float">
+      <input name="in1" type="float" nodename="led_mask" />
+      <input name="in2" type="float" nodename="pixel_level" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="lit_led" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="panel_color" />
+      <input name="fg" type="color3" value="0.08, 0.08, 0.08" />
+      <input name="mix" type="float" nodename="led_mask" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.55" />
+      <input name="fg" type="float" value="0.15" />
+      <input name="mix" type="float" nodename="led_mask" />
+    </mix>
+    <multiply name="lens_slope" type="float">
+      <input name="in1" type="float" nodename="led_mask" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <multiply name="lens_lean" type="vector2">
+      <input name="in1" type="vector2" nodename="led_local" />
+      <input name="in2" type="float" nodename="lens_slope" />
+    </multiply>
+    <separate2 name="lens_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="lens_lean" />
+    </separate2>
+    <remap name="lens_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="lens_parts" output="outx" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="lens_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="lens_parts" output="outy" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="lens_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="lens_normal_encoded_x" />
+      <input name="in2" type="float" nodename="lens_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="lens_normal" type="vector3">
+      <input name="in" type="vector3" nodename="lens_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+    <output name="normal_out" type="vector3" nodename="lens_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_led_matrix" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_led_matrix" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_led_matrix" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_led_matrix" output="normal_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_led_matrix" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_led_matrix" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="LED_Matrix" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_led_matrix" />
+  </surfacematerial>
+</materialx>

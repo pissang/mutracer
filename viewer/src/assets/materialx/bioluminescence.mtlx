@@ -1,0 +1,201 @@
+<?xml version="1.0"?>
+<!--
+  Bioluminescent skin: OpenPBR wet deep-sea hide with emissive
+  photophores. Each object-space Worley cell holds one light organ whose
+  size and brightness come from the cell value, with a pale core. A
+  coarser Worley layer draws faintly glowing veins between them, and a
+  vector noise pebbles the skin. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_bioluminescence">
+    <input name="skin_color" type="color3" value="0.006, 0.014, 0.03" uiname="Skin" />
+    <input name="glow_color" type="color3" value="0.02, 1, 0.65" uiname="Glow" />
+    <input name="organ_scale" type="float" value="8" uiname="Organ scale" />
+    <input name="organ_size" type="float" value="0.34" uiname="Organ size" uimin="0.05" uimax="0.45" />
+    <input name="vein_glow" type="float" value="0.14" uiname="Vein glow" uimin="0" uimax="1" />
+    <input name="skin_bump" type="float" value="0.25" uiname="Skin bump" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="3" uiname="Brightness" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="organ_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="organ_scale" />
+    </multiply>
+
+    <!-- Photophores: a disc around each Worley feature point; the cell value
+         sets its size and brightness. -->
+    <worleynoise3d name="organ_value" type="vector2">
+      <input name="position" type="vector3" nodename="organ_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate2 name="organ_id" type="multioutput">
+      <input name="in" type="vector2" nodename="organ_value" />
+    </separate2>
+    <remap name="organ_size_vary" type="float">
+      <input name="in" type="float" nodename="organ_id" output="outx" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.35" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="organ_radius" type="float">
+      <input name="in1" type="float" interfacename="organ_size" />
+      <input name="in2" type="float" nodename="organ_size_vary" />
+    </multiply>
+    <worleynoise3d name="organ_distance" type="float">
+      <input name="position" type="vector3" nodename="organ_position" />
+    </worleynoise3d>
+    <multiply name="organ_core" type="float">
+      <input name="in1" type="float" nodename="organ_radius" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <smoothstep name="organ_edge" type="float">
+      <input name="in" type="float" nodename="organ_distance" />
+      <input name="low" type="float" nodename="organ_core" />
+      <input name="high" type="float" nodename="organ_radius" />
+    </smoothstep>
+    <invert name="organ" type="float">
+      <input name="in" type="float" nodename="organ_edge" />
+    </invert>
+    <multiply name="organ_squared" type="float">
+      <input name="in1" type="float" nodename="organ" />
+      <input name="in2" type="float" nodename="organ" />
+    </multiply>
+    <remap name="organ_brightness" type="float">
+      <input name="in" type="float" nodename="organ_id" output="outy" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="organ_glow" type="float">
+      <input name="in1" type="float" nodename="organ_squared" />
+      <input name="in2" type="float" nodename="organ_brightness" />
+    </multiply>
+
+    <!-- Veins: the borders of a coarser Worley layer, warped. -->
+    <multiply name="vein_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <multiply name="vein_warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <noise3d name="vein_warp" type="vector3">
+      <input name="position" type="vector3" nodename="vein_warp_position" />
+      <input name="amplitude" type="float" value="0.25" />
+    </noise3d>
+    <add name="vein_position" type="vector3">
+      <input name="in1" type="vector3" nodename="vein_scaled" />
+      <input name="in2" type="vector3" nodename="vein_warp" />
+    </add>
+    <worleynoise3d name="vein_cells" type="vector2">
+      <input name="position" type="vector3" nodename="vein_position" />
+    </worleynoise3d>
+    <separate2 name="vein_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="vein_cells" />
+    </separate2>
+    <subtract name="vein_border" type="float">
+      <input name="in1" type="float" nodename="vein_distances" output="outy" />
+      <input name="in2" type="float" nodename="vein_distances" output="outx" />
+    </subtract>
+    <smoothstep name="vein_edge" type="float">
+      <input name="in" type="float" nodename="vein_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <invert name="vein_line" type="float">
+      <input name="in" type="float" nodename="vein_edge" />
+    </invert>
+    <multiply name="vein" type="float">
+      <input name="in1" type="float" nodename="vein_line" />
+      <input name="in2" type="float" interfacename="vein_glow" />
+    </multiply>
+    <smoothstep name="organ_centre" type="float">
+      <input name="in" type="float" nodename="organ" />
+      <input name="low" type="float" value="0.75" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <multiply name="core_white" type="float">
+      <input name="in1" type="float" nodename="organ_centre" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" interfacename="glow_color" />
+      <input name="fg" type="color3" value="0.8, 1, 0.95" />
+      <input name="mix" type="float" nodename="core_white" />
+    </mix>
+    <max name="glow" type="float">
+      <input name="in1" type="float" nodename="organ_glow" />
+      <input name="in2" type="float" nodename="vein" />
+    </max>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="glow" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+    <multiply name="organ_tissue" type="color3">
+      <input name="in1" type="color3" interfacename="glow_color" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="skin_color" />
+      <input name="fg" type="color3" nodename="organ_tissue" />
+      <input name="mix" type="float" nodename="organ" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.32" />
+      <input name="fg" type="float" value="0.12" />
+      <input name="mix" type="float" nodename="organ" />
+    </mix>
+    <multiply name="pebble_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="pebble_noise" type="vector3">
+      <input name="position" type="vector3" nodename="pebble_position" />
+    </noise3d>
+    <invert name="off_organ" type="float">
+      <input name="in" type="float" nodename="organ" />
+    </invert>
+    <multiply name="pebble_amount" type="float">
+      <input name="in1" type="float" nodename="off_organ" />
+      <input name="in2" type="float" interfacename="skin_bump" />
+    </multiply>
+    <multiply name="pebble_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="pebble_noise" />
+      <input name="in2" type="float" nodename="pebble_amount" />
+    </multiply>
+    <add name="skin_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="pebble_offset" />
+    </add>
+    <transformnormal name="skin_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="skin_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="skin_normal" type="vector3">
+      <input name="in" type="vector3" nodename="skin_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+    <output name="normal_out" type="vector3" nodename="skin_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_bioluminescence" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_bioluminescence" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_bioluminescence" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.4" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_bioluminescence" output="normal_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_bioluminescence" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_bioluminescence" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Bioluminescent_Skin" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_bioluminescence" />
+  </surfacematerial>
+</materialx>

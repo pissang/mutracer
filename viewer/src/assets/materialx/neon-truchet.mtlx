@@ -1,0 +1,207 @@
+<?xml version="1.0"?>
+<!--
+  Neon maze: OpenPBR dark gloss panel with emissive tubes. A Truchet
+  tiling routes the tubes: each texture-space cell holds two quarter
+  arcs around opposite corners and cellnoise mirrors the cell, so the
+  arcs join into endless loops. Tubes glow with a white-hot core and a
+  halo on the panel; a slow noise splits them between two colors.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_neon_truchet">
+    <input name="panel_color" type="color3" value="0.012, 0.012, 0.018" uiname="Panel" />
+    <input name="neon_a" type="color3" value="1, 0.03, 0.45" uiname="Neon A" />
+    <input name="neon_b" type="color3" value="0.02, 0.7, 1" uiname="Neon B" />
+    <input name="tiles" type="vector2" value="16, 8" uiname="Cells per UV" />
+    <input name="tube_width" type="float" value="0.09" uiname="Tube width" uimin="0.02" uimax="0.3" />
+    <input name="halo" type="float" value="0.35" uiname="Halo" uimin="0" uimax="1" />
+    <input name="color_zones" type="float" value="0.22" uiname="Color zone scale" />
+    <input name="intensity" type="float" value="4" uiname="Brightness" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="cell_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="cell_index" type="vector2">
+      <input name="in" type="vector2" nodename="cell_uv" />
+    </floor>
+    <subtract name="cell_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="cell_uv" />
+      <input name="in2" type="vector2" nodename="cell_index" />
+    </subtract>
+    <separate2 name="cell_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="cell_fraction" />
+    </separate2>
+
+    <!-- Truchet: cellnoise mirrors half of the cells, then two quarter arcs of
+         radius 0.5 around opposite corners. -->
+    <cellnoise2d name="cell_random" type="float">
+      <input name="texcoord" type="vector2" nodename="cell_uv" />
+    </cellnoise2d>
+    <ifgreater name="flip" type="float">
+      <input name="value1" type="float" nodename="cell_random" />
+      <input name="value2" type="float" value="0.5" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="mirrored_x" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="cell_parts" output="outx" />
+    </subtract>
+    <mix name="flipped_x" type="float">
+      <input name="bg" type="float" nodename="cell_parts" output="outx" />
+      <input name="fg" type="float" nodename="mirrored_x" />
+      <input name="mix" type="float" nodename="flip" />
+    </mix>
+    <combine2 name="near_corner" type="vector2">
+      <input name="in1" type="float" nodename="flipped_x" />
+      <input name="in2" type="float" nodename="cell_parts" output="outy" />
+    </combine2>
+    <subtract name="far_corner" type="vector2">
+      <input name="in1" type="vector2" nodename="near_corner" />
+      <input name="in2" type="vector2" value="1, 1" />
+    </subtract>
+    <dotproduct name="near_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="near_corner" />
+      <input name="in2" type="vector2" nodename="near_corner" />
+    </dotproduct>
+    <sqrt name="near_distance" type="float">
+      <input name="in" type="float" nodename="near_distance_squared" />
+    </sqrt>
+    <subtract name="arc_a_signed" type="float">
+      <input name="in1" type="float" nodename="near_distance" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="arc_a" type="float">
+      <input name="in" type="float" nodename="arc_a_signed" />
+    </absval>
+    <dotproduct name="far_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="far_corner" />
+      <input name="in2" type="vector2" nodename="far_corner" />
+    </dotproduct>
+    <sqrt name="far_distance" type="float">
+      <input name="in" type="float" nodename="far_distance_squared" />
+    </sqrt>
+    <subtract name="arc_b_signed" type="float">
+      <input name="in1" type="float" nodename="far_distance" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="arc_b" type="float">
+      <input name="in" type="float" nodename="arc_b_signed" />
+    </absval>
+    <min name="arc_distance" type="float">
+      <input name="in1" type="float" nodename="arc_a" />
+      <input name="in2" type="float" nodename="arc_b" />
+    </min>
+    <multiply name="tube_half" type="float">
+      <input name="in1" type="float" interfacename="tube_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="tube_inner" type="float">
+      <input name="in1" type="float" nodename="tube_half" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <smoothstep name="tube_edge" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" nodename="tube_inner" />
+      <input name="high" type="float" nodename="tube_half" />
+    </smoothstep>
+    <invert name="tube" type="float">
+      <input name="in" type="float" nodename="tube_edge" />
+    </invert>
+    <multiply name="core_width" type="float">
+      <input name="in1" type="float" nodename="tube_half" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <smoothstep name="core_edge" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="core_width" />
+    </smoothstep>
+    <invert name="core" type="float">
+      <input name="in" type="float" nodename="core_edge" />
+    </invert>
+    <multiply name="halo_far" type="float">
+      <input name="in1" type="float" nodename="tube_half" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <smoothstep name="halo_edge" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" nodename="tube_half" />
+      <input name="high" type="float" nodename="halo_far" />
+    </smoothstep>
+    <invert name="halo_reach" type="float">
+      <input name="in" type="float" nodename="halo_edge" />
+    </invert>
+    <multiply name="halo_squared" type="float">
+      <input name="in1" type="float" nodename="halo_reach" />
+      <input name="in2" type="float" nodename="halo_reach" />
+    </multiply>
+    <multiply name="halo_glow" type="float">
+      <input name="in1" type="float" nodename="halo_squared" />
+      <input name="in2" type="float" interfacename="halo" />
+    </multiply>
+
+    <!-- Color: a slow noise assigns each region one of the two gases. -->
+    <multiply name="zone_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="cell_uv" />
+      <input name="in2" type="float" interfacename="color_zones" />
+    </multiply>
+    <noise2d name="zone_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="zone_uv" />
+    </noise2d>
+    <smoothstep name="zone" type="float">
+      <input name="in" type="float" nodename="zone_noise" />
+      <input name="low" type="float" value="-0.08" />
+      <input name="high" type="float" value="0.08" />
+    </smoothstep>
+    <mix name="gas_color" type="color3">
+      <input name="bg" type="color3" interfacename="neon_a" />
+      <input name="fg" type="color3" interfacename="neon_b" />
+      <input name="mix" type="float" nodename="zone" />
+    </mix>
+    <multiply name="core_white" type="float">
+      <input name="in1" type="float" nodename="core" />
+      <input name="in2" type="float" value="0.55" />
+    </multiply>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" nodename="gas_color" />
+      <input name="fg" type="color3" value="1, 1, 1" />
+      <input name="mix" type="float" nodename="core_white" />
+    </mix>
+    <max name="glow" type="float">
+      <input name="in1" type="float" nodename="tube" />
+      <input name="in2" type="float" nodename="halo_glow" />
+    </max>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="glow" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="panel_color" />
+      <input name="fg" type="color3" value="0.3, 0.3, 0.3" />
+      <input name="mix" type="float" nodename="tube" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.22" />
+      <input name="fg" type="float" value="0.06" />
+      <input name="mix" type="float" nodename="tube" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_neon_truchet" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_neon_truchet" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_neon_truchet" output="roughness_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_neon_truchet" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_neon_truchet" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Neon_Truchet" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_neon_truchet" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,172 @@
+<?xml version="1.0"?>
+<!--
+  Nebula marble: an OpenPBR black glass marble with an emissive nebula.
+  A vector fractal swirls object space; a fractal over it is the gas
+  density and a second one shifts its hue through hsvtorgb. Stars are
+  the feature points of sparse Worley cells. A clear coat gives the
+  marble its glass surface. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_nebula">
+    <input name="cloud_scale" type="float" value="1.5" uiname="Cloud scale" />
+    <input name="swirl" type="float" value="0.7" uiname="Swirl" />
+    <input name="density" type="float" value="0.55" uiname="Gas density" uimin="0" uimax="1" />
+    <input name="hue" type="float" value="0.62" uiname="Hue" uimin="0" uimax="1" />
+    <input name="hue_range" type="float" value="0.3" uiname="Hue range" uimin="0" uimax="1" />
+    <input name="stars" type="float" value="0.3" uiname="Star share" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="1.7" uiname="Brightness" />
+
+    <position name="object_position" type="vector3" />
+    <multiply name="cloud_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="cloud_scale" />
+    </multiply>
+    <multiply name="swirl_position" type="vector3">
+      <input name="in1" type="vector3" nodename="cloud_position" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <fractal3d name="swirl_noise" type="vector3">
+      <input name="position" type="vector3" nodename="swirl_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" interfacename="swirl" />
+    </fractal3d>
+    <add name="swirled_position" type="vector3">
+      <input name="in1" type="vector3" nodename="cloud_position" />
+      <input name="in2" type="vector3" nodename="swirl_noise" />
+    </add>
+
+    <!-- Gas: density from one fractal, hue from another. -->
+    <remap name="density_low" type="float">
+      <input name="in" type="float" interfacename="density" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="-0.6" />
+    </remap>
+    <fractal3d name="gas_fractal" type="float">
+      <input name="position" type="vector3" nodename="swirled_position" />
+      <input name="octaves" type="integer" value="5" />
+      <input name="diminish" type="float" value="0.55" />
+    </fractal3d>
+    <add name="density_high" type="float">
+      <input name="in1" type="float" nodename="density_low" />
+      <input name="in2" type="float" value="0.9" />
+    </add>
+    <smoothstep name="gas" type="float">
+      <input name="in" type="float" nodename="gas_fractal" />
+      <input name="low" type="float" nodename="density_low" />
+      <input name="high" type="float" nodename="density_high" />
+    </smoothstep>
+    <multiply name="hue_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="swirled_position" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="hue_position" type="vector3">
+      <input name="in1" type="vector3" nodename="hue_scaled" />
+      <input name="in2" type="vector3" value="8.3, -2.2, 5.9" />
+    </add>
+    <fractal3d name="hue_fractal" type="float">
+      <input name="position" type="vector3" nodename="hue_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <multiply name="hue_spread" type="float">
+      <input name="in1" type="float" nodename="hue_fractal" />
+      <input name="in2" type="float" interfacename="hue_range" />
+    </multiply>
+    <add name="hue_shifted" type="float">
+      <input name="in1" type="float" nodename="hue_spread" />
+      <input name="in2" type="float" interfacename="hue" />
+    </add>
+    <modulo name="gas_hue" type="float">
+      <input name="in1" type="float" nodename="hue_shifted" />
+      <input name="in2" type="float" value="1" />
+    </modulo>
+    <remap name="gas_saturation" type="float">
+      <input name="in" type="float" nodename="gas" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.95" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <combine3 name="gas_hsv" type="color3">
+      <input name="in1" type="float" nodename="gas_hue" />
+      <input name="in2" type="float" nodename="gas_saturation" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <hsvtorgb name="gas_color" type="color3">
+      <input name="in" type="color3" nodename="gas_hsv" />
+    </hsvtorgb>
+
+    <!-- Stars: the feature points of a fine Worley layer, in a share of its
+         cells. -->
+    <multiply name="star_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="34" />
+    </multiply>
+    <worleynoise3d name="star_distance" type="float">
+      <input name="position" type="vector3" nodename="star_position" />
+    </worleynoise3d>
+    <smoothstep name="star_edge" type="float">
+      <input name="in" type="float" nodename="star_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.09" />
+    </smoothstep>
+    <invert name="star_point" type="float">
+      <input name="in" type="float" nodename="star_edge" />
+    </invert>
+    <worleynoise3d name="star_value" type="float">
+      <input name="position" type="vector3" nodename="star_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <ifgreater name="star_present" type="float">
+      <input name="value1" type="float" interfacename="stars" />
+      <input name="value2" type="float" nodename="star_value" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="star" type="float">
+      <input name="in1" type="float" nodename="star_point" />
+      <input name="in2" type="float" nodename="star_present" />
+    </multiply>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" nodename="gas_color" />
+      <input name="fg" type="color3" value="1, 0.95, 0.9" />
+      <input name="mix" type="float" nodename="star" />
+    </mix>
+    <multiply name="gas_squared" type="float">
+      <input name="in1" type="float" nodename="gas" />
+      <input name="in2" type="float" nodename="gas" />
+    </multiply>
+    <multiply name="gas_glow" type="float">
+      <input name="in1" type="float" nodename="gas_squared" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="star_glow" type="float">
+      <input name="in1" type="float" nodename="star" />
+      <input name="in2" type="float" value="2.5" />
+    </multiply>
+    <add name="glow" type="float">
+      <input name="in1" type="float" nodename="gas_glow" />
+      <input name="in2" type="float" nodename="star_glow" />
+    </add>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="glow" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_nebula" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.004, 0.004, 0.008" />
+    <input name="specular_roughness" type="float" value="0.3" />
+    <input name="coat_weight" type="float" value="1" />
+    <input name="coat_roughness" type="float" value="0.02" />
+    <input name="emission_luminance" type="float" nodegraph="NG_nebula" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_nebula" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Nebula_Marble" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_nebula" />
+  </surfacematerial>
+</materialx>

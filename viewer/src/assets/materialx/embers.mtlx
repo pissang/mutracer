@@ -1,0 +1,357 @@
+<?xml version="1.0"?>
+<!--
+  Glowing embers: OpenPBR charcoal with emissive heat. Warped object-space
+  Worley cells are the coals; a slow fractal decides where the bed is
+  still burning, and there the crevices and patches of each coal glow
+  from deep red through orange to yellow. Cold coal tops carry grey ash.
+  The coal height becomes a bump by forward differences. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_embers">
+    <input name="coal_color" type="color3" value="0.012, 0.011, 0.01" uiname="Coal" />
+    <input name="ash_color" type="color3" value="0.3, 0.29, 0.27" uiname="Ash" />
+    <input name="glow_cool" type="color3" value="1, 0.03, 0" uiname="Glow, cool" />
+    <input name="glow_hot" type="color3" value="1, 0.55, 0.12" uiname="Glow, hot" />
+    <input name="coal_scale" type="float" value="5" uiname="Coal scale" />
+    <input name="heat" type="float" value="0.6" uiname="Heat" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="3" uiname="Glow intensity" />
+    <input name="coal_bump" type="float" value="0.5" uiname="Coal bump" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="coal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="coal_scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_position" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <noise3d name="warp_noise" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+      <input name="amplitude" type="float" value="0.3" />
+    </noise3d>
+    <add name="warped_position" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_position" />
+      <input name="in2" type="vector3" nodename="warp_noise" />
+    </add>
+
+    <!-- Coal height: each Worley cell rises from the crevices around it. -->
+    <worleynoise3d name="coal_cells" type="vector2">
+      <input name="position" type="vector3" nodename="warped_position" />
+    </worleynoise3d>
+    <separate2 name="coal_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="coal_cells" />
+    </separate2>
+    <subtract name="crevice_distance" type="float">
+      <input name="in1" type="float" nodename="coal_distances" output="outy" />
+      <input name="in2" type="float" nodename="coal_distances" output="outx" />
+    </subtract>
+    <smoothstep name="coal_rise" type="float">
+      <input name="in" type="float" nodename="crevice_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="crackle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise3d name="crackle" type="float">
+      <input name="position" type="vector3" nodename="crackle_position" />
+      <input name="amplitude" type="float" value="0.1" />
+    </noise3d>
+    <add name="coal_height" type="float">
+      <input name="in1" type="float" nodename="coal_rise" />
+      <input name="in2" type="float" nodename="crackle" />
+    </add>
+
+    <!-- Heat: a slow fractal picks the burning regions; crevices glow most,
+         with patches on the coal faces. -->
+    <remap name="burning_low" type="float">
+      <input name="in" type="float" interfacename="heat" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="-0.5" />
+    </remap>
+    <multiply name="bed_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.5" />
+    </multiply>
+    <fractal3d name="bed_fractal" type="float">
+      <input name="position" type="vector3" nodename="bed_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <add name="burning_high" type="float">
+      <input name="in1" type="float" nodename="burning_low" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <smoothstep name="burning" type="float">
+      <input name="in" type="float" nodename="bed_fractal" />
+      <input name="low" type="float" nodename="burning_low" />
+      <input name="high" type="float" nodename="burning_high" />
+    </smoothstep>
+    <smoothstep name="crevice_edge" type="float">
+      <input name="in" type="float" nodename="crevice_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.28" />
+    </smoothstep>
+    <invert name="crevice_glow" type="float">
+      <input name="in" type="float" nodename="crevice_edge" />
+    </invert>
+    <multiply name="face_position" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="float" value="2.6" />
+    </multiply>
+    <noise3d name="face_noise" type="float">
+      <input name="position" type="vector3" nodename="face_position" />
+    </noise3d>
+    <smoothstep name="face_glow" type="float">
+      <input name="in" type="float" nodename="face_noise" />
+      <input name="low" type="float" value="-0.1" />
+      <input name="high" type="float" value="0.7" />
+    </smoothstep>
+    <multiply name="crevice_heat" type="float">
+      <input name="in1" type="float" nodename="crevice_glow" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <multiply name="face_heat" type="float">
+      <input name="in1" type="float" nodename="face_glow" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="heat_sum" type="float">
+      <input name="in1" type="float" nodename="crevice_heat" />
+      <input name="in2" type="float" nodename="face_heat" />
+    </add>
+    <multiply name="heat_field" type="float">
+      <input name="in1" type="float" nodename="heat_sum" />
+      <input name="in2" type="float" nodename="burning" />
+    </multiply>
+    <smoothstep name="warm_ramp" type="float">
+      <input name="in" type="float" nodename="heat_field" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <mix name="warm_color" type="color3">
+      <input name="bg" type="color3" interfacename="glow_cool" />
+      <input name="fg" type="color3" interfacename="glow_hot" />
+      <input name="mix" type="float" nodename="warm_ramp" />
+    </mix>
+    <smoothstep name="white_ramp" type="float">
+      <input name="in" type="float" nodename="heat_field" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1.15" />
+    </smoothstep>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" nodename="warm_color" />
+      <input name="fg" type="color3" value="1, 0.85, 0.5" />
+      <input name="mix" type="float" nodename="white_ramp" />
+    </mix>
+    <multiply name="heat_squared" type="float">
+      <input name="in1" type="float" nodename="heat_field" />
+      <input name="in2" type="float" nodename="heat_field" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="heat_squared" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+
+    <!-- Ash settles on the tops of coals that have gone cold. -->
+    <smoothstep name="ash_rise" type="float">
+      <input name="in" type="float" nodename="crevice_distance" />
+      <input name="low" type="float" value="0.15" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <invert name="cold" type="float">
+      <input name="in" type="float" nodename="burning" />
+    </invert>
+    <multiply name="ash_tops" type="float">
+      <input name="in1" type="float" nodename="ash_rise" />
+      <input name="in2" type="float" nodename="cold" />
+    </multiply>
+    <multiply name="ash_position" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_position" />
+      <input name="in2" type="float" value="3.3" />
+    </multiply>
+    <noise3d name="ash_noise" type="float">
+      <input name="position" type="vector3" nodename="ash_position" />
+    </noise3d>
+    <smoothstep name="ash_patches" type="float">
+      <input name="in" type="float" nodename="ash_noise" />
+      <input name="low" type="float" value="-0.4" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+    <multiply name="ash_mask" type="float">
+      <input name="in1" type="float" nodename="ash_tops" />
+      <input name="in2" type="float" nodename="ash_patches" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="coal_color" />
+      <input name="fg" type="color3" interfacename="ash_color" />
+      <input name="mix" type="float" nodename="ash_mask" />
+    </mix>
+    <remap name="roughness" type="float">
+      <input name="in" type="float" nodename="ash_mask" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="0.95" />
+    </remap>
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" interfacename="coal_bump" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="coal_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0.03, 0, 0" />
+    </add>
+    <worleynoise3d name="coal_cells_x" type="vector2">
+      <input name="position" type="vector3" nodename="coal_normal_position_x" />
+    </worleynoise3d>
+    <separate2 name="coal_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="coal_cells_x" />
+    </separate2>
+    <subtract name="crevice_distance_x" type="float">
+      <input name="in1" type="float" nodename="coal_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="coal_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="coal_rise_x" type="float">
+      <input name="in" type="float" nodename="crevice_distance_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="crackle_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_position_x" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise3d name="crackle_x" type="float">
+      <input name="position" type="vector3" nodename="crackle_position_x" />
+      <input name="amplitude" type="float" value="0.1" />
+    </noise3d>
+    <add name="coal_height_x" type="float">
+      <input name="in1" type="float" nodename="coal_rise_x" />
+      <input name="in2" type="float" nodename="crackle_x" />
+    </add>
+    <add name="coal_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0, 0.03, 0" />
+    </add>
+    <worleynoise3d name="coal_cells_y" type="vector2">
+      <input name="position" type="vector3" nodename="coal_normal_position_y" />
+    </worleynoise3d>
+    <separate2 name="coal_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="coal_cells_y" />
+    </separate2>
+    <subtract name="crevice_distance_y" type="float">
+      <input name="in1" type="float" nodename="coal_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="coal_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="coal_rise_y" type="float">
+      <input name="in" type="float" nodename="crevice_distance_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="crackle_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_position_y" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise3d name="crackle_y" type="float">
+      <input name="position" type="vector3" nodename="crackle_position_y" />
+      <input name="amplitude" type="float" value="0.1" />
+    </noise3d>
+    <add name="coal_height_y" type="float">
+      <input name="in1" type="float" nodename="coal_rise_y" />
+      <input name="in2" type="float" nodename="crackle_y" />
+    </add>
+    <add name="coal_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.03" />
+    </add>
+    <worleynoise3d name="coal_cells_z" type="vector2">
+      <input name="position" type="vector3" nodename="coal_normal_position_z" />
+    </worleynoise3d>
+    <separate2 name="coal_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="coal_cells_z" />
+    </separate2>
+    <subtract name="crevice_distance_z" type="float">
+      <input name="in1" type="float" nodename="coal_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="coal_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="coal_rise_z" type="float">
+      <input name="in" type="float" nodename="crevice_distance_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="crackle_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_position_z" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise3d name="crackle_z" type="float">
+      <input name="position" type="vector3" nodename="crackle_position_z" />
+      <input name="amplitude" type="float" value="0.1" />
+    </noise3d>
+    <add name="coal_height_z" type="float">
+      <input name="in1" type="float" nodename="coal_rise_z" />
+      <input name="in2" type="float" nodename="crackle_z" />
+    </add>
+    <combine3 name="coal_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="coal_height_x" />
+      <input name="in2" type="float" nodename="coal_height_y" />
+      <input name="in3" type="float" nodename="coal_height_z" />
+    </combine3>
+    <subtract name="coal_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_ahead" />
+      <input name="in2" type="float" nodename="coal_height" />
+    </subtract>
+    <multiply name="coal_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_delta" />
+      <input name="in2" type="float" value="33.33333" />
+    </multiply>
+    <dotproduct name="coal_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="coal_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="coal_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="coal_normal_along_normal" />
+    </multiply>
+    <subtract name="coal_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_gradient" />
+      <input name="in2" type="vector3" nodename="coal_normal_normal_part" />
+    </subtract>
+    <multiply name="coal_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="coal_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="coal_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="coal_normal_offset" />
+    </subtract>
+    <transformnormal name="coal_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="coal_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="coal_normal" type="vector3">
+      <input name="in" type="vector3" nodename="coal_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+    <output name="normal_out" type="vector3" nodename="coal_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_embers" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_embers" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_roughness" type="float" nodegraph="NG_embers" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_embers" output="normal_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_embers" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_embers" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Glowing_Embers" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_embers" />
+  </surfacematerial>
+</materialx>

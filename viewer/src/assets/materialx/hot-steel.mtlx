@@ -1,0 +1,249 @@
+<?xml version="1.0"?>
+<!--
+  Hot forged steel: OpenPBR metal glowing from the forge. Temperature
+  falls along object Y with a fractal wandering through it: the hot end
+  emits from dull red to yellow-white, a thin-film band of temper colors
+  sits just beyond the glow, and the cold end is bare steel. Flakes of
+  dark oxide scale, one per Worley cell, cover part of the glow.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_hot_steel">
+    <input name="steel_color" type="color3" value="0.42, 0.42, 0.43" uiname="Steel" />
+    <input name="scale_color" type="color3" value="0.025, 0.023, 0.025" uiname="Oxide scale" />
+    <input name="heat_level" type="float" value="0.55" uiname="Heat level" uimin="-1" uimax="1" />
+    <input name="heat_spread" type="float" value="0.9" uiname="Heat spread" />
+    <input name="scale_amount" type="float" value="0.4" uiname="Scale amount" uimin="0" uimax="1" />
+    <input name="scale_size" type="float" value="9" uiname="Flake scale" />
+    <input name="intensity" type="float" value="5" uiname="Glow intensity" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Temperature coordinate: 0 at the cold end of the glow, 1 at the hot
+         end. -->
+    <multiply name="heat_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <fractal3d name="heat_noise" type="float">
+      <input name="position" type="vector3" nodename="heat_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" value="0.18" />
+    </fractal3d>
+    <dotproduct name="height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 1, 0" />
+    </dotproduct>
+    <subtract name="heat_height" type="float">
+      <input name="in1" type="float" interfacename="heat_level" />
+      <input name="in2" type="float" nodename="height" />
+    </subtract>
+    <add name="heat_coordinate" type="float">
+      <input name="in1" type="float" nodename="heat_height" />
+      <input name="in2" type="float" nodename="heat_noise" />
+    </add>
+    <divide name="temperature" type="float">
+      <input name="in1" type="float" nodename="heat_coordinate" />
+      <input name="in2" type="float" interfacename="heat_spread" />
+    </divide>
+    <clamp name="glow" type="float">
+      <input name="in" type="float" nodename="temperature" />
+    </clamp>
+
+    <!-- Oxide scale: Worley cells whose value passes the amount, cut back from
+         the cell borders. -->
+    <multiply name="flake_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="scale_size" />
+    </multiply>
+    <worleynoise3d name="flake_cells" type="vector2">
+      <input name="position" type="vector3" nodename="flake_position" />
+    </worleynoise3d>
+    <separate2 name="flake_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="flake_cells" />
+    </separate2>
+    <subtract name="flake_border" type="float">
+      <input name="in1" type="float" nodename="flake_distances" output="outy" />
+      <input name="in2" type="float" nodename="flake_distances" output="outx" />
+    </subtract>
+    <smoothstep name="flake_inside" type="float">
+      <input name="in" type="float" nodename="flake_border" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.1" />
+    </smoothstep>
+    <worleynoise3d name="flake_value" type="float">
+      <input name="position" type="vector3" nodename="flake_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <ifgreater name="flake_present" type="float">
+      <input name="value1" type="float" interfacename="scale_amount" />
+      <input name="value2" type="float" nodename="flake_value" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="flake" type="float">
+      <input name="in1" type="float" nodename="flake_inside" />
+      <input name="in2" type="float" nodename="flake_present" />
+    </multiply>
+
+    <!-- Glow color: dull red, orange, then yellow-white. Scale is cooler and
+         dims it. -->
+    <smoothstep name="orange_ramp" type="float">
+      <input name="in" type="float" nodename="glow" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <mix name="red_to_orange" type="color3">
+      <input name="bg" type="color3" value="1, 0.02, 0" />
+      <input name="fg" type="color3" value="1, 0.3, 0.02" />
+      <input name="mix" type="float" nodename="orange_ramp" />
+    </mix>
+    <smoothstep name="white_ramp" type="float">
+      <input name="in" type="float" nodename="glow" />
+      <input name="low" type="float" value="0.6" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" nodename="red_to_orange" />
+      <input name="fg" type="color3" value="1, 0.78, 0.4" />
+      <input name="mix" type="float" nodename="white_ramp" />
+    </mix>
+    <multiply name="glow_squared" type="float">
+      <input name="in1" type="float" nodename="glow" />
+      <input name="in2" type="float" nodename="glow" />
+    </multiply>
+    <multiply name="glow_cubed" type="float">
+      <input name="in1" type="float" nodename="glow_squared" />
+      <input name="in2" type="float" nodename="glow" />
+    </multiply>
+    <remap name="flake_dimming" type="float">
+      <input name="in" type="float" nodename="flake" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.12" />
+    </remap>
+    <multiply name="scale_dimming" type="float">
+      <input name="in1" type="float" nodename="glow_cubed" />
+      <input name="in2" type="float" nodename="flake_dimming" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="scale_dimming" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+
+    <!-- Temper colors: a thin oxide film just beyond the glow, thicker toward
+         the heat. -->
+    <smoothstep name="temper_start" type="float">
+      <input name="in" type="float" nodename="temperature" />
+      <input name="low" type="float" value="-0.55" />
+      <input name="high" type="float" value="-0.4" />
+    </smoothstep>
+    <smoothstep name="temper_fade" type="float">
+      <input name="in" type="float" nodename="temperature" />
+      <input name="low" type="float" value="-0.05" />
+      <input name="high" type="float" value="0.1" />
+    </smoothstep>
+    <invert name="temper_end" type="float">
+      <input name="in" type="float" nodename="temper_fade" />
+    </invert>
+    <multiply name="temper_band" type="float">
+      <input name="in1" type="float" nodename="temper_start" />
+      <input name="in2" type="float" nodename="temper_end" />
+    </multiply>
+    <invert name="bare" type="float">
+      <input name="in" type="float" nodename="flake" />
+    </invert>
+    <multiply name="film_weight" type="float">
+      <input name="in1" type="float" nodename="temper_band" />
+      <input name="in2" type="float" nodename="bare" />
+    </multiply>
+    <remap name="film_thickness_um" type="float">
+      <input name="in" type="float" nodename="temperature" />
+      <input name="inlow" type="float" value="-0.55" />
+      <input name="inhigh" type="float" value="0.1" />
+      <input name="outlow" type="float" value="0.12" />
+      <input name="outhigh" type="float" value="0.42" />
+    </remap>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="steel_color" />
+      <input name="fg" type="color3" interfacename="scale_color" />
+      <input name="mix" type="float" nodename="flake" />
+    </mix>
+    <invert name="metalness" type="float">
+      <input name="in" type="float" nodename="flake" />
+    </invert>
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="28" />
+    </multiply>
+    <noise3d name="forge_grain" type="float">
+      <input name="position" type="vector3" nodename="grain_position" />
+      <input name="amplitude" type="float" value="0.06" />
+    </noise3d>
+    <add name="steel_roughness" type="float">
+      <input name="in1" type="float" nodename="forge_grain" />
+      <input name="in2" type="float" value="0.32" />
+    </add>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="steel_roughness" />
+      <input name="fg" type="float" value="0.85" />
+      <input name="mix" type="float" nodename="flake" />
+    </mix>
+    <multiply name="pit_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="22" />
+    </multiply>
+    <noise3d name="pit_noise" type="vector3">
+      <input name="position" type="vector3" nodename="pit_position" />
+    </noise3d>
+    <remap name="pit_strength" type="float">
+      <input name="in" type="float" nodename="flake" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.05" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <multiply name="pit_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_noise" />
+      <input name="in2" type="float" nodename="pit_strength" />
+    </multiply>
+    <add name="forged_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="pit_offset" />
+    </add>
+    <transformnormal name="forged_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="forged_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="forged_normal" type="vector3">
+      <input name="in" type="vector3" nodename="forged_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="thin_film_weight_out" type="float" nodename="film_weight" />
+    <output name="thin_film_out" type="float" nodename="film_thickness_um" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+    <output name="normal_out" type="vector3" nodename="forged_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_hot_steel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_hot_steel" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_hot_steel" output="metalness_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_hot_steel" output="roughness_out" />
+    <input name="thin_film_weight" type="float" nodegraph="NG_hot_steel" output="thin_film_weight_out" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_hot_steel" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="2.4" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_hot_steel" output="normal_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_hot_steel" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_hot_steel" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Hot_Forged_Steel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_hot_steel" />
+  </surfacematerial>
+</materialx>

@@ -45,7 +45,15 @@ const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}
   'holo-glitter':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.6}},
   'gas-giant':{terminals:['baseColor'],values:{fuzzWeight:0.6}},
   'cooling-lava':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
-  'hex-panel':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance'],values:{baseMetalness:1}}
+  'hex-panel':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance'],values:{baseMetalness:1}},
+  'embers':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
+  'hot-steel':{terminals:['baseColor','baseMetalness','specularRoughness','thinFilmWeight','thinFilmThickness','normal','emissionColor','emissionLuminance'],values:{thinFilmIor:2.4}},
+  'sun':{terminals:['emissionColor','emissionLuminance'],values:{specularWeight:0}},
+  'neon-truchet':{terminals:['baseColor','specularRoughness','emissionColor','emissionLuminance']},
+  'led-matrix':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
+  'night-windows':{terminals:['baseColor','specularRoughness','emissionColor','emissionLuminance']},
+  'nebula':{terminals:['emissionColor','emissionLuminance'],values:{coatWeight:1,coatRoughness:0.02}},
+  'bioluminescence':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']}
 };
 // Samples with a UV-only height, and their displacement scale.
 const displaced:Record<string,number>={'cobblestone':0.04,'brick-wall':0.03};

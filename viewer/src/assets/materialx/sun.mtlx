@@ -1,0 +1,166 @@
+<?xml version="1.0"?>
+<!--
+  Sun: an OpenPBR emissive photosphere for a sphere. Object-space Worley
+  cells are the granules, bright in the middle and dark along the lanes
+  between them; a fractal varies the brightness on a larger scale. Where
+  a slow noise peaks, dark sunspots open with a lighter penumbra around
+  them. Temperature picks the color. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_sun">
+    <input name="cool_color" type="color3" value="1, 0.12, 0" uiname="Cool gas" />
+    <input name="hot_color" type="color3" value="1, 0.55, 0.14" uiname="Hot gas" />
+    <input name="granule_scale" type="float" value="16" uiname="Granule scale" />
+    <input name="granule_contrast" type="float" value="0.55" uiname="Granule contrast" uimin="0" uimax="1" />
+    <input name="sunspots" type="float" value="0.35" uiname="Sunspots" uimin="0" uimax="1" />
+    <input name="activity" type="float" value="0.35" uiname="Large-scale variation" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="1.3" uiname="Brightness" />
+
+    <position name="object_position" type="vector3" />
+    <multiply name="granule_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="granule_scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_position" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <noise3d name="warp_noise" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+      <input name="amplitude" type="float" value="0.5" />
+    </noise3d>
+    <add name="warped_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_position" />
+      <input name="in2" type="vector3" nodename="warp_noise" />
+    </add>
+    <worleynoise3d name="granule_cells" type="vector2">
+      <input name="position" type="vector3" nodename="warped_position" />
+    </worleynoise3d>
+    <separate2 name="granule_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="granule_cells" />
+    </separate2>
+    <subtract name="lane_distance" type="float">
+      <input name="in1" type="float" nodename="granule_distances" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances" output="outx" />
+    </subtract>
+    <smoothstep name="granule" type="float">
+      <input name="in" type="float" nodename="lane_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+
+    <!-- Temperature: granules over their lanes, modulated on a larger scale. -->
+    <multiply name="large_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <fractal3d name="large_scale" type="float">
+      <input name="position" type="vector3" nodename="large_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="amplitude" type="float" interfacename="activity" />
+    </fractal3d>
+    <invert name="lane_level" type="float">
+      <input name="in" type="float" interfacename="granule_contrast" />
+    </invert>
+    <mix name="lane_to_granule" type="float">
+      <input name="bg" type="float" nodename="lane_level" />
+      <input name="fg" type="float" value="1" />
+      <input name="mix" type="float" nodename="granule" />
+    </mix>
+    <add name="granulation" type="float">
+      <input name="in1" type="float" nodename="lane_to_granule" />
+      <input name="in2" type="float" nodename="large_scale" />
+    </add>
+
+    <!-- Sunspots: a dark umbra where a slow noise peaks, inside a lighter
+         penumbra. -->
+    <multiply name="spot_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.6" />
+    </multiply>
+    <add name="spot_position" type="vector3">
+      <input name="in1" type="vector3" nodename="spot_scaled" />
+      <input name="in2" type="vector3" value="2.7, -6.1, 4.3" />
+    </add>
+    <noise3d name="spot_noise" type="float">
+      <input name="position" type="vector3" nodename="spot_position" />
+    </noise3d>
+    <remap name="spot_threshold" type="float">
+      <input name="in" type="float" interfacename="sunspots" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="0.25" />
+    </remap>
+    <subtract name="penumbra_start" type="float">
+      <input name="in1" type="float" nodename="spot_threshold" />
+      <input name="in2" type="float" value="0.07" />
+    </subtract>
+    <smoothstep name="penumbra" type="float">
+      <input name="in" type="float" nodename="spot_noise" />
+      <input name="low" type="float" nodename="penumbra_start" />
+      <input name="high" type="float" nodename="spot_threshold" />
+    </smoothstep>
+    <add name="umbra_end" type="float">
+      <input name="in1" type="float" nodename="spot_threshold" />
+      <input name="in2" type="float" value="0.05" />
+    </add>
+    <smoothstep name="umbra" type="float">
+      <input name="in" type="float" nodename="spot_noise" />
+      <input name="low" type="float" nodename="spot_threshold" />
+      <input name="high" type="float" nodename="umbra_end" />
+    </smoothstep>
+    <remap name="penumbra_dimming" type="float">
+      <input name="in" type="float" nodename="penumbra" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <remap name="umbra_dimming" type="float">
+      <input name="in" type="float" nodename="umbra" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.1" />
+    </remap>
+    <multiply name="spot_dimming" type="float">
+      <input name="in1" type="float" nodename="penumbra_dimming" />
+      <input name="in2" type="float" nodename="umbra_dimming" />
+    </multiply>
+    <multiply name="temperature" type="float">
+      <input name="in1" type="float" nodename="granulation" />
+      <input name="in2" type="float" nodename="spot_dimming" />
+    </multiply>
+    <clamp name="color_ramp" type="float">
+      <input name="in" type="float" nodename="temperature" />
+    </clamp>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" interfacename="cool_color" />
+      <input name="fg" type="color3" interfacename="hot_color" />
+      <input name="mix" type="float" nodename="color_ramp" />
+    </mix>
+    <multiply name="temperature_squared" type="float">
+      <input name="in1" type="float" nodename="temperature" />
+      <input name="in2" type="float" nodename="temperature" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="temperature_squared" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_sun" type="surfaceshader">
+    <input name="base_color" type="color3" value="0, 0, 0" />
+    <input name="specular_weight" type="float" value="0" />
+    <input name="specular_roughness" type="float" value="1" />
+    <input name="emission_luminance" type="float" nodegraph="NG_sun" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_sun" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Sun" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_sun" />
+  </surfacematerial>
+</materialx>

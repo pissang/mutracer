@@ -1,0 +1,235 @@
+<?xml version="1.0"?>
+<!--
+  Night windows: an OpenPBR office facade after dark. Texture space is
+  cut into bays with one window each; cellnoise per window and per floor
+  decides which are lit, how bright, warm or cool, and how far the blind
+  is drawn. Lit windows emit, with noise standing in for the room behind
+  the glass; dark ones are glossy glass in a matte frame.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_night_windows">
+    <input name="frame_color" type="color3" value="0.05, 0.05, 0.055" uiname="Facade" />
+    <input name="glass_color" type="color3" value="0.012, 0.016, 0.022" uiname="Glass" />
+    <input name="warm_light" type="color3" value="1, 0.6, 0.27" uiname="Warm light" />
+    <input name="cool_light" type="color3" value="0.65, 0.82, 1" uiname="Cool light" />
+    <input name="tiles" type="vector2" value="28, 18" uiname="Windows per UV" />
+    <input name="lit_windows" type="float" value="0.45" uiname="Lit windows" uimin="0" uimax="1" />
+    <input name="cool_share" type="float" value="0.3" uiname="Cool light share" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="1.5" uiname="Brightness" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="bay_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="bay_index" type="vector2">
+      <input name="in" type="vector2" nodename="bay_uv" />
+    </floor>
+    <subtract name="bay_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_uv" />
+      <input name="in2" type="vector2" nodename="bay_index" />
+    </subtract>
+    <subtract name="bay_local" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="bay_centred" type="vector2">
+      <input name="in" type="vector2" nodename="bay_local" />
+    </absval>
+    <separate2 name="bay_distance" type="multioutput">
+      <input name="in" type="vector2" nodename="bay_centred" />
+    </separate2>
+
+    <!-- Window opening with a central mullion. -->
+    <smoothstep name="jamb" type="float">
+      <input name="in" type="float" nodename="bay_distance" output="outx" />
+      <input name="low" type="float" value="0.37" />
+      <input name="high" type="float" value="0.39" />
+    </smoothstep>
+    <invert name="opening_x" type="float">
+      <input name="in" type="float" nodename="jamb" />
+    </invert>
+    <smoothstep name="sill" type="float">
+      <input name="in" type="float" nodename="bay_distance" output="outy" />
+      <input name="low" type="float" value="0.33" />
+      <input name="high" type="float" value="0.35" />
+    </smoothstep>
+    <invert name="opening_y" type="float">
+      <input name="in" type="float" nodename="sill" />
+    </invert>
+    <multiply name="opening" type="float">
+      <input name="in1" type="float" nodename="opening_x" />
+      <input name="in2" type="float" nodename="opening_y" />
+    </multiply>
+    <smoothstep name="mullion" type="float">
+      <input name="in" type="float" nodename="bay_distance" output="outx" />
+      <input name="low" type="float" value="0.012" />
+      <input name="high" type="float" value="0.022" />
+    </smoothstep>
+    <multiply name="window" type="float">
+      <input name="in1" type="float" nodename="opening" />
+      <input name="in2" type="float" nodename="mullion" />
+    </multiply>
+
+    <!-- Random values per window, and one per floor so whole floors tend to be
+         lit together. -->
+    <cellnoise2d name="window_random_1" type="float">
+      <input name="texcoord" type="vector2" nodename="bay_uv" />
+    </cellnoise2d>
+    <add name="bay_uv_2" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_uv" />
+      <input name="in2" type="vector2" value="31, 17" />
+    </add>
+    <cellnoise2d name="window_random_2" type="float">
+      <input name="texcoord" type="vector2" nodename="bay_uv_2" />
+    </cellnoise2d>
+    <add name="bay_uv_3" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_uv" />
+      <input name="in2" type="vector2" value="-13, 47" />
+    </add>
+    <cellnoise2d name="window_random_3" type="float">
+      <input name="texcoord" type="vector2" nodename="bay_uv_3" />
+    </cellnoise2d>
+    <add name="bay_uv_4" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_uv" />
+      <input name="in2" type="vector2" value="59, -23" />
+    </add>
+    <cellnoise2d name="window_random_4" type="float">
+      <input name="texcoord" type="vector2" nodename="bay_uv_4" />
+    </cellnoise2d>
+    <separate2 name="bay_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="bay_uv" />
+    </separate2>
+    <combine2 name="floor_cell" type="vector2">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="bay_parts" output="outy" />
+    </combine2>
+    <cellnoise2d name="floor_random" type="float">
+      <input name="texcoord" type="vector2" nodename="floor_cell" />
+    </cellnoise2d>
+    <mix name="lit_random" type="float">
+      <input name="bg" type="float" nodename="window_random_1" />
+      <input name="fg" type="float" nodename="floor_random" />
+      <input name="mix" type="float" value="0.45" />
+    </mix>
+    <ifgreater name="is_lit" type="float">
+      <input name="value1" type="float" interfacename="lit_windows" />
+      <input name="value2" type="float" nodename="lit_random" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+
+    <!-- Room: blinds drawn to a random height dim the top of the window; noise
+         stands in for the interior. -->
+    <separate2 name="fraction_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="bay_fraction" />
+    </separate2>
+    <remap name="blind_height" type="float">
+      <input name="in" type="float" nodename="window_random_4" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.3" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="blind_soft" type="float">
+      <input name="in" type="float" nodename="window_random_4" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.32" />
+      <input name="outhigh" type="float" value="1.02" />
+    </remap>
+    <smoothstep name="blind_edge" type="float">
+      <input name="in" type="float" nodename="fraction_parts" output="outy" />
+      <input name="low" type="float" nodename="blind_height" />
+      <input name="high" type="float" nodename="blind_soft" />
+    </smoothstep>
+    <remap name="blind" type="float">
+      <input name="in" type="float" nodename="blind_edge" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.35" />
+    </remap>
+    <multiply name="room_scaled" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_fraction" />
+      <input name="in2" type="vector2" value="2.6, 3.4" />
+    </multiply>
+    <multiply name="room_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="bay_index" />
+      <input name="in2" type="float" value="7.3" />
+    </multiply>
+    <add name="room_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="room_scaled" />
+      <input name="in2" type="vector2" nodename="room_offset" />
+    </add>
+    <noise2d name="room" type="float">
+      <input name="texcoord" type="vector2" nodename="room_uv" />
+      <input name="amplitude" type="float" value="0.3" />
+      <input name="pivot" type="float" value="0.75" />
+    </noise2d>
+    <multiply name="room_level" type="float">
+      <input name="in1" type="float" nodename="room" />
+      <input name="in2" type="float" nodename="blind" />
+    </multiply>
+    <remap name="window_brightness" type="float">
+      <input name="in" type="float" nodename="window_random_3" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="window_level" type="float">
+      <input name="in1" type="float" nodename="room_level" />
+      <input name="in2" type="float" nodename="window_brightness" />
+    </multiply>
+    <multiply name="lit_mask" type="float">
+      <input name="in1" type="float" nodename="window" />
+      <input name="in2" type="float" nodename="is_lit" />
+    </multiply>
+    <multiply name="lit_window" type="float">
+      <input name="in1" type="float" nodename="lit_mask" />
+      <input name="in2" type="float" nodename="window_level" />
+    </multiply>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="lit_window" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+    <ifgreater name="is_cool" type="float">
+      <input name="value1" type="float" interfacename="cool_share" />
+      <input name="value2" type="float" nodename="window_random_2" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" interfacename="warm_light" />
+      <input name="fg" type="color3" interfacename="cool_light" />
+      <input name="mix" type="float" nodename="is_cool" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="frame_color" />
+      <input name="fg" type="color3" interfacename="glass_color" />
+      <input name="mix" type="float" nodename="window" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.8" />
+      <input name="fg" type="float" value="0.05" />
+      <input name="mix" type="float" nodename="window" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_night_windows" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_night_windows" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_night_windows" output="roughness_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_night_windows" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_night_windows" output="emission_color_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Night_Windows" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_night_windows" />
+  </surfacematerial>
+</materialx>

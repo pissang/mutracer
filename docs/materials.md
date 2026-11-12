@@ -520,13 +520,16 @@ Damascus steel, kintsugi, heat-tinted titanium, abalone, hex plating, a brick
 wall with height displacement, wet asphalt, chipped paint, a Fair Isle knit,
 perforated metal with cut-out holes, a circuit board, thin-walled stained
 glass, rain on glass, agate, guilloché enamel, dragon scales, holographic
-glitter, a gas giant, cooling lava with glowing cracks and a sci-fi hex panel
-with glowing seams. They use only graph nodes and no images, so they need
-WebGPU to show their patterns; WebGL 2 renders their constant fallback. Wood,
-stone, metal, glass, paint and lava patterns use object-space position and
-follow the model's size; the woven, knitted, tiled, plated, perforated and
-scaled ones use UV0 and expose their repeat count. The gas giant and the
-guilloché are laid out around object Y.
+glitter and a gas giant. Ten samples emit light: cooling lava, a hex panel with
+glowing seams, embers, hot forged steel, a sun, neon tubes, an LED matrix,
+office windows at night, a nebula marble and bioluminescent skin. They use only
+graph nodes and no images, so they need WebGPU to show their patterns; WebGL 2
+renders their constant fallback. Wood,
+stone, metal, glass, paint, lava and ember patterns use object-space position
+and follow the model's size; the woven, knitted, tiled, plated, perforated,
+scaled, LED, neon and window ones use UV0 and expose their repeat count. The
+gas giant, the guilloché and the hot steel gradient are laid out along or
+around object Y.
 
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and

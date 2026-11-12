@@ -1,23 +1,25 @@
 <?xml version="1.0"?>
 <!--
-  Sci-fi hex panel: OpenPBR metal plates with emissive cyan seams. Two offset rectangular grids
-  give the nearest hexagon centre in texture space; the hexagonal
-  distance cuts bevelled plates from dark grooves. Cellnoise per plate
-  varies its finish, anodizes some plates in an accent color and
-  engraves a ring into others. Procedural, CC0.
+  Hex panel: OpenPBR metal plates with emissive detail. Two offset
+  rectangular grids give the nearest hexagon centre in texture space;
+  the hexagonal distance cuts bevelled plates from the grooves. Cellnoise
+  per plate varies its finish and powers a share of the plates: those
+  light a rim, and an inner outline or a core, in the main or the accent
+  color. Every groove carries a faint glow. Procedural, CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_hex_panel">
-    <input name="plate_color" type="color3" value="0.055, 0.07, 0.1" uiname="Plate" />
-    <input name="accent_color" type="color3" value="0.15, 0.23, 0.3" uiname="Accent plates" />
-    <input name="tiles" type="vector2" value="16, 8" uiname="Columns per UV" />
+    <input name="plate_color" type="color3" value="0.16, 0.17, 0.2" uiname="Plate" />
+    <input name="glow_color" type="color3" value="0.02, 0.6, 1" uiname="Glow" />
+    <input name="accent_color" type="color3" value="1, 0.14, 0.01" uiname="Accent glow" />
+    <input name="tiles" type="vector2" value="18, 9" uiname="Columns per UV" />
     <input name="groove_width" type="float" value="0.06" uiname="Groove width" uimin="0" uimax="0.3" />
-    <input name="accent_plates" type="float" value="0.14" uiname="Accent share" uimin="0" uimax="1" />
+    <input name="lit_plates" type="float" value="0.38" uiname="Lit plates" uimin="0" uimax="1" />
+    <input name="accent_share" type="float" value="0.25" uiname="Accent share" uimin="0" uimax="1" />
+    <input name="seam_glow" type="float" value="0.1" uiname="Seam glow" uimin="0" uimax="1" />
+    <input name="intensity" type="float" value="3.5" uiname="Glow intensity" />
     <input name="finish_variation" type="float" value="0.6" uiname="Finish variation" uimin="0" uimax="1" />
     <input name="bevel" type="float" value="0.5" uiname="Bevel" uimin="0" uimax="1" />
-
-    <input name="seam_color" type="color3" value="0.015, 0.65, 1" uiname="Seam color" />
-    <input name="seam_brightness" type="float" value="3" uiname="Seam brightness" uimin="0" uimax="20" />
 
     <texcoord name="uv" type="vector2" />
     <multiply name="hex_uv" type="vector2">
@@ -132,13 +134,129 @@
       <input name="texcoord" type="vector2" nodename="plate_cell_3" />
     </cellnoise2d>
 
-    <!-- Finish: value and roughness vary per plate; some plates are anodized. -->
-    <ifgreater name="is_accent" type="float">
-      <input name="value1" type="float" interfacename="accent_plates" />
+    <!-- Emission: lit plates show a rim just inside their edge, plus an inner
+         outline or a core. -->
+    <ifgreater name="is_lit" type="float">
+      <input name="value1" type="float" interfacename="lit_plates" />
       <input name="value2" type="float" nodename="plate_random_1" />
       <input name="in1" type="float" value="1" />
       <input name="in2" type="float" value="0" />
     </ifgreater>
+    <add name="rim_start" type="float">
+      <input name="in1" type="float" nodename="groove_half" />
+      <input name="in2" type="float" value="0.02" />
+    </add>
+    <add name="rim_end" type="float">
+      <input name="in1" type="float" nodename="groove_half" />
+      <input name="in2" type="float" value="0.06" />
+    </add>
+    <smoothstep name="rim_edge" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" nodename="rim_start" />
+      <input name="high" type="float" nodename="rim_end" />
+    </smoothstep>
+    <invert name="rim_falloff" type="float">
+      <input name="in" type="float" nodename="rim_edge" />
+    </invert>
+    <multiply name="rim" type="float">
+      <input name="in1" type="float" nodename="plate_mask" />
+      <input name="in2" type="float" nodename="rim_falloff" />
+    </multiply>
+    <smoothstep name="outline_on" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.2" />
+      <input name="high" type="float" value="0.212" />
+    </smoothstep>
+    <smoothstep name="outline_off" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.238" />
+      <input name="high" type="float" value="0.25" />
+    </smoothstep>
+    <subtract name="outline" type="float">
+      <input name="in1" type="float" nodename="outline_on" />
+      <input name="in2" type="float" nodename="outline_off" />
+    </subtract>
+    <smoothstep name="core" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.37" />
+      <input name="high" type="float" value="0.42" />
+    </smoothstep>
+    <ifgreater name="has_outline" type="float">
+      <input name="value1" type="float" nodename="plate_random_3" />
+      <input name="value2" type="float" value="0.6" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="outline_pick" type="float">
+      <input name="in1" type="float" nodename="outline" />
+      <input name="in2" type="float" nodename="has_outline" />
+    </multiply>
+    <ifgreater name="has_core" type="float">
+      <input name="value1" type="float" value="0.3" />
+      <input name="value2" type="float" nodename="plate_random_3" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="core_pick" type="float">
+      <input name="in1" type="float" nodename="core" />
+      <input name="in2" type="float" nodename="has_core" />
+    </multiply>
+    <add name="figure" type="float">
+      <input name="in1" type="float" nodename="outline_pick" />
+      <input name="in2" type="float" nodename="core_pick" />
+    </add>
+    <add name="lit_shape" type="float">
+      <input name="in1" type="float" nodename="rim" />
+      <input name="in2" type="float" nodename="figure" />
+    </add>
+    <remap name="lit_brightness" type="float">
+      <input name="in" type="float" nodename="plate_random_2" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="lit_level" type="float">
+      <input name="in1" type="float" nodename="is_lit" />
+      <input name="in2" type="float" nodename="lit_brightness" />
+    </multiply>
+    <multiply name="lit_glow" type="float">
+      <input name="in1" type="float" nodename="lit_shape" />
+      <input name="in2" type="float" nodename="lit_level" />
+    </multiply>
+    <invert name="groove_mask" type="float">
+      <input name="in" type="float" nodename="plate_mask" />
+    </invert>
+    <multiply name="seams" type="float">
+      <input name="in1" type="float" nodename="groove_mask" />
+      <input name="in2" type="float" interfacename="seam_glow" />
+    </multiply>
+    <add name="glow_sum" type="float">
+      <input name="in1" type="float" nodename="lit_glow" />
+      <input name="in2" type="float" nodename="seams" />
+    </add>
+    <multiply name="emission_luminance" type="float">
+      <input name="in1" type="float" nodename="glow_sum" />
+      <input name="in2" type="float" interfacename="intensity" />
+    </multiply>
+    <ifgreater name="is_accent" type="float">
+      <input name="value1" type="float" interfacename="accent_share" />
+      <input name="value2" type="float" nodename="plate_random_2" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="accent_pick" type="float">
+      <input name="in1" type="float" nodename="is_accent" />
+      <input name="in2" type="float" nodename="is_lit" />
+    </multiply>
+    <mix name="emission_color" type="color3">
+      <input name="bg" type="color3" interfacename="glow_color" />
+      <input name="fg" type="color3" interfacename="accent_color" />
+      <input name="mix" type="float" nodename="accent_pick" />
+    </mix>
+
+    <!-- Plates: value and roughness vary per plate; grooves and unlit figures
+         are dark. -->
     <subtract name="value_centred" type="float">
       <input name="in1" type="float" nodename="plate_random_3" />
       <input name="in2" type="float" value="0.5" />
@@ -151,58 +269,34 @@
       <input name="in1" type="float" nodename="value_shift" />
       <input name="in2" type="float" value="1" />
     </add>
-    <mix name="plate_tint" type="color3">
-      <input name="bg" type="color3" interfacename="plate_color" />
-      <input name="fg" type="color3" interfacename="accent_color" />
-      <input name="mix" type="float" nodename="is_accent" />
-    </mix>
-    <multiply name="plate_finish" type="color3">
-      <input name="in1" type="color3" nodename="plate_tint" />
-      <input name="in2" type="float" nodename="plate_value" />
+    <invert name="is_unlit" type="float">
+      <input name="in" type="float" nodename="is_lit" />
+    </invert>
+    <multiply name="unlit_figure" type="float">
+      <input name="in1" type="float" nodename="figure" />
+      <input name="in2" type="float" nodename="is_unlit" />
     </multiply>
-
-    <!-- An engraved ring on about a third of the plates. -->
-    <smoothstep name="ring_on" type="float">
-      <input name="in" type="float" nodename="edge_distance" />
-      <input name="low" type="float" value="0.2" />
-      <input name="high" type="float" value="0.212" />
-    </smoothstep>
-    <smoothstep name="ring_off" type="float">
-      <input name="in" type="float" nodename="edge_distance" />
-      <input name="low" type="float" value="0.232" />
-      <input name="high" type="float" value="0.244" />
-    </smoothstep>
-    <subtract name="ring_band" type="float">
-      <input name="in1" type="float" nodename="ring_on" />
-      <input name="in2" type="float" nodename="ring_off" />
-    </subtract>
-    <ifgreater name="has_ring" type="float">
-      <input name="value1" type="float" nodename="plate_random_2" />
-      <input name="value2" type="float" value="0.66" />
-      <input name="in1" type="float" value="1" />
-      <input name="in2" type="float" value="0" />
-    </ifgreater>
-    <multiply name="ring" type="float">
-      <input name="in1" type="float" nodename="ring_band" />
-      <input name="in2" type="float" nodename="has_ring" />
+    <remap name="figure_shade" type="float">
+      <input name="in" type="float" nodename="unlit_figure" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.35" />
+    </remap>
+    <multiply name="plate_finish" type="color3">
+      <input name="in1" type="color3" interfacename="plate_color" />
+      <input name="in2" type="float" nodename="plate_value" />
     </multiply>
     <remap name="groove_shade" type="float">
       <input name="in" type="float" nodename="plate_mask" />
       <input name="inlow" type="float" value="0" />
       <input name="inhigh" type="float" value="1" />
-      <input name="outlow" type="float" value="0.12" />
+      <input name="outlow" type="float" value="0.1" />
       <input name="outhigh" type="float" value="1" />
-    </remap>
-    <remap name="ring_shade" type="float">
-      <input name="in" type="float" nodename="ring" />
-      <input name="inlow" type="float" value="0" />
-      <input name="inhigh" type="float" value="1" />
-      <input name="outlow" type="float" value="1" />
-      <input name="outhigh" type="float" value="0.3" />
     </remap>
     <multiply name="recess" type="float">
       <input name="in1" type="float" nodename="groove_shade" />
-      <input name="in2" type="float" nodename="ring_shade" />
+      <input name="in2" type="float" nodename="figure_shade" />
     </multiply>
     <multiply name="base_color" type="color3">
       <input name="in1" type="color3" nodename="plate_finish" />
@@ -220,17 +314,9 @@
       <input name="in1" type="float" nodename="roughness_shift" />
       <input name="in2" type="float" value="0.16" />
     </add>
-    <multiply name="ring_rough" type="float">
-      <input name="in1" type="float" nodename="ring" />
-      <input name="in2" type="float" value="0.3" />
-    </multiply>
-    <add name="ring_roughness" type="float">
-      <input name="in1" type="float" nodename="plate_roughness" />
-      <input name="in2" type="float" nodename="ring_rough" />
-    </add>
     <mix name="roughness" type="float">
       <input name="bg" type="float" value="0.8" />
-      <input name="fg" type="float" nodename="ring_roughness" />
+      <input name="fg" type="float" nodename="plate_roughness" />
       <input name="mix" type="float" nodename="plate_mask" />
     </mix>
 
@@ -290,30 +376,19 @@
       <input name="in" type="vector3" nodename="plate_normal_encoded" />
     </normalmap>
 
-    <invert name="seams" type="float">
-      <input name="in" type="float" nodename="plate_mask" />
-    </invert>
-    <multiply name="glow_color" type="color3">
-      <input name="in1" type="color3" interfacename="seam_color" />
-      <input name="in2" type="float" nodename="seams" />
-    </multiply>
-    <multiply name="glow_luminance" type="float">
-      <input name="in1" type="float" interfacename="seam_brightness" />
-      <input name="in2" type="float" nodename="seams" />
-    </multiply>
-    <output name="emission_color_out" type="color3" nodename="glow_color" />
-    <output name="emission_luminance_out" type="float" nodename="glow_luminance" />
     <output name="base_color_out" type="color3" nodename="base_color" />
     <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="emission_color_out" type="color3" nodename="emission_color" />
+    <output name="emission_luminance_out" type="float" nodename="emission_luminance" />
     <output name="normal_out" type="vector3" nodename="plate_normal" />
   </nodegraph>
 
   <open_pbr_surface name="SR_hex_panel" type="surfaceshader">
     <input name="base_color" type="color3" nodegraph="NG_hex_panel" output="base_color_out" />
-    <input name="emission_color" type="color3" nodegraph="NG_hex_panel" output="emission_color_out" />
-    <input name="emission_luminance" type="float" nodegraph="NG_hex_panel" output="emission_luminance_out" />
     <input name="base_metalness" type="float" value="1" />
     <input name="specular_roughness" type="float" nodegraph="NG_hex_panel" output="roughness_out" />
+    <input name="emission_luminance" type="float" nodegraph="NG_hex_panel" output="emission_luminance_out" />
+    <input name="emission_color" type="color3" nodegraph="NG_hex_panel" output="emission_color_out" />
     <input name="geometry_normal" type="vector3" nodegraph="NG_hex_panel" output="normal_out" />
   </open_pbr_surface>
   <surfacematerial name="Hex_Panel" type="material">
