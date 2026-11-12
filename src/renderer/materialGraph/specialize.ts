@@ -85,7 +85,28 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true): Mat
         helper+=`fn mx_shadow_opacity(materialIndex:i32,index:vec3i,bary:vec3f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4f(position,1.0)).xyz,instanceIndex,fallback); }\n`;
         declarations+=helper;
     }
-    return {graph: {declarations, evaluate: body, opacity}};
+    const lightEmission=structures.some(g=>emission.some(field=>hasTerminal(g,field)));
+    if(lightEmission) {
+        const zero=(field:string)=>width(terminalTypes[field])===1?'0.0':`${v(width(terminalTypes[field]))}(0.0)`;
+        const init=used.map(field=>`  result.${field} = ${field==='emissionColor'?'mx_parameter(base,0).rgb':field==='emissionLuminance'?'mx_parameter(base,1).x':field==='coatColor'?'data.coatColor':field==='coatWeight'?'coatWeight':zero(field)};`).join('\n');
+        declarations+=`fn mx_emission(materialIndex:i32,uv:vec2f,uv1:vec2f,position:vec3f,instanceIndex:i32,fallback:vec3f) -> vec3f {
+  let data=materialsBuffer[materialIndex];
+  let id=i32(data._padding1); let base=i32(data._padding2);
+  var coatWeight=data.coatWeight;
+  if(USE_COAT_WEIGHT_MAPS && data.coatWeightMapIndex>=0.0) { let index=i32(data.coatWeightMapIndex); coatWeight*=sampleMap(index,getMapUvSet(index,uv,uv1)).r; }
+  var result:MXResult;
+${init}
+`;
+        structures.forEach((g,i)=>{if(emission.some(field=>hasTerminal(g,field)))declarations+=`  if(id==${i+1}) {
+    result=mx_eval_${i+1}(base+2,uv,uv1,position,vec3f(0,0,1),vec3f(1,0,0),vec3f(0,1,0),mx_w2l(instanceIndex),mx_l2w(instanceIndex),result);
+    var value=result.emissionColor*result.emissionLuminance;
+    if(data.matType==0.0) { value*=mix(vec3f(1),sqrt(max(result.coatColor,vec3f(0))),clamp(result.coatWeight,0.0,1.0)); }
+    return value;
+  }
+`;});
+        declarations+='  return fallback;\n}\n';
+    }
+    return {graph: {declarations, evaluate: body, opacity, emission:lightEmission}};
 }
 
 /** Pure MaterialX helpers shared by surface rendering and UV height baking. */

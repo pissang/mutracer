@@ -88,7 +88,7 @@ describe('MaterialX numeric semantics', () => {
         expect(evaluateGraph(graph,{uv:[0.4,0.6]}).specularRoughness[0]).toBeCloseTo(0.16);
     });
     it('locates unsupported emissive-surface semantics while preserving fallback',()=>{
-        const graph=new MaterialGraph({nodes:[{id:'color',category:'constant',type:'color3'}],terminal:{emissionColor:{node:'color'}}});
+        const graph=new MaterialGraph({nodes:[{id:'frame',category:'normal',type:'vector3'},{id:'color',category:'convert',type:'color3',inputs:{in:{type:'vector3',connection:{node:'frame'}}}}],terminal:{emissionColor:{node:'color'}}});
         const state=new MaterialGraphState();state.request([new OpenPBRMaterial({graph})]);
         expect(state.status).toBe('failed');expect(state.diagnostics[0].code).toBe('unsupported-emission-graph');expect(state.active.key).toBe('');
     });
@@ -107,7 +107,7 @@ describe('MaterialX numeric semantics', () => {
         expect(state.status).toBe('failed');expect(state.installedRevision).toBe(installed);expect(state.revision).toBeGreaterThan(installed);expect(state.diagnostics[0].materialId).toBe(material.aovId);
     });
     it('uses constants when a previously valid graph enters an unsupported material context',()=>{
-        const graph=new MaterialGraph({nodes:[{id:'c',category:'constant',type:'color3'}],terminal:{emissionColor:{node:'c'}}});
+        const graph=new MaterialGraph({nodes:[{id:'n',category:'normal',type:'vector3'},{id:'c',category:'convert',type:'color3',inputs:{in:{type:'vector3',connection:{node:'n'}}}}],terminal:{emissionColor:{node:'c'}}});
         const material=new OpenPBRMaterial({graph,unlit:true}),state=new MaterialGraphState();state.request([material]);state.install(state.requested,state.revision);
         expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[]).length).toBeGreaterThan(MATERIAL_FLOAT_COUNT);
         material.unlit=false;state.request([material]);

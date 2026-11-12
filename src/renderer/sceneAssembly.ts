@@ -54,7 +54,7 @@ export function writeTraceSampling(views: TraceViews, sampling: ReturnType<typeo
 // The Web path may reuse its choice/texture scratch allocations. Native consumes
 // exactly the same assembly without a GPU device, canvas or browser light facade.
 export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive: EmissiveTriangle[], environmentPower: number,
-  maxDimension: number, choices = new LightChoiceBuffer(), scratch?: Float32Array, catcherChoices?: LightChoiceBuffer) {
+  maxDimension: number, choices = new LightChoiceBuffer(), scratch?: Float32Array, catcherChoices?: LightChoiceBuffer, emissiveInstanceIndices = false) {
   choices.reserve(1 + lights.length + emissive.length);
   choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, environmentPower);
   for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
@@ -79,14 +79,14 @@ export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive
     else emissive[source].selectionPmf = pmf;
   }
   const choiceTexels = Math.max(choices.count + (catcherDistribution ? shadowCatcherChoiceCount : 0), 1);
-  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + choiceTexels;
+  const emissiveTexels = emissive.length * (emissiveInstanceIndices ? 7 : 6), profileStart = emissiveTexels + choiceTexels;
   const profiles = packIESProfiles(lights, profileStart), totalTexels = Math.max(profileStart + profiles.texelCount, 1);
   const width = Math.min(maxDimension, Math.max(16, Math.ceil(Math.sqrt(totalTexels) / 16) * 16));
   const height = Math.ceil(totalTexels / width);
   if (height > maxDimension) throw new Error('Too many emissive triangles for the light sampling texture.');
   const lightData = scratch?.length === width * height * 4 ? scratch : new Float32Array(width * height * 4);
   lightData.fill(0);
-  if (emissive.length) packEmissiveTriangles(emissive, lightData);
+  if (emissive.length) packEmissiveTriangles(emissive, lightData, emissiveInstanceIndices);
   new Uint32Array(lightData.buffer).set(distribution.choices, emissiveTexels * 4);
   if (catcherDistribution && shadowCatcherChoiceCount) {
     new Uint32Array(lightData.buffer).set(catcherDistribution.choices, (emissiveTexels + choices.count) * 4);

@@ -12,6 +12,7 @@ import { normalizeGraph, type NormalizedGraph } from './normalize.js';
 import { generateGraph } from './codegen.js';
 import { MATERIAL_FLOAT_COUNT, materialLayoutFields } from '../materialLayoutSchema.js';
 const alphaModeOffset = materialLayoutFields().find(field => field.name === 'alphaMode')!.offset / 4;
+const emissionOffset = materialLayoutFields().find(field => field.name === 'emission')!.offset / 4;
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
 export interface GraphPlan {
     key: string;
@@ -44,6 +45,8 @@ export interface MaterialGraphCompilationState {
  * snapshots graph parameters and guards installation by revision. */
 export class MaterialGraphState {
     capabilities = 'atlas';
+    /** Browser transport opts out while graph evaluation is disabled. */
+    emissionSampling = true;
     private readonly slotTextures = new SlotTextures();
     private hasSlotHistory = false;
     active = empty();
@@ -75,7 +78,7 @@ export class MaterialGraphState {
             const graph = normalizeGraph(material.graph, this.capabilities);
             const validateContext=(graph:NormalizedGraph,retained=false)=>{
                 const before=graph.diagnostics.length;
-                const context=graphContextDiagnostics(flattenGraphUnchecked(graph),material.unlit,material.emissionLuminance>0,material.alphaMode==='opaque',material.uvProjection!=='none');
+                const context=graphContextDiagnostics(flattenGraphUnchecked(graph),material.unlit,material.emissionLuminance>0,material.alphaMode==='opaque',material.uvProjection!=='none',true);
                 for(const d of context) {
                     const port=graphTerminals[d.port];
                     graph.diagnostics.push({code:d.code,message:d.message,node:graph.nodes[d.node]?.id,port});
@@ -172,6 +175,15 @@ export class MaterialGraphState {
         }
         return [...textures];
     }
+    emissionProposal(material: OpenPBRMaterial): number[] | undefined {
+        if(!this.emissionSampling || material.unlit || material.shadowCatcher || this.constantFallback.has(material))return;
+        const i=this.active.materials?.indexOf(material) ?? this.materials.indexOf(material);
+        const graph=this.active.graphs[i];
+        if(!graph || !['emissionColor','emissionLuminance','coatColor','coatWeight'].some(p=>p in graph.terminal))return;
+        if(!('emissionColor' in graph.terminal || 'emissionLuminance' in graph.terminal) && material.emissionLuminance<=0)return;
+        const rgb=material.emissionColor.map(c=>Math.max(c*material.emissionLuminance,0));
+        return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722>1e-8 ? rgb : [1,1,1];
+    }
     pack(buffer: Float32Array, textures: readonly Texture[]) {
         if (this.hasSlotHistory) {
             // Pipeline installation can remove a terminal that the previous slot
@@ -198,6 +210,8 @@ export class MaterialGraphState {
             const graph = this.active.materials ? activeGraphs.get(this.materials[i]) : this.active.graphs[i];
             if (!graph)
                 continue;
+            const proposal=this.emissionProposal(this.materials[i]);
+            if(proposal)buffer.set(proposal,i*MATERIAL_FLOAT_COUNT+emissionOffset);
             if ('opacity' in graph.terminal && this.materials[i].alphaMode === 'auto' && this.materials[i].alphaCutoff <= 0) buffer[i * MATERIAL_FLOAT_COUNT + alphaModeOffset] = 2;
             const generated = generateGraph(graph);
             const params: [

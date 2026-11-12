@@ -43,7 +43,9 @@ const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}
   'guilloche-enamel':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,coatColor:[0.03,0.2,0.75]}},
   'dragon-scales':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.2}},
   'holo-glitter':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.6}},
-  'gas-giant':{terminals:['baseColor'],values:{fuzzWeight:0.6}}
+  'gas-giant':{terminals:['baseColor'],values:{fuzzWeight:0.6}},
+  'cooling-lava':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
+  'hex-panel':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance'],values:{baseMetalness:1}}
 };
 // Samples with a UV-only height, and their displacement scale.
 const displaced:Record<string,number>={'cobblestone':0.04,'brick-wall':0.03};

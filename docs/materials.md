@@ -453,13 +453,19 @@ UV-dependent opacity requires the material's `uvProjection: 'none'`; use graph
 coordinates for procedural coverage. Complex coverage networks also increase
 shadow-ray evaluation cost.
 
-Emission color and luminance graphs currently require `unlit: true`; graph coat
-absorption on an emissive surface has the same restriction. These unsupported material contexts
-use the constant fallback. Displacement, volume, subsurface and tangent terminals
-are not supported. With WebGPU light tracing or photon mapping, graphs that
-still require graph evaluation use their constant fallback and report
-`unsupported-transport`. This API takes an authored
-graph; it does not load `.mtlx`/USD files or convert other surface models.
+On WebGPU, emission color and luminance graphs also work on lit materials and
+light nearby surfaces. Lit emission and its coat absorption can use UVs and
+object/world position; shading-frame dependencies produce a located diagnostic
+and use the constant fallback. UV-dependent lit emission requires
+`uvProjection: 'none'`. Unlit emission graphs remain unrestricted by this
+light-point context and do not light other surfaces. Choose a representative
+constant emission fallback to help light sampling; a black fallback still works,
+but small, bright graph features can need more samples. Complex emission
+networks increase direct-light sampling cost. Displacement, volume, subsurface
+and tangent terminals are not supported. With WebGPU light tracing or photon
+mapping, graphs that still require graph evaluation use their constant fallback
+and report `unsupported-transport`. This API takes an authored graph; it does not
+load `.mtlx`/USD files or convert other surface models.
 
 Parameter edits update without a graph compile while the installed graph program
 or a compatible texture-slot plan can represent them. An edit that makes a slot
@@ -514,12 +520,13 @@ Damascus steel, kintsugi, heat-tinted titanium, abalone, hex plating, a brick
 wall with height displacement, wet asphalt, chipped paint, a Fair Isle knit,
 perforated metal with cut-out holes, a circuit board, thin-walled stained
 glass, rain on glass, agate, guilloché enamel, dragon scales, holographic
-glitter and a gas giant. They use only graph nodes and no images, so they need
+glitter, a gas giant, cooling lava with glowing cracks and a sci-fi hex panel
+with glowing seams. They use only graph nodes and no images, so they need
 WebGPU to show their patterns; WebGL 2 renders their constant fallback. Wood,
-stone, metal, glass and paint patterns use object-space position and follow the
-model's size; the woven, knitted, tiled, plated, perforated and scaled ones use
-UV0 and expose their repeat count. The gas giant and the guilloché are laid out
-around object Y.
+stone, metal, glass, paint and lava patterns use object-space position and
+follow the model's size; the woven, knitted, tiled, plated, perforated and
+scaled ones use UV0 and expose their repeat count. The gas giant and the
+guilloché are laid out around object Y.
 
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and
@@ -540,8 +547,8 @@ can also be baked into ordinary material maps, those maps remain the
 fallback during compilation, after rejection and on WebGL 2.
 Disney Principled and Simple Hair surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
-Subsurface and tangent graph inputs and lit emission graphs retain
-the limits described above. To load `.mtlx` files, use the viewer; the library's
+Subsurface, tangent and lit-emission graph inputs retain the limits described
+above. To load `.mtlx` files, use the viewer; the library's
 graph API accepts typed nodes and loaded textures.
 
 If the material has no displacement connection, the viewer also detects package

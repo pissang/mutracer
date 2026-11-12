@@ -4,7 +4,7 @@ import {
   LIGHT_CHOICE_ENVIRONMENT
 } from '../../lightConstants.js';
 
-export default /*wgsl */ `
+export function createSampleLightWgsl(instanceIndices=false, graphEmission=false) { return /*wgsl */ `
 fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {
   let centerOffset = light.position - scatterPos;
   let centerDistance = length(centerOffset);
@@ -269,7 +269,7 @@ fn loadLightSamplingTexel(texelIndex: i32) -> vec4f {
 }
 
 fn getEmissiveTriangle(index: i32) -> EmissiveTriangle {
-  let offset = index * 6;
+  let offset = index * ${instanceIndices ? 7 : 6};
   let a = loadLightSamplingTexel(offset);
   let b = loadLightSamplingTexel(offset + 1);
   let c = loadLightSamplingTexel(offset + 2);
@@ -312,7 +312,7 @@ fn stratifyLightChoiceRandom(
 }
 
 fn sampleEmissiveTriangleLight(
-  triangle: EmissiveTriangle,
+  triangle: EmissiveTriangle,${instanceIndices ? '\n  instanceIndex: i32,' : ''}
   scatterPos: vec3f,
   randomV2: vec2f,
   lightSample: ptr<function, LightSampleRec>
@@ -354,7 +354,7 @@ fn sampleEmissiveTriangleLight(
   (*lightSample).emission = getMaterialEmission(
     i32(triangle.materialIndex), uv, secondaryUv
   );
-  (*lightSample).selectionPmf = triangle.selectionPmf;
+${graphEmission ? `  (*lightSample).emission = mx_emission(i32(triangle.materialIndex),uv*materialsBuffer[i32(triangle.materialIndex)].uvScale,secondaryUv*materialsBuffer[i32(triangle.materialIndex)].uvScale,lightPosition,${instanceIndices ? 'instanceIndex' : '-1'},(*lightSample).emission);\n` : ''}  (*lightSample).selectionPmf = triangle.selectionPmf;
   (*lightSample).pdf = triangle.selectionPmf *
     ((*lightSample).dist * (*lightSample).dist) /
     max(triangle.area * cosLight, 1e-8);
@@ -407,7 +407,7 @@ fn sampleLightChoiceTable(
     (*lightSample).sourceType = 1u;
     (*lightSample).sourceIndex = u32(choice.sourceIndex);
     sampleEmissiveTriangleLight(
-      getEmissiveTriangle(choice.sourceIndex),
+      getEmissiveTriangle(choice.sourceIndex),${instanceIndices ? "\n      i32(loadLightSamplingTexel(choice.sourceIndex*7+6).x)," : ""}
       scatterPos,
       rnd.xy,
       lightSample
@@ -452,3 +452,5 @@ fn sampleLightForNEECandidate(
   );
 }
 `;
+}
+export default createSampleLightWgsl();

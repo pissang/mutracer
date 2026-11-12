@@ -32,6 +32,8 @@ export interface EmissiveTriangle {
   secondaryUv1: [number, number];
   secondaryUv2: [number, number];
   materialIndex: number;
+  /** Source mesh instance ordinal; remapped to a GPU slot by the browser. */
+  instanceIndex?: number;
   area: number;
   samplingLuminance: number;
   selectionPmf: number;
@@ -41,6 +43,7 @@ export interface EmissiveMeshBinding {
   mesh: Mesh;
   geometry: Geometry;
   materialIndices: number[];
+  instanceSlots?: number[];
 }
 
 export interface LightChoiceInput {
@@ -307,6 +310,7 @@ export function collectEmissiveTriangles(
           secondaryUv1: triangleSecondaryUvs[1],
           secondaryUv2: triangleSecondaryUvs[2],
           materialIndex,
+          instanceIndex: instance,
           area,
           samplingLuminance,
           selectionPmf: 0
@@ -322,28 +326,30 @@ function packEmissivePoint(data: Float32Array, offset: number, point: Float32Arr
   if (data.buffer === point.buffer) {data.set(point, offset); return;}
   data[offset] = point[0]; data[offset + 1] = point[1]; data[offset + 2] = point[2];
 }
-export function packEmissiveTriangles(triangles: EmissiveTriangle[], data: Float32Array = new Float32Array(Math.max(triangles.length, 1) * 24)) {
+export function packEmissiveTriangles(triangles: EmissiveTriangle[], data?: Float32Array, instanceIndices = false) {
+  const packed = data ?? new Float32Array(Math.max(triangles.length, 1) * (instanceIndices ? 28 : 24));
   triangles.forEach((triangle, index) => {
-    const offset = index * 24;
-    packEmissivePoint(data, offset, triangle.p0);
-    data[offset + 3] = triangle.selectionPmf;
-    packEmissivePoint(data, offset + 4, triangle.p1);
-    data[offset + 7] = triangle.area;
-    packEmissivePoint(data, offset + 8, triangle.p2);
-    data[offset + 11] = triangle.materialIndex;
-    data[offset + 12] = triangle.uv0[0]; data[offset + 13] = triangle.uv0[1];
-    data[offset + 14] = triangle.uv1[0]; data[offset + 15] = triangle.uv1[1];
-    data[offset + 16] = triangle.uv2[0]; data[offset + 17] = triangle.uv2[1];
-    data[offset + 18] = triangle.secondaryUv0[0]; data[offset + 19] = triangle.secondaryUv0[1];
-    data[offset + 20] = triangle.secondaryUv1[0]; data[offset + 21] = triangle.secondaryUv1[1];
-    data[offset + 22] = triangle.secondaryUv2[0]; data[offset + 23] = triangle.secondaryUv2[1];
+    const offset = index * (instanceIndices ? 28 : 24);
+    packEmissivePoint(packed, offset, triangle.p0);
+    packed[offset + 3] = triangle.selectionPmf;
+    packEmissivePoint(packed, offset + 4, triangle.p1);
+    packed[offset + 7] = triangle.area;
+    packEmissivePoint(packed, offset + 8, triangle.p2);
+    packed[offset + 11] = triangle.materialIndex;
+    packed[offset + 12] = triangle.uv0[0]; packed[offset + 13] = triangle.uv0[1];
+    packed[offset + 14] = triangle.uv1[0]; packed[offset + 15] = triangle.uv1[1];
+    packed[offset + 16] = triangle.uv2[0]; packed[offset + 17] = triangle.uv2[1];
+    packed[offset + 18] = triangle.secondaryUv0[0]; packed[offset + 19] = triangle.secondaryUv0[1];
+    packed[offset + 20] = triangle.secondaryUv1[0]; packed[offset + 21] = triangle.secondaryUv1[1];
+    packed[offset + 22] = triangle.secondaryUv2[0]; packed[offset + 23] = triangle.secondaryUv2[1];
+    if(instanceIndices)packed[offset+24]=triangle.instanceIndex ?? -1;
   });
-  return data;
+  return packed;
 }
 
 
 interface EmissiveCacheEntry { geometry: Geometry; version: number; instanceVersion: number; instanceCount: number; instanceTransforms?: Float32Array; matrix: Float64Array;
-    indices: number[]; activity: boolean[]; triangles: EmissiveTriangle[] }
+    indices: number[]; activity: boolean[]; triangles: EmissiveTriangle[]; localInstances: number[] }
 
 // WeakMap class fields have no native representation in scriptc 0.3.2.
 // Keep the same per-cache weak ownership in a module-owned registry.
@@ -372,7 +378,8 @@ export class EmissiveTriangleCache {
         meshMatrixChanged(mesh, cached.matrix)) {
         cached = { geometry, version: geometry.version, instanceVersion, instanceCount, instanceTransforms, matrix: copyMeshMatrix(mesh),
           indices: materialIndices.slice(), activity: materialIndices.map(isActive),
-          triangles: collectEmissiveTriangles([binding], materials,this.samplingWeight) };
+          triangles: collectEmissiveTriangles([binding], materials,this.samplingWeight), localInstances: [] };
+        cached.localInstances=cached.triangles.map(t=>t.instanceIndex!);
         cachedBindings.set(mesh, cached);
       } else {
         for (const triangle of cached.triangles) {
@@ -380,7 +387,12 @@ export class EmissiveTriangleCache {
           triangle.samplingLuminance = this.samplingWeight?this.samplingWeight(m):colorLuminance(materialEmission(m));
         }
       }
-      for (const triangle of cached.triangles) this._triangles.push(triangle);
+      for (let i=0;i<cached.triangles.length;i++) {
+        const triangle=cached.triangles[i],local=cached.localInstances[i];
+        triangle.instanceIndex=binding.instanceSlots ? binding.instanceSlots[local] ?? -1 : local;
+        if(binding.instanceSlots && triangle.instanceIndex<0)continue;
+        this._triangles.push(triangle);
+      }
     }
     return this._triangles;
   }

@@ -58,9 +58,9 @@ describe('MaterialX graph import',()=>{
   const m=parseMaterialXGraph(doc('','open_pbr_surface','<input name="geometry_normal" type="vector3" value="0,1,0"/><input name="mystery" type="float" value="1"/>'));
   expect(m.graph!.terminal.normal).toBeDefined();expect(normalizeGraph(m.graph!).diagnostics).toContainEqual(expect.objectContaining({code:'unsupported-terminal',port:'mystery'}));
  });
- it('reports lit emission fallback and keeps image file paths',()=>{
+ it('accepts lit emission and keeps image file paths',()=>{
   const m=parseMaterialXGraph(doc('<image name="image" type="color3"><input name="file" type="filename" value="textures/light.png"/></image>','open_pbr_surface','<input name="emission_color" type="color3" nodename="image"/><input name="emission_luminance" type="float" value="2"/>'));
-  expect(m.images.get('image')?.file).toBe('textures/light.png');expect(m.warnings.some(s=>s.includes('Lit emission'))).toBe(true);
+  expect(m.images.get('image')?.file).toBe('textures/light.png');expect(m.warnings).toEqual([]);
  });
  it('ignores exporter inputs that have no effect and still reports active ones',()=>{
   const image=(extra:string)=>`<texcoord name="uv" type="vector2"/><image name="rough" type="float"><input name="texcoord" type="vector2" nodename="uv"/><input name="file" type="filename" value="r.png"/>${extra}</image><normal name="n" type="vector3"><input name="space" type="string" value="world"/></normal>`;

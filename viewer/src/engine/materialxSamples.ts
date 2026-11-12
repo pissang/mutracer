@@ -21,7 +21,8 @@ const LABELS: Record<string, string> = {
   'knit-wool': 'Knit', 'perforated-metal': 'Perforated', 'circuit-board': 'Circuit',
   'stained-glass': 'Stained glass', 'rain-glass': 'Rain glass', 'agate': 'Agate',
   'guilloche-enamel': 'Guilloché', 'dragon-scales': 'Scales', 'holo-glitter': 'Glitter',
-  'gas-giant': 'Gas giant'
+  'gas-giant': 'Gas giant',
+  'cooling-lava': 'Lava', 'hex-panel': 'Hex glow'
 };
 const order = Object.keys(LABELS);
 

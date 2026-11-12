@@ -13,7 +13,7 @@ import random from './chunks/random.wgsl.js';
 import env from './chunks/envMap.wgsl.js';
 import sampling from './chunks/sampling.wgsl.js';
 import {createOpenPbrBsdfWgsl} from './chunks/openPbrBsdf.wgsl.js';
-import light from './chunks/sampleLight.wgsl.js';
+import {createSampleLightWgsl} from './chunks/sampleLight.wgsl.js';
 import uv from './chunks/uvProjection.wgsl.js';
 import {causticPartitionWGSL} from './chunks/caustics.wgsl.js';
 import {wgpuShaderPreamble} from '../wgpuShaderSource.js';
@@ -39,7 +39,8 @@ export function causticLightCompute(
   compactVertices = false,
   independentTextures = false,
   analyticLightStorage = false,
-  materialHooks: MaterialShaderHooks = {}
+  materialHooks: MaterialShaderHooks = {},
+  emissiveInstanceIndices = false
 ) {
   const frames = !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES,
     coat = !!constants.USE_COAT_NORMAL_FRAMES;
@@ -69,7 +70,7 @@ ${env}
 ${sampling}
 ${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(frames, coat, materialHooks)}
-${light}
+${createSampleLightWgsl(emissiveInstanceIndices)}
 ${background.replace(
   /\b(?:USE_BACKGROUND|USE_BACKGROUND_MAP|USE_GROUNDED_BACKGROUND)\b/g,
   (name) =>

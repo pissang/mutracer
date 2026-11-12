@@ -148,17 +148,45 @@ by either staged result until its resources are rebuilt. Validation failures ret
 the installed result. The normal frame uses
 an internal half-integer normal-map index, so truncation still addresses the
 original texture. No public Texture option or native descriptor is required.
-The ordinary cotangent normal path and no-graph shader source remain unchanged.
+The ordinary cotangent normal path remains unchanged.
 
 ## Current boundaries
 
 This is an authored typed graph API, not a MaterialX XML/USD importer. Unknown
 categories, unsupported input variants and unsupported terminal semantics fail
-as whole graphs. In particular, arbitrary graph emission on lit materials needs
-matching emissive-light and caustic-emitter evaluation before it can be enabled;
-it currently produces a located diagnostic and forces constant fallback, even
-when a formerly valid unlit graph is present. Emission graphs on unlit materials
-exercise the same arithmetic/image code without entering light proposals.
+as whole graphs. Browser WebGPU lit emission evaluates at surface hits and
+sampled light points. `mx_emission` uses UV0/UV1, world position and the sampled
+instance transforms, with the same fallback emission slots and single-passage
+coat absorption as the surface evaluator. Graph outputs replace ordinary slot
+values in both paths. Only dependencies of emission and its coat absorption are
+restricted to UV/position; unrelated normal and scattering branches still have
+the full surface context. Projected material UVs and shading-frame dependencies
+on an emitter produce located diagnostics and force constant fallback. Unlit
+emission keeps its existing evaluator and never enters the light distribution.
+Emissive coat networks stay on the graph path so slot lowering cannot hide the
+proposal behind an absorbed constant. Native context validation retains the
+unlit-only boundary.
+
+The installed browser plan provides a positive constant light proposal: raw
+fallback emission RGB, or unit white when its luminance is at most 1e-8. CPU
+triangle selection uses its luminance times world-space area, while material
+packing places the identical RGB in `materialsBuffer.emission` for emissive-hit
+MIS. The emitted contribution is evaluated at the sample exactly once; neither
+the graph value nor a varying coat changes the proposal PDF. This proposal need
+not bound the graph: positive support and matching densities keep the estimator
+unbiased, though highly concentrated emission can increase variance. Black
+fallback graphs are collected from all visible instance bindings. Installation,
+graph edits, transport changes and membership changes refresh both the packed
+proposal and the light distribution.
+
+Browser WebGPU opts into seven-texel emissive records: the original six texels
+followed by a texel whose x component is the GPU instance slot. Collection keeps
+the source instance ordinal separately, remapping it after visibility/reordering
+and omitting invalid transforms. The default six-texel packing and shader remain
+in use by WebGL 2 and native. No resolved-material or surface-interaction value
+struct grows. Light tracing and photon mapping disable the graph proposal along
+with graph evaluation, preserving their constant emitter fallback.
+
 Opacity overrides raw coverage before existing alpha-map factors and mode resolution.
 The traversal helper evaluates it at the same UV/position as the surface path;
 frame-dependent opacity is rejected because shadow traversal lacks the shading

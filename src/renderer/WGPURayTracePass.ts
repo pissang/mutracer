@@ -1,3 +1,4 @@
+import {materialEmission} from './materialEmission.js';
 import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
@@ -50,7 +51,7 @@ import {constants} from './webgl.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WGPU} from './pathLimits.js';
 import {updateMeshInstanceColors} from './prepareMeshBVH.js';
-import {updateTLASInstanceColors} from './bvhAccel.js';
+import {updateTLASInstanceColors,tlasInstanceSlots} from './bvhAccel.js';
 import {getMaterialHashKey} from '../scene/openPbrSchema.js';
 import {sameInstanceMembership} from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -74,7 +75,7 @@ import {
   geometryTopologyChanged,
 } from './geometryUpdates.js';
 import {SceneEnvironmentCache, RectLightTextureTracker} from './sceneLightChanges.js';
-import {MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel} from './materialChanges.js';
+import {MaterialChangeTracker, type MaterialUpdateLevel} from './materialChanges.js';
 import {WGPUEnvMapDistribution} from './WGPUEnvMapDistribution.js';
 import {WGPUShaderCache, retainedShaderCapacity} from './WGPUShaderCache.js';
 import {WGPUShaderCapabilities} from './WGPUShaderCapabilities.js';
@@ -134,7 +135,7 @@ import {
   EmissiveTriangleCache,
   LightChoiceBuffer,
   type EmissiveTriangle,
-  estimateEnvironmentPower
+  estimateEnvironmentPower, colorLuminance
 } from './lightSampling.js';
 import {
   getOpenPbrEnergyLutData,
@@ -384,7 +385,7 @@ class WGPURayTracePass {
 
   private _bvhBuffer?: GPUBuffer;
   private _instancesBuffer?: GPUBuffer;
-  private _emissiveCache = new EmissiveTriangleCache();
+  private _emissiveCache = new EmissiveTriangleCache(material=>colorLuminance(this.graphs.emissionProposal(material as OpenPBRMaterial) ?? materialEmission(material)));
   private _lightChoices = new LightChoiceBuffer();
   private _shadowCatcherLightChoices = new LightChoiceBuffer();
   private _lightSamplingData?: Float32Array;
@@ -1034,6 +1035,8 @@ class WGPURayTracePass {
     if (variant.graphKey === this.graphs.requested.key && this.graphs.active.key !== variant.graphKey) {
       this.graphs.compilation={sourceBytes:variant.diagnostics.sourceBytes,sourceGenerationTimeMs:variant.diagnostics.sourceGenerationTimeMs,moduleCreationTimeMs:variant.diagnostics.moduleCreationTimeMs,totalTimeMs:variant.diagnostics.totalTimeMs};
       this.graphs.install(this.graphs.requested,this.graphs.revision);
+      this._emissiveTriangles=this._collectEmissiveTriangles();
+      this._updateLightSamplingData();
       this._materialsBuffer = this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData!.getBufferArray(),MATERIAL_FLOAT_COUNT * 4);
       this._needsUpdateBindGroups = true;
     }
@@ -1088,7 +1091,7 @@ class WGPURayTracePass {
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
       let code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
         causticDiagnostics.fullEmissionRandom !== false, true, true, false, true,
-        {materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS});
+        {materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS}, true);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
     const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
@@ -1127,6 +1130,7 @@ class WGPURayTracePass {
               materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS
             },
             maxPathEvents: MAX_PATH_EVENTS_WGPU,
+            emissiveInstanceIndices: true,
             hasDisplacement,
             channelIndependentRis: Boolean(constants.SPECTRAL),
             shareSpectralPrefix,
@@ -1896,6 +1900,16 @@ class WGPURayTracePass {
     this._lightTracing = !!settings?.lightTracing && hasCaster && photonSupported;
     const photonMapping = !!settings?.photonMapping && hasCaster && photonSupported;
     this._photonMapping = photonMapping;
+    const emissionSampling=!this._lightTracing && !this._photonMapping;
+    if(this.graphs.emissionSampling!==emissionSampling) {
+      this.graphs.emissionSampling=emissionSampling;
+      if(this._preparedMeshData && this._materialData) {
+        this._materialsBuffer=this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData.getBufferArray(),MATERIAL_FLOAT_COUNT*4);
+        this._emissiveTriangles=this._collectEmissiveTriangles();
+        this._needsUpdateLightSamplingData=true;
+        this._needsUpdateBindGroups=true;
+      }
+    }
     this._causticKey =
       this._transport?.enabled || this._lightTracing || this._photonMapping
         ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${causticDiagnostics.photonDirectSubset !== false}/${this._transport?.key ?? ''}`
@@ -2322,6 +2336,24 @@ class WGPURayTracePass {
     this._needsUpdateBindGroups ||= resized;
   }
 
+  private _collectEmissiveTriangles() {
+    const res=this._preparedMeshData!;
+    const gpuSlots=tlasInstanceSlots(this._tlas!);
+    const bindings=res.instanceBindings.map((binding,index)=>{
+      const slots=new Array<number>(binding.mesh.instanceData?.count ?? 1).fill(-1);
+      if(Array.isArray(res.instances))slots[0]=gpuSlots.get(index) ?? -1;
+      else for(const slot of res.instances.bindingSlots[index] ?? [])slots[res.instances.localIndices[slot]]=gpuSlots.get(slot) ?? -1;
+      return {...binding,instanceSlots:slots};
+    });
+    // Candidate black emitters must survive mesh preparation. The installed
+    // plan's proposal decides activity, including validation and transport fallback.
+    res.emissiveBindings=bindings.filter(binding=>binding.materialIndices.some(index=>{
+      const m=res.materials[index];
+      return !m.unlit && !m.shadowCatcher && colorLuminance(this.graphs.emissionProposal(m) ?? materialEmission(m))>1e-8;
+    }));
+    return this._emissiveCache.collect(res.emissiveBindings,res.materials);
+  }
+
   private _updateLightSamplingData() {
     this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(
       this._analyticLights.map((light) => light.type),
@@ -2336,7 +2368,8 @@ class WGPURayTracePass {
       this._device.limits.maxTextureDimension2D,
       this._lightChoices,
       this._lightSamplingScratch,
-      this._shadowCatcherLightChoices
+      this._shadowCatcherLightChoices,
+      true
     );
     researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
@@ -2497,7 +2530,7 @@ class WGPURayTracePass {
     const previousStride = this._attributeStride;
     const previousOffsets = this._attributeOffsets;
     this._pendingGeometryUpdates.clear();
-    this._emissiveCache = new EmissiveTriangleCache();
+    this._emissiveCache = new EmissiveTriangleCache(material=>colorLuminance(this.graphs.emissionProposal(material as OpenPBRMaterial) ?? materialEmission(material)));
     const meshes = this._meshes;
     for (const geometry of this._geometriesNeedRefit) {
       const usesDisplacement = meshes.some(
@@ -2530,10 +2563,7 @@ class WGPURayTracePass {
       materials, this._analyticLights, {maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D}));
-    this._emissiveTriangles = this._emissiveCache.collect(
-      res.emissiveBindings,
-      materials
-    );
+    this._emissiveTriangles = this._collectEmissiveTriangles();
     this._needsUpdateLightSamplingData = true;
 
     // Displacement geometry and its CPU BVH bounds must use the same normal.
@@ -2708,9 +2738,7 @@ class WGPURayTracePass {
     this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
     if (update.emission || update.emissiveMap) {
-      res.emissiveBindings = res.instanceBindings.filter(binding =>
-        binding.materialIndices.some(index => materialIsEmissive(res.materials[index])));
-      this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
+      this._emissiveTriangles = this._collectEmissiveTriangles();
       this._needsUpdateLightSamplingData = true;
     }
     this._needsUpdateBindGroups = true;
@@ -2728,7 +2756,7 @@ class WGPURayTracePass {
       return;
     }
     const res = selectVisibleInstances(resident, this._meshes);
-    const {instances, emissiveBindings} = res;
+    const {instances} = res;
     this._preparedMeshData = res;
     if (pending) this._residentPreparedMeshData = res;
     this._pendingMembershipData = undefined;
@@ -2737,10 +2765,7 @@ class WGPURayTracePass {
     // Triangle materials follow the BLAS layout, which stays put when reused.
     if (this._uploadBVH(tlas, res.blases)) this._refreshTriangleMaterials(res, tlas);
 
-    this._emissiveTriangles = this._emissiveCache.collect(
-      emissiveBindings,
-      res.materials
-    );
+    this._emissiveTriangles = this._collectEmissiveTriangles();
     this._needsUpdateLightSamplingData = true;
     this._rtUniform.views.isEmpty[0] = +(instances.length === 0);
     this._meshSnapshot.forEach((snapshot) => {
@@ -2784,7 +2809,7 @@ class WGPURayTracePass {
     if (!sameInstanceMembership(previousInstances, res.instances)) {
       this._tlas = buildWebTLAS(res.instances, res.blases);
       if (this._uploadBVH(this._tlas, res.blases)) this._refreshTriangleMaterials(res, this._tlas);
-      this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
+      this._emissiveTriangles = this._collectEmissiveTriangles();
       this._needsUpdateLightSamplingData = true;
       this._rtUniform.views.isEmpty[0] = +(res.instances.length === 0);
       this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
@@ -2822,10 +2847,7 @@ class WGPURayTracePass {
         this._dirtyTransformMeshes.has(mesh)
       )
     ) {
-      this._emissiveTriangles = this._emissiveCache.collect(
-        res.emissiveBindings,
-        res.materials
-      );
+      this._emissiveTriangles = this._collectEmissiveTriangles();
       this._needsUpdateLightSamplingData = true;
     }
     this._dirtyTransformMeshes.clear();

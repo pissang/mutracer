@@ -6,7 +6,7 @@ async function run(){
  for(const test of [{port:'emissionColor',map:false},{port:'emissionLuminance',map:false},{port:'coatWeight',map:false},{port:'emissionColor',map:true}]){
   const {port}=test,name=port+(test.map?'-map':'');
   const engine=new Engine({backend,canvas:document.createElement('canvas')});engine.display.setSize(48,48);
-  const graph=new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'color',category:'convert',type:'color3',inputs:{in:{type:'vector2',connection:{node:'uv'}}}},{id:'scalar',category:'extract',type:'float',inputs:{in:{type:'vector2',connection:{node:'uv'}}}}],terminal:{[port]:{node:port==='emissionColor'?'color':'scalar'}}});
+  const graph=new MaterialGraph({nodes:[{id:'uv',category:'normal',type:'vector3'},{id:'color',category:'convert',type:'color3',inputs:{in:{type:'vector3',connection:{node:'uv'}}}},{id:'scalar',category:'extract',type:'float',inputs:{in:{type:'vector3',connection:{node:'uv'}}}}],terminal:{[port]:{node:port==='emissionColor'?'color':'scalar'}}});
   const material=new OpenPBRMaterial({graph,emissionColor:[1,0.3,0.1],emissionLuminance:5,coatWeight:0.6,coatColor:[0.3,0.6,1]});
   if(test.map){material.emissiveMap=new Texture({width:2,height:2,data:new Float32Array([1,.2,.1,1,.2,1,.1,1,.1,.2,1,1,1,.5,.2,1])});material.emissiveMap.colorSpace='linear';}
   const emitter=new Mesh(createPlaneGeometry(1,1,'vertical'),material);emitter.position=[0,0,1];emitter.transform[0]=-0.3;emitter.transform[5]=0.3;emitter.transform[10]=-1;
