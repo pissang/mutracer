@@ -452,5 +452,5 @@ export function createMaterialShapes(): LoadedModel {
     for (const part of shape.parts) part.geometry.translate(x, 0, shape.forward);
     x += shape.radius + spacing;
     return shape.parts;
-  }), { Cube: 'hex-panel', Ball: 'car-paint', Drape: 'tartan-velvet', Knot: 'candle-wax' });
+  }), { Cube: 'hex-panel', Ball: 'hex-plating', Drape: 'tartan-velvet', Knot: 'kintsugi' });
 }

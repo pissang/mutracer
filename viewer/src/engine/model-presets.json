@@ -43,8 +43,8 @@
     "sourceUrl": "https://github.com/pissang/mutracer",
     "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
     "camera": {
-      "position": [0.9, 2.7, 11.4],
-      "target": [0.0, 0.72, 0.0],
+      "position": [4.555782, 2.441513, 6.561463],
+      "target": [0.688266, 0.460483, 0.0],
       "fov": 28,
       "space": "grounded"
     }
