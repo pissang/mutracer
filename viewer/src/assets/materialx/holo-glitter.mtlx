@@ -1,0 +1,138 @@
+<?xml version="1.0"?>
+<!--
+  Holographic glitter: OpenPBR metal flakes, each with its own
+  interference color. Object-space cellnoise gives every flake a
+  random tilt and a random thin-film thickness, so neighbouring flakes
+  flash different colors as the view changes. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_holo_glitter">
+    <input name="flake_scale" type="float" value="45" uiname="Flake scale" />
+    <input name="flake_tilt" type="float" value="0.5" uiname="Flake tilt" uimin="0" uimax="1" />
+    <input name="film_thickness" type="float" value="0.3" uiname="Film thickness (um)" uimin="0" uimax="1" />
+    <input name="film_spread" type="float" value="0.45" uiname="Thickness spread" />
+    <input name="flake_roughness" type="float" value="0.12" uiname="Flake roughness" uimin="0" uimax="1" />
+    <input name="dark_flakes" type="float" value="0.35" uiname="Dark flake share" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <multiply name="flake_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="flake_scale" />
+    </multiply>
+    <cellnoise3d name="flake_cell" type="float">
+      <input name="position" type="vector3" nodename="flake_position" />
+    </cellnoise3d>
+    <add name="flake_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_position" />
+      <input name="in2" type="vector3" value="17.3, 41.9, 5.7" />
+    </add>
+    <cellnoise3d name="flake_cell_x" type="float">
+      <input name="position" type="vector3" nodename="flake_position_x" />
+    </cellnoise3d>
+    <add name="flake_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_position" />
+      <input name="in2" type="vector3" value="-33.1, 8.2, 61.4" />
+    </add>
+    <cellnoise3d name="flake_cell_y" type="float">
+      <input name="position" type="vector3" nodename="flake_position_y" />
+    </cellnoise3d>
+    <add name="flake_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_position" />
+      <input name="in2" type="vector3" value="71.5, -19.4, 28.6" />
+    </add>
+    <cellnoise3d name="flake_cell_z" type="float">
+      <input name="position" type="vector3" nodename="flake_position_z" />
+    </cellnoise3d>
+
+    <!-- Each flake: a random film thickness, and a share of them dark to set
+         off the bright ones. -->
+    <multiply name="film_offset" type="float">
+      <input name="in1" type="float" nodename="flake_cell" />
+      <input name="in2" type="float" interfacename="film_spread" />
+    </multiply>
+    <add name="film_thickness_um" type="float">
+      <input name="in1" type="float" nodename="film_offset" />
+      <input name="in2" type="float" interfacename="film_thickness" />
+    </add>
+    <ifgreater name="is_dark" type="float">
+      <input name="value1" type="float" interfacename="dark_flakes" />
+      <input name="value2" type="float" nodename="flake_cell_z" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="flake_value" type="float">
+      <input name="bg" type="float" value="0.3" />
+      <input name="fg" type="float" value="0.06" />
+      <input name="mix" type="float" nodename="is_dark" />
+    </mix>
+    <combine3 name="base_color" type="color3">
+      <input name="in1" type="float" nodename="flake_value" />
+      <input name="in2" type="float" nodename="flake_value" />
+      <input name="in3" type="float" nodename="flake_value" />
+    </combine3>
+    <multiply name="roughness_vary" type="float">
+      <input name="in1" type="float" nodename="flake_cell_z" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" nodename="roughness_vary" />
+      <input name="in2" type="float" interfacename="flake_roughness" />
+    </add>
+    <subtract name="tilt_x_centred" type="float">
+      <input name="in1" type="float" nodename="flake_cell_x" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="tilt_x" type="float">
+      <input name="in1" type="float" nodename="tilt_x_centred" />
+      <input name="in2" type="float" interfacename="flake_tilt" />
+    </multiply>
+    <subtract name="tilt_y_centred" type="float">
+      <input name="in1" type="float" nodename="flake_cell_y" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="tilt_y" type="float">
+      <input name="in1" type="float" nodename="tilt_y_centred" />
+      <input name="in2" type="float" interfacename="flake_tilt" />
+    </multiply>
+    <remap name="flake_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="flake_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_y" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="flake_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="flake_normal_encoded_x" />
+      <input name="in2" type="float" nodename="flake_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="flake_normal" type="vector3">
+      <input name="in" type="vector3" nodename="flake_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="thin_film_out" type="float" nodename="film_thickness_um" />
+    <output name="normal_out" type="vector3" nodename="flake_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_holo_glitter" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_holo_glitter" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_holo_glitter" output="roughness_out" />
+    <input name="thin_film_weight" type="float" value="1" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_holo_glitter" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="2.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_holo_glitter" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Holographic_Glitter" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_holo_glitter" />
+  </surfacematerial>
+</materialx>

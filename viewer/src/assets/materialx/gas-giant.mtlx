@@ -1,0 +1,217 @@
+<?xml version="1.0"?>
+<!--
+  Gas giant: OpenPBR banded atmosphere for a sphere. Latitude along
+  object Y, bent by a stretched fractal, runs through two sines that mix
+  four cloud colors into belts and zones; a finer fractal shears their
+  edges into turbulence. An oval storm sits at a fixed point, and fuzz
+  adds a pale limb. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_gas_giant">
+    <input name="zone_color" type="color3" value="0.72, 0.6, 0.42" uiname="Zones" />
+    <input name="belt_color" type="color3" value="0.26, 0.09, 0.03" uiname="Belts" />
+    <input name="pale_color" type="color3" value="0.8, 0.76, 0.66" uiname="Pale clouds" />
+    <input name="deep_color" type="color3" value="0.14, 0.1, 0.1" uiname="Deep clouds" />
+    <input name="storm_color" type="color3" value="0.55, 0.09, 0.03" uiname="Storm" />
+    <input name="bands" type="float" value="3.2" uiname="Bands per unit" />
+    <input name="turbulence" type="float" value="0.07" uiname="Turbulence" />
+    <input name="storm_size" type="float" value="0.3" uiname="Storm size" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+
+    <!-- Storm: an oval around a fixed point; it also bulges the bands around
+         it. -->
+    <subtract name="storm_centred" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.55, -0.28, 0.7" />
+    </subtract>
+    <multiply name="storm_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="storm_centred" />
+      <input name="in2" type="vector3" value="1, 2.1, 1" />
+    </multiply>
+    <dotproduct name="storm_distance_squared" type="float">
+      <input name="in1" type="vector3" nodename="storm_offset" />
+      <input name="in2" type="vector3" nodename="storm_offset" />
+    </dotproduct>
+    <sqrt name="storm_distance" type="float">
+      <input name="in" type="float" nodename="storm_distance_squared" />
+    </sqrt>
+    <multiply name="storm_inner" type="float">
+      <input name="in1" type="float" interfacename="storm_size" />
+      <input name="in2" type="float" value="0.55" />
+    </multiply>
+    <smoothstep name="storm_edge" type="float">
+      <input name="in" type="float" nodename="storm_distance" />
+      <input name="low" type="float" nodename="storm_inner" />
+      <input name="high" type="float" interfacename="storm_size" />
+    </smoothstep>
+    <invert name="storm" type="float">
+      <input name="in" type="float" nodename="storm_edge" />
+    </invert>
+    <multiply name="storm_outer" type="float">
+      <input name="in1" type="float" interfacename="storm_size" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <smoothstep name="storm_far" type="float">
+      <input name="in" type="float" nodename="storm_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="storm_outer" />
+    </smoothstep>
+    <invert name="storm_reach" type="float">
+      <input name="in" type="float" nodename="storm_far" />
+    </invert>
+    <multiply name="storm_bulge" type="float">
+      <input name="in1" type="float" nodename="storm_reach" />
+      <input name="in2" type="float" value="0.09" />
+    </multiply>
+
+    <!-- Latitude bent by turbulence stretched along the bands. -->
+    <dotproduct name="latitude" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 1, 0" />
+    </dotproduct>
+    <multiply name="swirl_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="2.2, 9, 2.2" />
+    </multiply>
+    <fractal3d name="swirl" type="float">
+      <input name="position" type="vector3" nodename="swirl_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="amplitude" type="float" interfacename="turbulence" />
+    </fractal3d>
+    <multiply name="fine_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="7, 26, 7" />
+    </multiply>
+    <add name="fine_position" type="vector3">
+      <input name="in1" type="vector3" nodename="fine_scaled" />
+      <input name="in2" type="vector3" value="3.1, 0, -4.4" />
+    </add>
+    <multiply name="fine_amount" type="float">
+      <input name="in1" type="float" interfacename="turbulence" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <fractal3d name="fine_swirl" type="float">
+      <input name="position" type="vector3" nodename="fine_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" nodename="fine_amount" />
+    </fractal3d>
+    <add name="turbulent" type="float">
+      <input name="in1" type="float" nodename="latitude" />
+      <input name="in2" type="float" nodename="swirl" />
+    </add>
+    <add name="swirled" type="float">
+      <input name="in1" type="float" nodename="turbulent" />
+      <input name="in2" type="float" nodename="fine_swirl" />
+    </add>
+    <subtract name="storm_latitude" type="float">
+      <input name="in1" type="float" nodename="latitude" />
+      <input name="in2" type="float" value="-0.28" />
+    </subtract>
+    <sign name="storm_side" type="float">
+      <input name="in" type="float" nodename="storm_latitude" />
+    </sign>
+    <multiply name="bulged" type="float">
+      <input name="in1" type="float" nodename="storm_bulge" />
+      <input name="in2" type="float" nodename="storm_side" />
+    </multiply>
+    <add name="bent_latitude" type="float">
+      <input name="in1" type="float" nodename="swirled" />
+      <input name="in2" type="float" nodename="bulged" />
+    </add>
+    <multiply name="band_coordinate" type="float">
+      <input name="in1" type="float" nodename="bent_latitude" />
+      <input name="in2" type="float" interfacename="bands" />
+    </multiply>
+    <multiply name="wide_phase" type="float">
+      <input name="in1" type="float" nodename="band_coordinate" />
+      <input name="in2" type="float" value="6.283185" />
+    </multiply>
+    <sin name="wide_wave" type="float">
+      <input name="in" type="float" nodename="wide_phase" />
+    </sin>
+    <remap name="wide_bands" type="float">
+      <input name="in" type="float" nodename="wide_wave" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="narrow_scaled" type="float">
+      <input name="in1" type="float" nodename="band_coordinate" />
+      <input name="in2" type="float" value="17.3" />
+    </multiply>
+    <add name="narrow_phase" type="float">
+      <input name="in1" type="float" nodename="narrow_scaled" />
+      <input name="in2" type="float" value="1.3" />
+    </add>
+    <sin name="narrow_wave" type="float">
+      <input name="in" type="float" nodename="narrow_phase" />
+    </sin>
+    <remap name="narrow_bands" type="float">
+      <input name="in" type="float" nodename="narrow_wave" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <smoothstep name="belt_mask" type="float">
+      <input name="in" type="float" nodename="wide_bands" />
+      <input name="low" type="float" value="0.35" />
+      <input name="high" type="float" value="0.65" />
+    </smoothstep>
+    <mix name="belts_and_zones" type="color3">
+      <input name="bg" type="color3" interfacename="zone_color" />
+      <input name="fg" type="color3" interfacename="belt_color" />
+      <input name="mix" type="float" nodename="belt_mask" />
+    </mix>
+    <mix name="streaks" type="color3">
+      <input name="bg" type="color3" interfacename="pale_color" />
+      <input name="fg" type="color3" interfacename="deep_color" />
+      <input name="mix" type="float" nodename="narrow_bands" />
+    </mix>
+    <mix name="clouds" type="color3">
+      <input name="bg" type="color3" nodename="belts_and_zones" />
+      <input name="fg" type="color3" nodename="streaks" />
+      <input name="mix" type="float" value="0.35" />
+    </mix>
+    <multiply name="spiral_phase" type="float">
+      <input name="in1" type="float" nodename="storm_distance" />
+      <input name="in2" type="float" value="60" />
+    </multiply>
+    <sin name="spiral_wave" type="float">
+      <input name="in" type="float" nodename="spiral_phase" />
+    </sin>
+    <remap name="storm_spiral" type="float">
+      <input name="in" type="float" nodename="spiral_wave" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="storm_shaded" type="color3">
+      <input name="in1" type="color3" interfacename="storm_color" />
+      <input name="in2" type="float" nodename="storm_spiral" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="clouds" />
+      <input name="fg" type="color3" nodename="storm_shaded" />
+      <input name="mix" type="float" nodename="storm" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_gas_giant" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_gas_giant" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="1" />
+    <input name="specular_weight" type="float" value="0.15" />
+    <input name="specular_roughness" type="float" value="0.7" />
+    <input name="fuzz_weight" type="float" value="0.6" />
+    <input name="fuzz_color" type="color3" value="0.75, 0.82, 0.9" />
+    <input name="fuzz_roughness" type="float" value="0.6" />
+  </open_pbr_surface>
+  <surfacematerial name="Gas_Giant" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_gas_giant" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,310 @@
+<?xml version="1.0"?>
+<!--
+  Dragon scales: OpenPBR iridescent metal scales. Texture space holds
+  staggered rows of overlapping discs; a point belongs to the disc of the
+  row above when inside it, otherwise to the disc of its own row. Each
+  scale lifts
+  toward its tip, carries a keel, and takes a random value that shifts
+  its color and thin-film thickness. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_dragon_scales">
+    <input name="scale_color" type="color3" value="0.03, 0.2, 0.14" uiname="Scale color" />
+    <input name="tip_color" type="color3" value="0.55, 0.42, 0.1" uiname="Tip color" />
+    <input name="tiles" type="vector2" value="34, 24" uiname="Scales per UV" />
+    <input name="scale_lift" type="float" value="0.5" uiname="Scale lift" uimin="0" uimax="1" />
+    <input name="keel" type="float" value="0.4" uiname="Keel" uimin="0" uimax="1" />
+    <input name="film_thickness" type="float" value="0.38" uiname="Film thickness (um)" uimin="0" uimax="1" />
+    <input name="film_variation" type="float" value="0.14" uiname="Film variation" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="scale_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="uv_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="scale_uv" />
+    </separate2>
+    <floor name="row" type="float">
+      <input name="in" type="float" nodename="uv_parts" output="outy" />
+    </floor>
+
+    <!-- Candidate scales: the row above overlaps this one, so it wins inside
+         its radius. -->
+    <add name="upper_row" type="float">
+      <input name="in1" type="float" nodename="row" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <modulo name="upper_parity" type="float">
+      <input name="in1" type="float" nodename="upper_row" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <multiply name="upper_shift" type="float">
+      <input name="in1" type="float" nodename="upper_parity" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="upper_unshifted" type="float">
+      <input name="in1" type="float" nodename="uv_parts" output="outx" />
+      <input name="in2" type="float" nodename="upper_shift" />
+    </subtract>
+    <add name="upper_rounding" type="float">
+      <input name="in1" type="float" nodename="upper_unshifted" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="upper_nearest" type="float">
+      <input name="in" type="float" nodename="upper_rounding" />
+    </floor>
+    <add name="upper_column" type="float">
+      <input name="in1" type="float" nodename="upper_nearest" />
+      <input name="in2" type="float" nodename="upper_shift" />
+    </add>
+    <combine2 name="upper_centre" type="vector2">
+      <input name="in1" type="float" nodename="upper_column" />
+      <input name="in2" type="float" nodename="upper_row" />
+    </combine2>
+    <subtract name="upper_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_uv" />
+      <input name="in2" type="vector2" nodename="upper_centre" />
+    </subtract>
+    <modulo name="lower_parity" type="float">
+      <input name="in1" type="float" nodename="row" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <multiply name="lower_shift" type="float">
+      <input name="in1" type="float" nodename="lower_parity" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="lower_unshifted" type="float">
+      <input name="in1" type="float" nodename="uv_parts" output="outx" />
+      <input name="in2" type="float" nodename="lower_shift" />
+    </subtract>
+    <add name="lower_rounding" type="float">
+      <input name="in1" type="float" nodename="lower_unshifted" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="lower_nearest" type="float">
+      <input name="in" type="float" nodename="lower_rounding" />
+    </floor>
+    <add name="lower_column" type="float">
+      <input name="in1" type="float" nodename="lower_nearest" />
+      <input name="in2" type="float" nodename="lower_shift" />
+    </add>
+    <combine2 name="lower_centre" type="vector2">
+      <input name="in1" type="float" nodename="lower_column" />
+      <input name="in2" type="float" nodename="row" />
+    </combine2>
+    <subtract name="lower_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_uv" />
+      <input name="in2" type="vector2" nodename="lower_centre" />
+    </subtract>
+    <dotproduct name="upper_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="upper_offset" />
+      <input name="in2" type="vector2" nodename="upper_offset" />
+    </dotproduct>
+    <sqrt name="upper_distance" type="float">
+      <input name="in" type="float" nodename="upper_distance_squared" />
+    </sqrt>
+    <ifgreater name="in_upper" type="float">
+      <input name="value1" type="float" value="0.7" />
+      <input name="value2" type="float" nodename="upper_distance" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="scale_local" type="vector2">
+      <input name="bg" type="vector2" nodename="lower_offset" />
+      <input name="fg" type="vector2" nodename="upper_offset" />
+      <input name="mix" type="float" nodename="in_upper" />
+    </mix>
+    <mix name="scale_centre" type="vector2">
+      <input name="bg" type="vector2" nodename="lower_centre" />
+      <input name="fg" type="vector2" nodename="upper_centre" />
+      <input name="mix" type="float" nodename="in_upper" />
+    </mix>
+    <dotproduct name="scale_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="scale_local" />
+      <input name="in2" type="vector2" nodename="scale_local" />
+    </dotproduct>
+    <sqrt name="scale_distance" type="float">
+      <input name="in" type="float" nodename="scale_distance_squared" />
+    </sqrt>
+    <divide name="scale_radius" type="float">
+      <input name="in1" type="float" nodename="scale_distance" />
+      <input name="in2" type="float" value="0.7" />
+    </divide>
+
+    <!-- Random values per scale. -->
+    <add name="scale_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_centre" />
+      <input name="in2" type="float" value="0.25" />
+    </add>
+    <cellnoise2d name="scale_random_1" type="float">
+      <input name="texcoord" type="vector2" nodename="scale_cell" />
+    </cellnoise2d>
+    <add name="scale_cell_2" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_cell" />
+      <input name="in2" type="vector2" value="19, 7" />
+    </add>
+    <cellnoise2d name="scale_random_2" type="float">
+      <input name="texcoord" type="vector2" nodename="scale_cell_2" />
+    </cellnoise2d>
+
+    <!-- Color: darker at the hidden root, a tinted rim at the tip. -->
+    <smoothstep name="tip" type="float">
+      <input name="in" type="float" nodename="scale_radius" />
+      <input name="low" type="float" value="0.6" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <remap name="root_shade" type="float">
+      <input name="in" type="float" nodename="scale_radius" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.35" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="scale_value" type="float">
+      <input name="in" type="float" nodename="scale_random_1" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.65" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="scale_shade" type="float">
+      <input name="in1" type="float" nodename="root_shade" />
+      <input name="in2" type="float" nodename="scale_value" />
+    </multiply>
+    <multiply name="scale_body" type="color3">
+      <input name="in1" type="color3" interfacename="scale_color" />
+      <input name="in2" type="float" nodename="scale_shade" />
+    </multiply>
+    <multiply name="tip_amount" type="float">
+      <input name="in1" type="float" nodename="tip" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="scale_body" />
+      <input name="fg" type="color3" interfacename="tip_color" />
+      <input name="mix" type="float" nodename="tip_amount" />
+    </mix>
+    <remap name="scale_roughness" type="float">
+      <input name="in" type="float" nodename="scale_random_2" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.14" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <multiply name="tip_roughness" type="float">
+      <input name="in1" type="float" nodename="tip" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <add name="roughness" type="float">
+      <input name="in1" type="float" nodename="scale_roughness" />
+      <input name="in2" type="float" nodename="tip_roughness" />
+    </add>
+    <subtract name="film_centred" type="float">
+      <input name="in1" type="float" nodename="scale_random_1" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="film_shift" type="float">
+      <input name="in1" type="float" nodename="film_centred" />
+      <input name="in2" type="float" interfacename="film_variation" />
+    </multiply>
+    <add name="film_base" type="float">
+      <input name="in1" type="float" nodename="film_shift" />
+      <input name="in2" type="float" interfacename="film_thickness" />
+    </add>
+    <multiply name="film_tip" type="float">
+      <input name="in1" type="float" nodename="scale_radius" />
+      <input name="in2" type="float" value="0.06" />
+    </multiply>
+    <add name="film_thickness_um" type="float">
+      <input name="in1" type="float" nodename="film_base" />
+      <input name="in2" type="float" nodename="film_tip" />
+    </add>
+
+    <!-- Normal: each scale rises toward its tip and folds along its keel. -->
+    <separate2 name="local_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="scale_local" />
+    </separate2>
+    <multiply name="keel_sharp" type="float">
+      <input name="in1" type="float" nodename="local_parts" output="outx" />
+      <input name="in2" type="float" value="8" />
+    </multiply>
+    <clamp name="keel_side" type="float">
+      <input name="in" type="float" nodename="keel_sharp" />
+      <input name="low" type="float" value="-1" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <multiply name="keel_amount" type="float">
+      <input name="in1" type="float" interfacename="keel" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="keel_fold" type="float">
+      <input name="in1" type="float" nodename="keel_side" />
+      <input name="in2" type="float" nodename="keel_amount" />
+    </multiply>
+    <multiply name="lift_side" type="float">
+      <input name="in1" type="float" interfacename="scale_lift" />
+      <input name="in2" type="float" value="1.1" />
+    </multiply>
+    <multiply name="lift_x" type="float">
+      <input name="in1" type="float" nodename="local_parts" output="outx" />
+      <input name="in2" type="float" nodename="lift_side" />
+    </multiply>
+    <add name="tilt_x" type="float">
+      <input name="in1" type="float" nodename="lift_x" />
+      <input name="in2" type="float" nodename="keel_fold" />
+    </add>
+    <add name="lift_bias" type="float">
+      <input name="in1" type="float" nodename="local_parts" output="outy" />
+      <input name="in2" type="float" value="0.25" />
+    </add>
+    <multiply name="lift_amount" type="float">
+      <input name="in1" type="float" interfacename="scale_lift" />
+      <input name="in2" type="float" value="1.1" />
+    </multiply>
+    <multiply name="tilt_y" type="float">
+      <input name="in1" type="float" nodename="lift_bias" />
+      <input name="in2" type="float" nodename="lift_amount" />
+    </multiply>
+    <remap name="scale_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="scale_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_y" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="scale_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="scale_normal_encoded_x" />
+      <input name="in2" type="float" nodename="scale_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="scale_normal" type="vector3">
+      <input name="in" type="vector3" nodename="scale_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="thin_film_out" type="float" nodename="film_thickness_um" />
+    <output name="normal_out" type="vector3" nodename="scale_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_dragon_scales" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_dragon_scales" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_dragon_scales" output="roughness_out" />
+    <input name="thin_film_weight" type="float" value="1" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_dragon_scales" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="2.2" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_dragon_scales" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Dragon_Scales" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_dragon_scales" />
+  </surfacematerial>
+</materialx>

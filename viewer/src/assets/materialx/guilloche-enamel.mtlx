@@ -1,0 +1,156 @@
+<?xml version="1.0"?>
+<!--
+  Guilloche enamel: OpenPBR engine-turned metal under translucent enamel.
+  atan2 and the distance from object Y give polar coordinates; rings
+  whose radius waves with the angle are the engraved cuts, and the cosine
+  of their phase leans the normal radially. The coat is the enamel: it
+  keeps the smooth surface and its constant color tints the engraving.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_guilloche_enamel">
+    <input name="metal_color" type="color3" value="0.92, 0.9, 0.86" uiname="Metal color" />
+    <input name="rings" type="float" value="30" uiname="Rings per unit" />
+    <input name="petals" type="float" value="20" uiname="Waves per turn" />
+    <input name="wave_depth" type="float" value="0.02" uiname="Wave depth" />
+    <input name="twist" type="float" value="1" uiname="Twist" />
+    <input name="cut_depth" type="float" value="0.55" uiname="Cut depth" uimin="0" uimax="1" />
+    <input name="roughness" type="float" value="0.16" uiname="Roughness" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Polar coordinates around object Y. -->
+    <multiply name="radial" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="1, 0, 1" />
+    </multiply>
+    <dotproduct name="radius_squared" type="float">
+      <input name="in1" type="vector3" nodename="radial" />
+      <input name="in2" type="vector3" nodename="radial" />
+    </dotproduct>
+    <sqrt name="radius" type="float">
+      <input name="in" type="float" nodename="radius_squared" />
+    </sqrt>
+    <separate3 name="position_parts" type="multioutput">
+      <input name="in" type="vector3" nodename="object_position" />
+    </separate3>
+    <atan2 name="angle" type="float">
+      <input name="iny" type="float" nodename="position_parts" output="outz" />
+      <input name="inx" type="float" nodename="position_parts" output="outx" />
+    </atan2>
+
+    <!-- Rose-engine cut: rings whose radius waves with the angle, twisting
+         outward. -->
+    <multiply name="petal_angle" type="float">
+      <input name="in1" type="float" nodename="angle" />
+      <input name="in2" type="float" interfacename="petals" />
+    </multiply>
+    <multiply name="twist_rate" type="float">
+      <input name="in1" type="float" interfacename="twist" />
+      <input name="in2" type="float" value="6.283185" />
+    </multiply>
+    <multiply name="petal_twist" type="float">
+      <input name="in1" type="float" nodename="radius" />
+      <input name="in2" type="float" nodename="twist_rate" />
+    </multiply>
+    <add name="petal_phase" type="float">
+      <input name="in1" type="float" nodename="petal_angle" />
+      <input name="in2" type="float" nodename="petal_twist" />
+    </add>
+    <sin name="petal_wave" type="float">
+      <input name="in" type="float" nodename="petal_phase" />
+    </sin>
+    <multiply name="petal_offset" type="float">
+      <input name="in1" type="float" nodename="petal_wave" />
+      <input name="in2" type="float" interfacename="wave_depth" />
+    </multiply>
+    <add name="waved_radius" type="float">
+      <input name="in1" type="float" nodename="radius" />
+      <input name="in2" type="float" nodename="petal_offset" />
+    </add>
+    <multiply name="cut_coordinate" type="float">
+      <input name="in1" type="float" nodename="waved_radius" />
+      <input name="in2" type="float" interfacename="rings" />
+    </multiply>
+    <multiply name="cut_phase" type="float">
+      <input name="in1" type="float" nodename="cut_coordinate" />
+      <input name="in2" type="float" value="6.283185" />
+    </multiply>
+    <sin name="cut" type="float">
+      <input name="in" type="float" nodename="cut_phase" />
+    </sin>
+    <cos name="cut_cosine" type="float">
+      <input name="in" type="float" nodename="cut_phase" />
+    </cos>
+    <multiply name="cut_amount" type="float">
+      <input name="in1" type="float" interfacename="cut_depth" />
+      <input name="in2" type="float" value="-0.9" />
+    </multiply>
+    <multiply name="cut_slope" type="float">
+      <input name="in1" type="float" nodename="cut_cosine" />
+      <input name="in2" type="float" nodename="cut_amount" />
+    </multiply>
+    <max name="safe_radius" type="float">
+      <input name="in1" type="float" nodename="radius" />
+      <input name="in2" type="float" value="0.001" />
+    </max>
+    <divide name="radial_direction" type="vector3">
+      <input name="in1" type="vector3" nodename="radial" />
+      <input name="in2" type="float" nodename="safe_radius" />
+    </divide>
+    <multiply name="cut_lean" type="vector3">
+      <input name="in1" type="vector3" nodename="radial_direction" />
+      <input name="in2" type="float" nodename="cut_slope" />
+    </multiply>
+    <add name="cut_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="cut_lean" />
+    </add>
+    <transformnormal name="cut_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="cut_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="cut_normal" type="vector3">
+      <input name="in" type="vector3" nodename="cut_normal_world" />
+    </normalize>
+    <multiply name="cut_rough" type="float">
+      <input name="in1" type="float" nodename="cut" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="cut_roughness" type="float">
+      <input name="in1" type="float" nodename="cut_rough" />
+      <input name="in2" type="float" interfacename="roughness" />
+    </add>
+    <remap name="cut_shade" type="float">
+      <input name="in" type="float" nodename="cut" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" interfacename="metal_color" />
+      <input name="in2" type="float" nodename="cut_shade" />
+    </multiply>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="cut_roughness" />
+    <output name="normal_out" type="vector3" nodename="cut_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_guilloche_enamel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_guilloche_enamel" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_guilloche_enamel" output="roughness_out" />
+    <input name="coat_weight" type="float" value="1" />
+    <input name="coat_color" type="color3" value="0.03, 0.2, 0.75" />
+    <input name="coat_roughness" type="float" value="0.02" />
+    <input name="coat_ior" type="float" value="1.5" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_guilloche_enamel" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Guilloche_Enamel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_guilloche_enamel" />
+  </surfacematerial>
+</materialx>

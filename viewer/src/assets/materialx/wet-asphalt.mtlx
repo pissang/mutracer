@@ -1,0 +1,275 @@
+<?xml version="1.0"?>
+<!--
+  Wet asphalt: OpenPBR aggregate with puddles and an oil film. Fine
+  object-space Worley cells are the stones, tinted by their cell value
+  and bumped by forward differences. A fractal floods the low areas:
+  water darkens the surface, flattens the normal and makes it a mirror,
+  and a thin film of varying thickness floats on part of it.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_wet_asphalt">
+    <input name="stone_color" type="color3" value="0.09, 0.09, 0.093" uiname="Aggregate" />
+    <input name="stone_scale" type="float" value="45" uiname="Aggregate scale" />
+    <input name="stone_bump" type="float" value="0.5" uiname="Aggregate bump" uimin="0" uimax="1" />
+    <input name="water_level" type="float" value="0.5" uiname="Water level" uimin="0" uimax="1" />
+    <input name="puddle_scale" type="float" value="1.3" uiname="Puddle scale" />
+    <input name="oil_amount" type="float" value="0.7" uiname="Oil film" uimin="0" uimax="1" />
+    <input name="oil_thickness" type="float" value="0.42" uiname="Oil thickness (um)" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="stone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="stone_scale" />
+    </multiply>
+
+    <!-- Aggregate: one stone per Worley cell, tinted by the cell value. -->
+    <worleynoise3d name="stone_distance" type="float">
+      <input name="position" type="vector3" nodename="stone_position" />
+    </worleynoise3d>
+    <invert name="stone_height" type="float">
+      <input name="in" type="float" nodename="stone_distance" />
+    </invert>
+    <worleynoise3d name="stone_value" type="vector3">
+      <input name="position" type="vector3" nodename="stone_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate3 name="stone_id" type="multioutput">
+      <input name="in" type="vector3" nodename="stone_value" />
+    </separate3>
+    <remap name="stone_value_shift" type="float">
+      <input name="in" type="float" nodename="stone_id" output="outx" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="1.7" />
+    </remap>
+    <remap name="pit_shade" type="float">
+      <input name="in" type="float" nodename="stone_height" />
+      <input name="inlow" type="float" value="0.3" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="stone_shade" type="float">
+      <input name="in1" type="float" nodename="stone_value_shift" />
+      <input name="in2" type="float" nodename="pit_shade" />
+    </multiply>
+    <multiply name="stone_tone" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="float" nodename="stone_shade" />
+    </multiply>
+
+    <!-- Puddles: a fractal below the water level. The edge is damp, the inside
+         is standing water. -->
+    <multiply name="puddle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="puddle_scale" />
+    </multiply>
+    <fractal3d name="puddle_fractal" type="float">
+      <input name="position" type="vector3" nodename="puddle_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <remap name="level" type="float">
+      <input name="in" type="float" interfacename="water_level" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="-0.55" />
+      <input name="outhigh" type="float" value="0.45" />
+    </remap>
+    <add name="damp_far" type="float">
+      <input name="in1" type="float" nodename="level" />
+      <input name="in2" type="float" value="0.22" />
+    </add>
+    <smoothstep name="damp_edge" type="float">
+      <input name="in" type="float" nodename="puddle_fractal" />
+      <input name="low" type="float" nodename="level" />
+      <input name="high" type="float" nodename="damp_far" />
+    </smoothstep>
+    <invert name="damp" type="float">
+      <input name="in" type="float" nodename="damp_edge" />
+    </invert>
+    <subtract name="flood_near" type="float">
+      <input name="in1" type="float" nodename="level" />
+      <input name="in2" type="float" value="0.1" />
+    </subtract>
+    <smoothstep name="flood_edge" type="float">
+      <input name="in" type="float" nodename="puddle_fractal" />
+      <input name="low" type="float" nodename="flood_near" />
+      <input name="high" type="float" nodename="level" />
+    </smoothstep>
+    <invert name="flooded" type="float">
+      <input name="in" type="float" nodename="flood_edge" />
+    </invert>
+    <remap name="wet_darkening" type="float">
+      <input name="in" type="float" nodename="damp" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.4" />
+    </remap>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" nodename="stone_tone" />
+      <input name="in2" type="float" nodename="wet_darkening" />
+    </multiply>
+    <remap name="dry_roughness" type="float">
+      <input name="in" type="float" nodename="stone_id" output="outy" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="0.9" />
+    </remap>
+    <mix name="damp_roughness" type="float">
+      <input name="bg" type="float" nodename="dry_roughness" />
+      <input name="fg" type="float" value="0.3" />
+      <input name="mix" type="float" nodename="damp" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="damp_roughness" />
+      <input name="fg" type="float" value="0.015" />
+      <input name="mix" type="float" nodename="flooded" />
+    </mix>
+
+    <!-- Oil film: floats on part of the standing water, its thickness
+         drifting. -->
+    <multiply name="oil_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.6" />
+    </multiply>
+    <add name="oil_position" type="vector3">
+      <input name="in1" type="vector3" nodename="oil_scaled" />
+      <input name="in2" type="vector3" value="4.2, 8.8, -3.3" />
+    </add>
+    <noise3d name="oil_noise" type="float">
+      <input name="position" type="vector3" nodename="oil_position" />
+    </noise3d>
+    <smoothstep name="oil_patches" type="float">
+      <input name="in" type="float" nodename="oil_noise" />
+      <input name="low" type="float" value="-0.3" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="oil_cover" type="float">
+      <input name="in1" type="float" nodename="flooded" />
+      <input name="in2" type="float" nodename="oil_patches" />
+    </multiply>
+    <multiply name="oil_weight" type="float">
+      <input name="in1" type="float" nodename="oil_cover" />
+      <input name="in2" type="float" interfacename="oil_amount" />
+    </multiply>
+    <multiply name="oil_drift_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <fractal3d name="oil_drift" type="float">
+      <input name="position" type="vector3" nodename="oil_drift_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" value="0.28" />
+    </fractal3d>
+    <add name="oil_thickness_um" type="float">
+      <input name="in1" type="float" nodename="oil_drift" />
+      <input name="in2" type="float" interfacename="oil_thickness" />
+    </add>
+    <invert name="dry" type="float">
+      <input name="in" type="float" nodename="flooded" />
+    </invert>
+    <multiply name="bump_scale" type="float">
+      <input name="in1" type="float" interfacename="stone_bump" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" nodename="dry" />
+      <input name="in2" type="float" nodename="bump_scale" />
+    </multiply>
+    <add name="stone_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_position" />
+      <input name="in2" type="vector3" value="0.03, 0, 0" />
+    </add>
+    <worleynoise3d name="stone_distance_x" type="float">
+      <input name="position" type="vector3" nodename="stone_normal_position_x" />
+    </worleynoise3d>
+    <invert name="stone_height_x" type="float">
+      <input name="in" type="float" nodename="stone_distance_x" />
+    </invert>
+    <add name="stone_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_position" />
+      <input name="in2" type="vector3" value="0, 0.03, 0" />
+    </add>
+    <worleynoise3d name="stone_distance_y" type="float">
+      <input name="position" type="vector3" nodename="stone_normal_position_y" />
+    </worleynoise3d>
+    <invert name="stone_height_y" type="float">
+      <input name="in" type="float" nodename="stone_distance_y" />
+    </invert>
+    <add name="stone_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.03" />
+    </add>
+    <worleynoise3d name="stone_distance_z" type="float">
+      <input name="position" type="vector3" nodename="stone_normal_position_z" />
+    </worleynoise3d>
+    <invert name="stone_height_z" type="float">
+      <input name="in" type="float" nodename="stone_distance_z" />
+    </invert>
+    <combine3 name="stone_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="stone_height_x" />
+      <input name="in2" type="float" nodename="stone_height_y" />
+      <input name="in3" type="float" nodename="stone_height_z" />
+    </combine3>
+    <subtract name="stone_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_normal_ahead" />
+      <input name="in2" type="float" nodename="stone_height" />
+    </subtract>
+    <multiply name="stone_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_normal_delta" />
+      <input name="in2" type="float" value="33.33333" />
+    </multiply>
+    <dotproduct name="stone_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="stone_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="stone_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="stone_normal_along_normal" />
+    </multiply>
+    <subtract name="stone_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_normal_gradient" />
+      <input name="in2" type="vector3" nodename="stone_normal_normal_part" />
+    </subtract>
+    <multiply name="stone_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="stone_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="stone_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="stone_normal_offset" />
+    </subtract>
+    <transformnormal name="stone_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="stone_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="stone_normal" type="vector3">
+      <input name="in" type="vector3" nodename="stone_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="thin_film_weight_out" type="float" nodename="oil_weight" />
+    <output name="thin_film_out" type="float" nodename="oil_thickness_um" />
+    <output name="normal_out" type="vector3" nodename="stone_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_wet_asphalt" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_wet_asphalt" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.7" />
+    <input name="specular_roughness" type="float" nodegraph="NG_wet_asphalt" output="roughness_out" />
+    <input name="thin_film_weight" type="float" nodegraph="NG_wet_asphalt" output="thin_film_weight_out" />
+    <input name="thin_film_thickness" type="float" nodegraph="NG_wet_asphalt" output="thin_film_out" />
+    <input name="thin_film_ior" type="float" value="1.45" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_wet_asphalt" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Wet_Asphalt" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_wet_asphalt" />
+  </surfacematerial>
+</materialx>

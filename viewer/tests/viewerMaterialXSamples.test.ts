@@ -30,8 +30,23 @@ const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}
   'kintsugi':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
   'heat-tinted-titanium':{terminals:['specularRoughness','thinFilmThickness'],values:{baseMetalness:1,specularAnisotropy:0.4,thinFilmIor:2.6}},
   'abalone':{terminals:['specularRoughness','thinFilmThickness','normal'],values:{baseMetalness:1,thinFilmIor:2.4}},
-  'hex-plating':{terminals:['baseColor','specularRoughness','normal']}
+  'hex-plating':{terminals:['baseColor','specularRoughness','normal']},
+  'brick-wall':{terminals:['baseColor','specularRoughness']},
+  'wet-asphalt':{terminals:['baseColor','specularRoughness','thinFilmWeight','thinFilmThickness','normal'],values:{thinFilmIor:1.45}},
+  'chipped-paint':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
+  'knit-wool':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.85,fuzzRoughness:0.55}},
+  'perforated-metal':{terminals:['baseColor','specularRoughness','opacity','normal'],values:{baseMetalness:1}},
+  'circuit-board':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
+  'stained-glass':{terminals:['baseColor','baseMetalness','specularRoughness','transmissionWeight','transmissionColor','normal'],values:{thinWalled:true}},
+  'rain-glass':{terminals:['specularRoughness','normal'],values:{transmissionWeight:1,specularIor:1.45}},
+  'agate':{terminals:['baseColor','specularRoughness','normal'],values:{subsurfaceWeight:0.25,subsurfaceRadius:0.1}},
+  'guilloche-enamel':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,coatColor:[0.03,0.2,0.75]}},
+  'dragon-scales':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.2}},
+  'holo-glitter':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.6}},
+  'gas-giant':{terminals:['baseColor'],values:{fuzzWeight:0.6}}
 };
+// Samples with a UV-only height, and their displacement scale.
+const displaced:Record<string,number>={'cobblestone':0.04,'brick-wall':0.03};
 
 describe('bundled MaterialX samples',()=>{
   it('lists every sample in panel order and packages it as a MaterialX drop',()=>{
@@ -80,8 +95,20 @@ describe('bundled MaterialX samples',()=>{
     expect(max).toBeLessThan(0.06);
   });
 
+  it('bakes the brick wall height from UV0 into bricks above the mortar',()=>{
+    const m=parseMaterialXGraph(sample('brick-wall').text);
+    expect(m.displacement).toMatchObject({mode:'bake',uvChannel:0});
+    expect(m.displacement!.reason).toBeUndefined();
+    const {heights}=bakeHeightCPU(m.displacement!.graph,[],64,64);
+    expect(heights.every(Number.isFinite)).toBe(true);
+    // Mortar is at zero; bricks stand 0.72 to 1 of the 0.03 scale, plus pitting.
+    expect(Math.min(...heights)).toBeLessThan(0.004);
+    expect(Math.max(...heights)).toBeGreaterThan(0.02);
+    expect(Math.max(...heights)).toBeLessThan(0.045);
+  });
+
   it('leaves displacement off for every other sample',()=>{
-    for(const s of MATERIALX_SAMPLES.filter(s=>s.id!=='cobblestone'))expect(parseMaterialXGraph(s.text).displacement).toBeUndefined();
+    for(const s of MATERIALX_SAMPLES.filter(s=>!(s.id in displaced)))expect(parseMaterialXGraph(s.text).displacement).toBeUndefined();
   });
 
   it('keeps a constant fallback for each sample that reports the graph-only nodes',()=>{
@@ -112,14 +139,14 @@ describe('bundled MaterialX samples',()=>{
   });
 
   it.each(MATERIALX_SAMPLES.map(s=>[s.id]))('imports %s through the viewer as one material replacement',async id=>{
-    vi.mocked(bakeDisplacement).mockResolvedValueOnce({file:new Blob(['height']),scale:0.04,bias:0,maxError:0.04/510,width:1024,height:1024,backend:'cpu',timings:{compileMs:0,executeMs:1,readbackMs:0,cacheHit:false}});
+    vi.mocked(bakeDisplacement).mockResolvedValue({file:new Blob(['height']),scale:displaced[id]??0.04,bias:0,maxError:0.04/510,width:1024,height:1024,backend:'cpu',timings:{compileMs:0,executeMs:1,readbackMs:0,cacheHit:false}});
     const setTextures=vi.fn(async()=>true),receiver={materials:{setTextures}};
     expect(await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'target',materialXSampleFiles(sample(id)))).toBe(true);
     expect(setTextures).toHaveBeenCalledTimes(1);
     const args=setTextures.mock.calls[0] as unknown as unknown[];
     expect(args[3]).toMatch(/^[A-Z][A-Za-z_]+ MaterialX$/);
     expect(Object.keys((args[6] as {terminal:object}).terminal)).toEqual(expect.arrayContaining(expected[id].terminals));
-    if(id==='cobblestone')expect(args[2]).toMatchObject({displacementScale:0.04,displacementBias:0});
+    if(id in displaced)expect(args[2]).toMatchObject({displacementScale:displaced[id],displacementBias:0});
     else expect((args[1] as Record<string,unknown>).displacementMap).toBeNull();
   });
 });

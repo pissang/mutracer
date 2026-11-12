@@ -510,11 +510,16 @@ material. Download or import failures also keep the existing material.
 The **MaterialX** preset category imports procedural samples: flake car paint,
 weathered steel, varnished wood, marble, terrazzo, leather, tartan, cobblestone
 with height displacement, zellige tile, wax, hammered copper, carbon fibre,
-Damascus steel, kintsugi, heat-tinted titanium, abalone and hex plating. They
-use only graph nodes and no images, so they need WebGPU to show their patterns;
-WebGL 2 renders their constant fallback. Wood, stone, metal and leather
-patterns use object-space position and follow the model's size; the woven,
-tiled and plated ones use UV0 and expose their repeat count.
+Damascus steel, kintsugi, heat-tinted titanium, abalone, hex plating, a brick
+wall with height displacement, wet asphalt, chipped paint, a Fair Isle knit,
+perforated metal with cut-out holes, a circuit board, thin-walled stained
+glass, rain on glass, agate, guilloché enamel, dragon scales, holographic
+glitter and a gas giant. They use only graph nodes and no images, so they need
+WebGPU to show their patterns; WebGL 2 renders their constant fallback. Wood,
+stone, metal, glass and paint patterns use object-space position and follow the
+model's size; the woven, knitted, tiled, plated, perforated and scaled ones use
+UV0 and expose their repeat count. The gas giant and the guilloché are laid out
+around object Y.
 
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and

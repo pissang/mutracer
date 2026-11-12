@@ -1,0 +1,219 @@
+<?xml version="1.0"?>
+<!--
+  Rain on glass: OpenPBR transmission with water drops over condensation.
+  Each object-space Worley cell holds one drop, a dome around its feature
+  point, and forward differences of that height make the drops refract
+  like lenses. The glass between drops is misted and rough, and a finer
+  Worley layer clears small beads in it. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_rain_glass">
+    <input name="drop_scale" type="float" value="6" uiname="Drop scale" />
+    <input name="drop_size" type="float" value="0.42" uiname="Drop size" uimin="0.05" uimax="0.5" />
+    <input name="drop_bulge" type="float" value="0.55" uiname="Drop bulge" uimin="0" uimax="1" />
+    <input name="mist_roughness" type="float" value="0.28" uiname="Mist roughness" uimin="0" uimax="1" />
+    <input name="bead_scale" type="float" value="4" uiname="Bead scale" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="drop_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="drop_scale" />
+    </multiply>
+
+    <!-- Drop height: a dome around each Worley feature point, flat outside the
+         drop size. -->
+    <worleynoise3d name="drop_distance" type="float">
+      <input name="position" type="vector3" nodename="drop_position" />
+    </worleynoise3d>
+    <divide name="drop_radius" type="float">
+      <input name="in1" type="float" nodename="drop_distance" />
+      <input name="in2" type="float" interfacename="drop_size" />
+    </divide>
+    <clamp name="drop_profile" type="float">
+      <input name="in" type="float" nodename="drop_radius" />
+    </clamp>
+    <multiply name="drop_falloff" type="float">
+      <input name="in1" type="float" nodename="drop_profile" />
+      <input name="in2" type="float" nodename="drop_profile" />
+    </multiply>
+    <subtract name="drop_height" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="drop_falloff" />
+    </subtract>
+    <smoothstep name="drop_mask" type="float">
+      <input name="in" type="float" nodename="drop_height" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+
+    <!-- Small beads: a finer Worley layer clears spots in the mist. -->
+    <multiply name="bead_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_position" />
+      <input name="in2" type="float" interfacename="bead_scale" />
+    </multiply>
+    <add name="bead_position" type="vector3">
+      <input name="in1" type="vector3" nodename="bead_scaled" />
+      <input name="in2" type="vector3" value="3.7, 9.2, -5.1" />
+    </add>
+    <worleynoise3d name="bead_distance" type="float">
+      <input name="position" type="vector3" nodename="bead_position" />
+    </worleynoise3d>
+    <smoothstep name="bead_edge" type="float">
+      <input name="in" type="float" nodename="bead_distance" />
+      <input name="low" type="float" value="0.16" />
+      <input name="high" type="float" value="0.24" />
+    </smoothstep>
+    <invert name="bead_mask" type="float">
+      <input name="in" type="float" nodename="bead_edge" />
+    </invert>
+    <max name="clear_mask" type="float">
+      <input name="in1" type="float" nodename="drop_mask" />
+      <input name="in2" type="float" nodename="bead_mask" />
+    </max>
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_position" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="mist_grain" type="float">
+      <input name="position" type="vector3" nodename="grain_position" />
+      <input name="amplitude" type="float" value="0.06" />
+    </noise3d>
+    <add name="misted" type="float">
+      <input name="in1" type="float" nodename="mist_grain" />
+      <input name="in2" type="float" interfacename="mist_roughness" />
+    </add>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="misted" />
+      <input name="fg" type="float" value="0" />
+      <input name="mix" type="float" nodename="clear_mask" />
+    </mix>
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" interfacename="drop_bulge" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="drop_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_position" />
+      <input name="in2" type="vector3" value="0.02, 0, 0" />
+    </add>
+    <worleynoise3d name="drop_distance_x" type="float">
+      <input name="position" type="vector3" nodename="drop_normal_position_x" />
+    </worleynoise3d>
+    <divide name="drop_radius_x" type="float">
+      <input name="in1" type="float" nodename="drop_distance_x" />
+      <input name="in2" type="float" interfacename="drop_size" />
+    </divide>
+    <clamp name="drop_profile_x" type="float">
+      <input name="in" type="float" nodename="drop_radius_x" />
+    </clamp>
+    <multiply name="drop_falloff_x" type="float">
+      <input name="in1" type="float" nodename="drop_profile_x" />
+      <input name="in2" type="float" nodename="drop_profile_x" />
+    </multiply>
+    <subtract name="drop_height_x" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="drop_falloff_x" />
+    </subtract>
+    <add name="drop_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_position" />
+      <input name="in2" type="vector3" value="0, 0.02, 0" />
+    </add>
+    <worleynoise3d name="drop_distance_y" type="float">
+      <input name="position" type="vector3" nodename="drop_normal_position_y" />
+    </worleynoise3d>
+    <divide name="drop_radius_y" type="float">
+      <input name="in1" type="float" nodename="drop_distance_y" />
+      <input name="in2" type="float" interfacename="drop_size" />
+    </divide>
+    <clamp name="drop_profile_y" type="float">
+      <input name="in" type="float" nodename="drop_radius_y" />
+    </clamp>
+    <multiply name="drop_falloff_y" type="float">
+      <input name="in1" type="float" nodename="drop_profile_y" />
+      <input name="in2" type="float" nodename="drop_profile_y" />
+    </multiply>
+    <subtract name="drop_height_y" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="drop_falloff_y" />
+    </subtract>
+    <add name="drop_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.02" />
+    </add>
+    <worleynoise3d name="drop_distance_z" type="float">
+      <input name="position" type="vector3" nodename="drop_normal_position_z" />
+    </worleynoise3d>
+    <divide name="drop_radius_z" type="float">
+      <input name="in1" type="float" nodename="drop_distance_z" />
+      <input name="in2" type="float" interfacename="drop_size" />
+    </divide>
+    <clamp name="drop_profile_z" type="float">
+      <input name="in" type="float" nodename="drop_radius_z" />
+    </clamp>
+    <multiply name="drop_falloff_z" type="float">
+      <input name="in1" type="float" nodename="drop_profile_z" />
+      <input name="in2" type="float" nodename="drop_profile_z" />
+    </multiply>
+    <subtract name="drop_height_z" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="drop_falloff_z" />
+    </subtract>
+    <combine3 name="drop_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="drop_height_x" />
+      <input name="in2" type="float" nodename="drop_height_y" />
+      <input name="in3" type="float" nodename="drop_height_z" />
+    </combine3>
+    <subtract name="drop_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_normal_ahead" />
+      <input name="in2" type="float" nodename="drop_height" />
+    </subtract>
+    <multiply name="drop_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_normal_delta" />
+      <input name="in2" type="float" value="50" />
+    </multiply>
+    <dotproduct name="drop_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="drop_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="drop_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="drop_normal_along_normal" />
+    </multiply>
+    <subtract name="drop_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_normal_gradient" />
+      <input name="in2" type="vector3" nodename="drop_normal_normal_part" />
+    </subtract>
+    <multiply name="drop_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="drop_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="drop_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="drop_normal_offset" />
+    </subtract>
+    <transformnormal name="drop_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="drop_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="drop_normal" type="vector3">
+      <input name="in" type="vector3" nodename="drop_normal_world" />
+    </normalize>
+
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="drop_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_rain_glass" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_rain_glass" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.45" />
+    <input name="transmission_weight" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="0.86, 0.93, 0.95" />
+    <input name="transmission_depth" type="float" value="1" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_rain_glass" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Rain_Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_rain_glass" />
+  </surfacematerial>
+</materialx>

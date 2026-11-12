@@ -16,7 +16,12 @@ const LABELS: Record<string, string> = {
   'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles', 'zellige-tile': 'Zellige',
   'candle-wax': 'Wax', 'hammered-copper': 'Copper', 'carbon-fiber': 'Carbon',
   'damascus-steel': 'Damascus', 'kintsugi': 'Kintsugi', 'heat-tinted-titanium': 'Titanium',
-  'abalone': 'Abalone', 'hex-plating': 'Hex plate'
+  'abalone': 'Abalone', 'hex-plating': 'Hex plate',
+  'brick-wall': 'Brick', 'wet-asphalt': 'Asphalt', 'chipped-paint': 'Chipped paint',
+  'knit-wool': 'Knit', 'perforated-metal': 'Perforated', 'circuit-board': 'Circuit',
+  'stained-glass': 'Stained glass', 'rain-glass': 'Rain glass', 'agate': 'Agate',
+  'guilloche-enamel': 'Guilloché', 'dragon-scales': 'Scales', 'holo-glitter': 'Glitter',
+  'gas-giant': 'Gas giant'
 };
 const order = Object.keys(LABELS);
 

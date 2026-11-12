@@ -1,0 +1,233 @@
+<?xml version="1.0"?>
+<!--
+  Agate: OpenPBR polished banded stone with subsurface scattering. The
+  distance from a warped centre counts the bands; cellnoise gives every
+  band one random value that picks among four colors, and thin pale
+  lines separate them. The core is quartz: Worley facets sparkle with
+  their own tilt. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_agate">
+    <input name="band_a" type="color3" value="0.012, 0.05, 0.16" uiname="Band A" />
+    <input name="band_b" type="color3" value="0.05, 0.3, 0.42" uiname="Band B" />
+    <input name="band_c" type="color3" value="0.72, 0.74, 0.7" uiname="Band C" />
+    <input name="band_d" type="color3" value="0.42, 0.15, 0.03" uiname="Band D" />
+    <input name="bands" type="float" value="34" uiname="Bands per unit" />
+    <input name="warp" type="float" value="0.22" uiname="Band warp" />
+    <input name="core_size" type="float" value="0.3" uiname="Quartz core" uimin="0" uimax="1" />
+    <input name="line_strength" type="float" value="0.6" uiname="Band lines" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Band coordinate: distance from an off-centre point, warped by a vector
+         fractal. -->
+    <add name="centred" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="-0.45, -0.3, -0.6" />
+    </add>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <fractal3d name="warp_noise" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+      <input name="octaves" type="integer" value="3" />
+      <input name="amplitude" type="float" interfacename="warp" />
+    </fractal3d>
+    <add name="warped" type="vector3">
+      <input name="in1" type="vector3" nodename="centred" />
+      <input name="in2" type="vector3" nodename="warp_noise" />
+    </add>
+    <multiply name="squashed" type="vector3">
+      <input name="in1" type="vector3" nodename="warped" />
+      <input name="in2" type="vector3" value="1, 1.35, 0.9" />
+    </multiply>
+    <dotproduct name="radius_squared" type="float">
+      <input name="in1" type="vector3" nodename="squashed" />
+      <input name="in2" type="vector3" nodename="squashed" />
+    </dotproduct>
+    <sqrt name="radius" type="float">
+      <input name="in" type="float" nodename="radius_squared" />
+    </sqrt>
+    <multiply name="band_coordinate" type="float">
+      <input name="in1" type="float" nodename="radius" />
+      <input name="in2" type="float" interfacename="bands" />
+    </multiply>
+
+    <!-- One random value per band picks its color. -->
+    <combine3 name="band_cell" type="vector3">
+      <input name="in1" type="float" nodename="band_coordinate" />
+      <input name="in2" type="float" value="0.5" />
+      <input name="in3" type="float" value="0.5" />
+    </combine3>
+    <cellnoise3d name="band_random" type="float">
+      <input name="position" type="vector3" nodename="band_cell" />
+    </cellnoise3d>
+    <combine3 name="band_cell_2" type="vector3">
+      <input name="in1" type="float" nodename="band_coordinate" />
+      <input name="in2" type="float" value="7.5" />
+      <input name="in3" type="float" value="3.5" />
+    </combine3>
+    <cellnoise3d name="band_random_2" type="float">
+      <input name="position" type="vector3" nodename="band_cell_2" />
+    </cellnoise3d>
+    <smoothstep name="pick_b" type="float">
+      <input name="in" type="float" nodename="band_random" />
+      <input name="low" type="float" value="0.3" />
+      <input name="high" type="float" value="0.34" />
+    </smoothstep>
+    <mix name="two_bands" type="color3">
+      <input name="bg" type="color3" interfacename="band_a" />
+      <input name="fg" type="color3" interfacename="band_b" />
+      <input name="mix" type="float" nodename="pick_b" />
+    </mix>
+    <smoothstep name="pick_c" type="float">
+      <input name="in" type="float" nodename="band_random" />
+      <input name="low" type="float" value="0.7" />
+      <input name="high" type="float" value="0.74" />
+    </smoothstep>
+    <mix name="three_bands" type="color3">
+      <input name="bg" type="color3" nodename="two_bands" />
+      <input name="fg" type="color3" interfacename="band_c" />
+      <input name="mix" type="float" nodename="pick_c" />
+    </mix>
+    <smoothstep name="pick_d" type="float">
+      <input name="in" type="float" nodename="band_random" />
+      <input name="low" type="float" value="0.84" />
+      <input name="high" type="float" value="0.88" />
+    </smoothstep>
+    <mix name="four_bands" type="color3">
+      <input name="bg" type="color3" nodename="three_bands" />
+      <input name="fg" type="color3" interfacename="band_d" />
+      <input name="mix" type="float" nodename="pick_d" />
+    </mix>
+    <remap name="band_value" type="float">
+      <input name="in" type="float" nodename="band_random_2" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="band_shaded" type="color3">
+      <input name="in1" type="color3" nodename="four_bands" />
+      <input name="in2" type="float" nodename="band_value" />
+    </multiply>
+    <modulo name="band_fraction" type="float">
+      <input name="in1" type="float" nodename="band_coordinate" />
+      <input name="in2" type="float" value="1" />
+    </modulo>
+    <subtract name="band_centred" type="float">
+      <input name="in1" type="float" nodename="band_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="band_edge_distance" type="float">
+      <input name="in" type="float" nodename="band_centred" />
+    </absval>
+    <smoothstep name="line_mask" type="float">
+      <input name="in" type="float" nodename="band_edge_distance" />
+      <input name="low" type="float" value="0.44" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <multiply name="band_line" type="float">
+      <input name="in1" type="float" nodename="line_mask" />
+      <input name="in2" type="float" interfacename="line_strength" />
+    </multiply>
+    <multiply name="line_amount" type="float">
+      <input name="in1" type="float" nodename="band_line" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <mix name="banded" type="color3">
+      <input name="bg" type="color3" nodename="band_shaded" />
+      <input name="fg" type="color3" interfacename="band_c" />
+      <input name="mix" type="float" nodename="line_amount" />
+    </mix>
+
+    <!-- Quartz core: Worley facets, each with a random tilt. -->
+    <multiply name="core_inner" type="float">
+      <input name="in1" type="float" interfacename="core_size" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <smoothstep name="core_edge" type="float">
+      <input name="in" type="float" nodename="radius" />
+      <input name="low" type="float" nodename="core_inner" />
+      <input name="high" type="float" interfacename="core_size" />
+    </smoothstep>
+    <invert name="quartz" type="float">
+      <input name="in" type="float" nodename="core_edge" />
+    </invert>
+    <multiply name="quartz_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="26" />
+    </multiply>
+    <worleynoise3d name="facet" type="vector3">
+      <input name="position" type="vector3" nodename="quartz_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <worleynoise3d name="facet_distance" type="float">
+      <input name="position" type="vector3" nodename="quartz_position" />
+    </worleynoise3d>
+    <remap name="crystal_value" type="float">
+      <input name="in" type="float" nodename="facet_distance" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="0.8" />
+      <input name="outlow" type="float" value="1.1" />
+      <input name="outhigh" type="float" value="0.6" />
+    </remap>
+    <multiply name="crystal_color" type="color3">
+      <input name="in1" type="color3" value="0.8, 0.82, 0.85" />
+      <input name="in2" type="float" nodename="crystal_value" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="banded" />
+      <input name="fg" type="color3" nodename="crystal_color" />
+      <input name="mix" type="float" nodename="quartz" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.05" />
+      <input name="fg" type="float" value="0.12" />
+      <input name="mix" type="float" nodename="quartz" />
+    </mix>
+    <subtract name="facet_centred" type="vector3">
+      <input name="in1" type="vector3" nodename="facet" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="facet_amount" type="float">
+      <input name="in1" type="float" nodename="quartz" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <multiply name="facet_tilt" type="vector3">
+      <input name="in1" type="vector3" nodename="facet_centred" />
+      <input name="in2" type="float" nodename="facet_amount" />
+    </multiply>
+    <add name="facet_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="facet_tilt" />
+    </add>
+    <transformnormal name="facet_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="facet_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="facet_normal" type="vector3">
+      <input name="in" type="vector3" nodename="facet_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="facet_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_agate" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_agate" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_agate" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.54" />
+    <input name="subsurface_weight" type="float" value="0.25" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.85, 0.9" />
+    <input name="subsurface_radius" type="float" value="0.1" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_agate" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Agate" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_agate" />
+  </surfacematerial>
+</materialx>

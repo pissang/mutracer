@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+<!--
+  Stained glass: OpenPBR thin-walled transmission between lead cames.
+  Object-space Worley cells are the panes: the cell value becomes a hue
+  through hsvtorgb and drives the transmission color, and F2 - F1 draws
+  the metal came between panes. A vector noise ripples the hand-made
+  glass. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_stained_glass">
+    <input name="came_color" type="color3" value="0.06, 0.06, 0.065" uiname="Came" />
+    <input name="pane_scale" type="float" value="3.2" uiname="Pane scale" />
+    <input name="came_width" type="float" value="0.07" uiname="Came width" uimin="0.01" uimax="0.3" />
+    <input name="hue_offset" type="float" value="0" uiname="Hue offset" uimin="0" uimax="1" />
+    <input name="hue_range" type="float" value="1" uiname="Hue range" uimin="0" uimax="1" />
+    <input name="saturation" type="float" value="0.9" uiname="Saturation" uimin="0" uimax="1" />
+    <input name="ripple" type="float" value="0.12" uiname="Glass ripple" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="pane_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="pane_scale" />
+    </multiply>
+    <worleynoise3d name="pane_cells" type="vector2">
+      <input name="position" type="vector3" nodename="pane_position" />
+    </worleynoise3d>
+    <separate2 name="pane_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="pane_cells" />
+    </separate2>
+    <subtract name="came_distance" type="float">
+      <input name="in1" type="float" nodename="pane_distances" output="outy" />
+      <input name="in2" type="float" nodename="pane_distances" output="outx" />
+    </subtract>
+    <add name="came_soft" type="float">
+      <input name="in1" type="float" interfacename="came_width" />
+      <input name="in2" type="float" value="0.02" />
+    </add>
+    <smoothstep name="glass_mask" type="float">
+      <input name="in" type="float" nodename="came_distance" />
+      <input name="low" type="float" interfacename="came_width" />
+      <input name="high" type="float" nodename="came_soft" />
+    </smoothstep>
+
+    <!-- Pane color: the Worley cell value picks hue, saturation and value. -->
+    <worleynoise3d name="pane_value" type="vector3">
+      <input name="position" type="vector3" nodename="pane_position" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <separate3 name="pane_id" type="multioutput">
+      <input name="in" type="vector3" nodename="pane_value" />
+    </separate3>
+    <multiply name="hue_spread" type="float">
+      <input name="in1" type="float" nodename="pane_id" output="outx" />
+      <input name="in2" type="float" interfacename="hue_range" />
+    </multiply>
+    <add name="pane_hue" type="float">
+      <input name="in1" type="float" nodename="hue_spread" />
+      <input name="in2" type="float" interfacename="hue_offset" />
+    </add>
+    <remap name="saturation_vary" type="float">
+      <input name="in" type="float" nodename="pane_id" output="outy" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.55" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="pane_saturation" type="float">
+      <input name="in1" type="float" nodename="saturation_vary" />
+      <input name="in2" type="float" interfacename="saturation" />
+    </multiply>
+    <remap name="pane_brightness" type="float">
+      <input name="in" type="float" nodename="pane_id" output="outz" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="pane_hsv" type="color3">
+      <input name="in1" type="float" nodename="pane_hue" />
+      <input name="in2" type="float" nodename="pane_saturation" />
+      <input name="in3" type="float" nodename="pane_brightness" />
+    </combine3>
+    <hsvtorgb name="pane_color" type="color3">
+      <input name="in" type="color3" nodename="pane_hsv" />
+    </hsvtorgb>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="came_color" />
+      <input name="fg" type="color3" nodename="pane_color" />
+      <input name="mix" type="float" nodename="glass_mask" />
+    </mix>
+    <invert name="came_metalness" type="float">
+      <input name="in" type="float" nodename="glass_mask" />
+    </invert>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.5" />
+      <input name="fg" type="float" value="0.04" />
+      <input name="mix" type="float" nodename="glass_mask" />
+    </mix>
+
+    <!-- Hand-made glass: a slow vector noise ripples the normal inside each
+         pane. -->
+    <multiply name="ripple_position" type="vector3">
+      <input name="in1" type="vector3" nodename="pane_position" />
+      <input name="in2" type="float" value="2.4" />
+    </multiply>
+    <noise3d name="ripple_noise" type="vector3">
+      <input name="position" type="vector3" nodename="ripple_position" />
+    </noise3d>
+    <multiply name="ripple_amount" type="float">
+      <input name="in1" type="float" nodename="glass_mask" />
+      <input name="in2" type="float" interfacename="ripple" />
+    </multiply>
+    <multiply name="ripple_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="ripple_noise" />
+      <input name="in2" type="float" nodename="ripple_amount" />
+    </multiply>
+    <add name="glass_object_normal" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="ripple_offset" />
+    </add>
+    <transformnormal name="glass_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="glass_object_normal" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="glass_normal" type="vector3">
+      <input name="in" type="vector3" nodename="glass_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="came_metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="transmission_weight_out" type="float" nodename="glass_mask" />
+    <output name="transmission_color_out" type="color3" nodename="pane_color" />
+    <output name="normal_out" type="vector3" nodename="glass_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_stained_glass" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_stained_glass" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_stained_glass" output="metalness_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_stained_glass" output="roughness_out" />
+    <input name="transmission_weight" type="float" nodegraph="NG_stained_glass" output="transmission_weight_out" />
+    <input name="transmission_color" type="color3" nodegraph="NG_stained_glass" output="transmission_color_out" />
+    <input name="geometry_thin_walled" type="boolean" value="true" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_stained_glass" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Stained_Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_stained_glass" />
+  </surfacematerial>
+</materialx>

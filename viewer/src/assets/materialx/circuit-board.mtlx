@@ -1,0 +1,383 @@
+<?xml version="1.0"?>
+<!--
+  Circuit board: OpenPBR solder mask over copper traces. A Truchet tiling
+  routes the traces: each texture-space cell holds two quarter arcs
+  around opposite corners and cellnoise flips the cell, so the arcs
+  always join their neighbours. Gold pads with drilled vias sit on some
+  cell edges, where the arcs cross. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_circuit_board">
+    <input name="mask_color" type="color3" value="0.008, 0.075, 0.03" uiname="Solder mask" />
+    <input name="trace_color" type="color3" value="0.03, 0.2, 0.075" uiname="Trace" />
+    <input name="pad_color" type="color3" value="1, 0.76, 0.34" uiname="Pad" />
+    <input name="tiles" type="vector2" value="24, 12" uiname="Cells per UV" />
+    <input name="trace_width" type="float" value="0.09" uiname="Trace width" uimin="0.01" uimax="0.2" />
+    <input name="pad_share" type="float" value="0.45" uiname="Pad share" uimin="0" uimax="1" />
+    <input name="pad_size" type="float" value="0.17" uiname="Pad size" uimin="0.05" uimax="0.3" />
+    <input name="trace_relief" type="float" value="0.5" uiname="Trace relief" uimin="0" uimax="1" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="cell_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <floor name="cell_index" type="vector2">
+      <input name="in" type="vector2" nodename="cell_uv" />
+    </floor>
+    <subtract name="cell_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="cell_uv" />
+      <input name="in2" type="vector2" nodename="cell_index" />
+    </subtract>
+    <separate2 name="cell_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="cell_fraction" />
+    </separate2>
+
+    <!-- Truchet: cellnoise mirrors half of the cells, then two quarter arcs of
+         radius 0.5 around opposite corners. -->
+    <cellnoise2d name="cell_random" type="float">
+      <input name="texcoord" type="vector2" nodename="cell_uv" />
+    </cellnoise2d>
+    <ifgreater name="flip" type="float">
+      <input name="value1" type="float" nodename="cell_random" />
+      <input name="value2" type="float" value="0.5" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="mirrored_x" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="cell_parts" output="outx" />
+    </subtract>
+    <mix name="flipped_x" type="float">
+      <input name="bg" type="float" nodename="cell_parts" output="outx" />
+      <input name="fg" type="float" nodename="mirrored_x" />
+      <input name="mix" type="float" nodename="flip" />
+    </mix>
+    <combine2 name="near_corner" type="vector2">
+      <input name="in1" type="float" nodename="flipped_x" />
+      <input name="in2" type="float" nodename="cell_parts" output="outy" />
+    </combine2>
+    <subtract name="far_corner" type="vector2">
+      <input name="in1" type="vector2" nodename="near_corner" />
+      <input name="in2" type="vector2" value="1, 1" />
+    </subtract>
+    <dotproduct name="near_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="near_corner" />
+      <input name="in2" type="vector2" nodename="near_corner" />
+    </dotproduct>
+    <sqrt name="near_distance" type="float">
+      <input name="in" type="float" nodename="near_distance_squared" />
+    </sqrt>
+    <subtract name="arc_a" type="float">
+      <input name="in1" type="float" nodename="near_distance" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <dotproduct name="far_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="far_corner" />
+      <input name="in2" type="vector2" nodename="far_corner" />
+    </dotproduct>
+    <sqrt name="far_distance" type="float">
+      <input name="in" type="float" nodename="far_distance_squared" />
+    </sqrt>
+    <subtract name="arc_b" type="float">
+      <input name="in1" type="float" nodename="far_distance" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="arc_b_abs" type="float">
+      <input name="in" type="float" nodename="arc_b" />
+    </absval>
+    <absval name="arc_a_abs" type="float">
+      <input name="in" type="float" nodename="arc_a" />
+    </absval>
+    <ifgreater name="arc_signed" type="float">
+      <input name="value1" type="float" nodename="arc_b_abs" />
+      <input name="value2" type="float" nodename="arc_a_abs" />
+      <input name="in1" type="float" nodename="arc_a" />
+      <input name="in2" type="float" nodename="arc_b" />
+    </ifgreater>
+    <absval name="arc_distance" type="float">
+      <input name="in" type="float" nodename="arc_signed" />
+    </absval>
+    <multiply name="trace_half" type="float">
+      <input name="in1" type="float" interfacename="trace_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="trace_soft" type="float">
+      <input name="in1" type="float" nodename="trace_half" />
+      <input name="in2" type="float" value="0.012" />
+    </add>
+    <smoothstep name="trace_edge" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" nodename="trace_half" />
+      <input name="high" type="float" nodename="trace_soft" />
+    </smoothstep>
+    <invert name="trace" type="float">
+      <input name="in" type="float" nodename="trace_edge" />
+    </invert>
+
+    <!-- Pads: cell-edge midpoints are the odd points of a lattice at twice the
+         frequency. -->
+    <multiply name="pad_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="cell_uv" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <add name="pad_rounding" type="vector2">
+      <input name="in1" type="vector2" nodename="pad_uv" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="pad_lattice" type="vector2">
+      <input name="in" type="vector2" nodename="pad_rounding" />
+    </floor>
+    <separate2 name="pad_lattice_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="pad_lattice" />
+    </separate2>
+    <add name="pad_sum" type="float">
+      <input name="in1" type="float" nodename="pad_lattice_parts" output="outx" />
+      <input name="in2" type="float" nodename="pad_lattice_parts" output="outy" />
+    </add>
+    <modulo name="pad_parity" type="float">
+      <input name="in1" type="float" nodename="pad_sum" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <add name="pad_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="pad_lattice" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <cellnoise2d name="pad_random" type="float">
+      <input name="texcoord" type="vector2" nodename="pad_cell" />
+    </cellnoise2d>
+    <ifgreater name="pad_chosen" type="float">
+      <input name="value1" type="float" interfacename="pad_share" />
+      <input name="value2" type="float" nodename="pad_random" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="pad_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="pad_uv" />
+      <input name="in2" type="vector2" nodename="pad_lattice" />
+    </subtract>
+    <dotproduct name="pad_offset_length_squared" type="float">
+      <input name="in1" type="vector2" nodename="pad_offset" />
+      <input name="in2" type="vector2" nodename="pad_offset" />
+    </dotproduct>
+    <sqrt name="pad_offset_length" type="float">
+      <input name="in" type="float" nodename="pad_offset_length_squared" />
+    </sqrt>
+    <multiply name="pad_distance" type="float">
+      <input name="in1" type="float" nodename="pad_offset_length" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="pad_present" type="float">
+      <input name="in1" type="float" nodename="pad_parity" />
+      <input name="in2" type="float" nodename="pad_chosen" />
+    </multiply>
+    <subtract name="pad_inner" type="float">
+      <input name="in1" type="float" interfacename="pad_size" />
+      <input name="in2" type="float" value="0.012" />
+    </subtract>
+    <smoothstep name="pad_edge" type="float">
+      <input name="in" type="float" nodename="pad_distance" />
+      <input name="low" type="float" nodename="pad_inner" />
+      <input name="high" type="float" interfacename="pad_size" />
+    </smoothstep>
+    <invert name="pad_disc" type="float">
+      <input name="in" type="float" nodename="pad_edge" />
+    </invert>
+    <multiply name="pad" type="float">
+      <input name="in1" type="float" nodename="pad_disc" />
+      <input name="in2" type="float" nodename="pad_present" />
+    </multiply>
+    <multiply name="via_inner" type="float">
+      <input name="in1" type="float" interfacename="pad_size" />
+      <input name="in2" type="float" value="0.32" />
+    </multiply>
+    <multiply name="via_outer" type="float">
+      <input name="in1" type="float" interfacename="pad_size" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <smoothstep name="via_edge" type="float">
+      <input name="in" type="float" nodename="pad_distance" />
+      <input name="low" type="float" nodename="via_inner" />
+      <input name="high" type="float" nodename="via_outer" />
+    </smoothstep>
+    <invert name="via_disc" type="float">
+      <input name="in" type="float" nodename="via_edge" />
+    </invert>
+    <multiply name="via" type="float">
+      <input name="in1" type="float" nodename="via_disc" />
+      <input name="in2" type="float" nodename="pad_present" />
+    </multiply>
+
+    <!-- Shading: mask over laminate, lighter over copper; bare gold pads; dark
+         vias. -->
+    <multiply name="laminate_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="cell_uv" />
+      <input name="in2" type="vector2" value="38, 38" />
+    </multiply>
+    <noise2d name="laminate" type="float">
+      <input name="texcoord" type="vector2" nodename="laminate_uv" />
+      <input name="amplitude" type="float" value="0.08" />
+      <input name="pivot" type="float" value="1" />
+    </noise2d>
+    <mix name="mask_over_copper" type="color3">
+      <input name="bg" type="color3" interfacename="mask_color" />
+      <input name="fg" type="color3" interfacename="trace_color" />
+      <input name="mix" type="float" nodename="trace" />
+    </mix>
+    <multiply name="masked" type="color3">
+      <input name="in1" type="color3" nodename="mask_over_copper" />
+      <input name="in2" type="float" nodename="laminate" />
+    </multiply>
+    <mix name="with_pads" type="color3">
+      <input name="bg" type="color3" nodename="masked" />
+      <input name="fg" type="color3" interfacename="pad_color" />
+      <input name="mix" type="float" nodename="pad" />
+    </mix>
+    <remap name="via_shade" type="float">
+      <input name="in" type="float" nodename="via" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.03" />
+    </remap>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" nodename="with_pads" />
+      <input name="in2" type="float" nodename="via_shade" />
+    </multiply>
+    <invert name="via_hole" type="float">
+      <input name="in" type="float" nodename="via" />
+    </invert>
+    <multiply name="metalness" type="float">
+      <input name="in1" type="float" nodename="pad" />
+      <input name="in2" type="float" nodename="via_hole" />
+    </multiply>
+    <remap name="mask_roughness" type="float">
+      <input name="in" type="float" nodename="trace" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.34" />
+      <input name="outhigh" type="float" value="0.26" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="mask_roughness" />
+      <input name="fg" type="float" value="0.3" />
+      <input name="mix" type="float" nodename="pad" />
+    </mix>
+
+    <!-- Relief: the mask rises over each trace; the slope follows the arc
+         radius. -->
+    <absval name="arc_b_abs_2" type="float">
+      <input name="in" type="float" nodename="arc_b" />
+    </absval>
+    <absval name="arc_a_abs_2" type="float">
+      <input name="in" type="float" nodename="arc_a" />
+    </absval>
+    <ifgreater name="use_near" type="float">
+      <input name="value1" type="float" nodename="arc_b_abs_2" />
+      <input name="value2" type="float" nodename="arc_a_abs_2" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="arc_direction" type="vector2">
+      <input name="bg" type="vector2" nodename="far_corner" />
+      <input name="fg" type="vector2" nodename="near_corner" />
+      <input name="mix" type="float" nodename="use_near" />
+    </mix>
+    <multiply name="band_start" type="float">
+      <input name="in1" type="float" nodename="trace_half" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <smoothstep name="band_in" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" nodename="band_start" />
+      <input name="high" type="float" nodename="trace_half" />
+    </smoothstep>
+    <add name="band_far" type="float">
+      <input name="in1" type="float" nodename="trace_half" />
+      <input name="in2" type="float" value="0.03" />
+    </add>
+    <smoothstep name="band_end" type="float">
+      <input name="in" type="float" nodename="arc_distance" />
+      <input name="low" type="float" nodename="trace_half" />
+      <input name="high" type="float" nodename="band_far" />
+    </smoothstep>
+    <invert name="band_out" type="float">
+      <input name="in" type="float" nodename="band_end" />
+    </invert>
+    <multiply name="edge_band" type="float">
+      <input name="in1" type="float" nodename="band_in" />
+      <input name="in2" type="float" nodename="band_out" />
+    </multiply>
+    <sign name="arc_side" type="float">
+      <input name="in" type="float" nodename="arc_signed" />
+    </sign>
+    <multiply name="lean_sign" type="float">
+      <input name="in1" type="float" nodename="arc_side" />
+      <input name="in2" type="float" nodename="edge_band" />
+    </multiply>
+    <multiply name="relief_amount" type="float">
+      <input name="in1" type="float" interfacename="trace_relief" />
+      <input name="in2" type="float" value="1.6" />
+    </multiply>
+    <multiply name="trace_lean" type="float">
+      <input name="in1" type="float" nodename="lean_sign" />
+      <input name="in2" type="float" nodename="relief_amount" />
+    </multiply>
+    <multiply name="relief_direction" type="vector2">
+      <input name="in1" type="vector2" nodename="arc_direction" />
+      <input name="in2" type="float" nodename="trace_lean" />
+    </multiply>
+    <separate2 name="direction_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="relief_direction" />
+    </separate2>
+    <remap name="unflip" type="float">
+      <input name="in" type="float" nodename="flip" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="-1" />
+    </remap>
+    <multiply name="tilt_x" type="float">
+      <input name="in1" type="float" nodename="direction_parts" output="outx" />
+      <input name="in2" type="float" nodename="unflip" />
+    </multiply>
+    <remap name="trace_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="trace_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="direction_parts" output="outy" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="trace_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="trace_normal_encoded_x" />
+      <input name="in2" type="float" nodename="trace_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="trace_normal" type="vector3">
+      <input name="in" type="vector3" nodename="trace_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="trace_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_circuit_board" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_circuit_board" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_circuit_board" output="metalness_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_circuit_board" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.55" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_circuit_board" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Circuit_Board" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_circuit_board" />
+  </surfacematerial>
+</materialx>

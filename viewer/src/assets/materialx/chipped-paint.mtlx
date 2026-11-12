@@ -1,0 +1,436 @@
+<?xml version="1.0"?>
+<!--
+  Chipped paint: OpenPBR layers worn through in turn. One object-space
+  fractal with scratch noise is the wear field: past the first threshold
+  the glossy paint gives way to matte primer, past the second to bare
+  steel, and a second fractal rusts part of the steel. The layer height
+  becomes a bump by forward differences, so each layer has a visible
+  edge. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_chipped_paint">
+    <input name="paint_color" type="color3" value="0.55, 0.2, 0" uiname="Paint" />
+    <input name="primer_color" type="color3" value="0.42, 0.4, 0.36" uiname="Primer" />
+    <input name="steel_color" type="color3" value="0.5, 0.5, 0.51" uiname="Steel" />
+    <input name="rust_color" type="color3" value="0.16, 0.05, 0.015" uiname="Rust" />
+    <input name="wear" type="float" value="0.45" uiname="Wear" uimin="0" uimax="1" />
+    <input name="chip_scale" type="float" value="2.6" uiname="Chip scale" />
+    <input name="scratches" type="float" value="0.5" uiname="Scratches" uimin="0" uimax="1" />
+    <input name="rust_amount" type="float" value="0.55" uiname="Rust amount" uimin="0" uimax="1" />
+    <input name="layer_edge" type="float" value="0.5" uiname="Layer edge" uimin="0" uimax="1" />
+
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="chip_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="chip_scale" />
+    </multiply>
+    <remap name="wear_threshold" type="float">
+      <input name="in" type="float" interfacename="wear" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="-0.35" />
+    </remap>
+    <add name="primer_end" type="float">
+      <input name="in1" type="float" nodename="wear_threshold" />
+      <input name="in2" type="float" value="0.09" />
+    </add>
+
+    <!-- Wear field and layer height: 2 on paint, 1 on primer, 0 on steel. -->
+    <fractal3d name="wear_fractal" type="float">
+      <input name="position" type="vector3" nodename="chip_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="diminish" type="float" value="0.6" />
+    </fractal3d>
+    <multiply name="scratch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="chip_position" />
+      <input name="in2" type="vector3" value="1.2, 9, 4" />
+    </multiply>
+    <noise3d name="scratch_noise" type="float">
+      <input name="position" type="vector3" nodename="scratch_position" />
+    </noise3d>
+    <absval name="scratch_distance" type="float">
+      <input name="in" type="float" nodename="scratch_noise" />
+    </absval>
+    <smoothstep name="scratch_edge" type="float">
+      <input name="in" type="float" nodename="scratch_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="scratch_lines" type="float">
+      <input name="in" type="float" nodename="scratch_edge" />
+    </invert>
+    <multiply name="scratch_amount" type="float">
+      <input name="in1" type="float" interfacename="scratches" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="scratch_wear" type="float">
+      <input name="in1" type="float" nodename="scratch_lines" />
+      <input name="in2" type="float" nodename="scratch_amount" />
+    </multiply>
+    <add name="wear_field" type="float">
+      <input name="in1" type="float" nodename="wear_fractal" />
+      <input name="in2" type="float" nodename="scratch_wear" />
+    </add>
+    <add name="paint_soft" type="float">
+      <input name="in1" type="float" nodename="wear_threshold" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="paint_gone" type="float">
+      <input name="in" type="float" nodename="wear_field" />
+      <input name="low" type="float" nodename="wear_threshold" />
+      <input name="high" type="float" nodename="paint_soft" />
+    </smoothstep>
+    <add name="primer_soft" type="float">
+      <input name="in1" type="float" nodename="primer_end" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="primer_gone" type="float">
+      <input name="in" type="float" nodename="wear_field" />
+      <input name="low" type="float" nodename="primer_end" />
+      <input name="high" type="float" nodename="primer_soft" />
+    </smoothstep>
+    <add name="layers_gone" type="float">
+      <input name="in1" type="float" nodename="paint_gone" />
+      <input name="in2" type="float" nodename="primer_gone" />
+    </add>
+    <subtract name="layer_height" type="float">
+      <input name="in1" type="float" value="2" />
+      <input name="in2" type="float" nodename="layers_gone" />
+    </subtract>
+
+    <!-- Rust on part of the bare steel. -->
+    <multiply name="rust_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="chip_position" />
+      <input name="in2" type="float" value="2.3" />
+    </multiply>
+    <add name="rust_position" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_scaled" />
+      <input name="in2" type="vector3" value="9.1, -2.7, 5.5" />
+    </add>
+    <fractal3d name="rust_fractal" type="float">
+      <input name="position" type="vector3" nodename="rust_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="rust_threshold" type="float">
+      <input name="in" type="float" interfacename="rust_amount" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="-0.5" />
+    </remap>
+    <remap name="rust_soft" type="float">
+      <input name="in" type="float" interfacename="rust_amount" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="-0.3" />
+    </remap>
+    <smoothstep name="rust_patches" type="float">
+      <input name="in" type="float" nodename="rust_fractal" />
+      <input name="low" type="float" nodename="rust_threshold" />
+      <input name="high" type="float" nodename="rust_soft" />
+    </smoothstep>
+    <multiply name="rust_on_steel" type="float">
+      <input name="in1" type="float" nodename="rust_patches" />
+      <input name="in2" type="float" nodename="primer_gone" />
+    </multiply>
+    <multiply name="rust_mask" type="float">
+      <input name="in1" type="float" nodename="rust_on_steel" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <mix name="steel_and_rust" type="color3">
+      <input name="bg" type="color3" interfacename="steel_color" />
+      <input name="fg" type="color3" interfacename="rust_color" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <mix name="paint_and_primer" type="color3">
+      <input name="bg" type="color3" interfacename="paint_color" />
+      <input name="fg" type="color3" interfacename="primer_color" />
+      <input name="mix" type="float" nodename="paint_gone" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="paint_and_primer" />
+      <input name="fg" type="color3" nodename="steel_and_rust" />
+      <input name="mix" type="float" nodename="primer_gone" />
+    </mix>
+    <invert name="not_rust" type="float">
+      <input name="in" type="float" nodename="rust_mask" />
+    </invert>
+    <multiply name="metalness" type="float">
+      <input name="in1" type="float" nodename="primer_gone" />
+      <input name="in2" type="float" nodename="not_rust" />
+    </multiply>
+    <mix name="paint_primer_roughness" type="float">
+      <input name="bg" type="float" value="0.2" />
+      <input name="fg" type="float" value="0.75" />
+      <input name="mix" type="float" nodename="paint_gone" />
+    </mix>
+    <mix name="steel_rust_roughness" type="float">
+      <input name="bg" type="float" value="0.32" />
+      <input name="fg" type="float" value="0.85" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="paint_primer_roughness" />
+      <input name="fg" type="float" nodename="steel_rust_roughness" />
+      <input name="mix" type="float" nodename="primer_gone" />
+    </mix>
+    <multiply name="bump_strength" type="float">
+      <input name="in1" type="float" interfacename="layer_edge" />
+      <input name="in2" type="float" value="0.035" />
+    </multiply>
+    <add name="layer_normal_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="chip_position" />
+      <input name="in2" type="vector3" value="0.02, 0, 0" />
+    </add>
+    <fractal3d name="wear_fractal_x" type="float">
+      <input name="position" type="vector3" nodename="layer_normal_position_x" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="diminish" type="float" value="0.6" />
+    </fractal3d>
+    <multiply name="scratch_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_position_x" />
+      <input name="in2" type="vector3" value="1.2, 9, 4" />
+    </multiply>
+    <noise3d name="scratch_noise_x" type="float">
+      <input name="position" type="vector3" nodename="scratch_position_x" />
+    </noise3d>
+    <absval name="scratch_distance_x" type="float">
+      <input name="in" type="float" nodename="scratch_noise_x" />
+    </absval>
+    <smoothstep name="scratch_edge_x" type="float">
+      <input name="in" type="float" nodename="scratch_distance_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="scratch_lines_x" type="float">
+      <input name="in" type="float" nodename="scratch_edge_x" />
+    </invert>
+    <multiply name="scratch_amount_x" type="float">
+      <input name="in1" type="float" interfacename="scratches" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="scratch_wear_x" type="float">
+      <input name="in1" type="float" nodename="scratch_lines_x" />
+      <input name="in2" type="float" nodename="scratch_amount_x" />
+    </multiply>
+    <add name="wear_field_x" type="float">
+      <input name="in1" type="float" nodename="wear_fractal_x" />
+      <input name="in2" type="float" nodename="scratch_wear_x" />
+    </add>
+    <add name="paint_soft_x" type="float">
+      <input name="in1" type="float" nodename="wear_threshold" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="paint_gone_x" type="float">
+      <input name="in" type="float" nodename="wear_field_x" />
+      <input name="low" type="float" nodename="wear_threshold" />
+      <input name="high" type="float" nodename="paint_soft_x" />
+    </smoothstep>
+    <add name="primer_soft_x" type="float">
+      <input name="in1" type="float" nodename="primer_end" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="primer_gone_x" type="float">
+      <input name="in" type="float" nodename="wear_field_x" />
+      <input name="low" type="float" nodename="primer_end" />
+      <input name="high" type="float" nodename="primer_soft_x" />
+    </smoothstep>
+    <add name="layers_gone_x" type="float">
+      <input name="in1" type="float" nodename="paint_gone_x" />
+      <input name="in2" type="float" nodename="primer_gone_x" />
+    </add>
+    <subtract name="layer_height_x" type="float">
+      <input name="in1" type="float" value="2" />
+      <input name="in2" type="float" nodename="layers_gone_x" />
+    </subtract>
+    <add name="layer_normal_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="chip_position" />
+      <input name="in2" type="vector3" value="0, 0.02, 0" />
+    </add>
+    <fractal3d name="wear_fractal_y" type="float">
+      <input name="position" type="vector3" nodename="layer_normal_position_y" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="diminish" type="float" value="0.6" />
+    </fractal3d>
+    <multiply name="scratch_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_position_y" />
+      <input name="in2" type="vector3" value="1.2, 9, 4" />
+    </multiply>
+    <noise3d name="scratch_noise_y" type="float">
+      <input name="position" type="vector3" nodename="scratch_position_y" />
+    </noise3d>
+    <absval name="scratch_distance_y" type="float">
+      <input name="in" type="float" nodename="scratch_noise_y" />
+    </absval>
+    <smoothstep name="scratch_edge_y" type="float">
+      <input name="in" type="float" nodename="scratch_distance_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="scratch_lines_y" type="float">
+      <input name="in" type="float" nodename="scratch_edge_y" />
+    </invert>
+    <multiply name="scratch_amount_y" type="float">
+      <input name="in1" type="float" interfacename="scratches" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="scratch_wear_y" type="float">
+      <input name="in1" type="float" nodename="scratch_lines_y" />
+      <input name="in2" type="float" nodename="scratch_amount_y" />
+    </multiply>
+    <add name="wear_field_y" type="float">
+      <input name="in1" type="float" nodename="wear_fractal_y" />
+      <input name="in2" type="float" nodename="scratch_wear_y" />
+    </add>
+    <add name="paint_soft_y" type="float">
+      <input name="in1" type="float" nodename="wear_threshold" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="paint_gone_y" type="float">
+      <input name="in" type="float" nodename="wear_field_y" />
+      <input name="low" type="float" nodename="wear_threshold" />
+      <input name="high" type="float" nodename="paint_soft_y" />
+    </smoothstep>
+    <add name="primer_soft_y" type="float">
+      <input name="in1" type="float" nodename="primer_end" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="primer_gone_y" type="float">
+      <input name="in" type="float" nodename="wear_field_y" />
+      <input name="low" type="float" nodename="primer_end" />
+      <input name="high" type="float" nodename="primer_soft_y" />
+    </smoothstep>
+    <add name="layers_gone_y" type="float">
+      <input name="in1" type="float" nodename="paint_gone_y" />
+      <input name="in2" type="float" nodename="primer_gone_y" />
+    </add>
+    <subtract name="layer_height_y" type="float">
+      <input name="in1" type="float" value="2" />
+      <input name="in2" type="float" nodename="layers_gone_y" />
+    </subtract>
+    <add name="layer_normal_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="chip_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.02" />
+    </add>
+    <fractal3d name="wear_fractal_z" type="float">
+      <input name="position" type="vector3" nodename="layer_normal_position_z" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="diminish" type="float" value="0.6" />
+    </fractal3d>
+    <multiply name="scratch_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_position_z" />
+      <input name="in2" type="vector3" value="1.2, 9, 4" />
+    </multiply>
+    <noise3d name="scratch_noise_z" type="float">
+      <input name="position" type="vector3" nodename="scratch_position_z" />
+    </noise3d>
+    <absval name="scratch_distance_z" type="float">
+      <input name="in" type="float" nodename="scratch_noise_z" />
+    </absval>
+    <smoothstep name="scratch_edge_z" type="float">
+      <input name="in" type="float" nodename="scratch_distance_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="scratch_lines_z" type="float">
+      <input name="in" type="float" nodename="scratch_edge_z" />
+    </invert>
+    <multiply name="scratch_amount_z" type="float">
+      <input name="in1" type="float" interfacename="scratches" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="scratch_wear_z" type="float">
+      <input name="in1" type="float" nodename="scratch_lines_z" />
+      <input name="in2" type="float" nodename="scratch_amount_z" />
+    </multiply>
+    <add name="wear_field_z" type="float">
+      <input name="in1" type="float" nodename="wear_fractal_z" />
+      <input name="in2" type="float" nodename="scratch_wear_z" />
+    </add>
+    <add name="paint_soft_z" type="float">
+      <input name="in1" type="float" nodename="wear_threshold" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="paint_gone_z" type="float">
+      <input name="in" type="float" nodename="wear_field_z" />
+      <input name="low" type="float" nodename="wear_threshold" />
+      <input name="high" type="float" nodename="paint_soft_z" />
+    </smoothstep>
+    <add name="primer_soft_z" type="float">
+      <input name="in1" type="float" nodename="primer_end" />
+      <input name="in2" type="float" value="0.015" />
+    </add>
+    <smoothstep name="primer_gone_z" type="float">
+      <input name="in" type="float" nodename="wear_field_z" />
+      <input name="low" type="float" nodename="primer_end" />
+      <input name="high" type="float" nodename="primer_soft_z" />
+    </smoothstep>
+    <add name="layers_gone_z" type="float">
+      <input name="in1" type="float" nodename="paint_gone_z" />
+      <input name="in2" type="float" nodename="primer_gone_z" />
+    </add>
+    <subtract name="layer_height_z" type="float">
+      <input name="in1" type="float" value="2" />
+      <input name="in2" type="float" nodename="layers_gone_z" />
+    </subtract>
+    <combine3 name="layer_normal_ahead" type="vector3">
+      <input name="in1" type="float" nodename="layer_height_x" />
+      <input name="in2" type="float" nodename="layer_height_y" />
+      <input name="in3" type="float" nodename="layer_height_z" />
+    </combine3>
+    <subtract name="layer_normal_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_ahead" />
+      <input name="in2" type="float" nodename="layer_height" />
+    </subtract>
+    <multiply name="layer_normal_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_delta" />
+      <input name="in2" type="float" value="50" />
+    </multiply>
+    <dotproduct name="layer_normal_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="layer_normal_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="layer_normal_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="layer_normal_along_normal" />
+    </multiply>
+    <subtract name="layer_normal_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_gradient" />
+      <input name="in2" type="vector3" nodename="layer_normal_normal_part" />
+    </subtract>
+    <multiply name="layer_normal_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="layer_normal_surface_gradient" />
+      <input name="in2" type="float" nodename="bump_strength" />
+    </multiply>
+    <subtract name="layer_normal_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="layer_normal_offset" />
+    </subtract>
+    <transformnormal name="layer_normal_world" type="vector3">
+      <input name="in" type="vector3" nodename="layer_normal_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="layer_normal" type="vector3">
+      <input name="in" type="vector3" nodename="layer_normal_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="layer_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_chipped_paint" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_chipped_paint" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_chipped_paint" output="metalness_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_chipped_paint" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_chipped_paint" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Chipped_Paint" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_chipped_paint" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,278 @@
+<?xml version="1.0"?>
+<!--
+  Fair Isle knit: OpenPBR fuzz over stockinette stitches. Shearing each
+  half of a texture-space column upward folds the rows into V stitches;
+  the row fraction is the yarn cross-section and tilts the normal. Stitch
+  indices draw a repeating diamond motif and stripes in two contrast
+  yarns, and stretched noise twists the plies. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_knit_wool">
+    <input name="main_color" type="color3" value="0.035, 0.05, 0.12" uiname="Main yarn" />
+    <input name="motif_color" type="color3" value="0.72, 0.68, 0.58" uiname="Motif yarn" />
+    <input name="stripe_color" type="color3" value="0.45, 0.03, 0.03" uiname="Stripe yarn" />
+    <input name="tiles" type="vector2" value="64, 40" uiname="Stitches per UV" />
+    <input name="stitch_slant" type="float" value="0.9" uiname="Stitch slant" uimin="0" uimax="1.5" />
+    <input name="yarn_depth" type="float" value="0.6" uiname="Yarn depth" uimin="0" uimax="1" />
+    <input name="ply_contrast" type="float" value="0.3" uiname="Ply contrast" uimin="0" uimax="1" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="stitch_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="stitch_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="stitch_uv" />
+    </separate2>
+    <floor name="column" type="float">
+      <input name="in" type="float" nodename="stitch_parts" output="outx" />
+    </floor>
+    <subtract name="column_fraction" type="float">
+      <input name="in1" type="float" nodename="stitch_parts" output="outx" />
+      <input name="in2" type="float" nodename="column" />
+    </subtract>
+    <subtract name="column_side" type="float">
+      <input name="in1" type="float" nodename="column_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+
+    <!-- V stitch: both halves of a column shear upward away from its centre. -->
+    <absval name="side_distance" type="float">
+      <input name="in" type="float" nodename="column_side" />
+    </absval>
+    <multiply name="shear" type="float">
+      <input name="in1" type="float" nodename="side_distance" />
+      <input name="in2" type="float" interfacename="stitch_slant" />
+    </multiply>
+    <add name="sheared_row" type="float">
+      <input name="in1" type="float" nodename="stitch_parts" output="outy" />
+      <input name="in2" type="float" nodename="shear" />
+    </add>
+    <floor name="row" type="float">
+      <input name="in" type="float" nodename="sheared_row" />
+    </floor>
+    <subtract name="row_fraction" type="float">
+      <input name="in1" type="float" nodename="sheared_row" />
+      <input name="in2" type="float" nodename="row" />
+    </subtract>
+    <subtract name="yarn_across" type="float">
+      <input name="in1" type="float" nodename="row_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+
+    <!-- Fair Isle chart from stitch indices: diamonds with an outline, and two
+         stripe rows. -->
+    <modulo name="chart_column" type="float">
+      <input name="in1" type="float" nodename="column" />
+      <input name="in2" type="float" value="8" />
+    </modulo>
+    <subtract name="chart_x_centred" type="float">
+      <input name="in1" type="float" nodename="chart_column" />
+      <input name="in2" type="float" value="4" />
+    </subtract>
+    <absval name="chart_x" type="float">
+      <input name="in" type="float" nodename="chart_x_centred" />
+    </absval>
+    <modulo name="chart_row" type="float">
+      <input name="in1" type="float" nodename="row" />
+      <input name="in2" type="float" value="14" />
+    </modulo>
+    <subtract name="chart_y_centred" type="float">
+      <input name="in1" type="float" nodename="chart_row" />
+      <input name="in2" type="float" value="4" />
+    </subtract>
+    <absval name="chart_y" type="float">
+      <input name="in" type="float" nodename="chart_y_centred" />
+    </absval>
+    <add name="diamond_distance" type="float">
+      <input name="in1" type="float" nodename="chart_x" />
+      <input name="in2" type="float" nodename="chart_y" />
+    </add>
+    <ifgreater name="diamond_fill" type="float">
+      <input name="value1" type="float" value="1.5" />
+      <input name="value2" type="float" nodename="diamond_distance" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="outline_centred" type="float">
+      <input name="in1" type="float" nodename="diamond_distance" />
+      <input name="in2" type="float" value="4" />
+    </subtract>
+    <absval name="outline_distance" type="float">
+      <input name="in" type="float" nodename="outline_centred" />
+    </absval>
+    <ifgreater name="diamond_outline" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="outline_distance" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <ifgreater name="motif_band" type="float">
+      <input name="value1" type="float" value="8.5" />
+      <input name="value2" type="float" nodename="chart_row" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <max name="motif_shape" type="float">
+      <input name="in1" type="float" nodename="diamond_fill" />
+      <input name="in2" type="float" nodename="diamond_outline" />
+    </max>
+    <multiply name="motif" type="float">
+      <input name="in1" type="float" nodename="motif_shape" />
+      <input name="in2" type="float" nodename="motif_band" />
+    </multiply>
+    <subtract name="stripe_centred" type="float">
+      <input name="in1" type="float" nodename="chart_row" />
+      <input name="in2" type="float" value="11" />
+    </subtract>
+    <absval name="stripe_distance" type="float">
+      <input name="in" type="float" nodename="stripe_centred" />
+    </absval>
+    <ifgreater name="stripe" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="stripe_distance" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="with_motif" type="color3">
+      <input name="bg" type="color3" interfacename="main_color" />
+      <input name="fg" type="color3" interfacename="motif_color" />
+      <input name="mix" type="float" nodename="motif" />
+    </mix>
+    <mix name="with_stripe" type="color3">
+      <input name="bg" type="color3" nodename="with_motif" />
+      <input name="fg" type="color3" interfacename="stripe_color" />
+      <input name="mix" type="float" nodename="stripe" />
+    </mix>
+
+    <!-- Yarn: plies twist along the stitch; the color darkens between rows. -->
+    <multiply name="ply_x" type="float">
+      <input name="in1" type="float" nodename="stitch_parts" output="outx" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <multiply name="ply_skew" type="float">
+      <input name="in1" type="float" nodename="sheared_row" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <add name="ply_along" type="float">
+      <input name="in1" type="float" nodename="ply_x" />
+      <input name="in2" type="float" nodename="ply_skew" />
+    </add>
+    <multiply name="ply_across" type="float">
+      <input name="in1" type="float" nodename="sheared_row" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <combine2 name="ply_uv" type="vector2">
+      <input name="in1" type="float" nodename="ply_along" />
+      <input name="in2" type="float" nodename="ply_across" />
+    </combine2>
+    <noise2d name="ply_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="ply_uv" />
+    </noise2d>
+    <multiply name="across_squared" type="float">
+      <input name="in1" type="float" nodename="yarn_across" />
+      <input name="in2" type="float" nodename="yarn_across" />
+    </multiply>
+    <multiply name="row_gap" type="float">
+      <input name="in1" type="float" nodename="across_squared" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <multiply name="ply_amount" type="float">
+      <input name="in1" type="float" nodename="ply_noise" />
+      <input name="in2" type="float" interfacename="ply_contrast" />
+    </multiply>
+    <add name="ply_shade" type="float">
+      <input name="in1" type="float" nodename="ply_amount" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <remap name="gap_shade" type="float">
+      <input name="in" type="float" nodename="row_gap" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1.1" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <multiply name="yarn_shade" type="float">
+      <input name="in1" type="float" nodename="ply_shade" />
+      <input name="in2" type="float" nodename="gap_shade" />
+    </multiply>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" nodename="with_stripe" />
+      <input name="in2" type="float" nodename="yarn_shade" />
+    </multiply>
+    <multiply name="fuzz_lift" type="color3">
+      <input name="in1" type="color3" nodename="base_color" />
+      <input name="in2" type="float" value="1.5" />
+    </multiply>
+    <add name="fuzz_color" type="color3">
+      <input name="in1" type="color3" nodename="fuzz_lift" />
+      <input name="in2" type="color3" value="0.03, 0.03, 0.03" />
+    </add>
+
+    <!-- Normal: round across the yarn, leaning with the slant of each stitch
+         half. -->
+    <multiply name="yarn_slope" type="float">
+      <input name="in1" type="float" interfacename="yarn_depth" />
+      <input name="in2" type="float" value="1.6" />
+    </multiply>
+    <multiply name="tilt_y" type="float">
+      <input name="in1" type="float" nodename="yarn_across" />
+      <input name="in2" type="float" nodename="yarn_slope" />
+    </multiply>
+    <sign name="side_sign" type="float">
+      <input name="in" type="float" nodename="column_side" />
+    </sign>
+    <multiply name="slant_tilt" type="float">
+      <input name="in1" type="float" nodename="side_sign" />
+      <input name="in2" type="float" nodename="tilt_y" />
+    </multiply>
+    <multiply name="slant_amount" type="float">
+      <input name="in1" type="float" interfacename="stitch_slant" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="tilt_x" type="float">
+      <input name="in1" type="float" nodename="slant_tilt" />
+      <input name="in2" type="float" nodename="slant_amount" />
+    </multiply>
+    <remap name="stitch_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="tilt_x" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="stitch_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="tilt_y" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="stitch_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="stitch_normal_encoded_x" />
+      <input name="in2" type="float" nodename="stitch_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="stitch_normal" type="vector3">
+      <input name="in" type="vector3" nodename="stitch_normal_encoded" />
+    </normalmap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="fuzz_color_out" type="color3" nodename="fuzz_color" />
+    <output name="normal_out" type="vector3" nodename="stitch_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_knit_wool" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_knit_wool" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.9" />
+    <input name="specular_roughness" type="float" value="0.85" />
+    <input name="specular_weight" type="float" value="0.2" />
+    <input name="fuzz_weight" type="float" value="0.85" />
+    <input name="fuzz_color" type="color3" nodegraph="NG_knit_wool" output="fuzz_color_out" />
+    <input name="fuzz_roughness" type="float" value="0.55" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_knit_wool" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Fair_Isle_Knit" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_knit_wool" />
+  </surfacematerial>
+</materialx>

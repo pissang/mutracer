@@ -1,0 +1,173 @@
+<?xml version="1.0"?>
+<!--
+  Perforated metal: OpenPBR brushed sheet with punched holes cut by
+  opacity. Two offset rectangular grids give the nearest centre of a
+  staggered hole pattern in texture space; opacity drops to zero inside
+  the hole radius and the punched rim leans the normal. Stretched noise
+  brushes the sheet. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_perforated_metal">
+    <input name="metal_color" type="color3" value="0.72, 0.73, 0.75" uiname="Metal color" />
+    <input name="tiles" type="vector2" value="36, 18" uiname="Holes per UV" />
+    <input name="hole_radius" type="float" value="0.3" uiname="Hole radius" uimin="0.05" uimax="0.48" />
+    <input name="rim_bevel" type="float" value="0.5" uiname="Rim bevel" uimin="0" uimax="1" />
+    <input name="roughness" type="float" value="0.28" uiname="Roughness" uimin="0" uimax="1" />
+    <input name="brushing" type="float" value="0.08" uiname="Brush contrast" uimin="0" uimax="0.3" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="hole_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+
+    <!-- Nearest hole centre: the closer of two rectangular grids offset by
+         half a cell. -->
+    <modulo name="grid_a_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="hole_uv" />
+      <input name="in2" type="vector2" value="1, 1.732051" />
+    </modulo>
+    <subtract name="grid_a" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_a_cell" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <subtract name="grid_b_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="hole_uv" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <modulo name="grid_b_cell" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_b_uv" />
+      <input name="in2" type="vector2" value="1, 1.732051" />
+    </modulo>
+    <subtract name="grid_b" type="vector2">
+      <input name="in1" type="vector2" nodename="grid_b_cell" />
+      <input name="in2" type="vector2" value="0.5, 0.8660254" />
+    </subtract>
+    <dotproduct name="grid_b_distance" type="float">
+      <input name="in1" type="vector2" nodename="grid_b" />
+      <input name="in2" type="vector2" nodename="grid_b" />
+    </dotproduct>
+    <dotproduct name="grid_a_distance" type="float">
+      <input name="in1" type="vector2" nodename="grid_a" />
+      <input name="in2" type="vector2" nodename="grid_a" />
+    </dotproduct>
+    <ifgreater name="hole_local" type="vector2">
+      <input name="value1" type="float" nodename="grid_b_distance" />
+      <input name="value2" type="float" nodename="grid_a_distance" />
+      <input name="in1" type="vector2" nodename="grid_a" />
+      <input name="in2" type="vector2" nodename="grid_b" />
+    </ifgreater>
+    <dotproduct name="hole_distance_squared" type="float">
+      <input name="in1" type="vector2" nodename="hole_local" />
+      <input name="in2" type="vector2" nodename="hole_local" />
+    </dotproduct>
+    <sqrt name="hole_distance" type="float">
+      <input name="in" type="float" nodename="hole_distance_squared" />
+    </sqrt>
+    <subtract name="hole_inner" type="float">
+      <input name="in1" type="float" interfacename="hole_radius" />
+      <input name="in2" type="float" value="0.008" />
+    </subtract>
+    <add name="hole_outer" type="float">
+      <input name="in1" type="float" interfacename="hole_radius" />
+      <input name="in2" type="float" value="0.008" />
+    </add>
+    <smoothstep name="opacity" type="float">
+      <input name="in" type="float" nodename="hole_distance" />
+      <input name="low" type="float" nodename="hole_inner" />
+      <input name="high" type="float" nodename="hole_outer" />
+    </smoothstep>
+
+    <!-- Punched rim: the sheet rolls into the hole. -->
+    <add name="rim_end" type="float">
+      <input name="in1" type="float" interfacename="hole_radius" />
+      <input name="in2" type="float" value="0.09" />
+    </add>
+    <smoothstep name="rim_reach" type="float">
+      <input name="in" type="float" nodename="hole_distance" />
+      <input name="low" type="float" interfacename="hole_radius" />
+      <input name="high" type="float" nodename="rim_end" />
+    </smoothstep>
+    <invert name="rim_mask" type="float">
+      <input name="in" type="float" nodename="rim_reach" />
+    </invert>
+    <multiply name="rim_amount" type="float">
+      <input name="in1" type="float" interfacename="rim_bevel" />
+      <input name="in2" type="float" value="-2.2" />
+    </multiply>
+    <multiply name="rim_slope" type="float">
+      <input name="in1" type="float" nodename="rim_mask" />
+      <input name="in2" type="float" nodename="rim_amount" />
+    </multiply>
+    <multiply name="rim_lean" type="vector2">
+      <input name="in1" type="vector2" nodename="hole_local" />
+      <input name="in2" type="float" nodename="rim_slope" />
+    </multiply>
+    <separate2 name="lean_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="rim_lean" />
+    </separate2>
+    <remap name="rim_normal_encoded_x" type="float">
+      <input name="in" type="float" nodename="lean_parts" output="outx" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="rim_normal_encoded_y" type="float">
+      <input name="in" type="float" nodename="lean_parts" output="outy" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="rim_normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="rim_normal_encoded_x" />
+      <input name="in2" type="float" nodename="rim_normal_encoded_y" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="rim_normal" type="vector3">
+      <input name="in" type="vector3" nodename="rim_normal_encoded" />
+    </normalmap>
+    <multiply name="brush_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="hole_uv" />
+      <input name="in2" type="vector2" value="0.35, 26" />
+    </multiply>
+    <noise2d name="brush_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="brush_uv" />
+      <input name="amplitude" type="float" interfacename="brushing" />
+    </noise2d>
+    <add name="brushed_roughness" type="float">
+      <input name="in1" type="float" nodename="brush_noise" />
+      <input name="in2" type="float" interfacename="roughness" />
+    </add>
+    <multiply name="brush_tone" type="float">
+      <input name="in1" type="float" nodename="brush_noise" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <add name="brush_shade" type="float">
+      <input name="in1" type="float" nodename="brush_tone" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" interfacename="metal_color" />
+      <input name="in2" type="float" nodename="brush_shade" />
+    </multiply>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="brushed_roughness" />
+    <output name="opacity_out" type="float" nodename="opacity" />
+    <output name="normal_out" type="vector3" nodename="rim_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_perforated_metal" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_perforated_metal" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_perforated_metal" output="roughness_out" />
+    <input name="specular_roughness_anisotropy" type="float" value="0.5" />
+    <input name="geometry_opacity" type="float" nodegraph="NG_perforated_metal" output="opacity_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_perforated_metal" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Perforated_Metal" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_perforated_metal" />
+  </surfacematerial>
+</materialx>

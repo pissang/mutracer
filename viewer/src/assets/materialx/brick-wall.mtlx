@@ -1,0 +1,270 @@
+<?xml version="1.0"?>
+<!--
+  Brick wall: OpenPBR running bond with scalar height displacement. Every
+  other course shifts by half a brick; cellnoise per brick shifts its
+  hue and value, burns some bricks dark and sets how far each one stands
+  proud. Mortar is sandy and recessed. The height uses only UV0, so the
+  viewer bakes it into a height map. Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_brick_wall">
+    <input name="brick_color" type="color3" value="0.2, 0.05, 0.025" uiname="Brick" />
+    <input name="burnt_color" type="color3" value="0.06, 0.035, 0.035" uiname="Burnt brick" />
+    <input name="mortar_color" type="color3" value="0.25, 0.24, 0.21" uiname="Mortar" />
+    <input name="tiles" type="vector2" value="16, 22" uiname="Bricks per UV" />
+    <input name="mortar_width" type="float" value="0.07" uiname="Mortar width" uimin="0.01" uimax="0.3" />
+    <input name="brick_variation" type="float" value="0.6" uiname="Brick variation" uimin="0" uimax="1" />
+    <input name="burnt_share" type="float" value="0.14" uiname="Burnt share" uimin="0" uimax="1" />
+    <input name="surface_detail" type="float" value="0.16" uiname="Surface detail" />
+
+    <texcoord name="uv" type="vector2" />
+    <multiply name="course_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="course_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="course_uv" />
+    </separate2>
+
+    <!-- Running bond: odd courses shift by half a brick. -->
+    <floor name="course" type="float">
+      <input name="in" type="float" nodename="course_parts" output="outy" />
+    </floor>
+    <modulo name="course_parity" type="float">
+      <input name="in1" type="float" nodename="course" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <multiply name="course_shift" type="float">
+      <input name="in1" type="float" nodename="course_parity" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="brick_x" type="float">
+      <input name="in1" type="float" nodename="course_parts" output="outx" />
+      <input name="in2" type="float" nodename="course_shift" />
+    </add>
+    <combine2 name="brick_uv" type="vector2">
+      <input name="in1" type="float" nodename="brick_x" />
+      <input name="in2" type="float" nodename="course_parts" output="outy" />
+    </combine2>
+    <floor name="brick_index" type="vector2">
+      <input name="in" type="vector2" nodename="brick_uv" />
+    </floor>
+    <subtract name="brick_local" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" nodename="brick_index" />
+    </subtract>
+    <subtract name="brick_fraction" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_local" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="brick_centred" type="vector2">
+      <input name="in" type="vector2" nodename="brick_fraction" />
+    </absval>
+    <separate2 name="brick_distance" type="multioutput">
+      <input name="in" type="vector2" nodename="brick_centred" />
+    </separate2>
+
+    <!-- Distance to the brick edge; a brick is twice as wide as tall. -->
+    <subtract name="edge_x_half" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="brick_distance" output="outx" />
+    </subtract>
+    <multiply name="edge_x" type="float">
+      <input name="in1" type="float" nodename="edge_x_half" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="edge_y" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="brick_distance" output="outy" />
+    </subtract>
+    <min name="edge_distance" type="float">
+      <input name="in1" type="float" nodename="edge_x" />
+      <input name="in2" type="float" nodename="edge_y" />
+    </min>
+    <multiply name="edge_noise_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" value="9, 18" />
+    </multiply>
+    <noise2d name="edge_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="edge_noise_uv" />
+      <input name="amplitude" type="float" value="0.02" />
+    </noise2d>
+    <add name="ragged_edge" type="float">
+      <input name="in1" type="float" nodename="edge_distance" />
+      <input name="in2" type="float" nodename="edge_noise" />
+    </add>
+    <add name="joint_soft" type="float">
+      <input name="in1" type="float" interfacename="mortar_width" />
+      <input name="in2" type="float" value="0.035" />
+    </add>
+    <smoothstep name="brick_mask" type="float">
+      <input name="in" type="float" nodename="ragged_edge" />
+      <input name="low" type="float" interfacename="mortar_width" />
+      <input name="high" type="float" nodename="joint_soft" />
+    </smoothstep>
+
+    <!-- Three random values per brick. -->
+    <cellnoise2d name="brick_random_1" type="float">
+      <input name="texcoord" type="vector2" nodename="brick_uv" />
+    </cellnoise2d>
+    <add name="brick_uv_2" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" value="23, 57" />
+    </add>
+    <cellnoise2d name="brick_random_2" type="float">
+      <input name="texcoord" type="vector2" nodename="brick_uv_2" />
+    </cellnoise2d>
+    <add name="brick_uv_3" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" value="-41, 13" />
+    </add>
+    <cellnoise2d name="brick_random_3" type="float">
+      <input name="texcoord" type="vector2" nodename="brick_uv_3" />
+    </cellnoise2d>
+
+    <!-- Height: bricks stand proud by a random amount, with fractal pitting. -->
+    <multiply name="detail_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" value="8, 4" />
+    </multiply>
+    <separate2 name="detail_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="detail_uv" />
+    </separate2>
+    <combine3 name="detail_position" type="vector3">
+      <input name="in1" type="float" nodename="detail_parts" output="outx" />
+      <input name="in2" type="float" nodename="detail_parts" output="outy" />
+      <input name="in3" type="float" value="0.5" />
+    </combine3>
+    <fractal3d name="detail" type="float">
+      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="amplitude" type="float" interfacename="surface_detail" />
+    </fractal3d>
+    <remap name="brick_proud" type="float">
+      <input name="in" type="float" nodename="brick_random_3" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.72" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <add name="brick_height" type="float">
+      <input name="in1" type="float" nodename="brick_proud" />
+      <input name="in2" type="float" nodename="detail" />
+    </add>
+    <multiply name="height" type="float">
+      <input name="in1" type="float" nodename="brick_mask" />
+      <input name="in2" type="float" nodename="brick_height" />
+    </multiply>
+
+    <!-- Color: per-brick hue and value shift, some bricks burnt dark; recessed
+         bricks are darker. -->
+    <subtract name="hue_centred" type="float">
+      <input name="in1" type="float" nodename="brick_random_1" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="hue_range" type="float">
+      <input name="in1" type="float" interfacename="brick_variation" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="hue_shift" type="float">
+      <input name="in1" type="float" nodename="hue_centred" />
+      <input name="in2" type="float" nodename="hue_range" />
+    </multiply>
+    <subtract name="value_centred" type="float">
+      <input name="in1" type="float" nodename="brick_random_2" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="value_shift" type="float">
+      <input name="in1" type="float" nodename="value_centred" />
+      <input name="in2" type="float" interfacename="brick_variation" />
+    </multiply>
+    <add name="value" type="float">
+      <input name="in1" type="float" nodename="value_shift" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <combine3 name="hsv_amount" type="vector3">
+      <input name="in1" type="float" nodename="hue_shift" />
+      <input name="in2" type="float" value="1" />
+      <input name="in3" type="float" nodename="value" />
+    </combine3>
+    <hsvadjust name="fired_brick" type="color3">
+      <input name="in" type="color3" interfacename="brick_color" />
+      <input name="amount" type="vector3" nodename="hsv_amount" />
+    </hsvadjust>
+    <ifgreater name="is_burnt" type="float">
+      <input name="value1" type="float" interfacename="burnt_share" />
+      <input name="value2" type="float" nodename="brick_random_3" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <mix name="brick_tone" type="color3">
+      <input name="bg" type="color3" nodename="fired_brick" />
+      <input name="fg" type="color3" interfacename="burnt_color" />
+      <input name="mix" type="float" nodename="is_burnt" />
+    </mix>
+    <multiply name="pit_tone" type="float">
+      <input name="in1" type="float" nodename="detail" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <add name="pit_shade" type="float">
+      <input name="in1" type="float" nodename="pit_tone" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="brick_shade" type="float">
+      <input name="in1" type="float" nodename="pit_shade" />
+      <input name="in2" type="float" nodename="brick_proud" />
+    </multiply>
+    <multiply name="pitted_brick" type="color3">
+      <input name="in1" type="color3" nodename="brick_tone" />
+      <input name="in2" type="float" nodename="brick_shade" />
+    </multiply>
+    <multiply name="sand_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="brick_uv" />
+      <input name="in2" type="vector2" value="60, 30" />
+    </multiply>
+    <noise2d name="sand" type="float">
+      <input name="texcoord" type="vector2" nodename="sand_uv" />
+      <input name="amplitude" type="float" value="0.12" />
+      <input name="pivot" type="float" value="1" />
+    </noise2d>
+    <multiply name="sandy_mortar" type="color3">
+      <input name="in1" type="color3" interfacename="mortar_color" />
+      <input name="in2" type="float" nodename="sand" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="sandy_mortar" />
+      <input name="fg" type="color3" nodename="pitted_brick" />
+      <input name="mix" type="float" nodename="brick_mask" />
+    </mix>
+    <remap name="brick_roughness" type="float">
+      <input name="in" type="float" nodename="brick_random_2" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="0.88" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.95" />
+      <input name="fg" type="float" nodename="brick_roughness" />
+      <input name="mix" type="float" nodename="brick_mask" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="height_out" type="float" nodename="height" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_brick_wall" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_brick_wall" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_roughness" type="float" nodegraph="NG_brick_wall" output="roughness_out" />
+  </open_pbr_surface>
+  <displacement name="DS_brick_wall" type="displacementshader">
+    <input name="displacement" type="float" nodegraph="NG_brick_wall" output="height_out" />
+    <input name="scale" type="float" value="0.03" />
+  </displacement>
+  <surfacematerial name="Brick_Wall" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_brick_wall" />
+    <input name="displacementshader" type="displacementshader" nodename="DS_brick_wall" />
+  </surfacematerial>
+</materialx>
