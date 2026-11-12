@@ -86,6 +86,7 @@ mod postprocess;
 mod profiling;
 mod recovery;
 mod runtime;
+mod sampling_batch;
 mod scene;
 pub mod scene_api;
 pub mod settings;
@@ -709,6 +710,7 @@ struct Target {
     groups: [wgpu::BindGroup; 2],
     samples: u32,
     frames: Vec<[u8; 16]>,
+    sampling_batch: Option<Mutex<sampling_batch::State>>,
     /// Disabled targets allocate no frame guides or geometry history.
     frame_inputs: Option<Box<denoiser_inputs::GpuFrameHistory>>,
     /// Test-only marker proving a render command buffer reached its final GPU pass.
@@ -799,6 +801,17 @@ impl DispatchAudit {
     }
 }
 impl Target {
+    fn dispatches_per_buffer(&self, additional: u32) -> u32 {
+        if self.sampling_batch.is_some() && self.caustics.is_none() {
+            additional.clamp(1, sampling_batch::MAX_DISPATCHES)
+        } else {
+            1
+        }
+    }
+    fn timer_pairs(&self, additional: u32) -> u32 {
+        additional.div_ceil(self.dispatches_per_buffer(additional))
+            * self.caustics.as_ref().map_or(1, |c| c.pass_count())
+    }
     #[allow(dead_code)]
     fn enable_frame_inputs(&mut self, gpu: &GpuDevice) -> &mut denoiser_inputs::GpuFrameHistory {
         self.frame_inputs.get_or_insert_with(|| {
@@ -1181,6 +1194,7 @@ impl GpuScene {
                 ],
                 samples: 0,
                 frames: runtime::frames(options.bounces, options.seed)?,
+                sampling_batch: sampling_batch::for_target(&gpu, use_hwrt, &display_trace, false),
                 frame_inputs: None,
                 #[cfg(test)]
                 dispatch_audit: (std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
@@ -1214,11 +1228,8 @@ impl GpuScene {
         ))
     }
     fn add_samples(&self, target: &mut Target, additional: u32) -> Result<()> {
-        let timer = profiling::GpuTimer::new(
-            &self.gpu.device,
-            additional * target.caustics.as_ref().map_or(1, |c| c.pass_count()),
-            false,
-        );
+        let timer =
+            profiling::GpuTimer::new(&self.gpu.device, target.timer_pairs(additional), false);
         let completion =
             self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         crate::GpuDevice::wait(&self.gpu.device)?;
@@ -1424,6 +1435,12 @@ impl GpuScene {
         let offset = layout::ray_uniform::SAMPLE_SEQUENCE_OFFSET;
         let caustic_sequence_offset =
             u32::from_le_bytes(packet.trace[offset..offset + 4].try_into().unwrap());
+        let sampling_batch = sampling_batch::for_target(
+            &self.gpu,
+            self.hwrt_shader,
+            &packet.trace,
+            caustics.is_some(),
+        );
         Ok(Target {
             workgroup_size,
             caustic_sequence_offset,
@@ -1436,6 +1453,7 @@ impl GpuScene {
             pipeline,
             groups: [frame, output],
             samples: 0,
+            sampling_batch,
             frames: packet.frames,
             frame_inputs,
             #[cfg(test)]
@@ -1457,6 +1475,9 @@ impl GpuScene {
             .ok_or("Sample count overflow")?;
         if additional == 0 || end > 16384 {
             return Err("Total samples must be 1..16384".into());
+        }
+        if target.dispatches_per_buffer(additional) > 1 {
+            return self.dispatch_target_batched(target, start, additional, timer);
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
@@ -2051,6 +2072,11 @@ impl GpuScene {
             if *id == self.scene.rt_uniform {
                 let at = *offset as usize;
                 self.display_trace[at..at + data.len()].copy_from_slice(data);
+                // All persistent target-uniform changes pass through this upload.
+                // Per-sample metadata is patched separately from Target::frames.
+                if let Some(state) = target.and_then(|t| t.sampling_batch.as_ref()) {
+                    state.lock().unwrap().write_trace(at, data);
+                }
             }
             if *id < layout::resource::ATLAS {
                 if let Some(buffer) = self

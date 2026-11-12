@@ -2187,11 +2187,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     let start = job.base + job.submitted;
     let timer = crate::profiling::GpuTimer::realtime(
         &gpu.device,
-        count
-            * target
-                .as_ref()
-                .and_then(|t| t.caustics.as_ref())
-                .map_or(1, |c| c.pass_count()),
+        target.as_ref().map_or(count, |t| t.timer_pairs(count)),
         false,
     );
     let scene = owner

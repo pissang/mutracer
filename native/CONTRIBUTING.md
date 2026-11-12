@@ -662,6 +662,14 @@ includes wgpu's upload/barrier buffers without changing encoding or queue
 ordering. Do not call `CommandEncoder::as_hal_mut` after wgpu encoding: wgpu 30
 rejects mixed encoding APIs even for a read-only inspection.
 
+Ordinary Metal HWRT targets encode up to four sampling dispatches per command
+buffer within the existing flight. Other backends and caustics keep one sample
+per buffer. Each dispatch reads a separate aligned uniform range; target-uniform
+updates refresh the cached template, and buffers/bindings are reused between
+batches. This changes no sample order, flight budget or display scheduling and
+adds no ordinary polling wait. Timestamp pairs cover groups of dispatches while
+sample-time denominators retain the actual sample count.
+
 Ordinary sampling flights automatically repair retryable Metal execution errors
 before crediting their samples. Missing pixels are replayed with the original
 sample records; a SubmissionsIgnored error replaces only the observed queue's
@@ -682,12 +690,12 @@ real-hang image comparisons separate from deterministic missing-row injection.
 
 For `api::Render` command-buffer diagnostics, set
 `MUTRACER_NATIVE_DISPATCH_AUDIT=1` when running a `cfg(test)` GPU test. Each
-sample submission then appends a one-thread GPU marker in the same command
+sampling dispatch then appends a one-thread GPU marker in the same command
 buffer; after its completion callback, the test logs the marker count beside
 the flight range and CPU sample credits. The marker supports sample indices
 `0..16384` (at most 16,384 samples per target reset). A count of one proves the
 buffer reached that marker, not that every path-tracing invocation or pixel
-finished. The extra tail pass and readback can perturb timing. The option is
+finished. The extra tail dispatch and readback can perturb timing. The option is
 absent from non-test builds and unset by default.
 
 To reproduce repeated full-preparation failures, run the ignored loop with the

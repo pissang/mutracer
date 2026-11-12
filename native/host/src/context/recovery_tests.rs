@@ -52,7 +52,14 @@ fn blocking_repair_matches_clean_outputs_and_restores_full_frame_state() {
             let hook = gpu.recovery_test.lock().unwrap();
             assert_eq!(
                 (hook.repairs, hook.submissions),
-                (0, 8),
+                (
+                    0,
+                    if backend == 1 && gpu.info.backend == wgpu::Backend::Metal {
+                        2
+                    } else {
+                        8
+                    }
+                ),
                 "successful rendering added recovery work"
             );
         }
