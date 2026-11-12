@@ -101,8 +101,8 @@ const smoothstep = (a: number, b: number, x: number) => {
 interface RevolveOptions {
   /** Columns around the axis; by default as many as keep the widest edge short. */
   columns?: number;
-  /** Offset along the normal at an azimuth and profile position, for detail that does not revolve. */
-  relief?: (azimuth: number, r: number, y: number) => number;
+  /** Moves a profile point at an azimuth, for shapes and detail that do not revolve. */
+  warp?: (azimuth: number, point: ProfilePoint) => [r: number, y: number];
 }
 
 /**
@@ -110,7 +110,7 @@ interface RevolveOptions {
  * are tuned for: U is the azimuth over a full turn and V is the distance along
  * the profile over a half turn of a unit sphere.
  */
-function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(...profile.map((p) => p.r)) / MAX_EDGE), relief }: RevolveOptions = {}): THREE.BufferGeometry {
+function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(...profile.map((p) => p.r)) / MAX_EDGE), warp }: RevolveOptions = {}): THREE.BufferGeometry {
   const rows = profile.length, stride = columns + 1;
   const positions = new Float32Array(rows * stride * 3), normals = new Float32Array(rows * stride * 3), uvs = new Float32Array(rows * stride * 2);
   const indices: number[] = [];
@@ -120,15 +120,15 @@ function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(.
     for (let column = 0; column <= columns; column++) {
       // The seam repeats the first column's positions exactly, with U = 1.
       const angle = (TAU * (column % columns)) / columns, sin = Math.sin(angle), cos = Math.cos(angle);
-      const offset = relief && point.r > 0 ? relief(angle, point.r, point.y) : 0;
-      const r = point.r + point.nr * offset, i = row * stride + column;
-      positions.set([r * sin, point.y + point.ny * offset, r * cos], i * 3);
+      const [r, y] = warp ? warp(angle, point) : [point.r, point.y];
+      const i = row * stride + column;
+      positions.set([r * sin, y, r * cos], i * 3);
       normals.set([point.nr * sin, point.ny, point.nr * cos], i * 3);
       uvs.set([column / columns, length / Math.PI], i * 2);
     }
   });
-  if (relief) {
-    // Relief bends the surface away from the profile's normals: take them from the grid.
+  if (warp) {
+    // A warp bends the surface away from the profile's normals: take them from the grid.
     const at = (row: number, column: number) => new THREE.Vector3().fromArray(positions, (row * stride + (column + columns) % columns) * 3);
     for (let row = 1; row < rows - 1; row++) {
       for (let column = 0; column <= columns; column++) {
@@ -152,106 +152,43 @@ function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(.
   return geometry;
 }
 
-const BASE = { radius: 1.38, height: 0.08 };
+/** `material` names the part's material; parts that share a name share the material. */
+interface Part { name: string; geometry: THREE.BufferGeometry; material: string }
+
+const BASE_HEIGHT = 0.08;
 /** The parts rest on each other across a hair of air instead of sharing a face. */
 const GAP = 0.002;
-const SHELL = { outer: 1, inner: 0.86 };
-/** Height of the ball's centre: it sits 0.04 deep in the cradle's socket. */
-const BALL_Y = BASE.height + GAP + 0.04 + SHELL.outer;
-/** The shell's axis runs through its port, up and to the right of the default view. */
-const PORT_AXIS = new THREE.Vector3(Math.cos(40 * DEG) * Math.sin(66 * DEG), Math.sin(40 * DEG), Math.cos(40 * DEG) * Math.cos(66 * DEG));
-const VIEW = new THREE.Vector3(2.4, 1.3, 6.1).normalize();
+const FLOOR = BASE_HEIGHT + GAP;
+/** The dial texture spans this radius. */
+const DIAL_RADIUS = 2;
 
-/**
- * The shell's outside by latitude from its own axis. Below the bezel it is a
- * plain sphere with one fine line; the bezel carries a fluted band and two
- * grooves, then rises into the collar around the port.
- */
-const PORT = 47 * DEG;
-const FLUTES = { from: 27 * DEG, to: 35.5 * DEG, count: 48, depth: 0.024 };
-const GROOVES = { latitudes: [38.2 * DEG, 40.2 * DEG], halfWidth: 0.55 * DEG, depth: 0.014 };
-const LINE = { latitude: 14 * DEG, halfWidth: 0.5 * DEG, depth: 0.012 };
-function shellRadius(latitude: number) {
-  let radius = SHELL.outer + 0.03 * smoothstep(23 * DEG, 24.5 * DEG, latitude) + 0.025 * smoothstep(42 * DEG, 44 * DEG, latitude);
-  for (const groove of GROOVES.latitudes) radius -= GROOVES.depth * (1 - smoothstep(0.4, 1, Math.abs(latitude - groove) / GROOVES.halfWidth));
-  return radius - LINE.depth * (1 - smoothstep(0.4, 1, Math.abs(latitude - LINE.latitude) / LINE.halfWidth));
-}
-/** Rows are fine where the radius changes quickly; the flutes only vary around the axis. */
-const shellStep = (latitude: number) => {
-  const degrees = latitude / DEG;
-  return degrees > 22.5 && degrees < 28.2 || degrees > 34.3 && degrees < 44.5 || Math.abs(latitude - LINE.latitude) < LINE.halfWidth ? 0.15 : 1;
-};
-function flutes(azimuth: number, r: number, y: number) {
-  // Only the outside is fluted.
-  if (Math.hypot(r, y) < SHELL.outer) return 0;
-  const latitude = Math.atan2(y, r);
-  const band = smoothstep(FLUTES.from, FLUTES.from + DEG, latitude) * (1 - smoothstep(FLUTES.to - DEG, FLUTES.to, latitude));
-  return band ? -FLUTES.depth * band * (0.5 - 0.5 * Math.cos(FLUTES.count * azimuth)) : 0;
-}
-
-/** A hollow ball open at a round port, with a full-round lip joining its two sides. */
-function shellGeometry() {
-  const collar = shellRadius(PORT), lip = (collar - SHELL.inner) / 2, middle = SHELL.inner + lip;
-  const rim: Knot[] = [];
-  for (let angle = 10 * DEG; angle < 179 * DEG; angle += 10 * DEG) {
-    const reach = middle + lip * Math.cos(angle), latitude = PORT + (lip * Math.sin(angle)) / middle;
-    rim.push({ r: reach * Math.cos(latitude), y: reach * Math.sin(latitude) });
+/** A low disc whose top maps the dial by radius; its rim and underside stay plain. */
+function baseGeometry(radius: number) {
+  const geometry = revolve(buildProfile([
+    { r: 0, y: 0 }, { r: radius, y: 0, fillet: 0.006 }, { r: radius, y: BASE_HEIGHT, fillet: 0.02 }, { r: 0, y: BASE_HEIGHT }
+  ]), { columns: 192 });
+  const position = geometry.getAttribute('position'), normal = geometry.getAttribute('normal'), uv = geometry.getAttribute('uv');
+  for (let i = 0; i < uv.count; i++) {
+    uv.setY(i, normal.getY(i) > 0.99 ? Math.hypot(position.getX(i), position.getZ(i)) / DIAL_RADIUS : 1);
   }
-  const profile = buildProfile([
-    ...ballArc(0, -90 * DEG, PORT, shellRadius, shellStep), ...rim, ...ballArc(0, PORT, -90 * DEG, () => SHELL.inner, () => 1.6)
-  ]);
-  const geometry = revolve(profile, { columns: 432, relief: flutes });
-  // Turn the UV seam away from the default view before tilting the port into place.
-  const tilt = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), PORT_AXIS);
-  const hidden = VIEW.clone().negate().applyQuaternion(tilt.clone().invert());
-  const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(hidden.x, hidden.z));
-  return geometry.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(0, BALL_Y, 0), tilt.multiply(turn), new THREE.Vector3(1, 1, 1)));
+  return geometry;
 }
 
-/** A low ring with a sloped face and a socket that seats the ball. */
-function cradleProfile() {
-  const foot = BASE.height + GAP, top = foot + 0.2, socket = SHELL.outer + GAP;
-  const edge = Math.asin((top - BALL_Y) / socket), bore = -Math.acos(0.3 / socket);
-  return buildProfile([
-    { r: 0.86, y: foot, fillet: 0.012 }, { r: 0.66, y: top, fillet: 0.02 },
-    { r: socket * Math.cos(edge), y: top, fillet: 0.008 },
-    ...ballArc(BALL_Y, edge, bore, () => socket).slice(1, -1),
-    { r: 0.3, y: BALL_Y + socket * Math.sin(bore), fillet: 0.01 }, { r: 0.3, y: foot, fillet: 0.01 }
-  ], true);
-}
-
-const baseProfile = () => buildProfile([
-  { r: 0, y: 0 }, { r: BASE.radius, y: 0, fillet: 0.006 }, { r: BASE.radius, y: BASE.height, fillet: 0.02 }, { r: 0, y: BASE.height }
-]);
-
-/** A dial on the base's top: rings every 0.1 and ticks every 5°, a reference for refraction, reflections and scale. */
-function baseTexture(profile: ProfilePoint[]) {
-  const width = 2048, height = 1024, data = new Uint8Array(width * height * 4);
-  // Radius along the top face for each texture row; the side and underside stay plain.
-  const radii = new Float32Array(height).fill(-1);
-  let length = 0;
-  for (let i = 1; i < profile.length; i++) {
-    const from = profile[i - 1], to = profile[i], next = length + Math.hypot(to.r - from.r, to.y - from.y);
-    if (from.ny > 0.99 && to.ny > 0.99) {
-      for (let row = Math.ceil((length / Math.PI) * height - 0.5); (row + 0.5) / height * Math.PI < next; row++) {
-        radii[row] = from.r + (to.r - from.r) * (((row + 0.5) / height * Math.PI - length) / (next - length));
-      }
-    }
-    length = next;
-  }
+/** A polar grid, rings every 0.1 and spokes every 15°: a reference for refraction, reflections and scale. */
+function dialTexture() {
+  const width = 2048, height = 512, data = new Uint8Array(width * height * 4);
   const line = (distance: number, halfWidth: number, pixel: number) => Math.min(1, Math.max(0, 0.5 + (halfWidth - distance) / pixel));
   const periodic = (value: number, period: number) => Math.abs(value - Math.round(value / period) * period);
   for (let row = 0; row < height; row++) {
-    const radius = radii[row];
+    const radius = ((row + 0.5) / height) * DIAL_RADIUS, pixel = DIAL_RADIUS / height;
     for (let column = 0; column < width; column++) {
       let shade = 0.2;
-      if (radius >= 0) {
-        const degrees = ((column + 0.5) / width) * 360, arc = radius * DEG, pixel = Math.PI / height;
+      if (row < height - 4) {
+        const degrees = ((column + 0.5) / width) * 360;
         const sector = (Math.floor(degrees / 15) + Math.floor(radius / 0.2)) % 2;
-        const ticks = radius > 1.24 && radius < 1.3 ? line(periodic(degrees, 5) * arc, 0.004, (TAU * radius) / width) : 0;
-        const spokes = radius > 1.1 && radius < 1.3 ? line(periodic(degrees, 15) * arc, 0.006, (TAU * radius) / width) : 0;
+        const spokes = radius > 0.3 ? line(periodic(degrees, 15) * radius * DEG, 0.003, (TAU * radius) / width) : 0;
         const rings = Math.max(line(periodic(radius, 0.1), 0.003, pixel), line(periodic(radius, 0.5), 0.007, pixel));
-        shade = (sector ? 0.17 : 0.215) + 0.42 * Math.max(ticks, spokes, rings);
+        shade = (sector ? 0.17 : 0.215) + 0.42 * Math.max(spokes, rings);
       }
       data.set([shade * 255, shade * 258, shade * 268, 255], (row * width + column) * 4);
     }
@@ -264,33 +201,256 @@ function baseTexture(profile: ProfilePoint[]) {
   return texture;
 }
 
-/**
- * Material test model. One material covers a hollow ball and the cradle it
- * sits in. The ball is open at a round port that shows its wall thickness and
- * a core in a second material; around the port it carries flutes, grooves and
- * a collar, and the rest is plain curvature. Every part is a closed solid
- * without hard edges, in one object space, so position-based graphs line up
- * across parts and displacement does not tear.
- */
-export function createShaderBall(): LoadedModel {
-  const material = new THREE.MeshPhysicalMaterial({ color: 0xd9dadd, roughness: 0.28 });
-  material.name = 'Material';
-  const coreMaterial = new THREE.MeshPhysicalMaterial({ color: 0xffc35a, metalness: 1, roughness: 0.25 });
-  coreMaterial.name = 'Core';
-  const base = baseProfile();
-  const baseMaterial = new THREE.MeshPhysicalMaterial({ map: baseTexture(base), roughness: 0.45 });
-  baseMaterial.name = 'Base';
+const SHELL = { outer: 1, inner: 0.86 };
+/** Height of the ball's centre: it sits 0.04 deep in the cradle's socket. */
+const BALL_Y = FLOOR + 0.04 + SHELL.outer;
+/** The shell's axis runs through its port, up and to the right of the default view. */
+const PORT_AXIS = new THREE.Vector3(Math.cos(40 * DEG) * Math.sin(66 * DEG), Math.sin(40 * DEG), Math.cos(40 * DEG) * Math.cos(66 * DEG));
+const VIEW = new THREE.Vector3(2.4, 1.3, 6.1).normalize();
 
-  const root = new THREE.Group();
-  root.name = 'Shader ball';
-  const add = (name: string, geometry: THREE.BufferGeometry, surface: THREE.Material) => {
-    const mesh = new THREE.Mesh(geometry, surface);
-    mesh.name = name;
-    root.add(mesh);
+/** The port's edge and one fine parting line, by latitude from the shell's own axis. */
+const PORT = 46 * DEG;
+const LINE = { latitude: 22 * DEG, halfWidth: 0.5 * DEG, depth: 0.012 };
+const shellRadius = (latitude: number) => SHELL.outer - LINE.depth * (1 - smoothstep(0.4, 1, Math.abs(latitude - LINE.latitude) / LINE.halfWidth));
+
+/** A hollow ball open at a round port, with a full-round lip joining its two sides. */
+function shellGeometry() {
+  const lip = (SHELL.outer - SHELL.inner) / 2, middle = SHELL.inner + lip;
+  const rim: Knot[] = [];
+  for (let angle = 10 * DEG; angle < 179 * DEG; angle += 10 * DEG) {
+    const reach = middle + lip * Math.cos(angle), latitude = PORT + (lip * Math.sin(angle)) / middle;
+    rim.push({ r: reach * Math.cos(latitude), y: reach * Math.sin(latitude) });
+  }
+  const geometry = revolve(buildProfile([
+    ...ballArc(0, -90 * DEG, PORT, shellRadius, (latitude) => Math.abs(latitude - LINE.latitude) < LINE.halfWidth ? 0.15 : 1),
+    ...rim, ...ballArc(0, PORT, -90 * DEG, () => SHELL.inner, () => 1.6)
+  ]));
+  // Turn the UV seam away from the default view before tilting the port into place.
+  const tilt = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), PORT_AXIS);
+  const hidden = VIEW.clone().negate().applyQuaternion(tilt.clone().invert());
+  const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(hidden.x, hidden.z));
+  return geometry.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(0, BALL_Y, 0), tilt.multiply(turn), new THREE.Vector3(1, 1, 1)));
+}
+
+/** A low ring with a sloped face and a socket that seats the ball. */
+function cradleProfile() {
+  const top = FLOOR + 0.2, socket = SHELL.outer + GAP;
+  const edge = Math.asin((top - BALL_Y) / socket), bore = -Math.acos(0.3 / socket);
+  return buildProfile([
+    { r: 0.86, y: FLOOR, fillet: 0.012 }, { r: 0.66, y: top, fillet: 0.02 },
+    { r: socket * Math.cos(edge), y: top, fillet: 0.008 },
+    ...ballArc(BALL_Y, edge, bore, () => socket).slice(1, -1),
+    { r: 0.3, y: BALL_Y + socket * Math.sin(bore), fillet: 0.01 }, { r: 0.3, y: FLOOR, fillet: 0.01 }
+  ], true);
+}
+
+/**
+ * A hollow ball in a cradle, open at a round port that shows its wall
+ * thickness and a core in a second material.
+ */
+function ball(baseRadius: number, material: string): Part[] {
+  return [
+    { name: 'Shell', geometry: shellGeometry(), material },
+    { name: 'Cradle', geometry: revolve(cradleProfile()), material },
+    { name: 'Core', geometry: revolve(buildProfile(ballArc(BALL_Y, -90 * DEG, 90 * DEG, () => 0.62, () => 1.5))), material: 'Core' },
+    { name: 'Base', geometry: baseGeometry(baseRadius), material: 'Base' }
+  ];
+}
+
+/**
+ * A cube with crisp, slightly rounded edges, cut into panels: each face has a
+ * recessed centre and two channels crossing it. The six faces share one
+ * lattice, with lines gathered at every step, so the walls stay steep and the
+ * solid stays closed. UVs are planar on each face.
+ */
+function cube(baseRadius: number, material: string): Part[] {
+  const half = 0.6, round = 0.03, wall = 0.004, soften = 0.008;
+  // The channels run over the rounded edges, so they stay shallower than the rounding.
+  const panel = { edge: 0.4, depth: 0.02 }, channel = { edge: 0.035, depth: 0.026 };
+  const marks = [0, half - round, half];
+  for (const edge of [channel.edge, panel.edge]) marks.push(edge - wall - soften, edge - wall, edge + wall, edge + wall + soften);
+  for (let step = 1; step < 4; step++) marks.push(half - round + round * Math.tan((45 * DEG * step) / 4));
+  marks.sort((x, y) => x - y);
+  const lines: number[] = [];
+  marks.forEach((mark, i) => {
+    const pieces = i ? Math.ceil((mark - marks[i - 1]) / 0.02) : 1;
+    for (let piece = 1; piece <= pieces; piece++) lines.push(i ? marks[i - 1] + ((mark - marks[i - 1]) * piece) / pieces : 0);
+  });
+  lines[lines.length - 1] = half;
+  const lattice = [...lines.slice(1).reverse().map((value) => -value), ...lines];
+
+  const ramp = (inside: number) => Math.min(1, Math.max(0, inside / (2 * wall) + 0.5));
+  /** How far the surface sinks at a point on the cube. */
+  const depth = (point: number[]) => {
+    const [low, middle] = point.map(Math.abs).sort((x, y) => x - y);
+    return Math.max(panel.depth * ramp(panel.edge - middle), channel.depth * ramp(channel.edge - low));
   };
-  add('Shell', shellGeometry(), material);
-  add('Cradle', revolve(cradleProfile()), material);
-  add('Core', revolve(buildProfile(ballArc(BALL_Y, -90 * DEG, 90 * DEG, () => 0.62, () => 1.5))), coreMaterial);
-  add('Base', revolve(base, { columns: 192 }), baseMaterial);
-  return { name: 'Shader ball', root, animations: [], revoke() {} };
+  const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+  const count = lattice.length, inner = half - round;
+  for (const axis of [0, 1, 2]) {
+    for (const sign of [1, -1]) {
+      const [u, v] = sign > 0 ? [(axis + 1) % 3, (axis + 2) % 3] : [(axis + 2) % 3, (axis + 1) % 3];
+      const first = positions.length / 3;
+      for (let j = 0; j < count; j++) {
+        for (let i = 0; i < count; i++) {
+          const point = [0, 0, 0];
+          point[axis] = sign * half; point[u] = lattice[i]; point[v] = lattice[j];
+          // A rounded box: every point sits `round` away from the box shrunk by `round`.
+          const core = point.map((value) => Math.min(inner, Math.max(-inner, value)));
+          const length = Math.hypot(point[0] - core[0], point[1] - core[1], point[2] - core[2]);
+          const out = point.map((value, k) => (value - core[k]) / length), sink = depth(point);
+          positions.push(...core.map((value, k) => value + (round - sink) * out[k]));
+          // The surface leans towards rising depth along each direction it spans.
+          const normal = new THREE.Vector3(...out);
+          for (const [k, index] of [[u, i], [v, j]] as const) {
+            const before = [...point], after = [...point];
+            before[k] = lattice[Math.max(0, index - 1)]; after[k] = lattice[Math.min(count - 1, index + 1)];
+            const tangent = new THREE.Vector3().setComponent(k, 1);
+            normal.addScaledVector(tangent, (depth(after) - depth(before)) / (after[k] - before[k]));
+          }
+          normals.push(...normal.normalize().toArray());
+          const across = axis === 1 ? point[0] : sign * (axis === 2 ? point[0] : -point[2]);
+          uvs.push(0.5 + across / TAU, 0.5 + (axis === 1 ? -sign * point[2] : point[1]) / Math.PI);
+        }
+      }
+      for (let j = 0; j < count - 1; j++) {
+        for (let i = 0; i < count - 1; i++) {
+          const a = first + j * count + i;
+          indices.push(a, a + 1, a + count, a + 1, a + count + 1, a + count);
+        }
+      }
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.rotateY(28 * DEG).translate(0, FLOOR + half, 0);
+  return [{ name: 'Cube', geometry, material }, { name: 'Cube base', geometry: baseGeometry(baseRadius), material: 'Base' }];
+}
+
+/**
+ * A cloth draped over a ball down to the floor: a thin closed sheet that
+ * follows the ball, hangs as a curtain and folds more the further it falls.
+ * Its corners reach the floor and its sides stop short of it.
+ */
+function drape(baseRadius: number, material: string): Part[] {
+  const half = 0.012, ball = { radius: 0.5, y: 0.95, to: 62 * DEG }, cloth = { sides: 0.86, corner: 4, turn: 20 * DEG };
+  const leave = [ball.radius * Math.sin(ball.to), ball.y + ball.radius * Math.cos(ball.to)];
+  const longest = leave[1] - (FLOOR + half + 0.004);
+  /** How far each direction hangs, as a share of the corners' fall. */
+  const share = (azimuth: number) => cloth.sides * (Math.abs(Math.cos(azimuth)) ** cloth.corner + Math.abs(Math.sin(azimuth)) ** cloth.corner) ** (-1 / cloth.corner);
+  /** The cloth leaves the ball along its tangent, turns down into a curtain and spreads on the floor. */
+  const flare = (fall: number) => 0.21 * (1 - Math.exp(-fall / 0.4)) + 0.07 * (fall / longest) ** 5;
+  const centre: [number, number][] = [];
+  for (let angle = 0; angle < ball.to - 1e-9; angle += 2 * DEG) centre.push([ball.radius * Math.sin(angle), ball.y + ball.radius * Math.cos(angle)]);
+  const steps = Math.ceil(longest / 0.018);
+  for (let step = 0; step <= steps; step++) centre.push([leave[0] + flare((longest * step) / steps), leave[1] - (longest * step) / steps]);
+  const inner: Knot[] = [], outer: Knot[] = [];
+  let tangent = [1, 0], out = [0, 1];
+  centre.forEach(([r, y], i) => {
+    const a = centre[Math.max(0, i - 1)], b = centre[Math.min(centre.length - 1, i + 1)], length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    tangent = i === 0 ? [1, 0] : [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+    out = [-tangent[1], tangent[0]];
+    inner.push({ r: Math.max(0, r - half * out[0]), y: y - half * out[1] });
+    outer.unshift({ r: Math.max(0, r + half * out[0]), y: y + half * out[1] });
+  });
+  const end = centre[centre.length - 1], lip: Knot[] = [];
+  for (let angle = 30 * DEG; angle < 179 * DEG; angle += 30 * DEG) {
+    lip.push({ r: end[0] + half * (-Math.cos(angle) * out[0] + Math.sin(angle) * tangent[0]), y: end[1] + half * (-Math.cos(angle) * out[1] + Math.sin(angle) * tangent[1]) });
+  }
+  // Uneven folds: broad lobes with tight creases between them, drifting in spacing and depth.
+  const folds = (azimuth: number) => {
+    const drift = azimuth + 0.16 * Math.sin(3 * azimuth + 1) + 0.07 * Math.sin(5 * azimuth + 2.3);
+    return (1 - 2 * (0.5 - 0.5 * Math.cos(9 * drift)) ** 1.5) * (0.78 + 0.22 * Math.sin(2 * azimuth + 0.7));
+  };
+  const geometry = revolve(buildProfile([...inner, ...lip, ...outer]), {
+    columns: 480,
+    warp: (azimuth, point) => {
+      if (point.y >= leave[1]) return [point.r, point.y];
+      // The profile hangs as far as a corner; elsewhere the hem rises to where the cloth ends.
+      const fall = Math.min(longest, leave[1] - point.y), hang = fall * Math.min(1, share(azimuth - cloth.turn));
+      const r = point.r + flare(hang) - flare(fall);
+      return [r * (1 + 0.2 * (hang / longest) ** 1.3 * folds(azimuth)), point.y + fall - hang];
+    }
+  });
+  return [{ name: 'Drape', geometry, material }, { name: 'Drape base', geometry: baseGeometry(baseRadius), material: 'Base' }];
+}
+
+/** A trefoil knot standing on two lobes: a solid tube that crosses in front of itself. */
+function knot(baseRadius: number, material: string): Part[] {
+  const tubular = 384, radial = 36, tube = 0.15, stride = radial + 1;
+  const geometry = new THREE.TorusKnotGeometry(0.46, tube, tubular, radial, 2, 3);
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute, normal = geometry.getAttribute('normal') as THREE.BufferAttribute, uv = geometry.getAttribute('uv');
+  // Close both seams exactly, and measure the tube to bring its UVs to the other shapes' density.
+  let length = 0;
+  const ring = (row: number) => {
+    const centre = new THREE.Vector3();
+    for (let column = 0; column < radial; column++) centre.add(new THREE.Vector3().fromBufferAttribute(position, row * stride + column));
+    return centre.divideScalar(radial);
+  };
+  for (let row = 0; row <= tubular; row++) {
+    if (row > 0) length += ring(row).distanceTo(ring(row - 1));
+    for (let column = 0; column <= radial; column++) {
+      const i = row * stride + column, twin = (row % tubular) * stride + column % radial;
+      position.copyAt(i, position, twin);
+      normal.copyAt(i, normal, twin);
+    }
+  }
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * length) / TAU, uv.getY(i) * 2 * tube);
+  geometry.rotateZ(90 * DEG);
+  geometry.computeBoundingBox();
+  geometry.translate(0, FLOOR - geometry.boundingBox!.min.y, 0);
+  return [{ name: 'Knot', geometry, material }, { name: 'Knot base', geometry: baseGeometry(baseRadius), material: 'Base' }];
+}
+
+/**
+ * Builds the meshes. Every part is a closed solid, so transmission stays
+ * consistent, and every mesh keeps the identity transform, so position-based
+ * graphs see one object space.
+ */
+function assemble(name: string, parts: Part[], materialX?: Record<string, string>): LoadedModel {
+  const materials = new Map<string, THREE.MeshPhysicalMaterial>();
+  const root = new THREE.Group();
+  root.name = name;
+  for (const part of parts) {
+    let material = materials.get(part.material);
+    if (!material) {
+      material = part.material === 'Core' ? new THREE.MeshPhysicalMaterial({ color: 0xffc35a, metalness: 1, roughness: 0.25 })
+        : part.material === 'Base' ? new THREE.MeshPhysicalMaterial({ map: dialTexture(), roughness: 0.45 })
+        : new THREE.MeshPhysicalMaterial({ color: 0xd9dadd, roughness: 0.28 });
+      material.name = part.material;
+      materials.set(part.material, material);
+    }
+    const mesh = new THREE.Mesh(part.geometry, material);
+    mesh.name = part.name;
+    root.add(mesh);
+  }
+  return { name, root, animations: [], materialX, revoke() {} };
+}
+
+/** Material test model: a hollow ball with a port and a core. */
+export const createShaderBall = (): LoadedModel => assemble('Shader ball', ball(1.38, 'Material'));
+
+/**
+ * Material test set: a panelled cube, the shader ball, a draped cloth and a
+ * knot, in a shallow arc. Each has its own material and opens with a bundled
+ * sample that suits its shape.
+ */
+export function createMaterialShapes(): LoadedModel {
+  const shapes = [
+    { radius: 1, parts: cube(1, 'Cube'), forward: 0.5 },
+    { radius: 1.18, parts: ball(1.18, 'Ball').map((part) => ({ ...part, name: part.name === 'Shell' ? 'Ball' : `Ball ${part.name.toLowerCase()}` })), forward: 0 },
+    { radius: 1.05, parts: drape(1.05, 'Drape'), forward: 0 },
+    { radius: 0.95, parts: knot(0.95, 'Knot'), forward: 0.5 }
+  ];
+  const spacing = 0.08, width = shapes.reduce((sum, shape) => sum + 2 * shape.radius, 0) + spacing * (shapes.length - 1);
+  let x = -width / 2;
+  return assemble('Material shapes', shapes.flatMap((shape) => {
+    x += shape.radius;
+    for (const part of shape.parts) part.geometry.translate(x, 0, shape.forward);
+    x += shape.radius + spacing;
+    return shape.parts;
+  }), { Cube: 'hex-panel', Ball: 'car-paint', Drape: 'tartan-velvet', Knot: 'candle-wax' });
 }

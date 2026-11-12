@@ -8,7 +8,7 @@ import * as meshopt from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { fetchWithProgress } from './fetchWithProgress';
 import type { PathedFile } from './droppedFiles';
 import { loadModelLighting, modelEnvironmentPaths, type ModelLighting } from './modelLighting';
-import { createShaderBall } from './shaderBall';
+import { createMaterialShapes, createShaderBall } from './shaderBall';
 
 export { isHDRFile, isModelFile, readDroppedItems, toPathedFiles, type PathedFile } from './droppedFiles';
 
@@ -20,6 +20,8 @@ export interface LoadedModel {
   animations: THREE.AnimationClip[];
   lighting?: ModelLighting;
   pbrt?: { settings: Converted['settings']; warnings: Warning[] };
+  /** Bundled MaterialX sample to apply to each named material when the model first opens. */
+  materialX?: Record<string, string>;
   /** Original files, including external buffers/textures, for reloads from OPFS. */
   source?: ModelSource;
   /** Releases blob URLs created for local files. */
@@ -239,4 +241,4 @@ export function createMaterialSpheres(): LoadedModel {
 
 /** Scenes built in code: the presets without a URL. */
 export const createProceduralModel = (presetId: string | null): LoadedModel =>
-  presetId === 'shader-ball' ? createShaderBall() : createMaterialSpheres();
+  presetId === 'shader-ball' ? createShaderBall() : presetId === 'material-shapes' ? createMaterialShapes() : createMaterialSpheres();

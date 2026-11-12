@@ -34,6 +34,22 @@
     }
   },
   {
+    "id": "material-shapes",
+    "name": "Material shapes",
+    "tag": "Material test",
+    "url": null,
+    "license": "CC0",
+    "credit": "Procedural scene by Yi Shen",
+    "sourceUrl": "https://github.com/pissang/mutracer",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "camera": {
+      "position": [0.9, 2.7, 11.4],
+      "target": [0.0, 0.72, 0.0],
+      "fov": 28,
+      "space": "grounded"
+    }
+  },
+  {
     "id": "toycar",
     "name": "Toy Car",
     "tag": "Coat · transmission",

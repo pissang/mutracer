@@ -19,6 +19,7 @@ import {
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, readMaterial, type MaterialValues, type TextureKey } from './materialParams';
 import { isMaterialXDrop, materialDropTarget, type MaterialDropTarget } from './materialDrop';
+import { MATERIALX_SAMPLES, materialXSampleFiles } from './materialxSamples';
 // Keep the importer in the initial module graph: a tab can stay open across
 // deployments that remove the previous build's lazily loaded chunks.
 import { parseMaterialXGraph } from './materialxGraph';
@@ -128,6 +129,7 @@ export class WebEngine implements ViewerEngine {
   private envAbort?: AbortController;
   private dragging = false;
   private awaitingFirstSample = false;
+  private materialXDefaults: Record<string, string> | null = null;
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
@@ -456,6 +458,8 @@ export class WebEngine implements ViewerEngine {
     this.materials.flush();
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
+    // Restored edits already hold the materials the user left.
+    this.materialXDefaults = edits ? null : model.materialX ?? null;
     const cameraRestored = restored ? this.restoreCamera(id) : false;
     const preset = MODEL_PRESETS.find((preset) => preset.id === meta.presetId);
     const researchScene = preset?.category === 'research';
@@ -1500,7 +1504,24 @@ export class WebEngine implements ViewerEngine {
    * material as one undo step. The import replaces the whole material: every
    * value starts from the neutral base and every texture slot is set or cleared.
    */
-  async importMaterialX(materialId: string, files: PathedFile[], signal?: AbortSignal) {
+  /** A model's own starting materials; they need its materials converted, so they follow its first sample. */
+  private async applyMaterialXDefaults() {
+    const defaults = this.materialXDefaults, token = this.loadToken;
+    this.materialXDefaults = null;
+    if (!defaults || !this.model) return;
+    const materials = new Map<string, string>();
+    this.model.root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.isMesh) for (const material of toArray(mesh.material)) materials.set(material.name, material.uuid);
+    });
+    for (const [name, sampleId] of Object.entries(defaults)) {
+      const sample = MATERIALX_SAMPLES.find((entry) => entry.id === sampleId), materialId = materials.get(name);
+      if (token !== this.loadToken) return;
+      if (sample && materialId) await this.importMaterialX(materialId, materialXSampleFiles(sample), undefined, true);
+    }
+  }
+
+  async importMaterialX(materialId: string, files: PathedFile[], signal?: AbortSignal, quiet = false) {
     const token = this.loadToken;
     let name = files[0]?.file.name ?? 'MaterialX';
     let imports=materialXImports.get(this);
@@ -1533,7 +1554,7 @@ export class WebEngine implements ViewerEngine {
       if(!applied||signal?.aborted)return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
-      showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}`,warnings.length?'warning':'success');
+      if(!quiet)showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}`,warnings.length?'warning':'success');
       return true;
     } catch (error) {
       if(signal?.aborted||imports.get(materialId)!==request||this.modelGroup!==model)return false;
@@ -1870,6 +1891,7 @@ export class WebEngine implements ViewerEngine {
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });
+        if (hasNewSample) void this.applyMaterialXDefaults();
       } else if (loading) {
         const stage = phase === 'compiling' ? 'shaders'
           : phase === 'preparing' ? 'bvh' : loading.stage;
