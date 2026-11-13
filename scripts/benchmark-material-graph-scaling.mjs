@@ -26,6 +26,9 @@ const {values} = parseArgs({options: {
   'edit-interval-ms': {type: 'string'},
   'edit-kind': {type: 'string'},
   'compile-speed': {type: 'string'},
+  'compile-backend': {type: 'string'},
+  probe: {type: 'string'},
+  'probe-delay-ms': {type: 'string'},
   policy: {type: 'string'},
   repeats: {type: 'string', default: '1'},
   'scene-gltf': {type: 'string'},
@@ -41,9 +44,11 @@ if (values.help) {
   --scene-gltf scene.glb | --scene-fbx scene.fbx   loaded scene instead of the sphere grid
   --no-interim  --budget-ms 1000   fixed planner budgets instead of the calibrated policy
   --target-samples 2048      render target while the tier policy decides (auto)
-  --settle-ms 60000          longest wait for the policy decision (auto)
+  --settle-ms 60000          longest wait for the policy decision (auto); rows report settleOutcome
   --edits 10 --edit-interval-ms 1000 --edit-kind structure|parameter   edit simulation
   --compile-speed 3          debug device compile speed factor (simulates a slower compiler)
+  --compile-backend d3d12    debug compile-cost shape of another backend
+  --probe contended|solo --probe-delay-ms 1000   concurrency probe: an edit needing a compile during (or without) a long upgrade compile
   --policy '{"margin":1.5}'  tier policy overrides (JSON)
   --hdr --hdr-block 8 --close-up --first-index 0 --swap
   --output rows.jsonl        full rows (calibration samples, upgrade events, edits, timings)
@@ -77,15 +82,18 @@ try {
         for (let i = 0; i < 300; i++) { if (await page.tab.evaluate('typeof window.runMaterialGraphScaling === "function"')) break; await delay(100); }
         const number = name => values[name] === undefined ? undefined : Number(values[name]);
         const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl, interim: !values['no-interim'], budgetMs: number('budget-ms'),
-          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), policy: values.policy ? JSON.parse(values.policy) : undefined};
+          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), compileBackend: values['compile-backend'], probe: values.probe, probeDelayMs: number('probe-delay-ms'), policy: values.policy ? JSON.parse(values.policy) : undefined};
         let row;
         try { row = await page.tab.evaluate(`runMaterialGraphScaling(${JSON.stringify(options)})`); }
         catch (error) { row = {...options, error: String(error).slice(0, 2000)}; }
         const last = (type) => row.upgrades?.filter(e => e.type === type).at(-1);
         console.log(JSON.stringify({repeat, structures, mode, firstFrameMs: row.firstFrameMs, graphReadyMs: row.graphReadyMs, firstCorrectFrameMs: row.firstCorrectFrameMs, optimizedMs: row.optimizedMs, tiers: row.tiers?.map(t => `${t.interim ? 'i' : 'f'}${t.specialized}/${t.interpreted}@${Math.round(t.atMs)}`).join(' '), gpuSampleTimeMs: row.gpuSampleTimeMs,
-          wallSampleMs: row.wallSampleMs, sourceBytes: row.shaderCompilation?.sourceBytes, pipelineMs: row.shaderCompilation?.pipelineCompilationTimeMs, swap: row.swap,
+          settle: row.settleOutcome, wallSampleMs: row.wallSampleMs, sourceBytes: row.shaderCompilation?.sourceBytes, pipelineMs: row.shaderCompilation?.pipelineCompilationTimeMs, swap: row.swap,
           upgrades: row.upgrades?.map(e => `${e.type}@${Math.round(e.atMs)}`).join(' '), verified: (last('keep') ?? last('rollback'))?.verification,
           compiles: row.compiles?.map(c => `${c.kind}:${Math.round(c.totalKB)}KB/${Math.round(c.ms)}ms s=${c.speed.toFixed(2)}`).join(' '),
+          probe: row.probe && {upgradeStart: Math.round(row.probe.upgradeStartMs ?? -1), editAt: Math.round(row.probe.editAtMs), editReady: row.probe.editReadyMs === undefined ? 'timeout' : Math.round(row.probe.editReadyMs),
+            editCompile: row.probe.editCompile && `${Math.round(row.probe.editCompile.ms)}ms overlap ${Math.round(row.probe.editCompile.overlapMs)} done@${Math.round(row.probe.editCompile.finishedMs)}`,
+            upgradeCompile: row.probe.upgradeCompile && `${Math.round(row.probe.upgradeCompile.ms)}ms done@${Math.round(row.probe.upgradeCompile.finishedMs)}`},
           edits: row.edits?.length ? row.edits.map(e => `${e.readyMs === undefined ? 'timeout' : Math.round(e.readyMs)}${e.compiledKB ? 'c' : ''}`).join(' ') : undefined, error: row.error}));
         if (values.output) appendFileSync(resolve(values.output), JSON.stringify(row) + '\n');
       } finally { await page.close(); }

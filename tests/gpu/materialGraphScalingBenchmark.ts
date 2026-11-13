@@ -7,7 +7,7 @@ import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
 import {DEFAULT_GRAPH_TIER_BUDGET} from '../../src/renderer/materialGraph/planner.js';
 import {freezeMaterialGraphPolicy, setMaterialGraphPlanner, type GraphInstallEvent, type GraphTierPolicy, type GraphUpgradeEvent} from '../../src/renderer/materialGraph/state.js';
-import type {GraphCompileObservation} from '../../src/renderer/materialGraph/tierPolicy.js';
+import type {GraphCompileObservation, GraphCompilerBackend} from '../../src/renderer/materialGraph/tierPolicy.js';
 import {scalingGraph, type GraphClass} from './materialGraphScalingScene.js';
 
 /** Material-graph scaling harness: one fixed 32×32 sphere grid, N distinct graph
@@ -106,17 +106,26 @@ interface RunOptions {
    * graph with an unseen structure, alternating the simple and noise classes (new opcode families). Default 0. */ edits?: number; editIntervalMs?: number;
   /** `parameter` edits change only parameter values of the same structure. Default structure. */ editKind?: 'structure' | 'parameter';
   /** Debug compile speed factor (slow device simulation). */ compileSpeed?: number;
+  /** Debug compile-cost shape, e.g. 'd3d12' on a Mac. */ compileBackend?: GraphCompilerBackend;
   policy?: Partial<GraphTierPolicy>;
+  /** Concurrency probe (auto mode): `contended` starts a fully specialized upgrade, then makes a
+   * structural edit that needs its own compile (new opcode families, no prefetch) `probeDelayMs`
+   * after the upgrade starts; `solo` makes the same edit with no upgrade. Records how long the
+   * edit waits. */ probe?: 'contended' | 'solo'; probeDelayMs?: number;
 }
 async function run(options: RunOptions) {
   const {structures: count, mode, graphClass = 'simple', bakeSize = 128, perfSamples = 50, textureBinding = 'auto', firstIndex = 0} = options;
   // 'graph' forces specialized code, 'interpreter' the shared interpreter tier and
   // 'auto' lets the planner mix them. A per-run salt keeps the fixed interpreter
   // source cold in the shared Metal cache.
-  const installs: GraphInstallEvent[] = [], upgrades: GraphUpgradeEvent[] = [], compiles: GraphCompileObservation[] = [];
+  const installs: GraphInstallEvent[] = [], upgrades: GraphUpgradeEvent[] = [], compiles: GraphCompileObservation[] = [], compiledAt: number[] = [];
+  // The probe forces a fully specialized upgrade right after the debounce (contended) or none (solo).
+  const probePolicy: Partial<GraphTierPolicy> | undefined = options.probe && {margin: 0, prefetch: false, maxUpgradeCompileMs: options.probe === 'contended' ? Infinity : 0};
+  const budgetMs = options.probe ? 1e9 : options.budgetMs;
   setMaterialGraphPlanner({tier: mode === 'interpreter' ? 'interpreter' : mode === 'auto' ? 'auto' : 'specialized', salt: 1 + Math.floor(Math.random() * 1e9),
-    interim: options.interim ?? true, budget: options.budgetMs ? {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs: options.budgetMs} : undefined, compileSpeed: options.compileSpeed, policy: options.policy,
-    onInstall: event => installs.push(event), onUpgrade: event => upgrades.push(event), onCompile: event => compiles.push(event)});
+    interim: options.interim ?? true, budget: budgetMs ? {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs} : undefined, compileSpeed: options.compileSpeed, compileBackend: options.compileBackend,
+    policy: {...options.policy, ...probePolicy},
+    onInstall: event => installs.push(event), onUpgrade: event => upgrades.push(event), onCompile: event => { compiles.push(event); compiledAt.push(performance.now()); }});
   const graphs = mode === 'graph' || mode === 'interpreter' || mode === 'auto';
   const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding});
   engine.display.setSize(WIDTH, HEIGHT); engine.bvhBuilder = 'builtin';
@@ -175,6 +184,33 @@ async function run(options: RunOptions) {
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
     }
     const firstCorrectFrameMs = performance.now() - start;
+    let probe: {upgradeStartMs?: number; editAtMs: number; editReadyMs?: number; editCompile?: unknown; upgradeCompile?: unknown} | undefined;
+    if (options.probe && graphs && count) {
+      render.maxSamples = 1e6; render.restart();
+      const waitFor = async (done: () => boolean, ms: number) => { for (const deadline = performance.now() + ms; !done() && performance.now() < deadline;) { render.refine(); await pause(); } };
+      // contended: the gate starts the upgrade after its debounce; solo: the gate refuses it (ceiling).
+      await waitFor(() => upgrades.some(e => e.type === (options.probe === 'contended' ? 'start' : 'hold')), 120000);
+      const started = upgrades.find(e => e.type === 'start');
+      await waitFor(() => false, options.probeDelayMs ?? 1000);
+      // Noise-class structures add opcode families the serving interpreter lacks.
+      const slot = 0, compiled = compiles.length, before = (engine.getDiagnostics()?.materialGraphs as {revision: number}).revision;
+      materials[slot].graph = scalingGraph(structures(1, 'noise', firstIndex + 800000)[0], 'noise');
+      const editStart = performance.now();
+      engine.update();
+      let editReadyMs: number | undefined;
+      await waitFor(() => {
+        const state = engine.getDiagnostics()?.materialGraphs as {revision: number; installedRevision: number};
+        if (state.revision > before && state.installedRevision >= state.revision) editReadyMs = performance.now() - editStart;
+        return editReadyMs !== undefined;
+      }, options.settleMs ?? 300000);
+      const editIndex = compiles.findIndex((c, i) => i >= compiled && !c.specializedBytes && c.interpreterBytes > 0);
+      // The (now stale) upgrade compile still finishes; its duration tells whether the two overlapped.
+      await waitFor(() => compiles.some(c => c.specializedBytes > 0), options.settleMs ?? 300000);
+      const upgradeIndex = compiles.findIndex(c => c.specializedBytes > 0);
+      probe = {upgradeStartMs: started && started.at - start, editAtMs: editStart - start, editReadyMs,
+        editCompile: editIndex >= 0 ? {...compiles[editIndex], finishedMs: compiledAt[editIndex] - start} : undefined,
+        upgradeCompile: upgradeIndex >= 0 ? {...compiles[upgradeIndex], finishedMs: compiledAt[upgradeIndex] - start} : undefined};
+    }
     // Structural edits: each replaces one material's graph by an unseen structure.
     const edits: {atMs: number; readyMs?: number; installs: number; shaderKeyChanged: boolean; compiledKB?: number}[] = [];
     // Settled: the last decision is final, or the gate refused under the render target.
@@ -202,11 +238,16 @@ async function run(options: RunOptions) {
     }
     // Let the tier policy decide on an upgrade for a render of `targetSamples` (auto mode).
     const settleStart = performance.now();
-    if (mode === 'auto' && graphs && count) {
+    if (mode === 'auto' && graphs && count && !options.probe) {
       render.maxSamples = options.targetSamples ?? 2048; render.restart();
       for (const deadline = settleStart + (options.settleMs ?? 60000); !settled(settleStart) && performance.now() < deadline;) { render.refine(); await pause(); }
     }
     const settleMs = performance.now() - settleStart;
+    // Where the policy stood at the end of the settle window: decided, or still compiling or
+    // verifying an upgrade at the deadline (no final upgrade conclusion for such a row).
+    const lastUpgrade = upgrades.at(-1);
+    const settleOutcome = mode !== 'auto' || !graphs || !count || options.probe ? undefined : settled(settleStart) ? 'decided'
+      : lastUpgrade?.type === 'start' ? 'compiling-at-deadline' : lastUpgrade?.type === 'installed' ? 'verifying-at-deadline' : 'undecided-at-deadline';
     // Fixed tiers for the measurements below.
     freezeMaterialGraphPolicy(true);
     render.maxSamples = 64;
@@ -260,9 +301,9 @@ async function run(options: RunOptions) {
       swap = {readyMs, optimizedMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
     }
     return {
-      swap, scene: complex?.info, edits, settleMs,
+      swap, scene: complex?.info, edits, settleMs, settleOutcome, probe,
       upgrades: upgrades.map(e => ({...e, atMs: e.at - start, key: undefined})),
-      compiles: compiles.map(c => ({totalKB: c.totalBytes / 1024, specializedKB: c.specializedBytes / 1024, interpreterKB: c.interpreterBytes / 1024, ms: c.ms, overlapMs: c.overlapMs, kind: c.kind, referenceMs: c.referenceMs, ratio: c.ratio, speed: c.speed})),
+      compiles: compiles.map(c => ({totalKB: c.totalBytes / 1024, specializedKB: c.specializedBytes / 1024, interpreterKB: c.interpreterBytes / 1024, ms: c.ms, overlapMs: c.overlapMs, kind: c.kind, referenceMs: c.referenceMs, ratio: c.ratio, speed: c.speed, specializedFactor: c.specializedFactor})),
       structures: count, mode, graphClass, firstIndex, bakeSize: mode === 'baked' ? bakeSize : undefined, width: WIDTH, height: HEIGHT, spheres: GRID * GRID,
       prepareMs, bakeMs: mode === 'baked' ? bakeMs : undefined, firstFrameMs, graphReadyMs, firstCorrectFrameMs, optimizedMs, tiers,
       gpuSampleTimeMs: median(gpuSampleTimesMs) ?? null, gpuSampleTimesMs, wallSampleMs: median(complex ? wallSamplesMs.slice(1) : wallSamplesMs), wallSamplesMs,
