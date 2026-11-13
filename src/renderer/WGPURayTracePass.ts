@@ -1273,6 +1273,7 @@ class WGPURayTracePass {
     const run = () => compile().then(
       () => {
         variant.status = 'ready';
+        this.graphs.compiled(variant.graphKey);
         finishDiagnostics('ready');
       },
       (error) => {

@@ -269,7 +269,7 @@ export interface GraphVerifyOptions { minGain: number; phaseSamples: number; min
  * ends after one warm-up sample plus `phaseSamples` samples, `minPhaseMs` and either
  * a third of `minTimestamps` GPU timestamps or `maxPhaseMs` (Chrome reads timestamps back about
  * once per second while sampling). The medians of each tier's timestamps over its three
- * phases decide when every phase has at least one; otherwise wall
+ * phases decide when each tier has at least half of `minTimestamps`; otherwise wall
  * time per sample decides, which Render's realtime pacing can distort. A view change
  * discards the current phase.
  */
@@ -311,7 +311,10 @@ export class GraphUpgradeVerifier {
         if (this.phases.length < GraphUpgradeVerifier.ORDER.length) { this.phases.push(this.phase(this.phases.length)); return; }
         const median = (v: number[]) => { const s = v.slice().sort((a, b) => a - b); return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
         const of = (tier: GraphVerifyTier) => this.phases.filter(p => p.tier === tier);
-        const gpu = this.phases.every(p => p.gpu.length > 0);
+        // GPU timestamps decide when each tier has half of `minTimestamps` over its phases:
+        // the timestamp readback can stall for a whole phase behind a deep queue, and wall
+        // time under Render's realtime pacing can invert the result.
+        const gpu = (['final', 'interim'] as const).every(tier => of(tier).reduce((n, p) => n + p.gpu.length, 0) >= Math.ceil(this.options.minTimestamps / 2));
         const wall = (p: VerifyPhase) => p.wallSamples ? (p.wallEnd! - p.wallStart!) / p.wallSamples : NaN;
         const value = (tier: GraphVerifyTier) => gpu ? median(of(tier).flatMap(p => p.gpu)) : of(tier).map(wall).reduce((a, b) => a + b, 0) / 3;
         const final = value('final'), interim = value('interim'), gain = 1 - final / interim;

@@ -240,6 +240,8 @@ export class MaterialGraphState {
     private rejected = new Set<string>();
     /** Editing interpreters compiled in the background, by shader key. */
     private prefetched = new Map<string, GraphTierShape>();
+    /** Shader keys of prefetched variants whose compile finished. */
+    private prefetchedReady = new Set<string>();
     private seenTerminals = new Set<string>(PLAIN_TERMINALS);
     // Render progress reported by the backend.
     private view = -1;
@@ -363,8 +365,9 @@ export class MaterialGraphState {
         // Incremental edit: the installed variant keeps its specialized code and runs
         // new or changed structures as interpreter programs.
         if (installed && this.fits(installed, base)) return installed;
-        // A background-compiled editing interpreter that covers the edit.
-        for (const shape of this.prefetched.values()) if (this.fits(shape, base)) return shape;
+        // A ready background-compiled editing interpreter that covers the edit. One still
+        // compiling is not waited for: on a slow compiler the set's own families finish sooner.
+        for (const shape of this.prefetched.values()) if (this.prefetchedReady.has(shape.shaderKey) && this.fits(shape, base)) return shape;
         const correctMs = planner.budget?.correctMs ?? this.policy.correctMs, {model} = this.deviceBudget();
         if (installed || this.generation > 0) {
             // A structural edit: every opcode family, the plain terminals and every
@@ -541,22 +544,23 @@ export class MaterialGraphState {
      * After the first graph installation, the editing interpreter (every opcode family) is
      * compiled once in the background while the installed variant serves, so later
      * structural edits find it ready. Returns that plan once, when nothing else compiles;
-     * it has the installed variant's pipeline features. Skipped when its predicted
-     * increment exceeds the final-variant budget (the most background compile time a
-     * structure set may cost): an edit then compiles only its own families.
+     * it has the installed variant's pipeline features. Skipped when its whole-kernel
+     * compile is predicted over the upgrade ceiling (the longest uncancellable background
+     * compile the policy starts): an edit then compiles only its own families.
      */
     prefetch(compilesInFlight: number): GraphPlan | undefined {
         const installed = this.active.shape;
         if (compilesInFlight > 0 || !this.policy.prefetch || planner.tier !== 'auto' || !this.interpreterAvailable || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
         const full = this.interpreterConfig(this.base.structures, true);
         if (installed.interpreter && installed.interpreter.families.size >= ALL_FAMILIES.size && full.terminals.every(t => installed.interpreter!.terminals.includes(t))) return;
-        const {model, budget} = this.deviceBudget();
-        if (interpreterCompileMs(this.interpreterBytes(full.terminals, full.families), model) > Math.max(budget.budgetMs, budget.correctMs)) return;
         const shape = this.shape(this.base.structures.filter(g => !this.program(g)), full, installed.features);
+        if (this.compileMs(shape) > this.policy.maxUpgradeCompileMs) return;
         if (this.prefetched.has(shape.shaderKey)) return;
         this.prefetched.set(shape.shaderKey, shape);
         return this.plan(this.base, shape);
     }
+    /** The backend finished compiling the variant `shaderKey`. */
+    compiled(shaderKey: string) { if (this.prefetched.has(shaderKey)) this.prefetchedReady.add(shaderKey); }
     /** Scheduling class of a compile for `plan`: `edit` renders the requested structures
      * correctly (never waits behind background work), `upgrade` is the gated specialized
      * variant, `prefetch` the background editing interpreter. */

@@ -189,6 +189,20 @@ describe('graph upgrade verification', () => {
         expect(decision!.gain).toBeCloseTo(0.2);
     });
 
+    it('decides by GPU time when one phase gets no timestamps but each tier has enough', () => {
+        const verifier = new GraphUpgradeVerifier({minGain: 0.03, phaseSamples: 4, minTimestamps: 6, minPhaseMs: 30, maxPhaseMs: 100});
+        let now = 0;
+        for (let i = 0; i < 400 && !verifier.decision; i++) {
+            const tier = verifier.tier, ms = tier === 'final' ? 9 : 10;
+            // Wall time favours the interim (realtime pacing); the readback stalls in the fourth phase.
+            now += tier === 'final' ? 12 : 10;
+            verifier.frame(tier, 1, 1, now);
+            if ((verifier as unknown as {phases: unknown[]}).phases.length !== 4) verifier.gpu(tier, 1, ms);
+        }
+        expect(verifier.decision).toMatchObject({keep: true, method: 'gpu'});
+        expect(verifier.decision!.phases[3].timestamps).toBe(0);
+    });
+
     it('discards the current phase when the view changes', () => {
         const verifier = new GraphUpgradeVerifier({minGain: 0.03, phaseSamples: 4, minTimestamps: 3, minPhaseMs: 30, maxPhaseMs: 100});
         let frames = 0;
