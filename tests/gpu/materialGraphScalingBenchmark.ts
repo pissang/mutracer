@@ -1,4 +1,8 @@
-import {Engine, Render, Camera, Mesh, OpenPBRMaterial, AmbientLight, SphereLight, Texture, createSphereGeometry, createPlaneGeometry} from '../../src/main.js';
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
+import {MeshoptDecoder} from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import {FBXLoader} from 'three/examples/jsm/loaders/FBXLoader.js';
+import {Engine, Render, Camera, Mesh, OpenPBRMaterial, AmbientLight, SphereLight, Texture, THREESync, createSphereGeometry, createPlaneGeometry, type Geometry} from '../../src/main.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
 import {setMaterialGraphTier} from '../../src/renderer/materialGraph/state.js';
@@ -41,7 +45,57 @@ function bake(index: number, graphClass: GraphClass, size: number) {
   return {map: texture(color, 'srgb'), metallicRoughnessMap: texture(mr, 'linear')};
 }
 
-async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean}) {
+// Scene materials are replaced, so FBX texture requests resolve to one opaque pixel.
+const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+/** Loads a glTF (or FBX) scene through THREESync and assigns `materials` round-robin to every
+ * converted mesh. Each geometry's UV0 is rescaled into [0, 1] so UV bakes stay exact;
+ * the camera is fixed inside the scene bounds. */
+async function gltfScene(engine: Engine, url: string, materials: OpenPBRMaterial[]) {
+  let root: THREE.Object3D;
+  if (url.endsWith('.fbx')) {
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier(item => item.endsWith('.fbx') ? item : PIXEL);
+    root = await new FBXLoader(manager).loadAsync(url);
+    // Authored FBX lights differ per file; keep the harness's own sun and ambient.
+    const lights: THREE.Object3D[] = [];
+    root.traverse(object => { if ((object as THREE.Light).isLight) lights.push(object); });
+    for (const light of lights) light.removeFromParent();
+  } else root = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url)).scene;
+  const loaded = {scene: root};
+  const scene = new THREE.Scene();
+  scene.add(loaded.scene);
+  scene.background = new THREE.Color(0.7, 0.8, 1);
+  const sun = new THREE.DirectionalLight(0xffffff, 6);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.3), sun, sun.target);
+  scene.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(loaded.scene), size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+  sun.position.set(center.x + size.x * 0.1, box.max.y + size.y, center.z + size.z * 0.2); sun.target.position.copy(center);
+  // The FBX interior (Bistro) is closed to the sun; light it from inside.
+  if (url.endsWith('.fbx')) { const lamp = new THREE.PointLight(0xffffff, 2000 * size.y * size.y, 0, 2); lamp.position.set(center.x, box.min.y + size.y * 0.7, center.z); scene.add(lamp); }
+  const rescaled = new Set<Geometry>();
+  let assigned = 0, triangles = 0, noUv = 0;
+  // Every source material converts to a placeholder that onMeshConverted replaces.
+  const sync = new THREESync(engine, {scene, convertMaterial: () => materials[0], onMeshConverted(mesh) {
+    mesh.materials = mesh.materials.map(() => materials[assigned++ % materials.length]);
+    const geometry = mesh.geometry;
+    if (rescaled.has(geometry)) return;
+    rescaled.add(geometry);
+    triangles += (geometry.indices?.array.length ?? geometry.position.array.length / 3) / 3;
+    const uv = geometry.uv?.array;
+    if (!uv) { noUv++; return; }
+    let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
+    for (let i = 0; i < uv.length; i += 2) { u0 = Math.min(u0, uv[i]); u1 = Math.max(u1, uv[i]); v0 = Math.min(v0, uv[i + 1]); v1 = Math.max(v1, uv[i + 1]); }
+    for (let i = 0; i < uv.length; i += 2) { uv[i] = (uv[i] - u0) / Math.max(u1 - u0, 1e-6); uv[i + 1] = (uv[i + 1] - v0) / Math.max(v1 - v0, 1e-6); }
+  }});
+  sync.update();
+  const camera = new Camera({projection: 'perspective', fov: 60});
+  camera.position = [box.min.x + size.x * 0.2, box.min.y + size.y * 0.2, center.z];
+  camera.lookAt([box.max.x, box.min.y + size.y * 0.3, center.z]);
+  engine.camera = camera;
+  return {info: {meshes: assigned, geometries: rescaled.size, triangles, noUv, bounds: [box.min.toArray(), box.max.toArray()], camera: [camera.position, [box.max.x, box.min.y + size.y * 0.3, center.z]], distinctMaterials: Math.min(assigned, materials.length)}};
+}
+
+async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean; sceneUrl?: string}) {
   const {structures: count, mode, graphClass = 'simple', bakeSize = 128, perfSamples = 50, textureBinding = 'auto', firstIndex = 0} = options;
   // 'interpreter' renders the same graphs as 'graph' on the shared interpreter tier.
   // A per-run salt keeps the fixed interpreter source cold in the shared Metal cache.
@@ -62,7 +116,9 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
     return new OpenPBRMaterial({baseColor: [0.3 + 0.5 * h, 0.5, 0.8 - 0.5 * h], specularRoughness: 0.2 + 0.6 * h, baseMetalness: h > 0.7 ? 1 : 0});
   });
   const fallback = new OpenPBRMaterial({baseColor: [0.6, 0.6, 0.6], specularRoughness: 0.5});
+  const complex = options.sceneUrl ? await gltfScene(engine, options.sceneUrl, materials.length ? materials : [fallback]) : undefined;
   const sphere = createSphereGeometry(32, 16), meshes: Mesh[] = [];
+  if (!complex) {
   for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
     const mesh = new Mesh(sphere, materials.length ? materials[(z * GRID + x) % materials.length] : fallback);
     mesh.transform[0] = mesh.transform[5] = mesh.transform[10] = 0.45;
@@ -77,6 +133,7 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
   if (options.closeUp) { camera.position = [-15.5, 1.2, -13.0]; camera.lookAt([-15.5, 0, -15.5]); }
   else { camera.position = [0, 22, 26]; camera.lookAt([0, 0, -1]); }
   engine.camera = camera;
+  }
   const render = new Render(engine, {bounces: 6, directLightCandidates: 1, samplingPattern: 'sobol', maxSamples: 64, denoiser: null});
   const prepareMs = performance.now() - prepareStart;
   try {
@@ -114,11 +171,26 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
     }
     render.maxSamples = 4096; render.restart();
     const gpuSampleTimesMs: number[] = [];
-    for (let i = 0; i < perfSamples; i++) { render.refine(); await pause(); const t = render.gpuSampleTimeMs; if (t !== undefined) gpuSampleTimesMs.push(t); }
+    // Timestamps are read back asynchronously and not for every sample. Slow complex
+    // scenes keep refining longer and record each new readback once.
+    const refines = complex ? perfSamples * 4 : perfSamples;
+    for (let i = 0, last: number | undefined; i < refines; i++) {
+      render.refine(); await pause(); const t = render.gpuSampleTimeMs;
+      if (t !== undefined && (!complex || t !== last)) gpuSampleTimesMs.push(t);
+      last = t;
+    }
+    // Wall-clock throughput over 64 samples; GPU-bound scenes approach GPU time per sample.
+    const wallSamplesMs: number[] = [];
+    // The first block absorbs warm-up after the restart; complex scenes drop it.
+    for (let i = 0; i < (complex ? 4 : 1); i++) {
+      render.restart(); const wallStart = performance.now();
+      await render.converge({samples: 64, sampleSequenceOffset: 0, timeoutMs: 900000});
+      wallSamplesMs.push((performance.now() - wallStart) / 64);
+    }
     // Swap to a disjoint structure set of the same size: measures a structure-set
     // change after the first graph variant is installed.
     let swap: {readyMs: number; firstFrameMs: number; pipelineMs?: number; sourceBytes?: number; status?: string} | undefined;
-    if (options.swap && graphs && count) {
+    if (options.swap && graphs && count && !complex) {
       const before = engine.getDiagnostics()?.materialGraphs as {revision: number} | undefined;
       const next = structures(count, graphClass, firstIndex + 500000);
       meshes.forEach((mesh, i) => { if (i < GRID * GRID) mesh.materials = [new OpenPBRMaterial({graph: scalingGraph(next[i % next.length], graphClass)})]; });
@@ -131,10 +203,10 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
       swap = {readyMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
     }
     return {
-      swap,
+      swap, scene: complex?.info,
       structures: count, mode, graphClass, firstIndex, bakeSize: mode === 'baked' ? bakeSize : undefined, width: WIDTH, height: HEIGHT, spheres: GRID * GRID,
       prepareMs, bakeMs: mode === 'baked' ? bakeMs : undefined, firstFrameMs, graphReadyMs, firstCorrectFrameMs,
-      gpuSampleTimeMs: median(gpuSampleTimesMs) ?? null, gpuSampleTimesMs,
+      gpuSampleTimeMs: median(gpuSampleTimesMs) ?? null, gpuSampleTimesMs, wallSampleMs: median(complex ? wallSamplesMs.slice(1) : wallSamplesMs), wallSamplesMs,
       shaderCompilation: diagnostics?.shaderCompilation, materialGraphs: graphState ?? diagnostics?.materialGraphs,
       materialTextures: diagnostics?.materialTextures, textureAtlas: (diagnostics as {textureAtlas?: unknown} | undefined)?.textureAtlas, lastError: engine.getDiagnostics()?.lastError, adapter: diagnostics?.adapterName, userAgent: navigator.userAgent, hdr
     };

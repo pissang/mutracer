@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import {createServer} from 'vite';
 import {parseArgs} from 'node:util';
-import {mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync} from 'node:fs';
+import {mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync, createReadStream} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {resolve, dirname} from 'node:path';
+import {resolve, dirname, extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {launchChrome, delay} from './reference-runtime.mjs';
 
@@ -18,18 +18,24 @@ const {values} = parseArgs({options: {
   'close-up': {type: 'boolean', default: false},
   'hdr-block': {type: 'string', default: '8'},
   swap: {type: 'boolean', default: false},
+  'scene-gltf': {type: 'string'},
+  'scene-fbx': {type: 'string'},
   output: {type: 'string'}, help: {type: 'boolean'}
 }});
 if (values.help) {
-  console.log('node scripts/benchmark-material-graph-scaling.mjs [--structures 0,1,10] [--modes constant,baked,graph,interpreter] [--class simple|noise] [--bake-size 128] [--texture-binding auto|atlas] [--hdr] [--first-index 0] [--close-up] [--hdr-block 8] [--swap] [--output rows.jsonl]');
+  console.log('node scripts/benchmark-material-graph-scaling.mjs [--structures 0,1,10] [--modes constant,baked,graph,interpreter] [--class simple|noise] [--bake-size 128] [--texture-binding auto|atlas] [--hdr] [--first-index 0] [--close-up] [--hdr-block 8] [--swap] [--scene-gltf scene.glb | --scene-fbx scene.fbx] [--output rows.jsonl]');
   process.exit(0);
 }
 // Graph structures start at a fresh index per invocation unless pinned, keeping graph compiles cold.
 const firstIndex = Number(values['first-index'] ?? Math.floor(Math.random() * 1e6) * 1000);
+const scenePath = values['scene-gltf'] ?? values['scene-fbx'];
+const sceneUrl = scenePath ? `/graph-scaling-scene${extname(scenePath).toLowerCase()}` : undefined;
 const counts = values.structures.split(',').map(Number), modes = values.modes.split(',');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), temporary = mkdtempSync(resolve(tmpdir(), 'mutracer-graph-scaling-'));
 const server = await createServer({configFile: resolve(root, 'viewer/vite.config.ts'), cacheDir: resolve(temporary, 'vite'), server: {host: '127.0.0.1', port: 0}, plugins: [{
   name: 'graph-scaling-benchmark', configureServer(vite) { vite.middlewares.use((req, res, next) => {
+    // A local scene file is served as data at a fixed URL; it never enters the repository.
+    if (sceneUrl && req.url === sceneUrl) { res.setHeader('Content-Type', 'application/octet-stream'); createReadStream(resolve(scenePath)).pipe(res); return; }
     if (req.url !== '/graph-scaling-benchmark.html') return next();
     res.setHeader('Content-Type', 'text/html'); res.end(`<script type="module" src="/@fs/${root}/tests/gpu/materialGraphScalingBenchmark.ts"></script>`);
   }); }
@@ -45,7 +51,7 @@ try {
       const page = await chrome.page(`http://127.0.0.1:${address.port}/graph-scaling-benchmark.html`);
       try {
         for (let i = 0; i < 300; i++) { if (await page.tab.evaluate('typeof window.runMaterialGraphScaling === "function"')) break; await delay(100); }
-        const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap};
+        const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl};
         let row;
         try { row = await page.tab.evaluate(`runMaterialGraphScaling(${JSON.stringify(options)})`); }
         catch (error) { row = {...options, error: String(error).slice(0, 2000)}; }
