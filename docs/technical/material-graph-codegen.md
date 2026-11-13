@@ -114,27 +114,95 @@ Helper libraries (noise, HSV, `rotate3d`) count once. The interpreter
 compiles only the opcode families its programs use (the family set is part of
 its shader key), together with the helper libraries of those families; the
 planner charges it by the generated size for the families of all interpretable
-structures. The budget is the graph
-increment over the graph-free kernel (1 s on the reference platform). If every
-structure fits, the variant omits the interpreter, because its presence slows
-every hit. Otherwise the interpreter's fixed cost is charged and the remaining
-budget is filled greedily by benefit per compile millisecond. A mixed variant is
-built only when its specialized structures carry at least 20 % of the estimated
-interpreter work; below that, extra code on every hit outweighs the gain and
-all structures stay interpreted. Structures the interpreter cannot run are
-always specialized, even past the budget.
+structures. If every structure fits the budget, the variant omits the
+interpreter, because its presence slows every hit. Otherwise the interpreter's
+fixed cost is charged and the remaining budget is filled greedily by benefit per
+compile millisecond. A mixed variant is built only when its specialized structures
+carry at least 20 % of the estimated interpreter work; below that, extra code on
+every hit outweighs the gain and all structures stay interpreted. Structures the
+interpreter cannot run are always specialized, even past the budget.
 
-The budget of the final variant and the budget before the first correct frame
-are separate settings, both 1 s by default. A final variant estimated above the
-correct-frame budget, or one containing the interpreter, is preceded by the
-interpreter-only variant, so a larger final budget trades a later optimized
-variant for fewer interpreted structures without delaying correct rendering.
+Specialized source also has a size cap (120 KB by default) independent of the
+compile budget: inline code slows every hit of the megakernel, about 1.07× of
+baked at 110 KB and 1.15× at 220 KB on the reference grid, approaching the
+interpreter at a few hundred KB.
 
-Decisions stay fixed while the structure set is unchanged, so transform,
-visibility and parameter edits never recompile; a new set is planned again.
+### Compile model and budgets
+
+Compile time is modelled per device as `s × (3.8 ms/KB of graph-free kernel +
+21 ms/KB of specialized code + 48 ms/KB of interpreter source beyond 3.6 KB)`.
+The reference platform (Apple M4 Max, Chrome Metal, cold caches) has `s = 1`.
+`s` starts at a backend prior (Metal 1, D3D12 3, others 2; only Metal is
+measured) and follows every cold `createComputePipelineAsync` of the ray-tracing
+kernel, with and without graphs, in log space. A compile far below its
+prediction (under a quarter of `s`) is a driver or browser cache hit and is
+ignored. Time spent while another kernel compiled is half-subtracted as queueing,
+and a compile overlapped for more than 60 % of its duration is ignored. `s` is
+kept in memory per `GPUDevice`, never persisted.
+
+The planner works in device milliseconds. The correct-frame budget is 1 s of
+graph increment. The final-variant budget is three times this device's predicted
+cold graph-free compile, clamped to 1–10 s; because both sides scale with `s`,
+the specialized share of a plan depends on the device only through the clamps,
+the cap and the upgrade gate below.
+
+### Edit-aware tiers
+
+A new structure set is first served by a variant that renders it correctly:
+
+- If the installed variant still covers it, nothing compiles. Covered means
+  every structure is specialized there or interpretable with its opcode
+  families and terminals, and the installed pipeline features (frames, UV1,
+  alpha, coat, ...) include the set's. Specialized functions keep their IDs, so
+  a structure removed by the edit stays as dead code until the next upgrade, and
+  new or changed structures run as interpreter programs.
+- Otherwise, after a first installation (a structural edit), the editing
+  interpreter compiles: every opcode family, every plain terminal (those that
+  change neither pipeline constants nor shared hooks) and every terminal seen in
+  the session, with the union of the old and new pipeline features. Later edits
+  then fit it. If its increment is predicted over the correct-frame budget, only
+  the set's families are used.
+- On the first load, a small set whose fully specialized variant fits the
+  correct-frame budget compiles directly; otherwise the interpreter with only
+  the set's families serves it.
+
+After the first structural edit, the editing interpreter is also compiled once
+in the background while the installed variant still fits, so a later edit that
+adds a node family usually finds it ready.
+
+Parameter, transform and visibility edits never recompile: parameters are
+material records, and tier decisions stay fixed per structure set.
+
+### Upgrades
+
+The planned final variant compiles only when the gate allows it:
+
+1. The structure set has been unchanged for 2 s.
+2. No other pipeline compile is running or queued. WebGPU compiles cannot be
+   cancelled, so upgrades never pile up behind edits.
+3. `(remaining − compile) × gain > 1.5 × compile`. Remaining time is the samples
+   left to the render target times the measured wall time per sample; without a
+   target it is the time already rendered on this view, at most 60 s. Gain is the
+   expected per-sample saving: 0.2 for removing all interpreter work (P1:
+   0.07–0.35 by scene) and half of that times the planner coverage for a mixed
+   variant, which keeps the interpreter's presence cost.
+
+A structure change while the upgrade compiles discards its result. When the
+upgrade installs, the serving variant stays cached and the two are compared on
+the same view in interleaved phases (final, serving, serving, final, final,
+serving), each at least 250 ms and 8 samples. GPU timestamps decide, read back
+through a small pool of buffers attributed to the variant that traced them; wall
+time per sample is the fallback, but Render's realtime pacing derives it from its
+own estimate and can invert small differences. The upgrade stays if it is at
+least 3 % faster. Otherwise the serving variant returns, the structure set is not
+upgraded again, and the device cap drops to 70 % of the rejected variant's
+specialized source (at least 16 KB). The measured gain replaces the 0.2 prior for
+later decisions in the scene.
+
 An internal measurement switch (`setMaterialGraphPlanner`) can force one tier,
-replace the compile model or budget, salt the interpreter source and observe
-installations.
+replace the compile model, budgets or policy constants, fix `s` to simulate a
+slower compiler, salt the interpreter source and observe installations, upgrade
+decisions and compile samples.
 
 ## Compilation and installation
 
@@ -162,11 +230,8 @@ debounce. WebGPU queues a normal async trace variant. When layout-compatible,
 the old variant and its parameter records continue tracing; installation uploads
 new records and binds the new variant together.
 
-When the requested plan is mixed, WebGPU also compiles the interpreter-only
-variant of the same structures and installs whichever is ready first; the mixed
-variant replaces it when it compiles. An interpreter-only variant that is
-already ready (its key depends only on the terminal set) bridges any later
-structure set, including fully specialized ones, without a compile. Both tiers
+WebGPU compiles the serving and upgrade variants through the same queue; the
+installed variant keeps tracing until the requested one is ready. Both tiers
 evaluate the same graph (HDR block MAD 0 in P1), so a tier switch of unchanged
 structures keeps accumulation; only structure or assignment changes restart it.
 

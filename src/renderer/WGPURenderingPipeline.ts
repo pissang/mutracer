@@ -311,6 +311,18 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
 };
     }).query
     : undefined;
+  // Upgrade verification compares graph variants by GPU time per sample. Its own small
+  // pool of readback buffers keeps several readbacks in flight behind a deep queue
+  // without changing the shared timing readback used for scheduling.
+  const graphTimestamps = timeQuery ? scratch.get('graph verification timing', () => {
+    const free: GPUBuffer[] = [], all: GPUBuffer[] = [];
+    return {
+      acquire() { if (!free.length && all.length < 8) { const b = device.createBuffer({size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ}); all.push(b); free.push(b); } return free.pop(); },
+      release(buffer: GPUBuffer) { free.push(buffer); },
+      getMemoryBytes: () => all.length * 16,
+      dispose() { for (const b of all) b.destroy(); }
+    };
+  }) : undefined;
   const tileRender = makeTileRender();
   const tileRenderWithPredict = timeQuery ? makeTileRenderWithPredict(WORKGROUP_SIZE) : undefined;
   tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -534,6 +546,9 @@ output.color = color;
     _updateSeed(renderWidth, renderHeight);
     const activeTimeQuery = timeQuery;
     const isUnmapped = activeTimeQuery?.resultBuffer.mapState === 'unmapped';
+    // Timestamps are attributed to the graph variant that traced them (upgrade verification).
+    const graphVariant = rayTracePass.graphs?.verifying ? rayTracePass.graphs.activeShaderKey : '';
+    const graphTimestamp = graphVariant && activeTimeQuery ? graphTimestamps?.acquire() : undefined;
     const measuredCausticBatch=rayTracePass.createPass(
       encoder,
       clear,
@@ -558,10 +573,21 @@ output.color = color;
           activeTimeQuery.resultBuffer.size
         );
       }
+      if (graphTimestamp) encoder.copyBufferToBuffer(activeTimeQuery.resolveBuffer, 0, graphTimestamp, 0, 16);
     }
 
     // TODO if encoder is not submitted. The uniform buffer will be replaced
     device.queue.submit([encoder.finish()]);
+
+    if (graphTimestamp) {
+      const view = tileTimingGeneration, tileCount = tiles[0] * tiles[1];
+      graphTimestamp.mapAsync(GPUMapMode.READ).then(() => {
+        const times = new BigInt64Array(graphTimestamp.getMappedRange(), 0, 2);
+        const ms = Number(times[1] - times[0]) / 1_000_000;
+        graphTimestamp.unmap();
+        if (!disposed && ms > 0) rayTracePass.graphs?.recordGpuSample(graphVariant, view, ms * tileCount);
+      }).catch(() => { if (graphTimestamp.mapState === 'mapped') graphTimestamp.unmap(); }).finally(() => graphTimestamps!.release(graphTimestamp));
+    }
 
     const submittedTileRenderWithPredict = tileRenderWithPredict;
     const submittedTimingGeneration = tileTimingGeneration;
@@ -990,6 +1016,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       sampleCount = 0;
       return false;
     }
+    rayTracePass.graphs?.recordFrame(sampleCount - frameSampleCount, sampleCount, renderSampleTarget, tileTimingGeneration);
 
     if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
       // Display AOVs only add detail: keep the first beauty image's latency and

@@ -7,9 +7,11 @@ import type {GraphPlan} from './state.js';
 export function materialGraphConstants(constants:Record<string,boolean|number>,plan:GraphPlan,geometry?:Geometry) {
     const result={...constants};
     if(!plan.key)return result;
-    const terminal=(...names:string[])=>plan.structures.some(g=>names.some(name=>name in g.terminal));
+    // A variant reused across structure edits keeps the features it was compiled with.
+    const structures=plan.featureStructures??plan.structures;
+    const terminal=(...names:string[])=>structures.some(g=>names.some(name=>name in g.terminal));
     const frames=terminal('normal','specularAnisotropy','coatAnisotropy') ||
-        plan.structures.some(g=>g.nodes.some(n=>['tangent','bitangent'].includes(n.category)||Object.values(n.inputs).some(i=>i.geometry==='tangent'||i.geometry==='bitangent'))) ||
+        structures.some(g=>g.nodes.some(n=>['tangent','bitangent'].includes(n.category)||Object.values(n.inputs).some(i=>i.geometry==='tangent'||i.geometry==='bitangent'))) ||
         (plan.materials??[]).some((m,i)=>plan.graphs[i]&&(m.specularAnisotropy>0||m.coatAnisotropy>0));
     if(frames){
         result.USE_ANISOTROPY_DIRECTIONS=true;
@@ -19,7 +21,7 @@ export function materialGraphConstants(constants:Record<string,boolean|number>,p
     // texcoord.index is editable data, so both UV sets must remain available.
     // Compact WebGPU geometry has no UV metadata on its layout facade; the
     // packed UV1 offset aliases UV0 when a mesh has no secondary coordinates.
-    if(plan.structures.some(g=>g.nodes.some(n=>n.category==='texcoord')))result.USE_UV1=true;
+    if(structures.some(g=>g.nodes.some(n=>n.category==='texcoord')))result.USE_UV1=true;
     if(terminal('emissionColor','emissionLuminance'))result.LIGHT_CAPABILITIES=Number(result.LIGHT_CAPABILITIES ?? 0)|LIGHT_SHADER_CAPABILITIES.emissive;
     if(terminal('opacity')){result.HAS_ALPHA=true;result.HAS_ALPHA_MASK=true;result.HAS_ALPHA_BLEND=true;}
     if(terminal('coatWeight'))result.HAS_COAT=true;

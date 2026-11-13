@@ -910,13 +910,14 @@ it('polls material graph installation after a target reaches its sample cap', ()
   const pipeline=createPipeline(false),camera=new Camera({projection:'perspective'});
   pipeline.trace(camera,1);
   expect(pipeline.getTotalSamplesRendered()).toBe(1);
-  const pass=mocks.TracePass.latest as typeof mocks.TracePass.latest & {graphs:{status:string;generation:number}};
-  pass.graphs={status:'compiling',generation:0};
+  const pass=mocks.TracePass.latest as typeof mocks.TracePass.latest & {graphs:{status:string;generation:number;recordFrame():void}};
+  const recordFrame=()=>{};
+  pass.graphs={status:'compiling',generation:0,recordFrame};
   const update=vi.spyOn(pass,'updatePipeline');
   expect(pipeline.refineAovs!(camera)).toBe(false);
   expect(update).toHaveBeenCalledOnce();
   expect(pipeline.getTotalSamplesRendered()).toBe(1);
-  pass.graphs={status:'ready',generation:1};
+  pass.graphs={status:'ready',generation:1,recordFrame};
   expect(pipeline.refineAovs!(camera)).toBe(false);
   expect(pipeline.getTotalSamplesRendered()).toBe(0);
   expect(pipeline.isFirstFrame()).toBe(true);

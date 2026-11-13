@@ -3,6 +3,8 @@ import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, graphShaderKey, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
 import {materialSurfaceAreas} from './materialGraph/usage.js';
+import {GraphCompileCalibration, GraphCompileClock, graphCompilerBackend} from './materialGraph/tierPolicy.js';
+import {DEFAULT_GRAPH_COMPILE_MODEL} from './materialGraph/planner.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
@@ -205,6 +207,13 @@ const MAX_TRACE_VARIANTS = 32;
 // Requests are cheap but drivers are not, and a running compilation cannot be cancelled.
 const MAX_CONCURRENT_COMPILES = 2;
 const MAX_QUEUED_COMPILES = 4;
+// Compile speed and compile overlap are properties of the device, shared by its passes.
+const deviceCompileProfiles = new WeakMap<GPUDevice, {calibration: GraphCompileCalibration; clock: GraphCompileClock}>();
+function deviceCompileProfile(device: GPUDevice) {
+  let profile = deviceCompileProfiles.get(device);
+  if (!profile) deviceCompileProfiles.set(device, profile = {calibration: new GraphCompileCalibration(graphCompilerBackend(), DEFAULT_GRAPH_COMPILE_MODEL), clock: new GraphCompileClock()});
+  return profile;
+}
 
 function shaderCompilationNow() {
   return typeof performance === 'undefined' ? Date.now() : performance.now();
@@ -268,7 +277,10 @@ class WGPURayTracePass {
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _graphs?: MaterialGraphState;
   get graphs() {
-    if (!this._graphs) { this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes); }
+    if (!this._graphs) {
+      this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes);
+      if (this._device) this._graphs.calibration = deviceCompileProfile(this._device).calibration;
+    }
     return this._graphs;
   }
   private _canTraceOldGraph = false;
@@ -935,6 +947,8 @@ class WGPURayTracePass {
       if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._visibleMeshes());
       this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
+      // The tier policy may start a gated upgrade or switch tiers while verifying one.
+      this.graphs.tick(this._activeCompiles + this._queuedCompiles.length);
       const graphPlan = this.graphs.candidate(!!this._rayTracePipeline);
       const graphConstants = materialGraphConstants(this._constants, graphPlan, this._preparedMeshData?.geometry);
       const pipelineInputs = JSON.stringify([
@@ -1020,28 +1034,8 @@ class WGPURayTracePass {
         this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature});
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
-      // Progressive installation: while a mixed variant compiles, the interpreter-only
-      // variant of the same structures renders them correctly. It is compiled only
-      // when requested (mixed final plan); otherwise it is used when already ready.
-      const interim = graphPlan === this.graphs.requested ? graphPlan.interim : undefined;
-      if (variant.status === 'pending' && interim && graphShaderKey(this.graphs.active) !== graphShaderKey(interim) && this._activeVariant?.baseSignature === fallbackSignature) {
-        const interimSignature = baseSignature + '\n' + graphShaderKey(interim);
-        let interimVariant = this._traceVariants.get(interimSignature);
-        if (!interimVariant && graphPlan.compileInterim) {
-          const interimStructure = JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(interim)});
-          interimVariant = this._startTraceVariant(interimSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey: interimStructure, capabilities, graphPlan: interim, baseSignature: fallbackSignature});
-          this._requestQueuedCompile(variant);
-        }
-        if (interimVariant?.status === 'ready') {
-          // Never matches pipelineInputs, so the next update keeps waiting for the final variant.
-          this._installTraceVariant(interimVariant, pipelineInputs + '\ninterim');
-          // The interim keeps tracing while the final variant compiles.
-          this._requestedVariant = variant;
-          this._canTraceOldGraph = true;
-          this._requestQueuedCompile(variant);
-          return;
-        }
-      }
+      // A gated upgrade or a structure edit that needs a new variant compiles while
+      // the installed variant keeps tracing (constants until a graph variant is ready).
       if (variant.status === 'pending') {
         this._requestQueuedCompile(variant);
         if (this._canTraceOldGraph) {
@@ -1051,11 +1045,19 @@ class WGPURayTracePass {
         return variant.settled;
       }
       if (variant.status === 'failed') {
-        if (this.graphs.abandonUpgrade(variant.graphKey)) { console.warn('Specialized material graph variant failed; keeping the interpreter.', variant.error); return; }
+        if (this.graphs.abandonUpgrade(variant.graphKey)) { console.warn('Specialized material graph variant failed; keeping the installed variant.', variant.error); return; }
         if (graphPlan.key) this.graphs.fail(this.graphs.revision,variant.error);
         return;
       }
       this._installTraceVariant(variant, pipelineInputs);
+      // Background compile of the editing interpreter (see MaterialGraphState.prefetch).
+      const prefetch = this.graphs.prefetch(this._activeCompiles + this._queuedCompiles.length);
+      if (prefetch && JSON.stringify(materialGraphConstants(this._constants, prefetch, this._preparedMeshData?.geometry)) === JSON.stringify(graphConstants)) {
+        const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
+        if (!this._traceVariants.has(prefetchSignature))
+          this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature,
+            structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})});
+      }
     } catch (error) {
       this._resourceError = error;
       this._needsUpdateBindGroups = true;
@@ -1218,6 +1220,7 @@ class WGPURayTracePass {
       // Scopes capture all device errors while open, so one must never span an
       // await: frames presented meanwhile would be blamed on this pipeline.
       device.pushErrorScope('validation');
+      const {clock} = deviceCompileProfile(device), timing = clock.start(shaderCompilationNow());
       const request = this._shaderCache.createComputePipelineAsync({
         label: 'Ray Trace', layout,
         compute: {module, entryPoint: 'main', constants: pipelineConstants}
@@ -1226,9 +1229,13 @@ class WGPURayTracePass {
       let pipeline: GPUComputePipeline;
       try {
         pipeline = await request;
+        // Calibrates this device's compile speed (cache hits and queueing are detected there).
+        const {ms, overlapMs} = clock.end(timing, shaderCompilationNow());
+        this.graphs.observeCompile(lightTracing || photonMapping ? {...shader.graphPlan, key: ''} : shader.graphPlan, source.bytes, ms, overlapMs);
         const scopedError = await scope;
         if (scopedError) throw scopedError;
       } catch (error) {
+        clock.end(timing, shaderCompilationNow());
         const scopedError = await scope;
         // Pipeline creation already reports WGSL failures. Pull the much
         // heavier module diagnostics only on that failure path so normal
