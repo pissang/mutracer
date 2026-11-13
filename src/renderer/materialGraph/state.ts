@@ -126,11 +126,11 @@ export class MaterialGraphState {
     interpreterAvailable = false;
     /** Tier decisions stay fixed for a structure set, so usage changes (transforms,
      * visibility) never recompile; a new set is planned again. */
-    private tiers?: {key: string; planner: typeof planner; specialized: Set<string>; coverage?: number};
+    private tiers?: {key: string; planner: typeof planner; specialized: Set<string>; coverage?: number; estimatedMs?: number};
     private sourceCache = new Map<string, Pick<GraphTierCandidate, 'sourceBytes' | 'helpers'>>();
     private decideTiers(key: string, structures: NormalizedGraph[], materials: OpenPBRMaterial[], graphs: (NormalizedGraph | undefined)[]) {
         if (this.tiers?.key === key && this.tiers.planner === planner) return this.tiers.specialized;
-        let specialized: Set<string>, coverage: number | undefined;
+        let specialized: Set<string>, coverage: number | undefined, estimatedMs: number | undefined;
         if (planner.tier === 'specialized' || !this.interpreterAvailable || !structures.length) specialized = new Set(structures.map(g => g.key));
         else if (planner.tier === 'interpreter') specialized = new Set(structures.filter(g => !this.program(g)).map(g => g.key));
         else {
@@ -142,9 +142,9 @@ export class MaterialGraphState {
                 return {key: g.key, usage: usage.get(g.key) ?? 0, ...this.source(g),
                     instructions: program ? [program.surface, program.opacity, program.emission].reduce((n, e) => n + e.instructions.length / GRAPH_INSTRUCTION_FLOATS, 0) : undefined};
             });
-            ({specialized, coverage} = planGraphTiers(candidates, planner.model, planner.budget));
+            ({specialized, coverage, estimatedMs} = planGraphTiers(candidates, planner.model, planner.budget));
         }
-        this.tiers = {key, planner, specialized, coverage};
+        this.tiers = {key, planner, specialized, coverage, estimatedMs};
         return specialized;
     }
     /** Specialized source estimate: the generated function plus its dispatch branches. */
@@ -227,7 +227,7 @@ export class MaterialGraphState {
             this.revision++;
             this.readyAt = performance.now() + 32;
         }
-        this.requested = { ...final, ...(interim && interim.programs!.size && graphShaderKey(interim) !== graphShaderKey(final) ? {interim, compileInterim: planner.interim && final.programs!.size > 0} : {}) };
+        this.requested = { ...final, ...(interim && interim.programs!.size && graphShaderKey(interim) !== graphShaderKey(final) ? {interim, compileInterim: planner.interim && (final.programs!.size > 0 || (this.tiers?.estimatedMs ?? 0) > planner.budget.correctMs)} : {}) };
         this.diagnostics = diagnostics;
         if (key === this.active.key) {
             // Same structures: keep the installed tiers (and its variant) for these parameters.

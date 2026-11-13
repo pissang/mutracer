@@ -28,8 +28,13 @@ export interface GraphCompileModel {
 }
 
 export interface GraphTierBudget {
-    /** Allowed graph increment over the graph-free kernel, in milliseconds. */
+    /** Allowed graph increment of the final (optimized) variant over the
+     * graph-free kernel, in milliseconds. */
     budgetMs: number;
+    /** Increment allowed before the scene first renders every graph correctly. A
+     * final variant estimated above it, or one containing the interpreter, is
+     * preceded by the interpreter-only variant. */
+    correctMs: number;
     /** A mixed variant is built only if the structures it specializes carry at
      * least this share of the estimated interpreter work; otherwise the presence
      * of extra code on every hit outweighs the gain and all structures stay interpreted. */
@@ -53,7 +58,7 @@ export interface GraphTierDecision {
  * uniform sphere grid was only ≈4 % faster than the interpreter alone, so a
  * mixed variant needs at least 20 % coverage. */
 export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}};
-export const DEFAULT_GRAPH_TIER_BUDGET: GraphTierBudget = {budgetMs: 1000, minBenefitShare: 0.2};
+export const DEFAULT_GRAPH_TIER_BUDGET: GraphTierBudget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.2};
 
 export function specializedCompileMs(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {
     let bytes = 0;

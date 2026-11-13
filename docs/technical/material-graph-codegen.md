@@ -121,6 +121,12 @@ interpreter work; below that, extra code on every hit outweighs the gain and
 all structures stay interpreted. Structures the interpreter cannot run are
 always specialized, even past the budget.
 
+The budget of the final variant and the budget before the first correct frame
+are separate settings, both 1 s by default. A final variant estimated above the
+correct-frame budget, or one containing the interpreter, is preceded by the
+interpreter-only variant, so a larger final budget trades a later optimized
+variant for fewer interpreted structures without delaying correct rendering.
+
 Decisions stay fixed while the structure set is unchanged, so transform,
 visibility and parameter edits never recompile; a new set is planned again.
 An internal measurement switch (`setMaterialGraphPlanner`) can force one tier,

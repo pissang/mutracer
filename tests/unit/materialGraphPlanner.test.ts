@@ -11,7 +11,7 @@ import InstancedMesh from '../../src/scene/InstancedMesh.js';
 import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 
 const model = {msPerKB: 100, interpreterMs: 300, helperBytes: {noise: 2048}};
-const budget = {budgetMs: 1000, minBenefitShare: 0.05};
+const budget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.05};
 const candidate = (key: string, usage: number, kb = 1, instructions: number | undefined = 10, helpers?: string[]): GraphTierCandidate =>
     ({key, usage, sourceBytes: kb * 1024, instructions, helpers});
 
@@ -85,7 +85,7 @@ describe('material graph tier plans', () => {
     it('builds a mixed final plan with an interpreter-only interim and installs them progressively', () => {
         const installs: GraphInstallEvent[] = [];
         // Room for the interpreter and about two specialized structures.
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, minBenefitShare: 0.05}, onInstall: e => installs.push(e)});
+        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}, onInstall: e => installs.push(e)});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         const usage = new Map<unknown, number>(materials.map((m, i) => [m, i === 5 ? 1000 : i === 2 ? 500 : 1]));
         const state = new MaterialGraphState();
@@ -139,7 +139,7 @@ describe('material graph tier plans', () => {
     });
 
     it('keeps the interim installed when the final variant fails', () => {
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, minBenefitShare: 0.05}});
+        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         const state = new MaterialGraphState();
         state.interpreterAvailable = true;
@@ -154,7 +154,7 @@ describe('material graph tier plans', () => {
     });
 
     it('keeps tier decisions for an unchanged structure set when usage changes', () => {
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, minBenefitShare: 0.05}});
+        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         let usage = new Map<unknown, number>(materials.map((m, i) => [m, i === 0 ? 100 : 1]));
         const state = new MaterialGraphState();
@@ -165,6 +165,16 @@ describe('material graph tier plans', () => {
         usage = new Map(materials.map((m, i) => [m, i === 7 ? 100 : 1]));
         state.request(materials);
         expect(graphShaderKey(state.requested)).toBe(before);
+    });
+
+    it('compiles the interim before a fully specialized final variant above the correct-frame budget', () => {
+        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 1e5, correctMs: 600, minBenefitShare: 0.05}});
+        const state = new MaterialGraphState();
+        state.interpreterAvailable = true;
+        state.request(Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)})));
+        expect(state.requested.programs!.size).toBe(0);
+        expect(state.requested.compileInterim).toBe(true);
+        expect(state.requested.interim!.programs!.size).toBe(8);
     });
 
     it('specializes small sets without interpreter code by default', () => {
