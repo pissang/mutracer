@@ -44,7 +44,8 @@ function bake(index: number, graphClass: GraphClass, size: number) {
 async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean}) {
   const {structures: count, mode, graphClass = 'simple', bakeSize = 128, perfSamples = 50, textureBinding = 'auto', firstIndex = 0} = options;
   // 'interpreter' renders the same graphs as 'graph' on the shared interpreter tier.
-  setMaterialGraphTier(mode === 'interpreter' ? 'interpreter' : 'specialized');
+  // A per-run salt keeps the fixed interpreter source cold in the shared Metal cache.
+  setMaterialGraphTier(mode === 'interpreter' ? 'interpreter' : 'specialized', 1 + Math.floor(Math.random() * 1e9));
   const graphs = mode === 'graph' || mode === 'interpreter';
   const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding});
   engine.display.setSize(WIDTH, HEIGHT); engine.bvhBuilder = 'builtin';
@@ -84,12 +85,14 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
     let graphReadyMs: number | undefined, graphState: {status: string; topologyCount: number} | undefined;
     await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
     const firstFrameMs = performance.now() - start;
-    const waitGraphs = async (revision = 0) => {
-      for (const deadline = performance.now() + 900000; performance.now() < deadline;) {
-        const state = engine.getDiagnostics()?.materialGraphs as {status: string; topologyCount: number; revision: number} | undefined;
+    const waitGraphs = async (revision = 0, timeoutMs = 900000) => {
+      let state: {status: string; topologyCount: number; revision: number} | undefined;
+      for (const deadline = performance.now() + timeoutMs; performance.now() < deadline;) {
+        state = engine.getDiagnostics()?.materialGraphs as typeof state;
         if (state && state.topologyCount > 0 && state.revision > revision && (state.status === 'ready' || state.status === 'failed')) return state;
         render.refine(); await pause();
       }
+      return {...state!, status: `timeout:${state?.status}:${state?.revision}`};
     };
     if (graphs && count) {
       // Graph state exists only once the pipeline has seen the scene; keep sampling while it compiles.
@@ -118,10 +121,10 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
     if (options.swap && graphs && count) {
       const before = engine.getDiagnostics()?.materialGraphs as {revision: number} | undefined;
       const next = structures(count, graphClass, firstIndex + 500000);
-      meshes.forEach((mesh, i) => { if (i < GRID * GRID) mesh.material = new OpenPBRMaterial({graph: scalingGraph(next[i % next.length], graphClass)}); });
+      meshes.forEach((mesh, i) => { if (i < GRID * GRID) mesh.materials = [new OpenPBRMaterial({graph: scalingGraph(next[i % next.length], graphClass)})]; });
       const swapStart = performance.now();
       engine.update();
-      const state = await waitGraphs(before?.revision ?? 0);
+      const state = await waitGraphs(before?.revision ?? 0, 120000);
       const readyMs = performance.now() - swapStart;
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
       const compiled = engine.getDiagnostics()?.shaderCompilation;
