@@ -5,6 +5,8 @@ import {FBXLoader} from 'three/examples/jsm/loaders/FBXLoader.js';
 import {Engine, Render, Camera, Mesh, OpenPBRMaterial, AmbientLight, SphereLight, Texture, THREESync, createSphereGeometry, createPlaneGeometry, type Geometry} from '../../src/main.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
+import {flattenGraphUnchecked} from '../../src/renderer/materialGraph/flatten.js';
+import {GraphOp, buildGraphProgram, graphProgramFamilies} from '../../src/renderer/materialGraph/interpreter.js';
 import {DEFAULT_GRAPH_TIER_BUDGET} from '../../src/renderer/materialGraph/planner.js';
 import {freezeMaterialGraphPolicy, setMaterialGraphPlanner, type GraphInstallEvent, type GraphTierPolicy, type GraphUpgradeEvent} from '../../src/renderer/materialGraph/state.js';
 import type {GraphCompileObservation, GraphCompilerBackend} from '../../src/renderer/materialGraph/tierPolicy.js';
@@ -192,9 +194,14 @@ async function run(options: RunOptions) {
       await waitFor(() => upgrades.some(e => e.type === (options.probe === 'contended' ? 'start' : 'hold')), 120000);
       const started = upgrades.find(e => e.type === 'start');
       await waitFor(() => false, options.probeDelayMs ?? 1000);
-      // Noise-class structures add opcode families the serving interpreter lacks.
+      // A noise-class structure whose program uses the noise family, which no simple-class
+      // structure needs: the edit needs its own interpreter compile.
+      const noisy = (index: number) => { const program = buildGraphProgram(flattenGraphUnchecked(normalizeGraph(scalingGraph(index, 'noise')))).program, families = new Set<GraphOp>();
+        if (program) graphProgramFamilies(program, families); return families.has(GraphOp.Noise); };
+      let editIndex = firstIndex + 800000;
+      while (!noisy(editIndex)) editIndex++;
       const slot = 0, compiled = compiles.length, before = (engine.getDiagnostics()?.materialGraphs as {revision: number}).revision;
-      materials[slot].graph = scalingGraph(structures(1, 'noise', firstIndex + 800000)[0], 'noise');
+      materials[slot].graph = scalingGraph(editIndex, 'noise');
       const editStart = performance.now();
       engine.update();
       let editReadyMs: number | undefined;
@@ -203,12 +210,12 @@ async function run(options: RunOptions) {
         if (state.revision > before && state.installedRevision >= state.revision) editReadyMs = performance.now() - editStart;
         return editReadyMs !== undefined;
       }, options.settleMs ?? 300000);
-      const editIndex = compiles.findIndex((c, i) => i >= compiled && !c.specializedBytes && c.interpreterBytes > 0);
+      const editCompileIndex = compiles.findIndex((c, i) => i >= compiled && !c.specializedBytes && c.interpreterBytes > 0);
       // The (now stale) upgrade compile still finishes; its duration tells whether the two overlapped.
-      await waitFor(() => compiles.some(c => c.specializedBytes > 0), options.settleMs ?? 300000);
+      if (options.probe === 'contended') await waitFor(() => compiles.some(c => c.specializedBytes > 0), options.settleMs ?? 300000);
       const upgradeIndex = compiles.findIndex(c => c.specializedBytes > 0);
       probe = {upgradeStartMs: started && started.at - start, editAtMs: editStart - start, editReadyMs,
-        editCompile: editIndex >= 0 ? {...compiles[editIndex], finishedMs: compiledAt[editIndex] - start} : undefined,
+        editCompile: editCompileIndex >= 0 ? {...compiles[editCompileIndex], finishedMs: compiledAt[editCompileIndex] - start} : undefined,
         upgradeCompile: upgradeIndex >= 0 ? {...compiles[upgradeIndex], finishedMs: compiledAt[upgradeIndex] - start} : undefined};
     }
     // Structural edits: each replaces one material's graph by an unseen structure.
