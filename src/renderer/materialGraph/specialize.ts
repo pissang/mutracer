@@ -19,7 +19,7 @@ function hasCategory(graph: GraphIR, names: string[]) {
 }
 const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness', opacity:'alpha' };
 /** Interpreted structures in a variant: only their terminal union shapes the source. */
-export interface GraphInterpreterOptions { terminals: readonly string[] }
+export interface GraphInterpreterOptions { terminals: readonly string[]; /** Inert literal that changes the source; measurement only. */ salt?: number }
 /** Pure shared graph fragments; templates own signatures, call sites and layout.
  * Specialized structures get IDs 1..N; with `interpreter`, negative IDs address a
  * program header record in `materialsBuffer` (see `graphInterpreterShader`). */
@@ -45,7 +45,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
         return `fn mx_${inverse ? 'w2l' : 'l2w'}(index:i32) -> mat4x4f { if(index<0){return mat4x4f(vec4f(1,0,0,0),vec4f(0,1,0,0),vec4f(0,0,1,0),vec4f(0,0,0,1));} return mat4x4f(${columns.join(',')}); }\n`;
     };
     declarations += matrix(true) + matrix(false);
-    if (interpreter) declarations += graphInterpreterShader(used);
+    if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt);
     const programHeader = (id: string) => `let mx_program = -${id}; let mx_header = vec4f(materialsBuffer[mx_program].color, materialsBuffer[mx_program].matType);`;
     const si = 'mx_si';
     const init = used.map(field => `    mx_result.${field} = ${field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field)};`).join('\n');
@@ -69,7 +69,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     const tangents = frames ? `normalize(${si}.geometryTangent), normalize(${si}.geometryBitangent)` : `${v(3)}(1.0,0.0,0.0), ${v(3)}(0.0,1.0,0.0)`;
     if (interpreter) {
         const bit = (field: string) => { const [low, high] = graphTerminalMask([field]); return low ? `${low}u` : `${high * 65536}u`; };
-        body += `    if(mx_id < 0) {\n      ${programHeader('mx_id')}\n      let mx_mask = u32(mx_header.w) | (u32(materialsBuffer[mx_program].emission.x) << 16u);\n`;
+        body += `    if(mx_id < 0) {\n      ${programHeader('mx_id')}\n      let mx_mask = u32(mx_header.w) | (u32(materialsBuffer[mx_program].roughness) << 16u);\n`;
         body += `      mx_run(mx_program + 1, i32(mx_header.x), mx_base + 2, MXContext(uv, uv1, ${si}.position, ${si}.instanceIndex, ${si}.vertexNormal, ${tangents}), &mx_result);\n`;
         for (const field of used)
             if (!['normal', 'opacity', 'emissionColor', 'emissionLuminance'].includes(field))

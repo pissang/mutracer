@@ -16,14 +16,15 @@ import { MATERIAL_FLOAT_COUNT, materialLayoutFields } from '../materialLayoutSch
 const alphaModeOffset = materialLayoutFields().find(field => field.name === 'alphaMode')!.offset / 4;
 const emissionOffset = materialLayoutFields().find(field => field.name === 'emission')!.offset / 4;
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
-// Interpreter records: a header vec4 and three operand vec4 rows of one material record.
-const programRows = ['color', 'emission', 'specularColor', 'transmissionColor'].map(name => materialLayoutFields().find(field => field.name === name)!.offset / 4);
+// Interpreter records: a header vec4 and three operand vec4 rows (the first four rows of a material record).
+const programRows = ['color', 'roughness', 'metallic', 'emission'].map(name => materialLayoutFields().find(field => field.name === name)!.offset / 4);
 /** Graph evaluation tier. `interpreter` runs every structure that fits the fixed
  * register file on the shared interpreter; others stay specialized. Internal
  * switch for measurement until a planner chooses per structure. */
 export type MaterialGraphTier = 'specialized' | 'interpreter';
-let graphTier: MaterialGraphTier = 'specialized';
-export function setMaterialGraphTier(tier: MaterialGraphTier) { graphTier = tier; }
+let graphTier: MaterialGraphTier = 'specialized', interpreterSalt = 0;
+/** `salt` makes the interpreter source unique so driver caches miss; measurement only. */
+export function setMaterialGraphTier(tier: MaterialGraphTier, salt = 0) { graphTier = tier; interpreterSalt = salt; }
 export const GRAPH_INTERPRETER_KEY = 'mx-interpreter-1';
 /** Plans without a tier split (older snapshots, tests) are fully specialized. */
 export const graphShaderKey = (plan: GraphPlan) => plan.shaderKey ?? plan.key;
@@ -40,6 +41,7 @@ export interface GraphPlan {
     programs?: ReadonlyMap<string, GraphProgram>;
     /** Terminals written by interpreted structures. */
     interpreterTerminals?: string[];
+    interpreterSalt?: number;
     slots?: ReadonlyMap<OpenPBRMaterial, OpenPBRMaterial>;
 }
 const empty = (): GraphPlan => ({ key: '', shaderKey: '', graphs: [], structures: [], specialized: [], programs: new Map(), interpreterTerminals: [] });
@@ -139,7 +141,7 @@ export class MaterialGraphState {
         if (graphTier === 'interpreter') for (const g of structures) { const program = this.program(g); if (program) programs.set(g.key, program); }
         const specialized = structures.filter(g => !programs.has(g.key));
         const interpreterTerminals = Object.keys(terminalTypes).filter(name => structures.some(g => programs.has(g.key) && name in g.terminal));
-        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}`] : [])].join('\n');
+        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}:${interpreterSalt}`] : [])].join('\n');
         const assignmentKey = (plan: GraphPlan) => plan.graphs.map(g => g?.key ?? '').join('\n');
         const authoredChanged = (materials.some(m => !!m.graph) || this.sourceRevisions.some(item => !!item.graph)) && (materials.length !== this.sourceRevisions.length || materials.some((m, i) => m.graph !== this.sourceRevisions[i]?.graph || m.graph?.revision !== this.sourceRevisions[i]?.revision));
         this.sourceRevisions = materials.map(m => ({ graph: m.graph, revision: m.graph?.revision }));
@@ -147,7 +149,7 @@ export class MaterialGraphState {
             this.revision++;
             this.readyAt = performance.now() + 32;
         }
-        this.requested = { key, shaderKey, materials: materials.slice(), graphs, structures, specialized, programs, interpreterTerminals, slots };
+        this.requested = { key, shaderKey, materials: materials.slice(), graphs, structures, specialized, programs, interpreterTerminals, interpreterSalt, slots };
         this.diagnostics = diagnostics;
         if (key === this.active.key) {
             this.install(this.requested, this.revision);
