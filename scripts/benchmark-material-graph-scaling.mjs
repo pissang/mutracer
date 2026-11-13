@@ -18,12 +18,14 @@ const {values} = parseArgs({options: {
   'close-up': {type: 'boolean', default: false},
   'hdr-block': {type: 'string', default: '8'},
   swap: {type: 'boolean', default: false},
+  'no-interim': {type: 'boolean', default: false},
+  'budget-ms': {type: 'string'},
   'scene-gltf': {type: 'string'},
   'scene-fbx': {type: 'string'},
   output: {type: 'string'}, help: {type: 'boolean'}
 }});
 if (values.help) {
-  console.log('node scripts/benchmark-material-graph-scaling.mjs [--structures 0,1,10] [--modes constant,baked,graph,interpreter] [--class simple|noise] [--bake-size 128] [--texture-binding auto|atlas] [--hdr] [--first-index 0] [--close-up] [--hdr-block 8] [--swap] [--scene-gltf scene.glb | --scene-fbx scene.fbx] [--output rows.jsonl]');
+  console.log('node scripts/benchmark-material-graph-scaling.mjs [--structures 0,1,10] [--modes constant,baked,graph,interpreter,auto] [--no-interim] [--budget-ms 1000] [--class simple|noise] [--bake-size 128] [--texture-binding auto|atlas] [--hdr] [--first-index 0] [--close-up] [--hdr-block 8] [--swap] [--scene-gltf scene.glb | --scene-fbx scene.fbx] [--output rows.jsonl]');
   process.exit(0);
 }
 // Graph structures start at a fresh index per invocation unless pinned, keeping graph compiles cold.
@@ -51,11 +53,11 @@ try {
       const page = await chrome.page(`http://127.0.0.1:${address.port}/graph-scaling-benchmark.html`);
       try {
         for (let i = 0; i < 300; i++) { if (await page.tab.evaluate('typeof window.runMaterialGraphScaling === "function"')) break; await delay(100); }
-        const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl};
+        const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl, interim: !values['no-interim'], budgetMs: values['budget-ms'] ? Number(values['budget-ms']) : undefined};
         let row;
         try { row = await page.tab.evaluate(`runMaterialGraphScaling(${JSON.stringify(options)})`); }
         catch (error) { row = {...options, error: String(error).slice(0, 2000)}; }
-        console.log(JSON.stringify({structures, mode, firstFrameMs: row.firstFrameMs, graphReadyMs: row.graphReadyMs, firstCorrectFrameMs: row.firstCorrectFrameMs, gpuSampleTimeMs: row.gpuSampleTimeMs,
+        console.log(JSON.stringify({structures, mode, firstFrameMs: row.firstFrameMs, graphReadyMs: row.graphReadyMs, firstCorrectFrameMs: row.firstCorrectFrameMs, optimizedMs: row.optimizedMs, tiers: row.tiers?.map(t => `${t.interim ? 'i' : 'f'}${t.specialized}/${t.interpreted}@${Math.round(t.atMs)}`).join(' '), gpuSampleTimeMs: row.gpuSampleTimeMs,
           sourceBytes: row.shaderCompilation?.sourceBytes, pipelineMs: row.shaderCompilation?.pipelineCompilationTimeMs, swap: row.swap, error: row.error}));
         if (values.output) appendFileSync(resolve(values.output), JSON.stringify(row) + '\n');
       } finally { await page.close(); }

@@ -5,13 +5,14 @@ import {FBXLoader} from 'three/examples/jsm/loaders/FBXLoader.js';
 import {Engine, Render, Camera, Mesh, OpenPBRMaterial, AmbientLight, SphereLight, Texture, THREESync, createSphereGeometry, createPlaneGeometry, type Geometry} from '../../src/main.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
-import {setMaterialGraphTier} from '../../src/renderer/materialGraph/state.js';
+import {DEFAULT_GRAPH_TIER_BUDGET} from '../../src/renderer/materialGraph/planner.js';
+import {setMaterialGraphPlanner, type GraphInstallEvent} from '../../src/renderer/materialGraph/state.js';
 import {scalingGraph, type GraphClass} from './materialGraphScalingScene.js';
 
 /** Material-graph scaling harness: one fixed 32×32 sphere grid, N distinct graph
  * structures assigned round-robin, rendered as graphs, as their exact UV bakes,
  * or as constants. Timings report rather than gate. */
-type Mode = 'constant' | 'baked' | 'graph' | 'interpreter';
+type Mode = 'constant' | 'baked' | 'graph' | 'interpreter' | 'auto';
 const GRID = 32, WIDTH = 640, HEIGHT = 400;
 const pause = () => new Promise(resolve => setTimeout(resolve, 5));
 const median = (values: number[]) => { const s = values.slice().sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : undefined; };
@@ -95,12 +96,15 @@ async function gltfScene(engine: Engine, url: string, materials: OpenPBRMaterial
   return {info: {meshes: assigned, geometries: rescaled.size, triangles, noUv, bounds: [box.min.toArray(), box.max.toArray()], camera: [camera.position, [box.max.x, box.min.y + size.y * 0.3, center.z]], distinctMaterials: Math.min(assigned, materials.length)}};
 }
 
-async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean; sceneUrl?: string}) {
+async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean; sceneUrl?: string; interim?: boolean; budgetMs?: number}) {
   const {structures: count, mode, graphClass = 'simple', bakeSize = 128, perfSamples = 50, textureBinding = 'auto', firstIndex = 0} = options;
-  // 'interpreter' renders the same graphs as 'graph' on the shared interpreter tier.
-  // A per-run salt keeps the fixed interpreter source cold in the shared Metal cache.
-  setMaterialGraphTier(mode === 'interpreter' ? 'interpreter' : 'specialized', 1 + Math.floor(Math.random() * 1e9));
-  const graphs = mode === 'graph' || mode === 'interpreter';
+  // 'graph' forces specialized code, 'interpreter' the shared interpreter tier and
+  // 'auto' lets the planner mix them. A per-run salt keeps the fixed interpreter
+  // source cold in the shared Metal cache.
+  const installs: GraphInstallEvent[] = [];
+  setMaterialGraphPlanner({tier: mode === 'interpreter' ? 'interpreter' : mode === 'auto' ? 'auto' : 'specialized', salt: 1 + Math.floor(Math.random() * 1e9),
+    interim: options.interim ?? true, budget: options.budgetMs ? {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs: options.budgetMs} : undefined, onInstall: event => installs.push(event)});
+  const graphs = mode === 'graph' || mode === 'interpreter' || mode === 'auto';
   const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding});
   engine.display.setSize(WIDTH, HEIGHT); engine.bvhBuilder = 'builtin';
   const prepareStart = performance.now();
@@ -158,6 +162,10 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
     }
     const firstCorrectFrameMs = performance.now() - start;
+    // A planner run may install the interpreter-only variant first; wait for the final one.
+    for (const deadline = performance.now() + 900000; installs.length && installs[installs.length - 1].interim && performance.now() < deadline;) { render.refine(); await pause(); }
+    const optimizedMs = installs.length ? installs[installs.length - 1].at - start : undefined;
+    const tiers = installs.map(e => ({atMs: e.at - start, interim: e.interim, specialized: e.specialized, interpreted: e.interpreted, coverage: e.coverage}));
     const diagnostics = engine.getDiagnostics();
     for (let i = 0; i < 2; i++) await render.converge({samples: 16, sampleSequenceOffset: 0, timeoutMs: 900000});
     let hdr: number[] | undefined;
@@ -189,23 +197,26 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
     }
     // Swap to a disjoint structure set of the same size: measures a structure-set
     // change after the first graph variant is installed.
-    let swap: {readyMs: number; firstFrameMs: number; pipelineMs?: number; sourceBytes?: number; status?: string} | undefined;
+    let swap: {readyMs: number; optimizedMs?: number; firstFrameMs: number; pipelineMs?: number; sourceBytes?: number; status?: string} | undefined;
     if (options.swap && graphs && count && !complex) {
       const before = engine.getDiagnostics()?.materialGraphs as {revision: number} | undefined;
       const next = structures(count, graphClass, firstIndex + 500000);
       meshes.forEach((mesh, i) => { if (i < GRID * GRID) mesh.materials = [new OpenPBRMaterial({graph: scalingGraph(next[i % next.length], graphClass)})]; });
       const swapStart = performance.now();
       engine.update();
+      const installed = installs.length;
       const state = await waitGraphs(before?.revision ?? 0, 120000);
       const readyMs = performance.now() - swapStart;
+      for (const deadline = performance.now() + 120000; (installs.length === installed || installs[installs.length - 1].interim) && performance.now() < deadline;) { render.refine(); await pause(); }
+      const optimizedMs = installs.length > installed ? installs[installs.length - 1].at - swapStart : undefined;
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
       const compiled = engine.getDiagnostics()?.shaderCompilation;
-      swap = {readyMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
+      swap = {readyMs, optimizedMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
     }
     return {
       swap, scene: complex?.info,
       structures: count, mode, graphClass, firstIndex, bakeSize: mode === 'baked' ? bakeSize : undefined, width: WIDTH, height: HEIGHT, spheres: GRID * GRID,
-      prepareMs, bakeMs: mode === 'baked' ? bakeMs : undefined, firstFrameMs, graphReadyMs, firstCorrectFrameMs,
+      prepareMs, bakeMs: mode === 'baked' ? bakeMs : undefined, firstFrameMs, graphReadyMs, firstCorrectFrameMs, optimizedMs, tiers,
       gpuSampleTimeMs: median(gpuSampleTimesMs) ?? null, gpuSampleTimesMs, wallSampleMs: median(complex ? wallSamplesMs.slice(1) : wallSamplesMs), wallSamplesMs,
       shaderCompilation: diagnostics?.shaderCompilation, materialGraphs: graphState ?? diagnostics?.materialGraphs,
       materialTextures: diagnostics?.materialTextures, textureAtlas: (diagnostics as {textureAtlas?: unknown} | undefined)?.textureAtlas, lastError: engine.getDiagnostics()?.lastError, adapter: diagnostics?.adapterName, userAgent: navigator.userAgent, hdr
