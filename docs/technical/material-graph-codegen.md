@@ -61,6 +61,43 @@ by topology, so many materials using one structure emit one function. A scene's
 set of functions remains one megakernel variant, rather than one pipeline per
 material or per topology.
 
+## Interpreter tier
+
+Specialized source grows with the number of structures, and so do pipeline
+compile time and megakernel cost. The WebGPU interpreter keeps one fixed WGSL
+evaluator whose source depends only on the set of terminals it writes, so a
+structure-set change with the same terminals reuses the installed pipeline and
+uploads new programs.
+
+`buildGraphProgram` lowers validated IR into three dependency-pruned entry
+programs: surface (all terminals except opacity), opacity and emission. Nodes
+map to opcode families (unary, binary, mix, remap, blend, noise, image, ...)
+with a sub-operation and a fixed operand order. Uniform subtrees use the folded
+parameter slots of `generateGraphIR`, so both tiers read one packed parameter
+block. Operand codes select a parameter slot, a register or a geometry input,
+plus a component selector and the declared width. Registers hold canonical
+vec4 values: scalars are splatted and vectors zero-padded, which reproduces the
+generated casts; only `convert` widening pads `w = 1`. Registers are allocated
+by liveness; a structure needing more than the fixed register file, or using a
+category without an opcode, stays specialized. `runGraphProgram` is the CPU
+reference of the loop and is checked against `evaluateGraph` for every
+supported category/type combination.
+
+Programs follow the parameter records in `materialsBuffer`: one header record
+per structure (entry instruction counts and the surface terminal mask, split
+into two exact floats), then one record per instruction using the first four
+rows (header, then twelve operand codes). The topology-ID component addresses
+either a specialized function (positive) or a program header (negative); no
+value struct changes. The surface branch applies the same per-terminal clamps
+as specialized code, gated by the terminal mask. The first four operands are
+decoded before the opcode switch so lanes on different opcodes share those
+loads.
+
+The tier is internal (`setMaterialGraphTier`) and defaults to specialized code.
+The fixed register array and the operand decoding cost GPU time per evaluated
+node; the interpreter variant also costs some time on hits that do not evaluate
+a graph. Choosing a tier per structure is left to a budgeted planner.
+
 ## Compilation and installation
 
 Native raw descriptors preserve authored IDs separately from the exact structural

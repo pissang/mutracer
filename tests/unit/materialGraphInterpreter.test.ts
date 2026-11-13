@@ -111,7 +111,7 @@ describe('material graph interpreter programs', () => {
             state.request(first);
             state.install(state.requested, state.revision);
             const plan = state.active, shaderKey = plan.shaderKey;
-            expect(plan.programs.size).toBe(2);
+            expect(plan.programs?.size).toBe(2);
             expect(plan.specialized).toEqual([]);
             const source = materialGraphShader(plan).graph!;
             expect(source.interpreter).toBe(true);
@@ -125,7 +125,7 @@ describe('material graph interpreter programs', () => {
             // The header counts surface instructions; its records follow it.
             const header = -id(0) * MATERIAL_FLOAT_COUNT;
             const count = packed[header + field('color')];
-            expect(count).toBe(plan.programs.get(plan.graphs[0]!.key)!.surface.instructions.length / GRAPH_INSTRUCTION_FLOATS);
+            expect(count).toBe(plan.programs!.get(plan.graphs[0]!.key)!.surface.instructions.length / GRAPH_INSTRUCTION_FLOATS);
             expect(packed[header + field('color') + 1]).toBe(0);
             const last = header + count * MATERIAL_FLOAT_COUNT;
             expect(packed[last + field('color')]).toBe(GraphOp.Store);
@@ -140,7 +140,7 @@ describe('material graph interpreter programs', () => {
     it('keeps specialized variants unchanged by default', () => {
         const state = new MaterialGraphState();
         state.request([new OpenPBRMaterial({graph: new MaterialGraph({nodes: [{id: 'uv', category: 'texcoord', type: 'vector2'}, {id: 'x', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}, index: {type: 'integer', value: 0}}}], terminal: {specularRoughness: {node: 'x'}}})})]);
-        expect(state.requested.programs.size).toBe(0);
+        expect(state.requested.programs?.size).toBe(0);
         expect(state.requested.shaderKey).toBe(state.requested.key);
         const source = materialGraphShader(state.requested).graph!;
         expect(source.interpreter).toBeUndefined();
