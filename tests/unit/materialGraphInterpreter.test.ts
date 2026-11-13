@@ -7,7 +7,7 @@ import {evaluateGraph, evaluateNode, numeric, type GraphContext} from '../../src
 import {buildGraphProgram, decodeOperand, GraphOp, GRAPH_INSTRUCTION_FLOATS, GRAPH_INTERPRETER_REGISTERS, OperandKind, runGraphProgram, type GraphProgramEntry} from '../../src/renderer/materialGraph/interpreter.js';
 import type {GraphType} from '../../src/renderer/materialGraph/types.js';
 import {materialGraphFixtures} from '../../native/validation/material-graph-fixtures.js';
-import {MaterialGraphState, setMaterialGraphTier} from '../../src/renderer/materialGraph/state.js';
+import {MaterialGraphState, setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state.js';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader.js';
 import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
@@ -104,9 +104,10 @@ describe('material graph interpreter programs', () => {
             {id: 'f', category: unary, type: 'float', inputs: {in: {type: 'float', connection: {node: 'x'}}}},
             {id: 'r', category: 'multiply', type: 'float', inputs: {in1: {type: 'float', connection: {node: 'f'}}, in2: {type: 'float', value: k}}}
         ], terminal: {specularRoughness: {node: 'r'}}});
-        setMaterialGraphTier('interpreter');
+        setMaterialGraphPlanner({tier: 'interpreter'});
         try {
             const state = new MaterialGraphState();
+            state.interpreterAvailable = true;
             const first = [new OpenPBRMaterial({graph: graph(0.5, 'sin')}), new OpenPBRMaterial({graph: graph(0.25, 'cos')}), new OpenPBRMaterial()];
             state.request(first);
             state.install(state.requested, state.revision);
@@ -134,11 +135,12 @@ describe('material graph interpreter programs', () => {
             state.request([new OpenPBRMaterial({graph: graph(0.5, 'abs')}), new OpenPBRMaterial({graph: graph(0.5, 'floor')})]);
             expect(state.requested.key).not.toBe(plan.key);
             expect(state.requested.shaderKey).toBe(shaderKey);
-        } finally { setMaterialGraphTier('specialized'); }
+        } finally { setMaterialGraphPlanner(); }
     });
 
     it('keeps specialized variants unchanged by default', () => {
         const state = new MaterialGraphState();
+        state.interpreterAvailable = true;
         state.request([new OpenPBRMaterial({graph: new MaterialGraph({nodes: [{id: 'uv', category: 'texcoord', type: 'vector2'}, {id: 'x', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}, index: {type: 'integer', value: 0}}}], terminal: {specularRoughness: {node: 'x'}}})})]);
         expect(state.requested.programs?.size).toBe(0);
         expect(state.requested.shaderKey).toBe(state.requested.key);

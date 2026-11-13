@@ -2,6 +2,7 @@ import {materialEmission} from './materialEmission.js';
 import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, graphShaderKey, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
+import {materialSurfaceAreas} from './materialGraph/usage.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
@@ -266,7 +267,10 @@ class WGPURayTracePass {
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _graphs?: MaterialGraphState;
-  get graphs() { return this._graphs ??= new MaterialGraphState(); }
+  get graphs() {
+    if (!this._graphs) { this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes); }
+    return this._graphs;
+  }
   private _canTraceOldGraph = false;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
@@ -935,6 +939,7 @@ class WGPURayTracePass {
       const graphConstants = materialGraphConstants(this._constants, graphPlan, this._preparedMeshData?.geometry);
       const pipelineInputs = JSON.stringify([
         graphPlan.key,
+        graphShaderKey(graphPlan),
         graphConstants,
         Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
         this._hasDisplacement,
@@ -1015,6 +1020,25 @@ class WGPURayTracePass {
         this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature});
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
+      // Progressive installation: while a mixed variant compiles, the interpreter-only
+      // variant of the same structures renders them correctly. It is compiled only
+      // when requested (mixed final plan); otherwise it is used when already ready.
+      const interim = graphPlan === this.graphs.requested ? graphPlan.interim : undefined;
+      if (variant.status === 'pending' && interim && graphShaderKey(this.graphs.active) !== graphShaderKey(interim) && this._activeVariant?.baseSignature === fallbackSignature) {
+        const interimSignature = baseSignature + '\n' + graphShaderKey(interim);
+        let interimVariant = this._traceVariants.get(interimSignature);
+        if (!interimVariant && graphPlan.compileInterim) {
+          const interimStructure = JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(interim)});
+          interimVariant = this._startTraceVariant(interimSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey: interimStructure, capabilities, graphPlan: interim, baseSignature: fallbackSignature});
+          this._requestQueuedCompile(variant);
+        }
+        if (interimVariant?.status === 'ready') {
+          // Never matches pipelineInputs, so the next update keeps waiting for the final variant.
+          this._installTraceVariant(interimVariant, pipelineInputs + '\ninterim');
+          this._requestedVariant = variant;
+          return;
+        }
+      }
       if (variant.status === 'pending') {
         this._requestQueuedCompile(variant);
         if (this._canTraceOldGraph) {
@@ -1034,9 +1058,8 @@ class WGPURayTracePass {
 
   /** Runs only for a ready variant, without yielding, so tracing can start in this call. */
   private _installTraceVariant(variant: TraceVariant, pipelineInputs: string) {
-    if (variant.graphKey === graphShaderKey(this.graphs.requested) && this.graphs.active.key !== this.graphs.requested.key) {
+    if (this.graphs.installShader(variant.graphKey)) {
       this.graphs.compilation={sourceBytes:variant.diagnostics.sourceBytes,sourceGenerationTimeMs:variant.diagnostics.sourceGenerationTimeMs,moduleCreationTimeMs:variant.diagnostics.moduleCreationTimeMs,totalTimeMs:variant.diagnostics.totalTimeMs};
-      this.graphs.install(this.graphs.requested,this.graphs.revision);
       this._emissiveTriangles=this._collectEmissiveTriangles();
       this._updateLightSamplingData();
       this._materialsBuffer = this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData!.getBufferArray(),MATERIAL_FLOAT_COUNT * 4);

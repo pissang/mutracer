@@ -6,6 +6,8 @@ import {flattenGraphUnchecked} from './flatten.js';
 import {graphContextDiagnostics} from './context.js';
 import {graphTerminals} from './ir.js';
 import {terminalTypes} from './nodes.js';
+import {DEFAULT_GRAPH_COMPILE_MODEL, DEFAULT_GRAPH_TIER_BUDGET, planGraphTiers, type GraphCompileModel, type GraphTierBudget, type GraphTierCandidate} from './planner.js';
+import {generateGraphIR} from './generate.js';
 import {buildGraphProgram, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
 import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
@@ -18,13 +20,36 @@ const emissionOffset = materialLayoutFields().find(field => field.name === 'emis
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
 // Interpreter records: a header vec4 and three operand vec4 rows (the first four rows of a material record).
 const programRows = ['color', 'roughness', 'metallic', 'emission'].map(name => materialLayoutFields().find(field => field.name === name)!.offset / 4);
-/** Graph evaluation tier. `interpreter` runs every structure that fits the fixed
- * register file on the shared interpreter; others stay specialized. Internal
- * switch for measurement until a planner chooses per structure. */
-export type MaterialGraphTier = 'specialized' | 'interpreter';
-let graphTier: MaterialGraphTier = 'specialized', interpreterSalt = 0;
-/** `salt` makes the interpreter source unique so driver caches miss; measurement only. */
-export function setMaterialGraphTier(tier: MaterialGraphTier, salt = 0) { graphTier = tier; interpreterSalt = salt; }
+/** Internal tier selection. `auto` lets the planner choose per structure;
+ * `specialized`/`interpreter` force one tier for A/B measurement. */
+export type MaterialGraphTier = 'auto' | 'specialized' | 'interpreter';
+export interface MaterialGraphPlannerOptions {
+    /** Default auto. */
+    tier?: MaterialGraphTier;
+    /** Makes the interpreter source unique so driver caches miss; measurement only. Default 0. */
+    salt?: number;
+    /** Default DEFAULT_GRAPH_COMPILE_MODEL. */
+    model?: GraphCompileModel;
+    /** Default DEFAULT_GRAPH_TIER_BUDGET. */
+    budget?: GraphTierBudget;
+    /** Compile the interpreter-only variant first when the final variant is mixed. Default true. */
+    interim?: boolean;
+    /** Measurement hook called on every installation. */
+    onInstall?: (event: GraphInstallEvent) => void;
+}
+export interface GraphInstallEvent { key: string; shaderKey: string; interim: boolean; specialized: number; interpreted: number; /** Planned share of interpreter work moved to specialized code. */ coverage?: number; at: number }
+let planner: Required<Omit<MaterialGraphPlannerOptions, 'onInstall'>> & Pick<MaterialGraphPlannerOptions, 'onInstall'> =
+    {tier: 'auto', salt: 0, model: DEFAULT_GRAPH_COMPILE_MODEL, budget: DEFAULT_GRAPH_TIER_BUDGET, interim: true};
+/** Internal planner overrides for measurement; omitted fields reset to their defaults. */
+export function setMaterialGraphPlanner(options: MaterialGraphPlannerOptions = {}) {
+    planner = {tier: options.tier ?? 'auto', salt: options.salt ?? 0, model: options.model ?? DEFAULT_GRAPH_COMPILE_MODEL,
+        budget: options.budget ?? DEFAULT_GRAPH_TIER_BUDGET, interim: options.interim ?? true, onInstall: options.onInstall};
+}
+/** Categories that pull shared helper libraries into specialized code. */
+const graphHelperCategories: Record<string, string[]> = {
+    noise: ['noise2d', 'noise3d', 'fractal3d', 'cellnoise2d', 'cellnoise3d', 'worleynoise2d', 'worleynoise3d'],
+    hsv: ['rgbtohsv', 'hsvtorgb', 'hsvadjust'], rotate3d: ['rotate3d']
+};
 export const GRAPH_INTERPRETER_KEY = 'mx-interpreter-1';
 /** Plans without a tier split (older snapshots, tests) are fully specialized. */
 export const graphShaderKey = (plan: GraphPlan) => plan.shaderKey ?? plan.key;
@@ -42,6 +67,10 @@ export interface GraphPlan {
     /** Terminals written by interpreted structures. */
     interpreterTerminals?: string[];
     interpreterSalt?: number;
+    /** Interpreter-only plan of the same structures, installed while this plan's mixed variant compiles. */
+    interim?: GraphPlan;
+    /** Whether to compile the interim variant (rather than only use it when ready). */
+    compileInterim?: boolean;
     slots?: ReadonlyMap<OpenPBRMaterial, OpenPBRMaterial>;
 }
 const empty = (): GraphPlan => ({ key: '', shaderKey: '', graphs: [], structures: [], specialized: [], programs: new Map(), interpreterTerminals: [] });
@@ -89,6 +118,54 @@ export class MaterialGraphState {
     }[] = [];
     private materials: OpenPBRMaterial[] = [];
     private programCache = new Map<string, GraphProgramResult>();
+    /** Relative hit weight per material (world-space surface area), read when a new
+     * structure set is planned. Default (or an all-zero result) weighs materials equally. */
+    usage?: () => ReadonlyMap<unknown, number>;
+    /** Backends with the WGSL interpreter (WebGPU) enable tier planning; otherwise
+     * every structure is specialized. Default false. */
+    interpreterAvailable = false;
+    /** Tier decisions stay fixed for a structure set, so usage changes (transforms,
+     * visibility) never recompile; a new set is planned again. */
+    private tiers?: {key: string; planner: typeof planner; specialized: Set<string>; coverage?: number};
+    private sourceCache = new Map<string, Pick<GraphTierCandidate, 'sourceBytes' | 'helpers'>>();
+    private decideTiers(key: string, structures: NormalizedGraph[], materials: OpenPBRMaterial[], graphs: (NormalizedGraph | undefined)[]) {
+        if (this.tiers?.key === key && this.tiers.planner === planner) return this.tiers.specialized;
+        let specialized: Set<string>, coverage: number | undefined;
+        if (planner.tier === 'specialized' || !this.interpreterAvailable || !structures.length) specialized = new Set(structures.map(g => g.key));
+        else if (planner.tier === 'interpreter') specialized = new Set(structures.filter(g => !this.program(g)).map(g => g.key));
+        else {
+            const weights = this.usage?.(), usage = new Map<string, number>();
+            const equal = !weights || !materials.some((m, i) => graphs[i] && (weights.get(m) ?? 0) > 0);
+            graphs.forEach((g, i) => { if (g) usage.set(g.key, (usage.get(g.key) ?? 0) + (equal ? 1 : weights.get(materials[i]) ?? 0)); });
+            const candidates = structures.map(g => {
+                const program = this.program(g);
+                return {key: g.key, usage: usage.get(g.key) ?? 0, ...this.source(g),
+                    instructions: program ? [program.surface, program.opacity, program.emission].reduce((n, e) => n + e.instructions.length / GRAPH_INSTRUCTION_FLOATS, 0) : undefined};
+            });
+            ({specialized, coverage} = planGraphTiers(candidates, planner.model, planner.budget));
+        }
+        this.tiers = {key, planner, specialized, coverage};
+        return specialized;
+    }
+    /** Specialized source estimate: the generated function plus its dispatch branches. */
+    private source(graph: NormalizedGraph) {
+        let result = this.sourceCache.get(graph.key);
+        if (!result) {
+            const ir = flattenGraphUnchecked(graph), categories = new Set(graph.nodes.map(n => n.category)), terminals = Object.keys(graph.terminal);
+            const helpers = Object.entries(graphHelperCategories).filter(([, names]) => names.some(n => categories.has(n))).map(([name]) => name);
+            const dispatch = 320 + 60 * terminals.length + ('opacity' in graph.terminal ? 260 : 0) + (terminals.some(t => ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor'].includes(t)) ? 360 : 0);
+            this.sourceCache.set(graph.key, result = {sourceBytes: generateGraphIR(ir, 'mx_eval_1').source.length + dispatch, helpers});
+        }
+        return result;
+    }
+    private withTiers(base: Pick<GraphPlan, 'key' | 'materials' | 'graphs' | 'structures' | 'slots'>, specializedKeys: ReadonlySet<string>): GraphPlan {
+        const programs = new Map<string, GraphProgram>();
+        for (const g of base.structures) { const program = specializedKeys.has(g.key) ? undefined : this.program(g); if (program) programs.set(g.key, program); }
+        const specialized = base.structures.filter(g => !programs.has(g.key));
+        const interpreterTerminals = Object.keys(terminalTypes).filter(name => base.structures.some(g => programs.has(g.key) && name in g.terminal));
+        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}:${planner.salt}`] : [])].join('\n');
+        return {...base, shaderKey, specialized, programs, interpreterTerminals, interpreterSalt: planner.salt};
+    }
     private program(graph: NormalizedGraph) {
         let result = this.programCache.get(graph.key);
         if (!result) this.programCache.set(graph.key, result = buildGraphProgram(flattenGraphUnchecked(graph)));
@@ -137,11 +214,12 @@ export class MaterialGraphState {
         this.slotTextures.finish();
         const structures = Array.from(new Map(graphs.filter((g): g is NormalizedGraph => !!g && !!Object.keys(g.terminal).length).map(g => [g.key, g])).values()).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
         const key = structures.map(g => g.key).join('\n');
-        const programs = new Map<string, GraphProgram>();
-        if (graphTier === 'interpreter') for (const g of structures) { const program = this.program(g); if (program) programs.set(g.key, program); }
-        const specialized = structures.filter(g => !programs.has(g.key));
-        const interpreterTerminals = Object.keys(terminalTypes).filter(name => structures.some(g => programs.has(g.key) && name in g.terminal));
-        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}:${interpreterSalt}`] : [])].join('\n');
+        const specializedKeys = this.decideTiers(key, structures, materials, graphs);
+        const base = { key, materials: materials.slice(), graphs, structures, slots };
+        const final = this.withTiers(base, specializedKeys);
+        // The interpreter-only variant installs first while a mixed variant compiles,
+        // and also bridges any later structure set while its own variant is ready.
+        const interim = planner.tier === 'auto' && specializedKeys.size ? this.withTiers(base, new Set()) : undefined;
         const assignmentKey = (plan: GraphPlan) => plan.graphs.map(g => g?.key ?? '').join('\n');
         const authoredChanged = (materials.some(m => !!m.graph) || this.sourceRevisions.some(item => !!item.graph)) && (materials.length !== this.sourceRevisions.length || materials.some((m, i) => m.graph !== this.sourceRevisions[i]?.graph || m.graph?.revision !== this.sourceRevisions[i]?.revision));
         this.sourceRevisions = materials.map(m => ({ graph: m.graph, revision: m.graph?.revision }));
@@ -149,10 +227,12 @@ export class MaterialGraphState {
             this.revision++;
             this.readyAt = performance.now() + 32;
         }
-        this.requested = { key, shaderKey, materials: materials.slice(), graphs, structures, specialized, programs, interpreterTerminals, interpreterSalt, slots };
+        this.requested = { ...final, ...(interim && interim.programs!.size && graphShaderKey(interim) !== graphShaderKey(final) ? {interim, compileInterim: planner.interim && final.programs!.size > 0} : {}) };
         this.diagnostics = diagnostics;
         if (key === this.active.key) {
-            this.install(this.requested, this.revision);
+            // Same structures: keep the installed tiers (and its variant) for these parameters.
+            const installed = graphShaderKey(this.active) === graphShaderKey(this.requested) ? this.requested : this.requested.interim && graphShaderKey(this.active) === graphShaderKey(this.requested.interim) ? this.requested.interim : this.withTiers(base, new Set((this.active.specialized ?? []).map(g => g.key)));
+            this.install(installed, this.revision);
             this.status = diagnostics.length ? 'failed' : key ? 'ready' : 'idle';
         }
         else
@@ -162,11 +242,21 @@ export class MaterialGraphState {
     candidate(hasPipeline: boolean): GraphPlan {
         return hasPipeline && performance.now() >= this.readyAt && !this.compileFailed ? this.requested : this.active;
     }
+    /** Installs the requested plan, or its interpreter-only interim, whose shader
+     * key matches a ready variant. False when nothing changes. */
+    installShader(shaderKey: string): boolean {
+        const plan = [this.requested, this.requested.interim].find(p => p && graphShaderKey(p) === shaderKey);
+        if (!plan || plan.key === this.active.key && graphShaderKey(this.active) === shaderKey) return false;
+        return this.install(plan, this.revision);
+    }
     install(plan: GraphPlan, revision: number) {
         if (revision !== this.revision || plan.key !== this.requested.key)
             return false;
+        // A tier switch of unchanged structures keeps accumulation: both tiers evaluate
+        // the same graph (block-level MAD 0), so only structure/assignment changes count.
         const changed = plan.key !== this.active.key || plan.graphs.some((g, i) => g?.key !== this.active.graphs[i]?.key);
-        this.active = this.requested;
+        this.active = plan;
+        planner.onInstall?.({key: plan.key, shaderKey: graphShaderKey(plan), interim: plan === this.requested.interim, specialized: plan.specialized?.length ?? plan.structures.length, interpreted: plan.programs?.size ?? 0, coverage: this.tiers?.key === plan.key ? this.tiers.coverage : undefined, at: performance.now()});
         if(!this.diagnostics.length)this.installedRevision = revision;
         if (changed)
             this.generation++;

@@ -93,10 +93,39 @@ as specialized code, gated by the terminal mask. The first four operands are
 decoded before the opcode switch so lanes on different opcodes share those
 loads.
 
-The tier is internal (`setMaterialGraphTier`) and defaults to specialized code.
 The fixed register array and the operand decoding cost GPU time per evaluated
 node; the interpreter variant also costs some time on hits that do not evaluate
-a graph. Choosing a tier per structure is left to a budgeted planner.
+a graph.
+
+## Tier planner
+
+`planGraphTiers` chooses a tier per structure when a structure set is requested,
+so one variant can mix specialized `mx_eval_N` branches with the interpreter.
+The benefit of specializing a structure is its interpreter instruction count
+(surface, opacity and emission programs) times its usage, the world-space area
+of the visible surfaces using it. The interpreter's extra cost is linear in
+executed instructions, while the scene's traversal cost, which sets the
+interpreter/baked ratio of a frame, is the same for both tiers; the planner
+therefore uses no fixed interpreter ratio. Screen coverage is not used.
+
+The cost of a structure is the compile time of its specialized source: the
+generated function plus its dispatch branches, at a calibrated time per KB.
+Helper libraries (noise, HSV, `rotate3d`) count once, and only without the
+interpreter, whose variant always contains them. The budget is the graph
+increment over the graph-free kernel (1 s on the reference platform). If every
+structure fits, the variant omits the interpreter, because its presence slows
+every hit. Otherwise the interpreter's fixed cost is charged and the remaining
+budget is filled greedily by benefit per compile millisecond. A mixed variant is
+built only when its specialized structures carry at least 20 % of the estimated
+interpreter work; below that, extra code on every hit outweighs the gain and
+all structures stay interpreted. Structures the interpreter cannot run are
+always specialized, even past the budget.
+
+Decisions stay fixed while the structure set is unchanged, so transform,
+visibility and parameter edits never recompile; a new set is planned again.
+An internal measurement switch (`setMaterialGraphPlanner`) can force one tier,
+replace the compile model or budget, salt the interpreter source and observe
+installations.
 
 ## Compilation and installation
 
@@ -123,6 +152,14 @@ structure set can install without compiling. A different set waits for a short
 debounce. WebGPU queues a normal async trace variant. When layout-compatible,
 the old variant and its parameter records continue tracing; installation uploads
 new records and binds the new variant together.
+
+When the requested plan is mixed, WebGPU also compiles the interpreter-only
+variant of the same structures and installs whichever is ready first; the mixed
+variant replaces it when it compiles. An interpreter-only variant that is
+already ready (its key depends only on the terminal set) bridges any later
+structure set, including fully specialized ones, without a compile. Both tiers
+evaluate the same graph (HDR block MAD 0 in P1), so a tier switch of unchanged
+structures keeps accumulation; only structure or assignment changes restart it.
 
 Only a plan matching the current request can install. Validation/compile failures
 retain the successful plan and appear in the existing engine diagnostics. A
