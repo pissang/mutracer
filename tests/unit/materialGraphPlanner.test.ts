@@ -65,6 +65,16 @@ describe('material graph tier planner', () => {
         expect(decision.estimatedMs).toBe(model.interpreterMs);
     });
 
+    it('caps the total specialized source independently of the compile budget', () => {
+        const set = [candidate('a', 10, 3), candidate('b', 5, 3), candidate('c', 4, 3)];
+        // 9 KB fit the 1000 ms budget, but not a 7 KB cap: the interpreter takes the rest.
+        const capped = planGraphTiers(set, model, {...budget, budgetMs: 2000, capKB: 7});
+        expect(capped.interpreter).toBe(true);
+        expect([...capped.specialized].sort()).toEqual(['a', 'b']);
+        expect(capped.specializedBytes).toBe(6 * 1024);
+        expect(planGraphTiers(set, model, {...budget, budgetMs: 2000}).interpreter).toBe(false);
+    });
+
     it('counts helper libraries once and only without the interpreter', () => {
         // 3 + 3 KB plus a 2 KB library: 800 ms without the interpreter.
         const noisy = [candidate('a', 1, 3, 10, ['noise']), candidate('b', 2, 3, 10, ['noise'])];

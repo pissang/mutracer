@@ -43,6 +43,10 @@ export interface GraphTierBudget {
      * least this share of the estimated interpreter work; otherwise the presence
      * of extra code on every hit outweighs the gain and all structures stay interpreted. */
     minBenefitShare: number;
+    /** Total specialized source allowed in one variant, in KB, independent of the
+     * compile budget: specialized code slows every hit of the megakernel (P0:
+     * +110 KB ≈ 1.07×, +220 KB ≈ 1.15×, +665 KB ≈ 1.49× of baked). Default unlimited. */
+    capKB?: number;
 }
 
 export interface GraphTierDecision {
@@ -54,6 +58,8 @@ export interface GraphTierDecision {
     estimatedMs: number;
     /** Share of the estimated interpreter work moved to specialized code (1 without interpreter). */
     coverage: number;
+    /** Specialized source of the chosen variant in bytes. */
+    specializedBytes: number;
 }
 
 /** Calibrated on the reference platform: specialized code adds 19–21 ms per KB
@@ -65,7 +71,7 @@ export interface GraphTierDecision {
 export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, interpreterMsPerKB: 48, interpreterFreeKB: 3.6, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}};
 export const DEFAULT_GRAPH_TIER_BUDGET: GraphTierBudget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.2};
 
-export function specializedCompileMs(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {
+export function specializedBytes(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {
     let bytes = 0;
     const helpers = new Set<string>();
     for (const c of candidates) {
@@ -73,7 +79,10 @@ export function specializedCompileMs(candidates: readonly GraphTierCandidate[], 
         if (!interpreter) for (const h of c.helpers ?? []) helpers.add(h);
     }
     for (const h of helpers) bytes += model.helperBytes[h] ?? 0;
-    return bytes / 1024 * model.msPerKB;
+    return bytes;
+}
+export function specializedCompileMs(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {
+    return specializedBytes(candidates, model, interpreter) / 1024 * model.msPerKB;
 }
 
 /**
@@ -87,7 +96,8 @@ export function specializedCompileMs(candidates: readonly GraphTierCandidate[], 
  * fits the budget without an interpreter, the interpreter is omitted entirely
  * (its presence slows every hit). Otherwise the interpreter's fixed cost is
  * charged and the remaining budget is filled greedily by benefit per ms.
- * Structures the interpreter cannot run are always specialized.
+ * Structures the interpreter cannot run are always specialized. `budget.capKB`
+ * limits the total specialized source on top of the compile budget.
  */
 export function interpreterCompileMs(sourceBytes: number, model: GraphCompileModel) {
     return model.interpreterMsPerKB * Math.max(0, sourceBytes / 1024 - model.interpreterFreeKB);
@@ -97,11 +107,11 @@ export function interpreterCompileMs(sourceBytes: number, model: GraphCompileMod
  * cost of only the opcode families the candidates need. */
 export function planGraphTiers(candidates: readonly GraphTierCandidate[], model = DEFAULT_GRAPH_COMPILE_MODEL, budget = DEFAULT_GRAPH_TIER_BUDGET, interpreterMs = model.interpreterMs): GraphTierDecision {
     const forced = candidates.filter(c => c.instructions === undefined);
-    const allMs = specializedCompileMs(candidates, model, false);
-    if (allMs <= budget.budgetMs || forced.length === candidates.length)
-        return {specialized: new Set(candidates.map(c => c.key)), interpreter: false, estimatedMs: allMs, coverage: 1};
+    const allMs = specializedCompileMs(candidates, model, false), capBytes = (budget.capKB ?? Infinity) * 1024;
+    if ((allMs <= budget.budgetMs && specializedBytes(candidates, model, false) <= capBytes) || forced.length === candidates.length)
+        return {specialized: new Set(candidates.map(c => c.key)), interpreter: false, estimatedMs: allMs, coverage: 1, specializedBytes: specializedBytes(candidates, model, false)};
     const specialized = new Set(forced.map(c => c.key));
-    let usedMs = interpreterMs + specializedCompileMs(forced, model, true);
+    let usedMs = interpreterMs + specializedCompileMs(forced, model, true), usedBytes = specializedBytes(forced, model, true);
     const benefit = (c: GraphTierCandidate) => (c.instructions ?? 0) * Math.max(c.usage, 0);
     const optional = candidates.filter(c => c.instructions !== undefined);
     const total = optional.reduce((sum, c) => sum + benefit(c), 0);
@@ -111,17 +121,17 @@ export function planGraphTiers(candidates: readonly GraphTierCandidate[], model 
     const chosen: string[] = [];
     for (const c of ranked) {
         const ms = cost(c);
-        if (usedMs + ms > budget.budgetMs) continue;
-        usedMs += ms; gained += benefit(c); chosen.push(c.key);
+        if (usedMs + ms > budget.budgetMs || usedBytes + c.sourceBytes > capBytes) continue;
+        usedMs += ms; usedBytes += c.sourceBytes; gained += benefit(c); chosen.push(c.key);
     }
     // Specializing every interpretable structure would drop the interpreter, but
     // then the full set is over budget (allMs above); keep the last pick interpreted.
     if (chosen.length && chosen.length === optional.length) {
         const last = optional.find(c => c.key === chosen.pop())!;
-        usedMs -= cost(last); gained -= benefit(last);
+        usedMs -= cost(last); usedBytes -= last.sourceBytes; gained -= benefit(last);
     }
     const coverage = total > 0 ? gained / total : 0;
     if (coverage >= budget.minBenefitShare) for (const key of chosen) specialized.add(key);
-    else usedMs = interpreterMs + specializedCompileMs(forced, model, true);
-    return {specialized, interpreter: true, estimatedMs: usedMs, coverage: coverage >= budget.minBenefitShare ? coverage : 0};
+    else { usedMs = interpreterMs + specializedCompileMs(forced, model, true); usedBytes = specializedBytes(forced, model, true); }
+    return {specialized, interpreter: true, estimatedMs: usedMs, coverage: coverage >= budget.minBenefitShare ? coverage : 0, specializedBytes: usedBytes};
 }
