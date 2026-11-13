@@ -1677,7 +1677,7 @@ width: renderWidth, height: renderHeight,
     refineAovs(camera, samples = sampleCount) {
       // Completed beauty targets still poll deferred graph compilation. A late
       // installation invalidates this target before its next capped sample.
-      if (rayTracePass.graphs?.status === 'compiling' || graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
+      if (rayTracePass.graphs?.status === 'compiling' || rayTracePass.graphs?.upgrading || graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
         applyTraceQuality(); rayTracePass.setCamera(camera); rayTracePass.updatePipeline();
         if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
           graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; sampleCount = 0; cancelDenoise(); return false;

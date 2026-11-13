@@ -117,6 +117,7 @@ describe('material graph tier plans', () => {
         let packed = state.pack(new Float32Array(9 * MATERIAL_FLOAT_COUNT), []);
         for (let i = 0; i < 8; i++) expect(id(packed, i)).toBeLessThan(0);
 
+        expect(state.upgrading).toBe(true);
         // A parameter-only request keeps the installed interim tiers.
         state.request([...materials, new OpenPBRMaterial()]);
         expect(graphShaderKey(state.active)).toBe(graphShaderKey(interim));
@@ -124,6 +125,7 @@ describe('material graph tier plans', () => {
 
         // The final variant swaps tiers without restarting accumulation.
         expect(state.installShader(graphShaderKey(state.requested))).toBe(true);
+        expect(state.upgrading).toBe(false);
         expect(state.generation).toBe(generation + 1);
         packed = state.pack(new Float32Array(9 * MATERIAL_FLOAT_COUNT), []);
         const specialized = new Set(state.active.specialized!.map(g => g.key));
@@ -134,6 +136,21 @@ describe('material graph tier plans', () => {
         expect(id(packed, 8)).toBe(0);
         // The parameter-only request also reinstalled the interim.
         expect(installs.map(e => e.interim)).toEqual([true, true, false]);
+    });
+
+    it('keeps the interim installed when the final variant fails', () => {
+        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, minBenefitShare: 0.05}});
+        const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
+        const state = new MaterialGraphState();
+        state.interpreterAvailable = true;
+        state.request(materials);
+        const finalKey = graphShaderKey(state.requested), interim = state.requested.interim!;
+        expect(state.abandonUpgrade(finalKey)).toBe(false);
+        state.installShader(graphShaderKey(interim));
+        expect(state.abandonUpgrade(finalKey)).toBe(true);
+        expect(state.upgrading).toBe(false);
+        expect(state.status).toBe('ready');
+        expect(graphShaderKey(state.requested)).toBe(graphShaderKey(interim));
     });
 
     it('keeps tier decisions for an unchanged structure set when usage changes', () => {

@@ -1035,7 +1035,10 @@ class WGPURayTracePass {
         if (interimVariant?.status === 'ready') {
           // Never matches pipelineInputs, so the next update keeps waiting for the final variant.
           this._installTraceVariant(interimVariant, pipelineInputs + '\ninterim');
+          // The interim keeps tracing while the final variant compiles.
           this._requestedVariant = variant;
+          this._canTraceOldGraph = true;
+          this._requestQueuedCompile(variant);
           return;
         }
       }
@@ -1047,7 +1050,11 @@ class WGPURayTracePass {
         }
         return variant.settled;
       }
-      if (variant.status === 'failed') { if (graphPlan.key) this.graphs.fail(this.graphs.revision,variant.error); return; }
+      if (variant.status === 'failed') {
+        if (this.graphs.abandonUpgrade(variant.graphKey)) { console.warn('Specialized material graph variant failed; keeping the interpreter.', variant.error); return; }
+        if (graphPlan.key) this.graphs.fail(this.graphs.revision,variant.error);
+        return;
+      }
       this._installTraceVariant(variant, pipelineInputs);
     } catch (error) {
       this._resourceError = error;

@@ -249,6 +249,14 @@ export class MaterialGraphState {
         if (!plan || plan.key === this.active.key && graphShaderKey(this.active) === shaderKey) return false;
         return this.install(plan, this.revision);
     }
+    /** The requested structures render correctly on the interim while the final tiers compile. */
+    get upgrading() { return this.active.key === this.requested.key && graphShaderKey(this.active) !== graphShaderKey(this.requested); }
+    /** A failed final variant keeps the installed interim instead of failing the graphs. */
+    abandonUpgrade(shaderKey: string): boolean {
+        if (!this.upgrading || graphShaderKey(this.requested) !== shaderKey || this.active !== this.requested.interim) return false;
+        this.requested = this.active;
+        return true;
+    }
     install(plan: GraphPlan, revision: number) {
         if (revision !== this.revision || plan.key !== this.requested.key)
             return false;
