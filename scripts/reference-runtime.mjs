@@ -37,9 +37,17 @@ class CDP {
   }
   close() {this.socket.close();}
 }
+function defaultChrome() {
+  if (process.platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (process.platform === 'win32') {
+    const candidates = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA]
+      .filter(Boolean).map(root => resolve(root, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    return candidates.find(path => existsSync(path)) ?? 'chrome.exe';
+  }
+  return 'google-chrome';
+}
 export async function launchChrome() {
-  const executable = process.env.MUTRACER_CHROME ?? (process.platform === 'darwin'
-    ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome');
+  const executable = process.env.MUTRACER_CHROME ?? defaultChrome();
   const profile = mkdtempSync(resolve(tmpdir(), 'mutracer-reference-chrome-'));
   const logFd=process.env.MUTRACER_CHROME_LOG?openSync(process.env.MUTRACER_CHROME_LOG,'a'):undefined;
   const child = spawn(executable, [...(logFd!==undefined?['--enable-logging=stderr']:[]),'--user-data-dir=' + profile, '--remote-debugging-port=0',

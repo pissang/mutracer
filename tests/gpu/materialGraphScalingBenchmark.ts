@@ -6,7 +6,8 @@ import {Engine, Render, Camera, Mesh, OpenPBRMaterial, AmbientLight, SphereLight
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {evaluateGraph} from '../../src/renderer/materialGraph/evaluate.js';
 import {DEFAULT_GRAPH_TIER_BUDGET} from '../../src/renderer/materialGraph/planner.js';
-import {setMaterialGraphPlanner, type GraphInstallEvent} from '../../src/renderer/materialGraph/state.js';
+import {freezeMaterialGraphPolicy, setMaterialGraphPlanner, type GraphInstallEvent, type GraphTierPolicy, type GraphUpgradeEvent} from '../../src/renderer/materialGraph/state.js';
+import type {GraphCompileObservation} from '../../src/renderer/materialGraph/tierPolicy.js';
 import {scalingGraph, type GraphClass} from './materialGraphScalingScene.js';
 
 /** Material-graph scaling harness: one fixed 32×32 sphere grid, N distinct graph
@@ -96,14 +97,26 @@ async function gltfScene(engine: Engine, url: string, materials: OpenPBRMaterial
   return {info: {meshes: assigned, geometries: rescaled.size, triangles, noUv, bounds: [box.min.toArray(), box.max.toArray()], camera: [camera.position, [box.max.x, box.min.y + size.y * 0.3, center.z]], distinctMaterials: Math.min(assigned, materials.length)}};
 }
 
-async function run(options: {structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number; closeUp?: boolean; hdrBlock?: number; swap?: boolean; sceneUrl?: string; interim?: boolean; budgetMs?: number}) {
+interface RunOptions {
+  structures: number; mode: Mode; graphClass?: GraphClass; bakeSize?: number; perfSamples?: number; textureBinding?: 'atlas' | 'auto'; hdr?: boolean; firstIndex?: number;
+  closeUp?: boolean; hdrBlock?: number; swap?: boolean; sceneUrl?: string; interim?: boolean; budgetMs?: number;
+  /** Render target while the tier policy decides (auto mode). Default 2048 (Render's default). */ targetSamples?: number;
+  /** Longest wait for the policy to settle. Default 60000. */ settleMs?: number;
+  /** Structural edits, one per `editIntervalMs`, after the first correct frame; each replaces one material's
+   * graph with an unseen structure, alternating the simple and noise classes (new opcode families). Default 0. */ edits?: number; editIntervalMs?: number;
+  /** `parameter` edits change only parameter values of the same structure. Default structure. */ editKind?: 'structure' | 'parameter';
+  /** Debug compile speed factor (slow device simulation). */ compileSpeed?: number;
+  policy?: Partial<GraphTierPolicy>;
+}
+async function run(options: RunOptions) {
   const {structures: count, mode, graphClass = 'simple', bakeSize = 128, perfSamples = 50, textureBinding = 'auto', firstIndex = 0} = options;
   // 'graph' forces specialized code, 'interpreter' the shared interpreter tier and
   // 'auto' lets the planner mix them. A per-run salt keeps the fixed interpreter
   // source cold in the shared Metal cache.
-  const installs: GraphInstallEvent[] = [];
+  const installs: GraphInstallEvent[] = [], upgrades: GraphUpgradeEvent[] = [], compiles: GraphCompileObservation[] = [];
   setMaterialGraphPlanner({tier: mode === 'interpreter' ? 'interpreter' : mode === 'auto' ? 'auto' : 'specialized', salt: 1 + Math.floor(Math.random() * 1e9),
-    interim: options.interim ?? true, budget: options.budgetMs ? {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs: options.budgetMs} : undefined, onInstall: event => installs.push(event)});
+    interim: options.interim ?? true, budget: options.budgetMs ? {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs: options.budgetMs} : undefined, compileSpeed: options.compileSpeed, policy: options.policy,
+    onInstall: event => installs.push(event), onUpgrade: event => upgrades.push(event), onCompile: event => compiles.push(event)});
   const graphs = mode === 'graph' || mode === 'interpreter' || mode === 'auto';
   const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding});
   engine.display.setSize(WIDTH, HEIGHT); engine.bvhBuilder = 'builtin';
@@ -162,10 +175,43 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
     }
     const firstCorrectFrameMs = performance.now() - start;
-    // A planner run may install the interpreter-only variant first; wait for the final one.
-    for (const deadline = performance.now() + 900000; installs.length && installs[installs.length - 1].interim && performance.now() < deadline;) { render.refine(); await pause(); }
+    // Structural edits: each replaces one material's graph by an unseen structure.
+    const edits: {atMs: number; readyMs?: number; installs: number; shaderKeyChanged: boolean; compiledKB?: number}[] = [];
+    // Settled: the last decision is final, or the gate refused under the render target.
+    const settled = (since: number) => { const last = upgrades.at(-1); return !!last && (['keep', 'rollback', 'failed', 'skip'].includes(last.type) || last.type === 'hold' && last.at >= since && last.maxSamples === render.maxSamples); };
+    if (graphs && count && options.edits) {
+      let next = firstIndex + 700000;
+      for (let e = 0; e < options.edits; e++) {
+        const editClass: GraphClass = e % 2 ? 'noise' : 'simple';
+        const slot = e % materials.length, before = (engine.getDiagnostics()?.materialGraphs as {revision: number}).revision;
+        if (options.editKind === 'parameter') materials[slot].graph = scalingGraph(indices[slot], graphClass, 1e6 + e);
+        else { const index = structures(1, editClass, next)[0]; next = index + 1; materials[slot].graph = scalingGraph(index, editClass); }
+        const editStart = performance.now(), installed = installs.length, compiled = compiles.length;
+        const key = installs.at(-1)?.shaderKey;
+        engine.update();
+        let readyMs: number | undefined;
+        for (const deadline = editStart + Math.max(options.editIntervalMs ?? 1000, 30000); performance.now() < deadline;) {
+          const state = engine.getDiagnostics()?.materialGraphs as {revision: number; installedRevision: number; status: string};
+          if (readyMs === undefined && state.revision > before && state.installedRevision >= state.revision) readyMs = performance.now() - editStart;
+          if (readyMs !== undefined && performance.now() - editStart >= (options.editIntervalMs ?? 1000)) break;
+          render.refine(); await pause();
+        }
+        edits.push({atMs: editStart - start, readyMs, installs: installs.length - installed, shaderKeyChanged: installs.at(-1)?.shaderKey !== key,
+          compiledKB: compiles.length > compiled ? compiles.slice(compiled).reduce((n, c) => n + c.totalBytes / 1024, 0) : undefined});
+      }
+    }
+    // Let the tier policy decide on an upgrade for a render of `targetSamples` (auto mode).
+    const settleStart = performance.now();
+    if (mode === 'auto' && graphs && count) {
+      render.maxSamples = options.targetSamples ?? 2048; render.restart();
+      for (const deadline = settleStart + (options.settleMs ?? 60000); !settled(settleStart) && performance.now() < deadline;) { render.refine(); await pause(); }
+    }
+    const settleMs = performance.now() - settleStart;
+    // Fixed tiers for the measurements below.
+    freezeMaterialGraphPolicy(true);
+    render.maxSamples = 64;
     const optimizedMs = installs.length ? installs[installs.length - 1].at - start : undefined;
-    const tiers = installs.map(e => ({atMs: e.at - start, interim: e.interim, specialized: e.specialized, interpreted: e.interpreted, coverage: e.coverage}));
+    const tiers = installs.map(e => ({atMs: e.at - start, interim: e.interim, role: e.role, specialized: e.specialized, interpreted: e.interpreted, coverage: e.coverage}));
     const diagnostics = engine.getDiagnostics();
     for (let i = 0; i < 2; i++) await render.converge({samples: 16, sampleSequenceOffset: 0, timeoutMs: 900000});
     let hdr: number[] | undefined;
@@ -207,20 +253,22 @@ async function run(options: {structures: number; mode: Mode; graphClass?: GraphC
       const installed = installs.length;
       const state = await waitGraphs(before?.revision ?? 0, 120000);
       const readyMs = performance.now() - swapStart;
-      for (const deadline = performance.now() + 120000; (installs.length === installed || installs[installs.length - 1].interim) && performance.now() < deadline;) { render.refine(); await pause(); }
+      for (const deadline = performance.now() + 120000; installs.length === installed && performance.now() < deadline;) { render.refine(); await pause(); }
       const optimizedMs = installs.length > installed ? installs[installs.length - 1].at - swapStart : undefined;
       await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
       const compiled = engine.getDiagnostics()?.shaderCompilation;
       swap = {readyMs, optimizedMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
     }
     return {
-      swap, scene: complex?.info,
+      swap, scene: complex?.info, edits, settleMs,
+      upgrades: upgrades.map(e => ({...e, atMs: e.at - start, key: undefined})),
+      compiles: compiles.map(c => ({totalKB: c.totalBytes / 1024, specializedKB: c.specializedBytes / 1024, interpreterKB: c.interpreterBytes / 1024, ms: c.ms, overlapMs: c.overlapMs, kind: c.kind, referenceMs: c.referenceMs, ratio: c.ratio, speed: c.speed})),
       structures: count, mode, graphClass, firstIndex, bakeSize: mode === 'baked' ? bakeSize : undefined, width: WIDTH, height: HEIGHT, spheres: GRID * GRID,
       prepareMs, bakeMs: mode === 'baked' ? bakeMs : undefined, firstFrameMs, graphReadyMs, firstCorrectFrameMs, optimizedMs, tiers,
       gpuSampleTimeMs: median(gpuSampleTimesMs) ?? null, gpuSampleTimesMs, wallSampleMs: median(complex ? wallSamplesMs.slice(1) : wallSamplesMs), wallSamplesMs,
       shaderCompilation: diagnostics?.shaderCompilation, materialGraphs: graphState ?? diagnostics?.materialGraphs,
       materialTextures: diagnostics?.materialTextures, textureAtlas: (diagnostics as {textureAtlas?: unknown} | undefined)?.textureAtlas, lastError: engine.getDiagnostics()?.lastError, adapter: diagnostics?.adapterName, userAgent: navigator.userAgent, hdr
     };
-  } finally { render.dispose(); engine.dispose(); }
+  } finally { freezeMaterialGraphPolicy(false); render.dispose(); engine.dispose(); }
 }
 Object.assign(window, {runMaterialGraphScaling: run});
