@@ -130,21 +130,38 @@ interpreter at a few hundred KB.
 ### Compile model and budgets
 
 Compile time is modelled per device as `s × (3.8 ms/KB of graph-free kernel +
-21 ms/KB of specialized code + 48 ms/KB of interpreter source beyond 3.6 KB)`.
+spec × KB of specialized code + interp × KB of interpreter source beyond a free
+part)`. The coefficients depend on the shader compiler, which Chrome picks by
+platform:
+
+| backend | specialized | interpreter | `s` prior |
+|---|---|---|---|
+| Metal (macOS) | 21 ms/KB | 48 ms/KB beyond 3.6 KB | 1 |
+| D3D12 (Windows) | 450 ms/KB | 300 ms/KB beyond 3.3 KB | 1.5 |
+| Vulkan, unknown | as D3D12 | as D3D12 | 2 |
+
 The reference platform (Apple M4 Max, Chrome Metal, cold caches) has `s = 1`.
-`s` starts at a backend prior (Metal 1, D3D12 3, others 2; only Metal is
-measured) and follows every cold `createComputePipelineAsync` of the ray-tracing
-kernel, with and without graphs, in log space. A compile far below its
-prediction (under a quarter of `s`) is a driver or browser cache hit and is
-ignored. Time spent while another kernel compiled is half-subtracted as queueing,
-and a compile overlapped for more than 60 % of its duration is ignored. `s` is
-kept in memory per `GPUDevice`, never persisted.
+D3D12 is fitted on an RTX 4060 Laptop relative to each run's own graph-free
+compile (`s ≈ 1.5`): specialized code costs ≈1.7 s per grid structure, linearly up
+to 173 KB, so specialized code is only practical for one or two structures there.
+Unmeasured backends assume D3D12's costs, because a pessimistic guess only keeps
+the interpreter while an optimistic one starts minute-long compiles.
+
+`s` follows cold compiles that happen anyway and contain no specialized code
+(graph-free kernels and interpreter variants), in log space, so it scales
+machine speed without changing the shape. A specialized compile more than 1.5×
+above its prediction raises this device's specialized coefficient to match it.
+Nothing is compiled only to measure. A compile under a quarter of its prediction
+is a driver or browser cache hit and is ignored. Time spent while another kernel
+compiled is half-subtracted as queueing, and a compile overlapped for more than
+60 % of its duration is ignored. The model is kept in memory per `GPUDevice`,
+never persisted.
 
 The planner works in device milliseconds. The correct-frame budget is 1 s of
 graph increment. The final-variant budget is three times this device's predicted
 cold graph-free compile, clamped to 1–10 s; because both sides scale with `s`,
-the specialized share of a plan depends on the device only through the clamps,
-the cap and the upgrade gate below.
+the specialized share of a plan depends on the backend's coefficients, the
+clamps, the cap and the upgrade gate below.
 
 ### Edit-aware tiers
 
@@ -161,14 +178,18 @@ A new structure set is first served by a variant that renders it correctly:
   change neither pipeline constants nor shared hooks) and every terminal seen in
   the session, with the union of the old and new pipeline features. Later edits
   then fit it. If its increment is predicted over the correct-frame budget, only
-  the set's families are used.
+  the set's families are used, unless a compiled prefetched editing interpreter (below)
+  covers the set.
 - On the first load, a small set whose fully specialized variant fits the
   correct-frame budget compiles directly; otherwise the interpreter with only
   the set's families serves it.
 
-After the first structural edit, the editing interpreter is also compiled once
-in the background while the installed variant still fits, so a later edit that
-adds a node family usually finds it ready.
+Right after the first graph installation, the editing interpreter (with the
+installed pipeline features) also compiles once in the background, so later
+structural edits find it ready and compile nothing. It is skipped when its
+compile is predicted over the 10 s upgrade ceiling below (on D3D12 it takes ≈7 s
+and still compiles). An edit uses it only once it has compiled; until then, or
+without it, an edit compiles as described above.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.
@@ -178,21 +199,27 @@ material records, and tier decisions stay fixed per structure set.
 The planned final variant compiles only when the gate allows it:
 
 1. The structure set has been unchanged for 2 s.
-2. No other pipeline compile is running or queued. WebGPU compiles cannot be
-   cancelled, so upgrades never pile up behind edits.
-3. `(remaining − compile) × gain > 1.5 × compile`. Remaining time is the samples
+2. Its predicted compile, including the graph-free part, is at most 10 s. A WebGPU
+   compile cannot be cancelled and an edit discards it; on a driver that
+   serializes compiles an edit's own compile would also wait behind it.
+3. No other pipeline compile is running or queued, so upgrades never pile up.
+4. `(remaining − compile) × gain > 1.5 × compile`. Remaining time is the samples
    left to the render target times the measured wall time per sample; without a
    target it is the time already rendered on this view, at most 60 s. Gain is the
    expected per-sample saving: 0.2 for removing all interpreter work (P1:
    0.07–0.35 by scene) and half of that times the planner coverage for a mixed
    variant, which keeps the interpreter's presence cost.
 
-A structure change while the upgrade compiles discards its result. When the
+Compiles that render an edit correctly never wait behind background work in the
+pass's compile queue: they start first, and upgrades and the prefetch start only
+while a compile slot stays free for an edit. A structure change while the upgrade
+compiles discards its result. When the
 upgrade installs, the serving variant stays cached and the two are compared on
 the same view in interleaved phases (final, serving, serving, final, final,
-serving), each at least 250 ms and 8 samples. GPU timestamps decide, read back
-through a small pool of buffers attributed to the variant that traced them; wall
-time per sample is the fallback, but Render's realtime pacing derives it from its
+serving), each at least 250 ms and 8 samples. GPU timestamps decide when each
+variant has at least three over its phases, read back through a small pool of
+buffers attributed to the variant that traced them (the readback can stall for a
+whole phase behind a deep queue); wall time per sample is the fallback, but Render's realtime pacing derives it from its
 own estimate and can invert small differences. The upgrade stays if it is at
 least 3 % faster. Otherwise the serving variant returns, the structure set is not
 upgraded again, and the device cap drops to 70 % of the rejected variant's
@@ -200,8 +227,8 @@ specialized source (at least 16 KB). The measured gain replaces the 0.2 prior fo
 later decisions in the scene.
 
 An internal measurement switch (`setMaterialGraphPlanner`) can force one tier,
-replace the compile model, budgets or policy constants, fix `s` to simulate a
-slower compiler, salt the interpreter source and observe installations, upgrade
+replace the compile model, budgets or policy constants, fix `s` or plan with
+another backend's coefficients to simulate a slower compiler, salt the interpreter source and observe installations, upgrade
 decisions and compile samples.
 
 ## Compilation and installation
