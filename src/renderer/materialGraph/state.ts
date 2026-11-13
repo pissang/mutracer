@@ -7,7 +7,7 @@ import {graphContextDiagnostics} from './context.js';
 import {graphTerminals} from './ir.js';
 import {terminalTypes} from './nodes.js';
 import {DEFAULT_GRAPH_COMPILE_MODEL, DEFAULT_GRAPH_TIER_BUDGET, interpreterCompileMs, planGraphTiers, type GraphCompileModel, type GraphTierBudget, type GraphTierCandidate} from './planner.js';
-import {GRAPH_FREE_MS_PER_KB, GraphCompileCalibration, GraphUpgradeVerifier, graphCompilerBackend, graphUpgradeGain, graphUpgradeGate, type GraphCompileObservation, type GraphUpgradeGate, type GraphVerifyDecision} from './tierPolicy.js';
+import {GRAPH_COMPILE_COEFFICIENTS, GRAPH_FREE_MS_PER_KB, GraphCompileCalibration, GraphUpgradeVerifier, graphCompileReferenceMs, graphCompilerBackend, graphUpgradeGain, graphUpgradeGate, type GraphCompileCoefficients, type GraphCompileObservation, type GraphCompileRole, type GraphCompilerBackend, type GraphUpgradeGate, type GraphVerifyDecision} from './tierPolicy.js';
 import {materialGraphConstants} from './features.js';
 import {generateGraphIR} from './generate.js';
 import {graphMathShaderIR} from './specialize.js';
@@ -51,16 +51,26 @@ export interface GraphTierPolicy {
     minVerifiedGain: number;
     /** Rendered samples per verification phase (after one warm-up sample). */
     verifySamples: number;
+    /** No upgrade predicted to compile longer than this (device ms, whole kernel) starts:
+     * a WebGPU compile cannot be cancelled, an edit in the meantime discards it, and on a
+     * serializing driver an edit's own compile could wait behind it. */
+    maxUpgradeCompileMs: number;
+    /** Compile the editing interpreter in the background after the first installation. */
+    prefetch: boolean;
 }
 export const DEFAULT_GRAPH_TIER_POLICY: GraphTierPolicy = {debounceMs: 2000, margin: 1.5, maxHorizonMs: 60000, finalBudgetFactor: 3, finalBudgetRangeMs: [1000, 10000],
-    correctMs: 1000, capKB: 120, capBackoff: 0.7, minCapKB: 16, interpreterGain: 0.2, minVerifiedGain: 0.03, verifySamples: 8};
+    correctMs: 1000, capKB: 120, capBackoff: 0.7, minCapKB: 16, interpreterGain: 0.2, minVerifiedGain: 0.03, verifySamples: 8, maxUpgradeCompileMs: 10000, prefetch: true};
 export interface MaterialGraphPlannerOptions {
     /** Default auto. */
     tier?: MaterialGraphTier;
     /** Makes the interpreter source unique so driver caches miss; measurement only. Default 0. */
     salt?: number;
-    /** Reference-platform compile model. Default DEFAULT_GRAPH_COMPILE_MODEL. */
+    /** Compile model in reference ms; its per-KB costs replace the backend's coefficients
+     * (measurement and tests). Default: the device's backend coefficients, with
+     * DEFAULT_GRAPH_COMPILE_MODEL's helper sizes. */
     model?: GraphCompileModel;
+    /** Debug: plan with this backend's compile-cost shape and speed prior, e.g. 'd3d12' on a Mac. Default detected. */
+    compileBackend?: GraphCompilerBackend;
     /** Fixed budgets in device ms instead of the calibrated policy budgets. Default undefined. */
     budget?: GraphTierBudget;
     /** Serve a mixed or slow final plan with an interpreter-only variant first. Default true. */
@@ -86,13 +96,13 @@ export interface GraphUpgradeEvent {
     /** Render sample target when the event fired. */
     maxSamples?: number;
 }
-type Planner = Required<Omit<MaterialGraphPlannerOptions, 'onInstall' | 'onUpgrade' | 'onCompile' | 'budget' | 'compileSpeed' | 'policy'>> &
-    Pick<MaterialGraphPlannerOptions, 'onInstall' | 'onUpgrade' | 'onCompile' | 'budget' | 'compileSpeed'> & {policy: GraphTierPolicy};
-let planner: Planner = {tier: 'auto', salt: 0, model: DEFAULT_GRAPH_COMPILE_MODEL, interim: true, policy: DEFAULT_GRAPH_TIER_POLICY};
+type Planner = Required<Omit<MaterialGraphPlannerOptions, 'onInstall' | 'onUpgrade' | 'onCompile' | 'budget' | 'compileSpeed' | 'compileBackend' | 'policy'>> &
+    Pick<MaterialGraphPlannerOptions, 'onInstall' | 'onUpgrade' | 'onCompile' | 'budget' | 'compileSpeed' | 'compileBackend'> & {policy: GraphTierPolicy; modelOverride: boolean};
+let planner: Planner = {tier: 'auto', salt: 0, model: DEFAULT_GRAPH_COMPILE_MODEL, modelOverride: false, interim: true, policy: DEFAULT_GRAPH_TIER_POLICY};
 /** Internal planner overrides for measurement; omitted fields reset to their defaults. */
 export function setMaterialGraphPlanner(options: MaterialGraphPlannerOptions = {}) {
-    planner = {tier: options.tier ?? 'auto', salt: options.salt ?? 0, model: options.model ?? DEFAULT_GRAPH_COMPILE_MODEL,
-        budget: options.budget, interim: options.interim ?? true, policy: {...DEFAULT_GRAPH_TIER_POLICY, ...options.policy}, compileSpeed: options.compileSpeed,
+    planner = {tier: options.tier ?? 'auto', salt: options.salt ?? 0, model: options.model ?? DEFAULT_GRAPH_COMPILE_MODEL, modelOverride: !!options.model,
+        budget: options.budget, interim: options.interim ?? true, policy: {...DEFAULT_GRAPH_TIER_POLICY, ...options.policy}, compileSpeed: options.compileSpeed, compileBackend: options.compileBackend,
         onInstall: options.onInstall, onUpgrade: options.onUpgrade, onCompile: options.onCompile};
 }
 export function materialGraphPlanner(): Readonly<Planner> { return planner; }
@@ -209,10 +219,10 @@ export class MaterialGraphState {
     interpreterAvailable = false;
     /** Compile speed of this device; shared by the passes of one device. Default: a
      * calibration with this platform's prior. */
-    calibration = new GraphCompileCalibration(graphCompilerBackend(), DEFAULT_GRAPH_COMPILE_MODEL);
+    calibration = new GraphCompileCalibration(graphCompilerBackend());
     /** Tier decisions stay fixed for a structure set, so usage changes (transforms,
      * visibility) never recompile; a new set is planned again. */
-    private tiers?: {key: string; planner: Planner; speed: number; capKB: number; shape: GraphTierShape; interpreter: boolean; estimatedMs: number};
+    private tiers?: {key: string; planner: Planner; model: GraphCompileModel; capKB: number; shape: GraphTierShape; interpreter: boolean; estimatedMs: number};
     private sourceCache = new Map<string, Pick<GraphTierCandidate, 'sourceBytes' | 'helpers'>>();
     // Policy state of the current structure set (`planKey`).
     private planKey = '';
@@ -228,9 +238,8 @@ export class MaterialGraphState {
     /** Measured per-sample saving of removing interpreter work in this scene, once verified. */
     private learnedGain?: number;
     private rejected = new Set<string>();
-    /** Structural edits after the first graph installation in this session. */
-    private edits = 0;
-    private prefetched = new Set<string>();
+    /** Editing interpreters compiled in the background, by shader key. */
+    private prefetched = new Map<string, GraphTierShape>();
     private seenTerminals = new Set<string>(PLAIN_TERMINALS);
     // Render progress reported by the backend.
     private view = -1;
@@ -239,17 +248,30 @@ export class MaterialGraphState {
     private maxSamples = Infinity;
     private wall: {at: number; samples: number; key: string}[] = [];
     private get policy() { return planner.policy; }
-    private get speed() { return planner.compileSpeed ?? this.calibration.factor; }
+    private get speed() { if (planner.compileBackend) this.calibration.useBackend(planner.compileBackend); return planner.compileSpeed ?? this.calibration.factor; }
     private get capKB() { return this.calibration.capKB ?? this.policy.capKB; }
+    /** Compile-cost shape in reference ms: the backend's coefficients with this device's
+     * specialized factor, or the planner model's costs when one is given. */
+    private get coefficients(): GraphCompileCoefficients {
+        if (planner.compileBackend) this.calibration.useBackend(planner.compileBackend);
+        const m = planner.model;
+        return planner.modelOverride ? {graphFreeMsPerKB: GRAPH_FREE_MS_PER_KB, msPerKB: m.msPerKB, interpreterMsPerKB: m.interpreterMsPerKB, interpreterFreeKB: m.interpreterFreeKB} : this.calibration.shape;
+    }
     /** Device-scaled compile model and budgets. */
     private deviceBudget(): {model: GraphCompileModel; budget: GraphTierBudget} {
-        const s = this.speed, m = planner.model;
-        const model = {...m, msPerKB: m.msPerKB * s, interpreterMs: m.interpreterMs * s, interpreterMsPerKB: m.interpreterMsPerKB * s};
+        const s = this.speed, c = this.coefficients, m = planner.model;
+        const interpreterScale = c.interpreterMsPerKB / (m.interpreterMsPerKB || GRAPH_COMPILE_COEFFICIENTS.metal.interpreterMsPerKB);
+        const model = {...m, msPerKB: c.msPerKB * s, interpreterMs: m.interpreterMs * s * (planner.modelOverride ? 1 : interpreterScale), interpreterMsPerKB: c.interpreterMsPerKB * s, interpreterFreeKB: c.interpreterFreeKB};
         if (planner.budget) return {model, budget: {capKB: this.capKB, ...planner.budget}};
         const [low, high] = this.policy.finalBudgetRangeMs;
-        const graphFreeMs = s * this.calibration.graphFreeBytes / 1024 * GRAPH_FREE_MS_PER_KB;
+        const graphFreeMs = s * this.calibration.graphFreeBytes / 1024 * c.graphFreeMsPerKB;
         return {model, budget: {...DEFAULT_GRAPH_TIER_BUDGET, budgetMs: Math.min(Math.max(this.policy.finalBudgetFactor * graphFreeMs, low), high),
             correctMs: this.policy.correctMs, capKB: this.capKB}};
+    }
+    /** Predicted device ms of a whole-kernel compile of `shape`. */
+    private compileMs(shape: GraphTierShape) {
+        return this.speed * graphCompileReferenceMs(this.coefficients, {totalBytes: this.calibration.graphFreeBytes + shape.specializedBytes + shape.interpreterBytes,
+            specializedBytes: shape.specializedBytes, interpreterBytes: shape.interpreterBytes});
     }
     private interpreterBytes(terminals: readonly string[], families: ReadonlySet<GraphOp>) {
         return graphInterpreterShader(terminals, 0, families).length + graphMathShaderIR([], false, graphInterpreterHelpers(families)).length;
@@ -270,8 +292,9 @@ export class MaterialGraphState {
     }
     /** Plans the final tiers of a structure set within the device's budgets. */
     private decideTiers(key: string, structures: NormalizedGraph[], materials: OpenPBRMaterial[], graphs: (NormalizedGraph | undefined)[]) {
-        if (this.tiers?.key === key && this.tiers.planner === planner && this.tiers.speed === this.speed && this.tiers.capKB === this.capKB) return this.tiers;
         const {model, budget} = this.deviceBudget();
+        if (this.tiers?.key === key && this.tiers.planner === planner && this.tiers.model.msPerKB === model.msPerKB && this.tiers.model.interpreterMsPerKB === model.interpreterMsPerKB &&
+            this.tiers.capKB === this.capKB) return this.tiers;
         let specialized: Set<string>, coverage: number | undefined, estimatedMs = 0, interpreter = false;
         if (planner.tier === 'specialized' || !this.interpreterAvailable || !structures.length) specialized = new Set(structures.map(g => g.key));
         else if (planner.tier === 'interpreter') { specialized = new Set(structures.filter(g => !this.program(g)).map(g => g.key)); interpreter = specialized.size < structures.length; }
@@ -292,7 +315,7 @@ export class MaterialGraphState {
         }
         const chosen = structures.filter(g => specialized.has(g.key) || !this.program(g));
         const shape = this.shape(chosen, interpreter || chosen.length < structures.length ? this.interpreterConfig(structures.filter(g => !chosen.includes(g))) : undefined, structures, coverage);
-        this.tiers = {key, planner, speed: this.speed, capKB: this.capKB, shape, interpreter: !!shape.interpreter, estimatedMs};
+        this.tiers = {key, planner, model, capKB: this.capKB, shape, interpreter: !!shape.interpreter, estimatedMs};
         return this.tiers;
     }
     /** Specialized source estimate: the generated function plus its dispatch branches. */
@@ -340,6 +363,8 @@ export class MaterialGraphState {
         // Incremental edit: the installed variant keeps its specialized code and runs
         // new or changed structures as interpreter programs.
         if (installed && this.fits(installed, base)) return installed;
+        // A background-compiled editing interpreter that covers the edit.
+        for (const shape of this.prefetched.values()) if (this.fits(shape, base)) return shape;
         const correctMs = planner.budget?.correctMs ?? this.policy.correctMs, {model} = this.deviceBudget();
         if (installed || this.generation > 0) {
             // A structural edit: every opcode family, the plain terminals and every
@@ -406,7 +431,6 @@ export class MaterialGraphState {
             // decide about a specialized upgrade only once the set has been stable.
             const now = performance.now();
             if (this.phase === 'compiling' && key !== this.planKey) this.emit('stale', {});
-            if (this.active.key && key !== this.planKey) this.edits++;
             this.planKey = key;
             this.stableSince = now;
             this.held = false;
@@ -482,14 +506,13 @@ export class MaterialGraphState {
             if (now - this.stableSince < this.policy.debounceMs) return;
             this.upgrade ??= this.decideTiers(this.planKey, this.base.structures, this.materials, this.base.graphs).shape;
             if (this.upgrade.shaderKey === this.serving.shaderKey) { this.phase = 'none'; this.upgrade = undefined; this.emit('skip', {}); return; }
-            const compileMs = this.speed * this.calibration.referenceMs({totalBytes: this.calibration.graphFreeBytes + this.upgrade.specializedBytes + this.upgrade.interpreterBytes,
-                specializedBytes: this.upgrade.specializedBytes, interpreterBytes: this.upgrade.interpreterBytes});
+            const compileMs = this.compileMs(this.upgrade);
             const gain = graphUpgradeGain(this.learnedGain ?? this.policy.interpreterGain, !!this.upgrade.interpreter, this.upgrade.coverage ?? 1);
-            this.lastGate = graphUpgradeGate({now, stableSince: this.stableSince, debounceMs: this.policy.debounceMs, compilesInFlight, compileMs, gain,
+            this.lastGate = graphUpgradeGate({now, stableSince: this.stableSince, debounceMs: this.policy.debounceMs, compilesInFlight, compileMs, maxCompileMs: this.policy.maxUpgradeCompileMs, gain,
                 msPerSample: this.msPerSample, remainingSamples: Number.isFinite(this.maxSamples) ? this.maxSamples - this.samples : undefined,
                 renderedMs: now - Math.max(this.stableSince, this.viewStart), margin: this.policy.margin, maxHorizonMs: this.policy.maxHorizonMs});
             if (!this.lastGate.start) {
-                if (this.lastGate.reason === 'benefit' && !this.held) { this.held = true; this.emit('hold', {gate: this.lastGate, compileMs, gain, specializedKB: this.upgrade.specializedBytes / 1024}); }
+                if ((this.lastGate.reason === 'benefit' || this.lastGate.reason === 'ceiling') && !this.held) { this.held = true; this.emit('hold', {gate: this.lastGate, compileMs, gain, specializedKB: this.upgrade.specializedBytes / 1024}); }
                 return;
             }
             this.phase = 'compiling';
@@ -515,21 +538,32 @@ export class MaterialGraphState {
         }
     }
     /**
-     * After the first structural edit, the editing interpreter (every opcode family) is
-     * compiled once in the background while the installed variant still fits, so a later
-     * edit that adds a node family finds it ready. Returns that plan once, when nothing
-     * else compiles; it has the installed variant's pipeline features.
+     * After the first graph installation, the editing interpreter (every opcode family) is
+     * compiled once in the background while the installed variant serves, so later
+     * structural edits find it ready. Returns that plan once, when nothing else compiles;
+     * it has the installed variant's pipeline features. Skipped when its predicted
+     * increment exceeds the final-variant budget (the most background compile time a
+     * structure set may cost): an edit then compiles only its own families.
      */
     prefetch(compilesInFlight: number): GraphPlan | undefined {
         const installed = this.active.shape;
-        if (!this.edits || compilesInFlight > 0 || planner.tier !== 'auto' || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
+        if (compilesInFlight > 0 || !this.policy.prefetch || planner.tier !== 'auto' || !this.interpreterAvailable || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
         const full = this.interpreterConfig(this.base.structures, true);
         if (installed.interpreter && installed.interpreter.families.size >= ALL_FAMILIES.size && full.terminals.every(t => installed.interpreter!.terminals.includes(t))) return;
-        if (interpreterCompileMs(this.interpreterBytes(full.terminals, full.families), this.deviceBudget().model) > (planner.budget?.correctMs ?? this.policy.correctMs)) return;
+        const {model, budget} = this.deviceBudget();
+        if (interpreterCompileMs(this.interpreterBytes(full.terminals, full.families), model) > Math.max(budget.budgetMs, budget.correctMs)) return;
         const shape = this.shape(this.base.structures.filter(g => !this.program(g)), full, installed.features);
         if (this.prefetched.has(shape.shaderKey)) return;
-        this.prefetched.add(shape.shaderKey);
+        this.prefetched.set(shape.shaderKey, shape);
         return this.plan(this.base, shape);
+    }
+    /** Scheduling class of a compile for `plan`: `edit` renders the requested structures
+     * correctly (never waits behind background work), `upgrade` is the gated specialized
+     * variant, `prefetch` the background editing interpreter. */
+    compileRole(plan: GraphPlan): GraphCompileRole {
+        const key = graphShaderKey(plan);
+        if (this.upgrade && key === this.upgrade.shaderKey && key !== this.serving?.shaderKey) return 'upgrade';
+        return this.prefetched.has(key) && key !== this.serving?.shaderKey ? 'prefetch' : 'edit';
     }
     /** Compile sample of the ray-tracing kernel for `plan` (calibration input). */
     observeCompile(plan: GraphPlan, totalBytes: number, ms: number, overlapMs: number) {

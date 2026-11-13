@@ -1,67 +1,95 @@
 import {describe, expect, it} from 'vitest';
-import {GRAPH_FREE_MS_PER_KB, GraphCompileCalibration, GraphCompileClock, GraphUpgradeVerifier, graphCompilerBackend, graphUpgradeGate, type GraphUpgradeGateInput} from '../../src/renderer/materialGraph/tierPolicy.js';
+import {GRAPH_COMPILE_COEFFICIENTS, GRAPH_FREE_MS_PER_KB, GraphCompileCalibration, GraphCompileClock, GraphUpgradeVerifier, graphCompilerBackend, graphUpgradeGate, nextGraphCompile, type GraphUpgradeGateInput} from '../../src/renderer/materialGraph/tierPolicy.js';
 
-const model = {msPerKB: 21, interpreterMsPerKB: 48, interpreterFreeKB: 3.6};
-/** A graph-free kernel of 250 KB: ≈ 935 ms on the reference platform. */
+/** A graph-free kernel of 250 KB: ≈ 958 ms on the reference platform. */
 const graphFree = (ms: number, overlapMs = 0) => ({totalBytes: 250 * 1024, specializedBytes: 0, interpreterBytes: 0, ms, overlapMs});
+const reference = 250 * GRAPH_FREE_MS_PER_KB;
 
 describe('graph compile calibration', () => {
-    it('starts from the backend prior', () => {
+    it('selects the compile shape and prior by backend, pessimistic when unmeasured', () => {
         expect(graphCompilerBackend('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/131')).toBe('metal');
         expect(graphCompilerBackend('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131')).toBe('d3d12');
         expect(graphCompilerBackend('Mozilla/5.0 (X11; Linux x86_64) Chrome/131')).toBe('vulkan');
-        expect(new GraphCompileCalibration('d3d12', model).speed).toBe(3);
-        expect(new GraphCompileCalibration('unknown', model).speed).toBe(2);
+        const metal = new GraphCompileCalibration('metal'), d3d12 = new GraphCompileCalibration('d3d12');
+        expect([metal.speed, d3d12.speed, new GraphCompileCalibration('unknown').speed]).toEqual([1, 1.5, 2]);
+        // The graph-free kernel costs the same in reference units everywhere; graph code does not.
+        const specialized = {totalBytes: 360 * 1024, specializedBytes: 110 * 1024, interpreterBytes: 0};
+        expect(d3d12.referenceMs(graphFree(0))).toBeCloseTo(metal.referenceMs(graphFree(0)));
+        expect(d3d12.referenceMs(specialized) / metal.referenceMs(specialized)).toBeGreaterThan(10);
+        for (const backend of ['vulkan', 'unknown'] as const) {
+            const c = GRAPH_COMPILE_COEFFICIENTS[backend];
+            expect(c.msPerKB).toBeGreaterThanOrEqual(GRAPH_COMPILE_COEFFICIENTS.d3d12.msPerKB);
+            expect(c.interpreterMsPerKB).toBeGreaterThanOrEqual(GRAPH_COMPILE_COEFFICIENTS.d3d12.interpreterMsPerKB);
+        }
     });
 
-    it('replaces the prior with cold compiles of the graph-free kernel and of graph variants', () => {
-        const calibration = new GraphCompileCalibration('d3d12', model);
-        const reference = 250 * GRAPH_FREE_MS_PER_KB;
-        const first = calibration.observe(graphFree(1.5 * reference));
-        expect(first.kind).toBe('cold');
-        expect(calibration.speed).toBeCloseTo(1.5);
-        // A mixed variant: base + 40 KB specialized + 10 KB interpreter, 1.6× slower than the reference.
-        const variant = {totalBytes: 300 * 1024, specializedBytes: 40 * 1024, interpreterBytes: 10 * 1024};
-        const referenceMs = calibration.referenceMs(variant);
-        expect(referenceMs).toBeCloseTo(reference + 40 * 21 + 48 * 6.4);
-        calibration.observe({...variant, ms: 1.6 * referenceMs, overlapMs: 0});
-        expect(calibration.speed).toBeGreaterThan(1.5);
-        expect(calibration.speed).toBeLessThan(1.6);
-        expect(calibration.predictMs(variant)).toBeCloseTo(calibration.speed * referenceMs);
+    it('learns the device speed from graph-free and interpreter compiles without changing the shape', () => {
+        const calibration = new GraphCompileCalibration('d3d12');
+        expect(calibration.observe(graphFree(2 * reference)).kind).toBe('cold');
+        expect(calibration.speed).toBeCloseTo(2);
+        // An interpreter variant 2.2× slower than the reference shape.
+        const interpreter = {totalBytes: 260 * 1024, specializedBytes: 0, interpreterBytes: 10 * 1024};
+        calibration.observe({...interpreter, ms: 2.2 * calibration.referenceMs(interpreter), overlapMs: 0});
+        expect(calibration.speed).toBeGreaterThan(2);
+        expect(calibration.speed).toBeLessThan(2.2);
+        expect(calibration.predictMs(interpreter)).toBeCloseTo(calibration.speed * calibration.referenceMs(interpreter));
         expect(calibration.graphFreeMs).toBeCloseTo(calibration.speed * reference);
+        expect(calibration.specializedFactor).toBe(1);
+    });
+
+    it('raises the specialized cost after a far slower specialized compile, never the speed', () => {
+        const calibration = new GraphCompileCalibration('metal');
+        calibration.observe(graphFree(reference));
+        // A Metal-shaped prediction for 100 KB specialized, observed 20× slower in its specialized part.
+        const variant = {totalBytes: 350 * 1024, specializedBytes: 100 * 1024, interpreterBytes: 0};
+        const ms = reference + 20 * 100 * GRAPH_COMPILE_COEFFICIENTS.metal.msPerKB;
+        calibration.observe({...variant, ms, overlapMs: 0});
+        expect(calibration.speed).toBeCloseTo(1);
+        expect(calibration.specializedFactor).toBeCloseTo(20);
+        expect(calibration.predictMs(variant)).toBeCloseTo(ms);
+        // A faster specialized compile does not lower it again.
+        calibration.observe({...variant, ms: reference + 2000, overlapMs: 0});
+        expect(calibration.specializedFactor).toBeCloseTo(20);
     });
 
     it('ignores driver cache hits', () => {
-        const calibration = new GraphCompileCalibration('metal', model);
+        const calibration = new GraphCompileCalibration('metal');
         const hit = calibration.observe(graphFree(50));
         expect(hit.kind).toBe('cache-hit');
         expect(calibration.speed).toBe(1);
         // A slow device's cache hit is judged against its own speed.
-        const slow = new GraphCompileCalibration('d3d12', model);
-        expect(slow.observe(graphFree(500)).kind).toBe('cache-hit');
-        expect(slow.speed).toBe(3);
+        const slow = new GraphCompileCalibration('unknown');
+        expect(slow.observe(graphFree(400)).kind).toBe('cache-hit');
+        expect(slow.speed).toBe(2);
     });
 
     it('corrects compiles queued behind another and skips mostly overlapped ones', () => {
-        const reference = 250 * GRAPH_FREE_MS_PER_KB;
-        const queued = new GraphCompileCalibration('metal', model);
-        // 400 ms of a 2.4 s compile overlapped: half of it counts as queueing.
+        const queued = new GraphCompileCalibration('metal');
+        // 400 ms of a 2.1 s compile overlapped: half of it counts as queueing.
         const sample = queued.observe(graphFree(2 * reference + 200, 400));
         expect(sample.kind).toBe('queued');
         expect(sample.ratio).toBeCloseTo(2);
         expect(queued.speed).toBeGreaterThan(1);
         expect(queued.speed).toBeLessThan(2);
-        const overlapped = new GraphCompileCalibration('metal', model);
+        const overlapped = new GraphCompileCalibration('metal');
         expect(overlapped.observe(graphFree(3000, 2500)).kind).toBe('overlapped');
         expect(overlapped.speed).toBe(1);
     });
 
-    it('keeps a debug override fixed', () => {
-        const calibration = new GraphCompileCalibration('metal', model);
+    it('keeps a debug override fixed and switches backends for simulation', () => {
+        const calibration = new GraphCompileCalibration('metal');
         calibration.override = 3;
-        calibration.observe(graphFree(250 * GRAPH_FREE_MS_PER_KB));
+        calibration.observe(graphFree(reference));
         expect(calibration.factor).toBe(3);
         expect(calibration.speed).toBeCloseTo(1);
+        calibration.useBackend('d3d12');
+        expect(calibration.coefficients).toBe(GRAPH_COMPILE_COEFFICIENTS.d3d12);
+        // The measured speed stays; only the shape changes.
+        expect(calibration.speed).toBeCloseTo(1);
+        // Before any cold compile the simulated backend's prior applies.
+        const fresh = new GraphCompileCalibration('metal');
+        fresh.useBackend('d3d12');
+        expect(fresh.speed).toBe(1.5);
     });
 
     it('measures the overlap of one compile with others', () => {
@@ -75,8 +103,24 @@ describe('graph compile calibration', () => {
     });
 });
 
+describe('graph compile queue', () => {
+    const job = (role: 'edit' | 'upgrade' | 'prefetch') => ({role});
+    it('starts edits before background compiles and keeps a slot free for edits', () => {
+        // An upgrade queued before an edit: the edit starts first.
+        expect(nextGraphCompile([job('upgrade'), job('edit')], 0, 2, 1)).toBe(1);
+        expect(nextGraphCompile([job('edit'), job('upgrade'), job('edit')], 0, 2, 1)).toBe(2);
+        // Background work alone starts only into an idle compiler...
+        expect(nextGraphCompile([job('prefetch')], 0, 2, 1)).toBe(0);
+        expect(nextGraphCompile([job('prefetch')], 1, 2, 1)).toBe(-1);
+        // ...so an edit arriving while an upgrade runs takes the reserved slot at once.
+        expect(nextGraphCompile([job('edit')], 1, 2, 1)).toBe(0);
+        expect(nextGraphCompile([job('edit')], 2, 2, 1)).toBe(-1);
+        expect(nextGraphCompile([], 0, 2, 1)).toBe(-1);
+    });
+});
+
 describe('graph upgrade gate', () => {
-    const input = (overrides: Partial<GraphUpgradeGateInput>): GraphUpgradeGateInput => ({now: 10000, stableSince: 0, debounceMs: 2000, compilesInFlight: 0, compileMs: 1000,
+    const input = (overrides: Partial<GraphUpgradeGateInput>): GraphUpgradeGateInput => ({now: 10000, stableSince: 0, debounceMs: 2000, compilesInFlight: 0, compileMs: 1000, maxCompileMs: 10000,
         gain: 0.2, msPerSample: 10, remainingSamples: 2000, renderedMs: 10000, margin: 2, maxHorizonMs: 60000, ...overrides});
 
     it('waits for a stable structure set and an idle compiler', () => {
@@ -93,6 +137,12 @@ describe('graph upgrade gate', () => {
         expect(short).toMatchObject({start: false, reason: 'benefit', remainingMs: 5000, benefitMs: 800});
         // A slow compiler needs more remaining time for the same saving.
         expect(graphUpgradeGate(input({compileMs: 4000})).start).toBe(false);
+    });
+
+    it('never starts a compile predicted over the ceiling, whatever its benefit', () => {
+        const long = input({compileMs: 12000, remainingSamples: 1e7});
+        expect(graphUpgradeGate(long)).toMatchObject({start: false, reason: 'ceiling'});
+        expect(graphUpgradeGate({...long, maxCompileMs: 15000}).start).toBe(true);
     });
 
     it('expects as much remaining time as already rendered without a sample target', () => {

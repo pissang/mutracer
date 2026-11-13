@@ -174,6 +174,42 @@ describe('material graph tier plans', () => {
         expect(installs.map(e => e.role)).toEqual(['serving', 'upgrade']);
     });
 
+    /** Loads `n` chain structures on the default policy and renders a long target; returns the upgrade events. */
+    function longRender(n: number, options: Parameters<typeof setMaterialGraphPlanner>[0], maxSamples = 16384) {
+        const events: GraphUpgradeEvent[] = [];
+        setMaterialGraphPlanner({...options, onUpgrade: e => events.push(e)});
+        const state = newState();
+        state.request(Array.from({length: n}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)})));
+        state.installShader(graphShaderKey(state.requested));
+        const serving = state.requested;
+        const now = render(state, 400, 10, performance.now() + 3000, maxSamples);
+        state.tick(0, now);
+        return {state, events, serving};
+    }
+
+    it('keeps D3D12 on the interpreter beyond a couple of structures and upgrades Metal', () => {
+        // windows-1: s ≈ 1.5 with the D3D12 shape, simulated through the debug backend override.
+        const d3d12 = {compileBackend: 'd3d12' as const, compileSpeed: 1.5};
+        const many = longRender(40, d3d12);
+        expect(many.serving.programs!.size).toBe(40);
+        expect(many.events.some(e => e.type === 'start')).toBe(false);
+        expect(many.state.compileRole(many.state.requested)).toBe('edit');
+        // One structure is cheap enough to specialize even there.
+        const one = longRender(1, d3d12);
+        expect(one.state.requested.programs!.size).toBe(0);
+        // The same structures on Metal compile a fully specialized upgrade.
+        const metal = longRender(40, {compileBackend: 'metal', compileSpeed: 1});
+        expect(metal.events.map(e => e.type)).toEqual(['start']);
+        expect(metal.state.requested.programs!.size).toBe(0);
+        expect(metal.state.compileRole(metal.state.requested)).toBe('upgrade');
+    });
+
+    it('holds an upgrade predicted over the compile ceiling whatever its benefit', () => {
+        const {events, state} = longRender(40, {compileBackend: 'metal', compileSpeed: 1, policy: {maxUpgradeCompileMs: 1500}});
+        expect(events.map(e => [e.type, e.gate?.reason])).toEqual([['hold', 'ceiling']]);
+        expect(state.phase).toBe('waiting');
+    });
+
     /** Installs the serving plan and starts and installs the upgrade of a mixed 8-structure set. */
     function upgraded(onUpgrade?: (e: GraphUpgradeEvent) => void) {
         setMaterialGraphPlanner({...mixed, onUpgrade});
@@ -325,30 +361,37 @@ describe('material graph tier plans', () => {
         expect(graphShaderKey(state.requested)).toBe(graphShaderKey(full));
     });
 
-    it('prefetches the editing interpreter once after the first structural edit', () => {
+    it('prefetches the editing interpreter once right after the first installation', () => {
         setMaterialGraphPlanner(mixed);
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         const state = newState();
         state.request(materials);
-        state.installShader(graphShaderKey(state.requested));
+        // Nothing is installed yet, then another compile is in flight.
         expect(state.prefetch(0)).toBeUndefined();
-        // An edit that fits the installed (trimmed) interpreter.
-        state.request([...materials.slice(1), new OpenPBRMaterial({graph: chainGraph(9)})]);
         state.installShader(graphShaderKey(state.requested));
         expect(state.prefetch(1)).toBeUndefined();
         const prefetch = state.prefetch(0)!;
         expect(prefetch.interpreterFamilies!.has(GraphOp.Noise)).toBe(true);
+        expect(state.compileRole(prefetch)).toBe('prefetch');
         expect(state.prefetch(0)).toBeUndefined();
-        // A later edit with a new family uses exactly the prefetched variant.
+        // The first structural edit, which adds a family, uses exactly the prefetched variant.
         state.request([...materials.slice(1), new OpenPBRMaterial({graph: scaledGraph(9, 2, true)})]);
+        expect(graphShaderKey(state.requested)).toBe(graphShaderKey(prefetch));
+        // Now needed for the edit: an edit compile if it was still queued.
+        expect(state.compileRole(state.requested)).toBe('edit');
+        state.installShader(graphShaderKey(state.requested));
+        // Later edits fit the installed editing interpreter.
+        state.request([...materials.slice(2), new OpenPBRMaterial({graph: scaledGraph(10, 3)})]);
         expect(graphShaderKey(state.requested)).toBe(graphShaderKey(prefetch));
     });
 
-    it('limits the editing interpreter to the set families when all families are predicted over the correct-frame budget', () => {
+    it('limits the editing interpreter to the set families when all families are predicted over the budgets', () => {
         setMaterialGraphPlanner({...mixed, model: {...tierModel, interpreterMsPerKB: 48, interpreterFreeKB: 3.6}, compileSpeed: 20});
         const state = newState();
         state.request([new OpenPBRMaterial({graph: chainGraph(1)})]);
         state.installShader(graphShaderKey(state.requested));
+        // Over the final-variant budget: no background prefetch either.
+        expect(state.prefetch(0)).toBeUndefined();
         state.request([new OpenPBRMaterial({graph: scaledGraph(2, 2)})]);
         expect([...state.requested.interpreterFamilies!].sort()).toEqual([GraphOp.Unary, GraphOp.Binary, GraphOp.Extract, GraphOp.Geometry].sort());
     });

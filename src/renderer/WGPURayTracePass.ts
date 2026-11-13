@@ -3,8 +3,7 @@ import {materialGraphConstants} from './materialGraph/features.js';
 import {MaterialGraphState, graphShaderKey, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
 import {materialSurfaceAreas} from './materialGraph/usage.js';
-import {GraphCompileCalibration, GraphCompileClock, graphCompilerBackend} from './materialGraph/tierPolicy.js';
-import {DEFAULT_GRAPH_COMPILE_MODEL} from './materialGraph/planner.js';
+import {GraphCompileCalibration, GraphCompileClock, graphCompilerBackend, nextGraphCompile, type GraphCompileRole as CompileRole} from './materialGraph/tierPolicy.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
@@ -206,12 +205,15 @@ interface TraceVariant {
 const MAX_TRACE_VARIANTS = 32;
 // Requests are cheap but drivers are not, and a running compilation cannot be cancelled.
 const MAX_CONCURRENT_COMPILES = 2;
+/** Background compiles (gated upgrades, the editing-interpreter prefetch) leave this many
+ * slots to compiles that render an edit correctly, which never wait behind them. */
+const EDIT_RESERVED_COMPILES = 1;
 const MAX_QUEUED_COMPILES = 4;
 // Compile speed and compile overlap are properties of the device, shared by its passes.
 const deviceCompileProfiles = new WeakMap<GPUDevice, {calibration: GraphCompileCalibration; clock: GraphCompileClock}>();
 function deviceCompileProfile(device: GPUDevice) {
   let profile = deviceCompileProfiles.get(device);
-  if (!profile) deviceCompileProfiles.set(device, profile = {calibration: new GraphCompileCalibration(graphCompilerBackend(), DEFAULT_GRAPH_COMPILE_MODEL), clock: new GraphCompileClock()});
+  if (!profile) deviceCompileProfiles.set(device, profile = {calibration: new GraphCompileCalibration(graphCompilerBackend()), clock: new GraphCompileClock()});
   return profile;
 }
 
@@ -439,7 +441,7 @@ class WGPURayTracePass {
   private _shaderCapabilities = new WGPUShaderCapabilities();
   private _targetTransport = new WeakMap<object, number>();
   private _traceVariants = new Map<string, TraceVariant>();
-  private _queuedCompiles: {variant: TraceVariant; signature: string; run: () => Promise<void>; release: () => void}[] = [];
+  private _queuedCompiles: {variant: TraceVariant; signature: string; role: CompileRole; run: () => Promise<void>; release: () => void}[] = [];
   private _activeCompiles = 0;
   private _traceModules = new Map<string, {module: GPUShaderModule; bytes: number; lines: number; fingerprint: string}>();
   private _requestedVariant?: TraceVariant;
@@ -1031,13 +1033,13 @@ class WGPURayTracePass {
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
-        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature});
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature}, this.graphs.compileRole(graphPlan));
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
       // A gated upgrade or a structure edit that needs a new variant compiles while
       // the installed variant keeps tracing (constants until a graph variant is ready).
       if (variant.status === 'pending') {
-        this._requestQueuedCompile(variant);
+        this._requestQueuedCompile(variant, this.graphs.compileRole(graphPlan));
         if (this._canTraceOldGraph) {
           if(this._needsUpdateBindGroups) { this._updateBindGroups(); this._needsUpdateBindGroups = false; }
           return;
@@ -1056,7 +1058,7 @@ class WGPURayTracePass {
         const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
         if (!this._traceVariants.has(prefetchSignature))
           this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature,
-            structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})});
+            structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})}, 'prefetch');
       }
     } catch (error) {
       this._resourceError = error;
@@ -1115,7 +1117,7 @@ class WGPURayTracePass {
   private _startTraceVariant(signature: string, constants: Record<string, boolean | number>, shader: {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
     structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string;
-  }) {
+  }, role: CompileRole = 'edit') {
     const shareSpectralPrefix = Boolean(constants.SPECTRAL) && this._shareSpectralPrefix;
     const bake = this._bakePipelineConstants, bindless = this._bindless;
     const hasDisplacement = this._hasDisplacement, blasLayoutMask = this._blasLayoutMask;
@@ -1299,13 +1301,14 @@ class WGPURayTracePass {
       }
     );
     variant.settled = new Promise((resolve) => {
-      this._queuedCompiles.push({variant, signature, run, release: resolve});
+      this._queuedCompiles.push({variant, signature, role, run, release: resolve});
     });
     this._traceVariants.set(signature, variant);
     if (this._queuedCompiles.length > MAX_QUEUED_COMPILES) {
       // A dropped variant stays pending, because a render that still wants it
-      // replaces it with a new request on its next frame.
-      const obsolete = this._queuedCompiles.shift()!;
+      // replaces it with a new request on its next frame. Background work goes first.
+      const background = this._queuedCompiles.findIndex((job) => job.role !== 'edit');
+      const obsolete = this._queuedCompiles.splice(background >= 0 ? background : 0, 1)[0];
       if (this._traceVariants.get(obsolete.signature) === obsolete.variant) this._traceVariants.delete(obsolete.signature);
       obsolete.release();
     }
@@ -1317,10 +1320,10 @@ class WGPURayTracePass {
     return variant;
   }
 
-  /** Runs the most recently requested variants first: a dragged slider's last value is the one in use. */
+  /** Starts queued compiles in the order of `nextGraphCompile`. */
   private _pumpCompiles() {
-    while (this._activeCompiles < MAX_CONCURRENT_COMPILES && this._queuedCompiles.length) {
-      const job = this._queuedCompiles.pop()!;
+    for (let index; (index = nextGraphCompile(this._queuedCompiles, this._activeCompiles, MAX_CONCURRENT_COMPILES, EDIT_RESERVED_COMPILES)) >= 0;) {
+      const job = this._queuedCompiles.splice(index, 1)[0];
       this._activeCompiles++;
       void job.run().finally(() => {
         this._activeCompiles--;
@@ -1330,9 +1333,14 @@ class WGPURayTracePass {
     }
   }
 
-  private _requestQueuedCompile(variant: TraceVariant) {
+  /** Moves a queued variant to the front of its class; a background variant an edit now needs becomes an edit. */
+  private _requestQueuedCompile(variant: TraceVariant, role: CompileRole) {
     const index = this._queuedCompiles.findIndex((job) => job.variant === variant);
-    if (index >= 0) this._queuedCompiles.push(...this._queuedCompiles.splice(index, 1));
+    if (index < 0) return;
+    const [job] = this._queuedCompiles.splice(index, 1);
+    if (role === 'edit') job.role = 'edit';
+    this._queuedCompiles.push(job);
+    this._pumpCompiles();
   }
 
   private _prepareAovPipelines(kinds: readonly AovKind[], compact = false) {
