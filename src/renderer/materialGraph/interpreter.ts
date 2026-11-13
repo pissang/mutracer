@@ -4,6 +4,16 @@ import {width} from './types.js';
 import {terminalTypes} from './nodes.js';
 import {GraphSource, graphCategories, graphGeometry, graphOutputs, graphPorts, graphTerminals, graphTypes, type GraphIR} from './ir.js';
 
+/** Opcode families used by a program's entries. */
+export function graphProgramFamilies(program: GraphProgram, into = new Set<GraphOp>()) {
+    for (const entry of [program.surface, program.opacity, program.emission])
+        for (let at = 0; at < entry.instructions.length; at += GRAPH_INSTRUCTION_FLOATS) if (entry.instructions[at] !== GraphOp.Store) into.add(entry.instructions[at]);
+    return into;
+}
+/** Helper libraries an interpreter with these families needs. */
+export function graphInterpreterHelpers(families: ReadonlySet<GraphOp>) {
+    return {noise: families.has(GraphOp.Noise), hsv: families.has(GraphOp.Hsv), rotate3d: families.has(GraphOp.Rotate)};
+}
 /** Fixed register file of the WGSL interpreter. Structures needing more live
  * values than this keep the specialized path. */
 export const GRAPH_INTERPRETER_REGISTERS = 8;
@@ -224,8 +234,11 @@ export function runGraphProgram(entry: GraphProgramEntry, parameter: (slot: numb
 /** Fixed WGSL interpreter. Its size depends only on the terminal set, never on
  * the number of structures. Requires `mx_parameter`, `mx_image`, `mx_w2l`,
  * `mx_l2w`, the math helpers and `MXResult` with `fields`. */
-export function graphInterpreterShader(fields: readonly string[], salt = 0) {
+export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>) {
     const R = GRAPH_INTERPRETER_REGISTERS;
+    // Only the opcode families the programs use are compiled: unused cases cost
+    // compile time and registers on every hit.
+    const kase = (family: GraphOp, code: string) => !families || families.has(family) ? code : '';
     // The first four operands are decoded before the opcode switch, so lanes on
     // different opcodes share those loads; later operands load per family.
     const a = (k: number) => k < 4 ? `x${k}` : `mx_arg(rec,${k},base,ctx,regs)`;
@@ -266,14 +279,14 @@ fn mx_arg(rec: i32, k: i32, base: i32, ctx: MXContext, regs: ptr<function, array
 }
 fn mx_exec(rec: i32, op: i32, sub: i32, w: i32, color: bool, x0: vec4f, x1: vec4f, x2: vec4f, x3: vec4f, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
   switch op {
-    case ${GraphOp.Unary}: {
+${kase(GraphOp.Unary, `    case ${GraphOp.Unary}: {
       let x = ${a(0)};
       switch sub {
 ${unary}
         default: { return x; }
       }
-    }
-    case ${GraphOp.Binary}: {
+    }`)}
+${kase(GraphOp.Binary, `    case ${GraphOp.Binary}: {
       let x = ${a(0)}; let y = ${a(1)};
       switch sub {
         case 0: { return x + y; } case 1: { return x - y; } case 2: { return x * y; } case 3: { return x / y; }
@@ -281,44 +294,44 @@ ${unary}
         case 8: { return vec4f(dot(x, y)); } case 9: { return vec4f(cross(x.xyz, y.xyz), 0.0); }
         default: { return atan2(x, y); }
       }
-    }
-    case ${GraphOp.Mix}: { return mix(${a(0)}, ${a(1)}, ${a(2)}); }
-    case ${GraphOp.Clamp}: { return clamp(${a(0)}, ${a(1)}, ${a(2)}); }
-    case ${GraphOp.Copy}: {
+    }`)}
+${kase(GraphOp.Mix, `    case ${GraphOp.Mix}: { return mix(${a(0)}, ${a(1)}, ${a(2)}); }`)}
+${kase(GraphOp.Clamp, `    case ${GraphOp.Clamp}: { return clamp(${a(0)}, ${a(1)}, ${a(2)}); }`)}
+${kase(GraphOp.Copy, `    case ${GraphOp.Copy}: {
       var x = ${a(0)};
       // Widening a vector pads MaterialX-style (w = 1); scalars splat, narrowing truncates.
       let fw = mx_code(rec, 0) & 7;
       if(sub == 0 && fw > 1 && fw < 4 && w == 4) { x.w = 1.0; }
       return x;
-    }
-    case ${GraphOp.Combine}: { return vec4f(${a(0)}.x, ${a(1)}.x, ${a(2)}.x, ${a(3)}.x); }
-    case ${GraphOp.Extract}: { let x = ${a(0)}; return vec4f(x[clamp(i32(${a(1)}.x), 0, 3)]); }
-    case ${GraphOp.If}: {
+    }`)}
+${kase(GraphOp.Combine, `    case ${GraphOp.Combine}: { return vec4f(${a(0)}.x, ${a(1)}.x, ${a(2)}.x, ${a(3)}.x); }`)}
+${kase(GraphOp.Extract, `    case ${GraphOp.Extract}: { let x = ${a(0)}; return vec4f(x[clamp(i32(${a(1)}.x), 0, 3)]); }`)}
+${kase(GraphOp.If, `    case ${GraphOp.If}: {
       let c = ${a(0)}.x; let d = ${a(1)}.x;
       return select(${a(3)}, ${a(2)}, select(c == d, c > d, sub == 0));
-    }
-    case ${GraphOp.Remap}: {
+    }`)}
+${kase(GraphOp.Remap, `    case ${GraphOp.Remap}: {
       let lo = ${a(3)}; let hi = ${a(4)};
       var v = (${a(0)} - ${a(1)}) / (${a(2)} - ${a(1)});
       if(sub == 1) { v = sign(v) * pow(abs(v), vec4f(1.0) / ${a(5)}); }
       v = lo + v * (hi - lo);
       if(sub == 1 && ${a(6)}.x > 0.5) { v = clamp(v, lo, hi); }
       return v;
-    }
-    case ${GraphOp.Smoothstep}: {
+    }`)}
+${kase(GraphOp.Smoothstep, `    case ${GraphOp.Smoothstep}: {
       let x = ${a(0)}; let lo = ${a(1)}; let hi = ${a(2)};
       return select(select(smoothstep(lo, hi, x), vec4f(0.0), x <= lo), vec4f(1.0), x >= hi);
-    }
-    case ${GraphOp.Affine}: {
+    }`)}
+${kase(GraphOp.Affine, `    case ${GraphOp.Affine}: {
       let x = ${a(0)}; let amount = ${a(1)};
       if(sub == 1) { return amount - x; }
       let pivot = ${a(2)}; return (x - pivot) * amount + pivot;
-    }
-    case ${GraphOp.Luminance}: {
+    }`)}
+${kase(GraphOp.Luminance, `    case ${GraphOp.Luminance}: {
       let x = ${a(0)}; let l = dot(x.xyz, ${a(1)}.xyz);
       return select(vec4f(vec3f(l), 0.0), vec4f(vec3f(l), x.w), w == 4);
-    }
-    case ${GraphOp.Blend}: {
+    }`)}
+${kase(GraphOp.Blend, `    case ${GraphOp.Blend}: {
       let f = ${a(0)}; let b = ${a(1)}; let m = ${a(2)}.x;
       var blended: vec4f;
       switch sub {
@@ -331,8 +344,8 @@ ${unary}
       if(sub == 0) { return select(value, vec4f(0.0), abs(f) < vec4f(1e-8)); }
       if(sub == 1) { return select(value, vec4f(0.0), abs(1.0 - f) < vec4f(1e-8)); }
       return value;
-    }
-    case ${GraphOp.Ramp}: {
+    }`)}
+${kase(GraphOp.Ramp, `    case ${GraphOp.Ramp}: {
       let t = ${a(0)};
       let x = clamp(t.x, 0.0, 1.0); let y = clamp(t.y, 0.0, 1.0);
       switch sub {
@@ -342,20 +355,20 @@ ${unary}
         case 3: { return mix(${a(2)}, ${a(3)}, y); }
         default: { return mix(mix(${a(2)}, ${a(3)}, x), mix(${a(4)}, ${a(5)}, x), y); }
       }
-    }
-    case ${GraphOp.Place2d}: { return vec4f(mx_place2d(${a(0)}.xy, ${a(1)}.xy, ${a(2)}.xy, ${a(3)}.x, ${a(4)}.xy, ${a(5)}.x), 0.0, 0.0); }
-    case ${GraphOp.Rotate}: {
+    }`)}
+${kase(GraphOp.Place2d, `    case ${GraphOp.Place2d}: { return vec4f(mx_place2d(${a(0)}.xy, ${a(1)}.xy, ${a(2)}.xy, ${a(3)}.x, ${a(4)}.xy, ${a(5)}.x), 0.0, 0.0); }`)}
+${kase(GraphOp.Rotate, `    case ${GraphOp.Rotate}: {
       if(sub == 0) { return vec4f(mx_rotate(${a(0)}.xy, -${a(1)}.x), 0.0, 0.0); }
       return vec4f(mx_rotate3d(${a(0)}.xyz, ${a(1)}.x, ${a(2)}.xyz), 0.0);
-    }
-    case ${GraphOp.Hsv}: {
+    }`)}
+${kase(GraphOp.Hsv, `    case ${GraphOp.Hsv}: {
       let x = ${a(0)}; var h: vec3f;
       if(sub == 0) { h = mx_rgbtohsv(x.xyz); }
       else if(sub == 1) { h = mx_hsvtorgb(x.xyz); }
       else { let amount = ${a(1)}; h = mx_hsvtorgb((mx_rgbtohsv(x.xyz) + vec3f(amount.x, 0.0, 0.0)) * vec3f(1.0, amount.y, amount.z)); }
       return vec4f(h, x.w);
-    }
-    case ${GraphOp.Noise}: {
+    }`)}
+${kase(GraphOp.Noise, `    case ${GraphOp.Noise}: {
       let planar = sub == 0 || sub == 3 || sub == 5;
       let dim = select(3, 2, planar);
       let q = ${a(0)}; let p = select(q.xyz, vec3f(q.xy, 0.0), planar);
@@ -365,8 +378,8 @@ ${unary}
         case 3, 4: { return vec4f(mx_cell(p, dim, -1)); }
         default: { return vec4f(mx_worley(p, dim, w, ${a(6)}.x, i32(${a(7)}.x)), 0.0); }
       }
-    }
-    case ${GraphOp.Image}: {
+    }`)}
+${kase(GraphOp.Image, `    case ${GraphOp.Image}: {
       var uv = ${a(2)}.xy;
       if(sub == 1) { uv = (uv * ${a(3)}.xy - ${a(4)}.xy) / ${a(5)}.xy * ${a(6)}.xy; }
       if(sub >= 2) { uv = mx_place2d(uv, ${a(3)}.xy, vec2f(1.0) / ${a(4)}.xy, -${a(5)}.x, ${a(6)}.xy * vec2f(-1.0, 1.0), select(${a(7)}.x, 0.0, sub == 3)); }
@@ -375,8 +388,8 @@ ${unary}
       if(sub >= 2 && mx_code(rec, 10) >= 0) { v = v * ${a(10)}; }
       if(sub == 4) { v = vec4f(mx_normalmap(v.xyz, vec2f(1.0), ctx.normal, ctx.tangent, ctx.bitangent), 0.0); }
       return v;
-    }
-    case ${GraphOp.Geometry}: {
+    }`)}
+${kase(GraphOp.Geometry, `    case ${GraphOp.Geometry}: {
       let s = ${a(0)}.x;
       switch sub {
         case 0: { return vec4f(select(ctx.uv, ctx.uv1, s > 0.5), 0.0, 0.0); }
@@ -385,8 +398,8 @@ ${unary}
         case 3: { return vec4f(select(normalize((mx_w2l(ctx.instance) * vec4f(ctx.tangent, 0.0)).xyz), ctx.tangent, s > 0.5), 0.0); }
         default: { return vec4f(select(normalize((mx_w2l(ctx.instance) * vec4f(ctx.bitangent, 0.0)).xyz), ctx.bitangent, s > 0.5), 0.0); }
       }
-    }
-    case ${GraphOp.Transform}: {
+    }`)}
+${kase(GraphOp.Transform, `    case ${GraphOp.Transform}: {
       let x = ${a(0)}.xyz; let src = ${a(1)}.x; let dst = ${a(2)}.x;
       let l2w = mx_l2w(ctx.instance); let w2l = mx_w2l(ctx.instance);
       let h = select(0.0, 1.0, sub == 0);
@@ -395,8 +408,8 @@ ${unary}
       else if(src == 1.0 && dst == 0.0) { r = select((w2l * vec4f(x, h)).xyz, (transpose(l2w) * vec4f(x, h)).xyz, sub == 2); }
       if(sub == 2) { r = normalize(r); }
       return vec4f(r, 0.0);
-    }
-    case ${GraphOp.Normalmap}: { return vec4f(mx_normalmap(${a(0)}.xyz, ${a(1)}.xy, ${a(2)}.xyz, ${a(3)}.xyz, ${a(4)}.xyz), 0.0); }
+    }`)}
+${kase(GraphOp.Normalmap, `    case ${GraphOp.Normalmap}: { return vec4f(mx_normalmap(${a(0)}.xyz, ${a(1)}.xy, ${a(2)}.xyz, ${a(3)}.xyz, ${a(4)}.xyz), 0.0); }`)}
     default: { return vec4f(${salt}.0); }
   }
 }

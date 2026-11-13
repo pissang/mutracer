@@ -6,7 +6,7 @@ import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import {generateGraphIR} from './generate.js';
 import {graphCategories, graphTerminals, type GraphIR} from './ir.js';
-import {graphInterpreterShader, graphTerminalMask} from './interpreter.js';
+import {graphInterpreterHelpers, graphInterpreterShader, graphTerminalMask, type GraphOp} from './interpreter.js';
 function terminalNames(graph: GraphIR) {
     const names: string[]=[];
     for(let i=0;i<graph.terminal.length;i+=3) names.push(graphTerminals[graph.terminal[i]]);
@@ -19,7 +19,7 @@ function hasCategory(graph: GraphIR, names: string[]) {
 }
 const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness', opacity:'alpha' };
 /** Interpreted structures in a variant: only their terminal union shapes the source. */
-export interface GraphInterpreterOptions { terminals: readonly string[]; /** Inert literal that changes the source; measurement only. */ salt?: number }
+export interface GraphInterpreterOptions { terminals: readonly string[]; /** Inert literal that changes the source; measurement only. */ salt?: number; /** Opcode families the programs use. Default all. */ families?: ReadonlySet<GraphOp> }
 /** Pure shared graph fragments; templates own signatures, call sites and layout.
  * Specialized structures get IDs 1..N; with `interpreter`, negative IDs address a
  * program header record in `materialsBuffer` (see `graphInterpreterShader`). */
@@ -38,14 +38,14 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
   if(color) { texel = vec4f(decodeMapColor(index,texel.rgb),texel.a); } return texel;
 }
 `;
-    declarations += graphMathShaderIR(structures, !!interpreter);
+    declarations += graphMathShaderIR(structures, !!interpreter && !interpreter.families, interpreter?.families && graphInterpreterHelpers(interpreter.families));
     structures.forEach((g, index) => declarations += generateGraphIR(g, `mx_eval_${index + 1}`).source + '\n');
     const matrix = (inverse: boolean) => {
         const columns = Array.from({ length: 4 }, (_, c) => `instancesBuffer[index * ${INSTANCE_VEC4_STRIDE} + ${c + (inverse ? 1 : 5)}]`);
         return `fn mx_${inverse ? 'w2l' : 'l2w'}(index:i32) -> mat4x4f { if(index<0){return mat4x4f(vec4f(1,0,0,0),vec4f(0,1,0,0),vec4f(0,0,1,0),vec4f(0,0,0,1));} return mat4x4f(${columns.join(',')}); }\n`;
     };
     declarations += matrix(true) + matrix(false);
-    if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt);
+    if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt, interpreter.families);
     const programHeader = (id: string) => `let mx_program = -${id}; let mx_header = vec4f(materialsBuffer[mx_program].color, materialsBuffer[mx_program].matType);`;
     const si = 'mx_si';
     const init = used.map(field => `    mx_result.${field} = ${field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field)};`).join('\n');
@@ -142,7 +142,7 @@ ${init}
 }
 
 /** Pure MaterialX helpers shared by surface rendering and UV height baking. */
-export function graphMathShaderIR(structures:readonly GraphIR[], all = false) {
+export function graphMathShaderIR(structures:readonly GraphIR[], all = false, extra?: {noise: boolean; hsv: boolean; rotate3d: boolean}) {
     let declarations=`fn mx_rotate(p: vec2f, degrees: f32) -> vec2f { let a=degrees*0.017453292519943295; return vec2f(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
 fn mx_place2d(uv:vec2f,pivot:vec2f,scale:vec2f,angle:f32,offset:vec2f,order:f32) -> vec2f {
   if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
@@ -155,7 +155,7 @@ fn mx_normalmap(value:vec3f,scale:vec2f,n:vec3f,t:vec3f,b:vec3f) -> vec3f {
 `;
     // HSV thresholds follow MaterialX 1.39.4's OSL-derived operators. See
     // LICENSES/MaterialX-OSL-BSD-3-Clause.txt and THIRD_PARTY_NOTICES.md.
-    if (all || structures.some(g => hasCategory(g, ['rgbtohsv','hsvtorgb','hsvadjust']))) {
+    if (all || extra?.hsv || structures.some(g => hasCategory(g, ['rgbtohsv','hsvtorgb','hsvadjust']))) {
         declarations += `fn mx_hsvtorgb(value:vec3f) -> vec3f {
   if(value.y<0.0001){return vec3f(value.z);}
   let h=fract(value.x)*6.0;
@@ -171,8 +171,8 @@ fn mx_rgbtohsv(value:vec3f) -> vec3f {
 }
 `;
     }
-    if(all || structures.some(g=>hasCategory(g, ['noise2d','noise3d','fractal3d','cellnoise2d','cellnoise3d','worleynoise2d','worleynoise3d']))) declarations += noiseShader();
-    if(all || structures.some(g => hasCategory(g, ['rotate3d']))) {
+    if(all || extra?.noise || structures.some(g=>hasCategory(g, ['noise2d','noise3d','fractal3d','cellnoise2d','cellnoise3d','worleynoise2d','worleynoise3d']))) declarations += noiseShader();
+    if(all || extra?.rotate3d || structures.some(g => hasCategory(g, ['rotate3d']))) {
         declarations += `fn mx_rotate3d(p:vec3f,degrees:f32,axis:vec3f) -> vec3f {
   let n=normalize(axis);let a=degrees*0.017453292519943295;let c=cos(a);let s=sin(a);
   return p*c-cross(n,p)*s+n*dot(n,p)*(1.0-c);

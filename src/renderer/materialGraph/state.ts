@@ -6,9 +6,10 @@ import {flattenGraphUnchecked} from './flatten.js';
 import {graphContextDiagnostics} from './context.js';
 import {graphTerminals} from './ir.js';
 import {terminalTypes} from './nodes.js';
-import {DEFAULT_GRAPH_COMPILE_MODEL, DEFAULT_GRAPH_TIER_BUDGET, planGraphTiers, type GraphCompileModel, type GraphTierBudget, type GraphTierCandidate} from './planner.js';
+import {DEFAULT_GRAPH_COMPILE_MODEL, DEFAULT_GRAPH_TIER_BUDGET, interpreterCompileMs, planGraphTiers, type GraphCompileModel, type GraphTierBudget, type GraphTierCandidate} from './planner.js';
 import {generateGraphIR} from './generate.js';
-import {buildGraphProgram, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
+import {graphMathShaderIR} from './specialize.js';
+import {graphInterpreterHelpers, graphInterpreterShader, graphProgramFamilies, type GraphOp, buildGraphProgram, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
 import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
 import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
@@ -67,6 +68,8 @@ export interface GraphPlan {
     /** Terminals written by interpreted structures. */
     interpreterTerminals?: string[];
     interpreterSalt?: number;
+    /** Opcode families used by the interpreted programs; the interpreter compiles only these. */
+    interpreterFamilies?: ReadonlySet<GraphOp>;
     /** Interpreter-only plan of the same structures, installed while this plan's mixed variant compiles. */
     interim?: GraphPlan;
     /** Whether to compile the interim variant (rather than only use it when ready). */
@@ -142,7 +145,12 @@ export class MaterialGraphState {
                 return {key: g.key, usage: usage.get(g.key) ?? 0, ...this.source(g),
                     instructions: program ? [program.surface, program.opacity, program.emission].reduce((n, e) => n + e.instructions.length / GRAPH_INSTRUCTION_FLOATS, 0) : undefined};
             });
-            ({specialized, coverage, estimatedMs} = planGraphTiers(candidates, planner.model, planner.budget));
+            // Charge the interpreter for the opcode families of every interpretable
+            // structure (an upper bound for the ones left on it).
+            const families = new Set<GraphOp>(), terminals = Object.keys(terminalTypes).filter(name => structures.some(g => name in g.terminal));
+            for (const g of structures) { const program = this.program(g); if (program) graphProgramFamilies(program, families); }
+            const interpreterBytes = graphInterpreterShader(terminals, 0, families).length + graphMathShaderIR([], false, graphInterpreterHelpers(families)).length;
+            ({specialized, coverage, estimatedMs} = planGraphTiers(candidates, planner.model, planner.budget, interpreterCompileMs(interpreterBytes, planner.model)));
         }
         this.tiers = {key, planner, specialized, coverage, estimatedMs};
         return specialized;
@@ -163,8 +171,11 @@ export class MaterialGraphState {
         for (const g of base.structures) { const program = specializedKeys.has(g.key) ? undefined : this.program(g); if (program) programs.set(g.key, program); }
         const specialized = base.structures.filter(g => !programs.has(g.key));
         const interpreterTerminals = Object.keys(terminalTypes).filter(name => base.structures.some(g => programs.has(g.key) && name in g.terminal));
-        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}:${planner.salt}`] : [])].join('\n');
-        return {...base, shaderKey, specialized, programs, interpreterTerminals, interpreterSalt: planner.salt};
+        const families = new Set<GraphOp>();
+        for (const program of programs.values()) graphProgramFamilies(program, families);
+        const familyKey = [...families].sort((a, b) => a - b).join('.');
+        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}:${familyKey}:${planner.salt}`] : [])].join('\n');
+        return {...base, shaderKey, specialized, programs, interpreterTerminals, interpreterFamilies: families, interpreterSalt: planner.salt};
     }
     private program(graph: NormalizedGraph) {
         let result = this.programCache.get(graph.key);

@@ -20,8 +20,12 @@ export interface GraphTierCandidate {
 export interface GraphCompileModel {
     /** Pipeline compile time per KB of added specialized WGSL. */
     msPerKB: number;
-    /** Fixed cost of the interpreter (its evaluator and the generic dispatch). */
+    /** Cost of the interpreter when its source size is unknown (all families). */
     interpreterMs: number;
+    /** Interpreter compile time per KB of its source (cases and helper libraries)... */
+    interpreterMsPerKB: number;
+    /** ...beyond this many KB, which compile at no measurable cost. */
+    interpreterFreeKB: number;
     /** Size of each helper library, counted once when no interpreter is present
      * (the interpreter variant always contains every helper). */
     helperBytes: Readonly<Record<string, number>>;
@@ -54,10 +58,11 @@ export interface GraphTierDecision {
 
 /** Calibrated on the reference platform: specialized code adds 19–21 ms per KB
  * both alone and next to the interpreter; the interpreter-only variant adds
- * ≈0.57 s. A mixed variant specializing 35 % of the interpreter work on a
+ * ≈0.57 s with every opcode family, ≈48 ms per KB of interpreter source beyond
+ * 3.6 KB (0.14 s for the 9 families of the simple harness class). A mixed variant specializing 35 % of the interpreter work on a
  * uniform sphere grid was only ≈4 % faster than the interpreter alone, so a
  * mixed variant needs at least 20 % coverage. */
-export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}};
+export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, interpreterMsPerKB: 48, interpreterFreeKB: 3.6, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}};
 export const DEFAULT_GRAPH_TIER_BUDGET: GraphTierBudget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.2};
 
 export function specializedCompileMs(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {
@@ -84,13 +89,19 @@ export function specializedCompileMs(candidates: readonly GraphTierCandidate[], 
  * charged and the remaining budget is filled greedily by benefit per ms.
  * Structures the interpreter cannot run are always specialized.
  */
-export function planGraphTiers(candidates: readonly GraphTierCandidate[], model = DEFAULT_GRAPH_COMPILE_MODEL, budget = DEFAULT_GRAPH_TIER_BUDGET): GraphTierDecision {
+export function interpreterCompileMs(sourceBytes: number, model: GraphCompileModel) {
+    return model.interpreterMsPerKB * Math.max(0, sourceBytes / 1024 - model.interpreterFreeKB);
+}
+
+/** `interpreterMs` overrides the model's fixed interpreter cost, e.g. with the
+ * cost of only the opcode families the candidates need. */
+export function planGraphTiers(candidates: readonly GraphTierCandidate[], model = DEFAULT_GRAPH_COMPILE_MODEL, budget = DEFAULT_GRAPH_TIER_BUDGET, interpreterMs = model.interpreterMs): GraphTierDecision {
     const forced = candidates.filter(c => c.instructions === undefined);
     const allMs = specializedCompileMs(candidates, model, false);
     if (allMs <= budget.budgetMs || forced.length === candidates.length)
         return {specialized: new Set(candidates.map(c => c.key)), interpreter: false, estimatedMs: allMs, coverage: 1};
     const specialized = new Set(forced.map(c => c.key));
-    let usedMs = model.interpreterMs + specializedCompileMs(forced, model, true);
+    let usedMs = interpreterMs + specializedCompileMs(forced, model, true);
     const benefit = (c: GraphTierCandidate) => (c.instructions ?? 0) * Math.max(c.usage, 0);
     const optional = candidates.filter(c => c.instructions !== undefined);
     const total = optional.reduce((sum, c) => sum + benefit(c), 0);
@@ -111,6 +122,6 @@ export function planGraphTiers(candidates: readonly GraphTierCandidate[], model 
     }
     const coverage = total > 0 ? gained / total : 0;
     if (coverage >= budget.minBenefitShare) for (const key of chosen) specialized.add(key);
-    else usedMs = model.interpreterMs + specializedCompileMs(forced, model, true);
+    else usedMs = interpreterMs + specializedCompileMs(forced, model, true);
     return {specialized, interpreter: true, estimatedMs: usedMs, coverage: coverage >= budget.minBenefitShare ? coverage : 0};
 }

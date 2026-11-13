@@ -110,8 +110,11 @@ therefore uses no fixed interpreter ratio. Screen coverage is not used.
 
 The cost of a structure is the compile time of its specialized source: the
 generated function plus its dispatch branches, at a calibrated time per KB.
-Helper libraries (noise, HSV, `rotate3d`) count once, and only without the
-interpreter, whose variant always contains them. The budget is the graph
+Helper libraries (noise, HSV, `rotate3d`) count once. The interpreter
+compiles only the opcode families its programs use (the family set is part of
+its shader key), together with the helper libraries of those families; the
+planner charges it by the generated size for the families of all interpretable
+structures. The budget is the graph
 increment over the graph-free kernel (1 s on the reference platform). If every
 structure fits, the variant omits the interpreter, because its presence slows
 every hit. Otherwise the interpreter's fixed cost is charged and the remaining

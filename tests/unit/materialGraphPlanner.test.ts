@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest';
 import MaterialGraph, {type MaterialGraphNode} from '../../src/scene/MaterialGraph.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
+import {GraphOp} from '../../src/renderer/materialGraph/interpreter.js';
 import {planGraphTiers, type GraphTierCandidate} from '../../src/renderer/materialGraph/planner.js';
 import {MaterialGraphState, graphShaderKey, setMaterialGraphPlanner, type GraphInstallEvent} from '../../src/renderer/materialGraph/state.js';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader.js';
@@ -10,7 +11,9 @@ import Mesh from '../../src/scene/Mesh.js';
 import InstancedMesh from '../../src/scene/InstancedMesh.js';
 import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 
-const model = {msPerKB: 100, interpreterMs: 300, helperBytes: {noise: 2048}};
+const model = {msPerKB: 100, interpreterMs: 300, interpreterMsPerKB: 0, interpreterFreeKB: 0, helperBytes: {noise: 2048}};
+// State-level plans charge the interpreter by its generated source; zero keeps budgets exact here.
+const tierModel = {...model, helperBytes: {}};
 const budget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.05};
 const candidate = (key: string, usage: number, kb = 1, instructions: number | undefined = 10, helpers?: string[]): GraphTierCandidate =>
     ({key, usage, sourceBytes: kb * 1024, instructions, helpers});
@@ -33,6 +36,12 @@ describe('material graph tier planner', () => {
         expect([...decision.specialized].sort()).toEqual(['cold', 'hot', 'warm']);
         expect(decision.estimatedMs).toBeLessThanOrEqual(budget.budgetMs);
         expect(decision.coverage).toBeCloseTo((10 * 151) / (10 * 241));
+    });
+
+    it('charges the interpreter by the cost passed for its families', () => {
+        const set = [candidate('a', 10, 3), candidate('b', 5, 3), candidate('c', 1, 3), candidate('d', 1, 3)];
+        expect(planGraphTiers(set, model, budget, 600).specialized.size).toBe(1);
+        expect(planGraphTiers(set, model, budget, 100).specialized.size).toBe(3);
     });
 
     it('weighs usage by per-hit interpreter work, not by a fixed ratio', () => {
@@ -85,7 +94,7 @@ describe('material graph tier plans', () => {
     it('builds a mixed final plan with an interpreter-only interim and installs them progressively', () => {
         const installs: GraphInstallEvent[] = [];
         // Room for the interpreter and about two specialized structures.
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}, onInstall: e => installs.push(e)});
+        setMaterialGraphPlanner({model: tierModel, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}, onInstall: e => installs.push(e)});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         const usage = new Map<unknown, number>(materials.map((m, i) => [m, i === 5 ? 1000 : i === 2 ? 500 : 1]));
         const state = new MaterialGraphState();
@@ -106,6 +115,10 @@ describe('material graph tier plans', () => {
         expect(mixed.interpreter).toBe(true);
         expect(mixed.declarations).toContain('mx_eval_1');
         expect(mixed.declarations).toContain('fn mx_run');
+        // The interpreter compiles only the opcode families its programs use.
+        expect([...final.interpreterFamilies!].sort()).toEqual([GraphOp.Unary, GraphOp.Extract, GraphOp.Geometry].sort());
+        expect(mixed.declarations).not.toContain('mx_fractal');
+        expect(materialGraphShader({...final, interpreterFamilies: undefined}).graph!.declarations).toContain('mx_fractal');
 
         // The interim installs first and restarts accumulation (new structures).
         const generation = state.generation;
@@ -139,7 +152,7 @@ describe('material graph tier plans', () => {
     });
 
     it('keeps the interim installed when the final variant fails', () => {
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
+        setMaterialGraphPlanner({model: tierModel, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         const state = new MaterialGraphState();
         state.interpreterAvailable = true;
@@ -154,7 +167,7 @@ describe('material graph tier plans', () => {
     });
 
     it('keeps tier decisions for an unchanged structure set when usage changes', () => {
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
+        setMaterialGraphPlanner({model: tierModel, budget: {budgetMs: 600, correctMs: 600, minBenefitShare: 0.05}});
         const materials = Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)}));
         let usage = new Map<unknown, number>(materials.map((m, i) => [m, i === 0 ? 100 : 1]));
         const state = new MaterialGraphState();
@@ -168,7 +181,7 @@ describe('material graph tier plans', () => {
     });
 
     it('compiles the interim before a fully specialized final variant above the correct-frame budget', () => {
-        setMaterialGraphPlanner({model: {msPerKB: 100, interpreterMs: 300, helperBytes: {}}, budget: {budgetMs: 1e5, correctMs: 600, minBenefitShare: 0.05}});
+        setMaterialGraphPlanner({model: tierModel, budget: {budgetMs: 1e5, correctMs: 600, minBenefitShare: 0.05}});
         const state = new MaterialGraphState();
         state.interpreterAvailable = true;
         state.request(Array.from({length: 8}, (_, i) => new OpenPBRMaterial({graph: chainGraph(i + 1)})));
@@ -195,7 +208,7 @@ describe('material graph tier plans', () => {
         state.request(materials);
         expect(state.requested.specialized).toEqual([]);
         expect(state.requested.interim).toBeUndefined();
-        setMaterialGraphPlanner({tier: 'specialized', model: {msPerKB: 1e6, interpreterMs: 0, helperBytes: {}}});
+        setMaterialGraphPlanner({tier: 'specialized', model: {...tierModel, msPerKB: 1e6}});
         state.request(materials);
         expect(state.requested.programs!.size).toBe(0);
     });
