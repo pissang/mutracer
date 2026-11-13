@@ -1297,7 +1297,7 @@ fn fetchAttributes(
 ${hasAnisotropyDirections ? /* wgsl */ `
 ${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normal;` : ''}
   let directionMaterial = materialsBuffer[(*si).materialIndex];
-  if (${materialHooks.graph ? "directionMaterial._padding1 > 0.0 || " : ""}directionMaterial.anisotropyMapIndex >= 0.0${materialHooks.materialXNormals ? " || fract(directionMaterial.normalMapIndex) > 0.25" : ""} || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0${hasCoatNormals ? " || directionMaterial.coatWeight > 0.0" : ""}) {
+  if (${materialHooks.graph ? `directionMaterial._padding1 ${materialHooks.graph.interpreter ? "!=" : ">"} 0.0 || ` : ""}directionMaterial.anisotropyMapIndex >= 0.0${materialHooks.materialXNormals ? " || fract(directionMaterial.normalMapIndex) > 0.25" : ""} || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0${hasCoatNormals ? " || directionMaterial.coatWeight > 0.0" : ""}) {
     let dp1 = tri.p0 - tri.p2;
     let dp2 = tri.p1 - tri.p2;
     var inputTangent = vec4f(0.0);

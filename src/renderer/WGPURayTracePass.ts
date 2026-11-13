@@ -1,6 +1,6 @@
 import {materialEmission} from './materialEmission.js';
 import {materialGraphConstants} from './materialGraph/features.js';
-import {MaterialGraphState, type GraphPlan} from './materialGraph/state.js';
+import {MaterialGraphState, graphShaderKey, type GraphPlan} from './materialGraph/state.js';
 import {materialGraphShader} from './materialGraph/shader.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
@@ -981,7 +981,7 @@ class WGPURayTracePass {
         bakePipelineConstants: this._bakePipelineConstants
       };
       const structureKey = JSON.stringify({
-        graph: graphPlan.key,
+        graph: graphShaderKey(graphPlan),
         ...structure,
         defineCode,
         constants: pipelineConstantsKeys
@@ -1006,7 +1006,9 @@ class WGPURayTracePass {
         constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
       });
       const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
-      const signature = graphPlan.key ? baseSignature + '\n' + graphPlan.key : baseSignature;
+      // Interpreted structures share one shader key, so a structure-set change
+      // reuses the installed variant and only uploads programs.
+      const signature = graphShaderKey(graphPlan) ? baseSignature + '\n' + graphShaderKey(graphPlan) : baseSignature;
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
@@ -1032,7 +1034,7 @@ class WGPURayTracePass {
 
   /** Runs only for a ready variant, without yielding, so tracing can start in this call. */
   private _installTraceVariant(variant: TraceVariant, pipelineInputs: string) {
-    if (variant.graphKey === this.graphs.requested.key && this.graphs.active.key !== variant.graphKey) {
+    if (variant.graphKey === graphShaderKey(this.graphs.requested) && this.graphs.active.key !== this.graphs.requested.key) {
       this.graphs.compilation={sourceBytes:variant.diagnostics.sourceBytes,sourceGenerationTimeMs:variant.diagnostics.sourceGenerationTimeMs,moduleCreationTimeMs:variant.diagnostics.moduleCreationTimeMs,totalTimeMs:variant.diagnostics.totalTimeMs};
       this.graphs.install(this.graphs.requested,this.graphs.revision);
       this._emissiveTriangles=this._collectEmissiveTriangles();
@@ -1101,7 +1103,7 @@ class WGPURayTracePass {
       startedAtMs: 0, concurrentCompilationCount: 1
     };
     const variant: TraceVariant = {
-      graphKey: shader.graphPlan.key, graphRevision: this.graphs.revision, baseSignature: shader.baseSignature,
+      graphKey: graphShaderKey(shader.graphPlan), graphRevision: this.graphs.revision, baseSignature: shader.baseSignature,
       status: 'pending', capabilities: shader.capabilities, structureKey: shader.structureKey,
       settled: undefined!,
       diagnostics: {
@@ -1116,7 +1118,7 @@ class WGPURayTracePass {
       startedAt = shaderCompilationNow();
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
-      const moduleKey = JSON.stringify([shader.graphPlan.key, causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
+      const moduleKey = JSON.stringify([graphShaderKey(shader.graphPlan), causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
         bake && pipelineConstantsKeys.map((key) => constants[key])]);
       let source = this._traceModules.get(moduleKey);

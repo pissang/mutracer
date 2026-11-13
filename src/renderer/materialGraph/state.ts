@@ -5,6 +5,8 @@ import {SlotTextures} from './slotTextures.js';
 import {flattenGraphUnchecked} from './flatten.js';
 import {graphContextDiagnostics} from './context.js';
 import {graphTerminals} from './ir.js';
+import {terminalTypes} from './nodes.js';
+import {buildGraphProgram, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
 import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
 import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
@@ -14,14 +16,33 @@ import { MATERIAL_FLOAT_COUNT, materialLayoutFields } from '../materialLayoutSch
 const alphaModeOffset = materialLayoutFields().find(field => field.name === 'alphaMode')!.offset / 4;
 const emissionOffset = materialLayoutFields().find(field => field.name === 'emission')!.offset / 4;
 const padding = materialLayoutFields().find(field => field.name === '_padding1')!.offset / 4;
+// Interpreter records: a header vec4 and three operand vec4 rows of one material record.
+const programRows = ['color', 'emission', 'specularColor', 'transmissionColor'].map(name => materialLayoutFields().find(field => field.name === name)!.offset / 4);
+/** Graph evaluation tier. `interpreter` runs every structure that fits the fixed
+ * register file on the shared interpreter; others stay specialized. Internal
+ * switch for measurement until a planner chooses per structure. */
+export type MaterialGraphTier = 'specialized' | 'interpreter';
+let graphTier: MaterialGraphTier = 'specialized';
+export function setMaterialGraphTier(tier: MaterialGraphTier) { graphTier = tier; }
+export const GRAPH_INTERPRETER_KEY = 'mx-interpreter-1';
+/** Plans without a tier split (older snapshots, tests) are fully specialized. */
+export const graphShaderKey = (plan: GraphPlan) => plan.shaderKey ?? plan.key;
 export interface GraphPlan {
     key: string;
+    /** Shader identity: specialized structure keys plus the interpreter's terminal set. */
+    shaderKey?: string;
     materials?: readonly OpenPBRMaterial[];
     graphs: (NormalizedGraph | undefined)[];
     structures: NormalizedGraph[];
+    /** Structures compiled to `mx_eval_N`, in ID order. */
+    specialized?: NormalizedGraph[];
+    /** Interpreted structures by key. */
+    programs?: ReadonlyMap<string, GraphProgram>;
+    /** Terminals written by interpreted structures. */
+    interpreterTerminals?: string[];
     slots?: ReadonlyMap<OpenPBRMaterial, OpenPBRMaterial>;
 }
-const empty = (): GraphPlan => ({ key: '', graphs: [], structures: [] });
+const empty = (): GraphPlan => ({ key: '', shaderKey: '', graphs: [], structures: [], specialized: [], programs: new Map(), interpreterTerminals: [] });
 export interface MaterialGraphCompilationState {
     /** Engine-wide graph request counter, initially zero; independent of MaterialGraph.revision. */ revision: number;
     /** Latest fully valid engine-wide installed request, initially zero. Failed requests may install valid materials without advancing it. */ installedRevision: number;
@@ -65,6 +86,12 @@ export class MaterialGraphState {
         revision: number | undefined;
     }[] = [];
     private materials: OpenPBRMaterial[] = [];
+    private programCache = new Map<string, GraphProgramResult>();
+    private program(graph: NormalizedGraph) {
+        let result = this.programCache.get(graph.key);
+        if (!result) this.programCache.set(graph.key, result = buildGraphProgram(flattenGraphUnchecked(graph)));
+        return result.program;
+    }
     request(materials: OpenPBRMaterial[]) {
         this.materials = materials;
         this.compileFailed = false;
@@ -108,14 +135,19 @@ export class MaterialGraphState {
         this.slotTextures.finish();
         const structures = Array.from(new Map(graphs.filter((g): g is NormalizedGraph => !!g && !!Object.keys(g.terminal).length).map(g => [g.key, g])).values()).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
         const key = structures.map(g => g.key).join('\n');
+        const programs = new Map<string, GraphProgram>();
+        if (graphTier === 'interpreter') for (const g of structures) { const program = this.program(g); if (program) programs.set(g.key, program); }
+        const specialized = structures.filter(g => !programs.has(g.key));
+        const interpreterTerminals = Object.keys(terminalTypes).filter(name => structures.some(g => programs.has(g.key) && name in g.terminal));
+        const shaderKey = [...specialized.map(g => g.key), ...(programs.size ? [`${GRAPH_INTERPRETER_KEY}:${interpreterTerminals.join(',')}`] : [])].join('\n');
         const assignmentKey = (plan: GraphPlan) => plan.graphs.map(g => g?.key ?? '').join('\n');
         const authoredChanged = (materials.some(m => !!m.graph) || this.sourceRevisions.some(item => !!item.graph)) && (materials.length !== this.sourceRevisions.length || materials.some((m, i) => m.graph !== this.sourceRevisions[i]?.graph || m.graph?.revision !== this.sourceRevisions[i]?.revision));
         this.sourceRevisions = materials.map(m => ({ graph: m.graph, revision: m.graph?.revision }));
-        if (authoredChanged || key !== this.requested.key || assignmentKey({ key, graphs, structures }) !== assignmentKey(this.requested)) {
+        if (authoredChanged || key !== this.requested.key || assignmentKey({ ...empty(), key, graphs, structures }) !== assignmentKey(this.requested)) {
             this.revision++;
             this.readyAt = performance.now() + 32;
         }
-        this.requested = { key, materials: materials.slice(), graphs, structures, slots };
+        this.requested = { key, shaderKey, materials: materials.slice(), graphs, structures, specialized, programs, interpreterTerminals, slots };
         this.diagnostics = diagnostics;
         if (key === this.active.key) {
             this.install(this.requested, this.revision);
@@ -203,7 +235,8 @@ export class MaterialGraphState {
         }
         if (!this.active.key)
             return buffer;
-        const chunks: number[][] = [];
+        const chunks: ArrayLike<number>[] = [];
+        const interpreted: [number, string][] = [];
         const activeGraphs = new Map((this.active.materials ?? []).map((m,i) => [m,this.active.graphs[i]]));
         for (let i = 0; i < this.materials.length; i++) {
             if(this.constantFallback.has(this.materials[i]))continue;
@@ -218,13 +251,31 @@ export class MaterialGraphState {
                 unknown,
                 ...unknown[]
             ] = [this.materials[i].emissionColor, this.materials[i].emissionLuminance, ...generated.parameters];
-            buffer[i * MATERIAL_FLOAT_COUNT + padding] = this.active.structures.findIndex(g => g.key === graph.key) + 1;
+            if (this.active.programs?.has(graph.key)) interpreted.push([i, graph.key]);
+            else buffer[i * MATERIAL_FLOAT_COUNT + padding] = (this.active.specialized ?? this.active.structures).findIndex(g => g.key === graph.key) + 1;
             buffer[i * MATERIAL_FLOAT_COUNT + padding + 1] = buffer.length / MATERIAL_FLOAT_COUNT + chunks.length;
             for (const param of params) {
                 const values = param instanceof Texture ? [textures.indexOf(param)] : Array.isArray(param) ? param : [param === undefined ? -1 : param === 'world' ? 1 : param === '' ? -1 : typeof param === 'string' ? 0 : Number(param)];
                 chunks.push(values as number[]);
             }
         }
+        // Programs follow the parameter records; materials address their structure's
+        // header record with a negative topology ID.
+        const headers = new Map<string, number>();
+        for (const [key, program] of this.active.programs ?? []) {
+            headers.set(key, buffer.length / MATERIAL_FLOAT_COUNT + chunks.length);
+            const entries = [program.surface, program.opacity, program.emission];
+            const header = new Float32Array(MATERIAL_FLOAT_COUNT), [low, high] = graphTerminalMask(program.surface.terminals);
+            header.set([...entries.map(e => e.instructions.length / GRAPH_INSTRUCTION_FLOATS), low], programRows[0]);
+            header[programRows[1]] = high;
+            chunks.push(header);
+            for (const entry of entries) for (let at = 0; at < entry.instructions.length; at += GRAPH_INSTRUCTION_FLOATS) {
+                const record = new Float32Array(MATERIAL_FLOAT_COUNT);
+                programRows.forEach((row, r) => record.set(entry.instructions.slice(at + r * 4, at + r * 4 + 4), row));
+                chunks.push(record);
+            }
+        }
+        for (const [i, key] of interpreted) buffer[i * MATERIAL_FLOAT_COUNT + padding] = -headers.get(key)!;
         const packed = new Float32Array(buffer.length + chunks.length * MATERIAL_FLOAT_COUNT);
         packed.set(buffer);
         chunks.forEach((chunk, i) => packed.set(chunk, buffer.length + i * MATERIAL_FLOAT_COUNT));
