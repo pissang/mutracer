@@ -5,7 +5,7 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
-`new Engine({canvas?, backend?, device?, textureBinding?})` manages the device and one GPU
+`new Engine({canvas?, backend?, device?, textureBinding?, shaderPrefetch?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
 
@@ -15,6 +15,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
 | `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
 | `textureBinding` | `'atlas'` | Constructor-only; `'auto'` tries experimental WebGPU bindless textures, with atlas fallback; see [texture bindings](#texture-bindings) |
+| `shaderPrefetch` | `'off'` | Constructor-only; `'editing'` prepares every material lobe in the background for interactive material editing; see [editing prefetch](./updates.md#editing-prefetch) |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
 | `bvhWorkerCount` | `'auto'` | Hardware concurrency minus one, clamped 1–4; or positive integer |
 | `bvhLayout` | `'bvh2'` | Static TinyBVH layout; see [BVH](./bvh.md) |

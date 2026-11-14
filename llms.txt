@@ -15,6 +15,7 @@
 - Batch settings: `Object.assign(render, settings)` / `Object.assign(engine.display, settings)` with `RenderSettings` / `DisplaySettings`; constructor options configure Render. [Defaults](docs/api.md).
 - Ownership: Engine owns shared scene/device/BVH/atlas; Display owns tone mapping, bloom, HDR and channel; Render owns resolution, quality, samples, fallback and denoiser. `transmissiveOutputAlphaMin` is a Render option; [API](docs/api.md).
 - Initialization: optional `await engine.init()` gives backend, adapter and limits; `backend: 'auto'` defaults to WebGPU with WebGL fallback. `webgpu` requires WebGPU and `webgl` forces WebGL 2.
+- Material editors: `new Engine({shaderPrefetch:'editing'})` prepares every lobe in the background so lobe edits skip WebGPU compiles; [editing prefetch](docs/updates.md#editing-prefetch).
 - Texture bindings: `new Engine({textureBinding:'auto'})` tries experimental WebGPU bindless textures with atlas fallback; default `'atlas'`. [Requirements and budget](docs/api.md#texture-bindings).
 - UDIM: create `UdimTexture` from loaded RGBA tiles; missing cells are transparent black and Three.js/glTF do not expand `<UDIM>` paths. [Behavior and cost](docs/materials.md#udim-textures).
 - Status: each render exposes `status`, `samples` and `converged`; statuses are preparing, compiling, converging, denoising, finished and error. The first layer leaves frame selection/UI status to the application.

@@ -107,13 +107,18 @@ interface RunOptions {
   /** Longest wait for the policy to settle. Default 60000. */ settleMs?: number;
   /** Structural edits, one per `editIntervalMs`, after the first correct frame; each replaces one material's
    * graph with an unseen structure, alternating the simple and noise classes (new opcode families). Default 0. */ edits?: number; editIntervalMs?: number;
-  /** `parameter` edits change only parameter values of the same structure. Default structure. */ editKind?: 'structure' | 'parameter';
+  /** `parameter` edits change only parameter values of the same structure; `lobe` edits switch the first
+   * material to another lobe each time (coat, fuzz, thin film, transmission, subsurface, anisotropy), as
+   * switching material presets does. Default structure. */ editKind?: 'structure' | 'parameter' | 'lobe';
+  /** Engine `shaderPrefetch`. Default off. */ shaderPrefetch?: 'off' | 'editing';
+  /** Lobe sequence of `lobe` edits. Default coat, fuzz, thinfilm, transmission, subsurface, anisotropy. */ lobeOrder?: string[];
   /** Debug compile speed factor (slow device simulation). */ compileSpeed?: number;
   /** Debug compile-cost shape, e.g. 'd3d12' on a Mac. */ compileBackend?: GraphCompilerBackend;
   policy?: Partial<GraphTierPolicy>;
   /** `full` adds a row of spheres whose constant materials enable every surface lobe (coat, fuzz,
    * thin film, subsurface, transmission), anisotropy directions and emission, so the base kernel
-   * compiles with all of them. Default `lean`. */ features?: 'lean' | 'full';
+   * compiles with all of them; a comma list of lobe names (coat, fuzz, thinfilm, subsurface, transmission,
+   * medium, anisotropy, emission) enables them with hidden spheres. Default `lean`. */ features?: string;
   /** Viewer MaterialX sample ids (`viewer/src/assets/materialx/<id>.mtlx`) used as the graph materials
    * instead of generated structures; `structures` is ignored. Constant mode keeps only their values. */ mtlx?: string[];
   /** Apply the samples' constant values (lobe weights) as well as their graphs. Default true. */ mtlxValues?: boolean;
@@ -136,7 +141,7 @@ async function run(options: RunOptions) {
     policy: {...options.policy, ...probePolicy},
     onInstall: event => installs.push(event), onUpgrade: event => upgrades.push(event), onCompile: event => { compiles.push(event); compiledAt.push(performance.now()); }});
   const graphs = mode === 'graph' || mode === 'interpreter' || mode === 'auto';
-  const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding});
+  const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgpu', textureBinding, shaderPrefetch: options.shaderPrefetch});
   engine.display.setSize(WIDTH, HEIGHT); engine.bvhBuilder = 'builtin';
   const prepareStart = performance.now();
   const indices = structures(count, graphClass, firstIndex);
@@ -156,6 +161,19 @@ async function run(options: RunOptions) {
   const fallback = new OpenPBRMaterial({baseColor: [0.6, 0.6, 0.6], specularRoughness: 0.5});
   const complex = options.sceneUrl ? await gltfScene(engine, options.sceneUrl, materials.length ? materials : [fallback]) : undefined;
   const sphere = createSphereGeometry(32, 16), meshes: Mesh[] = [];
+  // `full` places visible spheres for compile tests. A list of lobe names hides tiny spheres
+  // under the floor: no ray reaches them, so only the compiled kernel changes.
+  const lobes: Record<string, Record<string, number>> = {coat: {coatWeight: 1}, fuzz: {fuzzWeight: 1}, thinfilm: {thinFilmWeight: 1, thinFilmThickness: 0.5},
+    subsurface: {subsurfaceWeight: 1}, transmission: {transmissionWeight: 1}, medium: {transmissionWeight: 1, transmissionDepth: 1},
+    anisotropy: {specularAnisotropy: 0.6, specularAnisotropyRotation: 0.25}, emission: {emissionLuminance: 5}};
+  const full = options.features === 'full', named = !full && options.features && options.features !== 'lean' ? options.features.split(',') : [];
+  const featureMeshes: Mesh[] = [];
+  (full ? ['coat', 'fuzz', 'thinfilm', 'subsurface', 'medium', 'anisotropy', 'emission'] : named).forEach((name, i) => {
+    if (!lobes[name]) throw Error(`unknown feature ${name}`);
+    const mesh = new Mesh(sphere, new OpenPBRMaterial({baseColor: [0.8, 0.6, 0.4], specularRoughness: 0.4, ...lobes[name]}));
+    mesh.transform[0] = mesh.transform[5] = mesh.transform[10] = full ? 0.45 : 0.001;
+    mesh.transform[12] = i - 3; mesh.transform[13] = full ? 0 : -1000; mesh.transform[14] = GRID / 2 + 1; featureMeshes.push(mesh);
+  });
   if (!complex) {
   for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
     const mesh = new Mesh(sphere, materials.length ? materials[(z * GRID + x) % materials.length] : fallback);
@@ -163,15 +181,7 @@ async function run(options: RunOptions) {
     mesh.transform[12] = x - (GRID - 1) / 2; mesh.transform[14] = z - (GRID - 1) / 2; meshes.push(mesh);
   }
   const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial({baseColor: [0.7, 0.7, 0.7], specularRoughness: 0.8}));
-  floor.transform[0] = floor.transform[10] = GRID * 1.5; floor.transform[13] = -0.45; meshes.push(floor);
-  if (options.features === 'full') [
-    {coatWeight: 1}, {fuzzWeight: 1}, {thinFilmWeight: 1, thinFilmThickness: 0.5}, {subsurfaceWeight: 1},
-    {transmissionWeight: 1, transmissionDepth: 1}, {specularAnisotropy: 0.6, specularAnisotropyRotation: 0.25}, {emissionLuminance: 5}
-  ].forEach((values, i) => {
-    const mesh = new Mesh(sphere, new OpenPBRMaterial({baseColor: [0.8, 0.6, 0.4], specularRoughness: 0.4, ...values}));
-    mesh.transform[0] = mesh.transform[5] = mesh.transform[10] = 0.45;
-    mesh.transform[12] = i - 3; mesh.transform[14] = GRID / 2 + 1; meshes.push(mesh);
-  });
+  floor.transform[0] = floor.transform[10] = GRID * 1.5; floor.transform[13] = -0.45; meshes.push(floor, ...featureMeshes);
   const light = new SphereLight({radius: 3, intensity: 400}); light.position = [-8, 20, 10];
   engine.scene = {meshes, lights: [new AmbientLight({intensity: 0.3}), light], background: [0.7, 0.8, 1, 1]};
   const camera = new Camera({projection: 'perspective', fov: 40});
@@ -179,7 +189,7 @@ async function run(options: RunOptions) {
   if (options.closeUp) { camera.position = [-15.5, 1.2, -13.0]; camera.lookAt([-15.5, 0, -15.5]); }
   else { camera.position = [0, 22, 26]; camera.lookAt([0, 0, -1]); }
   engine.camera = camera;
-  }
+  } else if (featureMeshes.length) engine.scene = {...engine.scene!, meshes: [...engine.scene!.meshes, ...featureMeshes]};
   const render = new Render(engine, {bounces: 6, directLightCandidates: 1, samplingPattern: 'sobol', maxSamples: 64, denoiser: null});
   const prepareMs = performance.now() - prepareStart;
   try {
@@ -240,7 +250,7 @@ async function run(options: RunOptions) {
     const edits: {atMs: number; readyMs?: number; installs: number; shaderKeyChanged: boolean; compiledKB?: number}[] = [];
     // Settled: the last decision is final, or the gate refused under the render target.
     const settled = (since: number) => { const last = upgrades.at(-1); return !!last && (['keep', 'rollback', 'failed', 'skip'].includes(last.type) || last.type === 'hold' && last.at >= since && last.maxSamples === render.maxSamples); };
-    if (graphs && count && options.edits) {
+    if (graphs && count && options.edits && options.editKind !== 'lobe') {
       let next = firstIndex + 700000;
       for (let e = 0; e < options.edits; e++) {
         const editClass: GraphClass = e % 2 ? 'noise' : 'simple';
@@ -260,6 +270,31 @@ async function run(options: RunOptions) {
         edits.push({atMs: editStart - start, readyMs, installs: installs.length - installed, shaderKeyChanged: installs.at(-1)?.shaderKey !== key,
           compiledKB: compiles.length > compiled ? compiles.slice(compiled).reduce((n, c) => n + c.totalBytes / 1024, 0) : undefined});
       }
+    }
+    // Lobe edits: time to the first sample after each edit (waits for any compile it needs), then
+    // GPU time right after the edits (editing variant when prefetched) and after the scene settles.
+    let lobeEdits: {lobe: string; readyMs: number}[] | undefined, lobeGpu: {afterEdits?: number; settled?: number} | undefined;
+    if (options.editKind === 'lobe' && options.edits) {
+      const sampleGpu = async (n: number) => { const t: number[] = []; for (let i = 0; i < n; i++) { render.refine(); await pause(); if (render.gpuSampleTimeMs !== undefined) t.push(render.gpuSampleTimeMs); } return median(t); };
+      const target = materials[0] ?? fallback, order = options.lobeOrder ?? ['coat', 'fuzz', 'thinfilm', 'transmission', 'subsurface', 'anisotropy'];
+      const reset = {coatWeight: 0, fuzzWeight: 0, thinFilmWeight: 0, transmissionWeight: 0, transmissionDepth: 0, subsurfaceWeight: 0, specularAnisotropy: 0, specularAnisotropyRotation: 0};
+      render.maxSamples = 1e6;
+      for (const end = performance.now() + 5000; performance.now() < end;) { render.refine(); await pause(); }
+      lobeEdits = [];
+      for (let e = 0; e < options.edits; e++) {
+        const lobe = order[e % order.length];
+        Object.assign(target, reset, lobes[lobe]); const u0 = performance.now(); engine.update(); const updateMs = performance.now() - u0;
+        const shader = () => { const c = engine.getDiagnostics()?.shaderCompilation; return `${c?.modules?.[0]?.sourceFingerprint}:${c?.pipelineCompilationTimeMs}`; };
+        const t = performance.now(), before = shader(); render.restart();
+        await render.converge({samples: 1, sampleSequenceOffset: 0, timeoutMs: 900000});
+        const after = engine.getDiagnostics()?.shaderCompilation;
+        lobeEdits.push({lobe, pipes: (after?.pipelines ?? []).map(p => `${p.label}:${p.status}:${Math.round(p.durationMs ?? -1)}`).join('|'), readyMs: performance.now() - t, updateMs: Math.round(updateMs), compiled: shader() !== before ? Math.round(after?.pipelineCompilationTimeMs ?? 0) : undefined} as {lobe: string; readyMs: number});
+        render.maxSamples = 1e6;
+        for (const end = performance.now() + (options.editIntervalMs ?? 1000); performance.now() < end;) { render.refine(); await pause(); }
+      }
+      lobeGpu = {afterEdits: await sampleGpu(20)};
+      for (const end = performance.now() + 8000; performance.now() < end;) { render.refine(); await pause(); }
+      lobeGpu.settled = await sampleGpu(20);
     }
     // Let the tier policy decide on an upgrade for a render of `targetSamples` (auto mode).
     const settleStart = performance.now();
@@ -326,7 +361,7 @@ async function run(options: RunOptions) {
       swap = {readyMs, optimizedMs, firstFrameMs: performance.now() - swapStart, pipelineMs: compiled?.pipelineCompilationTimeMs, sourceBytes: compiled?.sourceBytes, status: state?.status};
     }
     return {
-      swap, scene: complex?.info, edits, settleMs, settleOutcome, probe,
+      swap, scene: complex?.info, edits, lobeEdits, lobeGpu, settleMs, settleOutcome, probe,
       upgrades: upgrades.map(e => ({...e, atMs: e.at - start, key: undefined})),
       compiles: compiles.map(c => ({totalKB: c.totalBytes / 1024, specializedKB: c.specializedBytes / 1024, interpreterKB: c.interpreterBytes / 1024, ms: c.ms, overlapMs: c.overlapMs, kind: c.kind, referenceMs: c.referenceMs, ratio: c.ratio, speed: c.speed, specializedFactor: c.specializedFactor})),
       structures: count, mode, graphClass, firstIndex, bakeSize: mode === 'baked' ? bakeSize : undefined, width: WIDTH, height: HEIGHT, spheres: GRID * GRID,

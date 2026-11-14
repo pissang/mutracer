@@ -32,6 +32,8 @@ const {values} = parseArgs({options: {
   policy: {type: 'string'},
   features: {type: 'string', default: 'lean'},
   mtlx: {type: 'string'},
+  'shader-prefetch': {type: 'string'},
+  'lobe-order': {type: 'string'},
   'mtlx-no-values': {type: 'boolean', default: false},
   repeats: {type: 'string', default: '1'},
   'scene-gltf': {type: 'string'},
@@ -48,7 +50,7 @@ if (values.help) {
   --no-interim  --budget-ms 1000   fixed planner budgets instead of the calibrated policy
   --target-samples 2048      render target while the tier policy decides (auto)
   --settle-ms 60000          longest wait for the policy decision (auto); rows report settleOutcome
-  --edits 10 --edit-interval-ms 1000 --edit-kind structure|parameter   edit simulation
+  --edits 10 --edit-interval-ms 1000 --edit-kind structure|parameter|lobe   edit simulation
   --compile-speed 3          debug device compile speed factor (simulates a slower compiler)
   --compile-backend d3d12    debug compile-cost shape of another backend
   --probe contended|solo --probe-delay-ms 1000   concurrency probe: an edit needing a compile during (or without) a long upgrade compile
@@ -56,7 +58,9 @@ if (values.help) {
   --hdr --hdr-block 8 --close-up --first-index 0 --swap
   --output rows.jsonl        full rows (calibration samples, upgrade events, edits, timings)
   --mtlx wood,marble         viewer MaterialX samples as the graph materials (--mtlx-no-values: graphs only)
-  --features lean|full       full adds spheres enabling every surface lobe, anisotropy and emission
+  --shader-prefetch off|editing   Engine shaderPrefetch
+  --lobe-order coat,fuzz,...      lobe sequence of --edit-kind lobe
+  --features lean|full|coat,fuzz,...   full: visible spheres with every lobe; a list: hidden spheres enabling those lobes
 Environment: MUTRACER_CHROME=path to Chrome when it is not in the default location.`);
   process.exit(0);
 }
@@ -87,7 +91,7 @@ try {
         for (let i = 0; i < 300; i++) { if (await page.tab.evaluate('typeof window.runMaterialGraphScaling === "function"')) break; await delay(100); }
         const number = name => values[name] === undefined ? undefined : Number(values[name]);
         const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl, interim: !values['no-interim'], budgetMs: number('budget-ms'),
-          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), features: values.features, mtlx: values.mtlx?.split(','), mtlxValues: !values['mtlx-no-values'], compileBackend: values['compile-backend'], probe: values.probe, probeDelayMs: number('probe-delay-ms'), policy: values.policy ? JSON.parse(values.policy) : undefined};
+          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), features: values.features, shaderPrefetch: values['shader-prefetch'], lobeOrder: values['lobe-order']?.split(','), mtlx: values.mtlx?.split(','), mtlxValues: !values['mtlx-no-values'], compileBackend: values['compile-backend'], probe: values.probe, probeDelayMs: number('probe-delay-ms'), policy: values.policy ? JSON.parse(values.policy) : undefined};
         let row;
         try { row = await page.tab.evaluate(`runMaterialGraphScaling(${JSON.stringify(options)})`); }
         catch (error) { row = {...options, error: String(error).slice(0, 2000)}; }
@@ -99,7 +103,7 @@ try {
           probe: row.probe && {upgradeStart: Math.round(row.probe.upgradeStartMs ?? -1), editAt: Math.round(row.probe.editAtMs), editReady: row.probe.editReadyMs === undefined ? 'timeout' : Math.round(row.probe.editReadyMs),
             editCompile: row.probe.editCompile && `${Math.round(row.probe.editCompile.ms)}ms overlap ${Math.round(row.probe.editCompile.overlapMs)} done@${Math.round(row.probe.editCompile.finishedMs)}`,
             upgradeCompile: row.probe.upgradeCompile && `${Math.round(row.probe.upgradeCompile.ms)}ms done@${Math.round(row.probe.upgradeCompile.finishedMs)}`},
-          edits: row.edits?.length ? row.edits.map(e => `${e.readyMs === undefined ? 'timeout' : Math.round(e.readyMs)}${e.compiledKB ? 'c' : ''}`).join(' ') : undefined, error: row.error}));
+          lobeEdits: row.lobeEdits?.map(e => `${e.lobe}:${e.updateMs}+${Math.round(e.readyMs)}${e.compiled !== undefined ? 'c' + e.compiled : ''}`).join(' '), lobeGpu: row.lobeGpu, edits: row.edits?.length ? row.edits.map(e => `${e.readyMs === undefined ? 'timeout' : Math.round(e.readyMs)}${e.compiledKB ? 'c' : ''}`).join(' ') : undefined, error: row.error}));
         if (values.output) appendFileSync(resolve(values.output), JSON.stringify(row) + '\n');
       } finally { await page.close(); }
     } finally { await chrome.close(); }

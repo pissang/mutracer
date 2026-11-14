@@ -57,6 +57,7 @@ export interface EngineParams {
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
   /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
   /** Material texture bindings. Default atlas; auto tries WebGPU bindless textures and falls back to atlas when unavailable. Fixed at construction. */ textureBinding?: 'atlas' | 'auto';
+  /** WebGPU shader prefetch for interactive material editing. `editing` compiles a variant with every material lobe in the background, so a later edit that enables another lobe renders without waiting for a compile; once the scene settles, the lean variant replaces it. Costs background compiles and, until then, slower sampling. Default off. Fixed at construction. */ shaderPrefetch?: 'off' | 'editing';
 }
 /** Material-atlas device limits. */
 export interface TextureAtlasLimits { maxTextureArrayLayers: number; maxTextureDimension2D: number; }
@@ -153,6 +154,7 @@ export default class Engine {
   private _webglAdapterName?: string;
   private _backendChoice: NonNullable<EngineParams['backend']>;
   private readonly _textureBinding: 'atlas' | 'auto';
+  private readonly _shaderPrefetch: 'off' | 'editing';
   private _initPromise?: Promise<EngineInfo>;
   private _info?: EngineInfo;
   private _pipelineInitError?: Error;
@@ -199,6 +201,7 @@ export default class Engine {
     if (params.device && params.backend === 'webgl') throw new Error('A supplied GPUDevice cannot use the webgl backend.');
     this._suppliedDevice = params.device;
     this._textureBinding = params.textureBinding ?? 'atlas';
+    this._shaderPrefetch = params.shaderPrefetch ?? 'off';
     this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
     this._sceneChangeDetector = new SceneChangeDetector();
@@ -440,7 +443,7 @@ export default class Engine {
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderTargets(this.display.canvas, gpuDevice, {
-            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm', materialTextures
+            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm', materialTextures, shaderPrefetch: this._shaderPrefetch
           });
           this._watchDevice(gpuDevice);
           gpuCreated = true;

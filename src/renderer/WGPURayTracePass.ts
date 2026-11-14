@@ -81,10 +81,11 @@ import {MaterialChangeTracker, type MaterialUpdateLevel} from './materialChanges
 import {WGPUEnvMapDistribution} from './WGPUEnvMapDistribution.js';
 import {WGPUShaderCache, retainedShaderCapacity} from './WGPUShaderCache.js';
 import {WGPUShaderCapabilities} from './WGPUShaderCapabilities.js';
-import {wgpuSceneFeatureFlags} from './WGPUSceneFeatures.js';
+import {wgpuSceneFeatureFlags, WGPU_SCENE_FEATURE_BITS} from './WGPUSceneFeatures.js';
 import {
   lightShaderCapabilities,
   retainedShaderCapabilities,
+  ALL_MATERIAL_SHADER_CAPABILITIES,
   type ShaderCapabilities
 } from './shaderCapabilities.js';
 import {mat4} from '../math.js';
@@ -205,6 +206,23 @@ interface TraceVariant {
 const MAX_TRACE_VARIANTS = 32;
 // Requests are cheap but drivers are not, and a running compilation cannot be cancelled.
 const MAX_CONCURRENT_COMPILES = 2;
+/** Structure flags the editing variant enables. Each only adds code that per-material data
+ * gates, so scenes without the feature render the same through it. */
+const EDITING_STRUCTURE = {HAS_MEDIUM: true, USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true};
+const EDITING_SCENE_CAPABILITIES = WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ |
+  WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM | WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE;
+const editingShaderCapabilities = (required: ShaderCapabilities): ShaderCapabilities => ({
+  SCENE_CAPABILITIES: required.SCENE_CAPABILITIES | EDITING_SCENE_CAPABILITIES,
+  MATERIAL_CAPABILITIES: required.MATERIAL_CAPABILITIES | ALL_MATERIAL_SHADER_CAPABILITIES,
+  LIGHT_CAPABILITIES: required.LIGHT_CAPABILITIES
+});
+/** Scene stability before the lean variant replacing the editing variant compiles. */
+const EDITING_SETTLE_MS = 2000;
+interface TraceRequest {
+  constants: Record<string, boolean | number>; hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string;
+  pipelineConstantsKeys: string[]; structureKey: string; capabilities: ShaderCapabilities; baseSignature: string;
+  signature: string; graphPlan: GraphPlan; fallbackSignature: string;
+}
 /** Background compiles (gated upgrades, the editing-interpreter prefetch) leave this many
  * slots to compiles that render an edit correctly, which never wait behind them. */
 const EDIT_RESERVED_COMPILES = 1;
@@ -278,6 +296,12 @@ class WGPURayTracePass {
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _graphs?: MaterialGraphState;
+  /** Editing prefetch: after a variant installs, compile a variant with every lobe in the
+   * background, so a later material edit that needs another lobe installs without waiting.
+   * Default off. */
+  shaderPrefetch: 'off' | 'editing' = 'off';
+  private _editingRequest?: TraceRequest;
+  private _leanRequest?: TraceRequest & {since: number};
   get graphs() {
     if (!this._graphs) {
       this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes);
@@ -979,57 +1003,83 @@ class WGPURayTracePass {
           this._updateBindGroups();
         }
         this._requestedVariant = this._activeVariant;
+        this._maintainShaderPrefetch();
         return;
       }
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(graphConstants);
-      const requiredCapabilities = retainedShaderCapabilities(graphConstants);
-      const constants: Record<string, boolean | number> = {...graphConstants, ...requiredCapabilities};
-      const hasAlpha =
-        Boolean(constants.HAS_ALPHA_BLEND) && this._alphaBlendStrategy === 'deterministic-source-over';
-      const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
-      const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
-      const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
-      const structure = {
-        shareSpectralPrefix: Boolean(constants.SPECTRAL) && this._shareSpectralPrefix,
-        hasDisplacement: this._hasDisplacement,
-        caustics: this._causticKey,
-        bindless: !!this._bindless,
-        hasAlpha,
-        hasSceneAlpha,
-        hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-        hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-        blasLayoutMask: this._blasLayoutMask,
-        bakePipelineConstants: this._bakePipelineConstants
-      };
-      const structureKey = JSON.stringify({
-        graph: graphShaderKey(graphPlan),
-        ...structure,
-        defineCode,
-        constants: pipelineConstantsKeys
-          .filter((key) => !(key in requiredCapabilities))
-          .map((key) => [key, constants[key]])
-      });
-      // Prefer an existing compatible pipeline, including an earlier lean
-      // variant. Only grow the current variant when it cannot cover an edit;
-      // do not carry unused capabilities across different transport/layouts.
-      const capabilities =
-        this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
-        retainedShaderCapabilities(
-          graphConstants,
-          structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
-        );
-      Object.assign(constants, capabilities);
-      // Runtime feature values live in uniforms, so edits can share a pipeline
-      // as long as its compiled defines and overrides are the same.
-      const baseSignature = JSON.stringify({
-        ...structure,
-        defineCode,
-        constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
-      });
       const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
-      // Interpreted structures share one shader key, so a structure-set change
-      // reuses the installed variant and only uploads programs.
-      const signature = graphShaderKey(graphPlan) ? baseSignature + '\n' + graphShaderKey(graphPlan) : baseSignature;
+      // A variant request: lean (what the scene needs) or, with editing prefetch, the
+      // editing variant that also enables every lobe and code-adding structure flag.
+      const request = (editing: boolean, plan = graphPlan) => {
+        const planConstants = plan === graphPlan ? graphConstants : materialGraphConstants(this._constants, plan, this._preparedMeshData?.geometry);
+        const source = editing ? {...planConstants, ...EDITING_STRUCTURE} : planConstants;
+        const requiredCapabilities = retainedShaderCapabilities(source);
+        const constants: Record<string, boolean | number> = {...source, ...requiredCapabilities};
+        const hasAlpha =
+          Boolean(constants.HAS_ALPHA_BLEND) && this._alphaBlendStrategy === 'deterministic-source-over';
+        const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
+        const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
+        const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
+        const structure = {
+          shareSpectralPrefix: Boolean(constants.SPECTRAL) && this._shareSpectralPrefix,
+          hasDisplacement: this._hasDisplacement,
+          caustics: this._causticKey,
+          bindless: !!this._bindless,
+          hasAlpha,
+          hasSceneAlpha,
+          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+          blasLayoutMask: this._blasLayoutMask,
+          bakePipelineConstants: this._bakePipelineConstants
+        };
+        const structureKey = JSON.stringify({
+          graph: graphShaderKey(plan),
+          ...structure,
+          defineCode,
+          constants: pipelineConstantsKeys
+            .filter((key) => !(key in requiredCapabilities))
+            .map((key) => [key, constants[key]])
+        });
+        // Prefer an existing compatible pipeline, including an earlier lean
+        // variant. Only grow the current variant when it cannot cover an edit;
+        // do not carry unused capabilities across different transport/layouts.
+        const capabilities = editing ? editingShaderCapabilities(requiredCapabilities) :
+          this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
+          retainedShaderCapabilities(
+            graphConstants,
+            structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
+          );
+        Object.assign(constants, capabilities);
+        // Runtime feature values live in uniforms, so edits can share a pipeline
+        // as long as its compiled defines and overrides are the same.
+        const baseSignature = JSON.stringify({
+          ...structure,
+          defineCode,
+          constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
+        });
+        // Interpreted structures share one shader key, so a structure-set change
+        // reuses the installed variant and only uploads programs.
+        const signature = graphShaderKey(plan) ? baseSignature + '\n' + graphShaderKey(plan) : baseSignature;
+        return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature};
+      };
+      const lean = request(false);
+      let chosen = lean;
+      if (this.shaderPrefetch === 'editing') {
+        // An edit that needs a variant not compiled yet uses the prefetched editing
+        // variant at once; the lean variant compiles after the scene settles.
+        // With material graphs the editing variant carries the graph editing interpreter,
+        // so one background compile covers lobe and graph structure edits.
+        const editingPlan = this.graphs.editingPlan() ?? graphPlan;
+        const editing = request(true, editingPlan);
+        this._editingRequest = editing.signature === lean.signature ? undefined : {...editing, graphPlan: editingPlan, fallbackSignature};
+        // It can serve only the graph shader the graph state installs.
+        if (this._editingRequest && graphShaderKey(editingPlan) === graphShaderKey(graphPlan) &&
+          this._traceVariants.get(lean.signature)?.status !== 'ready' && this._traceVariants.get(editing.signature)?.status === 'ready') {
+          chosen = editing;
+          this._leanRequest = {...lean, graphPlan, fallbackSignature, since: performance.now()};
+        }
+      }
+      const {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature} = chosen;
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
@@ -1055,16 +1105,44 @@ class WGPURayTracePass {
       // Background compile of the editing interpreter (see MaterialGraphState.prefetch).
       const prefetch = this.graphs.prefetch(this._activeCompiles + this._queuedCompiles.length);
       if (prefetch && JSON.stringify(materialGraphConstants(this._constants, prefetch, this._preparedMeshData?.geometry)) === JSON.stringify(graphConstants)) {
-        const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
-        if (!this._traceVariants.has(prefetchSignature))
-          this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature,
-            structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})}, 'prefetch');
+        if (this.shaderPrefetch === 'editing') {
+          // The editing variant compiles it, with every lobe (see _maintainShaderPrefetch).
+          const editing = request(true, prefetch);
+          this._editingRequest = {...editing, graphPlan: prefetch, fallbackSignature};
+        } else {
+          const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
+          if (!this._traceVariants.has(prefetchSignature))
+            this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature,
+              structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})}, 'prefetch');
+        }
       }
+      this._maintainShaderPrefetch();
     } catch (error) {
       this._resourceError = error;
       this._needsUpdateBindGroups = true;
       console.error('Failed to update WebGPU ray tracing resources.', error);
     }
+  }
+
+  /** Editing prefetch upkeep, one background compile at a time: the lean variant once the
+   * scene has been stable for EDITING_SETTLE_MS (installed at the next update), otherwise
+   * the editing variant of the current scene. */
+  private _maintainShaderPrefetch() {
+    if (this.shaderPrefetch !== 'editing' || !this._activeVariant) return;
+    const idle = this._activeCompiles + this._queuedCompiles.length === 0;
+    const start = (r: TraceRequest) => this._startTraceVariant(r.signature, r.constants, {hasAlpha: r.hasAlpha, hasSceneAlpha: r.hasSceneAlpha,
+      defineCode: r.defineCode, pipelineConstantsKeys: r.pipelineConstantsKeys, structureKey: r.structureKey, capabilities: r.capabilities,
+      graphPlan: r.graphPlan, baseSignature: r.fallbackSignature}, 'prefetch');
+    const lean = this._leanRequest;
+    if (lean) {
+      const variant = this._traceVariants.get(lean.signature);
+      if (variant?.status === 'ready') { this._leanRequest = undefined; this._activeInputs = undefined; }
+      else if (variant?.status === 'failed') this._leanRequest = undefined;
+      else if (!variant && idle && performance.now() - lean.since >= EDITING_SETTLE_MS) start(lean);
+      return;
+    }
+    const editing = this._editingRequest;
+    if (editing && idle && !this._traceVariants.has(editing.signature)) start(editing);
   }
 
   /** Runs only for a ready variant, without yielding, so tracing can start in this call. */

@@ -580,6 +580,12 @@ export class MaterialGraphState {
         this.prefetched.set(shape.shaderKey, shape);
         return this.plan(this.base, shape);
     }
+    /** The plan of a registered editing interpreter (see `prefetch`) that covers the current
+     * structures, so another variant (an engine-level editing variant) can carry it. */
+    editingPlan(): GraphPlan | undefined {
+        for (const shape of this.prefetched.values()) if (this.fits(shape, this.base)) return this.plan(this.base, shape);
+        return undefined;
+    }
     /** The backend finished compiling the variant `shaderKey`. */
     compiled(shaderKey: string) { if (this.prefetched.has(shaderKey)) this.prefetchedReady.add(shaderKey); }
     /** Scheduling class of a compile for `plan`: `edit` renders the requested structures

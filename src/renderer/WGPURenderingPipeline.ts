@@ -96,6 +96,7 @@ out_normal[index] = vec4f(oidnSanitizeNormal(in_normal[index].rgb), 1.0);
 export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
   materialTextures?: MaterialTextureSelection;
+  shaderPrefetch?: 'off' | 'editing';
 }
 
 function createTimeQuery(device: GPUDevice) {
@@ -1904,6 +1905,7 @@ width: renderWidth, height: renderHeight,
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
   const rayTracePass = new WGPURayTracePass(device, options.materialTextures);
+  rayTracePass.shaderPrefetch = options.shaderPrefetch ?? 'off';
   const traceQueue = new GPUTraceQueue(device.queue);
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {

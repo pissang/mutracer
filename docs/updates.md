@@ -213,6 +213,24 @@ Analytic-light edits keep the environment map. Ambient and environment edits
 rebuild it. Rect-light texture edits require a full mesh update, because those
 textures live in the material atlas.
 
+### Editing prefetch
+
+Apps that let users edit materials can construct the engine with
+`shaderPrefetch: 'editing'` (WebGPU). After the first shader is ready, the engine
+compiles in the background a variant that also supports coat, fuzz, thin film,
+transmission, subsurface and media, anisotropy and coat-normal frames, and UV1
+textures. An edit that needs any of these then renders at once through that variant
+instead of waiting for a compile. Once the scene has not needed another shader
+for about two seconds of rendering, the engine compiles the variant the scene needs
+and switches back to it without restarting accumulation.
+
+The prefetch costs background compile time after loading. Until the switch back,
+sampling is slower than with the scene's own variant, and each restart can take
+longer before its first sample. Other changes in the table above, such as vertex
+tangents for anisotropy, alpha, dispersion or light types, still compile, and so does
+a material graph that connects a lobe weight (for example `transmissionWeight`) for
+the first time.
+
 ## Geometry
 
 Choose the notification that matches the edit:
