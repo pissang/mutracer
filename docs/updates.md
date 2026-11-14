@@ -215,6 +215,9 @@ textures live in the material atlas.
 
 ### Editing prefetch
 
+To compile shaders behind a loading screen, `await render.converge({samples: 1})`
+before showing the image: it waits for the shaders the committed scene needs.
+
 Apps that let users edit materials can construct the engine with
 `shaderPrefetch: 'editing'` (WebGPU). After the first shader is ready, the engine
 compiles in the background a variant that also supports coat, fuzz, thin film,
