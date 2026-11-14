@@ -97,6 +97,37 @@ The fixed register array and the operand decoding cost GPU time per evaluated
 node; the interpreter variant also costs some time on hits that do not evaluate
 a graph.
 
+### Compile cost and call sites
+
+Metal inlines every call, so each call site of the evaluator compiles another
+copy of the opcode switch and its helpers, and the cost does not follow source
+size. Graph emission is evaluated at sampled light points inside NEE as well as
+at surface hits; a second evaluator there costs about as much compile time as
+the first. Three rules keep one copy on the main path:
+
+- With the interpreter and graph emission, the browser builds a shared graph
+  site. Each integrator step calls `mx_vertex` between the ray query and the
+  material load. One loop with a runtime pass count runs the single
+  `mx_evaluate` call for every NEE candidate's light point and then the
+  surface, whose result `getMaterialPrecomputed` consumes in the same iteration.
+  A light point depends only on the light table and the candidate's random
+  numbers, so it is known before the vertex is shaded. The step passes the
+  sampling bounce its NEE will use (`depth + 1` after a completed hit, the
+  current depth otherwise), and light sampling reads the stored emission
+  (`mx_nee_lookup`); the random sampling mode also reuses the site's draws.
+  Estimator, candidates and structured random dimensions are unchanged.
+  Fully specialized variants keep the direct path: evaluating their emissive
+  structures ahead of NEE costs GPU time and saves little compile time.
+- Emission and opacity programs outside the shared site run in their own loops
+  (`mx_run_emission`, `mx_run_opacity`) limited to their programs' opcode
+  families, and only when an interpreted structure has such a program.
+- Noise helpers call `mx_perlin` from one channel loop, and the interpreter
+  evaluates noise and fractal octaves through one `mx_noise_octaves` call.
+
+The register file holds 16 values, enough for every viewer sample; it did not
+change compile time measurably. Specialized code still inlines the noise
+lattice at every noise node, which the compile model counts per node.
+
 ## Tier planner
 
 `planGraphTiers` chooses a tier per structure when a structure set is requested,
@@ -330,7 +361,8 @@ The ordinary cotangent normal path remains unchanged.
 This is an authored typed graph API, not a MaterialX XML/USD importer. Unknown
 categories, unsupported input variants and unsupported terminal semantics fail
 as whole graphs. Browser WebGPU lit emission evaluates at surface hits and
-sampled light points. `mx_emission` uses UV0/UV1, world position and the sampled
+sampled light points (through the shared graph site when the variant has the
+interpreter). `mx_emission` uses UV0/UV1, world position and the sampled
 instance transforms, with the same fallback emission slots and single-passage
 coat absorption as the surface evaluator. Graph outputs replace ordinary slot
 values in both paths. Only dependencies of emission and its coat absorption are

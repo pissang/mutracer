@@ -6,7 +6,7 @@ import {materialGraphShaderIR, graphMathShaderIR} from './specialize.js';
 /** Browser snapshots and resource identities stop at the shared IR boundary. */
 export function materialGraphShader(plan: GraphPlan, frames = true) {
     if (!plan.key) return {};
-    return materialGraphShaderIR((plan.specialized ?? plan.structures).map(flattenGraph), frames, (plan.interpreter ?? !!plan.programs?.size) ? {terminals: plan.interpreterTerminals ?? [], salt: plan.interpreterSalt, families: plan.interpreterFamilies} : undefined);
+    return materialGraphShaderIR((plan.specialized ?? plan.structures).map(flattenGraph), frames, (plan.interpreter ?? !!plan.programs?.size) ? {terminals: plan.interpreterTerminals ?? [], salt: plan.interpreterSalt, families: plan.interpreterFamilies, emission: plan.interpreterEmission, opacity: plan.interpreterOpacity} : undefined, true);
 }
 
 /** Shared numeric helpers for rendering and UV height baking. */

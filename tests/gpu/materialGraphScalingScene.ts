@@ -2,7 +2,7 @@ import {MaterialGraph, type MaterialGraphNode} from '../../src/main.js';
 
 /** Seeded UV-only OpenPBR graphs with distinct normalized structures. Every
  * terminal depends only on UV0, so each graph has an exact baked equivalent. */
-export type GraphClass = 'simple' | 'noise';
+export type GraphClass = 'simple' | 'noise' | 'wide';
 
 function random(seed: number) {
   let s = seed >>> 0 || 1;
@@ -53,5 +53,13 @@ export function scalingGraph(index: number, graphClass: GraphClass, valueSeed = 
   });
   const roughness = add('remap', 'float', {in: c(b), outlow: f(0.05 + v() * 0.2), outhigh: f(0.4 + v() * 0.5)});
   const metal = add('smoothstep', 'float', {in: c(d), low: f(0.4), high: f(0.6)});
-  return new MaterialGraph({nodes, terminal: {baseColor: {node: color}, specularRoughness: {node: roughness}, baseMetalness: {node: metal}}});
+  const terminal: Record<string, {node: string}> = {baseColor: {node: color}, specularRoughness: {node: roughness}, baseMetalness: {node: metal}};
+  // `wide` drives as many terminals as the viewer's MaterialX samples do together.
+  if (graphClass === 'wide') {
+    for (const name of ['baseWeight', 'baseDiffuseRoughness', 'specularWeight', 'specularIor', 'fuzzRoughness', 'coatRoughness', 'coatIor', 'coatDarkening', 'thinFilmThickness', 'thinFilmIor'])
+      terminal[name] = {node: add('remap', 'float', {in: c(b), outlow: f(0.1 + v() * 0.2), outhigh: f(0.5 + v() * 0.4)})};
+    for (const name of ['specularColor', 'transmissionColor', 'fuzzColor'])
+      terminal[name] = {node: add('mix', 'color3', {bg: {type: 'color3', value: [v(), v(), v()]}, fg: {type: 'color3', value: [v(), v(), v()]}, mix: c(d)})};
+  }
+  return new MaterialGraph({nodes, terminal});
 }

@@ -201,9 +201,13 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
     spResume = true; ${activate}
   }
 ` : ''}  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
-    if (${sharePrefix ? '!spResume && query' : 'query'}) {
+    ${materialHooks.graph?.precomputed !== undefined ? `let mxQuery = ${sharePrefix ? '!spResume && query' : 'query'};
+    if (mxQuery) { intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction); }
+    // Surface and volume vertices sample NEE at the current depth.
+    mx_vertex(mxQuery, &ma, &si, u32(depth), true);
+    if (mxQuery) {${materialHooks.materialXNormals ? '\n      materialx_normal(&si);' : ''}` : `if (${sharePrefix ? '!spResume && query' : 'query'}) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-      ${materialCall('&ma', 'si', materialHooks)}
+      ${materialCall('&ma', 'si', materialHooks)}`}
       if (event == 0 && si.hit && ma.materialType == STANDARD) {
         (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
         (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0);

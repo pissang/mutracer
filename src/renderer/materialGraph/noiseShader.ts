@@ -42,16 +42,37 @@ fn mx_perlin(p:vec3f,dim:i32,channel:i32) -> f32 {
   }
   return result*mx_pick(0.9820,0.6616,dim==2);
 }
+// One mx_perlin call site in a channel loop: every inlined copy of the lattice
+// loop costs compile time. \`s\` is the point of the offset channel.
+fn mx_noise_channels(p:vec3f,s:vec3f,dim:i32,n:i32,fractal:bool) -> vec4f {
+  var result:vec4f=vec4f(0.0);
+  let count=select(select(4,2,n==2 && fractal),1,n==1);
+  for(var c:i32=0;c<count;c++){
+    var q:vec3f=p;var channel:i32=-1;
+    if(n!=1 && !(n==2 && fractal)){if(c<3){channel=c;}else{q=s;}}else if(c==1){q=s;}
+    result[c]=mx_perlin(q,dim,channel);
+  }
+  if(n==1){return vec4f(result.x);}
+  return result;
+}
 fn mx_noise(p:vec3f,dim:i32,n:i32,fractal:bool) -> vec4f {
-  if(n==1){return vec4f(mx_perlin(p,dim,-1));}
-  if(n==2 && fractal){return vec4f(mx_perlin(p,dim,-1),mx_perlin(p+vec3f(19.0,193.0,17.0),dim,-1),0.0,0.0);}
   var offset:vec3f=vec3f(19.0,73.0,29.0);if(fractal){offset=vec3f(19.0,193.0,17.0);}
-  return vec4f(mx_perlin(p,dim,0),mx_perlin(p,dim,1),mx_perlin(p,dim,2),mx_perlin(p+offset,dim,-1));
+  return mx_noise_channels(p,p+offset,dim,n,fractal);
+}
+// Fractal octaves; with one octave and \`fractal\` false it is mx_noise, so the
+// interpreter evaluates both through one mx_noise_channels call site.
+fn mx_noise_octaves(p:vec3f,dim:i32,n:i32,fractal:bool,octaves:i32,lacunarity:f32,diminish:f32) -> vec4f {
+  var offset:vec3f=vec3f(19.0,73.0,29.0);if(fractal){offset=vec3f(19.0,193.0,17.0);}
+  var position:vec3f=p;var shifted:vec3f=p+offset;var amplitude:f32=1.0;var result:vec4f=vec4f(0.0);
+  for(var i:i32=0;i<octaves;i++){
+    // The fractal's 2- and 4-channel offsets follow the scaled shifted point.
+    let s=select(position+offset,shifted,fractal && (n==2 || n==4));
+    result+=amplitude*mx_noise_channels(position,s,dim,n,fractal);amplitude*=diminish;position*=lacunarity;shifted*=lacunarity;
+  }
+  return result;
 }
 fn mx_fractal(p:vec3f,n:i32,octaves:i32,lacunarity:f32,diminish:f32) -> vec4f {
-  var position:vec3f=p;var shifted:vec3f=p+vec3f(19.0,193.0,17.0);var amplitude:f32=1.0;var result:vec4f=vec4f(0.0);
-  for(var i:i32=0;i<octaves;i++){var value:vec4f=mx_noise(position,3,n,true);if(n==2){value.y=mx_perlin(shifted,3,-1);}if(n==4){value.w=mx_perlin(shifted,3,-1);}result+=amplitude*value;amplitude*=diminish;position*=lacunarity;shifted*=lacunarity;}
-  return result;
+  return mx_noise_octaves(p,3,n,true,octaves,lacunarity,diminish);
 }
 fn mx_cell(p:vec3f,dim:i32,channel:i32) -> f32 {
   let base:vec3i=vec3i(floor(p));var h:u32=0u;

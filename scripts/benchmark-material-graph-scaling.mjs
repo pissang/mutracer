@@ -30,6 +30,9 @@ const {values} = parseArgs({options: {
   probe: {type: 'string'},
   'probe-delay-ms': {type: 'string'},
   policy: {type: 'string'},
+  features: {type: 'string', default: 'lean'},
+  mtlx: {type: 'string'},
+  'mtlx-no-values': {type: 'boolean', default: false},
   repeats: {type: 'string', default: '1'},
   'scene-gltf': {type: 'string'},
   'scene-fbx': {type: 'string'},
@@ -52,6 +55,8 @@ if (values.help) {
   --policy '{"margin":1.5}'  tier policy overrides (JSON)
   --hdr --hdr-block 8 --close-up --first-index 0 --swap
   --output rows.jsonl        full rows (calibration samples, upgrade events, edits, timings)
+  --mtlx wood,marble         viewer MaterialX samples as the graph materials (--mtlx-no-values: graphs only)
+  --features lean|full       full adds spheres enabling every surface lobe, anisotropy and emission
 Environment: MUTRACER_CHROME=path to Chrome when it is not in the default location.`);
   process.exit(0);
 }
@@ -82,7 +87,7 @@ try {
         for (let i = 0; i < 300; i++) { if (await page.tab.evaluate('typeof window.runMaterialGraphScaling === "function"')) break; await delay(100); }
         const number = name => values[name] === undefined ? undefined : Number(values[name]);
         const options = {structures, mode, graphClass: values.class, bakeSize: Number(values['bake-size']), textureBinding: values['texture-binding'], hdr: values.hdr, firstIndex, closeUp: values['close-up'], hdrBlock: Number(values['hdr-block']), swap: values.swap, sceneUrl, interim: !values['no-interim'], budgetMs: number('budget-ms'),
-          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), compileBackend: values['compile-backend'], probe: values.probe, probeDelayMs: number('probe-delay-ms'), policy: values.policy ? JSON.parse(values.policy) : undefined};
+          targetSamples: number('target-samples'), settleMs: number('settle-ms'), edits: number('edits'), editIntervalMs: number('edit-interval-ms'), editKind: values['edit-kind'], compileSpeed: number('compile-speed'), features: values.features, mtlx: values.mtlx?.split(','), mtlxValues: !values['mtlx-no-values'], compileBackend: values['compile-backend'], probe: values.probe, probeDelayMs: number('probe-delay-ms'), policy: values.policy ? JSON.parse(values.policy) : undefined};
         let row;
         try { row = await page.tab.evaluate(`runMaterialGraphScaling(${JSON.stringify(options)})`); }
         catch (error) { row = {...options, error: String(error).slice(0, 2000)}; }

@@ -5,8 +5,8 @@ import {terminalTypes} from './nodes.js';
 import {GraphSource, graphCategories, graphGeometry, graphOutputs, graphPorts, graphTerminals, graphTypes, type GraphIR} from './ir.js';
 
 /** Opcode families used by a program's entries. */
-export function graphProgramFamilies(program: GraphProgram, into = new Set<GraphOp>()) {
-    for (const entry of [program.surface, program.opacity, program.emission])
+export function graphProgramFamilies(program: GraphProgram, into = new Set<GraphOp>(), entries: readonly ('surface' | 'opacity' | 'emission')[] = ['surface', 'opacity', 'emission']) {
+    for (const entry of entries.map(name => program[name]))
         for (let at = 0; at < entry.instructions.length; at += GRAPH_INSTRUCTION_FLOATS) if (entry.instructions[at] !== GraphOp.Store) into.add(entry.instructions[at]);
     return into;
 }
@@ -16,7 +16,7 @@ export function graphInterpreterHelpers(families: ReadonlySet<GraphOp>) {
 }
 /** Fixed register file of the WGSL interpreter. Structures needing more live
  * values than this keep the specialized path. */
-export const GRAPH_INTERPRETER_REGISTERS = 8;
+export const GRAPH_INTERPRETER_REGISTERS = 16;
 /** Operand slots per instruction record (three vec4 rows after the header). */
 export const GRAPH_INTERPRETER_OPERANDS = 12;
 /** Floats per instruction: header vec4 plus operand codes. */
@@ -231,53 +231,26 @@ export function runGraphProgram(entry: GraphProgramEntry, parameter: (slot: numb
     return result;
 }
 
+export interface GraphInterpreterRunner { fields: readonly string[]; families: ReadonlySet<GraphOp> }
 /** Fixed WGSL interpreter. Its size depends only on the terminal set, never on
  * the number of structures. Requires `mx_parameter`, `mx_image`, `mx_w2l`,
- * `mx_l2w`, the math helpers and `MXResult` with `fields`. */
-export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>) {
+ * `mx_l2w`, the math helpers and `MXResult` with `fields`. Each of `runners`
+ * adds an `mx_run_<name>` loop limited to its terminals and opcode families:
+ * emission and opacity are evaluated at several call sites (light sampling,
+ * shadow rays), where every inlined copy of the full surface loop costs compile time. */
+export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}) {
     const R = GRAPH_INTERPRETER_REGISTERS;
-    // Only the opcode families the programs use are compiled: unused cases cost
-    // compile time and registers on every hit.
-    const kase = (family: GraphOp, code: string) => !families || families.has(family) ? code : '';
     // The first four operands are decoded before the opcode switch, so lanes on
     // different opcodes share those loads; later operands load per family.
     const a = (k: number) => k < 4 ? `x${k}` : `mx_arg(rec,${k},base,ctx,regs)`;
-    const store = fields.map(field => `    case ${graphTerminals.indexOf(field)}: { (*result).${field} = v${width(terminalTypes[field]) === 1 ? '.x' : '.xyz'}; }`).join('\n');
+    const storeFor = (fields: readonly string[]) => fields.map(field => `    case ${graphTerminals.indexOf(field)}: { (*result).${field} = v${width(terminalTypes[field]) === 1 ? '.x' : '.xyz'}; }`).join('\n');
     const unary = graphUnary.map((name, i) => `      case ${i}: { return ${name === 'normalize' ? `select(normalize(x),sign(x),w==1)` : `${name === 'ln' ? 'log' : name}(x)`}; }`).join('\n');
-    return /* wgsl */`
-struct MXContext { uv: vec2f, uv1: vec2f, position: vec3f, instance: i32, normal: vec3f, tangent: vec3f, bitangent: vec3f, }
-fn mx_canon(v: vec4f, w: i32) -> vec4f { if(w == 1) { return vec4f(v.x); } return select(vec4f(0.0), v, vec4i(1, 2, 3, 4) <= vec4i(w)); }
-// Instruction rows 0–3 of a material record: header, then operand codes 0–3, 4–7, 8–11.
-fn mx_codes(rec: i32) -> vec4f { return vec4f(materialsBuffer[rec].roughness, materialsBuffer[rec].normalMapIndex, materialsBuffer[rec].normalMapScale); }
-fn mx_code(rec: i32, k: i32) -> i32 {
-  var row: vec4f;
-  if(k < 4) { row = mx_codes(rec); }
-  else if(k < 8) { let m = materialsBuffer[rec]; row = vec4f(m.metallic, m.anisotropy, m.diffuseMapIndex, m.mrtMapIndex); }
-  else { row = vec4f(materialsBuffer[rec].emission, materialsBuffer[rec].emissiveMapIndex); }
-  return i32(row[k & 3]);
-}
-fn mx_geometry(index: i32, ctx: MXContext) -> vec4f {
-  switch index {
-    case 0: { return vec4f(ctx.uv, 0.0, 0.0); }
-    case 1: { return vec4f((mx_w2l(ctx.instance) * vec4f(ctx.position, 1.0)).xyz, 0.0); }
-    case 2: { return vec4f(ctx.normal, 0.0); }
-    case 3: { return vec4f(ctx.tangent, 0.0); }
-    default: { return vec4f(ctx.bitangent, 0.0); }
-  }
-}
-fn mx_operand(code: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
-  if(code < 0) { return vec4f(0.0); }
-  let index = code >> 8u; let kind = (code >> 6u) & 3; let selector = (code >> 3u) & 7;
-  var v: vec4f;
-  if(kind == 0) { v = mx_parameter(base, index); } else if(kind == 1) { v = (*regs)[index]; } else { v = mx_geometry(index, ctx); }
-  if(selector == 0) { return mx_canon(v, code & 7); }
-  if(selector == 5) { return vec4f(v.xyz, 0.0); }
-  return vec4f(v[selector - 1]);
-}
-fn mx_arg(rec: i32, k: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
-  return mx_operand(mx_code(rec, k), base, ctx, regs);
-}
-fn mx_exec(rec: i32, op: i32, sub: i32, w: i32, color: bool, x0: vec4f, x1: vec4f, x2: vec4f, x3: vec4f, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+    // Only the opcode families the programs use are compiled: unused cases cost
+    // compile time and registers on every hit.
+    const runner = (s: string, fields: readonly string[], families: ReadonlySet<GraphOp> | undefined) => {
+        const kase = (family: GraphOp, code: string) => !families || families.has(family) ? code : '';
+        const store = storeFor(fields);
+        return /* wgsl */`fn mx_exec${s}(rec: i32, op: i32, sub: i32, w: i32, color: bool, x0: vec4f, x1: vec4f, x2: vec4f, x3: vec4f, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
   switch op {
 ${kase(GraphOp.Unary, `    case ${GraphOp.Unary}: {
       let x = ${a(0)};
@@ -373,8 +346,11 @@ ${kase(GraphOp.Noise, `    case ${GraphOp.Noise}: {
       let dim = select(3, 2, planar);
       let q = ${a(0)}; let p = select(q.xyz, vec3f(q.xy, 0.0), planar);
       switch sub {
-        case 0, 1: { return mx_noise(p, dim, w, false) * ${a(1)} + vec4f(${a(2)}.x); }
-        case 2: { return mx_fractal(p, w, i32(${a(3)}.x), ${a(4)}.x, ${a(5)}.x) * ${a(1)}; }
+        // Noise and fractal share one mx_noise_octaves call (one inlined lattice loop).
+        case 0, 1, 2: {
+          let fractal = sub == 2;
+          return mx_noise_octaves(p, dim, w, fractal, select(1, i32(${a(3)}.x), fractal), select(1.0, ${a(4)}.x, fractal), select(1.0, ${a(5)}.x, fractal)) * ${a(1)} + select(vec4f(${a(2)}.x), vec4f(0.0), fractal);
+        }
         case 3, 4: { return vec4f(mx_cell(p, dim, -1)); }
         default: { return vec4f(mx_worley(p, dim, w, ${a(6)}.x, i32(${a(7)}.x)), 0.0); }
       }
@@ -413,24 +389,24 @@ ${kase(GraphOp.Normalmap, `    case ${GraphOp.Normalmap}: { return vec4f(mx_norm
     default: { return vec4f(${salt}.0); }
   }
 }
-fn mx_store(terminal: i32, v: vec4f, result: ptr<function, MXResult>) {
+fn mx_store${s}(terminal: i32, v: vec4f, result: ptr<function, MXResult>) {
   switch terminal {
 ${store}
     default: {}
   }
 }
 /** Runs \`count\` instruction records starting at record \`program\`. */
-fn mx_run(program: i32, count: i32, base: i32, ctx: MXContext, result: ptr<function, MXResult>) {
+fn mx_run${s}(program: i32, count: i32, base: i32, ctx: MXContext, result: ptr<function, MXResult>) {
   var regs: array<vec4f, ${R}>;
   for(var pc = 0; pc < count; pc++) {
     let rec = program + pc;
     let header = vec4i(vec4f(materialsBuffer[rec].color, materialsBuffer[rec].matType));
     let codes = vec4i(mx_codes(rec));
     let x0 = mx_operand(codes.x, base, ctx, &regs);
-    if(header.x == ${GraphOp.Store}) { mx_store(header.y, x0, result); continue; }
+    if(header.x == ${GraphOp.Store}) { mx_store${s}(header.y, x0, result); continue; }
     let x1 = mx_operand(codes.y, base, ctx, &regs); let x2 = mx_operand(codes.z, base, ctx, &regs); let x3 = mx_operand(codes.w, base, ctx, &regs);
     let w = header.w & 15; let tid = header.w >> 4u;
-    var v = mx_exec(rec, header.x, header.y, w, tid == 3 || tid == 4, x0, x1, x2, x3, base, ctx, &regs);
+    var v = mx_exec${s}(rec, header.x, header.y, w, tid == 3 || tid == 4, x0, x1, x2, x3, base, ctx, &regs);
     if(header.x == ${GraphOp.Copy} && header.y == 0) {
       if(tid == 2) { v = vec4f(select(0.0, 1.0, v.x != 0.0)); } else if(tid == 1) { v = vec4f(trunc(v.x)); }
     }
@@ -438,4 +414,39 @@ fn mx_run(program: i32, count: i32, base: i32, ctx: MXContext, result: ptr<funct
   }
 }
 `;
+    };
+    return /* wgsl */`
+struct MXContext { uv: vec2f, uv1: vec2f, position: vec3f, instance: i32, normal: vec3f, tangent: vec3f, bitangent: vec3f, }
+fn mx_canon(v: vec4f, w: i32) -> vec4f { if(w == 1) { return vec4f(v.x); } return select(vec4f(0.0), v, vec4i(1, 2, 3, 4) <= vec4i(w)); }
+// Instruction rows 0–3 of a material record: header, then operand codes 0–3, 4–7, 8–11.
+fn mx_codes(rec: i32) -> vec4f { return vec4f(materialsBuffer[rec].roughness, materialsBuffer[rec].normalMapIndex, materialsBuffer[rec].normalMapScale); }
+fn mx_code(rec: i32, k: i32) -> i32 {
+  var row: vec4f;
+  if(k < 4) { row = mx_codes(rec); }
+  else if(k < 8) { let m = materialsBuffer[rec]; row = vec4f(m.metallic, m.anisotropy, m.diffuseMapIndex, m.mrtMapIndex); }
+  else { row = vec4f(materialsBuffer[rec].emission, materialsBuffer[rec].emissiveMapIndex); }
+  return i32(row[k & 3]);
+}
+fn mx_geometry(index: i32, ctx: MXContext) -> vec4f {
+  switch index {
+    case 0: { return vec4f(ctx.uv, 0.0, 0.0); }
+    case 1: { return vec4f((mx_w2l(ctx.instance) * vec4f(ctx.position, 1.0)).xyz, 0.0); }
+    case 2: { return vec4f(ctx.normal, 0.0); }
+    case 3: { return vec4f(ctx.tangent, 0.0); }
+    default: { return vec4f(ctx.bitangent, 0.0); }
+  }
+}
+fn mx_operand(code: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+  if(code < 0) { return vec4f(0.0); }
+  let index = code >> 8u; let kind = (code >> 6u) & 3; let selector = (code >> 3u) & 7;
+  var v: vec4f;
+  if(kind == 0) { v = mx_parameter(base, index); } else if(kind == 1) { v = (*regs)[index]; } else { v = mx_geometry(index, ctx); }
+  if(selector == 0) { return mx_canon(v, code & 7); }
+  if(selector == 5) { return vec4f(v.xyz, 0.0); }
+  return vec4f(v[selector - 1]);
+}
+fn mx_arg(rec: i32, k: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+  return mx_operand(mx_code(rec, k), base, ctx, regs);
+}
+` + runner('', fields, families) + Object.entries(runners).map(([name, r]) => runner(`_${name}`, r.fields, r.families)).join('');
 }

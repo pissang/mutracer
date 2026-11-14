@@ -1,4 +1,4 @@
-import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
+import {materialCall, materialQuery, type MaterialShaderHooks} from './materialShaderHooks.js';
 import {spectralPrefixWgsl, prefixCheckpoint, prefixSave, prefixRestore, prefixRandomBindings, type PrefixBindings} from './chunks/spectralPrefix.wgsl.js';
 import {photonQuerySource} from './photonMap.compute.js';
 import backgroundWgsl from './chunks/background.wgsl.js';
@@ -93,6 +93,7 @@ export interface RayTraceShaderOptions {
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
   const materialHooks = options.materialHooks ?? {};
+  const sharedGraph = materialHooks.graph?.precomputed !== undefined;
   const maxPathEvents = options.maxPathEvents ?? MAX_PATH_EVENTS_WEBGL;
   const research = researchTransport()?.compute(options);
   const enabled = research?.enabled ?? false;
@@ -202,7 +203,7 @@ ${envMapWgsl}
 ${samplingWgsl}
 ${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks)}
-${createSampleLightWgsl(options.emissiveInstanceIndices, !!materialHooks.graph?.emission)}${inputHooks?.declarations ?? ''}
+${createSampleLightWgsl(options.emissiveInstanceIndices, !!materialHooks.graph?.emission, materialHooks.graph?.precomputed !== undefined)}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
 var<private> bounceIndex: u32 = 0u;
@@ -255,7 +256,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined)}
 ${sampleShadowCatcherWgsl}
 
 // Output
@@ -704,10 +705,10 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
   // paths. Include the final query, which the legacy bounce completed before
   // testing its event budget. Even a zero-bounce back branch resolves guides.
   for (var event = ${sharePrefix ? 'spEvent' : '0'}; event <= eventLimit; event++) {
-    if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
+    ${sharedGraph ? materialQuery(sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery', 'intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);', 'ma', '(*si)', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, '(*si).hit & (event < eventLimit)') : `if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
       intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
       ${materialCall('ma', '(*si)', materialHooks)}
-    }
+    }`}
     if (event == 0) {
       if (initialQuery & (*si).hit & ((*ma).materialType == STANDARD)) {
         (*outAux).albedo = select((*ma).baseColor, vec3f(1.0), (*ma).transmissionWeight > 0.5);
@@ -796,10 +797,10 @@ ${primaryVariables}
   // Share one query/material graph across the primary, back and front paths.
   // Complete the back path before the front path to preserve random streams.
   for (var step = 0; step < (${maxPathEvents} + 1) * 2 + 2; step++) {
-    if (query) {
+    ${sharedGraph ? materialQuery('query', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `if (query) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       ${materialCall('&ma', 'si', materialHooks)}
-    }
+    }`}
     query = true;
     if (!primaryReady) {
 ${primaryGuides}
@@ -866,8 +867,8 @@ ${primaryVariables}
   // did before testing the event budget. Queries consume the preceding bounce's
   // random stream; shading advances samplingBounce only after hit completion.
   for (var event = 0; event <= eventLimit; event++) {
-    intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
-    ${materialCall('&ma', 'si', materialHooks)}
+    ${sharedGraph ? materialQuery('true', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+    ${materialCall('&ma', 'si', materialHooks)}`}
     if (event == 0) {
 ${primaryGuides}
       isNotTransparent = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99;
@@ -909,10 +910,10 @@ ${primaryVariables}
   // including completion of its final query. The primary hit is reused.
   let stepLimit = min((${maxPathEvents} + 1) * 3, i32(rtUniform.loopUnrollGuard * ${Math.ceil((maxPathEvents + 1) * 3 / 4)}u));
   for (var step = 0; step < stepLimit; step++) {
-    if (!primaryReady | ((event != 0) & !path.abort)) {
+    ${sharedGraph ? materialQuery('!primaryReady | ((event != 0) & !path.abort)', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(0u, select(u32(depth), u32(depth + 1), !sampleIgnored), event != 0)', materialHooks, 'si.hit & (event < eventLimit)') : `if (!primaryReady | ((event != 0) & !path.abort)) {
       intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
       ${materialCall('&ma', 'si', materialHooks)}
-    }
+    }`}
     if (event == 0) {
       if (!primaryReady) {
 ${primaryGuides}

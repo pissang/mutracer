@@ -29,6 +29,8 @@ export interface GraphCompileModel {
     /** Size of each helper library, counted once when no interpreter is present
      * (the interpreter variant always contains every helper). */
     helperBytes: Readonly<Record<string, number>>;
+    /** Source each specialized noise node inlines (the lattice loop of `mx_noise_channels`); helper libraries count once, their calls do not. */
+    noiseNodeBytes?: number;
 }
 
 export interface GraphTierBudget {
@@ -68,7 +70,7 @@ export interface GraphTierDecision {
  * 3.6 KB (0.14 s for the 9 families of the simple harness class). A mixed variant specializing 35 % of the interpreter work on a
  * uniform sphere grid was only ≈4 % faster than the interpreter alone, so a
  * mixed variant needs at least 20 % coverage. */
-export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, interpreterMsPerKB: 48, interpreterFreeKB: 3.6, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}};
+export const DEFAULT_GRAPH_COMPILE_MODEL: GraphCompileModel = {msPerKB: 21, interpreterMs: 600, interpreterMsPerKB: 48, interpreterFreeKB: 3.6, helperBytes: {noise: noiseShader().length, hsv: 900, rotate3d: 250}, noiseNodeBytes: 1000};
 export const DEFAULT_GRAPH_TIER_BUDGET: GraphTierBudget = {budgetMs: 1000, correctMs: 1000, minBenefitShare: 0.2};
 
 export function specializedBytes(candidates: readonly GraphTierCandidate[], model: GraphCompileModel, interpreter: boolean) {

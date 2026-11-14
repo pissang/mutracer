@@ -11,6 +11,7 @@ import {DEFAULT_GRAPH_TIER_BUDGET} from '../../src/renderer/materialGraph/planne
 import {freezeMaterialGraphPolicy, setMaterialGraphPlanner, type GraphInstallEvent, type GraphTierPolicy, type GraphUpgradeEvent} from '../../src/renderer/materialGraph/state.js';
 import type {GraphCompileObservation, GraphCompilerBackend} from '../../src/renderer/materialGraph/tierPolicy.js';
 import {scalingGraph, type GraphClass} from './materialGraphScalingScene.js';
+import {parseMaterialXGraph} from '../../viewer/src/engine/materialxGraph.js';
 
 /** Material-graph scaling harness: one fixed 32×32 sphere grid, N distinct graph
  * structures assigned round-robin, rendered as graphs, as their exact UV bakes,
@@ -110,6 +111,12 @@ interface RunOptions {
   /** Debug compile speed factor (slow device simulation). */ compileSpeed?: number;
   /** Debug compile-cost shape, e.g. 'd3d12' on a Mac. */ compileBackend?: GraphCompilerBackend;
   policy?: Partial<GraphTierPolicy>;
+  /** `full` adds a row of spheres whose constant materials enable every surface lobe (coat, fuzz,
+   * thin film, subsurface, transmission), anisotropy directions and emission, so the base kernel
+   * compiles with all of them. Default `lean`. */ features?: 'lean' | 'full';
+  /** Viewer MaterialX sample ids (`viewer/src/assets/materialx/<id>.mtlx`) used as the graph materials
+   * instead of generated structures; `structures` is ignored. Constant mode keeps only their values. */ mtlx?: string[];
+  /** Apply the samples' constant values (lobe weights) as well as their graphs. Default true. */ mtlxValues?: boolean;
   /** Concurrency probe (auto mode): `contended` starts a fully specialized upgrade, then makes a
    * structural edit that needs its own compile (new opcode families, no prefetch) `probeDelayMs`
    * after the upgrade starts; `solo` makes the same edit with no upgrade. Records how long the
@@ -134,7 +141,10 @@ async function run(options: RunOptions) {
   const prepareStart = performance.now();
   const indices = structures(count, graphClass, firstIndex);
   let bakeMs = 0;
-  const materials = indices.map((index, i) => {
+  const samples = options.mtlx && await Promise.all(options.mtlx.map(async id =>
+    parseMaterialXGraph((await import(/* @vite-ignore */ `../../viewer/src/assets/materialx/${id}.mtlx?raw`)).default as string)));
+  const materials = samples ? samples.map(sample => new OpenPBRMaterial({...(options.mtlxValues === false ? {} : sample.values as object),
+    ...(graphs && sample.graph ? {graph: sample.graph} : {})})) : indices.map((index, i) => {
     if (graphs) return new OpenPBRMaterial({graph: scalingGraph(index, graphClass)});
     if (mode === 'baked') {
       const start = performance.now(), maps = bake(index, graphClass, bakeSize); bakeMs += performance.now() - start;
@@ -154,6 +164,14 @@ async function run(options: RunOptions) {
   }
   const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial({baseColor: [0.7, 0.7, 0.7], specularRoughness: 0.8}));
   floor.transform[0] = floor.transform[10] = GRID * 1.5; floor.transform[13] = -0.45; meshes.push(floor);
+  if (options.features === 'full') [
+    {coatWeight: 1}, {fuzzWeight: 1}, {thinFilmWeight: 1, thinFilmThickness: 0.5}, {subsurfaceWeight: 1},
+    {transmissionWeight: 1, transmissionDepth: 1}, {specularAnisotropy: 0.6, specularAnisotropyRotation: 0.25}, {emissionLuminance: 5}
+  ].forEach((values, i) => {
+    const mesh = new Mesh(sphere, new OpenPBRMaterial({baseColor: [0.8, 0.6, 0.4], specularRoughness: 0.4, ...values}));
+    mesh.transform[0] = mesh.transform[5] = mesh.transform[10] = 0.45;
+    mesh.transform[12] = i - 3; mesh.transform[14] = GRID / 2 + 1; meshes.push(mesh);
+  });
   const light = new SphereLight({radius: 3, intensity: 400}); light.position = [-8, 20, 10];
   engine.scene = {meshes, lights: [new AmbientLight({intensity: 0.3}), light], background: [0.7, 0.8, 1, 1]};
   const camera = new Camera({projection: 'perspective', fov: 40});

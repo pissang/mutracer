@@ -4,7 +4,9 @@ import {
   LIGHT_CHOICE_ENVIRONMENT
 } from '../../lightConstants.js';
 
-export function createSampleLightWgsl(instanceIndices=false, graphEmission=false) { return /*wgsl */ `
+/** `sharedGraphEmission`: graph emission comes from the integrator's shared graph site
+ * (`mx_vertex`), which evaluates each NEE candidate's light point in advance. */
+export function createSampleLightWgsl(instanceIndices=false, graphEmission=false, sharedGraphEmission=false) { return /*wgsl */ `
 fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {
   let centerOffset = light.position - scatterPos;
   let centerDistance = length(centerOffset);
@@ -354,7 +356,7 @@ fn sampleEmissiveTriangleLight(
   (*lightSample).emission = getMaterialEmission(
     i32(triangle.materialIndex), uv, secondaryUv
   );
-${graphEmission ? `  (*lightSample).emission = mx_emission(i32(triangle.materialIndex),uv*materialsBuffer[i32(triangle.materialIndex)].uvScale,secondaryUv*materialsBuffer[i32(triangle.materialIndex)].uvScale,lightPosition,${instanceIndices ? 'instanceIndex' : '-1'},(*lightSample).emission);\n` : ''}  (*lightSample).selectionPmf = triangle.selectionPmf;
+${sharedGraphEmission ? `  (*lightSample).emission = mx_nee_lookup(i32(triangle.materialIndex),(*lightSample).emission);\n` : graphEmission ? `  (*lightSample).emission = mx_emission(i32(triangle.materialIndex),uv*materialsBuffer[i32(triangle.materialIndex)].uvScale,secondaryUv*materialsBuffer[i32(triangle.materialIndex)].uvScale,lightPosition,${instanceIndices ? 'instanceIndex' : '-1'},(*lightSample).emission);\n` : ''}  (*lightSample).selectionPmf = triangle.selectionPmf;
   (*lightSample).pdf = triangle.selectionPmf *
     ((*lightSample).dist * (*lightSample).dist) /
     max(triangle.area * cosLight, 1e-8);
@@ -442,7 +444,7 @@ fn sampleLightForNEECandidate(
   candidateCount: u32,
   lightSample: ptr<function, LightSampleRec>
 ) {
-  sampleLightChoiceTable(
+${sharedGraphEmission ? '  mx_nee_candidate = candidateIndex;\n' : ''}  sampleLightChoiceTable(
     scatterPos,
     stratifyLightChoiceRandom(rnd, candidateIndex, candidateCount),
     0,
@@ -450,7 +452,32 @@ fn sampleLightForNEECandidate(
     1.0,
     lightSample
   );
+${sharedGraphEmission ? '  mx_nee_candidate = 0xffffffffu;\n' : ''}}
+${sharedGraphEmission ? /* wgsl */ `
+struct NeeGraphPoint { materialIndex: i32, instanceIndex: i32, uv: vec2f, uv1: vec2f, position: vec3f }
+// The emissive point that NEE candidate candidateIndex selects from rnd, chosen as in
+// sampleLightForNEECandidate and sampleEmissiveTriangleLight; UVs are scaled.
+fn neeGraphPoint(rnd: vec3f, candidateIndex: u32, candidateCount: u32, point: ptr<function, NeeGraphPoint>) -> bool {
+  let choiceCount = rtUniform.lightChoiceCount;
+  if (choiceCount <= 0) { return false; }
+  let stratified = stratifyLightChoiceRandom(rnd, candidateIndex, candidateCount);
+  let scaledChoice = stratified.z * f32(choiceCount);
+  let column = min(i32(scaledChoice), choiceCount - 1);
+  let columnChoice = getLightChoiceFromTable(0, column);
+  let choice = getLightChoiceFromTable(0, select(columnChoice.aliasIndex, column, fract(scaledChoice) < columnChoice.probability));
+  if (!HAS_SCENE_EMISSIVE_LIGHT || choice.sourceType != ${LIGHT_CHOICE_EMISSIVE_TRIANGLE}) { return false; }
+  let triangle = getEmissiveTriangle(choice.sourceIndex);
+  let sqrtU = sqrt(stratified.x);
+  let b = vec3f(1.0 - sqrtU, sqrtU * (1.0 - stratified.y), sqrtU * stratified.y);
+  let materialIndex = i32(triangle.materialIndex);
+  let scale = materialsBuffer[materialIndex].uvScale;
+  (*point).materialIndex = materialIndex;
+  (*point).instanceIndex = ${instanceIndices ? 'i32(loadLightSamplingTexel(choice.sourceIndex*7+6).x)' : '-1'};
+  (*point).uv = (b.x * triangle.uv0 + b.y * triangle.uv1 + b.z * triangle.uv2) * scale;
+  (*point).uv1 = (b.x * triangle.secondaryUv0 + b.y * triangle.secondaryUv1 + b.z * triangle.secondaryUv2) * scale;
+  (*point).position = b.x * triangle.p0 + b.y * triangle.p1 + b.z * triangle.p2;
+  return true;
 }
-`;
+` : ''}`;
 }
 export default createSampleLightWgsl();

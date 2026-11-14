@@ -130,7 +130,8 @@ export const graphShaderKey = (plan: GraphPlan) => plan.shaderKey ?? plan.key;
 export interface GraphTierShape {
     shaderKey: string;
     specialized: NormalizedGraph[];
-    interpreter?: {terminals: string[]; families: ReadonlySet<GraphOp>};
+    /** Emission and opacity programs run in their own loops (light sampling, shadow rays), present only when some interpreted structure has one. */
+    interpreter?: {terminals: string[]; families: ReadonlySet<GraphOp>; emission?: ReadonlySet<GraphOp>; opacity?: ReadonlySet<GraphOp>};
     /** Structures whose pipeline features the variant enables. */
     features: NormalizedGraph[];
     specializedBytes: number;
@@ -156,6 +157,9 @@ export interface GraphPlan {
     interpreterSalt?: number;
     /** Opcode families used by the interpreted programs; the interpreter compiles only these. */
     interpreterFamilies?: ReadonlySet<GraphOp>;
+    /** Opcode families of the interpreted emission and opacity programs; absent when none has one. */
+    interpreterEmission?: ReadonlySet<GraphOp>;
+    interpreterOpacity?: ReadonlySet<GraphOp>;
     /** Structures selecting pipeline features; default `structures`. */
     featureStructures?: NormalizedGraph[];
     shape?: GraphTierShape;
@@ -275,22 +279,33 @@ export class MaterialGraphState {
         return this.speed * graphCompileReferenceMs(this.coefficients, {totalBytes: this.calibration.graphFreeBytes + shape.specializedBytes + shape.interpreterBytes,
             specializedBytes: shape.specializedBytes, interpreterBytes: shape.interpreterBytes});
     }
-    private interpreterBytes(terminals: readonly string[], families: ReadonlySet<GraphOp>) {
-        return graphInterpreterShader(terminals, 0, families).length + graphMathShaderIR([], false, graphInterpreterHelpers(families)).length;
+    private interpreterBytes(config: NonNullable<GraphTierShape['interpreter']>) {
+        const runners = {...(config.emission ? {emission: {fields: config.terminals, families: config.emission}} : {}), ...(config.opacity ? {opacity: {fields: ['opacity'], families: config.opacity}} : {})};
+        return graphInterpreterShader(config.terminals, 0, config.families, runners).length + graphMathShaderIR([], false, graphInterpreterHelpers(config.families)).length;
     }
     private shape(specialized: NormalizedGraph[], interpreter: GraphTierShape['interpreter'], features: NormalizedGraph[], coverage?: number): GraphTierShape {
-        const familyKey = interpreter ? [...interpreter.families].sort((a, b) => a - b).join('.') : '';
+        const list = (families?: ReadonlySet<GraphOp>) => families ? [...families].sort((a, b) => a - b).join('.') : '-';
+        const familyKey = interpreter ? `${list(interpreter.families)}:${list(interpreter.emission)}:${list(interpreter.opacity)}` : '';
         const shaderKey = [...specialized.map(g => g.key), ...(interpreter ? [`${GRAPH_INTERPRETER_KEY}:${interpreter.terminals.join(',')}:${familyKey}:${planner.salt}`] : [])].join('\n');
         const helpers = new Set<string>();
         let specializedBytes = 0;
         for (const g of specialized) { const source = this.source(g); specializedBytes += source.sourceBytes; if (!interpreter) for (const h of source.helpers ?? []) helpers.add(h); }
         for (const h of helpers) specializedBytes += planner.model.helperBytes[h] ?? 0;
-        return {shaderKey, specialized, interpreter, features, specializedBytes, interpreterBytes: interpreter ? this.interpreterBytes(interpreter.terminals, interpreter.families) : 0, coverage};
+        return {shaderKey, specialized, interpreter, features, specializedBytes, interpreterBytes: interpreter ? this.interpreterBytes(interpreter) : 0, coverage};
     }
     private interpreterConfig(structures: readonly NormalizedGraph[], full = false): NonNullable<GraphTierShape['interpreter']> {
         const families = new Set<GraphOp>(full ? ALL_FAMILIES : []), terminals = new Set<string>(full ? this.seenTerminals : []);
-        for (const g of structures) { const program = this.program(g); if (program) { graphProgramFamilies(program, families); for (const t in g.terminal) terminals.add(t); } }
-        return {terminals: Object.keys(terminalTypes).filter(t => terminals.has(t)), families};
+        // Emission and opacity loops cover only the current structures: they are inlined
+        // at several call sites, so even the editing interpreter keeps them small.
+        let emission: Set<GraphOp> | undefined, opacity: Set<GraphOp> | undefined;
+        for (const g of structures) {
+            const program = this.program(g);
+            if (!program) continue;
+            graphProgramFamilies(program, families); for (const t in g.terminal) terminals.add(t);
+            if (program.emission.instructions.length) graphProgramFamilies(program, emission ??= new Set(), ['emission']);
+            if (program.opacity.instructions.length) graphProgramFamilies(program, opacity ??= new Set(), ['opacity']);
+        }
+        return {terminals: Object.keys(terminalTypes).filter(t => terminals.has(t)), families, emission, opacity};
     }
     /** Plans the final tiers of a structure set within the device's budgets. */
     private decideTiers(key: string, structures: NormalizedGraph[], materials: OpenPBRMaterial[], graphs: (NormalizedGraph | undefined)[]) {
@@ -312,7 +327,7 @@ export class MaterialGraphState {
             // Charge the interpreter for the opcode families of every interpretable
             // structure (an upper bound for the ones left on it).
             const config = this.interpreterConfig(structures);
-            const decision = planGraphTiers(candidates, model, budget, interpreterCompileMs(this.interpreterBytes(config.terminals, config.families), model));
+            const decision = planGraphTiers(candidates, model, budget, interpreterCompileMs(this.interpreterBytes(config), model));
             ({specialized, coverage, estimatedMs, interpreter} = decision);
         }
         const chosen = structures.filter(g => specialized.has(g.key) || !this.program(g));
@@ -327,7 +342,9 @@ export class MaterialGraphState {
             const ir = flattenGraphUnchecked(graph), categories = new Set(graph.nodes.map(n => n.category)), terminals = Object.keys(graph.terminal);
             const helpers = Object.entries(graphHelperCategories).filter(([, names]) => names.some(n => categories.has(n))).map(([name]) => name);
             const dispatch = 320 + 60 * terminals.length + ('opacity' in graph.terminal ? 260 : 0) + (terminals.some(t => ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor'].includes(t)) ? 360 : 0);
-            this.sourceCache.set(graph.key, result = {sourceBytes: generateGraphIR(ir, 'mx_eval_1').source.length + dispatch, helpers});
+            // Calibrated on viewer MaterialX samples: specialized code inlines the noise lattice at every noise node.
+            const noiseNodes = graph.nodes.filter(n => graphHelperCategories.noise.includes(n.category)).length;
+            this.sourceCache.set(graph.key, result = {sourceBytes: generateGraphIR(ir, 'mx_eval_1').source.length + dispatch + noiseNodes * (planner.model.noiseNodeBytes ?? 0), helpers});
         }
         return result;
     }
@@ -336,6 +353,7 @@ export class MaterialGraphState {
         for (const g of base.structures) { const program = specializedKeys.has(g.key) ? undefined : this.program(g); if (program) programs.set(g.key, program); }
         return {...base, shaderKey: shape.shaderKey, specialized: shape.specialized, programs, interpreter: !!shape.interpreter,
             interpreterTerminals: shape.interpreter?.terminals ?? [], interpreterFamilies: shape.interpreter?.families, interpreterSalt: planner.salt,
+            interpreterEmission: shape.interpreter?.emission, interpreterOpacity: shape.interpreter?.opacity,
             featureStructures: shape.features === base.structures ? undefined : shape.features, shape};
     }
     private program(graph: NormalizedGraph) {
@@ -351,6 +369,9 @@ export class MaterialGraphState {
             const program = shape.interpreter && this.program(g);
             if (!program || Object.keys(g.terminal).some(t => !shape.interpreter!.terminals.includes(t))) return false;
             graphProgramFamilies(program, families);
+            const covers = (entry: 'emission' | 'opacity', supported?: ReadonlySet<GraphOp>) =>
+                !program[entry].instructions.length || !!supported && [...graphProgramFamilies(program, new Set(), [entry])].every(f => supported.has(f));
+            if (!covers('emission', shape.interpreter!.emission) || !covers('opacity', shape.interpreter!.opacity)) return false;
         }
         if ([...families].some(f => !shape.interpreter!.families.has(f))) return false;
         const features = (structures: NormalizedGraph[]) => JSON.stringify(materialGraphConstants({}, {...base, key: 'x', structures, featureStructures: undefined}));
@@ -375,7 +396,7 @@ export class MaterialGraphState {
             // that is predicted over the correct-frame budget (then only this set's families).
             const forced = structures.filter(g => !this.program(g)), features = [...(installed?.features ?? []), ...structures.filter(g => !installed?.features.includes(g))];
             const full = this.interpreterConfig(structures, true);
-            const config = interpreterCompileMs(this.interpreterBytes(full.terminals, full.families), model) <= correctMs ? full : this.interpreterConfig(structures);
+            const config = interpreterCompileMs(this.interpreterBytes(full), model) <= correctMs ? full : this.interpreterConfig(structures);
             return this.shape(forced, config, Array.from(new Map(features.map(g => [g.key, g])).values()));
         }
         // Initial load: a small fully specialized set compiles directly; otherwise the

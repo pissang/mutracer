@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {
@@ -212,7 +212,7 @@ ${caustics?`        var connection=*path;
         result.transmission = transmission;
       }
     } else {
-      let lightRnd = vec3f(sample2D(lightDim(event, 1u)), sample1D(lightDim(event, 0u)));
+      let lightRnd = ${sharedGraphEmission ? 'mx_nee_random(event)' : 'vec3f(sample2D(lightDim(event, 1u)), sample1D(lightDim(event, 0u)))'};
       sampleLightForNEECandidate((*si).position, lightRnd, event, candidateCount, &lightSample);
       lightDir = lightSample.direction;
       if ((lightSample.pdf <= 0.0) | (lightSample.selectionPmf <= 0.0) |
