@@ -473,8 +473,12 @@ plan incompatible, or otherwise requires a new graph program, compiles after a
 short debounce. Rendering keeps the previous successful result and its parameters
 or texture slots during compilation; without a previous result, it uses the
 material's constants and maps. A successful installation restarts accumulation. Compilation can take
-hundreds of milliseconds or longer and becomes more expensive as a scene uses
-more distinct structures. Texture/resource changes can also pause rendering
+hundreds of milliseconds or longer. On WebGPU, when a scene has more distinct
+structures than fit about one second of compilation, the less used ones run on a
+shared graph interpreter: compilation stays bounded, but those materials cost
+more per hit. The structures covering the most surface area get specialized
+code, which replaces the interpreter shortly after the first installation
+without restarting accumulation. Texture/resource changes can also pause rendering
 while the last image remains visible.
 Graphs add work at each material hit; opacity graphs also run for shadow rays.
 Ordinary materials in the same scene do not evaluate the graph's nodes.

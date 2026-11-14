@@ -301,5 +301,6 @@ value updates parameters without compiling a shader. Texture references and pixe
 edits still incur the texture upload costs above. Changing categories, types,
 connections or terminal inputs can require compilation; materials with the same
 reachable structure share code. Rendering keeps the previous graph and parameters
-until the new structure is ready, then restarts accumulation. Inspect
+until the new structure is ready, then restarts accumulation; a later switch of
+the same structures to faster code does not restart it. Inspect
 `engine.getDiagnostics()?.materialGraphs` for progress or a located failure.
