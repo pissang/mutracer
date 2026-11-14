@@ -302,6 +302,9 @@ class WGPURayTracePass {
   shaderPrefetch: 'off' | 'editing' = 'off';
   private _editingRequest?: TraceRequest;
   private _leanRequest?: TraceRequest & {since: number};
+  /** Signatures whose background compile failed. Maintenance never retries them, since
+   * nothing waits for them; a render that requests one compiles it again. */
+  private _failedPrefetch = new Set<string>();
   get graphs() {
     if (!this._graphs) {
       this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes);
@@ -1072,6 +1075,8 @@ class WGPURayTracePass {
         const editingPlan = this.graphs.editingPlan() ?? graphPlan;
         const editing = request(true, editingPlan);
         this._editingRequest = editing.signature === lean.signature ? undefined : {...editing, graphPlan: editingPlan, fallbackSignature};
+        // A lean variant is owed only while the editing variant serves this request.
+        this._leanRequest = undefined;
         // It can serve only the graph shader the graph state installs.
         if (this._editingRequest && graphShaderKey(editingPlan) === graphShaderKey(graphPlan) &&
           this._traceVariants.get(lean.signature)?.status !== 'ready' && this._traceVariants.get(editing.signature)?.status === 'ready') {
@@ -1137,12 +1142,12 @@ class WGPURayTracePass {
     if (lean) {
       const variant = this._traceVariants.get(lean.signature);
       if (variant?.status === 'ready') { this._leanRequest = undefined; this._activeInputs = undefined; }
-      else if (variant?.status === 'failed') this._leanRequest = undefined;
+      else if (variant?.status === 'failed' || this._failedPrefetch.has(lean.signature)) this._leanRequest = undefined;
       else if (!variant && idle && performance.now() - lean.since >= EDITING_SETTLE_MS) start(lean);
       return;
     }
     const editing = this._editingRequest;
-    if (editing && idle && !this._traceVariants.has(editing.signature)) start(editing);
+    if (editing && idle && !this._traceVariants.has(editing.signature) && !this._failedPrefetch.has(editing.signature)) start(editing);
   }
 
   /** Runs only for a ready variant, without yielding, so tracing can start in this call. */
@@ -1357,6 +1362,7 @@ class WGPURayTracePass {
       (error) => {
         finishDiagnostics('failed', getWebGPUErrorMessage(error));
         if (this._disposed) return;
+        if (role === 'prefetch') this._failedPrefetch.add(signature);
         if (!bake && isWebGPUPipelineSpecializationFailure(error)) {
           // WebKit can accept a large WGSL module but fail while translating
           // its specialization-constant variant to Metal. Baking the values

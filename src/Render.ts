@@ -653,9 +653,11 @@ export default class Render {
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
     target.setPreserveDenoisedOutput?.(!!this._filter && this._schedule() !== 'converged');
     const limit = this._nextSampleTarget();
-    if (this.samples < limit) {
-      if (this._trace(target, limit)) return this._status = 'compiling';
-    } else if (target.refineAovs && !target.refineAovs(this._targetCamera(this._engine._inputs.value!))) {
+    const tracing = this.samples < limit;
+    if (tracing && this._trace(target, limit)) return this._status = 'compiling';
+    // Completed targets poll deferred shader work, including the call that completes
+    // one: a finished render is left idle, so a pending variant would never install.
+    if ((!tracing || this.converged) && target.refineAovs && !target.refineAovs(this._targetCamera(this._engine._inputs.value!))) {
       return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);

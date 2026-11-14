@@ -1703,22 +1703,19 @@ width: renderWidth, height: renderHeight,
     getAovSamples() { return aov.samples; },
     restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
-      // Completed beauty targets still poll deferred graph compilation. A late
-      // installation invalidates this target before its next capped sample.
-      if (rayTracePass.graphs?.status === 'compiling' || rayTracePass.graphs?.upgrading || graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
-        applyTraceQuality(); rayTracePass.setCamera(camera); rayTracePass.updatePipeline();
-        if(graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
-          graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; sampleCount = 0; cancelDenoise(); return false;
-        }
-        if(rayTracePass.graphs?.status === 'compiling')return false;
+      // Completed targets and surface outputs poll deferred graph compilation. Check
+      // after this update, which may request the graphs. A late installation
+      // invalidates this target before its next capped sample.
+      applyTraceQuality(); rayTracePass.setCamera(camera); rayTracePass.updatePipeline();
+      if (graphGeneration !== (rayTracePass.graphs?.generation ?? 0)) {
+        graphGeneration = rayTracePass.graphs?.generation ?? 0; isFirstFrame = true; sampleCount = 0; aov.reset(); cancelDenoise(); return false;
       }
-      if (samples < 1 || !execution?.aovs?.length) return true;
-      applyTraceQuality();
-      rayTracePass.setCamera(camera); aovCamera = camera;
-      rayTracePass.updatePipeline();
       const pipelineError = rayTracePass.getPipelineError();
       if (pipelineError) throw pipelineError;
-      if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
+      // An installation can change the next request (graph features, emissive lights).
+      if (rayTracePass.graphs?.status === 'compiling' || rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
+      if (samples < 1 || !execution?.aovs?.length) return true;
+      aovCamera = camera;
       return rayTracePass.renderAovs(aov, camera, samples, Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution());
     },
     async readAov(kind) {

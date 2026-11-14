@@ -20,7 +20,7 @@ function fixture() {
   const pass = Object.create(WGPURayTracePass.prototype) as any;
   const maps = new Map<object, {data: object}>();
   Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(),
-    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _traceModules: new Map(), _targetTransport: new WeakMap(),
+    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _failedPrefetch: new Set(), _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
     _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(), _bevelSamples: 8, _hasDisplacement: false,
     _createPipelineLayout: () => ({}), _updateBindGroups: () => {pass._rayTraceBindGroups = [];},
