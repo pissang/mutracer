@@ -220,19 +220,22 @@ before showing the image: it waits for the shaders the committed scene needs.
 
 Apps that let users edit materials can construct the engine with
 `shaderPrefetch: 'editing'` (WebGPU). After the first shader is ready, the engine
-compiles in the background a variant that also supports coat, fuzz, thin film,
-transmission, subsurface and media, anisotropy and coat-normal frames, and UV1
-textures. An edit that needs any of these then renders at once through that variant
-instead of waiting for a compile. Once the scene has not needed another shader
-for about two seconds of rendering, the engine compiles the variant the scene needs
-and switches back to it without restarting accumulation.
+compiles in the background a variant that supports every material lobe, media,
+transparency, every texture type, anisotropy and coat-normal frames, UV1 textures
+and emissive triangles, and that runs any [material graph](./materials.md#material-graphs)
+in a graph interpreter. A material edit, including replacing a material's graph,
+then renders at once through that variant instead of waiting for a compile. Once the
+scene has not needed another shader for about two seconds of rendering, the engine
+compiles the variant the scene needs and switches back to it without restarting
+accumulation.
 
-The prefetch costs background compile time after loading. Until the switch back,
-sampling is slower than with the scene's own variant, and each restart can take
-longer before its first sample. Other changes in the table above, such as vertex
-tangents for anisotropy, alpha, dispersion or light types, still compile, and so does
-a material graph that connects a lobe weight (for example `transmissionWeight`) for
-the first time.
+The prefetch costs background compile time after loading (about 3.5 s on an Apple
+M4 Max). Until the switch back, sampling is slower than with the scene's own variant
+(about 10 % in a measured scene). Edits that change geometry still compile:
+displacement and the first anisotropic material on a mesh, which generates vertex
+tangents. So do dispersion and analytic-light types. Where graph interpreter code
+compiles slowly (predicted over 10 s, as with Direct3D or Vulkan), the background
+variant leaves out the graph interpreter, and a graph edit can compile.
 
 ## Geometry
 
@@ -323,5 +326,6 @@ edits still incur the texture upload costs above. Changing categories, types,
 connections or terminal inputs can require compilation; materials with the same
 reachable structure share code. Rendering keeps the previous graph and parameters
 until the new structure is ready, then restarts accumulation; a later switch of
-the same structures to faster code does not restart it. Inspect
+the same structures to faster code does not restart it. With
+[editing prefetch](#editing-prefetch) a new structure renders without that wait. Inspect
 `engine.getDiagnostics()?.materialGraphs` for progress or a located failure.

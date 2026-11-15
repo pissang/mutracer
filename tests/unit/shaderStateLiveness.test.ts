@@ -10,10 +10,11 @@ import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
 import {createPlaneGeometry, createSphereGeometry} from '../../src/main';
 import {SpotLight} from '../../src/main';
 import {installFakeGPU} from '../helpers/fakeGPU';
+import {setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state';
 
 const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
 let active: ReturnType<typeof installFakeGPU> | undefined;
-afterEach(async () => { active?.loseDevice(); await macrotask(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { active?.loseDevice(); await macrotask(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setMaterialGraphPlanner(); });
 
 /** Distinct graph structures: a chain of k unary nodes over UV driving `terminal`. */
 function chain(k: number, terminal: 'specularRoughness' | 'baseColor' | 'emissionColor' = 'specularRoughness') {
@@ -27,13 +28,16 @@ function chain(k: number, terminal: 'specularRoughness' | 'baseColor' | 'emissio
   return new MaterialGraph({nodes, terminal: {[terminal]: {node: 'c'}}});
 }
 
-function setup(seed: number) {
+function setup(seed: number, shaderPrefetch?: 'off' | 'editing') {
   let random = seed * 2654435761 + 7 >>> 0;
   const pick = (limit: number) => { random = random * 1664525 + 1013904223 >>> 0; return (random >>> 8) % limit; };
   let now = 1000;
+  // Odd seeds plan with Metal's compile costs, where the editing variant carries the universal
+  // graph interpreter; even seeds with the fake device's unknown backend, where it does not.
+  if (seed % 2) setMaterialGraphPlanner({compileBackend: 'metal'});
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   const gpu = active = installFakeGPU();
-  const engine = new Engine({canvas: gpu.canvas, backend: 'webgpu', shaderPrefetch: pick(4) ? 'editing' : 'off'});
+  const engine = new Engine({canvas: gpu.canvas, backend: 'webgpu', shaderPrefetch: pick(4) ? shaderPrefetch ?? 'editing' : shaderPrefetch ?? 'off'});
   const camera = new Camera({projection: 'perspective', aspect: 4 / 3, fov: 50});
   camera.position = [3, 2, 4]; camera.lookAt([0, 0, 0]);
   engine.camera = camera;
@@ -76,7 +80,8 @@ describe('shader variant liveness', () => {
     let pass: any;
     const update = WGPURayTracePass.prototype.updatePipeline;
     vi.spyOn(WGPURayTracePass.prototype, 'updatePipeline').mockImplementation(function (this: WGPURayTracePass) { pass = this; return update.call(this); });
-    const f = setup(0), {gpu, engine, final, loop} = f;
+    // Without editing prefetch: a ready editing variant installs graph edits without the debounce.
+    const f = setup(0, 'off'), {gpu, engine, final, loop} = f;
     final.maxSamples = 1;
     await engine.init();
     const run = async () => {

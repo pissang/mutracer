@@ -222,6 +222,22 @@ compile is predicted over the 10 s upgrade ceiling below (on D3D12 it takes ≈7
 and still compiles). An edit uses it only once it has compiled; until then, or
 without it, an edit compiles as described above.
 
+With the engine's editing prefetch, the backend's editing variant instead carries
+the universal editing interpreter: every opcode family in the surface, emission and
+opacity entries and every terminal, compiled with every graph pipeline feature
+(frames, UV1, alpha, emissive light sampling) and every lobe. It fits any
+interpretable structure set, so once it has compiled, a structural edit installs the
+new programs on it at once, without the debounce, and accumulation restarts as for
+any structure change. The set's own serving variant compiles once the scene has
+been stable for 2 s and replaces it without a restart; the upgrade policy waits for
+that. The universal shape never becomes a structure set's serving shape, and other
+variants keep compiling the installed structures' own plan. It is not used when its
+compile is predicted over the 10 s upgrade ceiling below (≈15 s on D3D12), when tiers
+are forced, or when a structure cannot be interpreted; the editing variant then
+carries the prefetched editing interpreter as before. The universal interpreter
+adds about 35 KB of source and about 1 s of Metal compile time over the lobe-only
+editing variant, and costs about 10 % GPU time per sample while it serves.
+
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.
 

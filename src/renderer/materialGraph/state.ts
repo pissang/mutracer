@@ -138,6 +138,9 @@ export interface GraphTierShape {
     interpreterBytes: number;
     /** Planner coverage when planned. */
     coverage?: number;
+    /** The universal editing interpreter: its variant enables every graph pipeline feature, so
+     * `fits` does not compare features. */
+    universal?: boolean;
 }
 export interface GraphPlan {
     key: string;
@@ -374,6 +377,7 @@ export class MaterialGraphState {
             if (!covers('emission', shape.interpreter!.emission) || !covers('opacity', shape.interpreter!.opacity)) return false;
         }
         if ([...families].some(f => !shape.interpreter!.families.has(f))) return false;
+        if (shape.universal) return true;
         const features = (structures: NormalizedGraph[]) => JSON.stringify(materialGraphConstants({}, {...base, key: 'x', structures, featureStructures: undefined}));
         return features([...shape.features, ...base.structures]) === features(shape.features);
     }
@@ -382,7 +386,7 @@ export class MaterialGraphState {
         const {key, structures, graphs} = base;
         for (const g of structures) if (this.program(g)) for (const t in g.terminal) this.seenTerminals.add(t);
         if (planner.tier !== 'auto' || !this.interpreterAvailable) return this.decideTiers(key, structures, materials, graphs).shape;
-        const installed = this.active.key ? this.active.shape : undefined;
+        const installed = this.active.key ? this.naturalShape() : undefined;
         // Incremental edit: the installed variant keeps its specialized code and runs
         // new or changed structures as interpreter programs.
         if (installed && this.fits(installed, base)) return installed;
@@ -475,6 +479,7 @@ export class MaterialGraphState {
         if (key === this.active.key) {
             // Same structures: keep the installed tiers (and its variant) for these parameters.
             const installed = this.active.shape?.shaderKey === this.requested.shaderKey ? this.requested : this.active.shape ? this.plan(base, this.active.shape) : this.requested;
+            if (installed.shape?.universal) this.activeNatural = this.requested;
             this.install(installed, this.revision);
             this.status = diagnostics.length ? 'failed' : key ? 'ready' : 'idle';
         }
@@ -525,7 +530,9 @@ export class MaterialGraphState {
      * installed tier while an installed upgrade is verified.
      */
     tick(compilesInFlight: number, now = performance.now()) {
-        if (!this.serving || this.active.key !== this.planKey || !this.planKey || policyFrozen) return;
+        // The universal editing interpreter serves until the backend installs the set's own
+        // variant; upgrades are decided from there.
+        if (!this.serving || this.active.key !== this.planKey || !this.planKey || policyFrozen || this.editingInstalled) return;
         if (this.phase === 'waiting') {
             if (now - this.stableSince < this.policy.debounceMs) return;
             this.upgrade ??= this.decideTiers(this.planKey, this.base.structures, this.materials, this.base.graphs).shape;
@@ -570,7 +577,7 @@ export class MaterialGraphState {
      * compile the policy starts): an edit then compiles only its own families.
      */
     prefetch(compilesInFlight: number): GraphPlan | undefined {
-        const installed = this.active.shape;
+        const installed = this.naturalShape();
         if (compilesInFlight > 0 || !this.policy.prefetch || planner.tier !== 'auto' || !this.interpreterAvailable || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
         const full = this.interpreterConfig(this.base.structures, true);
         if (installed.interpreter && installed.interpreter.families.size >= ALL_FAMILIES.size && full.terminals.every(t => installed.interpreter!.terminals.includes(t))) return;
@@ -580,9 +587,29 @@ export class MaterialGraphState {
         this.prefetched.set(shape.shaderKey, shape);
         return this.plan(this.base, shape);
     }
-    /** The plan of a registered editing interpreter (see `prefetch`) that covers the current
-     * structures, so another variant (an engine-level editing variant) can carry it. */
+    private universal?: {planner: Planner; shape: GraphTierShape};
+    /** Every opcode family in all three entries and every terminal: one variant that runs any
+     * interpretable structure set. Only the engine-level editing variant carries it, with every
+     * graph pipeline feature enabled. */
+    private universalShape() {
+        if (this.universal?.planner !== planner) {
+            const shape = this.shape([], {terminals: Object.keys(terminalTypes), families: ALL_FAMILIES, emission: ALL_FAMILIES, opacity: ALL_FAMILIES}, []);
+            this.universal = {planner, shape: {...shape, universal: true}};
+        }
+        return this.universal.shape;
+    }
+    /** The current structures on the universal editing interpreter, for the engine-level editing
+     * variant; also without graphs, so a first graph renders at once. Undefined when tiers are
+     * forced, without the interpreter, when a structure cannot be interpreted, or when its
+     * compile is predicted over the upgrade ceiling (the longest uncancellable background compile). */
     editingPlan(): GraphPlan | undefined {
+        if (planner.tier !== 'auto' || !this.interpreterAvailable || this.base.structures.some(g => !this.program(g))) return undefined;
+        const shape = this.universalShape();
+        return this.compileMs(shape) > this.policy.maxUpgradeCompileMs ? undefined : this.plan(this.base, shape);
+    }
+    /** The plan of a registered editing interpreter (see `prefetch`) that covers the current
+     * structures, for an editing variant without the universal interpreter. */
+    prefetchedEditingPlan(): GraphPlan | undefined {
         for (const shape of this.prefetched.values()) if (this.fits(shape, this.base)) return this.plan(this.base, shape);
         return undefined;
     }
@@ -603,16 +630,35 @@ export class MaterialGraphState {
         planner.onCompile?.(observation);
         return observation;
     }
-    /** Candidate installation; returning active during debounce keeps the existing backend fast path. */
-    candidate(hasPipeline: boolean): GraphPlan {
-        return hasPipeline && performance.now() >= this.readyAt && !this.compileFailed ? this.requested : this.active;
+    /** Candidate installation; returning active during debounce keeps the existing backend fast path.
+     * `immediate` skips the debounce, for a backend whose ready editing variant renders any
+     * structure set without compiling. */
+    candidate(hasPipeline: boolean, immediate: () => boolean = () => false): GraphPlan {
+        if (hasPipeline && !this.compileFailed && (performance.now() >= this.readyAt || immediate())) return this.requested;
+        // Variants other than the editing variant compile the installed structures' own plan.
+        return this.active.shape?.universal && this.activeNatural ? this.activeNatural : this.active;
     }
-    /** Installs the requested plan whose shader key matches a ready variant. False when nothing changes. */
+    /** The plan the installed structures would have without the universal interpreter, while it serves them. */
+    private activeNatural?: GraphPlan;
+    /** Installed shape; the installed structures' own shape while the universal interpreter serves them. */
+    private naturalShape() { return this.active.shape?.universal ? this.activeNatural?.shape : this.active.shape; }
+    /** Installs the requested plan, or the current structures on the universal editing
+     * interpreter, whose shader key matches a ready variant. False when nothing changes. */
     installShader(shaderKey: string): boolean {
-        if (this.requested.shaderKey !== shaderKey && graphShaderKey(this.requested) !== shaderKey) return false;
-        if (this.requested.key === this.active.key && graphShaderKey(this.active) === shaderKey) return false;
-        return this.install(this.requested, this.revision);
+        let plan = this.requested;
+        if (graphShaderKey(plan) !== shaderKey) {
+            const universal = this.universal?.shape;
+            if (universal?.shaderKey !== shaderKey || !this.fits(universal, this.base)) return false;
+            plan = this.plan(this.base, universal);
+            this.activeNatural = this.requested;
+        }
+        if (plan.key === this.active.key && graphShaderKey(this.active) === shaderKey) return false;
+        // Without graphs only the installed shape changes; there is no graph data to stage.
+        if (!plan.key && !this.active.key) { this.active = plan; return false; }
+        return this.install(plan, this.revision);
     }
+    /** The universal editing interpreter serves the installed structures. */
+    get editingInstalled() { return !!this.active.shape?.universal; }
     /** An installed upgrade is being compared with the serving variant. */
     get verifying() { return this.phase === 'verifying'; }
     /** An upgrade is compiling or being verified: keep polling converged targets. */

@@ -82,10 +82,12 @@ import {WGPUEnvMapDistribution} from './WGPUEnvMapDistribution.js';
 import {WGPUShaderCache, retainedShaderCapacity} from './WGPUShaderCache.js';
 import {WGPUShaderCapabilities} from './WGPUShaderCapabilities.js';
 import {wgpuSceneFeatureFlags, WGPU_SCENE_FEATURE_BITS} from './WGPUSceneFeatures.js';
+import {MATERIAL_TEXTURE_FEATURE_BITS} from './materialTextureSlots.js';
 import {
   lightShaderCapabilities,
   retainedShaderCapabilities,
   ALL_MATERIAL_SHADER_CAPABILITIES,
+  LIGHT_SHADER_CAPABILITIES,
   type ShaderCapabilities
 } from './shaderCapabilities.js';
 import {mat4} from '../math.js';
@@ -208,13 +210,20 @@ const MAX_TRACE_VARIANTS = 32;
 const MAX_CONCURRENT_COMPILES = 2;
 /** Structure flags the editing variant enables. Each only adds code that per-material data
  * gates, so scenes without the feature render the same through it. */
-const EDITING_STRUCTURE = {HAS_MEDIUM: true, USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true};
+const EDITING_STRUCTURE = {HAS_MEDIUM: true, USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true,
+  // Opacity terminals and alpha materials; coverage is per-material data.
+  HAS_ALPHA: true, HAS_ALPHA_MASK: true, HAS_ALPHA_BLEND: true};
+/** The editing variant's structure flags. Frames read vertex tangents whenever the geometry has them,
+ * as graph frames do (see materialGraphConstants). */
+const editingStructure = (geometry?: {tangent?: unknown}) => ({...EDITING_STRUCTURE, USE_TANGENT: geometry?.tangent != null});
 const EDITING_SCENE_CAPABILITIES = WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ |
-  WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM | WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE;
+  WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM | WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE |
+  Object.values(MATERIAL_TEXTURE_FEATURE_BITS).reduce((bits, bit) => bits | bit, 0);
 const editingShaderCapabilities = (required: ShaderCapabilities): ShaderCapabilities => ({
   SCENE_CAPABILITIES: required.SCENE_CAPABILITIES | EDITING_SCENE_CAPABILITIES,
   MATERIAL_CAPABILITIES: required.MATERIAL_CAPABILITIES | ALL_MATERIAL_SHADER_CAPABILITIES,
-  LIGHT_CAPABILITIES: required.LIGHT_CAPABILITIES
+  // Graph emission adds emissive triangles to light sampling.
+  LIGHT_CAPABILITIES: required.LIGHT_CAPABILITIES | LIGHT_SHADER_CAPABILITIES.emissive
 });
 /** Scene stability before the lean variant replacing the editing variant compiles. */
 const EDITING_SETTLE_MS = 2000;
@@ -978,44 +987,13 @@ class WGPURayTracePass {
       this._preparePhotonTarget();
       // The tier policy may start a gated upgrade or switch tiers while verifying one.
       this.graphs.tick(this._activeCompiles + this._queuedCompiles.length);
-      const graphPlan = this.graphs.candidate(!!this._rayTracePipeline);
-      const graphConstants = materialGraphConstants(this._constants, graphPlan, this._preparedMeshData?.geometry);
-      const pipelineInputs = JSON.stringify([
-        graphPlan.key,
-        graphShaderKey(graphPlan),
-        graphConstants,
-        Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
-        this._hasDisplacement,
-        this._alphaBlendStrategy,
-        this._blasLayoutMask,
-        this._bakePipelineConstants,
-        this._causticKey,
-        !!this._bindless
-      ]);
-      // Steady rendering must not repeat capability retention and pipeline-key
-      // preparation. Dirty resources still take the normal bind-group path.
-      if (
-        pipelineInputs === this._activeInputs &&
-        this._rayTracePipeline &&
-        this._rayTraceBindGroups &&
-        !this._needsUpdateBindGroups
-      ) {
-        if (this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
-          this._needsPhotonTargetBindGroups = false;
-          this._needsUpdateOutputBindGroup = false;
-          this._updateBindGroups();
-        }
-        this._requestedVariant = this._activeVariant;
-        this._maintainShaderPrefetch();
-        return;
-      }
-      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(graphConstants);
+      const geometry = this._preparedMeshData?.geometry;
       const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
       // A variant request: lean (what the scene needs) or, with editing prefetch, the
       // editing variant that also enables every lobe and code-adding structure flag.
-      const request = (editing: boolean, plan = graphPlan) => {
-        const planConstants = plan === graphPlan ? graphConstants : materialGraphConstants(this._constants, plan, this._preparedMeshData?.geometry);
-        const source = editing ? {...planConstants, ...EDITING_STRUCTURE} : planConstants;
+      const request = (editing: boolean, plan: GraphPlan) => {
+        const planConstants = materialGraphConstants(this._constants, plan, geometry);
+        const source = editing ? {...planConstants, ...editingStructure(geometry)} : planConstants;
         const requiredCapabilities = retainedShaderCapabilities(source);
         const constants: Record<string, boolean | number> = {...source, ...requiredCapabilities};
         const hasAlpha =
@@ -1049,7 +1027,7 @@ class WGPURayTracePass {
         const capabilities = editing ? editingShaderCapabilities(requiredCapabilities) :
           this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
           retainedShaderCapabilities(
-            graphConstants,
+            planConstants,
             structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined
           );
         Object.assign(constants, capabilities);
@@ -1063,38 +1041,84 @@ class WGPURayTracePass {
         // Interpreted structures share one shader key, so a structure-set change
         // reuses the installed variant and only uploads programs.
         const signature = graphShaderKey(plan) ? baseSignature + '\n' + graphShaderKey(plan) : baseSignature;
-        return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature};
+        return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature,
+          graphPlan: plan, fallbackSignature};
       };
-      const lean = request(false);
+      // With editing prefetch the editing variant carries the universal graph interpreter, so
+      // once compiled it renders any lobe and graph edit; graph edits then skip the debounce.
+      let universal: {plan?: GraphPlan; request?: TraceRequest} | undefined;
+      const editingRequest = () => {
+        if (!universal) {
+          const plan = this.shaderPrefetch === 'editing' ? this.graphs.editingPlan() : undefined;
+          universal = {plan, request: plan && request(true, plan)};
+        }
+        return universal.request;
+      };
+      const editingReady = () => this._traceVariants.get(editingRequest()?.signature ?? '')?.status === 'ready';
+      const graphPlan = this.graphs.candidate(!!this._rayTracePipeline, editingReady);
+      const graphConstants = materialGraphConstants(this._constants, graphPlan, geometry);
+      const pipelineInputs = JSON.stringify([
+        graphPlan.key,
+        graphShaderKey(graphPlan),
+        graphConstants,
+        Boolean(this._constants.SPECTRAL) && this._shareSpectralPrefix,
+        this._hasDisplacement,
+        this._alphaBlendStrategy,
+        this._blasLayoutMask,
+        this._bakePipelineConstants,
+        this._causticKey,
+        !!this._bindless
+      ]);
+      // Steady rendering must not repeat capability retention and pipeline-key
+      // preparation. Dirty resources still take the normal bind-group path.
+      if (
+        pipelineInputs === this._activeInputs &&
+        this._rayTracePipeline &&
+        this._rayTraceBindGroups &&
+        !this._needsUpdateBindGroups
+      ) {
+        if (this._needsPhotonTargetBindGroups || this._needsUpdateOutputBindGroup) {
+          this._needsPhotonTargetBindGroups = false;
+          this._needsUpdateOutputBindGroup = false;
+          this._updateBindGroups();
+        }
+        this._requestedVariant = this._activeVariant;
+        this._maintainShaderPrefetch();
+        return;
+      }
+      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(graphConstants);
+      const lean = request(false, graphPlan);
       let chosen = lean;
       if (this.shaderPrefetch === 'editing') {
-        // An edit that needs a variant not compiled yet uses the prefetched editing
-        // variant at once; the lean variant compiles after the scene settles.
-        // With material graphs the editing variant carries the graph editing interpreter,
-        // so one background compile covers lobe and graph structure edits.
-        const editingPlan = this.graphs.editingPlan() ?? graphPlan;
-        const editing = request(true, editingPlan);
-        this._editingRequest = editing.signature === lean.signature ? undefined : {...editing, graphPlan: editingPlan, fallbackSignature};
+        // Without the universal interpreter (a structure it cannot run, a slow compiler), the
+        // editing variant carries a prefetched editing interpreter or the requested graph
+        // shader, and serves edits only when the graph state installs that shader.
+        const editing = editingRequest() ?? request(true, this.graphs.prefetchedEditingPlan() ?? graphPlan);
+        this._editingRequest = editing.signature === lean.signature ? undefined : editing;
         // A lean variant is owed only while the editing variant serves this request.
         this._leanRequest = undefined;
-        // It can serve only the graph shader the graph state installs.
-        if (this._editingRequest && graphShaderKey(editingPlan) === graphShaderKey(graphPlan) &&
-          this._traceVariants.get(lean.signature)?.status !== 'ready' && this._traceVariants.get(editing.signature)?.status === 'ready') {
+        const ready = (r: TraceRequest) => this._traceVariants.get(r.signature)?.status === 'ready';
+        // A gated upgrade (or its verification) of the installed structures keeps tracing the
+        // installed variant while the upgrade compiles.
+        const tierChange = this.graphs.upgrading && !!this._activeVariant && this._activeVariant !== this._traceVariants.get(editing.signature) &&
+          this._activeVariant.baseSignature === fallbackSignature;
+        const servesGraph = !!universal?.plan || graphShaderKey(editing.graphPlan) === graphShaderKey(graphPlan);
+        if (this._editingRequest && servesGraph && !ready(lean) && ready(editing) && !tierChange) {
           chosen = editing;
-          this._leanRequest = {...lean, graphPlan, fallbackSignature, since: performance.now()};
+          this._leanRequest = {...lean, since: performance.now()};
         }
       }
       const {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature} = chosen;
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
-        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan, baseSignature:fallbackSignature}, this.graphs.compileRole(graphPlan));
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan: chosen.graphPlan, baseSignature:fallbackSignature}, this.graphs.compileRole(chosen.graphPlan));
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
       // A gated upgrade or a structure edit that needs a new variant compiles while
       // the installed variant keeps tracing (constants until a graph variant is ready).
       if (variant.status === 'pending') {
-        this._requestQueuedCompile(variant, this.graphs.compileRole(graphPlan));
+        this._requestQueuedCompile(variant, this.graphs.compileRole(chosen.graphPlan));
         if (this._canTraceOldGraph) {
           if(this._needsUpdateBindGroups) { this._updateBindGroups(); this._needsUpdateBindGroups = false; }
           return;
@@ -1107,13 +1131,13 @@ class WGPURayTracePass {
         return;
       }
       this._installTraceVariant(variant, pipelineInputs);
-      // Background compile of the editing interpreter (see MaterialGraphState.prefetch).
-      const prefetch = this.graphs.prefetch(this._activeCompiles + this._queuedCompiles.length);
-      if (prefetch && JSON.stringify(materialGraphConstants(this._constants, prefetch, this._preparedMeshData?.geometry)) === JSON.stringify(graphConstants)) {
+      // Background compile of the editing interpreter (see MaterialGraphState.prefetch); an
+      // editing variant with the universal interpreter covers it.
+      const prefetch = this.shaderPrefetch === 'editing' && editingRequest() ? undefined : this.graphs.prefetch(this._activeCompiles + this._queuedCompiles.length);
+      if (prefetch && JSON.stringify(materialGraphConstants(this._constants, prefetch, geometry)) === JSON.stringify(graphConstants)) {
         if (this.shaderPrefetch === 'editing') {
           // The editing variant compiles it, with every lobe (see _maintainShaderPrefetch).
-          const editing = request(true, prefetch);
-          this._editingRequest = {...editing, graphPlan: prefetch, fallbackSignature};
+          this._editingRequest = request(true, prefetch);
         } else {
           const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
           if (!this._traceVariants.has(prefetchSignature))
@@ -1244,7 +1268,7 @@ class WGPURayTracePass {
           constants,
           {
             materialHooks: {
-              ...materialGraphShader(lightTracing || photonMapping ? {...shader.graphPlan, key: ''} : shader.graphPlan,
+              ...materialGraphShader(lightTracing || photonMapping ? {...shader.graphPlan, key: '', interpreter: false} : shader.graphPlan,
                 !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES),
               materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS
             },
@@ -1399,7 +1423,7 @@ class WGPURayTracePass {
     }
     for (const [key, retained] of this._traceVariants) {
       if (this._traceVariants.size <= MAX_TRACE_VARIANTS) break;
-      if (retained.status !== 'pending' && retained !== this._activeVariant) this._traceVariants.delete(key);
+      if (retained.status !== 'pending' && retained !== this._activeVariant && key !== this._editingRequest?.signature) this._traceVariants.delete(key);
     }
     this._pumpCompiles();
     return variant;

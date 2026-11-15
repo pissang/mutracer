@@ -57,7 +57,7 @@ export interface EngineParams {
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
   /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
   /** Material texture bindings. Default atlas; auto tries WebGPU bindless textures and falls back to atlas when unavailable. Fixed at construction. */ textureBinding?: 'atlas' | 'auto';
-  /** WebGPU shader prefetch for interactive material editing. `editing` compiles a variant with every material lobe in the background, so a later edit that enables another lobe renders without waiting for a compile; once the scene settles, the lean variant replaces it. Costs background compiles and, until then, slower sampling. Default off. Fixed at construction. */ shaderPrefetch?: 'off' | 'editing';
+  /** WebGPU shader prefetch for interactive material editing. `editing` compiles a variant with every material lobe and a material graph interpreter in the background, so a later material or graph edit renders without waiting for a compile; once the scene settles, the lean variant replaces it. Costs background compiles and, until then, slower sampling. Default off. Fixed at construction. */ shaderPrefetch?: 'off' | 'editing';
 }
 /** Material-atlas device limits. */
 export interface TextureAtlasLimits { maxTextureArrayLayers: number; maxTextureDimension2D: number; }

@@ -406,6 +406,50 @@ describe('material graph tier plans', () => {
         expect(graphShaderKey(state.requested)).toBe(graphShaderKey(prefetch));
     });
 
+    it('serves any interpretable set on the universal editing interpreter without leaking it into other plans', () => {
+        setMaterialGraphPlanner(mixed);
+        const state = newState();
+        state.request([new OpenPBRMaterial({graph: chainGraph(1)})]);
+        state.installShader(graphShaderKey(state.requested));
+        const natural = graphShaderKey(state.requested);
+        const editing = state.editingPlan()!;
+        expect(editing.interpreterTerminals).toEqual(expect.arrayContaining(['opacity', 'normal', 'emissionColor', 'transmissionWeight']));
+        // A structure edit installs on the universal interpreter, keeping accumulation.
+        const generation = state.generation;
+        state.request([new OpenPBRMaterial({graph: scaledGraph(2, 2, true)})]);
+        expect(state.installShader(graphShaderKey(editing))).toBe(true);
+        expect(state.editingInstalled).toBe(true);
+        expect(state.generation).toBe(generation + 1);
+        // Other variants keep compiling the set's own plan, during the debounce and after
+        // further edits that the universal interpreter covers.
+        expect(state.candidate(true).shape?.universal).toBeFalsy();
+        state.request([new OpenPBRMaterial({graph: scaledGraph(3, 2, true)})]);
+        expect(state.requested.shape?.universal).toBeFalsy();
+        expect(state.candidate(true).shape?.universal).toBeFalsy();
+        expect(state.candidate(true, () => true).shape?.universal).toBeFalsy();
+        expect(graphShaderKey(state.requested)).not.toBe(graphShaderKey(editing));
+        // Parameter edits keep the installed universal interpreter; the set's own variant
+        // replaces it without restarting accumulation.
+        expect(state.installShader(graphShaderKey(editing))).toBe(true);
+        const installed = state.generation;
+        expect(state.installShader(graphShaderKey(state.requested))).toBe(true);
+        expect(state.editingInstalled).toBe(false);
+        expect(state.generation).toBe(installed);
+        expect(natural).not.toBe(graphShaderKey(editing));
+    });
+
+    it('offers the universal editing interpreter only within the background compile ceiling', () => {
+        const universal = (compileBackend: 'metal' | 'd3d12') => {
+            setMaterialGraphPlanner({compileBackend});
+            const state = newState();
+            state.request([new OpenPBRMaterial({graph: chainGraph(1)})]);
+            return state.editingPlan();
+        };
+        expect(universal('metal')).toBeDefined();
+        // Predicted far over 10 s with D3D12's interpreter cost.
+        expect(universal('d3d12')).toBeUndefined();
+    });
+
     it('limits the editing interpreter to the set families when all families are predicted too slow', () => {
         setMaterialGraphPlanner({...mixed, model: {...tierModel, interpreterMsPerKB: 48, interpreterFreeKB: 3.6}, compileSpeed: 20});
         const state = newState();
