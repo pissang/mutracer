@@ -1554,7 +1554,7 @@ export class WebEngine implements ViewerEngine {
       if(!applied||signal?.aborted)return false;
       const parts=`${warnings.length} unsupported ${warnings.length===1?'part':'parts'}`;
       if(warnings.length)console.warn(`MaterialX ${name}: ${parts}\n${warnings.join('\n')}`);
-      if(!quiet)showToast(warnings.length?`Imported ${name} with ${parts} (details in the console)`:`Imported ${name}`,warnings.length?'warning':'success');
+      if(!quiet&&warnings.length)showToast(`Imported ${name} with ${parts} (details in the console)`,'warning');
       return true;
     } catch (error) {
       if(signal?.aborted||imports.get(materialId)!==request||this.modelGroup!==model)return false;
