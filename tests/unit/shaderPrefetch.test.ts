@@ -6,6 +6,8 @@ import {WGPU_SCENE_FEATURE_BITS} from '../../src/renderer/WGPUSceneFeatures';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {createPlaneGeometry} from '../../src/util/commonGeometry';
 import Mesh from '../../src/scene/Mesh';
+import {setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state';
+import {LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
 
 const pipeline = () => ({getBindGroupLayout: () => ({})}) as unknown as GPUComputePipeline;
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -65,6 +67,27 @@ describe('editing shader prefetch', () => {
     trace(); trace();
     expect(JSON.parse(pass._activeVariant.structureKey).constants).not.toContainEqual(['HAS_MEDIUM', true]);
     expect(pass._activeVariant.capabilities.SCENE_CAPABILITIES & thinFilm).toBe(thinFilm);
+  });
+
+  it('adds graph features to the editing variant only with the universal interpreter', async () => {
+    const editing = async (compileBackend?: 'metal') => {
+      setMaterialGraphPlanner(compileBackend ? {compileBackend} : {});
+      const {pass, trace, complete} = fixture('editing');
+      trace(); await complete(); trace();
+      return pass._editingRequest;
+    };
+    try {
+      // The fake device's unknown backend predicts the universal compile over the ceiling:
+      // the editing variant is the lobe-only one.
+      const lobes = await editing();
+      expect(lobes.graphPlan.shape?.universal).toBeFalsy();
+      expect(lobes.constants.HAS_ALPHA).toBeFalsy();
+      expect(lobes.constants.LIGHT_CAPABILITIES & LIGHT_SHADER_CAPABILITIES.emissive).toBe(0);
+      const universal = await editing('metal');
+      expect(universal.graphPlan.shape?.universal).toBe(true);
+      expect(universal.constants.HAS_ALPHA).toBe(true);
+      expect(universal.constants.LIGHT_CAPABILITIES & LIGHT_SHADER_CAPABILITIES.emissive).toBe(LIGHT_SHADER_CAPABILITIES.emissive);
+    } finally { setMaterialGraphPlanner(); }
   });
 
   it('compiles nothing extra when off', async () => {

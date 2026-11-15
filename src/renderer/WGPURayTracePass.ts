@@ -210,20 +210,21 @@ const MAX_TRACE_VARIANTS = 32;
 const MAX_CONCURRENT_COMPILES = 2;
 /** Structure flags the editing variant enables. Each only adds code that per-material data
  * gates, so scenes without the feature render the same through it. */
-const EDITING_STRUCTURE = {HAS_MEDIUM: true, USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true,
-  // Opacity terminals and alpha materials; coverage is per-material data.
-  HAS_ALPHA: true, HAS_ALPHA_MASK: true, HAS_ALPHA_BLEND: true};
-/** The editing variant's structure flags. Frames read vertex tangents whenever the geometry has them,
- * as graph frames do (see materialGraphConstants). */
-const editingStructure = (geometry?: {tangent?: unknown}) => ({...EDITING_STRUCTURE, USE_TANGENT: geometry?.tangent != null});
+const EDITING_STRUCTURE = {HAS_MEDIUM: true, USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true};
+/** With the universal graph interpreter the editing variant also enables the features graph
+ * terminals select: alpha for opacity (coverage is per-material data) and frames from vertex
+ * tangents whenever the geometry has them, as graph frames do (see materialGraphConstants).
+ * Without it these stay out: on slow compilers they cost more compile time than they save. */
+const editingStructure = (universal: boolean, geometry?: {tangent?: unknown}) => universal ?
+  {...EDITING_STRUCTURE, HAS_ALPHA: true, HAS_ALPHA_MASK: true, HAS_ALPHA_BLEND: true, USE_TANGENT: geometry?.tangent != null} : EDITING_STRUCTURE;
 const EDITING_SCENE_CAPABILITIES = WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ |
-  WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM | WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE |
-  Object.values(MATERIAL_TEXTURE_FEATURE_BITS).reduce((bits, bit) => bits | bit, 0);
-const editingShaderCapabilities = (required: ShaderCapabilities): ShaderCapabilities => ({
-  SCENE_CAPABILITIES: required.SCENE_CAPABILITIES | EDITING_SCENE_CAPABILITIES,
+  WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM | WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE;
+const UNIVERSAL_TEXTURE_CAPABILITIES = Object.values(MATERIAL_TEXTURE_FEATURE_BITS).reduce((bits, bit) => bits | bit, 0);
+const editingShaderCapabilities = (required: ShaderCapabilities, universal: boolean): ShaderCapabilities => ({
+  SCENE_CAPABILITIES: required.SCENE_CAPABILITIES | EDITING_SCENE_CAPABILITIES | (universal ? UNIVERSAL_TEXTURE_CAPABILITIES : 0),
   MATERIAL_CAPABILITIES: required.MATERIAL_CAPABILITIES | ALL_MATERIAL_SHADER_CAPABILITIES,
   // Graph emission adds emissive triangles to light sampling.
-  LIGHT_CAPABILITIES: required.LIGHT_CAPABILITIES | LIGHT_SHADER_CAPABILITIES.emissive
+  LIGHT_CAPABILITIES: required.LIGHT_CAPABILITIES | (universal ? LIGHT_SHADER_CAPABILITIES.emissive : 0)
 });
 /** Scene stability before the lean variant replacing the editing variant compiles. */
 const EDITING_SETTLE_MS = 2000;
@@ -993,7 +994,8 @@ class WGPURayTracePass {
       // editing variant that also enables every lobe and code-adding structure flag.
       const request = (editing: boolean, plan: GraphPlan) => {
         const planConstants = materialGraphConstants(this._constants, plan, geometry);
-        const source = editing ? {...planConstants, ...editingStructure(geometry)} : planConstants;
+        const universalGraph = !!plan.shape?.universal;
+        const source = editing ? {...planConstants, ...editingStructure(universalGraph, geometry)} : planConstants;
         const requiredCapabilities = retainedShaderCapabilities(source);
         const constants: Record<string, boolean | number> = {...source, ...requiredCapabilities};
         const hasAlpha =
@@ -1024,7 +1026,7 @@ class WGPURayTracePass {
         // Prefer an existing compatible pipeline, including an earlier lean
         // variant. Only grow the current variant when it cannot cover an edit;
         // do not carry unused capabilities across different transport/layouts.
-        const capabilities = editing ? editingShaderCapabilities(requiredCapabilities) :
+        const capabilities = editing ? editingShaderCapabilities(requiredCapabilities, universalGraph) :
           this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
           retainedShaderCapabilities(
             planConstants,
