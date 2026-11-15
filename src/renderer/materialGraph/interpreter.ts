@@ -237,12 +237,18 @@ export interface GraphInterpreterRunner { fields: readonly string[]; families: R
  * `mx_l2w`, the math helpers and `MXResult` with `fields`. Each of `runners`
  * adds an `mx_run_<name>` loop limited to its terminals and opcode families:
  * emission and opacity are evaluated at several call sites (light sampling,
- * shadow rays), where every inlined copy of the full surface loop costs compile time. */
-export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}) {
+ * shadow rays), where every inlined copy of the full surface loop costs compile time.
+ * `operandLoop` (default false) shares one decoder in D3D12 browser kernels;
+ * other hosts retain their existing generated source. */
+export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}, operandLoop = false) {
     const R = GRAPH_INTERPRETER_REGISTERS;
-    // The first four operands are decoded before the opcode switch, so lanes on
-    // different opcodes share those loads; later operands load per family.
-    const a = (k: number) => k < 4 ? `x${k}` : `mx_arg(rec,${k},base,ctx,regs)`;
+    const operandCounts = Array<number>(GraphOp.Normalmap + 1).fill(1);
+    for (const instruction of Object.values(graphInstructions))
+        operandCounts[instruction.op] = Math.max(operandCounts[instruction.op], instruction.ports.length);
+    // D3D12 decodes each family's operand prefix once, before dispatch. This
+    // prevents every inlined argument load from duplicating context decoding.
+    // The default keeps four shared loads and loads later operands per family.
+    const a = (k: number) => operandLoop ? `(*args)[${k}]` : k < 4 ? `x${k}` : `mx_arg(rec,${k},base,ctx,regs)`;
     const storeFor = (fields: readonly string[]) => fields.map(field => `    case ${graphTerminals.indexOf(field)}: { (*result).${field} = v${width(terminalTypes[field]) === 1 ? '.x' : '.xyz'}; }`).join('\n');
     const unary = graphUnary.map((name, i) => `      case ${i}: { return ${name === 'normalize' ? `select(normalize(x),sign(x),w==1)` : `${name === 'ln' ? 'log' : name}(x)`}; }`).join('\n');
     // Only the opcode families the programs use are compiled: unused cases cost
@@ -250,7 +256,7 @@ export function graphInterpreterShader(fields: readonly string[], salt = 0, fami
     const runner = (s: string, fields: readonly string[], families: ReadonlySet<GraphOp> | undefined) => {
         const kase = (family: GraphOp, code: string) => !families || families.has(family) ? code : '';
         const store = storeFor(fields);
-        return /* wgsl */`fn mx_exec${s}(rec: i32, op: i32, sub: i32, w: i32, color: bool, x0: vec4f, x1: vec4f, x2: vec4f, x3: vec4f, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+        return /* wgsl */`fn mx_exec${s}(rec: i32, op: i32, sub: i32, w: i32, color: bool, ${operandLoop ? `args: ptr<function, array<vec4f, 12>>, ctx: MXContext` : `x0: vec4f, x1: vec4f, x2: vec4f, x3: vec4f, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>`}) -> vec4f {
   switch op {
 ${kase(GraphOp.Unary, `    case ${GraphOp.Unary}: {
       let x = ${a(0)};
@@ -401,12 +407,16 @@ fn mx_run${s}(program: i32, count: i32, base: i32, ctx: MXContext, result: ptr<f
   for(var pc = 0; pc < count; pc++) {
     let rec = program + pc;
     let header = vec4i(vec4f(materialsBuffer[rec].color, materialsBuffer[rec].matType));
-    let codes = vec4i(mx_codes(rec));
+${operandLoop ? `    var args: array<vec4f, 12>;
+    let counts = array<i32,${operandCounts.length}>(${operandCounts.join(",")});
+    for(var k=0;k<counts[clamp(header.x,0,${operandCounts.length-1})];k++){ args[k]=mx_arg(rec,k,base,ctx,&regs); }
+    if(header.x == ${GraphOp.Store}) { mx_store${s}(header.y,args[0],result); continue; }
+` : `    let codes = vec4i(mx_codes(rec));
     let x0 = mx_operand(codes.x, base, ctx, &regs);
     if(header.x == ${GraphOp.Store}) { mx_store${s}(header.y, x0, result); continue; }
     let x1 = mx_operand(codes.y, base, ctx, &regs); let x2 = mx_operand(codes.z, base, ctx, &regs); let x3 = mx_operand(codes.w, base, ctx, &regs);
-    let w = header.w & 15; let tid = header.w >> 4u;
-    var v = mx_exec${s}(rec, header.x, header.y, w, tid == 3 || tid == 4, x0, x1, x2, x3, base, ctx, &regs);
+`}    let w = header.w & 15; let tid = header.w >> 4u;
+    var v = mx_exec${s}(rec, header.x, header.y, w, tid == 3 || tid == 4, ${operandLoop ? "&args, ctx" : "x0, x1, x2, x3, base, ctx, &regs"});
     if(header.x == ${GraphOp.Copy} && header.y == 0) {
       if(tid == 2) { v = vec4f(select(0.0, 1.0, v.x != 0.0)); } else if(tid == 1) { v = vec4f(trunc(v.x)); }
     }

@@ -62,7 +62,10 @@ function makeRayTraceUniformCore(RayTraceUniformValues: ArrayBuffer) {
     views: RayTraceUniformViews
   };
 }
-export function makeRayTraceUniform() { return makeRayTraceUniformCore(new ArrayBuffer(320)); }
+export function makeRayTraceUniform(runtimeVertexLayout = false) {
+  const result = makeRayTraceUniformCore(new ArrayBuffer(runtimeVertexLayout ? 352 : 320));
+  return {...result, vertexLayout: runtimeVertexLayout ? new Int32Array(result.buffer, 320, 8) : undefined};
+}
 
 export function packWgpuAnalyticLights(
   lights: AnalyticLight[],

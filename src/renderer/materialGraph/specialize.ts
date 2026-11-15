@@ -21,7 +21,8 @@ const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness
 /** Interpreted structures in a variant: only their terminal union shapes the source. */
 export interface GraphInterpreterOptions { terminals: readonly string[]; /** Inert literal that changes the source; measurement only. */ salt?: number; /** Opcode families the programs use. Default all. */ families?: ReadonlySet<GraphOp>;
     /** Opcode families of the interpreted emission programs. Absent: light sampling never runs the interpreter. */ emission?: ReadonlySet<GraphOp>;
-    /** Opcode families of the interpreted opacity programs. Absent: shadow rays never run the interpreter. */ opacity?: ReadonlySet<GraphOp> }
+    /** Opcode families of the interpreted opacity programs. Absent: shadow rays never run the interpreter. */ opacity?: ReadonlySet<GraphOp>;
+    /** Share a decoder loop in D3D12 browser kernels. Default false preserves other hosts. */ operandLoop?: boolean }
 /** Pure shared graph fragments; templates own signatures, call sites and layout.
  * Specialized structures get IDs 1..N; with `interpreter`, negative IDs address a
  * program header record in `materialsBuffer` (see `graphInterpreterShader`).
@@ -57,7 +58,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt, interpreter.families, {
         ...(interpreter.emission && !sharedSite ? {emission: {fields: emission.filter(field => used.includes(field)), families: interpreter.emission}} : {}),
         ...(interpreter.opacity && used.includes('opacity') ? {opacity: {fields: ['opacity'], families: interpreter.opacity}} : {})
-    });
+    }, interpreter.operandLoop);
     const programHeader = (id: string) => `let mx_program = -${id}; let mx_header = vec4f(materialsBuffer[mx_program].color, materialsBuffer[mx_program].matType);`;
     const si = 'mx_si';
     const init = used.map(field => `    mx_result.${field} = ${field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field)};`).join('\n');

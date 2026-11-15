@@ -4,8 +4,27 @@ import {original,stripped,tokens,gpu} from './shaderSourceFormattingFixture';
 import MaterialGraph from '../../src/scene/MaterialGraph.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader.js';
+import {GraphOp} from '../../src/renderer/materialGraph/interpreter.js';
+import {shaderIdentifierMap} from './shaderSourceLoader';
+import {renameShaderIdentifiers} from '../../scripts/shader-identifiers.mjs';
 
 describe('material graphs in production shader builds',()=>{
+ it('preserves the operand loop and runtime geometry contract in editing kernels',()=>{
+  gpu();
+  const families=new Set(Object.values(GraphOp).filter((op):op is GraphOp=>typeof op==='number'));
+  const source=(loader:typeof original)=>{
+   const hooks=loader('src/renderer/materialGraph/specialize.ts').materialGraphShaderIR([],true,
+    {terminals:['baseColor','opacity','normal','emissionColor'],families,opacity:families,emission:families,operandLoop:true},true);
+   return loader('src/renderer/wgpuShaderSource.ts').wgpuShaderSource(
+    {NUM_MAPS:20,TLAS_STACK_SIZE:8,BLAS_STACK_SIZE:32,NUM_UNIFORM_LIGHTS:64,ATTR_STRIDE:6},
+    {materialHooks:hooks,hasDisplacement:true,hasAnisotropyDirections:true,hasCoatNormals:true,
+     hasAlpha:true,hasSceneAlpha:true,blasLayoutMask:1,compactVertices:true,runtimeVertexLayout:true});
+  };
+  const full=source(original),compact=source(stripped);
+  expect(tokens(compact)).toEqual(tokens(full));
+  expect(renameShaderIdentifiers(compact,shaderIdentifierMap)).toBe(compact);
+  expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();
+ });
  it.each([false,true])('preserves surface, normal and shadow evaluation after compression (compact vertices=%s)',compactVertices=>{
   gpu();
   const graph=normalizeGraph(new MaterialGraph({nodes:[

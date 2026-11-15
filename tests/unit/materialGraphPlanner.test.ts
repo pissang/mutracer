@@ -194,7 +194,7 @@ describe('material graph tier plans', () => {
         expect(many.serving.programs!.size).toBe(40);
         expect(many.events.some(e => e.type === 'start')).toBe(false);
         expect(many.state.compileRole(many.state.requested)).toBe('edit');
-        // The editing interpreter (≈7 s there) still fits the upgrade ceiling, so it is prefetched.
+        // The editing interpreter's prediction still fits the upgrade ceiling.
         expect(many.state.prefetch(0)?.interpreterFamilies?.has(GraphOp.Noise)).toBe(true);
         // One structure is cheap enough to specialize even there.
         const one = longRender(1, d3d12);
@@ -446,8 +446,40 @@ describe('material graph tier plans', () => {
             return state.editingPlan();
         };
         expect(universal('metal')).toBeDefined();
-        // Predicted far over 10 s with D3D12's interpreter cost.
-        expect(universal('d3d12')).toBeUndefined();
+        // D3D12 warms its small fallback before the longer editing compile.
+        expect(universal('d3d12')).toBeDefined();
+        setMaterialGraphPlanner({compileBackend: 'd3d12', compileSpeed: 20});
+        const slow = newState(); slow.request([]);
+        expect(slow.editingPlan()).toBeUndefined();
+        // A pipeline already compiled remains usable after calibration changes.
+        expect(slow.editingPlan(() => true)).toBeDefined();
+    });
+
+    it('charges an empty scene editing prefetch to the interpreter rather than the graph-free kernel', () => {
+        setMaterialGraphPlanner({compileBackend: 'metal'});
+        const state = newState(); state.request([]);
+        const plan = state.editingPlan()!, bytes = state.calibration.graphFreeBytes;
+        expect(plan.key).toBe('');
+        const totalBytes = bytes + plan.shape!.interpreterBytes;
+        const ms = state.calibration.predictMs({totalBytes, specializedBytes: 0, interpreterBytes: plan.shape!.interpreterBytes});
+        const sample = state.observeCompile(plan, totalBytes, ms, 0);
+        expect(sample.interpreterBytes).toBe(plan.shape!.interpreterBytes);
+        expect(sample.specializedBytes).toBe(0);
+        expect(state.calibration.graphFreeBytes).toBe(bytes);
+        expect(state.calibration.factor).toBeCloseTo(1);
+    });
+
+    it('waits for a graph installation before registering the ordinary editing interpreter', () => {
+        setMaterialGraphPlanner({compileBackend: 'metal'});
+        const state = newState(), material = new OpenPBRMaterial();
+        state.request([material]);
+        expect(state.prefetch(0)).toBeUndefined();
+        // Only the engine's universal prefetch emits interpreter code without graphs.
+        expect(state.editingPlan()?.shape?.universal).toBe(true);
+        material.graph = chainGraph(1);
+        state.request([material]);
+        state.installShader(graphShaderKey(state.requested));
+        expect(state.prefetch(0)?.interpreterFamilies?.has(GraphOp.Noise)).toBe(true);
     });
 
     it('limits the editing interpreter to the set families when all families are predicted too slow', () => {
