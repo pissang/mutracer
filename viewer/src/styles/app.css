@@ -80,7 +80,8 @@ kbd { font: 10px var(--cv-mono); color: var(--cv-text-4); }
 .app { display: grid; grid-template-rows: 44px minmax(0, 1fr); height: 100%; }
 .app[data-hidden] { grid-template-rows: minmax(0, 1fr); }
 .header {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  /* The side groups keep their content; the render bar takes what is left and stays centered. */
+  display: grid; grid-template-columns: minmax(auto, 1fr) minmax(0, max-content) minmax(auto, 1fr); align-items: center;
   gap: 12px; padding: 0 10px; border-bottom: 1px solid rgb(255 255 255 / 0.06);
   background: #141517;
 }
@@ -235,6 +236,11 @@ kbd { font: 10px var(--cv-mono); color: var(--cv-text-4); }
 .float .select:hover, .float .select[data-hovered] { background: rgb(255 255 255 / 0.06); }
 .viewport-tools { display: flex; align-items: center; gap: 4px; }
 .camera-controls { padding: 6px 8px; min-width: 0; max-width: 100%; }
+/* Desktop: a corner toolbar opposite the debug overlay, matching its height. */
+.viewport > .camera-controls { z-index: 5; top: 12px; right: 12px; max-width: calc(100% - 24px); padding: 3px; }
+.viewport > .camera-controls .viewport-camera { max-width: calc(100cqw - 300px); }
+.viewport > .camera-controls :is(.icon-btn, .select) { width: 26px; height: 26px; }
+.viewport > .camera-controls .select { width: 100%; }
 .viewport-camera { min-width: 0; width: max-content; max-width: calc(100cqw - 80px); }
 .camera-controls .select { width: 100%; font-family: var(--cv-mono); }
 .camera-controls .select .muted { font-family: system-ui, sans-serif; }
@@ -285,6 +291,60 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
   .dock { gap: 3px; }
   .dock__status { width: 48px; }
   .dock__toggle { padding: 0 3px; }
+}
+
+/* Render bar: the dock's controls set into the header on desktop. */
+.header__center { min-width: 0; justify-content: center; }
+.renderbar { display: flex; align-items: center; gap: 2px; height: 30px; min-width: 0; padding: 0 3px 0 6px;
+  border-radius: 9px; background: var(--cv-input); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.045); }
+.renderbar .sep { width: 1px; height: 16px; margin: 0 4px; background: rgb(255 255 255 / 0.08); flex: none; }
+.renderbar .ring { width: 18px; height: 18px; }
+.renderbar .ring svg:not(.ring__svg) { width: 10px; height: 10px; }
+.renderbar .ring__pct { display: none; }
+.renderbar .ring__track, .renderbar .ring__arc { stroke-width: 2.6; }
+.renderbar .dock__status { display: flex; align-items: baseline; gap: 7px; width: 142px; margin: 0 0 0 7px; }
+.renderbar .dock__status b { font-size: 11px; }
+.renderbar .dock__status .mono { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+.renderbar .icon-btn { width: 24px; height: 24px; border-radius: 6px; }
+.renderbar .dock__pause { margin-left: -2px; }
+.renderbar .select { height: 24px; gap: 5px; padding: 0 6px 0 7px; border-radius: 6px; background: transparent; font-size: 11px; }
+.renderbar .select:hover, .renderbar .select[data-hovered] { background: rgb(255 255 255 / 0.06); }
+.renderbar .select svg { width: 11px; height: 11px; }
+.renderbar .dock__denoise { display: flex; align-items: center; gap: 1px; }
+/* Toggles read as chips; the checkbox stays for keyboard and assistive use. */
+.renderbar .dock__toggle { position: relative; height: 24px; gap: 6px; padding: 0 8px 0 7px; color: var(--cv-text-3); font-size: 11px; }
+.renderbar .dock__toggle input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+.renderbar .dock__toggle::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; corner-shape: round;
+  box-shadow: inset 0 0 0 1.5px var(--cv-text-4); transition: background 140ms ease, box-shadow 140ms ease; }
+.renderbar .dock__toggle[data-selected] { color: var(--cv-active-text); }
+.renderbar .dock__toggle[data-selected]::before { background: var(--cv-success); box-shadow: 0 0 0 3px rgb(114 198 156 / 0.16); }
+.renderbar .dock__toggle:has(input:focus-visible) { outline: 2px solid var(--cv-focus); outline-offset: 1px; }
+.renderbar .dock__more { display: none; }
+.popover.dock-options[data-placement='bottom'] { margin-top: 2px; }
+/* Hand settings to the popover, least used first, before the header runs out of room. */
+@media (max-width: 1660px) {
+  .renderbar .dock__resolution > .select-field:first-of-type { display: none; }
+  .renderbar .dock__more { display: grid; }
+}
+@media (max-width: 1560px) {
+  .renderbar .dock__denoise > :not(:first-child) { display: none; }
+}
+@media (max-width: 1440px) {
+  .renderbar .dock__resolution { display: none; }
+}
+@media (max-width: 1360px) {
+  .renderbar .dock__denoise, .renderbar .dock__time { display: none; }
+  .renderbar .dock__status { width: 120px; }
+}
+@media (max-width: 1240px) {
+  .renderbar .dock__samples, .renderbar > .sep { display: none; }
+}
+@media (max-width: 1120px) {
+  .header .backend-pill .adapter { display: none; }
+}
+@media (max-width: 1000px) {
+  .header__right .btn .hide-xs { display: none; }
+  .header .brand__version { display: none; }
 }
 
 /* Progress ring */

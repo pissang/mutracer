@@ -4,7 +4,6 @@ import { changeNativeDevice } from '../engine/nativeCapabilities';
 import { VIEWER_AOVS, setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
 import { ResolutionSelect } from './ResolutionSelect';
-import { ViewControls } from './ViewControls';
 
 const LABELS: Record<RenderPhase, string> = {
   starting: 'Starting',
@@ -49,11 +48,12 @@ function ProgressRing({ progress, phase }: { progress: number; phase: RenderPhas
 }
 
 /**
- * Bottom dock: progress and the render settings people change most.
- * Everything else lives in the Render tab. The status block has a fixed
- * width so neighboring controls stay steady while numbers change.
+ * Progress and the render settings people change most: in the header on
+ * desktop (`bar`), in a floating dock over the viewport on mobile. Everything
+ * else lives in the Render tab. The status block has a fixed width so
+ * neighboring controls stay steady while numbers change.
  */
-export function StatusBar() {
+export function StatusBar({ variant = 'dock' }: { variant?: 'dock' | 'bar' }) {
   const stats = useViewer((s) => s.stats);
   const settings = useViewer((s) => s.settings);
   const paused = useViewer((s) => s.paused);
@@ -70,8 +70,7 @@ export function StatusBar() {
   const denoise = settings.denoise;
 
   return (
-    <div className="float dock" role="status" data-phase={phase}>
-      <ViewControls />
+    <div className={variant === 'bar' ? 'dock renderbar' : 'float dock'} role="status" aria-label="Render" data-phase={phase}>
       <div className="dock__summary">
         <ProgressRing progress={progress} phase={phase} />
         <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
@@ -117,7 +116,7 @@ export function StatusBar() {
             <span className="dock__label">Live</span>
           </label>}
         </div>
-        <RenderSettingsPopover />
+        <RenderSettingsPopover placement={variant === 'bar' ? 'bottom end' : 'top end'} />
       </div>
     </div>
   );
@@ -150,12 +149,12 @@ function DenoiserSelect({ disabled = false }: { disabled?: boolean }) {
   />;
 }
 
-function RenderSettingsPopover() {
+function RenderSettingsPopover({ placement }: { placement: 'top end' | 'bottom end' }) {
   const settings = useViewer((s) => s.settings);
   return (
     <DialogTrigger>
       <Button className="icon-btn dock__more" aria-label="Render settings"><SlidersHorizontal size={14} /></Button>
-      <Popover className="popover dock-options" placement="top end" offset={8}>
+      <Popover className="popover dock-options" placement={placement} offset={8}>
         <Dialog aria-label="Render settings">
           {({ close }) => <>
             <Heading slot="title" className="dialog__title">Render settings

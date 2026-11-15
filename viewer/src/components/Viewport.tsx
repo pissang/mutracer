@@ -11,6 +11,7 @@ import { StatusBar } from './StatusBar';
 import { OIDNLoadingStatus } from './OIDNLoadingStatus';
 import { CameraControls } from './ViewControls';
 import { Select } from './ui/controls';
+import { useMobile } from '../useMobile';
 
 export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -19,6 +20,7 @@ export function Viewport() {
   const drag = useRef({ active: false, pending: false, last: 0, revision: 0 });
   const picking = useViewer((s) => s.pickingFocus);
   const hidden = useViewer((s) => s.ui.hidden);
+  const mobile = useMobile();
   const inspectorOpen = useViewer((s) => s.ui.right);
 
   useEffect(() => {
@@ -83,16 +85,17 @@ export function Viewport() {
             <OIDNLoadingStatus />
             <Credit />
             <AnimationBar />
-            <div className="viewport-footer">
+            {mobile && <div className="viewport-footer">
               <StatusBar />
-              <CameraControls />
+              <CameraControls placement="top" />
               <button className="btn panel-toggle" aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} aria-expanded={inspectorOpen}
                 onClick={() => setUi({ right: !inspectorOpen })}>
                 {inspectorOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
                 <span className="panel-toggle__label"><b>{inspectorOpen ? 'Hide' : 'Show'}</b><small>Panel</small></span>
               </button>
-            </div>
+            </div>}
           </div>
+          {!mobile && <CameraControls placement="bottom" />}
         </>
       )}
       <LoadingCard />

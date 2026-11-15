@@ -12,6 +12,7 @@ import { toPathedFiles } from '../engine/droppedFiles';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
 import { ExamplesMenu } from './ExamplesBrowser';
+import { StatusBar } from './StatusBar';
 
 export function Toolbar({ mobile }: { mobile: boolean }) {
   const backend = useViewer((s) => s.backend);
@@ -33,10 +34,10 @@ export function Toolbar({ mobile }: { mobile: boolean }) {
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
           aria-pressed={ui.left} onClick={() => setUi({ left: !ui.left })}><PanelLeft size={15} /></button>
+        {!mobile && <><span className="divider" /><OpenMenu /><ExamplesMenu mobile={mobile} /></>}
       </div>
       <div className="header__center">
-        <OpenMenu />
-        <ExamplesMenu mobile={mobile} />
+        {mobile ? <><OpenMenu /><ExamplesMenu mobile={mobile} /></> : <StatusBar variant="bar" />}
       </div>
       <div className="header__right">
         <HistoryButtons />

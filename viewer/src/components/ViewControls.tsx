@@ -24,14 +24,15 @@ export function ViewControls() {
   );
 }
 
-/** Authored views stay separate from render and focus controls. */
-export function CameraControls() {
+/** Focus tools, authored views and fit: top right on desktop, beside the render dock on mobile. */
+export function CameraControls({ placement = 'bottom' }: { placement?: 'top' | 'bottom' }) {
   const cameras = useViewer((s) => s.cameras);
   const cameraIndex = useViewer((s) => s.settings.cameraIndex);
   return (
     <div className="float camera-controls" role="group" aria-label="Camera controls">
+      <ViewControls />
       {cameras.length > 0 && <div className="viewport-camera">
-        <Select label="Camera" prefix="Camera" value={String(cameraIndex)} placement="top"
+        <Select label="Camera" prefix="Camera" value={String(cameraIndex)} placement={placement}
           options={[{ value: '-1', label: 'Orbit' }, ...cameras.map((name, i) => ({ value: String(i), label: name }))]}
           onChange={(v) => setSettings({ cameraIndex: Number(v) })} />
       </div>}
