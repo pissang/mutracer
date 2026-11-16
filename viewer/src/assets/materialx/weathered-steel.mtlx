@@ -1,10 +1,13 @@
 <?xml version="1.0"?>
 <!--
-  Weathered steel: OpenPBR brushed metal with rust patches. A fractal mask
-  with ragged edges blends rust over the metal: bright orange where it
-  starts, dark brown in the core, with a brown stain bleeding into the
-  surrounding steel. Rust is rough, dielectric and pitted; the bare metal
-  keeps anisotropic brushing. Procedural, CC0.
+  Weathered steel: OpenPBR brushed metal with rust patches. A fractal mask,
+  frayed at two finer scales, blends rust over the metal. The rust is a
+  crust of layered flakes split by dark cracks, with fractal scale and fine
+  blisters whose ochre crowns stand out of orange and dark brown; it is
+  rough and dielectric. Around each patch a brown stain bleeds into the
+  steel and small corrosion pits open; the bare metal keeps anisotropic
+  brushing. Object-space finite differences of the heights give the normal.
+  Procedural, CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_weathered_steel">
@@ -13,24 +16,21 @@
     <input name="rust_light" type="color3" value="0.26, 0.07, 0.016" uiname="Light rust" />
     <input name="rust_amount" type="float" value="0.42" uiname="Rust amount" uimin="0" uimax="1" />
     <input name="rust_scale" type="float" value="2.2" uiname="Rust scale" />
-    <input name="edge_width" type="float" value="0.04" uiname="Edge width" uimin="0.005" uimax="0.3" />
+    <input name="edge_width" type="float" value="0.02" uiname="Edge width" uimin="0.005" uimax="0.3" />
     <input name="pitting" type="float" value="0.5" uiname="Pitting" uimin="0" uimax="1" />
     <input name="brushing" type="float" value="0.6" uiname="Brushing" uimin="0" uimax="1" />
-
     <position name="object_position" type="vector3" />
     <normal name="object_normal" type="vector3" />
     <multiply name="rust_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
       <input name="in2" type="float" interfacename="rust_scale" />
     </multiply>
+
+    <!-- Rust mask: a fractal field frayed at two finer scales, so the patch edges stay ragged up close. -->
     <fractal3d name="rust_fractal" type="float">
       <input name="position" type="vector3" nodename="rust_position" />
       <input name="octaves" type="integer" value="5" />
-      <input name="diminish" type="float" value="0.55" />
     </fractal3d>
-
-    <!-- Fractal output is roughly [-1, 1]; move it to [0, 1] and fray the
-         edge. -->
     <remap name="rust_base_field" type="float">
       <input name="in" type="float" nodename="rust_fractal" />
       <input name="inlow" type="float" value="-0.7" />
@@ -38,22 +38,33 @@
       <input name="outlow" type="float" value="0" />
       <input name="outhigh" type="float" value="1" />
     </remap>
-    <multiply name="detail_position" type="vector3">
+    <multiply name="fray_position" type="vector3">
       <input name="in1" type="vector3" nodename="rust_position" />
       <input name="in2" type="float" value="9" />
     </multiply>
     <noise3d name="edge_fray" type="float">
-      <input name="position" type="vector3" nodename="detail_position" />
+      <input name="position" type="vector3" nodename="fray_position" />
       <input name="amplitude" type="float" value="0.07" />
     </noise3d>
-    <add name="rust_field" type="float">
+    <add name="rust_frayed" type="float">
       <input name="in1" type="float" nodename="rust_base_field" />
       <input name="in2" type="float" nodename="edge_fray" />
     </add>
-    <subtract name="rust_threshold" type="float">
-      <input name="in1" type="float" value="1" />
-      <input name="in2" type="float" interfacename="rust_amount" />
-    </subtract>
+    <multiply name="fine_fray_position" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_position" />
+      <input name="in2" type="float" value="37" />
+    </multiply>
+    <noise3d name="edge_fine_fray" type="float">
+      <input name="position" type="vector3" nodename="fine_fray_position" />
+      <input name="amplitude" type="float" value="0.035" />
+    </noise3d>
+    <add name="rust_field" type="float">
+      <input name="in1" type="float" nodename="rust_frayed" />
+      <input name="in2" type="float" nodename="edge_fine_fray" />
+    </add>
+    <invert name="rust_threshold" type="float">
+      <input name="in" type="float" interfacename="rust_amount" />
+    </invert>
     <subtract name="edge_low" type="float">
       <input name="in1" type="float" nodename="rust_threshold" />
       <input name="in2" type="float" interfacename="edge_width" />
@@ -85,57 +96,1022 @@
       <input name="low" type="float" nodename="stain_low" />
       <input name="high" type="float" nodename="rust_threshold" />
     </smoothstep>
-
-    <!-- Rust color: mottled two-tone, darker toward the core of each patch. -->
-    <add name="tone_position" type="vector3">
-      <input name="in1" type="vector3" nodename="detail_position" />
-      <input name="in2" type="vector3" value="7.1, 3.3, -5.2" />
+    <multiply name="crust_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="flake_warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise3d name="flake_warp" type="vector3">
+      <input name="position" type="vector3" nodename="flake_warp_position" />
+    </noise3d>
+    <multiply name="flake_grid" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <multiply name="flake_warp_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_warp" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="flake_position" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_grid" />
+      <input name="in2" type="vector3" nodename="flake_warp_offset" />
     </add>
+    <worleynoise3d name="flakes" type="vector2">
+      <input name="position" type="vector3" nodename="flake_position" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <separate2 name="flake_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="flakes" />
+    </separate2>
+    <worleynoise3d name="flake_lift" type="float">
+      <input name="position" type="vector3" nodename="flake_position" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <multiply name="crack_zone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <noise3d name="crack_zone_noise" type="float">
+      <input name="position" type="vector3" nodename="crack_zone_position" />
+    </noise3d>
+    <smoothstep name="crack_zone" type="float">
+      <input name="in" type="float" nodename="crack_zone_noise" />
+      <input name="low" type="float" value="-0.12" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <subtract name="flake_border" type="float">
+      <input name="in1" type="float" nodename="flake_distances" output="outy" />
+      <input name="in2" type="float" nodename="flake_distances" output="outx" />
+    </subtract>
+    <smoothstep name="flake_border_ramp" type="float">
+      <input name="in" type="float" nodename="flake_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="crack_line" type="float">
+      <input name="in" type="float" nodename="flake_border_ramp" />
+    </invert>
+    <multiply name="crack_zoned" type="float">
+      <input name="in1" type="float" nodename="crack_line" />
+      <input name="in2" type="float" nodename="crack_zone" />
+    </multiply>
+    <invert name="flake_crack" type="float">
+      <input name="in" type="float" nodename="crack_zoned" />
+    </invert>
+    <invert name="flake_drop" type="float">
+      <input name="in" type="float" nodename="flake_lift" />
+    </invert>
+    <multiply name="zone_drop" type="float">
+      <input name="in1" type="float" nodename="crack_zone" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="flake_sink" type="float">
+      <input name="in1" type="float" nodename="flake_drop" />
+      <input name="in2" type="float" nodename="zone_drop" />
+    </multiply>
+    <invert name="flake_level" type="float">
+      <input name="in" type="float" nodename="flake_sink" />
+    </invert>
+    <multiply name="scale_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="18" />
+    </multiply>
+    <fractal3d name="scale_relief" type="float">
+      <input name="position" type="vector3" nodename="scale_position" />
+      <input name="octaves" type="integer" value="5" />
+    </fractal3d>
+    <multiply name="blister_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise3d name="blisters" type="vector2">
+      <input name="position" type="vector3" nodename="blister_position" />
+    </worleynoise3d>
+    <separate2 name="blister_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="blisters" />
+    </separate2>
+    <multiply name="blister_size_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="blister_size_noise" type="float">
+      <input name="position" type="vector3" nodename="blister_size_position" />
+    </noise3d>
+    <remap name="blister_size" type="float">
+      <input name="in" type="float" nodename="blister_size_noise" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="0.9" />
+    </remap>
+    <smoothstep name="blister_ramp" type="float">
+      <input name="in" type="float" nodename="blister_distances" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="blister_size" />
+    </smoothstep>
+    <invert name="blister" type="float">
+      <input name="in" type="float" nodename="blister_ramp" />
+    </invert>
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled" />
+      <input name="in2" type="float" value="160" />
+    </multiply>
+    <noise3d name="grain" type="float">
+      <input name="position" type="vector3" nodename="grain_position" />
+    </noise3d>
+    <multiply name="flake_shape" type="float">
+      <input name="in1" type="float" nodename="flake_crack" />
+      <input name="in2" type="float" nodename="flake_level" />
+    </multiply>
+    <multiply name="flake_height" type="float">
+      <input name="in1" type="float" nodename="flake_shape" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="scale_height" type="float">
+      <input name="in1" type="float" nodename="scale_relief" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_scale" type="float">
+      <input name="in1" type="float" nodename="flake_height" />
+      <input name="in2" type="float" nodename="scale_height" />
+    </add>
+    <multiply name="blister_height" type="float">
+      <input name="in1" type="float" nodename="blister" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="crust_blistered" type="float">
+      <input name="in1" type="float" nodename="crust_scale" />
+      <input name="in2" type="float" nodename="blister_height" />
+    </add>
+    <multiply name="grain_height" type="float">
+      <input name="in1" type="float" nodename="grain" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <add name="crust" type="float">
+      <input name="in1" type="float" nodename="crust_blistered" />
+      <input name="in2" type="float" nodename="grain_height" />
+    </add>
+    <add name="tap_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.0004, 0, 0" />
+    </add>
+    <multiply name="crust_scaled_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="flake_warp_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise3d name="flake_warp_x" type="vector3">
+      <input name="position" type="vector3" nodename="flake_warp_position_x" />
+    </noise3d>
+    <multiply name="flake_grid_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <multiply name="flake_warp_offset_x" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_warp_x" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="flake_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_grid_x" />
+      <input name="in2" type="vector3" nodename="flake_warp_offset_x" />
+    </add>
+    <worleynoise3d name="flakes_x" type="vector2">
+      <input name="position" type="vector3" nodename="flake_position_x" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <separate2 name="flake_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="flakes_x" />
+    </separate2>
+    <worleynoise3d name="flake_lift_x" type="float">
+      <input name="position" type="vector3" nodename="flake_position_x" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <multiply name="crack_zone_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <noise3d name="crack_zone_noise_x" type="float">
+      <input name="position" type="vector3" nodename="crack_zone_position_x" />
+    </noise3d>
+    <smoothstep name="crack_zone_x" type="float">
+      <input name="in" type="float" nodename="crack_zone_noise_x" />
+      <input name="low" type="float" value="-0.12" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <subtract name="flake_border_x" type="float">
+      <input name="in1" type="float" nodename="flake_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="flake_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="flake_border_ramp_x" type="float">
+      <input name="in" type="float" nodename="flake_border_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="crack_line_x" type="float">
+      <input name="in" type="float" nodename="flake_border_ramp_x" />
+    </invert>
+    <multiply name="crack_zoned_x" type="float">
+      <input name="in1" type="float" nodename="crack_line_x" />
+      <input name="in2" type="float" nodename="crack_zone_x" />
+    </multiply>
+    <invert name="flake_crack_x" type="float">
+      <input name="in" type="float" nodename="crack_zoned_x" />
+    </invert>
+    <invert name="flake_drop_x" type="float">
+      <input name="in" type="float" nodename="flake_lift_x" />
+    </invert>
+    <multiply name="zone_drop_x" type="float">
+      <input name="in1" type="float" nodename="crack_zone_x" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="flake_sink_x" type="float">
+      <input name="in1" type="float" nodename="flake_drop_x" />
+      <input name="in2" type="float" nodename="zone_drop_x" />
+    </multiply>
+    <invert name="flake_level_x" type="float">
+      <input name="in" type="float" nodename="flake_sink_x" />
+    </invert>
+    <multiply name="scale_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="18" />
+    </multiply>
+    <fractal3d name="scale_relief_x" type="float">
+      <input name="position" type="vector3" nodename="scale_position_x" />
+      <input name="octaves" type="integer" value="5" />
+    </fractal3d>
+    <multiply name="blister_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise3d name="blisters_x" type="vector2">
+      <input name="position" type="vector3" nodename="blister_position_x" />
+    </worleynoise3d>
+    <separate2 name="blister_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="blisters_x" />
+    </separate2>
+    <multiply name="blister_size_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="blister_size_noise_x" type="float">
+      <input name="position" type="vector3" nodename="blister_size_position_x" />
+    </noise3d>
+    <remap name="blister_size_x" type="float">
+      <input name="in" type="float" nodename="blister_size_noise_x" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="0.9" />
+    </remap>
+    <smoothstep name="blister_ramp_x" type="float">
+      <input name="in" type="float" nodename="blister_distances_x" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="blister_size_x" />
+    </smoothstep>
+    <invert name="blister_x" type="float">
+      <input name="in" type="float" nodename="blister_ramp_x" />
+    </invert>
+    <multiply name="grain_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_x" />
+      <input name="in2" type="float" value="160" />
+    </multiply>
+    <noise3d name="grain_x" type="float">
+      <input name="position" type="vector3" nodename="grain_position_x" />
+    </noise3d>
+    <multiply name="flake_shape_x" type="float">
+      <input name="in1" type="float" nodename="flake_crack_x" />
+      <input name="in2" type="float" nodename="flake_level_x" />
+    </multiply>
+    <multiply name="flake_height_x" type="float">
+      <input name="in1" type="float" nodename="flake_shape_x" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="scale_height_x" type="float">
+      <input name="in1" type="float" nodename="scale_relief_x" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_scale_x" type="float">
+      <input name="in1" type="float" nodename="flake_height_x" />
+      <input name="in2" type="float" nodename="scale_height_x" />
+    </add>
+    <multiply name="blister_height_x" type="float">
+      <input name="in1" type="float" nodename="blister_x" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="crust_blistered_x" type="float">
+      <input name="in1" type="float" nodename="crust_scale_x" />
+      <input name="in2" type="float" nodename="blister_height_x" />
+    </add>
+    <multiply name="grain_height_x" type="float">
+      <input name="in1" type="float" nodename="grain_x" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <add name="crust_x" type="float">
+      <input name="in1" type="float" nodename="crust_blistered_x" />
+      <input name="in2" type="float" nodename="grain_height_x" />
+    </add>
+    <add name="tap_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.0004, 0" />
+    </add>
+    <multiply name="crust_scaled_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="flake_warp_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise3d name="flake_warp_y" type="vector3">
+      <input name="position" type="vector3" nodename="flake_warp_position_y" />
+    </noise3d>
+    <multiply name="flake_grid_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <multiply name="flake_warp_offset_y" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_warp_y" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="flake_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_grid_y" />
+      <input name="in2" type="vector3" nodename="flake_warp_offset_y" />
+    </add>
+    <worleynoise3d name="flakes_y" type="vector2">
+      <input name="position" type="vector3" nodename="flake_position_y" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <separate2 name="flake_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="flakes_y" />
+    </separate2>
+    <worleynoise3d name="flake_lift_y" type="float">
+      <input name="position" type="vector3" nodename="flake_position_y" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <multiply name="crack_zone_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <noise3d name="crack_zone_noise_y" type="float">
+      <input name="position" type="vector3" nodename="crack_zone_position_y" />
+    </noise3d>
+    <smoothstep name="crack_zone_y" type="float">
+      <input name="in" type="float" nodename="crack_zone_noise_y" />
+      <input name="low" type="float" value="-0.12" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <subtract name="flake_border_y" type="float">
+      <input name="in1" type="float" nodename="flake_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="flake_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="flake_border_ramp_y" type="float">
+      <input name="in" type="float" nodename="flake_border_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="crack_line_y" type="float">
+      <input name="in" type="float" nodename="flake_border_ramp_y" />
+    </invert>
+    <multiply name="crack_zoned_y" type="float">
+      <input name="in1" type="float" nodename="crack_line_y" />
+      <input name="in2" type="float" nodename="crack_zone_y" />
+    </multiply>
+    <invert name="flake_crack_y" type="float">
+      <input name="in" type="float" nodename="crack_zoned_y" />
+    </invert>
+    <invert name="flake_drop_y" type="float">
+      <input name="in" type="float" nodename="flake_lift_y" />
+    </invert>
+    <multiply name="zone_drop_y" type="float">
+      <input name="in1" type="float" nodename="crack_zone_y" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="flake_sink_y" type="float">
+      <input name="in1" type="float" nodename="flake_drop_y" />
+      <input name="in2" type="float" nodename="zone_drop_y" />
+    </multiply>
+    <invert name="flake_level_y" type="float">
+      <input name="in" type="float" nodename="flake_sink_y" />
+    </invert>
+    <multiply name="scale_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="18" />
+    </multiply>
+    <fractal3d name="scale_relief_y" type="float">
+      <input name="position" type="vector3" nodename="scale_position_y" />
+      <input name="octaves" type="integer" value="5" />
+    </fractal3d>
+    <multiply name="blister_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise3d name="blisters_y" type="vector2">
+      <input name="position" type="vector3" nodename="blister_position_y" />
+    </worleynoise3d>
+    <separate2 name="blister_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="blisters_y" />
+    </separate2>
+    <multiply name="blister_size_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="blister_size_noise_y" type="float">
+      <input name="position" type="vector3" nodename="blister_size_position_y" />
+    </noise3d>
+    <remap name="blister_size_y" type="float">
+      <input name="in" type="float" nodename="blister_size_noise_y" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="0.9" />
+    </remap>
+    <smoothstep name="blister_ramp_y" type="float">
+      <input name="in" type="float" nodename="blister_distances_y" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="blister_size_y" />
+    </smoothstep>
+    <invert name="blister_y" type="float">
+      <input name="in" type="float" nodename="blister_ramp_y" />
+    </invert>
+    <multiply name="grain_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_y" />
+      <input name="in2" type="float" value="160" />
+    </multiply>
+    <noise3d name="grain_y" type="float">
+      <input name="position" type="vector3" nodename="grain_position_y" />
+    </noise3d>
+    <multiply name="flake_shape_y" type="float">
+      <input name="in1" type="float" nodename="flake_crack_y" />
+      <input name="in2" type="float" nodename="flake_level_y" />
+    </multiply>
+    <multiply name="flake_height_y" type="float">
+      <input name="in1" type="float" nodename="flake_shape_y" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="scale_height_y" type="float">
+      <input name="in1" type="float" nodename="scale_relief_y" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_scale_y" type="float">
+      <input name="in1" type="float" nodename="flake_height_y" />
+      <input name="in2" type="float" nodename="scale_height_y" />
+    </add>
+    <multiply name="blister_height_y" type="float">
+      <input name="in1" type="float" nodename="blister_y" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="crust_blistered_y" type="float">
+      <input name="in1" type="float" nodename="crust_scale_y" />
+      <input name="in2" type="float" nodename="blister_height_y" />
+    </add>
+    <multiply name="grain_height_y" type="float">
+      <input name="in1" type="float" nodename="grain_y" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <add name="crust_y" type="float">
+      <input name="in1" type="float" nodename="crust_blistered_y" />
+      <input name="in2" type="float" nodename="grain_height_y" />
+    </add>
+    <add name="tap_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.0004" />
+    </add>
+    <multiply name="crust_scaled_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="flake_warp_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise3d name="flake_warp_z" type="vector3">
+      <input name="position" type="vector3" nodename="flake_warp_position_z" />
+    </noise3d>
+    <multiply name="flake_grid_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <multiply name="flake_warp_offset_z" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_warp_z" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="flake_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="flake_grid_z" />
+      <input name="in2" type="vector3" nodename="flake_warp_offset_z" />
+    </add>
+    <worleynoise3d name="flakes_z" type="vector2">
+      <input name="position" type="vector3" nodename="flake_position_z" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <separate2 name="flake_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="flakes_z" />
+    </separate2>
+    <worleynoise3d name="flake_lift_z" type="float">
+      <input name="position" type="vector3" nodename="flake_position_z" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <multiply name="crack_zone_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <noise3d name="crack_zone_noise_z" type="float">
+      <input name="position" type="vector3" nodename="crack_zone_position_z" />
+    </noise3d>
+    <smoothstep name="crack_zone_z" type="float">
+      <input name="in" type="float" nodename="crack_zone_noise_z" />
+      <input name="low" type="float" value="-0.12" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <subtract name="flake_border_z" type="float">
+      <input name="in1" type="float" nodename="flake_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="flake_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="flake_border_ramp_z" type="float">
+      <input name="in" type="float" nodename="flake_border_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.035" />
+    </smoothstep>
+    <invert name="crack_line_z" type="float">
+      <input name="in" type="float" nodename="flake_border_ramp_z" />
+    </invert>
+    <multiply name="crack_zoned_z" type="float">
+      <input name="in1" type="float" nodename="crack_line_z" />
+      <input name="in2" type="float" nodename="crack_zone_z" />
+    </multiply>
+    <invert name="flake_crack_z" type="float">
+      <input name="in" type="float" nodename="crack_zoned_z" />
+    </invert>
+    <invert name="flake_drop_z" type="float">
+      <input name="in" type="float" nodename="flake_lift_z" />
+    </invert>
+    <multiply name="zone_drop_z" type="float">
+      <input name="in1" type="float" nodename="crack_zone_z" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="flake_sink_z" type="float">
+      <input name="in1" type="float" nodename="flake_drop_z" />
+      <input name="in2" type="float" nodename="zone_drop_z" />
+    </multiply>
+    <invert name="flake_level_z" type="float">
+      <input name="in" type="float" nodename="flake_sink_z" />
+    </invert>
+    <multiply name="scale_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="18" />
+    </multiply>
+    <fractal3d name="scale_relief_z" type="float">
+      <input name="position" type="vector3" nodename="scale_position_z" />
+      <input name="octaves" type="integer" value="5" />
+    </fractal3d>
+    <multiply name="blister_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise3d name="blisters_z" type="vector2">
+      <input name="position" type="vector3" nodename="blister_position_z" />
+    </worleynoise3d>
+    <separate2 name="blister_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="blisters_z" />
+    </separate2>
+    <multiply name="blister_size_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="blister_size_noise_z" type="float">
+      <input name="position" type="vector3" nodename="blister_size_position_z" />
+    </noise3d>
+    <remap name="blister_size_z" type="float">
+      <input name="in" type="float" nodename="blister_size_noise_z" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="0.9" />
+    </remap>
+    <smoothstep name="blister_ramp_z" type="float">
+      <input name="in" type="float" nodename="blister_distances_z" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="blister_size_z" />
+    </smoothstep>
+    <invert name="blister_z" type="float">
+      <input name="in" type="float" nodename="blister_ramp_z" />
+    </invert>
+    <multiply name="grain_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_scaled_z" />
+      <input name="in2" type="float" value="160" />
+    </multiply>
+    <noise3d name="grain_z" type="float">
+      <input name="position" type="vector3" nodename="grain_position_z" />
+    </noise3d>
+    <multiply name="flake_shape_z" type="float">
+      <input name="in1" type="float" nodename="flake_crack_z" />
+      <input name="in2" type="float" nodename="flake_level_z" />
+    </multiply>
+    <multiply name="flake_height_z" type="float">
+      <input name="in1" type="float" nodename="flake_shape_z" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="scale_height_z" type="float">
+      <input name="in1" type="float" nodename="scale_relief_z" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_scale_z" type="float">
+      <input name="in1" type="float" nodename="flake_height_z" />
+      <input name="in2" type="float" nodename="scale_height_z" />
+    </add>
+    <multiply name="blister_height_z" type="float">
+      <input name="in1" type="float" nodename="blister_z" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="crust_blistered_z" type="float">
+      <input name="in1" type="float" nodename="crust_scale_z" />
+      <input name="in2" type="float" nodename="blister_height_z" />
+    </add>
+    <multiply name="grain_height_z" type="float">
+      <input name="in1" type="float" nodename="grain_z" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <add name="crust_z" type="float">
+      <input name="in1" type="float" nodename="crust_blistered_z" />
+      <input name="in2" type="float" nodename="grain_height_z" />
+    </add>
+    <combine3 name="height_ahead" type="vector3">
+      <input name="in1" type="float" nodename="crust_x" />
+      <input name="in2" type="float" nodename="crust_y" />
+      <input name="in3" type="float" nodename="crust_z" />
+    </combine3>
+    <subtract name="height_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead" />
+      <input name="in2" type="float" nodename="crust" />
+    </subtract>
+    <multiply name="height_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta" />
+      <input name="in2" type="float" value="2500" />
+    </multiply>
+    <multiply name="pit_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="pit_position" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_scaled" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <worleynoise3d name="pits" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise3d>
+    <separate2 name="pit_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="pits" />
+    </separate2>
+    <worleynoise3d name="pit_pick" type="float">
+      <input name="position" type="vector3" nodename="pit_position" />
+      <input name="jitter" type="float" value="1" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <subtract name="pit_pick_offset" type="float">
+      <input name="in1" type="float" nodename="pit_pick" />
+      <input name="in2" type="float" value="0.6" />
+    </subtract>
+    <multiply name="pit_radius_raw" type="float">
+      <input name="in1" type="float" nodename="pit_pick_offset" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <max name="pit_radius" type="float">
+      <input name="in1" type="float" nodename="pit_radius_raw" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <multiply name="pit_floor" type="float">
+      <input name="in1" type="float" nodename="pit_radius" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="pit_rim" type="float">
+      <input name="in1" type="float" nodename="pit_radius" />
+      <input name="in2" type="float" value="0.001" />
+    </add>
+    <smoothstep name="pit_ramp" type="float">
+      <input name="in" type="float" nodename="pit_distances" output="outx" />
+      <input name="low" type="float" nodename="pit_floor" />
+      <input name="high" type="float" nodename="pit_rim" />
+    </smoothstep>
+    <invert name="pit_depth" type="float">
+      <input name="in" type="float" nodename="pit_ramp" />
+    </invert>
+    <add name="tap_position_x_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.0003, 0, 0" />
+    </add>
+    <multiply name="pit_scaled_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x_2" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="pit_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_scaled_x" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <worleynoise3d name="pits_x" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_x" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_x" />
+    </separate2>
+    <worleynoise3d name="pit_pick_x" type="float">
+      <input name="position" type="vector3" nodename="pit_position_x" />
+      <input name="jitter" type="float" value="1" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <subtract name="pit_pick_offset_x" type="float">
+      <input name="in1" type="float" nodename="pit_pick_x" />
+      <input name="in2" type="float" value="0.6" />
+    </subtract>
+    <multiply name="pit_radius_raw_x" type="float">
+      <input name="in1" type="float" nodename="pit_pick_offset_x" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <max name="pit_radius_x" type="float">
+      <input name="in1" type="float" nodename="pit_radius_raw_x" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <multiply name="pit_floor_x" type="float">
+      <input name="in1" type="float" nodename="pit_radius_x" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="pit_rim_x" type="float">
+      <input name="in1" type="float" nodename="pit_radius_x" />
+      <input name="in2" type="float" value="0.001" />
+    </add>
+    <smoothstep name="pit_ramp_x" type="float">
+      <input name="in" type="float" nodename="pit_distances_x" output="outx" />
+      <input name="low" type="float" nodename="pit_floor_x" />
+      <input name="high" type="float" nodename="pit_rim_x" />
+    </smoothstep>
+    <invert name="pit_depth_x" type="float">
+      <input name="in" type="float" nodename="pit_ramp_x" />
+    </invert>
+    <add name="tap_position_y_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.0003, 0" />
+    </add>
+    <multiply name="pit_scaled_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y_2" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="pit_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_scaled_y" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <worleynoise3d name="pits_y" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_y" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_y" />
+    </separate2>
+    <worleynoise3d name="pit_pick_y" type="float">
+      <input name="position" type="vector3" nodename="pit_position_y" />
+      <input name="jitter" type="float" value="1" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <subtract name="pit_pick_offset_y" type="float">
+      <input name="in1" type="float" nodename="pit_pick_y" />
+      <input name="in2" type="float" value="0.6" />
+    </subtract>
+    <multiply name="pit_radius_raw_y" type="float">
+      <input name="in1" type="float" nodename="pit_pick_offset_y" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <max name="pit_radius_y" type="float">
+      <input name="in1" type="float" nodename="pit_radius_raw_y" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <multiply name="pit_floor_y" type="float">
+      <input name="in1" type="float" nodename="pit_radius_y" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="pit_rim_y" type="float">
+      <input name="in1" type="float" nodename="pit_radius_y" />
+      <input name="in2" type="float" value="0.001" />
+    </add>
+    <smoothstep name="pit_ramp_y" type="float">
+      <input name="in" type="float" nodename="pit_distances_y" output="outx" />
+      <input name="low" type="float" nodename="pit_floor_y" />
+      <input name="high" type="float" nodename="pit_rim_y" />
+    </smoothstep>
+    <invert name="pit_depth_y" type="float">
+      <input name="in" type="float" nodename="pit_ramp_y" />
+    </invert>
+    <add name="tap_position_z_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.0003" />
+    </add>
+    <multiply name="pit_scaled_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z_2" />
+      <input name="in2" type="float" interfacename="rust_scale" />
+    </multiply>
+    <multiply name="pit_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="pit_scaled_z" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <worleynoise3d name="pits_z" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_z" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_z" />
+    </separate2>
+    <worleynoise3d name="pit_pick_z" type="float">
+      <input name="position" type="vector3" nodename="pit_position_z" />
+      <input name="jitter" type="float" value="1" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <subtract name="pit_pick_offset_z" type="float">
+      <input name="in1" type="float" nodename="pit_pick_z" />
+      <input name="in2" type="float" value="0.6" />
+    </subtract>
+    <multiply name="pit_radius_raw_z" type="float">
+      <input name="in1" type="float" nodename="pit_pick_offset_z" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <max name="pit_radius_z" type="float">
+      <input name="in1" type="float" nodename="pit_radius_raw_z" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <multiply name="pit_floor_z" type="float">
+      <input name="in1" type="float" nodename="pit_radius_z" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="pit_rim_z" type="float">
+      <input name="in1" type="float" nodename="pit_radius_z" />
+      <input name="in2" type="float" value="0.001" />
+    </add>
+    <smoothstep name="pit_ramp_z" type="float">
+      <input name="in" type="float" nodename="pit_distances_z" output="outx" />
+      <input name="low" type="float" nodename="pit_floor_z" />
+      <input name="high" type="float" nodename="pit_rim_z" />
+    </smoothstep>
+    <invert name="pit_depth_z" type="float">
+      <input name="in" type="float" nodename="pit_ramp_z" />
+    </invert>
+    <combine3 name="height_ahead_2" type="vector3">
+      <input name="in1" type="float" nodename="pit_depth_x" />
+      <input name="in2" type="float" nodename="pit_depth_y" />
+      <input name="in3" type="float" nodename="pit_depth_z" />
+    </combine3>
+    <subtract name="height_delta_2" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead_2" />
+      <input name="in2" type="float" nodename="pit_depth" />
+    </subtract>
+    <multiply name="height_gradient_2" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta_2" />
+      <input name="in2" type="float" value="3333.333333" />
+    </multiply>
+    <invert name="bare_metal" type="float">
+      <input name="in" type="float" nodename="rust_mask" />
+    </invert>
+    <multiply name="pit_zone" type="float">
+      <input name="in1" type="float" nodename="stain_halo" />
+      <input name="in2" type="float" nodename="bare_metal" />
+    </multiply>
+    <multiply name="pit_amount" type="float">
+      <input name="in1" type="float" nodename="pit_zone" />
+      <input name="in2" type="float" interfacename="pitting" />
+    </multiply>
+    <multiply name="pit" type="float">
+      <input name="in1" type="float" nodename="pit_depth" />
+      <input name="in2" type="float" nodename="pit_amount" />
+    </multiply>
+
+    <!-- Rust color: dark brown core, orange flakes and ochre crowns, near-black cracks, with fine speckle. -->
+    <multiply name="tone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_position" />
+      <input name="in2" type="float" value="25" />
+    </multiply>
     <noise3d name="rust_detail" type="float">
       <input name="position" type="vector3" nodename="tone_position" />
       <input name="amplitude" type="float" value="0.5" />
       <input name="pivot" type="float" value="0.5" />
     </noise3d>
+    <subtract name="flake_tone_offset" type="float">
+      <input name="in1" type="float" nodename="flake_level" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="flake_tone" type="float">
+      <input name="in1" type="float" nodename="flake_tone_offset" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="rust_tone_raw" type="float">
+      <input name="in1" type="float" nodename="rust_detail" />
+      <input name="in2" type="float" nodename="flake_tone" />
+    </add>
     <clamp name="rust_tone" type="float">
-      <input name="in" type="float" nodename="rust_detail" />
+      <input name="in" type="float" nodename="rust_tone_raw" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
     </clamp>
     <mix name="rust_mottled" type="color3">
       <input name="bg" type="color3" interfacename="rust_dark" />
       <input name="fg" type="color3" interfacename="rust_light" />
       <input name="mix" type="float" nodename="rust_tone" />
     </mix>
-    <multiply name="core_darkening" type="float">
-      <input name="in1" type="float" nodename="rust_core" />
-      <input name="in2" type="float" value="0.75" />
+    <multiply name="rust_ochre" type="color3">
+      <input name="in1" type="color3" interfacename="rust_light" />
+      <input name="in2" type="color3" value="1.6, 1.45, 0.9" />
     </multiply>
-    <mix name="rust_color" type="color3">
+    <smoothstep name="blister_crown" type="float">
+      <input name="in" type="float" nodename="blister" />
+      <input name="low" type="float" value="0.5" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <multiply name="crown_tone" type="float">
+      <input name="in1" type="float" nodename="rust_tone" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="crown_mix" type="float">
+      <input name="in1" type="float" nodename="blister_crown" />
+      <input name="in2" type="float" nodename="crown_tone" />
+    </multiply>
+    <mix name="rust_crowned" type="color3">
       <input name="bg" type="color3" nodename="rust_mottled" />
-      <input name="fg" type="color3" interfacename="rust_dark" />
-      <input name="mix" type="float" nodename="core_darkening" />
+      <input name="fg" type="color3" nodename="rust_ochre" />
+      <input name="mix" type="float" nodename="crown_mix" />
     </mix>
-    <multiply name="stain_color" type="color3">
-      <input name="in1" type="color3" interfacename="metal_color" />
-      <input name="in2" type="color3" value="0.6, 0.4, 0.27" />
+    <multiply name="broad_tone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_position" />
+      <input name="in2" type="float" value="5" />
     </multiply>
-    <multiply name="stain_amount" type="float">
-      <input name="in1" type="float" nodename="stain_halo" />
-      <input name="in2" type="float" value="0.75" />
+    <fractal3d name="broad_tone_fractal" type="float">
+      <input name="position" type="vector3" nodename="broad_tone_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="broad_tone" type="float">
+      <input name="in" type="float" nodename="broad_tone_fractal" />
+      <input name="low" type="float" value="-0.25" />
+      <input name="high" type="float" value="0.35" />
+    </smoothstep>
+    <multiply name="core_part" type="float">
+      <input name="in1" type="float" nodename="rust_core" />
+      <input name="in2" type="float" value="0.45" />
     </multiply>
-    <mix name="stained_metal" type="color3">
-      <input name="bg" type="color3" interfacename="metal_color" />
-      <input name="fg" type="color3" nodename="stain_color" />
-      <input name="mix" type="float" nodename="stain_amount" />
+    <multiply name="broad_part" type="float">
+      <input name="in1" type="float" nodename="broad_tone" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="darkening_raw" type="float">
+      <input name="in1" type="float" nodename="core_part" />
+      <input name="in2" type="float" nodename="broad_part" />
+    </add>
+    <clamp name="rust_darkening" type="float">
+      <input name="in" type="float" nodename="darkening_raw" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.85" />
+    </clamp>
+    <multiply name="rust_brown" type="color3">
+      <input name="in1" type="color3" interfacename="rust_dark" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <mix name="rust_cored" type="color3">
+      <input name="bg" type="color3" nodename="rust_crowned" />
+      <input name="fg" type="color3" nodename="rust_brown" />
+      <input name="mix" type="float" nodename="rust_darkening" />
     </mix>
-    <mix name="base_color_mix" type="color3">
-      <input name="bg" type="color3" nodename="stained_metal" />
-      <input name="fg" type="color3" nodename="rust_color" />
-      <input name="mix" type="float" nodename="rust_mask" />
+    <multiply name="crack_color" type="color3">
+      <input name="in1" type="color3" interfacename="rust_dark" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <mix name="rust_cracked" type="color3">
+      <input name="bg" type="color3" nodename="crack_color" />
+      <input name="fg" type="color3" nodename="rust_cored" />
+      <input name="mix" type="float" nodename="flake_crack" />
     </mix>
-    <invert name="metalness" type="float">
-      <input name="in" type="float" nodename="rust_mask" />
-    </invert>
+    <multiply name="speck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="420" />
+    </multiply>
+    <cellnoise3d name="speck" type="float">
+      <input name="position" type="vector3" nodename="speck_position" />
+    </cellnoise3d>
+    <remap name="speck_tone" type="float">
+      <input name="in" type="float" nodename="speck" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="rust_color" type="color3">
+      <input name="in1" type="color3" nodename="rust_cracked" />
+      <input name="in2" type="float" nodename="speck_tone" />
+    </multiply>
 
-    <!-- Brushing: noise stretched along object X. -->
+    <!-- Bare steel: brushed along object X, stained brown around the patches and dark in the pits. -->
     <multiply name="brush_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
       <input name="in2" type="vector3" value="1.5, 90, 90" />
@@ -145,52 +1121,157 @@
       <input name="amplitude" type="float" value="0.07" />
       <input name="pivot" type="float" value="0.26" />
     </noise3d>
+    <multiply name="brush_fine_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="4, 600, 600" />
+    </multiply>
+    <noise3d name="brush_fine" type="float">
+      <input name="position" type="vector3" nodename="brush_fine_position" />
+    </noise3d>
+    <multiply name="brush_tone_offset" type="float">
+      <input name="in1" type="float" nodename="brush_fine" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <add name="brush_tone" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="brush_tone_offset" />
+    </add>
+    <multiply name="metal_toned" type="color3">
+      <input name="in1" type="color3" interfacename="metal_color" />
+      <input name="in2" type="float" nodename="brush_tone" />
+    </multiply>
+    <multiply name="stain_amount" type="float">
+      <input name="in1" type="float" nodename="stain_halo" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <multiply name="stain_color" type="color3">
+      <input name="in1" type="color3" interfacename="metal_color" />
+      <input name="in2" type="color3" value="0.6, 0.4, 0.27" />
+    </multiply>
+    <mix name="stained_metal" type="color3">
+      <input name="bg" type="color3" nodename="metal_toned" />
+      <input name="fg" type="color3" nodename="stain_color" />
+      <input name="mix" type="float" nodename="stain_amount" />
+    </mix>
+    <multiply name="pit_color" type="color3">
+      <input name="in1" type="color3" interfacename="rust_dark" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="pit_color_amount" type="float">
+      <input name="in1" type="float" nodename="pit" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <clamp name="pit_color_mix" type="float">
+      <input name="in" type="float" nodename="pit_color_amount" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <mix name="pitted_metal" type="color3">
+      <input name="bg" type="color3" nodename="stained_metal" />
+      <input name="fg" type="color3" nodename="pit_color" />
+      <input name="mix" type="float" nodename="pit_color_mix" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="pitted_metal" />
+      <input name="fg" type="color3" nodename="rust_color" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <clamp name="pit_dielectric" type="float">
+      <input name="in" type="float" nodename="pit" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <max name="dielectric" type="float">
+      <input name="in1" type="float" nodename="rust_mask" />
+      <input name="in2" type="float" nodename="pit_dielectric" />
+    </max>
+    <invert name="metalness" type="float">
+      <input name="in" type="float" nodename="dielectric" />
+    </invert>
     <multiply name="stain_roughness" type="float">
       <input name="in1" type="float" nodename="stain_halo" />
       <input name="in2" type="float" value="0.22" />
     </multiply>
-    <add name="metal_roughness" type="float">
+    <add name="metal_stained_roughness" type="float">
       <input name="in1" type="float" nodename="brush_noise" />
       <input name="in2" type="float" nodename="stain_roughness" />
     </add>
-    <mix name="roughness_mix" type="float">
+    <multiply name="pit_roughness" type="float">
+      <input name="in1" type="float" nodename="pit" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="metal_roughness" type="float">
+      <input name="in1" type="float" nodename="metal_stained_roughness" />
+      <input name="in2" type="float" nodename="pit_roughness" />
+    </add>
+    <remap name="rust_roughness" type="float">
+      <input name="in" type="float" nodename="crust" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.95" />
+      <input name="outhigh" type="float" value="0.72" />
+    </remap>
+    <mix name="roughness" type="float">
       <input name="bg" type="float" nodename="metal_roughness" />
-      <input name="fg" type="float" value="0.86" />
+      <input name="fg" type="float" nodename="rust_roughness" />
       <input name="mix" type="float" nodename="rust_mask" />
     </mix>
     <multiply name="anisotropy" type="float">
       <input name="in1" type="float" nodename="metalness" />
       <input name="in2" type="float" interfacename="brushing" />
     </multiply>
-
-    <!-- Pitted rust: a vector noise tilts the object-space normal. -->
-    <noise3d name="pit_noise" type="vector3">
-      <input name="position" type="vector3" nodename="detail_position" />
-    </noise3d>
-    <multiply name="pit_strength" type="float">
-      <input name="in1" type="float" nodename="rust_mask" />
-      <input name="in2" type="float" interfacename="pitting" />
+    <multiply name="crust_strength" type="float">
+      <input name="in1" type="float" interfacename="pitting" />
+      <input name="in2" type="float" value="0.012" />
     </multiply>
-    <multiply name="pit_offset" type="vector3">
-      <input name="in1" type="vector3" nodename="pit_noise" />
+    <multiply name="crust_bump" type="float">
+      <input name="in1" type="float" nodename="rust_mask" />
+      <input name="in2" type="float" nodename="crust_strength" />
+    </multiply>
+    <multiply name="crust_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient" />
+      <input name="in2" type="float" nodename="crust_bump" />
+    </multiply>
+    <multiply name="pit_strength" type="float">
+      <input name="in1" type="float" nodename="pit_amount" />
+      <input name="in2" type="float" value="0.0015" />
+    </multiply>
+    <multiply name="pit_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient_2" />
       <input name="in2" type="float" nodename="pit_strength" />
     </multiply>
-    <add name="pitted_object_normal" type="vector3">
-      <input name="in1" type="vector3" nodename="object_normal" />
-      <input name="in2" type="vector3" nodename="pit_offset" />
+    <add name="pitted_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_gradient" />
+      <input name="in2" type="vector3" nodename="pit_gradient" />
     </add>
-    <transformnormal name="pitted_normal_world" type="vector3">
-      <input name="in" type="vector3" nodename="pitted_object_normal" />
+    <dotproduct name="pitted_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="pitted_gradient_sum" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="pitted_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="pitted_along_normal" />
+    </multiply>
+    <subtract name="pitted_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="pitted_gradient_sum" />
+      <input name="in2" type="vector3" nodename="pitted_normal_part" />
+    </subtract>
+    <subtract name="pitted_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="pitted_surface_gradient" />
+    </subtract>
+    <transformnormal name="pitted_world" type="vector3">
+      <input name="in" type="vector3" nodename="pitted_object" />
       <input name="fromspace" type="string" value="object" />
       <input name="tospace" type="string" value="world" />
     </transformnormal>
     <normalize name="pitted_normal" type="vector3">
-      <input name="in" type="vector3" nodename="pitted_normal_world" />
+      <input name="in" type="vector3" nodename="pitted_world" />
     </normalize>
 
-    <output name="base_color_out" type="color3" nodename="base_color_mix" />
+    <output name="base_color_out" type="color3" nodename="base_color" />
     <output name="metalness_out" type="float" nodename="metalness" />
-    <output name="roughness_out" type="float" nodename="roughness_mix" />
+    <output name="roughness_out" type="float" nodename="roughness" />
     <output name="anisotropy_out" type="float" nodename="anisotropy" />
     <output name="normal_out" type="vector3" nodename="pitted_normal" />
   </nodegraph>

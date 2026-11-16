@@ -1,13 +1,15 @@
 <?xml version="1.0"?>
 <!--
   Mossy stone: OpenPBR weathered rock with moss and scalar height
-  displacement. Rounded blocks between warped Worley cracks, with fractal
-  weathering, form a height in UV space only, so the viewer bakes it into a
+  displacement. Warped Worley cells are stones at their own heights with
+  chipped bevels and deep joints; tilted sedimentary layers inside each one
+  alternate harder ledges and recessed softer bands, under fractal
+  weathering. The height uses UV space only, so the viewer bakes it into a
   height map. Moss grows on faces turned toward the Up input (object +Y by
-  default), in the cracks and in soft-edged patches, as a fuzz layer over
-  round cushions of shoots; it is deep green in the cushions and
-  yellow-green on the tips and at the patch edges. Uses UV0 and exposes the
-  stone count.
+  default), in the joints and recessed layers and in soft-edged patches, as
+  a fuzz layer over round cushions of shoots; it is deep green in the
+  cushions and yellow-green on the tips and at the patch edges. Uses UV0 and
+  exposes the stone count.
   Procedural, CC0.
 -->
 <materialx version="1.39" colorspace="lin_rec709">
@@ -15,7 +17,7 @@
     <input name="stone_color" type="color3" value="0.09, 0.087, 0.08" uiname="Stone" />
     <input name="moss_color" type="color3" value="0.022, 0.06, 0.008" uiname="Moss" />
     <input name="tip_color" type="color3" value="0.09, 0.13, 0.02" uiname="Moss tips" />
-    <input name="moss_amount" type="float" value="0.55" uiname="Moss amount" uimin="0" uimax="1" />
+    <input name="moss_amount" type="float" value="0.45" uiname="Moss amount" uimin="0" uimax="1" />
     <input name="tiles" type="vector2" value="7, 3.5" uiname="Stones per UV" />
     <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
     <texcoord name="uv" type="vector2" />
@@ -45,29 +47,138 @@
     <separate2 name="block_distances" type="multioutput">
       <input name="in" type="vector2" nodename="blocks" />
     </separate2>
-    <subtract name="block_border" type="float">
+    <worleynoise2d name="stone_id" type="float">
+      <input name="texcoord" type="vector2" nodename="crack_uv" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise2d>
+    <multiply name="chip_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise2d name="chip" type="float">
+      <input name="texcoord" type="vector2" nodename="chip_uv" />
+    </noise2d>
+    <multiply name="chip_offset" type="float">
+      <input name="in1" type="float" nodename="chip" />
+      <input name="in2" type="float" value="0.06" />
+    </multiply>
+    <subtract name="block_border_raw" type="float">
       <input name="in1" type="float" nodename="block_distances" output="outy" />
       <input name="in2" type="float" nodename="block_distances" output="outx" />
     </subtract>
+    <add name="block_border" type="float">
+      <input name="in1" type="float" nodename="block_border_raw" />
+      <input name="in2" type="float" nodename="chip_offset" />
+    </add>
     <smoothstep name="crack_ramp" type="float">
       <input name="in" type="float" nodename="block_border" />
       <input name="low" type="float" value="0" />
-      <input name="high" type="float" value="0.07" />
+      <input name="high" type="float" value="0.06" />
     </smoothstep>
     <invert name="crack" type="float">
       <input name="in" type="float" nodename="crack_ramp" />
     </invert>
-    <smoothstep name="dome_ramp" type="float">
+    <smoothstep name="bevel" type="float">
       <input name="in" type="float" nodename="block_border" />
-      <input name="low" type="float" value="0" />
-      <input name="high" type="float" value="0.45" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.2" />
     </smoothstep>
-    <sqrt name="dome" type="float">
-      <input name="in" type="float" nodename="dome_ramp" />
-    </sqrt>
+    <multiply name="stone_level_part" type="float">
+      <input name="in1" type="float" nodename="stone_id" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="stone_level" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="stone_level_part" />
+    </add>
+    <separate2 name="stone_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="stone_uv" />
+    </separate2>
+    <subtract name="layer_tilt_offset" type="float">
+      <input name="in1" type="float" nodename="stone_id" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="layer_tilt" type="float">
+      <input name="in1" type="float" nodename="layer_tilt_offset" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <multiply name="layer_wobble_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="vector2" value="1.5, 4" />
+    </multiply>
+    <noise2d name="layer_wobble" type="float">
+      <input name="texcoord" type="vector2" nodename="layer_wobble_uv" />
+    </noise2d>
+    <multiply name="layer_wobble_offset" type="float">
+      <input name="in1" type="float" nodename="layer_wobble" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="layer_slant" type="float">
+      <input name="in1" type="float" nodename="stone_parts" output="outx" />
+      <input name="in2" type="float" nodename="layer_tilt" />
+    </multiply>
+    <add name="layer_axis" type="float">
+      <input name="in1" type="float" nodename="stone_parts" output="outy" />
+      <input name="in2" type="float" nodename="layer_slant" />
+    </add>
+    <multiply name="layer_count" type="float">
+      <input name="in1" type="float" nodename="layer_axis" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <multiply name="layer_shift" type="float">
+      <input name="in1" type="float" nodename="stone_id" />
+      <input name="in2" type="float" value="13" />
+    </multiply>
+    <add name="layer_phase_raw" type="float">
+      <input name="in1" type="float" nodename="layer_count" />
+      <input name="in2" type="float" nodename="layer_shift" />
+    </add>
+    <add name="layer_phase" type="float">
+      <input name="in1" type="float" nodename="layer_phase_raw" />
+      <input name="in2" type="float" nodename="layer_wobble_offset" />
+    </add>
+    <floor name="layer_fraction_floor" type="float">
+      <input name="in" type="float" nodename="layer_phase" />
+    </floor>
+    <subtract name="layer_fraction" type="float">
+      <input name="in1" type="float" nodename="layer_phase" />
+      <input name="in2" type="float" nodename="layer_fraction_floor" />
+    </subtract>
+    <smoothstep name="soft_in" type="float">
+      <input name="in" type="float" nodename="layer_fraction" />
+      <input name="low" type="float" value="0.55" />
+      <input name="high" type="float" value="0.72" />
+    </smoothstep>
+    <smoothstep name="soft_out" type="float">
+      <input name="in" type="float" nodename="layer_fraction" />
+      <input name="low" type="float" value="0.9" />
+      <input name="high" type="float" value="0.99" />
+    </smoothstep>
+    <invert name="soft_end" type="float">
+      <input name="in" type="float" nodename="soft_out" />
+    </invert>
+    <multiply name="soft_band" type="float">
+      <input name="in1" type="float" nodename="soft_in" />
+      <input name="in2" type="float" nodename="soft_end" />
+    </multiply>
+    <floor name="layer_index" type="float">
+      <input name="in" type="float" nodename="layer_phase" />
+    </floor>
+    <multiply name="layer_stone" type="float">
+      <input name="in1" type="float" nodename="stone_id" />
+      <input name="in2" type="float" value="31" />
+    </multiply>
+    <combine2 name="layer_key" type="vector2">
+      <input name="in1" type="float" nodename="layer_index" />
+      <input name="in2" type="float" nodename="layer_stone" />
+    </combine2>
+    <cellnoise2d name="layer_tone" type="float">
+      <input name="texcoord" type="vector2" nodename="layer_key" />
+    </cellnoise2d>
     <multiply name="rough_uv" type="vector2">
       <input name="in1" type="vector2" nodename="stone_uv" />
-      <input name="in2" type="float" value="5" />
+      <input name="in2" type="float" value="6" />
     </multiply>
     <separate2 name="rough_parts" type="multioutput">
       <input name="in" type="vector2" nodename="rough_uv" />
@@ -79,26 +190,30 @@
     </combine3>
     <fractal3d name="rough" type="float">
       <input name="position" type="vector3" nodename="rough_position" />
-      <input name="octaves" type="integer" value="5" />
+      <input name="octaves" type="integer" value="6" />
     </fractal3d>
-    <multiply name="dome_height" type="float">
-      <input name="in1" type="float" nodename="dome" />
-      <input name="in2" type="float" value="0.7" />
+    <multiply name="soft_depth" type="float">
+      <input name="in1" type="float" nodename="soft_band" />
+      <input name="in2" type="float" value="0.18" />
     </multiply>
+    <subtract name="layered" type="float">
+      <input name="in1" type="float" nodename="stone_level" />
+      <input name="in2" type="float" nodename="soft_depth" />
+    </subtract>
     <multiply name="rough_height" type="float">
       <input name="in1" type="float" nodename="rough" />
-      <input name="in2" type="float" value="0.25" />
+      <input name="in2" type="float" value="0.22" />
     </multiply>
-    <add name="block_height" type="float">
-      <input name="in1" type="float" nodename="dome_height" />
+    <add name="stone_face" type="float">
+      <input name="in1" type="float" nodename="layered" />
       <input name="in2" type="float" nodename="rough_height" />
     </add>
-    <add name="height_lift" type="float">
-      <input name="in1" type="float" nodename="block_height" />
-      <input name="in2" type="float" value="0.15" />
-    </add>
+    <multiply name="block_height" type="float">
+      <input name="in1" type="float" nodename="bevel" />
+      <input name="in2" type="float" nodename="stone_face" />
+    </multiply>
     <clamp name="height" type="float">
-      <input name="in" type="float" nodename="height_lift" />
+      <input name="in" type="float" nodename="block_height" />
       <input name="low" type="float" value="0" />
       <input name="high" type="float" value="1" />
     </clamp>
@@ -112,7 +227,7 @@
       <input name="in2" type="vector3" nodename="up_direction" />
     </dotproduct>
 
-    <!-- Moss grows on faces turned toward Up, in the cracks and in soft-edged patches. -->
+    <!-- Moss grows on faces turned toward Up, in the joints and recessed layers, and in soft-edged patches. -->
     <multiply name="patch_position" type="vector3">
       <input name="in1" type="vector3" nodename="object_position" />
       <input name="in2" type="float" value="3" />
@@ -148,9 +263,17 @@
       <input name="in1" type="float" nodename="crack" />
       <input name="in2" type="float" value="0.35" />
     </multiply>
+    <multiply name="soft_part" type="float">
+      <input name="in1" type="float" nodename="soft_band" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="moss_hollows" type="float">
+      <input name="in1" type="float" nodename="crack_part" />
+      <input name="in2" type="float" nodename="soft_part" />
+    </add>
     <add name="moss_cracks" type="float">
       <input name="in1" type="float" nodename="moss_up" />
-      <input name="in2" type="float" nodename="crack_part" />
+      <input name="in2" type="float" nodename="moss_hollows" />
     </add>
     <add name="moss_fringed" type="float">
       <input name="in1" type="float" nodename="moss_cracks" />
@@ -416,19 +539,65 @@
       <input name="outlow" type="float" value="0.85" />
       <input name="outhigh" type="float" value="1.12" />
     </remap>
+    <multiply name="stone_warm" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="color3" value="1.12, 1, 0.85" />
+    </multiply>
+    <multiply name="stone_cool" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="color3" value="0.9, 0.97, 1.08" />
+    </multiply>
+    <mix name="stone_tint" type="color3">
+      <input name="bg" type="color3" nodename="stone_warm" />
+      <input name="fg" type="color3" nodename="stone_cool" />
+      <input name="mix" type="float" nodename="stone_id" />
+    </mix>
+    <remap name="layer_shade" type="float">
+      <input name="in" type="float" nodename="layer_tone" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.82" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <remap name="soft_shade" type="float">
+      <input name="in" type="float" nodename="soft_band" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.7" />
+    </remap>
+    <multiply name="band_shade" type="float">
+      <input name="in1" type="float" nodename="layer_shade" />
+      <input name="in2" type="float" nodename="soft_shade" />
+    </multiply>
+    <remap name="joint_shade" type="float">
+      <input name="in" type="float" nodename="bevel" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.3" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
     <remap name="stone_shade" type="float">
       <input name="in" type="float" nodename="height" />
       <input name="inlow" type="float" value="0" />
       <input name="inhigh" type="float" value="1" />
-      <input name="outlow" type="float" value="0.45" />
-      <input name="outhigh" type="float" value="1.2" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="1.15" />
     </remap>
-    <multiply name="stone_tone" type="float">
+    <multiply name="stone_banded" type="float">
       <input name="in1" type="float" nodename="stone_shade" />
+      <input name="in2" type="float" nodename="band_shade" />
+    </multiply>
+    <multiply name="joint_speck" type="float">
+      <input name="in1" type="float" nodename="joint_shade" />
       <input name="in2" type="float" nodename="speck_tone" />
     </multiply>
+    <multiply name="stone_tone" type="float">
+      <input name="in1" type="float" nodename="stone_banded" />
+      <input name="in2" type="float" nodename="joint_speck" />
+    </multiply>
     <multiply name="stone_toned" type="color3">
-      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in1" type="color3" nodename="stone_tint" />
       <input name="in2" type="float" nodename="stone_tone" />
     </multiply>
     <dotproduct name="damp_position_height" type="float">
@@ -546,7 +715,7 @@
   </open_pbr_surface>
   <displacement name="DS_mossy_stone" type="displacementshader">
     <input name="displacement" type="float" nodegraph="NG_mossy_stone" output="height_out" />
-    <input name="scale" type="float" value="0.05" />
+    <input name="scale" type="float" value="0.06" />
   </displacement>
   <surfacematerial name="Mossy_Stone" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="SR_mossy_stone" />
