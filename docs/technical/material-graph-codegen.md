@@ -263,7 +263,7 @@ still needed tens of seconds. A ready variant remains eligible after calibration
 changes because reusing it costs no compile time. Metal and unmeasured backends
 retain their previous ceiling and prefetch sequence.
 
-The D3D12 universal variant also includes displacement traversal and reads compact
+On D3D12 and Metal the universal variant also includes displacement traversal and reads compact
 attribute offsets and format flags from two appended uniform vec4s. Changing stride,
 normal precision, UV/color/tangent presence or the triangle-material offset then
 reuses it. CPU attribute packing is unchanged; lean variants keep static offsets.
@@ -271,8 +271,11 @@ The uniform extension and dynamic readers are browser-only, with the default/nat
 layout retained. No resolved-material, BSDF, surface-interaction or path value
 struct changes. Real-GPU comparisons must cover both normal formats, tangents,
 opacity and emission. Sampling through this variant costs more until the lean
-replacement installs. Metal retains its existing shader, including the roughly
-35 KB universal interpreter; its GPU behavior after these changes is unverified.
+replacement installs. On an M4 Max the runtime layout added about 0.6 s to the
+universal compile and raised its sample time from about 1.1× to 1.3× the lean
+variant, in exchange for no compile when an anisotropic or displaced material
+first appears. Metal keeps the four-operand prefix decoder and its prefetch order.
+Vulkan keeps static offsets until it is measured.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.

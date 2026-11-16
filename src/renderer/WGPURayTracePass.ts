@@ -425,7 +425,10 @@ class WGPURayTracePass {
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
   };
-  private _rtUniform = makeRayTraceUniform(graphCompilerBackend() === 'd3d12');
+  /** The universal editing variant reads vertex layouts from the uniform on the measured
+   * backends, so it survives displacement and generated-tangent layout changes. */
+  private _rtUniform = makeRayTraceUniform(['d3d12', 'metal'].includes(graphCompilerBackend()));
+  private _lobeVariantFirst = graphCompilerBackend() === 'd3d12';
   private _mapInfoUniform!: GPUBuffer;
   private _attributeData?: Uint32Array;
   private _attributeStride = 0;
@@ -1104,9 +1107,9 @@ class WGPURayTracePass {
         // shader, and serves edits only when the graph state installs that shader.
         const editing = editingRequest() ?? request(true, this.graphs.prefetchedEditingPlan() ?? graphPlan);
         this._editingRequest = editing.signature === lean.signature ? undefined : editing;
-        // Windows prepares the smaller lobe variant first. It can serve lobe edits
+        // D3D12 prepares the smaller lobe variant first. It can serve lobe edits
         // while the uncancellable universal compile runs in the background.
-        const fallback = universal?.plan && this._rtUniform.vertexLayout && !graphPlan.key ? request(true, graphPlan) : undefined;
+        const fallback = universal?.plan && this._lobeVariantFirst && !graphPlan.key ? request(true, graphPlan) : undefined;
         this._editingFallbackRequest = fallback?.signature !== editing.signature ? fallback : undefined;
         // A lean variant is owed only while the editing variant serves this request.
         this._leanRequest = undefined;

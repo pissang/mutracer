@@ -235,9 +235,9 @@ smaller lobe variant first, so lobe edits can use it while the graph variant com
 Browser and driver caches can make later visits much faster. Until the scene's own
 variant returns, sampling is slower; the cost depends on the graph.
 
-On Windows, the ready editing variant also covers displacement and generated vertex
-tangents; geometry preparation and texture uploads still take time. These changes
-can compile on other platforms. Dispersion and analytic-light types can still compile
+On Windows and macOS, the ready editing variant also covers displacement and generated
+vertex tangents; geometry preparation and texture uploads still take time. These
+changes can compile on other platforms. Dispersion and analytic-light types can still compile
 on every platform. When the graph variant is predicted beyond the platform's
 background budget, prefetch keeps the smaller variant, and graph edits can compile.
 

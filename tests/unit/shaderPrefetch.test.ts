@@ -12,7 +12,7 @@ import {LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
 const pipeline = () => ({getBindGroupLayout: () => ({})}) as unknown as GPUComputePipeline;
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
-function fixture(shaderPrefetch: 'off' | 'editing', runtimeVertexLayout = false) {
+function fixture(shaderPrefetch: 'off' | 'editing', runtimeVertexLayout = false, lobeVariantFirst = runtimeVertexLayout) {
   const completions: (() => void)[] = [];
   let failing = false;
   const compile = vi.fn(() => new Promise<GPUComputePipeline>((resolve, reject) =>
@@ -20,7 +20,7 @@ function fixture(shaderPrefetch: 'off' | 'editing', runtimeVertexLayout = false)
   const device = {createShaderModule: () => ({getCompilationInfo: async () => ({messages: []})}),
     createComputePipelineAsync: compile, pushErrorScope() {}, popErrorScope: async () => null} as unknown as GPUDevice;
   const pass = Object.create(WGPURayTracePass.prototype) as any;
-  Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(runtimeVertexLayout), shaderPrefetch,
+  Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(runtimeVertexLayout), _lobeVariantFirst: lobeVariantFirst, shaderPrefetch,
     _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _failedPrefetch: new Set(), _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64, SAMPLING_PATTERN: 0},
     _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(), _bevelSamples: 8, _hasDisplacement: false,
@@ -123,6 +123,23 @@ describe('editing shader prefetch', () => {
       expect(pass._activeVariant).toBe(editing);
       expect(compile).toHaveBeenCalledTimes(3);
       expect(Array.from(pass._rtUniform.vertexLayout)).toEqual([9, 3, 6, 6, 8, 8, 9000, 19]);
+    } finally {setMaterialGraphPlanner();}
+  });
+
+  it('compiles the universal variant directly where the lobe variant is not prepared first', async () => {
+    setMaterialGraphPlanner({compileBackend: 'metal'});
+    try {
+      const {pass, compile, trace, complete} = fixture('editing', true, false);
+      trace(); await complete(); trace(); await complete(); trace();
+      expect(compile).toHaveBeenCalledTimes(2);
+      const editing = pass._traceVariants.get(pass._editingRequest.signature);
+      expect(editing.status).toBe('ready');
+      expect(pass._editingRequest.graphPlan.shape?.universal).toBe(true);
+      pass._constants.HAS_VERTEX_TANGENT = true;
+      pass._hasDisplacement = true;
+      expect(trace()).toBe('sampling');
+      expect(pass._activeVariant).toBe(editing);
+      expect(compile).toHaveBeenCalledTimes(2);
     } finally {setMaterialGraphPlanner();}
   });
 
