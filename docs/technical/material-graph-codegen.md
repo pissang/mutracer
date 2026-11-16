@@ -291,7 +291,7 @@ is metadata and is not part of the universal pipeline's cache identity.
 
 | Input | Universal request rule and cost |
 | --- | --- |
-| `NUM_MAPS` | Atlas packing and shader capacity are at least 256 (12 KiB of metadata); above that, retain the larger capacity and compile a compatible variant. Bindless metadata stays runtime storage, with its own binding-layout key. |
+| `NUM_MAPS` | Atlas packing and shader capacity are at least 256 (12 KiB of metadata). Existing scene capacities round up in tens, so more than 250 entries can exceed this bound; retain the larger capacity and compile a compatible variant. Bindless metadata stays runtime storage, with its own binding-layout key. |
 | TLAS/BLAS stacks | Fix both to the supported maximum of 64 entries: 512 bytes of private integer arrays in BVH2, rather than the scene's smaller arrays. This is storage size, not a register-pressure measurement. |
 | Vertex offsets, formats, UV/color/tangent presence, triangle-material offset | Read the existing two uniform vec4s; CPU vertex packing is unchanged. `POSITION_OFF` is always zero in compact packing. Lean kernels retain static offsets. |
 | Displacement, bevel and frames | Include displacement and bevel traversal, UV1, tangent/anisotropy and coat-normal frames. Material data gates their use. |
@@ -301,6 +301,7 @@ is metadata and is not part of the universal pipeline's cache identity.
 | Alpha | Include scene alpha, MASK and BLEND support. The selected stochastic/deterministic blend algorithm retains a separate key. |
 | BLAS layout mask | Include BVH2 alongside the scene's required layouts, so adding dynamic BVH2 geometry to a wide-layout scene reuses its kernel. Other layout families still need another variant. |
 | Dispersion, caustics, sampling pattern, bevel samples | Retain algorithm/quality keys; forcing a different algorithm can change sample streams or output. Caustic/research kernels keep their existing requests. |
+| `USE_RR`, `RR_MAX` | Keep the existing invariant settings: true and 12. They are not scene-dependent. |
 | Graph shader key | Every terminal and opcode family, independent of installed structures; only the measurement salt changes between cold trials. Forced tiers or uninterpretable structures keep their fallback. |
 | Binding mode, baked constants and backend | Retain resource/compiler compatibility keys. Device loss or another Engine/device needs its own pipeline objects; identical source can reuse persistent driver/browser caches. |
 

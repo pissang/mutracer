@@ -233,10 +233,11 @@ when its capacities and settings still fit. After about two seconds of stable
 rendering, the scene's lean variant compiles and replaces it without restarting
 accumulation.
 
-The common D3D12/Metal variant reserves metadata for 256 atlas textures and
+The common D3D12/Metal variant reserves 256 atlas metadata entries and
 supports shadow catchers and the default BVH2 geometry layout, including generated
-vertex tangents, material bevel and both normal formats. Larger atlases or other
-BVH layouts can need another editing variant. Dispersion, caustics, sampling
+vertex tangents, material bevel and both normal formats. Atlas capacities round
+up in tens, so more than 250 entries or other BVH layouts can need another
+editing variant. Dispersion, caustics, sampling
 pattern, bevel sample count, alpha-blend strategy or a texture-binding fallback
 can also select another variant. Returning to a prepared combination reuses it.
 Geometry preparation, texture uploads and BVH construction still take time.
