@@ -724,7 +724,6 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .examples-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .examples-panel__body { display: flex; min-height: 0; padding: 0 10px 10px; }
 .examples-panel .example-tabs__list [role='tab'] { gap: 4px; padding: 6px 7px; font-size: 10.5px; white-space: nowrap; }
-.examples-panel .ex-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .examples-panel .ex b { overflow-wrap: anywhere; }
 .example-tabs { display: flex; flex-direction: column; min-height: 0; width: 100%; }
 .example-tabs__list { display: flex; flex: none; gap: 4px; margin-bottom: 10px; }
@@ -733,8 +732,9 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .example-tabs [role='tabpanel'] { outline: none; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
 .example-note { margin: 0 4px 10px; }
 .example-note a { color: var(--cv-active-text); }
-.ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
-.ex-entry { min-width: 0; }
+/* Research scene thumbnails are 160px wide; cap cards to avoid enlarging them. */
+.ex-grid { display: flex; flex-wrap: wrap; align-content: start; gap: 8px; }
+.ex-entry { flex: 1 1 128px; min-width: 0; max-width: 160px; }
 .ex-entry .ex { width: 100%; }
 .ex-links { display: flex; gap: 12px; padding: 4px 9px; font-size: 10px; }
 .ex-links a { color: var(--cv-text-3); }
@@ -946,7 +946,6 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
   .center-card { width: min(340px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; }
   .popover { max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
   .examples { max-height: min(var(--available-height, 100dvh), calc(100dvh - 24px)); }
-  .ex-grid { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
   .scrim { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
   .dialog { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
   .dialog .actions { flex-wrap: wrap; }
