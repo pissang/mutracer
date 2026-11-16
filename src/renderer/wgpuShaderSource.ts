@@ -4,6 +4,7 @@ import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
 import type {MaterialShaderHooks} from './wgsl/materialShaderHooks.js';
+import {WGPU_RUNTIME_VERTEX_CONSTANTS, runtimeVertexLayoutSource} from './wgpuVertexLayout.js';
 
 export interface WGPUShaderFeatures {
   materialHooks?: MaterialShaderHooks;
@@ -27,6 +28,8 @@ export interface WGPUShaderFeatures {
   /** Browser emissive records include an instance slot. Default false. */
   emissiveInstanceIndices?: boolean;
   compactVertices?: boolean;
+  /** Browser editing kernels use runtime compact-vertex offsets. Default false. */
+  runtimeVertexLayout?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -48,12 +51,13 @@ const constantsNotUsed = [
   'USE_GROUNDED_BACKGROUND', ...MATERIAL_TEXTURE_DEFINES, 'USE_ANISOTROPY_DIRECTIONS',
   'USE_COAT_NORMAL_FRAMES', 'HAS_ALPHA_BLEND', 'HAS_ALPHA_MASK'
 ];
-export function wgpuPipelineConstantKeys(constants: Record<string, boolean | number>) {
-  return Object.keys(constants).sort().filter(key => !WGPU_SHADER_DEFINE_KEYS.includes(key) && !constantsNotUsed.includes(key));
+export function wgpuPipelineConstantKeys(constants: Record<string, boolean | number>, runtimeVertexLayout = false) {
+  return Object.keys(constants).sort().filter(key => !WGPU_SHADER_DEFINE_KEYS.includes(key) && !constantsNotUsed.includes(key) &&
+    !(runtimeVertexLayout && WGPU_RUNTIME_VERTEX_CONSTANTS.includes(key)));
 }
-export function wgpuShaderPreamble(constants: Record<string, boolean | number>, bake = false): string {
+export function wgpuShaderPreamble(constants: Record<string, boolean | number>, bake = false, runtimeVertexLayout = false): string {
   const defineCode = WGPU_SHADER_DEFINE_KEYS.map(key => `const ${key} = ${constants[key]};`).join('\n');
-  const keys = wgpuPipelineConstantKeys(constants);
+  const keys = wgpuPipelineConstantKeys(constants, runtimeVertexLayout);
   const constantsCode = keys.map(key => {
     const value = constants[key];
     return `${bake ? 'const' : 'override'} ${key} = ${typeof value === 'boolean' ? (value ? 'true' : 'false') : value.toString()};`;
@@ -62,11 +66,13 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
   constants = researchTransport()?.constants(constants, features) ?? constants;
-  return (features.independentTextures ? 'enable wgpu_binding_array;\n' : '') + wgpuShaderPreamble(constants, bake) + rayTraceCompute({
+  const source = rayTraceCompute({
     ...features,
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,
     lightCapabilities: bake && constants.LIGHT_CAPABILITIES !== undefined ? Number(constants.LIGHT_CAPABILITIES) : undefined
   }, sceneIntersections, pathDiagnostic, inputHooks);
+  return (features.independentTextures ? 'enable wgpu_binding_array;\n' : '') + wgpuShaderPreamble(constants, bake, features.runtimeVertexLayout) +
+    (features.runtimeVertexLayout ? runtimeVertexLayoutSource(source) : source);
 }

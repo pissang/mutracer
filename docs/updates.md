@@ -222,20 +222,24 @@ Apps that let users edit materials can construct the engine with
 `shaderPrefetch: 'editing'` (WebGPU). After the first shader is ready, the engine
 compiles in the background a variant that supports every material lobe, media,
 transparency, every texture type, anisotropy and coat-normal frames, UV1 textures
-and emissive triangles, and that runs any [material graph](./materials.md#material-graphs)
-in a graph interpreter. A material edit, including replacing a material's graph,
+and emissive triangles, with support for [material graph](./materials.md#material-graphs)
+replacements. A material edit, including replacing a material's graph,
 then renders at once through that variant instead of waiting for a compile. Once the
 scene has not needed another shader for about two seconds of rendering, the engine
 compiles the variant the scene needs and switches back to it without restarting
 accumulation.
 
-The prefetch costs background compile time after loading (about 3.5 s on an Apple
-M4 Max). Until the switch back, sampling is slower than with the scene's own variant
-(about 10 % in a measured scene). Edits that change geometry still compile:
-displacement and the first anisotropic material on a mesh, which generates vertex
-tangents. So do dispersion and analytic-light types. Where graph interpreter code
-compiles slowly (predicted over 10 s, as with Direct3D or Vulkan), the background
-variant leaves out the graph interpreter, and a graph edit can compile.
+The prefetch costs background compile time after loading: about 3.5 s on an Apple
+M4 Max and about 20–30 s in a measured Windows configuration. Windows prepares the
+smaller lobe variant first, so lobe edits can use it while the graph variant compiles.
+Browser and driver caches can make later visits much faster. Until the scene's own
+variant returns, sampling is slower; the cost depends on the graph.
+
+On Windows, the ready editing variant also covers displacement and generated vertex
+tangents; geometry preparation and texture uploads still take time. These changes
+can compile on other platforms. Dispersion and analytic-light types can still compile
+on every platform. When the graph variant is predicted beyond the platform's
+background budget, prefetch keeps the smaller variant, and graph edits can compile.
 
 ## Geometry
 

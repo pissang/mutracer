@@ -89,9 +89,9 @@ into two exact floats), then one record per instruction using the first four
 rows (header, then twelve operand codes). The topology-ID component addresses
 either a specialized function (positive) or a program header (negative); no
 value struct changes. The surface branch applies the same per-terminal clamps
-as specialized code, gated by the terminal mask. The first four operands are
-decoded before the opcode switch so lanes on different opcodes share those
-loads.
+as specialized code, gated by the terminal mask. The default decoder shares the
+first four operand loads before the opcode switch; D3D12 uses the loop described
+below.
 
 The fixed register array and the operand decoding cost GPU time per evaluated
 node; the interpreter variant also costs some time on hits that do not evaluate
@@ -127,6 +127,16 @@ the first. Three rules keep one copy on the main path:
 The register file holds 16 values, enough for every viewer sample; it did not
 change compile time measurably. Specialized code still inlines the noise
 lattice at every noise node, which the compile model counts per node.
+
+D3D12 browser interpreters decode each instruction's operands in one loop into
+a local vec4 array before the opcode switch. The loop bound is the family's
+maximum port count, derived from `graphInstructions`; absent ports still decode
+as zero. This preserves bytecode, casts, register liveness and evaluation order
+while avoiding repeated inlining of operand/context decoding at every expression.
+The array and loop cost GPU work while the interpreter serves. Metal, specialized
+code and native retain their existing decoder. Consolidating noise hash call sites
+and bounding noise lattice loops separately gave only a small compile improvement;
+those changes were not adopted.
 
 ## Tier planner
 
@@ -188,6 +198,12 @@ compiled is half-subtracted as queueing, and a compile overlapped for more than
 60 % of its duration is ignored. The model is kept in memory per `GPUDevice`,
 never persisted.
 
+A universal editing prefetch contains interpreter code even when its scene has
+no graphs. Calibration charges that shape to the interpreter; treating its empty
+structure-set key as graph-free otherwise inflates device speed and future costs.
+Source estimates use the decoder emitted on the current platform. Backend
+coefficients and speed priors remain as listed above.
+
 The planner works in device milliseconds. The correct-frame budget is 1 s of
 graph increment. The final-variant budget is three times this device's predicted
 cold graph-free compile, clamped to 1–10 s; because both sides scale with `s`,
@@ -218,9 +234,12 @@ A new structure set is first served by a variant that renders it correctly:
 Right after the first graph installation, the editing interpreter (with the
 installed pipeline features) also compiles once in the background, so later
 structural edits find it ready and compile nothing. It is skipped when its
-compile is predicted over the 10 s upgrade ceiling below (on D3D12 it takes ≈7 s
-and still compiles). An edit uses it only once it has compiled; until then, or
+compile is predicted over the 10 s upgrade ceiling below. An edit uses it only
+once it has compiled; until then, or
 without it, an edit compiles as described above.
+This ordinary prefetch requires an installed graph: without one, its source is
+graph-free and must never be registered as a ready interpreter. Only the explicit
+universal editing variant emits interpreter code for an empty structure set.
 
 With the engine's editing prefetch, the backend's editing variant instead carries
 the universal editing interpreter: every opcode family in the surface, emission and
@@ -231,12 +250,29 @@ new programs on it at once, without the debounce, and accumulation restarts as f
 any structure change. The set's own serving variant compiles once the scene has
 been stable for 2 s and replaces it without a restart; the upgrade policy waits for
 that. The universal shape never becomes a structure set's serving shape, and other
-variants keep compiling the installed structures' own plan. It is not used when its
-compile is predicted over the 10 s upgrade ceiling below (≈15 s on D3D12), when tiers
-are forced, or when a structure cannot be interpreted; the editing variant then
-carries the prefetched editing interpreter as before. The universal interpreter
-adds about 35 KB of source and about 1 s of Metal compile time over the lobe-only
-editing variant, and costs about 10 % GPU time per sample while it serves.
+variants keep compiling the installed structures' own plan. Forced tiers and
+uninterpretable structures retain the existing fallback.
+
+D3D12 prepares the smaller lobe variant before starting the universal variant, and
+can serve compatible edits through that fallback during the longer compile. Its
+engine-level editing prefetch allows three times the upgrade ceiling (30 s by
+default); other background work keeps the 10 s ceiling. This trades a longer first
+warm-up for reuse across graph switches and later browser visits: measured persistent
+Chrome profiles reused the full pipeline in about 50 ms, whereas fresh profiles
+still needed tens of seconds. A ready variant remains eligible after calibration
+changes because reusing it costs no compile time. Metal and unmeasured backends
+retain their previous ceiling and prefetch sequence.
+
+The D3D12 universal variant also includes displacement traversal and reads compact
+attribute offsets and format flags from two appended uniform vec4s. Changing stride,
+normal precision, UV/color/tangent presence or the triangle-material offset then
+reuses it. CPU attribute packing is unchanged; lean variants keep static offsets.
+The uniform extension and dynamic readers are browser-only, with the default/native
+layout retained. No resolved-material, BSDF, surface-interaction or path value
+struct changes. Real-GPU comparisons must cover both normal formats, tangents,
+opacity and emission. Sampling through this variant costs more until the lean
+replacement installs. Metal retains its existing shader, including the roughly
+35 KB universal interpreter; its GPU behavior after these changes is unverified.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.

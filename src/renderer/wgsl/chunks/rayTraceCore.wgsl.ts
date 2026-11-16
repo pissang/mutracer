@@ -17,6 +17,7 @@ export default function rayTraceCore({
   materialHooks = {},
   independentTextures = false,
   compactVertices = false,
+  runtimeVertexLayout = false,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true,
@@ -28,6 +29,7 @@ export default function rayTraceCore({
   materialHooks?: MaterialShaderHooks;
   independentTextures?: boolean;
   compactVertices?: boolean;
+  runtimeVertexLayout?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
@@ -312,7 +314,7 @@ struct RayTraceUniform {
   shadowCatcherChoiceCount: i32,
   environmentRotation: mat4x4f,
   backgroundMapTransform: vec4f,
-  backgroundMapRotation: mat4x4f,
+  backgroundMapRotation: mat4x4f,${runtimeVertexLayout ? '\n  vertexLayout0: vec4i,\n  vertexLayout1: vec4i,' : ''}
 }
 
 // Buffers

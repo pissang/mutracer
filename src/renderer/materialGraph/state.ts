@@ -284,7 +284,7 @@ export class MaterialGraphState {
     }
     private interpreterBytes(config: NonNullable<GraphTierShape['interpreter']>) {
         const runners = {...(config.emission ? {emission: {fields: config.terminals, families: config.emission}} : {}), ...(config.opacity ? {opacity: {fields: ['opacity'], families: config.opacity}} : {})};
-        return graphInterpreterShader(config.terminals, 0, config.families, runners).length + graphMathShaderIR([], false, graphInterpreterHelpers(config.families)).length;
+        return graphInterpreterShader(config.terminals, 0, config.families, runners, graphCompilerBackend() === 'd3d12').length + graphMathShaderIR([], false, graphInterpreterHelpers(config.families)).length;
     }
     private shape(specialized: NormalizedGraph[], interpreter: GraphTierShape['interpreter'], features: NormalizedGraph[], coverage?: number): GraphTierShape {
         const list = (families?: ReadonlySet<GraphOp>) => families ? [...families].sort((a, b) => a - b).join('.') : '-';
@@ -578,7 +578,8 @@ export class MaterialGraphState {
      */
     prefetch(compilesInFlight: number): GraphPlan | undefined {
         const installed = this.naturalShape();
-        if (compilesInFlight > 0 || !this.policy.prefetch || planner.tier !== 'auto' || !this.interpreterAvailable || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
+        if (compilesInFlight > 0 || !this.policy.prefetch || planner.tier !== 'auto' || !this.interpreterAvailable ||
+            !this.base.structures.length || !installed || this.active.key !== this.planKey || this.phase === 'compiling') return;
         const full = this.interpreterConfig(this.base.structures, true);
         if (installed.interpreter && installed.interpreter.families.size >= ALL_FAMILIES.size && full.terminals.every(t => installed.interpreter!.terminals.includes(t))) return;
         const shape = this.shape(this.base.structures.filter(g => !this.program(g)), full, installed.features);
@@ -601,11 +602,20 @@ export class MaterialGraphState {
     /** The current structures on the universal editing interpreter, for the engine-level editing
      * variant; also without graphs, so a first graph renders at once. Undefined when tiers are
      * forced, without the interpreter, when a structure cannot be interpreted, or when its
-     * compile is predicted over the upgrade ceiling (the longest uncancellable background compile). */
-    editingPlan(): GraphPlan | undefined {
+     * compile exceeds its background budget. D3D12 allows three upgrade budgets here:
+     * the backend prepares the lobe fallback first, then the reusable editing kernel.
+     * Other background compiles retain the upgrade ceiling. A ready pipeline costs
+     * nothing more to compile, even if later calibration raises the prediction. */
+    editingPlan(ready?: (plan: GraphPlan) => boolean): GraphPlan | undefined {
         if (planner.tier !== 'auto' || !this.interpreterAvailable || this.base.structures.some(g => !this.program(g))) return undefined;
         const shape = this.universalShape();
-        return this.compileMs(shape) > this.policy.maxUpgradeCompileMs ? undefined : this.plan(this.base, shape);
+        const ms = this.compileMs(shape);
+        const ceiling = this.policy.maxUpgradeCompileMs * (this.calibration.backend === 'd3d12' ? 3 : 1);
+        // Over-budget devices without a cached variant need no program-map or
+        // pipeline-signature construction on each steady rendering tick.
+        if (ms > ceiling && !ready) return undefined;
+        const plan = this.plan(this.base, shape);
+        return ms > ceiling && !ready!(plan) ? undefined : plan;
     }
     /** The plan of a registered editing interpreter (see `prefetch`) that covers the current
      * structures, for an editing variant without the universal interpreter. */
@@ -625,7 +635,9 @@ export class MaterialGraphState {
     }
     /** Compile sample of the ray-tracing kernel for `plan` (calibration input). */
     observeCompile(plan: GraphPlan, totalBytes: number, ms: number, overlapMs: number) {
-        const shape = plan.key ? plan.shape : undefined;
+        // An editing interpreter is also prefetched before the scene has any graphs.
+        // Its empty structure-set key does not make that compile graph-free.
+        const shape = plan.key || plan.shape?.universal ? plan.shape : undefined;
         const observation = this.calibration.observe({totalBytes, specializedBytes: shape ? shape.specializedBytes : 0, interpreterBytes: shape ? shape.interpreterBytes : 0, ms, overlapMs});
         planner.onCompile?.(observation);
         return observation;

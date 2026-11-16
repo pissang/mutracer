@@ -63,6 +63,7 @@ export interface RayTraceShaderOptions {
   /** Browser light records carry a GPU instance slot. Default false. */
   emissiveInstanceIndices?: boolean;
   compactVertices?: boolean;
+  runtimeVertexLayout?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -186,7 +187,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ materialHooks, independentTextures: options.independentTextures, compactVertices, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ materialHooks, independentTextures: options.independentTextures, compactVertices, runtimeVertexLayout: options.runtimeVertexLayout, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
 
 ${uvProjectionWgsl}
 

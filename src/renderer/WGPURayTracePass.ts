@@ -48,6 +48,7 @@ import {
 } from './wgpuBindless.js';
 import {wgpuMaterialConstants} from './wgpuMaterialConstants.js';
 import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} from './wgpuShaderSource.js';
+import {packWgpuVertexLayout} from './wgpuVertexLayout.js';
 import {makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
 import {constants} from './webgl.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
@@ -311,6 +312,8 @@ class WGPURayTracePass {
    * Default off. */
   shaderPrefetch: 'off' | 'editing' = 'off';
   private _editingRequest?: TraceRequest;
+  private _editingFallbackRequest?: TraceRequest;
+  private _hasUniversalVariant = false;
   private _leanRequest?: TraceRequest & {since: number};
   /** Signatures whose background compile failed. Maintenance never retries them, since
    * nothing waits for them; a render that requests one compiles it again. */
@@ -422,7 +425,7 @@ class WGPURayTracePass {
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
   };
-  private _rtUniform = makeRayTraceUniform();
+  private _rtUniform = makeRayTraceUniform(graphCompilerBackend() === 'd3d12');
   private _mapInfoUniform!: GPUBuffer;
   private _attributeData?: Uint32Array;
   private _attributeStride = 0;
@@ -989,23 +992,26 @@ class WGPURayTracePass {
       // The tier policy may start a gated upgrade or switch tiers while verifying one.
       this.graphs.tick(this._activeCompiles + this._queuedCompiles.length);
       const geometry = this._preparedMeshData?.geometry;
+      if (this._rtUniform.vertexLayout) packWgpuVertexLayout(this._constants, this._rtUniform.vertexLayout);
       const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
       // A variant request: lean (what the scene needs) or, with editing prefetch, the
       // editing variant that also enables every lobe and code-adding structure flag.
       const request = (editing: boolean, plan: GraphPlan) => {
         const planConstants = materialGraphConstants(this._constants, plan, geometry);
         const universalGraph = !!plan.shape?.universal;
+        const runtimeVertexLayout = universalGraph && !!this._rtUniform.vertexLayout;
         const source = editing ? {...planConstants, ...editingStructure(universalGraph, geometry)} : planConstants;
         const requiredCapabilities = retainedShaderCapabilities(source);
         const constants: Record<string, boolean | number> = {...source, ...requiredCapabilities};
         const hasAlpha =
           Boolean(constants.HAS_ALPHA_BLEND) && this._alphaBlendStrategy === 'deterministic-source-over';
         const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
-        const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
+        const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants, runtimeVertexLayout);
         const defineCode = WGPU_SHADER_DEFINE_KEYS.map((key) => `const ${key} = ${constants[key]};`).join('\n');
         const structure = {
           shareSpectralPrefix: Boolean(constants.SPECTRAL) && this._shareSpectralPrefix,
-          hasDisplacement: this._hasDisplacement,
+          hasDisplacement: runtimeVertexLayout || this._hasDisplacement,
+          ...(runtimeVertexLayout ? {runtimeVertexLayout: true} : {}),
           caustics: this._causticKey,
           bindless: !!this._bindless,
           hasAlpha,
@@ -1051,7 +1057,8 @@ class WGPURayTracePass {
       let universal: {plan?: GraphPlan; request?: TraceRequest} | undefined;
       const editingRequest = () => {
         if (!universal) {
-          const plan = this.shaderPrefetch === 'editing' ? this.graphs.editingPlan() : undefined;
+          const plan = this.shaderPrefetch === 'editing' ? this.graphs.editingPlan(this._hasUniversalVariant ? plan =>
+            this._traceVariants.get(request(true, plan).signature)?.status === 'ready' : undefined) : undefined;
           universal = {plan, request: plan && request(true, plan)};
         }
         return universal.request;
@@ -1097,6 +1104,10 @@ class WGPURayTracePass {
         // shader, and serves edits only when the graph state installs that shader.
         const editing = editingRequest() ?? request(true, this.graphs.prefetchedEditingPlan() ?? graphPlan);
         this._editingRequest = editing.signature === lean.signature ? undefined : editing;
+        // Windows prepares the smaller lobe variant first. It can serve lobe edits
+        // while the uncancellable universal compile runs in the background.
+        const fallback = universal?.plan && this._rtUniform.vertexLayout && !graphPlan.key ? request(true, graphPlan) : undefined;
+        this._editingFallbackRequest = fallback?.signature !== editing.signature ? fallback : undefined;
         // A lean variant is owed only while the editing variant serves this request.
         this._leanRequest = undefined;
         const ready = (r: TraceRequest) => this._traceVariants.get(r.signature)?.status === 'ready';
@@ -1105,8 +1116,10 @@ class WGPURayTracePass {
         const tierChange = this.graphs.upgrading && !!this._activeVariant && this._activeVariant !== this._traceVariants.get(editing.signature) &&
           this._activeVariant.baseSignature === fallbackSignature;
         const servesGraph = !!universal?.plan || graphShaderKey(editing.graphPlan) === graphShaderKey(graphPlan);
-        if (this._editingRequest && servesGraph && !ready(lean) && ready(editing) && !tierChange) {
-          chosen = editing;
+        const serving = ready(editing) && servesGraph ? editing :
+          fallback && ready(fallback) && graphShaderKey(fallback.graphPlan) === graphShaderKey(graphPlan) ? fallback : undefined;
+        if (this._editingRequest && !ready(lean) && serving && !tierChange) {
+          chosen = serving;
           this._leanRequest = {...lean, since: performance.now()};
         }
       }
@@ -1173,6 +1186,9 @@ class WGPURayTracePass {
       return;
     }
     const editing = this._editingRequest;
+    const fallback = this._editingFallbackRequest;
+    if (fallback && idle && !this._traceVariants.has(fallback.signature) && !this._failedPrefetch.has(fallback.signature) &&
+        this._traceVariants.get(editing?.signature ?? '')?.status !== 'ready') { start(fallback); return; }
     if (editing && idle && !this._traceVariants.has(editing.signature) && !this._failedPrefetch.has(editing.signature)) start(editing);
   }
 
@@ -1227,9 +1243,11 @@ class WGPURayTracePass {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
     structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string;
   }, role: CompileRole = 'edit') {
+    this._hasUniversalVariant ||= !!shader.graphPlan.shape?.universal;
     const shareSpectralPrefix = Boolean(constants.SPECTRAL) && this._shareSpectralPrefix;
     const bake = this._bakePipelineConstants, bindless = this._bindless;
-    const hasDisplacement = this._hasDisplacement, blasLayoutMask = this._blasLayoutMask;
+    const runtimeVertexLayout = !!shader.graphPlan.shape?.universal && !!this._rtUniform.vertexLayout;
+    const hasDisplacement = runtimeVertexLayout || this._hasDisplacement, blasLayoutMask = this._blasLayoutMask;
     const lightTracing = this._lightTracing, photonMapping = this._photonMapping;
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
@@ -1294,6 +1312,7 @@ class WGPURayTracePass {
             cameraProjectionInverse: true,
             perInstanceBounds: true,
             compactVertices: true,
+            runtimeVertexLayout,
             dynamicEnvironment: true,
             displayAovStorage: true
             ,analyticLightStorage: true
@@ -1342,7 +1361,7 @@ class WGPURayTracePass {
         pipeline = await request;
         // Calibrates this device's compile speed (cache hits and queueing are detected there).
         const {ms, overlapMs} = clock.end(timing, shaderCompilationNow());
-        this.graphs.observeCompile(lightTracing || photonMapping ? {...shader.graphPlan, key: ''} : shader.graphPlan, source.bytes, ms, overlapMs);
+        this.graphs.observeCompile(lightTracing || photonMapping ? {...shader.graphPlan, key: '', shape: undefined} : shader.graphPlan, source.bytes, ms, overlapMs);
         const scopedError = await scope;
         if (scopedError) throw scopedError;
       } catch (error) {
