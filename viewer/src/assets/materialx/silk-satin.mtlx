@@ -11,7 +11,7 @@
   <nodegraph name="NG_silk_satin">
     <input name="silk_color" type="color3" value="0.15, 0.004, 0.016" uiname="Silk" />
     <input name="sheen_color" type="color3" value="0.95, 0.7, 0.62" uiname="Sheen" />
-    <input name="tiles" type="vector2" value="700, 350" uiname="Threads per UV" />
+    <input name="tiles" type="vector2" value="700, 700" uiname="Threads per UV" />
     <input name="anisotropy" type="float" value="0.75" uiname="Anisotropy" uimin="0" uimax="1" />
     <input name="ripple" type="float" value="0.5" uiname="Ripple" uimin="0" uimax="1" />
     <texcoord name="uv" type="vector2" />

@@ -18,7 +18,7 @@
     <input name="moss_color" type="color3" value="0.022, 0.06, 0.008" uiname="Moss" />
     <input name="tip_color" type="color3" value="0.09, 0.13, 0.02" uiname="Moss tips" />
     <input name="moss_amount" type="float" value="0.45" uiname="Moss amount" uimin="0" uimax="1" />
-    <input name="tiles" type="vector2" value="7, 3.5" uiname="Stones per UV" />
+    <input name="tiles" type="vector2" value="7, 7" uiname="Stones per UV" />
     <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
     <texcoord name="uv" type="vector2" />
     <multiply name="stone_uv" type="vector2">

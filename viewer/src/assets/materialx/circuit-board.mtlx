@@ -11,7 +11,7 @@
     <input name="mask_color" type="color3" value="0.008, 0.075, 0.03" uiname="Solder mask" />
     <input name="trace_color" type="color3" value="0.03, 0.2, 0.075" uiname="Trace" />
     <input name="pad_color" type="color3" value="1, 0.76, 0.34" uiname="Pad" />
-    <input name="tiles" type="vector2" value="24, 12" uiname="Cells per UV" />
+    <input name="tiles" type="vector2" value="24, 24" uiname="Cells per UV" />
     <input name="trace_width" type="float" value="0.09" uiname="Trace width" uimin="0.01" uimax="0.2" />
     <input name="pad_share" type="float" value="0.45" uiname="Pad share" uimin="0" uimax="1" />
     <input name="pad_size" type="float" value="0.17" uiname="Pad size" uimin="0.05" uimax="0.3" />

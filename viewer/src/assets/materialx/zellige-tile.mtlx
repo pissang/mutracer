@@ -11,7 +11,7 @@
     <input name="glaze_color" type="color3" value="0.01, 0.13, 0.1" uiname="Glaze" />
     <input name="body_color" type="color3" value="0.45, 0.33, 0.2" uiname="Clay body" />
     <input name="grout_color" type="color3" value="0.27, 0.26, 0.24" uiname="Grout" />
-    <input name="tiles" type="vector2" value="24, 12" uiname="Tiles per UV" />
+    <input name="tiles" type="vector2" value="24, 24" uiname="Tiles per UV" />
     <input name="glaze_variation" type="float" value="0.6" uiname="Glaze variation" uimin="0" uimax="1" />
     <input name="grout_width" type="float" value="0.022" uiname="Grout width" uimin="0" uimax="0.2" />
     <input name="unevenness" type="float" value="0.3" uiname="Unevenness" uimin="0" uimax="1" />

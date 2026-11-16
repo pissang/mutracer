@@ -14,7 +14,7 @@
   <nodegraph name="NG_exposed_concrete">
     <input name="concrete_color" type="color3" value="0.155, 0.152, 0.143" uiname="Concrete" />
     <input name="stain_color" type="color3" value="0.045, 0.05, 0.035" uiname="Stains" />
-    <input name="tiles" type="vector2" value="6, 3" uiname="Form panels per UV" />
+    <input name="tiles" type="vector2" value="6, 6" uiname="Form panels per UV" />
     <input name="bugholes" type="float" value="0.5" uiname="Bug holes" uimin="0" uimax="1" />
     <input name="weathering" type="float" value="0.65" uiname="Weathering" uimin="0" uimax="1" />
     <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />

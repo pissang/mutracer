@@ -536,7 +536,8 @@ ember patterns and the saddle leather's seams use object-space position and
 follow the model's size; the woven, knitted, quilted, denim, satin, tweed,
 rattan, crocodile scales, mossy stone blocks, concrete form, tiled, plated,
 riveted, perforated, scaled, LED and neon ones use UV0 and expose their repeat
-count. The guilloché, the hot steel gradient and the anodized machining lines
+count. Default repeats assume a UV unit as long in U as in V; on a UV sphere,
+where U runs around the equator, halve the V repeat to keep cells in proportion. The guilloché, the hot steel gradient and the anodized machining lines
 are laid out around object Y. Moss, verdigris, stains and rust runs take an
 **Up** input, object +Y by default; set it to `0, 0, 1` for a Z-up model. Runs
 that start at UV-placed rivets and tie holes follow Up through the mesh

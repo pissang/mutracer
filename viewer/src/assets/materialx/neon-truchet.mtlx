@@ -12,7 +12,7 @@
     <input name="panel_color" type="color3" value="0.012, 0.012, 0.018" uiname="Panel" />
     <input name="neon_a" type="color3" value="1, 0.03, 0.45" uiname="Neon A" />
     <input name="neon_b" type="color3" value="0.02, 0.7, 1" uiname="Neon B" />
-    <input name="tiles" type="vector2" value="16, 8" uiname="Cells per UV" />
+    <input name="tiles" type="vector2" value="16, 16" uiname="Cells per UV" />
     <input name="tube_width" type="float" value="0.09" uiname="Tube width" uimin="0.02" uimax="0.3" />
     <input name="halo" type="float" value="0.35" uiname="Halo" uimin="0" uimax="1" />
     <input name="color_zones" type="float" value="0.22" uiname="Color zone scale" />

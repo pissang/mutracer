@@ -14,7 +14,7 @@
   <nodegraph name="NG_riveted_steel">
     <input name="paint_color" type="color3" value="0.05, 0.07, 0.06" uiname="Paint" />
     <input name="rust_color" type="color3" value="0.085, 0.028, 0.009" uiname="Rust" />
-    <input name="tiles" type="vector2" value="6, 3" uiname="Plates per UV" />
+    <input name="tiles" type="vector2" value="6, 6" uiname="Plates per UV" />
     <input name="rivets" type="float" value="9" uiname="Rivets per edge" uimin="2" uimax="40" />
     <input name="weathering" type="float" value="0.5" uiname="Weathering" uimin="0" uimax="1" />
     <input name="rust_runs" type="float" value="0.5" uiname="Rust runs" uimin="0" uimax="1" />

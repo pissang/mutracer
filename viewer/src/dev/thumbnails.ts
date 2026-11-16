@@ -75,7 +75,12 @@ export function materialStage(): { model: LoadedModel; sphere: THREE.Mesh } {
   const root = new THREE.Group();
   const backdrop = new THREE.Mesh(cycloramaGeometry(), new THREE.MeshStandardMaterial({ map: checker, roughness: 0.82 }));
   backdrop.name = 'Backdrop';
-  const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.94, 128, 64), new THREE.MeshPhysicalMaterial({ roughness: 0.35 }));
+  // U runs around the equator, twice as far as V runs pole to pole; halving V
+  // gives square UV texels, so UV-tiled samples keep their proportions.
+  const sphereGeometry = new THREE.SphereGeometry(0.94, 128, 64);
+  const sphereUv = sphereGeometry.getAttribute('uv');
+  for (let i = 0; i < sphereUv.count; i++) sphereUv.setY(i, sphereUv.getY(i) * 0.5);
+  const sphere = new THREE.Mesh(sphereGeometry, new THREE.MeshPhysicalMaterial({ roughness: 0.35 }));
   sphere.name = 'Material sphere';
   sphere.position.y = -0.06;
   root.add(backdrop, sphere);

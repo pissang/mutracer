@@ -11,7 +11,7 @@
   <nodegraph name="NG_quilted_leather">
     <input name="leather_color" type="color3" value="0.048, 0.01, 0.011" uiname="Leather" />
     <input name="thread_color" type="color3" value="0.085, 0.022, 0.02" uiname="Thread" />
-    <input name="tiles" type="vector2" value="20, 10" uiname="Diamonds per UV" />
+    <input name="tiles" type="vector2" value="20, 20" uiname="Diamonds per UV" />
     <input name="puff" type="float" value="0.16" uiname="Puff" uimin="0" uimax="0.5" />
     <input name="stitches" type="float" value="9" uiname="Stitches per diamond" uimin="2" uimax="30" />
     <input name="wear" type="float" value="0.5" uiname="Wear" uimin="0" uimax="1" />

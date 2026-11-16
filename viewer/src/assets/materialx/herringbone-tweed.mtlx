@@ -12,7 +12,7 @@
     <input name="warp_color" type="color3" value="0.07, 0.05, 0.036" uiname="Warp" />
     <input name="weft_color" type="color3" value="0.2, 0.165, 0.115" uiname="Weft" />
     <input name="fleck_color" type="color3" value="0.26, 0.07, 0.04" uiname="Flecks" />
-    <input name="tiles" type="vector2" value="520, 260" uiname="Threads per UV" />
+    <input name="tiles" type="vector2" value="520, 520" uiname="Threads per UV" />
     <input name="band" type="float" value="10" uiname="Band width" uimin="2" uimax="32" />
     <texcoord name="uv" type="vector2" />
     <multiply name="thread_uv" type="vector2">

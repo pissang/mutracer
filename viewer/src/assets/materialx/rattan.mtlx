@@ -13,7 +13,7 @@
     <input name="cane_color" type="color3" value="0.42, 0.26, 0.11" uiname="Cane" />
     <input name="node_color" type="color3" value="0.16, 0.08, 0.03" uiname="Nodes" />
     <input name="shadow_color" type="color3" value="0.05, 0.026, 0.01" uiname="Shadow" />
-    <input name="tiles" type="vector2" value="30, 15" uiname="Strands per UV" />
+    <input name="tiles" type="vector2" value="30, 30" uiname="Strands per UV" />
     <input name="strand_width" type="float" value="0.72" uiname="Strand width" uimin="0.3" uimax="1" />
     <texcoord name="uv" type="vector2" />
     <multiply name="weave_uv" type="vector2">

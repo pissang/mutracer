@@ -11,7 +11,7 @@
   <nodegraph name="NG_dragon_scales">
     <input name="scale_color" type="color3" value="0.03, 0.2, 0.14" uiname="Scale color" />
     <input name="tip_color" type="color3" value="0.55, 0.42, 0.1" uiname="Tip color" />
-    <input name="tiles" type="vector2" value="34, 24" uiname="Scales per UV" />
+    <input name="tiles" type="vector2" value="34, 48" uiname="Scales per UV" />
     <input name="scale_lift" type="float" value="0.5" uiname="Scale lift" uimin="0" uimax="1" />
     <input name="keel" type="float" value="0.4" uiname="Keel" uimin="0" uimax="1" />
     <input name="film_thickness" type="float" value="0.38" uiname="Film thickness (um)" uimin="0" uimax="1" />

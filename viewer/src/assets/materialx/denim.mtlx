@@ -11,7 +11,7 @@
   <nodegraph name="NG_denim">
     <input name="indigo" type="color3" value="0.012, 0.028, 0.09" uiname="Indigo warp" />
     <input name="weft_color" type="color3" value="0.4, 0.38, 0.33" uiname="Weft" />
-    <input name="tiles" type="vector2" value="260, 130" uiname="Threads per UV" />
+    <input name="tiles" type="vector2" value="260, 260" uiname="Threads per UV" />
     <input name="slub" type="float" value="0.6" uiname="Slub" uimin="0" uimax="1" />
     <input name="fade" type="float" value="0.55" uiname="Fade" uimin="0" uimax="1" />
     <texcoord name="uv" type="vector2" />

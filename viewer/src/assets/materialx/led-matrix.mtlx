@@ -8,7 +8,7 @@
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_led_matrix">
     <input name="panel_color" type="color3" value="0.015, 0.015, 0.018" uiname="Panel" />
-    <input name="tiles" type="vector2" value="72, 36" uiname="LEDs per UV" />
+    <input name="tiles" type="vector2" value="72, 72" uiname="LEDs per UV" />
     <input name="led_size" type="float" value="0.36" uiname="LED size" uimin="0.1" uimax="0.5" />
     <input name="pattern_scale" type="float" value="0.22" uiname="Pattern scale" />
     <input name="hue_offset" type="float" value="0.55" uiname="Hue offset" uimin="0" uimax="1" />

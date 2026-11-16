@@ -12,7 +12,7 @@
     <input name="plate_color" type="color3" value="0.16, 0.17, 0.2" uiname="Plate" />
     <input name="glow_color" type="color3" value="0.02, 0.6, 1" uiname="Glow" />
     <input name="accent_color" type="color3" value="1, 0.14, 0.01" uiname="Accent glow" />
-    <input name="tiles" type="vector2" value="18, 9" uiname="Columns per UV" />
+    <input name="tiles" type="vector2" value="18, 18" uiname="Columns per UV" />
     <input name="groove_width" type="float" value="0.06" uiname="Groove width" uimin="0" uimax="0.3" />
     <input name="lit_plates" type="float" value="0.38" uiname="Lit plates" uimin="0" uimax="1" />
     <input name="accent_share" type="float" value="0.25" uiname="Accent share" uimin="0" uimax="1" />

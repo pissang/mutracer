@@ -11,7 +11,7 @@
   <nodegraph name="NG_crocodile">
     <input name="leather_color" type="color3" value="0.05, 0.022, 0.009" uiname="Scales" />
     <input name="groove_color" type="color3" value="0.012, 0.005, 0.003" uiname="Grooves" />
-    <input name="tiles" type="vector2" value="34, 22" uiname="Scales per UV" />
+    <input name="tiles" type="vector2" value="34, 44" uiname="Scales per UV" />
     <input name="depth" type="float" value="0.3" uiname="Depth" uimin="0" uimax="1" />
     <input name="glaze" type="float" value="0.6" uiname="Glaze" uimin="0" uimax="1" />
     <texcoord name="uv" type="vector2" />

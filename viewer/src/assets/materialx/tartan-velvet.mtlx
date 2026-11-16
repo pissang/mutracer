@@ -13,7 +13,7 @@
     <input name="band_color" type="color3" value="0.27, 0.008, 0.014" uiname="Band" />
     <input name="line_color" type="color3" value="0.62, 0.42, 0.045" uiname="Line" />
     <input name="pin_color" type="color3" value="0.55, 0.55, 0.5" uiname="Pin stripe" />
-    <input name="repeats" type="vector2" value="6, 3" uiname="Repeats per UV" />
+    <input name="repeats" type="vector2" value="6, 6" uiname="Repeats per UV" />
     <input name="threads" type="float" value="72" uiname="Threads per repeat" />
     <input name="weave_depth" type="float" value="0.5" uiname="Weave depth" uimin="0" uimax="1" />
 

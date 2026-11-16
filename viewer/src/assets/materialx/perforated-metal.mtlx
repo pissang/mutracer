@@ -9,7 +9,7 @@
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_perforated_metal">
     <input name="metal_color" type="color3" value="0.72, 0.73, 0.75" uiname="Metal color" />
-    <input name="tiles" type="vector2" value="36, 18" uiname="Holes per UV" />
+    <input name="tiles" type="vector2" value="36, 36" uiname="Holes per UV" />
     <input name="hole_radius" type="float" value="0.3" uiname="Hole radius" uimin="0.05" uimax="0.48" />
     <input name="rim_bevel" type="float" value="0.5" uiname="Rim bevel" uimin="0" uimax="1" />
     <input name="roughness" type="float" value="0.28" uiname="Roughness" uimin="0" uimax="1" />

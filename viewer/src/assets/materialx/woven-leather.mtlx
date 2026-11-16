@@ -11,7 +11,7 @@
   <nodegraph name="NG_woven_leather">
     <input name="leather_color" type="color3" value="0.12, 0.058, 0.03" uiname="Leather" />
     <input name="gap_color" type="color3" value="0.012, 0.006, 0.003" uiname="Gaps" />
-    <input name="tiles" type="vector2" value="22, 11" uiname="Strips per UV" />
+    <input name="tiles" type="vector2" value="22, 22" uiname="Strips per UV" />
     <input name="strip_width" type="float" value="0.8" uiname="Strip width" uimin="0.4" uimax="1" />
     <input name="depth" type="float" value="0.11" uiname="Weave depth" uimin="0" uimax="0.4" />
     <input name="variation" type="float" value="0.7" uiname="Strip variation" uimin="0" uimax="1" />

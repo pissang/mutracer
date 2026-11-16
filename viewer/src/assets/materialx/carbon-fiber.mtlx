@@ -9,7 +9,7 @@
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_carbon_fiber">
     <input name="fibre_color" type="color3" value="0.05, 0.05, 0.055" uiname="Fibre color" />
-    <input name="tiles" type="vector2" value="110, 55" uiname="Tows per UV" />
+    <input name="tiles" type="vector2" value="110, 110" uiname="Tows per UV" />
     <input name="tow_curve" type="float" value="0.4" uiname="Tow curvature" uimin="0" uimax="1" />
     <input name="tow_dip" type="float" value="0.22" uiname="Tow dip" uimin="0" uimax="1" />
     <input name="strand_contrast" type="float" value="0.5" uiname="Filament contrast" uimin="0" uimax="1" />

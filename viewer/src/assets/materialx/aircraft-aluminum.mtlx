@@ -11,7 +11,7 @@
 <materialx version="1.39" colorspace="lin_rec709">
   <nodegraph name="NG_aircraft_aluminum">
     <input name="aluminum_color" type="color3" value="0.8, 0.81, 0.82" uiname="Aluminium" />
-    <input name="tiles" type="vector2" value="10, 5" uiname="Panels per UV" />
+    <input name="tiles" type="vector2" value="10, 10" uiname="Panels per UV" />
     <input name="rivets" type="float" value="22" uiname="Rivets per edge" uimin="4" uimax="80" />
     <input name="panel_variation" type="float" value="0.5" uiname="Panel variation" uimin="0" uimax="1" />
     <input name="grime" type="float" value="0.4" uiname="Grime" uimin="0" uimax="1" />

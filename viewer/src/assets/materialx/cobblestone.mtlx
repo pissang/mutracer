@@ -13,7 +13,7 @@
     <input name="mortar_color" type="color3" value="0.045, 0.04, 0.034" uiname="Mortar" />
     <input name="moss_color" type="color3" value="0.03, 0.06, 0.012" uiname="Moss" />
     <input name="moss_amount" type="float" value="0.45" uiname="Moss amount" uimin="0" uimax="1" />
-    <input name="tiles" type="vector2" value="16, 8" uiname="Stones per UV" />
+    <input name="tiles" type="vector2" value="16, 16" uiname="Stones per UV" />
     <input name="mortar_width" type="float" value="0.08" uiname="Mortar width" />
     <input name="surface_detail" type="float" value="0.12" uiname="Surface detail" />
 
