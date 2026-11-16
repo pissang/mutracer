@@ -240,7 +240,7 @@ export interface GraphInterpreterRunner { fields: readonly string[]; families: R
  * shadow rays), where every inlined copy of the full surface loop costs compile time.
  * `operandLoop` (default false) shares one decoder in D3D12 browser kernels;
  * other hosts retain their existing generated source. */
-export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}, operandLoop = false) {
+export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}, operandLoop = false, sharedOpacity = false) {
     const R = GRAPH_INTERPRETER_REGISTERS;
     const operandCounts = Array<number>(GraphOp.Normalmap + 1).fill(1);
     for (const instruction of Object.values(graphInstructions))
@@ -402,9 +402,11 @@ ${store}
   }
 }
 /** Runs \`count\` instruction records starting at record \`program\`. */
-fn mx_run${s}(program: i32, count: i32, base: i32, ctx: MXContext, result: ptr<function, MXResult>) {
+fn mx_run${s}(program: i32, count: i32, base: i32, ${sharedOpacity && !s ? 'initialContext: MXContext, opacityStart: i32' : 'ctx: MXContext'}, result: ptr<function, MXResult>) {
+${sharedOpacity && !s ? `  var ctx = initialContext;` : ''}
   var regs: array<vec4f, ${R}>;
   for(var pc = 0; pc < count; pc++) {
+${sharedOpacity && !s ? `    if(pc == opacityStart) { ctx.normal = vec3f(0.0,0.0,1.0); ctx.tangent = vec3f(1.0,0.0,0.0); ctx.bitangent = vec3f(0.0,1.0,0.0); }` : ''}
     let rec = program + pc;
     let header = vec4i(vec4f(materialsBuffer[rec].color, materialsBuffer[rec].matType));
 ${operandLoop ? `    var args: array<vec4f, 12>;

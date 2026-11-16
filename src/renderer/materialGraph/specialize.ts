@@ -40,6 +40,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     // Only an interpreter is worth sharing: a fully specialized variant inlines only its
     // emissive structures twice, and evaluating them ahead of NEE costs GPU time.
     const sharedSite = shared && !!interpreter && emission.some(field => used.includes(field));
+    const sharedOpacity = sharedSite && !!interpreter?.operandLoop && !!interpreter.opacity && used.includes('opacity');
     const members = used.map(name => {const type=terminalTypes[name];return `  ${name}: ${width(type) === 1 ? 'f32' : v(width(type))},`;}).join('\n');
     let declarations = `struct MXResult {\n${members}\n};\n`;
     declarations += `fn mx_parameter(base: i32, slot: i32) -> vec4f { let m = materialsBuffer[base + slot]; return vec4f(m.color, m.matType); }\n`;
@@ -58,7 +59,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt, interpreter.families, {
         ...(interpreter.emission && !sharedSite ? {emission: {fields: emission.filter(field => used.includes(field)), families: interpreter.emission}} : {}),
         ...(interpreter.opacity && used.includes('opacity') ? {opacity: {fields: ['opacity'], families: interpreter.opacity}} : {})
-    }, interpreter.operandLoop);
+    }, interpreter.operandLoop, sharedOpacity);
     const programHeader = (id: string) => `let mx_program = -${id}; let mx_header = vec4f(materialsBuffer[mx_program].color, materialsBuffer[mx_program].matType);`;
     const si = 'mx_si';
     const init = used.map(field => `    mx_result.${field} = ${field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field)};`).join('\n');
@@ -86,7 +87,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
             const bit = (field: string) => { const [low, high] = graphTerminalMask([field]); return low ? `${low}u` : `${high * 65536}u`; };
             body += `    if(mx_id < 0) {\n      ${programHeader('mx_id')}\n      let mx_mask = u32(mx_header.w) | (u32(materialsBuffer[mx_program].roughness) << 16u);\n`;
             body += pre ? used.map(field => `      if((mx_mask & ${bit(field)}) != 0u) { mx_result.${field} = mx_pre.${field}; }\n`).join('')
-                : `      mx_run(mx_program + 1, i32(mx_header.x), mx_base + 2, MXContext(uv, uv1, ${si}.position, ${si}.instanceIndex, ${si}.vertexNormal, ${tangents}), &mx_result);\n`;
+                : `      mx_run(mx_program + 1, i32(mx_header.x), mx_base + 2, MXContext(uv, uv1, ${si}.position, ${si}.instanceIndex, ${si}.vertexNormal, ${tangents}), ${sharedOpacity ? '-1, ' : ''}&mx_result);\n`;
             for (const field of used)
                 if (!['normal', 'opacity', 'emissionColor', 'emissionLuminance'].includes(field))
                     body += `      if((mx_mask & ${bit(field)}) != 0u) {\n  ${assignment(field)}      }\n`;
@@ -161,9 +162,9 @@ ${init}
     if(sharedSite) {
         const interpreted = interpreter ? `  if(id < 0) {
     ${programHeader('id')}
-    var start = mx_program + 1; var count = i32(mx_header.x);
+    var start = mx_program + 1; var count = i32(mx_header.x)${sharedOpacity ? ' + i32(mx_header.y)' : ''};
     if(emission) { start += i32(mx_header.x) + i32(mx_header.y); count = i32(mx_header.z); }
-    if(count > 0) { mx_run(start, count, base + 2, MXContext(uv, uv1, position, instanceIndex, normal, tangent, bitangent), &result); *emits = emission; }
+    if(count > 0) { mx_run(start, count, base + 2, MXContext(uv, uv1, position, instanceIndex, normal, tangent, bitangent), ${sharedOpacity ? 'select(i32(mx_header.x), -1, emission), ' : ''}&result); *emits = emission; }
   }
 ` : '';
         const specialized = structures.map((g, i) => `  if(id == ${i + 1}) { result = mx_eval_${i + 1}(base + 2, uv, uv1, position, normal, tangent, bitangent, mx_w2l(instanceIndex), mx_l2w(instanceIndex), result); *emits = ${emission.some(field => hasTerminal(g, field)) ? 'emission' : 'false'}; }\n`).join('');
@@ -176,7 +177,7 @@ var<private> mx_nee_candidate: u32 = 0xffffffffu;
 fn mx_evaluate(materialIndex:i32,emission:bool,uv:vec2f,uv1:vec2f,position:vec3f,instanceIndex:i32,normal:vec3f,tangent:vec3f,bitangent:vec3f,initial:MXResult,emits:ptr<function,bool>) -> MXResult {
   let data = materialsBuffer[materialIndex];
   let id = i32(data._padding1); let base = i32(data._padding2);
-  var result = initial;
+  var result = initial;${sharedOpacity ? '\n  result.opacity = data.alpha;' : ''}
   *emits = false;
 ${interpreted}${specialized}  return result;
 }
@@ -244,7 +245,11 @@ fn mx_nee_random(candidate:u32) -> vec3f {
 }
 `;
     }
-    return {graph: {declarations, evaluate: body, opacity, emission:lightEmission, ...(interpreter ? {interpreter: true} : {}), ...(sharedSite ? {precomputed: surfaceBody(true)} : {})}};
+    const hooks: MaterialShaderHooks = {graph: {declarations, evaluate: body, opacity, emission:lightEmission, ...(interpreter ? {interpreter: true} : {}), ...(sharedSite ? {precomputed: surfaceBody(true)} : {}),
+        ...(sharedOpacity ? {precomputedOpacity: structures.some(g => hasTerminal(g, 'opacity')) ?
+            'select(mx_opacity(materialIndex,uv,uv1,mx_si.position,instanceIndex,matData.alpha), clamp(mx_pre.opacity,0.0,1.0), i32(matData._padding1) < 0)' :
+            'clamp(mx_pre.opacity,0.0,1.0)'} : {})}};
+    return hooks;
 }
 
 /** Pure MaterialX helpers shared by surface rendering and UV height baking. */

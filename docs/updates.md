@@ -219,27 +219,36 @@ To compile shaders behind a loading screen, `await render.converge({samples: 1})
 before showing the image: it waits for the shaders the committed scene needs.
 
 Apps that let users edit materials can construct the engine with
-`shaderPrefetch: 'editing'` (WebGPU). After the first shader is ready, the engine
-compiles in the background a variant that supports every material lobe, media,
-transparency, every texture type, anisotropy and coat-normal frames, UV1 textures
-and emissive triangles, with support for [material graph](./materials.md#material-graphs)
-replacements. A material edit, including replacing a material's graph,
-then renders at once through that variant instead of waiting for a compile. Once the
-scene has not needed another shader for about two seconds of rendering, the engine
-compiles the variant the scene needs and switches back to it without restarting
+`shaderPrefetch: 'editing'` (WebGPU). Call `engine.init()` before loading a model
+to start device initialization alongside the download and parsing. On D3D12 and
+Metal, eligible editing prefetch starts as soon as the device is initialized;
+it does not wait for the scene's first shader or for a Render to sample.
+
+The prefetched variant supports every material lobe, media, transparency,
+texture slot, analytic-light type, anisotropy and coat-normal frames, UV1 textures,
+displacement and [material graph](./materials.md#material-graphs) replacements.
+Once ready, it serves compatible material and graph edits without waiting for
+compilation. Model or scene replacement reuses the same pending or ready variant
+when its capacities and settings still fit. After about two seconds of stable
+rendering, the scene's lean variant compiles and replaces it without restarting
 accumulation.
 
-The prefetch costs background compile time after loading: about 3.5 s on an Apple
-M4 Max and about 20–30 s in a measured Windows configuration. Windows prepares the
-smaller lobe variant first, so lobe edits can use it while the graph variant compiles.
-Browser and driver caches can make later visits much faster. Until the scene's own
-variant returns, sampling is slower; the cost depends on the graph.
+The common D3D12/Metal variant reserves 256 atlas metadata entries and
+supports shadow catchers and the default BVH2 geometry layout, including generated
+vertex tangents, material bevel and both normal formats. Atlas capacities round
+up in tens, so more than 250 entries or other BVH layouts can need another
+editing variant. Dispersion, caustics, sampling
+pattern, bevel sample count, alpha-blend strategy or a texture-binding fallback
+can also select another variant. Returning to a prepared combination reuses it.
+Geometry preparation, texture uploads and BVH construction still take time.
 
-On Windows and macOS, the ready editing variant also covers displacement and generated
-vertex tangents; geometry preparation and texture uploads still take time. These
-changes can compile on other platforms. Dispersion and analytic-light types can still compile
-on every platform. When the graph variant is predicted beyond the platform's
-background budget, prefetch keeps the smaller variant, and graph edits can compile.
+Prefetch consumes background compilation resources and can overlap the scene's
+own shader compilation. Cold preparation can still take seconds or tens of
+seconds; browser and driver caches can make later visits much faster. Sampling
+through the editing variant is slower until the lean replacement is ready.
+Forced graph tiers, unsupported graph structures and devices beyond the
+background compile budget retain their usual compilation behavior. Other WebGPU
+backends keep their existing scene-based prefetch.
 
 ## Geometry
 

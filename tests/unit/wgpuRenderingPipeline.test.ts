@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => {
   class TracePass extends Pass {
     static latest: TracePass;
     constructor() { super(); TracePass.latest = this; }
+    startEditingPrefetch = vi.fn();
     prepareAovs() { return true; }
     renderAovs() { return true; }
     setSampleSequenceOffset = vi.fn();

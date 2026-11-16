@@ -4,7 +4,11 @@ export interface MaterialShaderHooks {
   graph?: {declarations: string; evaluate: string; opacity: boolean; emission?: boolean; interpreter?: boolean;
     /** `getMaterialPrecomputed` body: graph results come from `mx_vertex`, the integrator's
      * single evaluation site for the surface and the NEE candidates' emission. */
-    precomputed?: string};
+    precomputed?: string;
+    /** Alpha expression for a precomputed surface/opacity interpreter site. */
+    precomputedOpacity?: string;
+    /** Sample and apply surface texture slots through one atlas filtering site. */
+    textureLoop?: boolean};
   materialXNormals?: boolean;
 }
 

@@ -141,7 +141,7 @@ The adapted files under `src/renderer/` include:
   `WGPURenderingPipeline.ts` / `WebGLRenderingPipeline.ts`.
 - `glsl/chunks/{intersect,envMap,rayTraceCore,materialBuffer,textureLinear,common,sampleShadowCatcher}.glsl.ts`,
   `glsl/rayTrace.frag.ts`, and `glsl/shadowCatcher.frag.ts`.
-- WGSL ports: `wgsl/chunks/{intersect,envMap,materialBuffer,sampleShadowCatcher}.wgsl.ts`
+- WGSL ports: `wgsl/chunks/{intersect,envMap,materialBuffer,materialSurfaceTextures,sampleShadowCatcher}.wgsl.ts`
   and `wgsl/rayTrace.compute.ts`.
 
 ## Bundled dependencies (dist/ only)
