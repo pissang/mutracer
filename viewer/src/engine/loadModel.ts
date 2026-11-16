@@ -219,6 +219,9 @@ export function createMaterialSpheres(): LoadedModel {
   const root = new THREE.Group();
   root.name = 'Material spheres';
   const geometry = new THREE.SphereGeometry(0.42, 96, 48);
+  // Halve V so UV cells are square: U runs around the equator, twice as far as V.
+  const uv = geometry.getAttribute('uv');
+  for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * 0.5);
   const add = (name: string, material: THREE.MeshPhysicalMaterial, x: number, z: number) => {
     material.name = name;
     const mesh = new THREE.Mesh(geometry, material);

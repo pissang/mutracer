@@ -106,9 +106,9 @@ interface RevolveOptions {
 }
 
 /**
- * Revolves a profile around Y. UVs follow the sphere convention the samples
- * are tuned for: U is the azimuth over a full turn and V is the distance along
- * the profile over a half turn of a unit sphere.
+ * Revolves a profile around Y. U is the azimuth over a full turn and V is the
+ * distance along the profile over a full turn of a unit sphere, so UV cells
+ * stay square on a unit sphere.
  */
 function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(...profile.map((p) => p.r)) / MAX_EDGE), warp }: RevolveOptions = {}): THREE.BufferGeometry {
   const rows = profile.length, stride = columns + 1;
@@ -124,7 +124,7 @@ function revolve(profile: ProfilePoint[], { columns = Math.ceil(TAU * Math.max(.
       const i = row * stride + column;
       positions.set([r * sin, y, r * cos], i * 3);
       normals.set([point.nr * sin, point.ny, point.nr * cos], i * 3);
-      uvs.set([column / columns, length / Math.PI], i * 2);
+      uvs.set([column / columns, length / TAU], i * 2);
     }
   });
   if (warp) {
@@ -310,7 +310,7 @@ function cube(baseRadius: number, material: string): Part[] {
           }
           normals.push(...normal.normalize().toArray());
           const across = axis === 1 ? point[0] : sign * (axis === 2 ? point[0] : -point[2]);
-          uvs.push(0.5 + across / TAU, 0.5 + (axis === 1 ? -sign * point[2] : point[1]) / Math.PI);
+          uvs.push(0.5 + across / TAU, 0.5 + (axis === 1 ? -sign * point[2] : point[1]) / TAU);
         }
       }
       for (let j = 0; j < count - 1; j++) {
@@ -398,7 +398,7 @@ function knot(baseRadius: number, material: string): Part[] {
       normal.copyAt(i, normal, twin);
     }
   }
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * length) / TAU, uv.getY(i) * 2 * tube);
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * length) / TAU, uv.getY(i) * tube);
   geometry.rotateZ(90 * DEG);
   geometry.computeBoundingBox();
   geometry.translate(0, FLOOR - geometry.boundingBox!.min.y, 0);
