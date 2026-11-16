@@ -7,7 +7,8 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {createPlaneGeometry} from '../../src/util/commonGeometry';
 import Mesh from '../../src/scene/Mesh';
 import {setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state';
-import {LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
+import {ALL_LIGHT_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
+import {EDITING_MAP_CAPACITY} from '../../src/renderer/wgpuEditingVariant';
 
 const pipeline = () => ({getBindGroupLayout: () => ({})}) as unknown as GPUComputePipeline;
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -23,7 +24,8 @@ function fixture(shaderPrefetch: 'off' | 'editing', runtimeVertexLayout = false,
   Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(runtimeVertexLayout), _lobeVariantFirst: lobeVariantFirst, shaderPrefetch,
     _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _traceVariants: new Map(), _queuedCompiles: [], _activeCompiles: 0, _failedPrefetch: new Set(), _traceModules: new Map(), _targetTransport: new WeakMap(),
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64, SAMPLING_PATTERN: 0},
-    _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(), _bevelSamples: 8, _hasDisplacement: false,
+    _blasLayoutMask: 1, _causticKey: '', _lightTracing: false, _photonMapping: false, _alphaBlendStrategy: 'stochastic', _bakePipelineConstants: true,
+    _shaderCapabilities: new WGPUShaderCapabilities(), _bevelSamples: 8, _hasDisplacement: false,
     _createPipelineLayout: () => ({}), _updateBindGroups: () => {pass._rayTraceBindGroups = [];},
     _meshes: [new Mesh(createPlaneGeometry(), new OpenPBRMaterial())], _analyticLights: [], _emissiveTriangles: [], _targetOutputs: new Map(), _width: 16, _height: 16});
   const target = {};
@@ -41,6 +43,68 @@ const thinFilm = WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM;
 
 describe('editing shader prefetch', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it('starts before a scene pipeline and reuses the pending/ready kernel across scene changes', async () => {
+    setMaterialGraphPlanner({compileBackend: 'metal'});
+    try {
+      const {pass, compile, trace, complete} = fixture('editing', true, false);
+      pass.startEditingPrefetch();
+      pass.startEditingPrefetch();
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(pass._activeVariant).toBeUndefined();
+      const request = pass._editingRequest;
+      const editing = pass._traceVariants.get(request.signature);
+      expect(editing.status).toBe('pending');
+      expect(request.constants.NUM_MAPS).toBe(EDITING_MAP_CAPACITY);
+      expect(request.constants.LIGHT_CAPABILITIES).toBe(ALL_LIGHT_SHADER_CAPABILITIES);
+      expect(request.constants.HAS_SHADOW_CATCHER).toBe(true);
+      expect(request.constants.HAS_BEVEL).toBe(true);
+      // Calibration can exceed the budget while this request is still compiling.
+      pass.graphs.calibration.override = 20;
+      expect(trace()).toBe('waiting');
+      expect(compile).toHaveBeenCalledTimes(2); // First frame can compile alongside prefetch.
+      expect(pass._editingRequest.signature).toBe(request.signature);
+      await complete(); trace();
+      Object.assign(pass._constants, {NUM_MAPS: 220, TLAS_STACK_SIZE: 32, BLAS_STACK_SIZE: 64,
+        HAS_THIN_FILM: true, USE_ENVMAP: true, LIGHT_CAPABILITIES: 127, NUM_DIFFUSE_MAPS: 100,
+        NUM_UDIM_MAPS: 7, USE_UDIM_MAPS: true, USE_MATERIALX_NORMAL_MAPS: true, HAS_SHADOW_CATCHER: true, HAS_BEVEL: true,
+        MATERIALINDEX_OFF: 9000, NORMAL_FLOAT: true, HAS_VERTEX_TANGENT: true});
+      pass._preparedMeshData = {geometry: {tangent: {}}};
+      pass._hasDisplacement = true;
+      expect(trace()).toBe('sampling');
+      expect(pass._editingRequest.signature).toBe(request.signature);
+      expect(pass._activeVariant).toBe(editing);
+      expect(compile).toHaveBeenCalledTimes(2);
+      pass.startEditingPrefetch();
+      expect(compile).toHaveBeenCalledTimes(2);
+    } finally { setMaterialGraphPlanner(); }
+  });
+
+  it('uses a different request when atlas capacity or transport/geometry support is exceeded', async () => {
+    setMaterialGraphPlanner({compileBackend: 'metal'});
+    try {
+      const {pass, trace, complete} = fixture('editing', true, false);
+      pass.startEditingPrefetch(); trace(); await complete(); trace();
+      const editing = pass._editingRequest;
+      pass._constants.NUM_MAPS = EDITING_MAP_CAPACITY + 10;
+      expect(trace()).toBe('waiting');
+      expect(pass._editingRequest.signature).not.toBe(editing.signature);
+      expect(pass._editingRequest.constants.NUM_MAPS).toBe(EDITING_MAP_CAPACITY + 10);
+      pass._constants.NUM_MAPS = 20;
+      const plan = editing.graphPlan;
+      for (const [key, value] of [['BEVEL_SAMPLES', 16], ['SPECTRAL', true]] as const) {
+        const previous = pass._constants[key];
+        pass._constants[key] = value;
+        expect(pass._traceRequest(true, plan, '').signature).not.toBe(editing.signature);
+        pass._constants[key] = previous;
+      }
+      pass._blasLayoutMask = 2;
+      const wide = pass._traceRequest(true, plan, '');
+      expect(wide.blasLayoutMask).toBe(3);
+      pass._blasLayoutMask = 3; // Static wide BLAS plus dynamic BVH2 uses the same kernel.
+      expect(pass._traceRequest(true, plan, '').signature).toBe(wide.signature);
+    } finally { setMaterialGraphPlanner(); }
+  });
 
   it('installs the prefetched variant for a lobe edit, then returns to the lean variant', async () => {
     let now = 0;

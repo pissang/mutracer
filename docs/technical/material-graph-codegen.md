@@ -138,6 +138,25 @@ code and native retain their existing decoder. Consolidating noise hash call sit
 and bounding noise lattice loops separately gave only a small compile improvement;
 those changes were not adopted.
 
+D3D12's shared graph site also executes the surface program and its following
+opacity program in one `mx_run` loop. At their boundary the context switches to
+the opacity entry's fixed normal and tangent frame. Each program writes its
+registers before reading them, so the sequential entries can reuse the register
+file. `getMaterialPrecomputed` consumes the resulting opacity; shadow queries
+retain their own opacity runner. Program layout, random streams and clamps are
+unchanged.
+
+The universal D3D12 surface samples and applies its material texture slots in a
+runtime loop, with one atlas-filtering call site. Each slot retains its channel,
+color decoding, factor and emission/coat ordering; normal and displacement
+queries keep their existing sites. The existing loop guard (value 4) prevents
+static unrolling. Its repeat-filter footprint reaches only `[-1,size]`, so the
+two boundary texels can wrap with selects instead of general signed remainders.
+These changes target expanded compiler work, not source byte count. Profile both
+DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
+for the complete browser wait. Generated native, non-graph and non-D3D12
+sampling sources retain their prior form.
+
 ## Tier planner
 
 `planGraphTiers` chooses a tier per structure when a structure set is requested,
@@ -253,29 +272,51 @@ that. The universal shape never becomes a structure set's serving shape, and oth
 variants keep compiling the installed structures' own plan. Forced tiers and
 uninterpretable structures retain the existing fallback.
 
-D3D12 prepares the smaller lobe variant before starting the universal variant, and
-can serve compatible edits through that fallback during the longer compile. Its
-engine-level editing prefetch allows three times the upgrade ceiling (30 s by
-default); other background work keeps the 10 s ceiling. This trades a longer first
-warm-up for reuse across graph switches and later browser visits: measured persistent
-Chrome profiles reused the full pipeline in about 50 ms, whereas fresh profiles
-still needed tens of seconds. A ready variant remains eligible after calibration
-changes because reusing it costs no compile time. Metal and unmeasured backends
-retain their previous ceiling and prefetch sequence.
+### Eager editing kernels and signature bounds
 
-On D3D12 and Metal the universal variant also includes displacement traversal and reads compact
-attribute offsets and format flags from two appended uniform vec4s. Changing stride,
-normal precision, UV/color/tangent presence or the triangle-material offset then
-reuses it. CPU attribute packing is unchanged; lean variants keep static offsets.
-The uniform extension and dynamic readers are browser-only, with the default/native
-layout retained. No resolved-material, BSDF, surface-interaction or path value
-struct changes. Real-GPU comparisons must cover both normal formats, tangents,
-opacity and emission. Sampling through this variant costs more until the lean
-replacement installs. On an M4 Max the runtime layout added about 0.6 s to the
-universal compile and raised its sample time from about 1.1× to 1.3× the lean
-variant, in exchange for no compile when an anisotropic or displaced material
-first appears. Metal keeps the four-operand prefix decoder and its prefetch order.
-Vulkan keeps static offsets until it is measured.
+D3D12 and Metal begin the eligible universal request when the rendering pipeline
+is constructed after device initialization, before a committed scene or a target
+exists. This uses the existing compile queue, with one slot reserved for a
+first-frame/edit request. A pending or ready request remains eligible if later
+calibration raises its predicted cost; only a new compile pays the budget again.
+D3D12 retains the 30 s engine-prefetch ceiling, and Metal retains its existing
+ceiling. Additional D3D12 requests outside the eager kernel's coverage retain the
+lobe-first fallback. Unmeasured backends retain the scene-based sequence.
+
+`universalEditingConstants` supplies an explicit, ordered source contract rather
+than spreading the scene's accumulated constants. The cache key and generated
+source exclude structure-set IDs and unused per-slot counts. The scene-dependent
+fallback signature still controls compatibility with an old displayed graph; it
+is metadata and is not part of the universal pipeline's cache identity.
+
+| Input | Universal request rule and cost |
+| --- | --- |
+| `NUM_MAPS` | Atlas packing and shader capacity are at least 256 (12 KiB of metadata); above that, retain the larger capacity and compile a compatible variant. Bindless metadata stays runtime storage, with its own binding-layout key. |
+| TLAS/BLAS stacks | Fix both to the supported maximum of 64 entries: 512 bytes of private integer arrays in BVH2, rather than the scene's smaller arrays. This is storage size, not a register-pressure measurement. |
+| Vertex offsets, formats, UV/color/tangent presence, triangle-material offset | Read the existing two uniform vec4s; CPU vertex packing is unchanged. `POSITION_OFF` is always zero in compact packing. Lean kernels retain static offsets. |
+| Displacement, bevel and frames | Include displacement and bevel traversal, UV1, tangent/anisotropy and coat-normal frames. Material data gates their use. |
+| Scene/material capabilities | Include every lobe, texture slot, shadow catcher and environment support; material data and the existing scene-feature uniform gate execution. |
+| Lights | Include every analytic type and emissive triangles. Counts and light records already use runtime storage; the unused uniform-light capacity stays 64. |
+| UDIM and MaterialX normal maps | Enable their readers permanently; tile/color flags and tagged normal indices select the actual behavior. Unused `NUM_UDIM_MAPS` and per-slot counts do not enter the source/key. |
+| Alpha | Include scene alpha, MASK and BLEND support. The selected stochastic/deterministic blend algorithm retains a separate key. |
+| BLAS layout mask | Include BVH2 alongside the scene's required layouts, so adding dynamic BVH2 geometry to a wide-layout scene reuses its kernel. Other layout families still need another variant. |
+| Dispersion, caustics, sampling pattern, bevel samples | Retain algorithm/quality keys; forcing a different algorithm can change sample streams or output. Caustic/research kernels keep their existing requests. |
+| Graph shader key | Every terminal and opcode family, independent of installed structures; only the measurement salt changes between cold trials. Forced tiers or uninterpretable structures keep their fallback. |
+| Binding mode, baked constants and backend | Retain resource/compiler compatibility keys. Device loss or another Engine/device needs its own pipeline objects; identical source can reuse persistent driver/browser caches. |
+
+Compiling all four BLAS layouts into one eager kernel was rejected because the
+resulting inlined traversal/opacity copies made cold compilation substantially
+longer and delayed the first frame. Every material query mode remains included;
+additional BLAS layouts use compatible fallback variants. The bounded kernel does
+not guarantee one pipeline for every possible scene or render configuration.
+
+The signature rules and existing runtime vertex layout apply to Metal as well as
+D3D12. The D3D12-only decoder, shared surface/opacity loop and texture-slot loop
+are gated through `graphCompilerBackend()`. No resolved-material, BSDF,
+surface-interaction, path or host buffer layout changes. Metal keeps its decoder
+and graph evaluation shape; the changed eager scheduling and widened signature
+capacities have not been timed on Mac. Vulkan keeps static vertex offsets until
+it is measured.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.

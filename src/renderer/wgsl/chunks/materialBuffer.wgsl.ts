@@ -1,3 +1,4 @@
+import {materialSurfaceTextures} from './materialSurfaceTextures.wgsl.js';
 import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import {materialXNormalDeclarations} from '../../materialXNormal.js';
 import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
@@ -44,57 +45,7 @@ export function createMaterialBufferWgsl({
 
   // The precomputed copy reads graph results evaluated at the integrator's shared
   // graph site (see materialGraphShaderIR), so the main path inlines one evaluator.
-  const materialFunction = (name: string, evaluate: string) => /* wgsl */ `fn ${name}(
-  ma: ptr<function, OpenPbrResolvedMaterial>,
-  materialIndex: i32,
-  uv: vec2f,
-  uv1: vec2f,
-  instanceIndex: i32,
-  vertexColor: vec3f${materialHooks.graph ? ", mx_si: SurfaceInteraction" : ""}${name === 'getMaterialPrecomputed' ? ', mx_pre: MXResult' : ''}
-)${materialHooks.graph ? " -> vec3f" : ""} {${materialHooks.graph ? "\n  var mx_normal = mx_si.normal;" : ""}
-  let matData = materialsBuffer[materialIndex];
-
-  (*ma).baseColor = matData.color;
-  (*ma).materialType = i32(matData.matType);
-  (*ma).specularRoughness = matData.roughness;
-  (*ma).baseMetalness = matData.metallic;
-  (*ma).specularAnisotropy = clamp(matData.anisotropy, 0.0, 1.0);
-  (*ma).emission = getMaterialEmission(materialIndex, uv, uv1);
-  (*ma).inside = false;
-  (*ma).specularIor = matData.ior;
-  (*ma).transmissionWeight = matData.transmission;
-  (*ma).thinWalled = matData.thin > 0.5;
-  (*ma).bevel = matData.bevel;
-  (*ma).transmissionDispersionScale = matData.dispersion;
-  (*ma).dispersionAbbeNumber = max(matData.dispersionAbbeNumber, 1e-6);
-  (*ma).mediumExtinction = max(matData.mediumExtinction, vec3f(0.0));
-  (*ma).mediumScattering = max(matData.mediumScattering, vec3f(0.0));
-  (*ma).mediumAnisotropy = clamp(matData.mediumAnisotropy, -1.0, 1.0);
-  (*ma).mediumType = select(0, 1, max(max((*ma).mediumExtinction.x, (*ma).mediumExtinction.y), (*ma).mediumExtinction.z) > 0.0);
-  ${materialHooks.graph?.opacity ? "  (*ma).alpha = mx_opacity(materialIndex,uv,uv1,mx_si.position,instanceIndex,matData.alpha);" : "(*ma).alpha = matData.alpha;"}
-  ${alphaModeAssignment}
-
-  (*ma).thinFilmThickness = matData.thinFilmThickness * 1000.0;
-  (*ma).thinFilmIor = matData.thinFilmIor;
-  (*ma).thinFilmWeight = select(0.0, clamp(matData.thinFilmWeight, 0.0, 1.0), HAS_THIN_FILM);
-  (*ma).baseWeight = clamp(matData.baseWeight, 0.0, 1.0);
-  (*ma).diffuseRoughness = clamp(matData.baseDiffuseRoughness, 0.0, 1.0);
-  (*ma).specularWeight = max(matData.specularWeight, 0.0);
-  (*ma).specularColor = max(matData.specularColor, vec3f(0.0));
-  (*ma).subsurfaceWeight = select(0.0, clamp(matData.subsurfaceWeight, 0.0, 1.0), HAS_SUBSURFACE);
-  (*ma).subsurfaceColor = max(matData.subsurfaceColor, vec3f(0.0));
-  (*ma).transmissionColor = max(matData.transmissionColor, vec3f(0.0));
-  (*ma).fuzzWeight = select(0.0, clamp(matData.fuzzWeight, 0.0, 1.0), HAS_FUZZ);
-  (*ma).fuzzColor = max(matData.fuzzColor, vec3f(0.0));
-  (*ma).fuzzRoughness = clamp(matData.fuzzRoughness, 0.0, 1.0);
-  (*ma).coatWeight = select(0.0, clamp(matData.coatWeight, 0.0, 1.0), HAS_COAT);
-  (*ma).coatColor = max(matData.coatColor, vec3f(0.0));
-  (*ma).coatRoughness = clamp(matData.coatRoughness, ROUGHNESS_MIN, 1.0);
-  (*ma).coatAnisotropy = clamp(matData.coatAnisotropy, 0.0, 1.0);
-  (*ma).coatIor = max(matData.coatIor, 1.0);
-  (*ma).coatDarkening = clamp(matData.coatDarkening, 0.0, 1.0);
-
-  if (USE_DIFFUSE_MAPS) {
+  const textureSource = /* wgsl */ `  if (USE_DIFFUSE_MAPS) {
     let diffuseMapIndex = i32(matData.diffuseMapIndex);
     if (diffuseMapIndex >= 0) {
       // TODO textureSample is not supported in compute shader.
@@ -182,7 +133,59 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.
-  ${evaluate}if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {
+`;
+  const materialFunction = (name: string, evaluate: string) => {
+    const source = /* wgsl */ `fn ${name}(
+  ma: ptr<function, OpenPbrResolvedMaterial>,
+  materialIndex: i32,
+  uv: vec2f,
+  uv1: vec2f,
+  instanceIndex: i32,
+  vertexColor: vec3f${materialHooks.graph ? ", mx_si: SurfaceInteraction" : ""}${name === 'getMaterialPrecomputed' ? ', mx_pre: MXResult' : ''}
+)${materialHooks.graph ? " -> vec3f" : ""} {${materialHooks.graph ? "\n  var mx_normal = mx_si.normal;" : ""}
+  let matData = materialsBuffer[materialIndex];
+
+  (*ma).baseColor = matData.color;
+  (*ma).materialType = i32(matData.matType);
+  (*ma).specularRoughness = matData.roughness;
+  (*ma).baseMetalness = matData.metallic;
+  (*ma).specularAnisotropy = clamp(matData.anisotropy, 0.0, 1.0);
+  (*ma).emission = ${materialHooks.graph?.textureLoop && name === 'getMaterialPrecomputed' ? 'matData.emission' : 'getMaterialEmission(materialIndex, uv, uv1)'};
+  (*ma).inside = false;
+  (*ma).specularIor = matData.ior;
+  (*ma).transmissionWeight = matData.transmission;
+  (*ma).thinWalled = matData.thin > 0.5;
+  (*ma).bevel = matData.bevel;
+  (*ma).transmissionDispersionScale = matData.dispersion;
+  (*ma).dispersionAbbeNumber = max(matData.dispersionAbbeNumber, 1e-6);
+  (*ma).mediumExtinction = max(matData.mediumExtinction, vec3f(0.0));
+  (*ma).mediumScattering = max(matData.mediumScattering, vec3f(0.0));
+  (*ma).mediumAnisotropy = clamp(matData.mediumAnisotropy, -1.0, 1.0);
+  (*ma).mediumType = select(0, 1, max(max((*ma).mediumExtinction.x, (*ma).mediumExtinction.y), (*ma).mediumExtinction.z) > 0.0);
+  ${materialHooks.graph?.opacity ? `(*ma).alpha = ${name === 'getMaterialPrecomputed' && materialHooks.graph.precomputedOpacity ? materialHooks.graph.precomputedOpacity : 'mx_opacity(materialIndex,uv,uv1,mx_si.position,instanceIndex,matData.alpha)'};` : "(*ma).alpha = matData.alpha;"}
+  ${alphaModeAssignment}
+
+  (*ma).thinFilmThickness = matData.thinFilmThickness * 1000.0;
+  (*ma).thinFilmIor = matData.thinFilmIor;
+  (*ma).thinFilmWeight = select(0.0, clamp(matData.thinFilmWeight, 0.0, 1.0), HAS_THIN_FILM);
+  (*ma).baseWeight = clamp(matData.baseWeight, 0.0, 1.0);
+  (*ma).diffuseRoughness = clamp(matData.baseDiffuseRoughness, 0.0, 1.0);
+  (*ma).specularWeight = max(matData.specularWeight, 0.0);
+  (*ma).specularColor = max(matData.specularColor, vec3f(0.0));
+  (*ma).subsurfaceWeight = select(0.0, clamp(matData.subsurfaceWeight, 0.0, 1.0), HAS_SUBSURFACE);
+  (*ma).subsurfaceColor = max(matData.subsurfaceColor, vec3f(0.0));
+  (*ma).transmissionColor = max(matData.transmissionColor, vec3f(0.0));
+  (*ma).fuzzWeight = select(0.0, clamp(matData.fuzzWeight, 0.0, 1.0), HAS_FUZZ);
+  (*ma).fuzzColor = max(matData.fuzzColor, vec3f(0.0));
+  (*ma).fuzzRoughness = clamp(matData.fuzzRoughness, 0.0, 1.0);
+  (*ma).coatWeight = select(0.0, clamp(matData.coatWeight, 0.0, 1.0), HAS_COAT);
+  (*ma).coatColor = max(matData.coatColor, vec3f(0.0));
+  (*ma).coatRoughness = clamp(matData.coatRoughness, ROUGHNESS_MIN, 1.0);
+  (*ma).coatAnisotropy = clamp(matData.coatAnisotropy, 0.0, 1.0);
+  (*ma).coatIor = max(matData.coatIor, 1.0);
+  (*ma).coatDarkening = clamp(matData.coatDarkening, 0.0, 1.0);
+
+${materialHooks.graph?.textureLoop && name === 'getMaterialPrecomputed' ? materialSurfaceTextures(hasCoatNormals, directionFlags, !!materialHooks.materialXNormals) + alphaModeResolution : textureSource}  ${evaluate}if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {
     let baseRoughness2 = (*ma).specularRoughness * (*ma).specularRoughness;
     let coatRoughness2 = (*ma).coatRoughness * (*ma).coatRoughness;
     (*ma).specularRoughness = mix((*ma).specularRoughness,
@@ -203,6 +206,8 @@ ${caustics ? /* wgsl */ `  (*ma).causticRoughness = (*ma).specularRoughness;
   (*ma).alphaY = specularAlpha.y;${materialHooks.graph ? "\n  return mx_normal;" : ""}
 }
 `;
+    return source;
+  };
   return /* wgsl */ `
 
 ${hasAnisotropyDirections ? /* wgsl */ `fn gltf_anisotropy_to_openpbr(roughness: f32, strength: f32) -> vec2f {
@@ -306,8 +311,10 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
 
 fn loadMapTexel(idx: i32, coordinate: vec2i, size: vec2i, origin: vec2i, modes: vec2f) -> vec4f {
   var p = clamp(coordinate, vec2i(0), size - vec2i(1));
-  if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
-  if (modes.y < 0.5) { p.y = ((coordinate.y % size.y) + size.y) % size.y; }
+${materialHooks.graph?.textureLoop ? `  // sampleMap's repeat footprint reaches only [-1,size]. Wrap its boundary texels.
+  if (modes.x < 0.5) { p.x = select(select(coordinate.x, 0, coordinate.x >= size.x), size.x - 1, coordinate.x < 0); }
+  if (modes.y < 0.5) { p.y = select(select(coordinate.y, 0, coordinate.y >= size.y), size.y - 1, coordinate.y < 0); }` : `  if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
+  if (modes.y < 0.5) { p.y = ((coordinate.y % size.y) + size.y) % size.y; }`}
   return ${independentTextures ? 'textureLoad(map[getMapLayer(idx)], p, 0)' : 'textureLoad(map, origin + p, getMapLayer(idx), 0)'};
 }
 

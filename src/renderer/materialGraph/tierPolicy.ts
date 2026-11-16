@@ -5,8 +5,8 @@ export type GraphCompilerBackend = 'metal' | 'd3d12' | 'vulkan' | 'unknown';
 /** Device compile speed `s` before this device's first cold kernel compile. `s` scales
  * the graph-free kernel, which compiles at the same per-KB cost on every backend in
  * reference units: Metal 1 (Apple M4 Max), D3D12 1.5 (RTX 4060 Laptop, windows-1),
- * unmeasured backends 2. The graph-free kernel always compiles first, so the prior
- * rarely decides anything. */
+ * unmeasured backends 2. Eager editing prefetch uses this prior before the first
+ * graph-free kernel supplies a device measurement. */
 export const GRAPH_COMPILE_SPEED_PRIORS: Readonly<Record<GraphCompilerBackend, number>> = {metal: 1, d3d12: 1.5, vulkan: 2, unknown: 2};
 
 export function graphCompilerBackend(userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent): GraphCompilerBackend {
