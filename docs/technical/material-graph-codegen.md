@@ -157,6 +157,45 @@ DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
 for the complete browser wait. Generated native, non-graph and non-D3D12
 sampling sources retain their prior form.
 
+### Unified editing queries
+
+Eligible D3D12 universal RGB/BVH2 kernels generate query points directly in the
+ray-tracing, material-sampling and catcher templates. Each path event has a
+bounded query loop: first the surface query and material evaluation, then the
+selected NEE visibility query and the scattering continuation. Primary catchers
+use that same query site for their four light candidates. Paths finish the event
+together; a free-running switch over complete paths lets lanes drift into
+different bounces and serializes their shading work.
+
+`intersect.wgsl.ts` emits the ordinary BVH traversal with a runtime closest/any-hit
+mode. The triangle tests, PDM stepping and surface completion are shared with the
+direct templates. Shadow opacity stays inside that traversal, with one independent
+opacity interpreter. No BVH cursor or duplicate `SurfaceInteraction` is suspended
+across shading, and alpha rejection continues the original nested loops. Bevel
+uses its independent traversal only when the scene requires it.
+
+`primaryGuides`, `completeVertex` and `shadeVertex` keep one arithmetic source.
+Query points change the surrounding control flow and explicitly name the saved
+material/catcher values; no generated function body is parsed or rewritten.
+Visibility resumes before the continuation's random draws. A catcher resumes its
+candidate before advancing the light loop, so neither its light draws nor a BVH
+node or displacement step repeats.
+
+Keeping the opacity interpreter separate spends additional compiler work compared
+with routing every alpha candidate through the surface interpreter. It preserves
+traversal locals and avoids saving a cursor while executing the graph. Likewise,
+retaining prepared BSDF values spends private storage instead of recomputing the
+preparation after visibility. Indexed storage is limited to the material
+continuation, rather than every query and integrator value. These are compiler
+inputs, not hardware register/scratch measurements; compare both sampling time
+and complete cold pipeline time when changing them.
+
+The host enables this shape through `graphCompilerBackend() === 'd3d12'`.
+The templates themselves have no D3D12 dependency, so the same switch can enable
+them for a Metal measurement. Other layouts, deterministic primary alpha,
+spectral and research transports retain their direct shape. Lean, WebGL and
+native generation retain their direct paths and existing host/value layouts.
+
 ## Tier planner
 
 `planGraphTiers` chooses a tier per structure when a structure set is requested,
@@ -278,7 +317,9 @@ D3D12 and Metal begin the eligible universal request when the rendering pipeline
 is constructed after device initialization, before a committed scene or a target
 exists. This uses the existing compile queue, with one slot reserved for a
 first-frame/edit request. A pending or ready request remains eligible if later
-calibration raises its predicted cost; only a new compile pays the budget again.
+calibration raises its predicted cost. Adding scene bevel to that accepted family
+remains eligible too; other new capacities and algorithm combinations pay the
+budget again.
 D3D12 retains the 30 s engine-prefetch ceiling, and Metal retains its existing
 ceiling. Additional D3D12 requests outside the eager kernel's coverage retain the
 lobe-first fallback. Unmeasured backends retain the scene-based sequence.
@@ -294,7 +335,8 @@ is metadata and is not part of the universal pipeline's cache identity.
 | `NUM_MAPS` | Atlas packing and shader capacity are at least 256 (12 KiB of metadata). Existing scene capacities round up in tens, so more than 250 entries can exceed this bound; retain the larger capacity and compile a compatible variant. Bindless metadata stays runtime storage, with its own binding-layout key. |
 | TLAS/BLAS stacks | Fix both to the supported maximum of 64 entries: 512 bytes of private integer arrays in BVH2, rather than the scene's smaller arrays. This is storage size, not a register-pressure measurement. |
 | Vertex offsets, formats, UV/color/tangent presence, triangle-material offset | Read the existing two uniform vec4s; CPU vertex packing is unchanged. `POSITION_OFF` is always zero in compact packing. Lean kernels retain static offsets. |
-| Displacement, bevel and frames | Include displacement and bevel traversal, UV1, tangent/anisotropy and coat-normal frames. Material data gates their use. |
+| Displacement and frames | Include displacement traversal, UV1, tangent/anisotropy and coat-normal frames. Material data gates their use. |
+| Material bevel | `HAS_BEVEL` follows the scene. First use compiles a compatible editing variant; removing bevel can reuse the earlier variant. `BEVEL_SAMPLES` remains an independent quality key. |
 | Scene/material capabilities | Include every lobe, texture slot, shadow catcher and environment support; material data and the existing scene-feature uniform gate execution. |
 | Lights | Include every analytic type and emissive triangles. Counts and light records already use runtime storage; the unused uniform-light capacity stays 64. |
 | UDIM and MaterialX normal maps | Enable their readers permanently; tile/color flags and tagged normal indices select the actual behavior. Unused `NUM_UDIM_MAPS` and per-slot counts do not enter the source/key. |
@@ -312,13 +354,11 @@ additional BLAS layouts use compatible fallback variants. The bounded kernel doe
 not guarantee one pipeline for every possible scene or render configuration.
 
 The signature rules and existing runtime vertex layout apply to Metal as well as
-D3D12. The D3D12-only decoder, shared surface/opacity loop and texture-slot loop
-are gated through `graphCompilerBackend()`. No resolved-material, BSDF,
-surface-interaction, path or host buffer layout changes. Metal keeps its decoder
-and graph evaluation shape. On an M4 Max the widened signature raised the cold
-universal compile from about 4.7 s to 7.2 s, with unchanged sampling cost; in the
-viewer the variant became ready about 0.9 s later despite the earlier start.
-Vulkan keeps static vertex offsets until it is measured.
+D3D12. The D3D12 decoder, shared surface/opacity loop, universal query mode and
+texture-slot loop are selected through `graphCompilerBackend()`. No resolved
+material, BSDF, surface-interaction, path or host buffer layout changes. Metal
+keeps its decoder and direct query shape unless explicitly enabled for a
+measurement. Vulkan keeps static vertex offsets until it is measured.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.

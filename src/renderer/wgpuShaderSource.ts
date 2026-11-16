@@ -30,6 +30,8 @@ export interface WGPUShaderFeatures {
   compactVertices?: boolean;
   /** Browser editing kernels use runtime compact-vertex offsets. Default false. */
   runtimeVertexLayout?: boolean;
+  /** Generate shared resumable queries. Default false. */
+  unifiedEditingQueries?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;

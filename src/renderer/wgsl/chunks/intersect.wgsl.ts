@@ -35,7 +35,7 @@ if (hit.t > 0.0) {
 `;
 };
 
-function getPDMDisplacmentCode(anyHit: boolean) {
+function getPDMDisplacmentCode(anyHit: boolean | string) {
   return /*wgsl */ `
   let microTriangle = intersectDisplacement(
     o, d, tMax,
@@ -50,13 +50,13 @@ function getPDMDisplacmentCode(anyHit: boolean) {
     matData.displacementStepSize,
     i32(matData.displacementUvProjection),
     displacementUvProjectionScale,
-    ${anyHit ? 'true' : 'false'},
+    ${typeof anyHit === 'string' ? anyHit : anyHit ? 'true' : 'false'},
     isRefractionRay
   );
 `;
 }
 
-const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirections: boolean) {
+const displacementIntersectCode = function (anyHit: boolean | string, hasAnisotropyDirections: boolean) {
   return /* wgsl */ `
 
 let hScale = insData.w;
@@ -213,7 +213,7 @@ fn intersectCwbvhInterior(
 function getBVHTraverseCode(
   handleHitCode: string,
   hasDisplacement: boolean,
-  anyHit: boolean,
+  anyHit: boolean | string,
   blasLayoutMask: number,
   hasAnisotropyDirections: boolean,
   skipTriangleCode = '',
@@ -628,6 +628,33 @@ ${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transf
 
 `;
 }
+/** One traversal body for camera/continuation and NEE/catcher rays. Opacity
+ * stays inside the query: no BVH cursor or hit record crosses a shading yield. */
+function createUnifiedSceneQuery(hasDisplacement: boolean, hasAnisotropyDirections: boolean, perInstanceBounds: boolean) {
+  return /* wgsl */ `
+fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, mode: i32, maximum: f32, currentTriangleIndex: i32, currentInstanceIndex: i32) -> bool {
+  if (mode == 0) { (*si).hit = false; }
+  if (rtUniform.isEmpty > 0) { return false; }
+  let shadowRayTMax = min(max(maximum, 0.0), RAY_MAX_DISTANCE);
+  var tMax = select(RAY_MAX_DISTANCE, shadowRayTMax, mode == 1);
+  var maxDim: i32; var shear: vec3f;
+  var hitIndex: vec3i; var hitTri: Triangle; var hitInsIdx: i32;
+  ${getBVHTraverseCode(/* wgsl */ `
+    if (mode == 1) {
+      if (!HAS_ALPHA || intersectionAlphaPasses(i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x), index, hitBarycentric, hitPosition, hitNormal, triangleIndex, insIdx)) { return true; }
+      tMax = shadowRayTMax;
+    } else {
+      (*si).triangleIndex = triangleIndex; hitTri = tri; hitIndex = index; hitInsIdx = insIdx;
+    }
+  `, hasDisplacement, 'mode == 1', 1, hasAnisotropyDirections, '', perInstanceBounds)}
+  if (isHit && mode == 0) {
+    completeSurfaceInteraction(si, hitTri, hitBarycentric, hitIndex, isHitMicroTriangle, hitInsIdx, hitNormal, hitPosition, -1);
+  }
+  return false;
+}
+`;
+}
+
 // Raw first-hit contract for native diagnostics. Reuse the same traversal and
 // triangle tests without surface completion or any integrator/alpha sampling.
 export function createSceneHitQueryWgsl(hasAnisotropyDirections = false) {
@@ -862,7 +889,8 @@ export default function getIntersectCode({
   hasCoatNormals = false,
   blasLayoutMask = 1,
   sceneIntersections = '',
-  materialHooks = {}
+  materialHooks = {},
+  queryPoints = false
 }: {
   perInstanceBounds?: boolean;
   hasDisplacement: boolean;
@@ -872,6 +900,7 @@ export default function getIntersectCode({
   sceneIntersections?: string;
   materialHooks?: MaterialShaderHooks;
   compactVertices?: boolean;
+  queryPoints?: boolean;
 }) {
   return /*wgsl*/ `
 
@@ -1576,5 +1605,5 @@ ${createIntersectionAlphaWgsl(hasAnisotropyDirections, compactVertices, material
 
 
 
-${sceneIntersections || createSceneIntersectionsWgsl({materialHooks, perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
+${queryPoints ? createUnifiedSceneQuery(hasDisplacement, hasAnisotropyDirections, perInstanceBounds) + '\n' : ''}${sceneIntersections || createSceneIntersectionsWgsl({materialHooks, perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

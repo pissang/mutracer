@@ -231,6 +231,8 @@ const editingShaderCapabilities = (required: ShaderCapabilities, universal: bool
 /** Scene stability before the lean variant replacing the editing variant compiles. */
 const EDITING_SETTLE_MS = 2000;
 interface TraceRequest {
+  /** An accepted editing family may add scene bevel after calibration changes. */
+  editingFamily?: string;
   constants: Record<string, boolean | number>; hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string;
   pipelineConstantsKeys: string[]; structureKey: string; capabilities: ShaderCapabilities; baseSignature: string;
   signature: string; graphPlan: GraphPlan; fallbackSignature: string; blasLayoutMask: number;
@@ -285,6 +287,7 @@ export function packAnalyticsLightsToBuffer(lights: AnalyticLight[], texturesInd
 }
 
 class WGPURayTracePass {
+  private _acceptedEditingFamily?: string;
   private _aovPrimitiveCache = new AovPrimitiveCache();
   private _device!: GPUDevice;
   private _rayTracePipeline?: GPUComputePipeline;
@@ -1007,8 +1010,17 @@ class WGPURayTracePass {
       const editingRequest = () => {
         if (!universal) {
           const plan = this.shaderPrefetch === 'editing' ? this.graphs.editingPlan(this._hasUniversalVariant ? plan => {
-            const status = this._traceVariants.get(request(true, plan).signature)?.status;
-            return status === 'pending' || status === 'ready';
+            const next = request(true, plan);
+            const accepted = (r: TraceRequest) => {
+              const status = this._traceVariants.get(r.signature)?.status;
+              return status === 'pending' || status === 'ready';
+            };
+            const previous = this._editingRequest;
+            // Scene bevel adds its own kernel to an already eligible family.
+            // A later calibration must not strand that family's graph edits.
+            if (accepted(next)) { this._acceptedEditingFamily = next.editingFamily; return true; }
+            if (previous?.editingFamily && accepted(previous)) this._acceptedEditingFamily = previous.editingFamily;
+            return !!next.editingFamily && next.editingFamily === this._acceptedEditingFamily;
           } : undefined) : undefined;
           universal = {plan, request: plan && request(true, plan)};
         }
@@ -1078,7 +1090,7 @@ class WGPURayTracePass {
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
-        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan: chosen.graphPlan, baseSignature:fallbackSignature, blasLayoutMask: chosen.blasLayoutMask}, this.graphs.compileRole(chosen.graphPlan));
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan: chosen.graphPlan, baseSignature:fallbackSignature, blasLayoutMask: chosen.blasLayoutMask, editingFamily: chosen.editingFamily}, this.graphs.compileRole(chosen.graphPlan));
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
       // A gated upgrade or a structure edit that needs a new variant compiles while
@@ -1166,15 +1178,14 @@ class WGPURayTracePass {
     Object.assign(constants, capabilities);
     // Runtime feature values live in uniforms, so edits can share a pipeline
     // as long as its compiled defines and overrides are the same.
-    const baseSignature = JSON.stringify({
-      ...structure,
-      defineCode,
-      constants: pipelineConstantsKeys.map((key) => [key, constants[key]])
-    });
+    const constantEntries = pipelineConstantsKeys.map((key) => [key, constants[key]]);
+    const baseSignature = JSON.stringify({...structure, defineCode, constants: constantEntries});
+    const editingFamily = canonical ? JSON.stringify({...structure, defineCode,
+      constants: constantEntries.filter(([key]) => key !== 'HAS_BEVEL'), graph: graphShaderKey(plan)}) : undefined;
     // Interpreted structures share one shader key, so a structure-set change
     // reuses the installed variant and only uploads programs.
     const signature = graphShaderKey(plan) ? baseSignature + '\n' + graphShaderKey(plan) : baseSignature;
-    return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature,
+    return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature, editingFamily,
       graphPlan: plan, fallbackSignature, blasLayoutMask: structure.blasLayoutMask};
   }
 
@@ -1259,14 +1270,17 @@ class WGPURayTracePass {
   /** Snapshots everything compilation needs. The task must not read mutable pass state afterwards. */
   private _startTraceVariant(signature: string, constants: Record<string, boolean | number>, shader: {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
-    structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string; blasLayoutMask?: number;
+    structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string; blasLayoutMask?: number; editingFamily?: string;
   }, role: CompileRole = 'edit') {
     this._hasUniversalVariant ||= !!shader.graphPlan.shape?.universal;
+    if (shader.editingFamily) this._acceptedEditingFamily = shader.editingFamily;
     const shareSpectralPrefix = Boolean(constants.SPECTRAL) && this._shareSpectralPrefix;
     const bake = this._bakePipelineConstants, bindless = this._bindless;
     const runtimeVertexLayout = !!shader.graphPlan.shape?.universal && !!this._rtUniform.vertexLayout;
     const hasDisplacement = runtimeVertexLayout || this._hasDisplacement, blasLayoutMask = shader.blasLayoutMask ?? this._blasLayoutMask;
     const lightTracing = this._lightTracing, photonMapping = this._photonMapping;
+    const unifiedEditingQueries = runtimeVertexLayout && bake && graphCompilerBackend() === 'd3d12' &&
+      !constants.SPECTRAL && !shader.hasAlpha && blasLayoutMask === 1 && !this._transport && !this._causticKey && !lightTracing && !photonMapping;
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
@@ -1297,7 +1311,7 @@ class WGPURayTracePass {
       startedAt = shaderCompilationNow();
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
-      const moduleKey = JSON.stringify([graphShaderKey(shader.graphPlan), causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement,
+      const moduleKey = JSON.stringify([graphShaderKey(shader.graphPlan), causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement, unifiedEditingQueries,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
         bake && pipelineConstantsKeys.map((key) => constants[key])]);
       let source = this._traceModules.get(moduleKey);
@@ -1331,6 +1345,7 @@ class WGPURayTracePass {
             perInstanceBounds: true,
             compactVertices: true,
             runtimeVertexLayout,
+            unifiedEditingQueries,
             dynamicEnvironment: true,
             displayAovStorage: true
             ,analyticLightStorage: true

@@ -27,7 +27,8 @@ import {createSampleLightWgsl} from './chunks/sampleLight.wgsl.js';
 import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
 import {spectrumWgsl} from '../spectrum.js';
-import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
+import {queryPointsWgsl} from './chunks/queryPoints.wgsl.js';
+import {createSampleShadowCatcherWgsl, SHADOW_CATCHER_LIGHT_SAMPLES} from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
@@ -64,6 +65,8 @@ export interface RayTraceShaderOptions {
   emissiveInstanceIndices?: boolean;
   compactVertices?: boolean;
   runtimeVertexLayout?: boolean;
+  /** Shared resumable query template. Default false. */
+  unifiedEditingQueries?: boolean;
   debugGroup?: number;
   /** Invocation block edge; the native host matches dispatch to this value. Default 8. */
   workgroupSize?:number;
@@ -115,6 +118,14 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
 } = options;
+  const queryPoints = !!options.unifiedEditingQueries && spectral === false && !hasAlpha && blasLayoutMask === 1 &&
+    compactVertices && sharedGraph && !!materialHooks.graph?.opacity && !enabled && !lightTracing && !photonMapping;
+  // A vertex runs its camera query and then each visibility query in one of
+  // eight stages (twice the runtime loop guard of four): one NEE ray, or the
+  // primary catcher's light samples. A query left pending would drop shading.
+  if (queryPoints && 1 + Math.max(1, SHADOW_CATCHER_LIGHT_SAMPLES) > 8) {
+    throw new Error('Unified editing queries: catcher light samples exceed the query stages');
+  }
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
@@ -151,8 +162,8 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
     var path: Path;
     path.ray = ray;
     path.fromEye = true;
-    (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
-    // RGB stores primary catcher coverage. The shadow travels in the
+    (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path${queryPoints ? ', queryStage != 0u' : ''});
+${queryPoints ? '    if (pendingSceneQuery.pending) { continue; }\n' : ''}    // RGB stores primary catcher coverage. The shadow travels in the
     // auxiliary counts, out of reach of color clamping.
     return vec4f(1.0);
   }
@@ -196,7 +207,7 @@ ${createMaterialBufferWgsl({ materialHooks, independentTextures: options.indepen
   hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
   hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ materialHooks, compactVertices, perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
+${createIntersectionWgsl({ materialHooks, compactVertices, perInstanceBounds: options.perInstanceBounds, hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections, queryPoints })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
@@ -257,9 +268,9 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined)}
-${sampleShadowCatcherWgsl}
-
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints)}
+${createSampleShadowCatcherWgsl(queryPoints)}
+${queryPoints ? queryPointsWgsl + '\n' : ''}
 // Output
 @group(3) @binding(0) var<storage, read_write> outColor: array<vec4f>;
 @group(3) @binding(1) var<storage, read_write> outNormal: array<vec4f>;
@@ -310,10 +321,11 @@ ${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, channel: i32) -> vec
 
 // Split shading from hit completion so primary and secondary rays can share
 // one traversal/material-load call site in the common RGB integrator.
-fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, sampleIgnoredOut: ptr<function, bool>) {
-  *sampleIgnoredOut = false;
+fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, sampleIgnoredOut: ptr<function, bool>${queryPoints ? ', resume: bool' : ''}) {
+${queryPoints ? `  let matType = (*ma).materialType;
+  var shadeMaterial = false; if (!resume) {\n` : ''}  *sampleIgnoredOut = false;
   samplingBounce = u32(max(*depth, 0));
-  let matType = (*ma).materialType;
+${queryPoints ? '' : '  let matType = (*ma).materialType;'}
   let isShadowCatcher = ${hasShadowCatcher ? /* wgsl */ `matType == SHADOW_CATCHER` : /* wgsl */ `false`};
   if (isShadowCatcher) {
     if ((*path).fromEye) {
@@ -418,7 +430,7 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
     }
     if (!(*sampleIgnoredOut)) {
       bounceIndex = u32(max(*depth, 0));
-      SampleMaterial(si, ma, path);
+${queryPoints ? '      shadeMaterial = true;' : '      SampleMaterial(si, ma, path);'}
     }
     else {
       // Alpha-null traversal does not consume the receiver event. The first
@@ -427,7 +439,12 @@ fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, 
     }
   }
 
-  if (!(*si).albedoSampled && !(*sampleIgnoredOut)) {
+${queryPoints ? /* wgsl */ `  }
+  if (resume || shadeMaterial) {
+    SampleMaterial(si, ma, path, resume);
+    if (pendingSceneQuery.pending) { return; }
+  }
+` : ''}  if (!(*si).albedoSampled && !(*sampleIgnoredOut)) {
     // Select denoising guides.
     if ((matType == STANDARD || matType == UNLIT)) {
       if (!((*ma).transmissionWeight > 0.5 ||
@@ -727,7 +744,7 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
     }
 ${sharePrefix ? '    spResume = false;\n' : ''}    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
     if (path.abort | (event >= eventLimit)) { break; }
-    shadeVertex(uv, &path, &depth, si, ma, outAux, &sampleIgnored);
+    shadeVertex(uv, &path, &depth, si, ma, outAux, &sampleIgnored${queryPoints ? ', false' : ''});
     if (path.abort) { break; }
   }
 
@@ -829,7 +846,7 @@ ${primaryGuides}
     }
     if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
     if (!path.abort & (event < eventLimit)) {
-      shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored);
+      shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored${queryPoints ? ', false' : ''});
     }
     if (path.abort | (event >= eventLimit)) {
       let result = vec4f(path.li, path.alpha);
@@ -868,8 +885,29 @@ ${primaryVariables}
   // did before testing the event budget. Queries consume the preceding bounce's
   // random stream; shading advances samplingBounce only after hit completion.
   for (var event = 0; event <= eventLimit; event++) {
-    ${sharedGraph ? materialQuery('true', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+${queryPoints ? /* wgsl */ `
+    pendingSceneQuery.ray = path.ray;
+    pendingSceneQuery.maximum = RAY_MAX_DISTANCE;
+    pendingSceneQuery.triangle = si.triangleIndex;
+    pendingSceneQuery.instance = si.instanceIndex;
+    pendingSceneQuery.kind = 0;
+    // Lanes finish each vertex together. A free-running phase switch lets
+    // paths drift into different bounces and serializes their shading work.
+    for (var queryStage = 0u; queryStage < rtUniform.loopUnrollGuard * 2u; queryStage++) {
+      let shadow = queryStage != 0u;
+      pendingSceneQuery.occluded = intersectSceneQuery(pendingSceneQuery.ray, &si,
+        select(depth, 1, shadow), (event != 0) || shadow, !shadow && path.isNextRefraction,
+        select(0, 1, shadow), pendingSceneQuery.maximum,
+        pendingSceneQuery.triangle, pendingSceneQuery.instance);
+      if (!shadow) {
+        mx_vertex(true, &ma, &si, select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored), si.hit & (event < eventLimit));
+      }
+      pendingSceneQuery.pending = false;
+${materialHooks.materialXNormals ? '      if (!shadow) { materialx_normal(&si); }' : ''}
+      if (pendingSceneQuery.kind != 1) {
+` : /* wgsl */ `    ${sharedGraph ? materialQuery('true', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
     ${materialCall('&ma', 'si', materialHooks)}`}
+`}
     if (event == 0) {
 ${primaryGuides}
       isNotTransparent = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99;
@@ -877,9 +915,13 @@ ${primaryGuides}
       completeVertex(&path, &depth, &si, &ma, sampleIgnored);
     }
     if (isNotTransparent && event > bounceLimit) { path.abort = true; }
-    if (path.abort || event >= eventLimit) { break; }
-    shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored);
-    if (path.abort) { break; }
+    if (path.abort || event >= eventLimit) { ${queryPoints ? 'return vec4f(path.li, path.alpha);' : 'break;'} }
+${queryPoints ? '      }' : ''}
+    shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored${queryPoints ? ', queryStage != 0u' : ''});
+${queryPoints ? '      if (pendingSceneQuery.pending) { continue; }' : ''}
+    if (path.abort) { ${queryPoints ? 'return vec4f(path.li, path.alpha);' : 'break;'} }
+${queryPoints ? `      break;
+    }` : ''}
   }
   return vec4f(path.li, path.alpha);
 }
@@ -962,7 +1004,7 @@ ${sharePrefix ? /* wgsl */ `      if (spActive && wavelengthIndex > 0 && spForkC
     }`}
     if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
     if (!path.abort & (event < eventLimit)) {
-      shadeVertex(uv, &path, &depth, &si, &ma, &wavelengthAux, &sampleIgnored);
+      shadeVertex(uv, &path, &depth, &si, &ma, &wavelengthAux, &sampleIgnored${queryPoints ? ', false' : ''});
     }
     if (path.abort | (event >= eventLimit)) {
       let result = vec4f(path.li, path.alpha);

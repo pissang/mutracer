@@ -1,8 +1,11 @@
+import {queryState} from './queryPoints.wgsl.js';
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false) {
-  return /* wgsl */ `
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false) {
+  const state = queryState(queryPoints, 'MaterialQueryState', 'materialQueryState', {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool', prepared: 'OpenPbrPreparedBsdf'}, queryPoints);
+  const {originalFace, ndv1, ffnormal, mediumSampled, prepared} = state.refs;
+  return state.declarations + /* wgsl */ `
 
 struct ShadowRayWork {
   ray: Ray,
@@ -150,7 +153,7 @@ fn sampleScattering(
   prepared: OpenPbrPreparedBsdf,
   path: ptr<function, Path>,
   ffnormal: vec3f,
-  isSurface: bool
+  isSurface: bool${queryPoints ? ', resume: bool' : ''}
 ) -> ScatteringWork {
   let candidateCount = neeCandidateCount();
   var selected: ShadowRayWork;
@@ -162,7 +165,7 @@ fn sampleScattering(
   // Both proposals use one BSDF evaluation call site, avoiding a second inlined
   // optical graph. Keep all random draws and visibility queries in their
   // original order, including the short-circuit reservoir replacement draw.
-  for (var event = 0u; event <= candidateCount; event++) {
+  for (var event = ${queryPoints ? 'select(0u, candidateCount, resume)' : '0u'}; event <= candidateCount; event++) {
     let continuation = event == candidateCount;
     var lightSample: LightSampleRec;
     var lightDir: vec3f;
@@ -179,13 +182,20 @@ fn sampleScattering(
             (f32(candidateCount) * selectedTarget);
         }
       }
-      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
+${queryPoints ? /* wgsl */ `      if (valid && !resume) {
+        pendingSceneQuery.contribution = selected.contribution;
+        pendingSceneQuery.weight = candidateUCW;
+        requestSceneVisibility(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex, 1);
+        return result;
+      }
+      if (resume && !pendingSceneQuery.occluded) { (*path).li += pendingSceneQuery.contribution * pendingSceneQuery.weight; }
+` : /* wgsl */ `      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
 ${caustics?`        var connection=*path;
         if(isSurface&&isCausticSpecular(ma)){causticAdvance(&connection,ma,dot(ffnormal,selected.ray.d)<0.0,true);}
         connection.beta=vec3f(1.0);causticHotRecord(connection,selected.contribution*candidateUCW,0u);
 `:''}        (*path).li += selected.contribution * candidateUCW;
       }
-      if (!isSurface) {
+`}      if (!isSurface) {
         result.direction = sampling_henyey_greenstein(-(*path).ray.d,
           (*si).mediumAnisotropy, sample2D(bounceDim(PHASE_DIRECTION)));
         result.pdf = sampling_henyey_greenstein_phase(
@@ -294,19 +304,20 @@ fn coat_frame_normal(input: vec3f, face: vec3f, view: vec3f) -> vec3f {
 fn SampleMaterial(
   si: ptr<function, SurfaceInteraction>,
   ma: ptr<function, OpenPbrResolvedMaterial>,
-  path: ptr<function, Path>
+  path: ptr<function, Path>${queryPoints ? ', resume: bool' : ''}
 ) {
-${hasCoatNormals ? /* wgsl */ `
-  let originalFace = (*si).faceNormal;
+${queryPoints ? `  var crossedBoundary = false;
+  if (!resume) {\n` : ''}${hasCoatNormals ? /* wgsl */ `
+  ${state.init('originalFace', '(*si).faceNormal', true)}
   let originalNormal = (*si).normal;
 ` : ''}
-  var ndv1: f32 = -dot((*si).faceNormal, (*path).ray.d);
+  ${state.init('ndv1', '-dot((*si).faceNormal, (*path).ray.d)', false, true)}
   var ndv2: f32 = -dot((*si).normal, (*path).ray.d);
   if ((((*ma).transmissionWeight > 0.0) | ((*ma).subsurfaceWeight > 0.0)) & (*ma).thinWalled) {
     // Always treat thin material as entering medium
-    if (ndv1 < 0.0) {
+    if (${ndv1} < 0.0) {
       (*si).faceNormal = -(*si).faceNormal;
-      ndv1 = -ndv1;
+      ${ndv1} = -${ndv1};
     }
     if (ndv2 < 0.0) {
       (*si).normal = -(*si).normal;
@@ -315,33 +326,33 @@ ${hasCoatNormals ? /* wgsl */ `
   }
   // In same edge cases normal is not torwards the camera while we can still see the face.
   // We need to choose faceNormal in this case.
-  var useFaceN: bool = (ndv1 >= 0.0) & (ndv2 < 0.0);
-  var ndv: f32 = select(ndv2, ndv1, useFaceN);
+  var useFaceN: bool = (${ndv1} >= 0.0) & (ndv2 < 0.0);
+  var ndv: f32 = select(ndv2, ${ndv1}, useFaceN);
   var N: vec3f = select((*si).normal, (*si).faceNormal, useFaceN);
 
   (*ma).inside = (ndv <= 0.0) & !(*ma).thinWalled;
   // In or out
   (*ma).relativeIor = select((*ma).specularIor, (1.0 / (*ma).specularIor), ndv > 0.0);
-  var ffnormal = select(-N, N, ndv >= 0.0);
+  ${state.init('ffnormal', 'select(-N, N, ndv >= 0.0)')}
 ${hasCoatNormals ? /* wgsl */ `
   if ((*ma).coatNormalEnabled) {
     let view = -(*path).ray.d;
-    let geometricView = dot(originalFace, view);
-    (*ma).geometricNormal = select(-originalFace, originalFace, geometricView >= 0.0);
-    ffnormal = coat_frame_normal(originalNormal, originalFace, view);
-    (*ma).coatNormal = coat_frame_normal((*si).coatNormal, originalFace, view);
+    let geometricView = dot(${originalFace}, view);
+    (*ma).geometricNormal = select(-${originalFace}, ${originalFace}, geometricView >= 0.0);
+    ${ffnormal} = coat_frame_normal(originalNormal, ${originalFace}, view);
+    (*ma).coatNormal = coat_frame_normal((*si).coatNormal, ${originalFace}, view);
     (*ma).inside = (geometricView <= 0.0) & !(*ma).thinWalled;
     (*ma).relativeIor = select((*ma).specularIor, 1.0 / (*ma).specularIor, (geometricView > 0.0) | (*ma).thinWalled);
   }
 ` : ''}
 
   (*path).scatteringIsDelta = false;
-  var mediumSampled = false;
-  var crossedBoundary = false;
+  ${state.init('mediumSampled', 'false')}
+${queryPoints ? '' : '  var crossedBoundary = false;'}
   let mediumType = (*si).mediumType;
-
+${queryPoints ? '' : `
   var scatteringPdf: f32;
-  var scatterDir: vec3f;
+  var scatterDir: vec3f;`}
 
   if (HAS_MEDIUM) {
     let d = distance((*si).position, (*path).ray.o);
@@ -359,15 +370,15 @@ ${hasCoatNormals ? /* wgsl */ `
         min(-log(max(sample1D(bounceDim(MEDIUM_DISTANCE)), 1e-7)) / channelExtinction, d),
         channelExtinction > 0.0
       );
-      mediumSampled = scatterDist < d;
+      ${mediumSampled} = scatterDist < d;
       let transmittance = exp(-extinction * scatterDist);
       let density = select(
         transmittance,
         extinction * transmittance,
-        mediumSampled
+        ${mediumSampled}
       );
       let mediumPdf = max((density.x + density.y + density.z) / 3.0, 1e-8);
-      if (mediumSampled) {
+      if (${mediumSampled}) {
         (*path).beta *= transmittance * scattering / mediumPdf;
         // Zero throughput cannot contribute at subsequent vertices or light connections.
         if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
@@ -386,7 +397,7 @@ ${hasCoatNormals ? /* wgsl */ `
     }
   }
 
-  if (!mediumSampled) {
+  if (!${mediumSampled}) {
     // Each spectral path carries one channel, including directly hit emitters.
     // Keep the full material emission in the light-selection/MIS density.
     var surfaceEmission = (*ma).emission;
@@ -403,21 +414,23 @@ ${caustics?`    let emissionWeight=emissiveHitMisWeight(si,path);
   }
   // Surface and medium events share the light estimator. Emission is added
   // before NEE, then the continuation direction is sampled.
-  var prepared: OpenPbrPreparedBsdf;
-  if (!mediumSampled) {
+  ${queryPoints ? state.init('prepared', 'OpenPbrPreparedBsdf()') : 'var prepared: OpenPbrPreparedBsdf;'}
+  if (!${mediumSampled}) {
 ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).directionTangent = (*si).directionTangent;
     (*ma).directionBitangent = (*si).directionBitangent;
     (*ma).geometryTangent = (*si).geometryTangent;
     (*ma).geometryBitangent = (*si).geometryBitangent;
 ` : /* wgsl */ ``}
-    prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
+    ${prepared} = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ${ffnormal});
   }
-${researchContribution}${photonMapping?/* wgsl */ `  if(!mediumSampled){let value=(*path).beta*photonContribution(*si,prepared,(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
-` : ''}  let scattered = sampleScattering(si, *ma, prepared, path, ffnormal, !mediumSampled);
-  scatterDir = scattered.direction;
+${queryPoints ? `  }
+  var scatteringPdf: f32;
+  var scatterDir: vec3f;\n` : ''}${researchContribution}${photonMapping?/* wgsl */ `  if(!${mediumSampled}){let value=(*path).beta*photonContribution(*si,${prepared},(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
+` : ''}  let scattered = sampleScattering(si, *ma, ${prepared}, path, ${ffnormal}, !${mediumSampled}${queryPoints ? ', resume' : ''});
+${queryPoints ? '  if (pendingSceneQuery.pending) { return; }\n' : ''}  scatterDir = scattered.direction;
   scatteringPdf = scattered.pdf;
-  if (!mediumSampled) {
+  if (!${mediumSampled}) {
     let f = scattered.response;
     let isNextRefraction = scattered.transmission;
     // A rejected microfacet proposal (including failed refraction), or a
@@ -433,9 +446,9 @@ ${researchContribution}${photonMapping?/* wgsl */ `  if(!mediumSampled){let valu
     }
     // Exactly index-matched solid transmission is a discrete null boundary;
     // environment NEE has no competing density for that event.
-    (*path).scatteringIsDelta = !prepared.material.thinWalled &
-      (abs(prepared.material.relativeIor - 1.0) <= 1e-6) &
-      (prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6);
+    (*path).scatteringIsDelta = !${prepared}.material.thinWalled &
+      (abs(${prepared}.material.relativeIor - 1.0) <= 1e-6) &
+      (${prepared}.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6);
 ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
 ` : ''}    (*path).beta *= f / scatteringPdf;
     // Zero throughput cannot contribute at subsequent vertices or light connections.
@@ -447,12 +460,12 @@ ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
     // Or the ray go out from transmission material will miss the opque surface.
     (*path).ray.o = (*si).position + EPS * scatterDir;
 ${hasCoatNormals ? /* wgsl */ `
-    if ((*ma).coatNormalEnabled) { (*path).ray.o = (*si).position + EPS * select(-originalFace, originalFace, dot(originalFace, scatterDir) >= 0.0); }
+    if ((*ma).coatNormalEnabled) { (*path).ray.o = (*si).position + EPS * select(-${originalFace}, ${originalFace}, dot(${originalFace}, scatterDir) >= 0.0); }
 ` : ''}
   }
   (*path).scatteringPdf = scatteringPdf;
   (*path).ray.d = scatterDir;
-  if (mediumSampled) {${caustics ? /* wgsl */ `
+  if (${mediumSampled}) {${caustics ? /* wgsl */ `
     causticAdvance(path, *ma, false, false);` : ''}
     (*path).isNextRefraction = false;
   }
@@ -462,8 +475,8 @@ ${hasCoatNormals ? /* wgsl */ `
   if (HAS_MEDIUM) {
     // Reflections stay in the current medium. Enter or leave only after the
     // BSDF actually sampled transmission through a medium boundary.
-    if (!mediumSampled & crossedBoundary & ((*ma).mediumType > 0)) {
-      if (ndv1 >= 0.0) {
+    if (!${mediumSampled} & crossedBoundary & ((*ma).mediumType > 0)) {
+      if (${ndv1} >= 0.0) {
         (*si).mediumType = (*ma).mediumType;
         (*si).mediumExtinction = (*ma).mediumExtinction;
         (*si).mediumScattering = (*ma).mediumScattering;
