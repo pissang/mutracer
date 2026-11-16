@@ -27,7 +27,7 @@ Bounds/limitations:
 - Canonical NUM_MAPS256 is12 KiB; existing rounding in tens means >250 entries can compile another capacity. Atlas high-water capacity does not shrink on model replacement.
 - BVH2 plus the requested BLAS family share a kernel; switching families or algorithm/quality/binding settings can compile. Full all-layout trial costs47.7–48.3 s; see report for the complete signature audit.
 - Final first sample is ~0.39 s (2.8%) later than the paired baseline; earlier prefetch reduces ready time by~10 s, not the kernel's intrinsic compile time.
-- Four first-switch auxiliary creations are display/AOV initialization, not trace recompilation. Mac and WebGL GPU comparisons remain unverified.
+- Four auxiliary creations during the initial graph switches are display/AOV initialization, not trace recompilation. Mac and WebGL GPU comparisons remain unverified.
 - Rejected narrower ~14.7 s kernel omitted catcher/bevel coverage; do not present it as final. Rejected packed MXResult/private scratch/tap/scalar-loop trials remain only in external evidence.
 
 Handoff: source is committed and web evidence is complete within these limits. Use `REPORT.md`, `final-summary.json`, `canonical-signature.json` and `commits.json`; only inspect archived trial directories for the specific follow-up being pursued. The cold-compile objective remains open.
