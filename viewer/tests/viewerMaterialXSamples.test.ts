@@ -16,13 +16,32 @@ const sample=(id:string)=>{const s=MATERIALX_SAMPLES.find(s=>s.id===id);if(!s)th
 const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}>={
   'car-paint':{terminals:['baseColor','baseMetalness','specularRoughness','normal'],values:{coatWeight:1,coatColor:[0.55,0.012,0.03],coatRoughness:0.03,coatIor:1.5}},
   'weathered-steel':{terminals:['baseColor','baseMetalness','specularRoughness','specularAnisotropy','normal']},
+  'galvanized-steel':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
+  'riveted-steel':{terminals:['baseColor','specularRoughness','normal']},
+  'anodized-aluminum':{terminals:['baseColor','specularRoughness','normal'],values:{baseMetalness:1,specularAnisotropy:0.35}},
+  'aircraft-aluminum':{terminals:['baseColor','specularRoughness','normal'],values:{baseMetalness:1,specularAnisotropy:0.5}},
+  'patina-bronze':{terminals:['baseColor','baseMetalness','specularRoughness','normal']},
   'varnished-wood':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:0.85,coatRoughness:0.06}},
+  'cork':{terminals:['baseColor','specularRoughness','normal'],values:{fuzzWeight:0.15}},
   'marble':{terminals:['baseColor','specularRoughness'],values:{subsurfaceWeight:0.3,subsurfaceRadius:0.06}},
   'terrazzo':{terminals:['baseColor','specularRoughness']},
+  'exposed-concrete':{terminals:['baseColor','normal']},
+  'mossy-stone':{terminals:['baseColor','specularRoughness','fuzzWeight','fuzzColor','normal']},
+  'lichen':{terminals:['baseColor','specularRoughness','normal']},
   'leather':{terminals:['baseColor','specularRoughness','normal'],values:{fuzzWeight:0.08}},
+  'saddle-leather':{terminals:['baseColor','specularRoughness','normal'],values:{fuzzWeight:0.06}},
+  'quilted-leather':{terminals:['baseColor','specularRoughness','normal']},
+  'woven-leather':{terminals:['baseColor','specularRoughness','normal']},
+  'crocodile':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:0.6}},
+  'suede':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.9}},
+  'denim':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.35}},
+  'silk-satin':{terminals:['baseColor','specularColor','specularAnisotropy','normal']},
+  'herringbone-tweed':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.6}},
+  'rattan':{terminals:['baseColor','specularRoughness','opacity','normal'],values:{coatWeight:0.3}},
   'tartan-velvet':{terminals:['baseColor','fuzzColor','normal'],values:{fuzzWeight:0.7,fuzzRoughness:0.45}},
   'cobblestone':{terminals:['baseColor','specularRoughness']},
   'zellige-tile':{terminals:['baseColor','specularRoughness','normal']},
+  'crackle-glaze':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,subsurfaceWeight:0.25}},
   'candle-wax':{terminals:['baseColor','specularRoughness','normal'],values:{subsurfaceWeight:0.6,subsurfaceRadius:0.25,subsurfaceColor:[0.92,0.55,0.18],transmissionWeight:0.1}},
   'hammered-copper':{terminals:['baseColor','specularRoughness','normal'],values:{baseMetalness:1}},
   'carbon-fiber':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,coatRoughness:0.04}},
@@ -43,20 +62,16 @@ const expected:Record<string,{terminals:string[];values?:Record<string,unknown>}
   'guilloche-enamel':{terminals:['baseColor','specularRoughness','normal'],values:{coatWeight:1,coatColor:[0.03,0.2,0.75]}},
   'dragon-scales':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.2}},
   'holo-glitter':{terminals:['baseColor','specularRoughness','thinFilmThickness','normal'],values:{thinFilmIor:2.6}},
-  'gas-giant':{terminals:['baseColor'],values:{fuzzWeight:0.6}},
   'cooling-lava':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
   'hex-panel':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance'],values:{baseMetalness:1}},
   'embers':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
   'hot-steel':{terminals:['baseColor','baseMetalness','specularRoughness','thinFilmWeight','thinFilmThickness','normal','emissionColor','emissionLuminance'],values:{thinFilmIor:2.4}},
-  'sun':{terminals:['emissionColor','emissionLuminance'],values:{specularWeight:0}},
   'neon-truchet':{terminals:['baseColor','specularRoughness','emissionColor','emissionLuminance']},
   'led-matrix':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']},
-  'night-windows':{terminals:['baseColor','specularRoughness','emissionColor','emissionLuminance']},
   'nebula':{terminals:['emissionColor','emissionLuminance'],values:{coatWeight:1,coatRoughness:0.02}},
-  'bioluminescence':{terminals:['baseColor','specularRoughness','normal','emissionColor','emissionLuminance']}
 };
 // Samples with a UV-only height, and their displacement scale.
-const displaced:Record<string,number>={'cobblestone':0.04,'brick-wall':0.03};
+const displaced:Record<string,number>={'mossy-stone':0.05,'cobblestone':0.04,'brick-wall':0.03};
 
 describe('bundled MaterialX samples',()=>{
   it('lists every sample in panel order and packages it as a MaterialX drop',()=>{

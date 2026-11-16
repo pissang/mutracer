@@ -1,0 +1,1202 @@
+<?xml version="1.0"?>
+<!--
+  Exposed concrete: OpenPBR board-formed concrete on a UV grid of form
+  panels. Each panel leaves a thin fin at its joints, six recessed tie holes
+  and patches of small bug holes; forward differences of that height give the
+  normal. Laitance varies from panel to panel in cloudy blotches, and water
+  and algae stains run down from the tie holes, traced through the tangent
+  frame so they follow gravity whatever way the UVs are laid out. The Up
+  input (object +Y by default) sets which way is up. Uses UV0 and exposes the
+  panel count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_exposed_concrete">
+    <input name="concrete_color" type="color3" value="0.155, 0.152, 0.143" uiname="Concrete" />
+    <input name="stain_color" type="color3" value="0.045, 0.05, 0.035" uiname="Stains" />
+    <input name="tiles" type="vector2" value="6, 3" uiname="Form panels per UV" />
+    <input name="bugholes" type="float" value="0.5" uiname="Bug holes" uimin="0" uimax="1" />
+    <input name="weathering" type="float" value="0.65" uiname="Weathering" uimin="0" uimax="1" />
+    <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="panel_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="panel_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="panel_uv" />
+    </separate2>
+    <floor name="panel_column" type="float">
+      <input name="in" type="float" nodename="panel_parts" output="outx" />
+    </floor>
+    <floor name="panel_row" type="float">
+      <input name="in" type="float" nodename="panel_parts" output="outy" />
+    </floor>
+    <subtract name="panel_u" type="float">
+      <input name="in1" type="float" nodename="panel_parts" output="outx" />
+      <input name="in2" type="float" nodename="panel_column" />
+    </subtract>
+    <subtract name="panel_v" type="float">
+      <input name="in1" type="float" nodename="panel_parts" output="outy" />
+      <input name="in2" type="float" nodename="panel_row" />
+    </subtract>
+    <invert name="panel_u_back" type="float">
+      <input name="in" type="float" nodename="panel_u" />
+    </invert>
+    <min name="edge_u" type="float">
+      <input name="in1" type="float" nodename="panel_u" />
+      <input name="in2" type="float" nodename="panel_u_back" />
+    </min>
+    <invert name="panel_v_back" type="float">
+      <input name="in" type="float" nodename="panel_v" />
+    </invert>
+    <min name="edge_v" type="float">
+      <input name="in1" type="float" nodename="panel_v" />
+      <input name="in2" type="float" nodename="panel_v_back" />
+    </min>
+    <min name="edge_distance" type="float">
+      <input name="in1" type="float" nodename="edge_u" />
+      <input name="in2" type="float" nodename="edge_v" />
+    </min>
+    <smoothstep name="fin_ramp" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0.001" />
+      <input name="high" type="float" value="0.005" />
+    </smoothstep>
+    <invert name="fin" type="float">
+      <input name="in" type="float" nodename="fin_ramp" />
+    </invert>
+    <multiply name="hole_u_phase" type="float">
+      <input name="in1" type="float" nodename="panel_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <floor name="hole_u_fraction_floor" type="float">
+      <input name="in" type="float" nodename="hole_u_phase" />
+    </floor>
+    <subtract name="hole_u_fraction" type="float">
+      <input name="in1" type="float" nodename="hole_u_phase" />
+      <input name="in2" type="float" nodename="hole_u_fraction_floor" />
+    </subtract>
+    <subtract name="hole_u_center" type="float">
+      <input name="in1" type="float" nodename="hole_u_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_u" type="float">
+      <input name="in1" type="float" nodename="hole_u_center" />
+      <input name="in2" type="float" value="3" />
+    </divide>
+    <multiply name="hole_v_phase" type="float">
+      <input name="in1" type="float" nodename="panel_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <floor name="hole_v_fraction_floor" type="float">
+      <input name="in" type="float" nodename="hole_v_phase" />
+    </floor>
+    <subtract name="hole_v_fraction" type="float">
+      <input name="in1" type="float" nodename="hole_v_phase" />
+      <input name="in2" type="float" nodename="hole_v_fraction_floor" />
+    </subtract>
+    <subtract name="hole_v_center" type="float">
+      <input name="in1" type="float" nodename="hole_v_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_v" type="float">
+      <input name="in1" type="float" nodename="hole_v_center" />
+      <input name="in2" type="float" value="2" />
+    </divide>
+    <multiply name="hole_distance_x2" type="float">
+      <input name="in1" type="float" nodename="hole_u" />
+      <input name="in2" type="float" nodename="hole_u" />
+    </multiply>
+    <multiply name="hole_distance_y2" type="float">
+      <input name="in1" type="float" nodename="hole_v" />
+      <input name="in2" type="float" nodename="hole_v" />
+    </multiply>
+    <add name="hole_distance_sq" type="float">
+      <input name="in1" type="float" nodename="hole_distance_x2" />
+      <input name="in2" type="float" nodename="hole_distance_y2" />
+    </add>
+    <sqrt name="hole_distance" type="float">
+      <input name="in" type="float" nodename="hole_distance_sq" />
+    </sqrt>
+    <smoothstep name="hole_ramp" type="float">
+      <input name="in" type="float" nodename="hole_distance" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.028" />
+    </smoothstep>
+    <invert name="tie_hole" type="float">
+      <input name="in" type="float" nodename="hole_ramp" />
+    </invert>
+    <subtract name="rim_offset" type="float">
+      <input name="in1" type="float" nodename="hole_distance" />
+      <input name="in2" type="float" value="0.03" />
+    </subtract>
+    <absval name="rim_abs" type="float">
+      <input name="in" type="float" nodename="rim_offset" />
+    </absval>
+    <smoothstep name="rim_ramp" type="float">
+      <input name="in" type="float" nodename="rim_abs" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.004" />
+    </smoothstep>
+    <invert name="tie_rim" type="float">
+      <input name="in" type="float" nodename="rim_ramp" />
+    </invert>
+    <multiply name="bug_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="panel_uv" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise2d name="bug_cells" type="vector2">
+      <input name="texcoord" type="vector2" nodename="bug_uv" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise2d>
+    <separate2 name="bug_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="bug_cells" />
+    </separate2>
+    <multiply name="bug_patch_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="panel_uv" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise2d name="bug_patches" type="float">
+      <input name="texcoord" type="vector2" nodename="bug_patch_uv" />
+    </noise2d>
+    <subtract name="bug_bias" type="float">
+      <input name="in1" type="float" interfacename="bugholes" />
+      <input name="in2" type="float" value="0.75" />
+    </subtract>
+    <add name="bug_chance" type="float">
+      <input name="in1" type="float" nodename="bug_patches" />
+      <input name="in2" type="float" nodename="bug_bias" />
+    </add>
+    <smoothstep name="bug_present" type="float">
+      <input name="in" type="float" nodename="bug_chance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <smoothstep name="bug_ramp" type="float">
+      <input name="in" type="float" nodename="bug_distances" output="outx" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.13" />
+    </smoothstep>
+    <invert name="bug_shape" type="float">
+      <input name="in" type="float" nodename="bug_ramp" />
+    </invert>
+    <multiply name="bug_hole" type="float">
+      <input name="in1" type="float" nodename="bug_shape" />
+      <input name="in2" type="float" nodename="bug_present" />
+    </multiply>
+    <multiply name="grain_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="panel_uv" />
+      <input name="in2" type="float" value="120" />
+    </multiply>
+    <noise2d name="grain" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv" />
+    </noise2d>
+    <multiply name="grain_height" type="float">
+      <input name="in1" type="float" nodename="grain" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="fin_height" type="float">
+      <input name="in1" type="float" nodename="fin" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="hole_depth" type="float">
+      <input name="in1" type="float" nodename="tie_hole" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <subtract name="cast_holes" type="float">
+      <input name="in1" type="float" nodename="fin_height" />
+      <input name="in2" type="float" nodename="hole_depth" />
+    </subtract>
+    <multiply name="bug_depth" type="float">
+      <input name="in1" type="float" nodename="bug_hole" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="cast_shape" type="float">
+      <input name="in1" type="float" nodename="cast_holes" />
+      <input name="in2" type="float" nodename="bug_depth" />
+    </subtract>
+    <multiply name="rim_height" type="float">
+      <input name="in1" type="float" nodename="tie_rim" />
+      <input name="in2" type="float" value="-0.15" />
+    </multiply>
+    <add name="cast_detail" type="float">
+      <input name="in1" type="float" nodename="grain_height" />
+      <input name="in2" type="float" nodename="rim_height" />
+    </add>
+    <add name="concrete_height" type="float">
+      <input name="in1" type="float" nodename="cast_shape" />
+      <input name="in2" type="float" nodename="cast_detail" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="panel_uv" />
+      <input name="in2" type="vector2" value="0.0015, 0" />
+    </add>
+    <separate2 name="panel_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="panel_column_u" type="float">
+      <input name="in" type="float" nodename="panel_parts_u" output="outx" />
+    </floor>
+    <floor name="panel_row_u" type="float">
+      <input name="in" type="float" nodename="panel_parts_u" output="outy" />
+    </floor>
+    <subtract name="panel_u_u" type="float">
+      <input name="in1" type="float" nodename="panel_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="panel_column_u" />
+    </subtract>
+    <subtract name="panel_v_u" type="float">
+      <input name="in1" type="float" nodename="panel_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="panel_row_u" />
+    </subtract>
+    <invert name="panel_u_back_u" type="float">
+      <input name="in" type="float" nodename="panel_u_u" />
+    </invert>
+    <min name="edge_u_u" type="float">
+      <input name="in1" type="float" nodename="panel_u_u" />
+      <input name="in2" type="float" nodename="panel_u_back_u" />
+    </min>
+    <invert name="panel_v_back_u" type="float">
+      <input name="in" type="float" nodename="panel_v_u" />
+    </invert>
+    <min name="edge_v_u" type="float">
+      <input name="in1" type="float" nodename="panel_v_u" />
+      <input name="in2" type="float" nodename="panel_v_back_u" />
+    </min>
+    <min name="edge_distance_u" type="float">
+      <input name="in1" type="float" nodename="edge_u_u" />
+      <input name="in2" type="float" nodename="edge_v_u" />
+    </min>
+    <smoothstep name="fin_ramp_u" type="float">
+      <input name="in" type="float" nodename="edge_distance_u" />
+      <input name="low" type="float" value="0.001" />
+      <input name="high" type="float" value="0.005" />
+    </smoothstep>
+    <invert name="fin_u" type="float">
+      <input name="in" type="float" nodename="fin_ramp_u" />
+    </invert>
+    <multiply name="hole_u_phase_u" type="float">
+      <input name="in1" type="float" nodename="panel_u_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <floor name="hole_u_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="hole_u_phase_u" />
+    </floor>
+    <subtract name="hole_u_fraction_u" type="float">
+      <input name="in1" type="float" nodename="hole_u_phase_u" />
+      <input name="in2" type="float" nodename="hole_u_fraction_floor_u" />
+    </subtract>
+    <subtract name="hole_u_center_u" type="float">
+      <input name="in1" type="float" nodename="hole_u_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_u_u" type="float">
+      <input name="in1" type="float" nodename="hole_u_center_u" />
+      <input name="in2" type="float" value="3" />
+    </divide>
+    <multiply name="hole_v_phase_u" type="float">
+      <input name="in1" type="float" nodename="panel_v_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <floor name="hole_v_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="hole_v_phase_u" />
+    </floor>
+    <subtract name="hole_v_fraction_u" type="float">
+      <input name="in1" type="float" nodename="hole_v_phase_u" />
+      <input name="in2" type="float" nodename="hole_v_fraction_floor_u" />
+    </subtract>
+    <subtract name="hole_v_center_u" type="float">
+      <input name="in1" type="float" nodename="hole_v_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_v_u" type="float">
+      <input name="in1" type="float" nodename="hole_v_center_u" />
+      <input name="in2" type="float" value="2" />
+    </divide>
+    <multiply name="hole_distance_x2_u" type="float">
+      <input name="in1" type="float" nodename="hole_u_u" />
+      <input name="in2" type="float" nodename="hole_u_u" />
+    </multiply>
+    <multiply name="hole_distance_y2_u" type="float">
+      <input name="in1" type="float" nodename="hole_v_u" />
+      <input name="in2" type="float" nodename="hole_v_u" />
+    </multiply>
+    <add name="hole_distance_sq_u" type="float">
+      <input name="in1" type="float" nodename="hole_distance_x2_u" />
+      <input name="in2" type="float" nodename="hole_distance_y2_u" />
+    </add>
+    <sqrt name="hole_distance_u" type="float">
+      <input name="in" type="float" nodename="hole_distance_sq_u" />
+    </sqrt>
+    <smoothstep name="hole_ramp_u" type="float">
+      <input name="in" type="float" nodename="hole_distance_u" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.028" />
+    </smoothstep>
+    <invert name="tie_hole_u" type="float">
+      <input name="in" type="float" nodename="hole_ramp_u" />
+    </invert>
+    <subtract name="rim_offset_u" type="float">
+      <input name="in1" type="float" nodename="hole_distance_u" />
+      <input name="in2" type="float" value="0.03" />
+    </subtract>
+    <absval name="rim_abs_u" type="float">
+      <input name="in" type="float" nodename="rim_offset_u" />
+    </absval>
+    <smoothstep name="rim_ramp_u" type="float">
+      <input name="in" type="float" nodename="rim_abs_u" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.004" />
+    </smoothstep>
+    <invert name="tie_rim_u" type="float">
+      <input name="in" type="float" nodename="rim_ramp_u" />
+    </invert>
+    <multiply name="bug_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise2d name="bug_cells_u" type="vector2">
+      <input name="texcoord" type="vector2" nodename="bug_uv_u" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise2d>
+    <separate2 name="bug_distances_u" type="multioutput">
+      <input name="in" type="vector2" nodename="bug_cells_u" />
+    </separate2>
+    <multiply name="bug_patch_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise2d name="bug_patches_u" type="float">
+      <input name="texcoord" type="vector2" nodename="bug_patch_uv_u" />
+    </noise2d>
+    <subtract name="bug_bias_u" type="float">
+      <input name="in1" type="float" interfacename="bugholes" />
+      <input name="in2" type="float" value="0.75" />
+    </subtract>
+    <add name="bug_chance_u" type="float">
+      <input name="in1" type="float" nodename="bug_patches_u" />
+      <input name="in2" type="float" nodename="bug_bias_u" />
+    </add>
+    <smoothstep name="bug_present_u" type="float">
+      <input name="in" type="float" nodename="bug_chance_u" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <smoothstep name="bug_ramp_u" type="float">
+      <input name="in" type="float" nodename="bug_distances_u" output="outx" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.13" />
+    </smoothstep>
+    <invert name="bug_shape_u" type="float">
+      <input name="in" type="float" nodename="bug_ramp_u" />
+    </invert>
+    <multiply name="bug_hole_u" type="float">
+      <input name="in1" type="float" nodename="bug_shape_u" />
+      <input name="in2" type="float" nodename="bug_present_u" />
+    </multiply>
+    <multiply name="grain_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="120" />
+    </multiply>
+    <noise2d name="grain_u" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_u" />
+    </noise2d>
+    <multiply name="grain_height_u" type="float">
+      <input name="in1" type="float" nodename="grain_u" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="fin_height_u" type="float">
+      <input name="in1" type="float" nodename="fin_u" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="hole_depth_u" type="float">
+      <input name="in1" type="float" nodename="tie_hole_u" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <subtract name="cast_holes_u" type="float">
+      <input name="in1" type="float" nodename="fin_height_u" />
+      <input name="in2" type="float" nodename="hole_depth_u" />
+    </subtract>
+    <multiply name="bug_depth_u" type="float">
+      <input name="in1" type="float" nodename="bug_hole_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="cast_shape_u" type="float">
+      <input name="in1" type="float" nodename="cast_holes_u" />
+      <input name="in2" type="float" nodename="bug_depth_u" />
+    </subtract>
+    <multiply name="rim_height_u" type="float">
+      <input name="in1" type="float" nodename="tie_rim_u" />
+      <input name="in2" type="float" value="-0.15" />
+    </multiply>
+    <add name="cast_detail_u" type="float">
+      <input name="in1" type="float" nodename="grain_height_u" />
+      <input name="in2" type="float" nodename="rim_height_u" />
+    </add>
+    <add name="concrete_height_u" type="float">
+      <input name="in1" type="float" nodename="cast_shape_u" />
+      <input name="in2" type="float" nodename="cast_detail_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="panel_uv" />
+      <input name="in2" type="vector2" value="0, 0.0015" />
+    </add>
+    <separate2 name="panel_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="panel_column_v" type="float">
+      <input name="in" type="float" nodename="panel_parts_v" output="outx" />
+    </floor>
+    <floor name="panel_row_v" type="float">
+      <input name="in" type="float" nodename="panel_parts_v" output="outy" />
+    </floor>
+    <subtract name="panel_u_v" type="float">
+      <input name="in1" type="float" nodename="panel_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="panel_column_v" />
+    </subtract>
+    <subtract name="panel_v_v" type="float">
+      <input name="in1" type="float" nodename="panel_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="panel_row_v" />
+    </subtract>
+    <invert name="panel_u_back_v" type="float">
+      <input name="in" type="float" nodename="panel_u_v" />
+    </invert>
+    <min name="edge_u_v" type="float">
+      <input name="in1" type="float" nodename="panel_u_v" />
+      <input name="in2" type="float" nodename="panel_u_back_v" />
+    </min>
+    <invert name="panel_v_back_v" type="float">
+      <input name="in" type="float" nodename="panel_v_v" />
+    </invert>
+    <min name="edge_v_v" type="float">
+      <input name="in1" type="float" nodename="panel_v_v" />
+      <input name="in2" type="float" nodename="panel_v_back_v" />
+    </min>
+    <min name="edge_distance_v" type="float">
+      <input name="in1" type="float" nodename="edge_u_v" />
+      <input name="in2" type="float" nodename="edge_v_v" />
+    </min>
+    <smoothstep name="fin_ramp_v" type="float">
+      <input name="in" type="float" nodename="edge_distance_v" />
+      <input name="low" type="float" value="0.001" />
+      <input name="high" type="float" value="0.005" />
+    </smoothstep>
+    <invert name="fin_v" type="float">
+      <input name="in" type="float" nodename="fin_ramp_v" />
+    </invert>
+    <multiply name="hole_u_phase_v" type="float">
+      <input name="in1" type="float" nodename="panel_u_v" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <floor name="hole_u_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="hole_u_phase_v" />
+    </floor>
+    <subtract name="hole_u_fraction_v" type="float">
+      <input name="in1" type="float" nodename="hole_u_phase_v" />
+      <input name="in2" type="float" nodename="hole_u_fraction_floor_v" />
+    </subtract>
+    <subtract name="hole_u_center_v" type="float">
+      <input name="in1" type="float" nodename="hole_u_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_u_v" type="float">
+      <input name="in1" type="float" nodename="hole_u_center_v" />
+      <input name="in2" type="float" value="3" />
+    </divide>
+    <multiply name="hole_v_phase_v" type="float">
+      <input name="in1" type="float" nodename="panel_v_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <floor name="hole_v_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="hole_v_phase_v" />
+    </floor>
+    <subtract name="hole_v_fraction_v" type="float">
+      <input name="in1" type="float" nodename="hole_v_phase_v" />
+      <input name="in2" type="float" nodename="hole_v_fraction_floor_v" />
+    </subtract>
+    <subtract name="hole_v_center_v" type="float">
+      <input name="in1" type="float" nodename="hole_v_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="hole_v_v" type="float">
+      <input name="in1" type="float" nodename="hole_v_center_v" />
+      <input name="in2" type="float" value="2" />
+    </divide>
+    <multiply name="hole_distance_x2_v" type="float">
+      <input name="in1" type="float" nodename="hole_u_v" />
+      <input name="in2" type="float" nodename="hole_u_v" />
+    </multiply>
+    <multiply name="hole_distance_y2_v" type="float">
+      <input name="in1" type="float" nodename="hole_v_v" />
+      <input name="in2" type="float" nodename="hole_v_v" />
+    </multiply>
+    <add name="hole_distance_sq_v" type="float">
+      <input name="in1" type="float" nodename="hole_distance_x2_v" />
+      <input name="in2" type="float" nodename="hole_distance_y2_v" />
+    </add>
+    <sqrt name="hole_distance_v" type="float">
+      <input name="in" type="float" nodename="hole_distance_sq_v" />
+    </sqrt>
+    <smoothstep name="hole_ramp_v" type="float">
+      <input name="in" type="float" nodename="hole_distance_v" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.028" />
+    </smoothstep>
+    <invert name="tie_hole_v" type="float">
+      <input name="in" type="float" nodename="hole_ramp_v" />
+    </invert>
+    <subtract name="rim_offset_v" type="float">
+      <input name="in1" type="float" nodename="hole_distance_v" />
+      <input name="in2" type="float" value="0.03" />
+    </subtract>
+    <absval name="rim_abs_v" type="float">
+      <input name="in" type="float" nodename="rim_offset_v" />
+    </absval>
+    <smoothstep name="rim_ramp_v" type="float">
+      <input name="in" type="float" nodename="rim_abs_v" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.004" />
+    </smoothstep>
+    <invert name="tie_rim_v" type="float">
+      <input name="in" type="float" nodename="rim_ramp_v" />
+    </invert>
+    <multiply name="bug_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <worleynoise2d name="bug_cells_v" type="vector2">
+      <input name="texcoord" type="vector2" nodename="bug_uv_v" />
+      <input name="jitter" type="float" value="1" />
+    </worleynoise2d>
+    <separate2 name="bug_distances_v" type="multioutput">
+      <input name="in" type="vector2" nodename="bug_cells_v" />
+    </separate2>
+    <multiply name="bug_patch_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise2d name="bug_patches_v" type="float">
+      <input name="texcoord" type="vector2" nodename="bug_patch_uv_v" />
+    </noise2d>
+    <subtract name="bug_bias_v" type="float">
+      <input name="in1" type="float" interfacename="bugholes" />
+      <input name="in2" type="float" value="0.75" />
+    </subtract>
+    <add name="bug_chance_v" type="float">
+      <input name="in1" type="float" nodename="bug_patches_v" />
+      <input name="in2" type="float" nodename="bug_bias_v" />
+    </add>
+    <smoothstep name="bug_present_v" type="float">
+      <input name="in" type="float" nodename="bug_chance_v" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.15" />
+    </smoothstep>
+    <smoothstep name="bug_ramp_v" type="float">
+      <input name="in" type="float" nodename="bug_distances_v" output="outx" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.13" />
+    </smoothstep>
+    <invert name="bug_shape_v" type="float">
+      <input name="in" type="float" nodename="bug_ramp_v" />
+    </invert>
+    <multiply name="bug_hole_v" type="float">
+      <input name="in1" type="float" nodename="bug_shape_v" />
+      <input name="in2" type="float" nodename="bug_present_v" />
+    </multiply>
+    <multiply name="grain_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="120" />
+    </multiply>
+    <noise2d name="grain_v" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_v" />
+    </noise2d>
+    <multiply name="grain_height_v" type="float">
+      <input name="in1" type="float" nodename="grain_v" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="fin_height_v" type="float">
+      <input name="in1" type="float" nodename="fin_v" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="hole_depth_v" type="float">
+      <input name="in1" type="float" nodename="tie_hole_v" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <subtract name="cast_holes_v" type="float">
+      <input name="in1" type="float" nodename="fin_height_v" />
+      <input name="in2" type="float" nodename="hole_depth_v" />
+    </subtract>
+    <multiply name="bug_depth_v" type="float">
+      <input name="in1" type="float" nodename="bug_hole_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="cast_shape_v" type="float">
+      <input name="in1" type="float" nodename="cast_holes_v" />
+      <input name="in2" type="float" nodename="bug_depth_v" />
+    </subtract>
+    <multiply name="rim_height_v" type="float">
+      <input name="in1" type="float" nodename="tie_rim_v" />
+      <input name="in2" type="float" value="-0.15" />
+    </multiply>
+    <add name="cast_detail_v" type="float">
+      <input name="in1" type="float" nodename="grain_height_v" />
+      <input name="in2" type="float" nodename="rim_height_v" />
+    </add>
+    <add name="concrete_height_v" type="float">
+      <input name="in1" type="float" nodename="cast_shape_v" />
+      <input name="in2" type="float" nodename="cast_detail_v" />
+    </add>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="concrete_height_u" />
+      <input name="in2" type="float" nodename="concrete_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" value="-16.666667" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="concrete_height_v" />
+      <input name="in2" type="float" nodename="concrete_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" value="-16.666667" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: cement laitance varies panel to panel and in cloudy blotches; water and algae stains run down from the tie holes and the top of each panel. -->
+    <position name="object_position" type="vector3" />
+    <combine2 name="panel_seed" type="vector2">
+      <input name="in1" type="float" nodename="panel_column" />
+      <input name="in2" type="float" nodename="panel_row" />
+    </combine2>
+    <cellnoise2d name="panel_random" type="float">
+      <input name="texcoord" type="vector2" nodename="panel_seed" />
+    </cellnoise2d>
+    <remap name="panel_tone" type="float">
+      <input name="in" type="float" nodename="panel_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="1.08" />
+    </remap>
+    <multiply name="cloud_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <fractal3d name="cloud" type="float">
+      <input name="position" type="vector3" nodename="cloud_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <remap name="cloud_tone" type="float">
+      <input name="in" type="float" nodename="cloud" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <multiply name="speck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="260" />
+    </multiply>
+    <cellnoise3d name="speck" type="float">
+      <input name="position" type="vector3" nodename="speck_position" />
+    </cellnoise3d>
+    <remap name="speck_tone" type="float">
+      <input name="in" type="float" nodename="speck" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.88" />
+      <input name="outhigh" type="float" value="1.08" />
+    </remap>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" interfacename="up" />
+    </normalize>
+    <tangent name="object_tangent" type="vector3" />
+    <bitangent name="object_bitangent" type="vector3" />
+    <dotproduct name="tangent_up" type="float">
+      <input name="in1" type="vector3" nodename="object_tangent" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="down_u" type="float">
+      <input name="in1" type="float" nodename="tangent_up" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <dotproduct name="bitangent_up" type="float">
+      <input name="in1" type="vector3" nodename="object_bitangent" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="down_v" type="float">
+      <input name="in1" type="float" nodename="bitangent_up" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <multiply name="down_slope_x2" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" nodename="down_u" />
+    </multiply>
+    <multiply name="down_slope_y2" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" nodename="down_v" />
+    </multiply>
+    <add name="down_slope_sq" type="float">
+      <input name="in1" type="float" nodename="down_slope_x2" />
+      <input name="in2" type="float" nodename="down_slope_y2" />
+    </add>
+    <sqrt name="down_slope" type="float">
+      <input name="in" type="float" nodename="down_slope_sq" />
+    </sqrt>
+    <multiply name="row_a" type="float">
+      <input name="in1" type="float" nodename="panel_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <multiply name="row_b" type="float">
+      <input name="in1" type="float" nodename="panel_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="row_da" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <multiply name="row_db" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <max name="row_stain_db_pos" type="float">
+      <input name="in1" type="float" nodename="row_db" />
+      <input name="in2" type="float" value="0.02" />
+    </max>
+    <min name="row_stain_db_neg" type="float">
+      <input name="in1" type="float" nodename="row_db" />
+      <input name="in2" type="float" value="-0.02" />
+    </min>
+    <ifgreater name="row_stain_db_safe" type="float">
+      <input name="value1" type="float" nodename="row_db" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" nodename="row_stain_db_pos" />
+      <input name="in2" type="float" nodename="row_stain_db_neg" />
+    </ifgreater>
+    <add name="row_stain_b_half" type="float">
+      <input name="in1" type="float" nodename="row_b" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="row_stain_b_row" type="float">
+      <input name="in" type="float" nodename="row_stain_b_half" />
+    </floor>
+    <ifgreater name="row_stain_src_side" type="float">
+      <input name="value1" type="float" nodename="row_db" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" value="-0.5" />
+      <input name="in2" type="float" value="0.5" />
+    </ifgreater>
+    <add name="row_stain_b_src" type="float">
+      <input name="in1" type="float" nodename="row_stain_b_row" />
+      <input name="in2" type="float" nodename="row_stain_src_side" />
+    </add>
+    <subtract name="row_stain_travel_b" type="float">
+      <input name="in1" type="float" nodename="row_b" />
+      <input name="in2" type="float" nodename="row_stain_b_src" />
+    </subtract>
+    <divide name="row_stain_travel_t" type="float">
+      <input name="in1" type="float" nodename="row_stain_travel_b" />
+      <input name="in2" type="float" nodename="row_stain_db_safe" />
+    </divide>
+    <multiply name="row_stain_drift" type="float">
+      <input name="in1" type="float" nodename="row_da" />
+      <input name="in2" type="float" nodename="row_stain_travel_t" />
+    </multiply>
+    <subtract name="row_stain_a_src" type="float">
+      <input name="in1" type="float" nodename="row_a" />
+      <input name="in2" type="float" nodename="row_stain_drift" />
+    </subtract>
+    <floor name="row_stain_a_fraction_floor" type="float">
+      <input name="in" type="float" nodename="row_stain_a_src" />
+    </floor>
+    <subtract name="row_stain_a_fraction" type="float">
+      <input name="in1" type="float" nodename="row_stain_a_src" />
+      <input name="in2" type="float" nodename="row_stain_a_fraction_floor" />
+    </subtract>
+    <subtract name="row_stain_across" type="float">
+      <input name="in1" type="float" nodename="row_stain_a_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="row_stain_dist" type="float">
+      <input name="in" type="float" nodename="row_stain_travel_b" />
+    </absval>
+    <smoothstep name="row_stain_downstream" type="float">
+      <input name="in" type="float" nodename="row_stain_travel_t" />
+      <input name="low" type="float" value="-0.002" />
+      <input name="high" type="float" value="0.002" />
+    </smoothstep>
+    <divide name="row_stain_across_panel" type="float">
+      <input name="in1" type="float" nodename="row_stain_across" />
+      <input name="in2" type="float" value="3" />
+    </divide>
+    <absval name="row_stain_x" type="float">
+      <input name="in" type="float" nodename="row_stain_across_panel" />
+    </absval>
+    <multiply name="row_stain_spread" type="float">
+      <input name="in1" type="float" nodename="row_stain_dist" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="row_stain_width" type="float">
+      <input name="in1" type="float" value="0.02" />
+      <input name="in2" type="float" nodename="row_stain_spread" />
+    </add>
+    <smoothstep name="row_stain_across_ramp" type="float">
+      <input name="in" type="float" nodename="row_stain_x" />
+      <input name="low" type="float" value="0.01" />
+      <input name="high" type="float" nodename="row_stain_width" />
+    </smoothstep>
+    <invert name="row_stain_across_mask" type="float">
+      <input name="in" type="float" nodename="row_stain_across_ramp" />
+    </invert>
+    <smoothstep name="row_stain_start" type="float">
+      <input name="in" type="float" nodename="row_stain_dist" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.08" />
+    </smoothstep>
+    <smoothstep name="row_stain_fade_ramp" type="float">
+      <input name="in" type="float" nodename="row_stain_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.9" />
+    </smoothstep>
+    <invert name="row_stain_fade" type="float">
+      <input name="in" type="float" nodename="row_stain_fade_ramp" />
+    </invert>
+    <multiply name="row_stain_along" type="float">
+      <input name="in1" type="float" nodename="row_stain_start" />
+      <input name="in2" type="float" nodename="row_stain_fade" />
+    </multiply>
+    <multiply name="row_stain_shape" type="float">
+      <input name="in1" type="float" nodename="row_stain_across_mask" />
+      <input name="in2" type="float" nodename="row_stain_along" />
+    </multiply>
+    <multiply name="row_stain" type="float">
+      <input name="in1" type="float" nodename="row_stain_shape" />
+      <input name="in2" type="float" nodename="row_stain_downstream" />
+    </multiply>
+    <multiply name="column_a" type="float">
+      <input name="in1" type="float" nodename="panel_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="column_b" type="float">
+      <input name="in1" type="float" nodename="panel_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <multiply name="column_da" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="column_db" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <max name="column_stain_db_pos" type="float">
+      <input name="in1" type="float" nodename="column_db" />
+      <input name="in2" type="float" value="0.02" />
+    </max>
+    <min name="column_stain_db_neg" type="float">
+      <input name="in1" type="float" nodename="column_db" />
+      <input name="in2" type="float" value="-0.02" />
+    </min>
+    <ifgreater name="column_stain_db_safe" type="float">
+      <input name="value1" type="float" nodename="column_db" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" nodename="column_stain_db_pos" />
+      <input name="in2" type="float" nodename="column_stain_db_neg" />
+    </ifgreater>
+    <add name="column_stain_b_half" type="float">
+      <input name="in1" type="float" nodename="column_b" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="column_stain_b_row" type="float">
+      <input name="in" type="float" nodename="column_stain_b_half" />
+    </floor>
+    <ifgreater name="column_stain_src_side" type="float">
+      <input name="value1" type="float" nodename="column_db" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" value="-0.5" />
+      <input name="in2" type="float" value="0.5" />
+    </ifgreater>
+    <add name="column_stain_b_src" type="float">
+      <input name="in1" type="float" nodename="column_stain_b_row" />
+      <input name="in2" type="float" nodename="column_stain_src_side" />
+    </add>
+    <subtract name="column_stain_travel_b" type="float">
+      <input name="in1" type="float" nodename="column_b" />
+      <input name="in2" type="float" nodename="column_stain_b_src" />
+    </subtract>
+    <divide name="column_stain_travel_t" type="float">
+      <input name="in1" type="float" nodename="column_stain_travel_b" />
+      <input name="in2" type="float" nodename="column_stain_db_safe" />
+    </divide>
+    <multiply name="column_stain_drift" type="float">
+      <input name="in1" type="float" nodename="column_da" />
+      <input name="in2" type="float" nodename="column_stain_travel_t" />
+    </multiply>
+    <subtract name="column_stain_a_src" type="float">
+      <input name="in1" type="float" nodename="column_a" />
+      <input name="in2" type="float" nodename="column_stain_drift" />
+    </subtract>
+    <floor name="column_stain_a_fraction_floor" type="float">
+      <input name="in" type="float" nodename="column_stain_a_src" />
+    </floor>
+    <subtract name="column_stain_a_fraction" type="float">
+      <input name="in1" type="float" nodename="column_stain_a_src" />
+      <input name="in2" type="float" nodename="column_stain_a_fraction_floor" />
+    </subtract>
+    <subtract name="column_stain_across" type="float">
+      <input name="in1" type="float" nodename="column_stain_a_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="column_stain_dist" type="float">
+      <input name="in" type="float" nodename="column_stain_travel_b" />
+    </absval>
+    <smoothstep name="column_stain_downstream" type="float">
+      <input name="in" type="float" nodename="column_stain_travel_t" />
+      <input name="low" type="float" value="-0.002" />
+      <input name="high" type="float" value="0.002" />
+    </smoothstep>
+    <divide name="column_stain_across_panel" type="float">
+      <input name="in1" type="float" nodename="column_stain_across" />
+      <input name="in2" type="float" value="2" />
+    </divide>
+    <absval name="column_stain_x" type="float">
+      <input name="in" type="float" nodename="column_stain_across_panel" />
+    </absval>
+    <multiply name="column_stain_spread" type="float">
+      <input name="in1" type="float" nodename="column_stain_dist" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="column_stain_width" type="float">
+      <input name="in1" type="float" value="0.02" />
+      <input name="in2" type="float" nodename="column_stain_spread" />
+    </add>
+    <smoothstep name="column_stain_across_ramp" type="float">
+      <input name="in" type="float" nodename="column_stain_x" />
+      <input name="low" type="float" value="0.01" />
+      <input name="high" type="float" nodename="column_stain_width" />
+    </smoothstep>
+    <invert name="column_stain_across_mask" type="float">
+      <input name="in" type="float" nodename="column_stain_across_ramp" />
+    </invert>
+    <smoothstep name="column_stain_start" type="float">
+      <input name="in" type="float" nodename="column_stain_dist" />
+      <input name="low" type="float" value="0.06" />
+      <input name="high" type="float" value="0.08" />
+    </smoothstep>
+    <smoothstep name="column_stain_fade_ramp" type="float">
+      <input name="in" type="float" nodename="column_stain_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.9" />
+    </smoothstep>
+    <invert name="column_stain_fade" type="float">
+      <input name="in" type="float" nodename="column_stain_fade_ramp" />
+    </invert>
+    <multiply name="column_stain_along" type="float">
+      <input name="in1" type="float" nodename="column_stain_start" />
+      <input name="in2" type="float" nodename="column_stain_fade" />
+    </multiply>
+    <multiply name="column_stain_shape" type="float">
+      <input name="in1" type="float" nodename="column_stain_across_mask" />
+      <input name="in2" type="float" nodename="column_stain_along" />
+    </multiply>
+    <multiply name="column_stain" type="float">
+      <input name="in1" type="float" nodename="column_stain_shape" />
+      <input name="in2" type="float" nodename="column_stain_downstream" />
+    </multiply>
+    <max name="slope_safe" type="float">
+      <input name="in1" type="float" nodename="down_slope" />
+      <input name="in2" type="float" value="0.001" />
+    </max>
+    <absval name="flow_v_abs" type="float">
+      <input name="in" type="float" nodename="down_v" />
+    </absval>
+    <divide name="flow_v_share" type="float">
+      <input name="in1" type="float" nodename="flow_v_abs" />
+      <input name="in2" type="float" nodename="slope_safe" />
+    </divide>
+    <smoothstep name="row_weight" type="float">
+      <input name="in" type="float" nodename="flow_v_share" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <absval name="flow_u_abs" type="float">
+      <input name="in" type="float" nodename="down_u" />
+    </absval>
+    <divide name="flow_u_share" type="float">
+      <input name="in1" type="float" nodename="flow_u_abs" />
+      <input name="in2" type="float" nodename="slope_safe" />
+    </divide>
+    <smoothstep name="column_weight" type="float">
+      <input name="in" type="float" nodename="flow_u_share" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="row_stain_weighted" type="float">
+      <input name="in1" type="float" nodename="row_stain" />
+      <input name="in2" type="float" nodename="row_weight" />
+    </multiply>
+    <multiply name="column_stain_weighted" type="float">
+      <input name="in1" type="float" nodename="column_stain" />
+      <input name="in2" type="float" nodename="column_weight" />
+    </multiply>
+    <max name="hole_stain_shape" type="float">
+      <input name="in1" type="float" nodename="row_stain_weighted" />
+      <input name="in2" type="float" nodename="column_stain_weighted" />
+    </max>
+    <smoothstep name="wall_steepness" type="float">
+      <input name="in" type="float" nodename="down_slope" />
+      <input name="low" type="float" value="0.15" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="hole_stain" type="float">
+      <input name="in1" type="float" nodename="hole_stain_shape" />
+      <input name="in2" type="float" nodename="wall_steepness" />
+    </multiply>
+    <dotproduct name="run_position_height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="run_position_across" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="16" />
+    </multiply>
+    <multiply name="run_position_along_extra" type="float">
+      <input name="in1" type="float" nodename="run_position_height" />
+      <input name="in2" type="float" value="-14.6" />
+    </multiply>
+    <multiply name="run_position_along" type="vector3">
+      <input name="in1" type="vector3" nodename="up_direction" />
+      <input name="in2" type="float" nodename="run_position_along_extra" />
+    </multiply>
+    <add name="run_position" type="vector3">
+      <input name="in1" type="vector3" nodename="run_position_across" />
+      <input name="in2" type="vector3" nodename="run_position_along" />
+    </add>
+    <noise3d name="runs" type="float">
+      <input name="position" type="vector3" nodename="run_position" />
+    </noise3d>
+    <smoothstep name="runs_mask" type="float">
+      <input name="in" type="float" nodename="runs" />
+      <input name="low" type="float" value="-0.05" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+    <multiply name="stain_break_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <noise3d name="stain_break" type="float">
+      <input name="position" type="vector3" nodename="stain_break_position" />
+    </noise3d>
+    <remap name="stain_breakup" type="float">
+      <input name="in" type="float" nodename="stain_break" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.4" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="hole_stain_strength" type="float">
+      <input name="in1" type="float" nodename="hole_stain" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <multiply name="run_stain" type="float">
+      <input name="in1" type="float" nodename="runs_mask" />
+      <input name="in2" type="float" value="0.75" />
+    </multiply>
+    <max name="stain_shape" type="float">
+      <input name="in1" type="float" nodename="hole_stain_strength" />
+      <input name="in2" type="float" nodename="run_stain" />
+    </max>
+    <multiply name="stain_broken" type="float">
+      <input name="in1" type="float" nodename="stain_shape" />
+      <input name="in2" type="float" nodename="stain_breakup" />
+    </multiply>
+    <multiply name="stain_mask" type="float">
+      <input name="in1" type="float" nodename="stain_broken" />
+      <input name="in2" type="float" interfacename="weathering" />
+    </multiply>
+    <multiply name="body_tone" type="float">
+      <input name="in1" type="float" nodename="panel_tone" />
+      <input name="in2" type="float" nodename="cloud_tone" />
+    </multiply>
+    <multiply name="body_speck" type="float">
+      <input name="in1" type="float" nodename="body_tone" />
+      <input name="in2" type="float" nodename="speck_tone" />
+    </multiply>
+    <multiply name="concrete_toned" type="color3">
+      <input name="in1" type="color3" interfacename="concrete_color" />
+      <input name="in2" type="float" nodename="body_speck" />
+    </multiply>
+    <multiply name="stain_mix" type="float">
+      <input name="in1" type="float" nodename="stain_mask" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <mix name="concrete_stained" type="color3">
+      <input name="bg" type="color3" nodename="concrete_toned" />
+      <input name="fg" type="color3" interfacename="stain_color" />
+      <input name="mix" type="float" nodename="stain_mix" />
+    </mix>
+    <multiply name="hole_color" type="color3">
+      <input name="in1" type="color3" nodename="concrete_stained" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="bug_shadow" type="float">
+      <input name="in1" type="float" nodename="bug_hole" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <max name="hole_shadow" type="float">
+      <input name="in1" type="float" nodename="tie_hole" />
+      <input name="in2" type="float" nodename="bug_shadow" />
+    </max>
+    <mix name="concrete_holes" type="color3">
+      <input name="bg" type="color3" nodename="concrete_stained" />
+      <input name="fg" type="color3" nodename="hole_color" />
+      <input name="mix" type="float" nodename="hole_shadow" />
+    </mix>
+    <multiply name="fin_color" type="color3">
+      <input name="in1" type="color3" nodename="concrete_stained" />
+      <input name="in2" type="float" value="1.15" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="concrete_holes" />
+      <input name="fg" type="color3" nodename="fin_color" />
+      <input name="mix" type="float" nodename="fin" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_exposed_concrete" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_exposed_concrete" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_weight" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" value="0.8" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_exposed_concrete" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Exposed_Concrete" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_exposed_concrete" />
+  </surfacematerial>
+</materialx>

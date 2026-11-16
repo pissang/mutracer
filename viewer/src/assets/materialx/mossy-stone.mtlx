@@ -1,0 +1,555 @@
+<?xml version="1.0"?>
+<!--
+  Mossy stone: OpenPBR weathered rock with moss and scalar height
+  displacement. Rounded blocks between warped Worley cracks, with fractal
+  weathering, form a height in UV space only, so the viewer bakes it into a
+  height map. Moss grows on faces turned toward the Up input (object +Y by
+  default), in the cracks and in soft-edged patches, as a fuzz layer over
+  round cushions of shoots; it is deep green in the cushions and
+  yellow-green on the tips and at the patch edges. Uses UV0 and exposes the
+  stone count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_mossy_stone">
+    <input name="stone_color" type="color3" value="0.09, 0.087, 0.08" uiname="Stone" />
+    <input name="moss_color" type="color3" value="0.022, 0.06, 0.008" uiname="Moss" />
+    <input name="tip_color" type="color3" value="0.09, 0.13, 0.02" uiname="Moss tips" />
+    <input name="moss_amount" type="float" value="0.55" uiname="Moss amount" uimin="0" uimax="1" />
+    <input name="tiles" type="vector2" value="7, 3.5" uiname="Stones per UV" />
+    <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="stone_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <multiply name="crack_warp_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <noise2d name="crack_warp" type="vector2">
+      <input name="texcoord" type="vector2" nodename="crack_warp_uv" />
+    </noise2d>
+    <multiply name="crack_warp_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="crack_warp" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="crack_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="vector2" nodename="crack_warp_offset" />
+    </add>
+    <worleynoise2d name="blocks" type="vector2">
+      <input name="texcoord" type="vector2" nodename="crack_uv" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise2d>
+    <separate2 name="block_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="blocks" />
+    </separate2>
+    <subtract name="block_border" type="float">
+      <input name="in1" type="float" nodename="block_distances" output="outy" />
+      <input name="in2" type="float" nodename="block_distances" output="outx" />
+    </subtract>
+    <smoothstep name="crack_ramp" type="float">
+      <input name="in" type="float" nodename="block_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.07" />
+    </smoothstep>
+    <invert name="crack" type="float">
+      <input name="in" type="float" nodename="crack_ramp" />
+    </invert>
+    <smoothstep name="dome_ramp" type="float">
+      <input name="in" type="float" nodename="block_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <sqrt name="dome" type="float">
+      <input name="in" type="float" nodename="dome_ramp" />
+    </sqrt>
+    <multiply name="rough_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="stone_uv" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <separate2 name="rough_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="rough_uv" />
+    </separate2>
+    <combine3 name="rough_position" type="vector3">
+      <input name="in1" type="float" nodename="rough_parts" output="outx" />
+      <input name="in2" type="float" nodename="rough_parts" output="outy" />
+      <input name="in3" type="float" value="0.5" />
+    </combine3>
+    <fractal3d name="rough" type="float">
+      <input name="position" type="vector3" nodename="rough_position" />
+      <input name="octaves" type="integer" value="5" />
+    </fractal3d>
+    <multiply name="dome_height" type="float">
+      <input name="in1" type="float" nodename="dome" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <multiply name="rough_height" type="float">
+      <input name="in1" type="float" nodename="rough" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="block_height" type="float">
+      <input name="in1" type="float" nodename="dome_height" />
+      <input name="in2" type="float" nodename="rough_height" />
+    </add>
+    <add name="height_lift" type="float">
+      <input name="in1" type="float" nodename="block_height" />
+      <input name="in2" type="float" value="0.15" />
+    </add>
+    <clamp name="height" type="float">
+      <input name="in" type="float" nodename="height_lift" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" interfacename="up" />
+    </normalize>
+    <dotproduct name="facing_up" type="float">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+
+    <!-- Moss grows on faces turned toward Up, in the cracks and in soft-edged patches. -->
+    <multiply name="patch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <fractal3d name="patch" type="float">
+      <input name="position" type="vector3" nodename="patch_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <multiply name="fringe_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="45" />
+    </multiply>
+    <noise3d name="fringe" type="float">
+      <input name="position" type="vector3" nodename="fringe_position" />
+    </noise3d>
+    <multiply name="fringe_part" type="float">
+      <input name="in1" type="float" nodename="fringe" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <multiply name="up_part" type="float">
+      <input name="in1" type="float" nodename="facing_up" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <multiply name="patch_part" type="float">
+      <input name="in1" type="float" nodename="patch" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="moss_up" type="float">
+      <input name="in1" type="float" nodename="up_part" />
+      <input name="in2" type="float" nodename="patch_part" />
+    </add>
+    <multiply name="crack_part" type="float">
+      <input name="in1" type="float" nodename="crack" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="moss_cracks" type="float">
+      <input name="in1" type="float" nodename="moss_up" />
+      <input name="in2" type="float" nodename="crack_part" />
+    </add>
+    <add name="moss_fringed" type="float">
+      <input name="in1" type="float" nodename="moss_cracks" />
+      <input name="in2" type="float" nodename="fringe_part" />
+    </add>
+    <multiply name="amount_part" type="float">
+      <input name="in1" type="float" interfacename="moss_amount" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <subtract name="amount_bias" type="float">
+      <input name="in1" type="float" nodename="amount_part" />
+      <input name="in2" type="float" value="0.9" />
+    </subtract>
+    <add name="moss_field" type="float">
+      <input name="in1" type="float" nodename="moss_fringed" />
+      <input name="in2" type="float" nodename="amount_bias" />
+    </add>
+    <smoothstep name="moss_mask" type="float">
+      <input name="in" type="float" nodename="moss_field" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.25" />
+    </smoothstep>
+    <multiply name="cushion_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="28" />
+    </multiply>
+    <worleynoise3d name="cushions" type="vector2">
+      <input name="position" type="vector3" nodename="cushion_position" />
+    </worleynoise3d>
+    <separate2 name="cushion_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="cushions" />
+    </separate2>
+    <smoothstep name="cushion_ramp" type="float">
+      <input name="in" type="float" nodename="cushion_distances" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <invert name="cushion" type="float">
+      <input name="in" type="float" nodename="cushion_ramp" />
+    </invert>
+    <multiply name="sprig_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="220" />
+    </multiply>
+    <noise3d name="sprigs" type="float">
+      <input name="position" type="vector3" nodename="sprig_position" />
+    </noise3d>
+    <multiply name="cushion_height" type="float">
+      <input name="in1" type="float" nodename="cushion" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="sprig_height" type="float">
+      <input name="in1" type="float" nodename="sprigs" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="moss_height" type="float">
+      <input name="in1" type="float" nodename="cushion_height" />
+      <input name="in2" type="float" nodename="sprig_height" />
+    </add>
+    <add name="tap_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.0008, 0, 0" />
+    </add>
+    <multiply name="cushion_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="28" />
+    </multiply>
+    <worleynoise3d name="cushions_x" type="vector2">
+      <input name="position" type="vector3" nodename="cushion_position_x" />
+    </worleynoise3d>
+    <separate2 name="cushion_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="cushions_x" />
+    </separate2>
+    <smoothstep name="cushion_ramp_x" type="float">
+      <input name="in" type="float" nodename="cushion_distances_x" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <invert name="cushion_x" type="float">
+      <input name="in" type="float" nodename="cushion_ramp_x" />
+    </invert>
+    <multiply name="sprig_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="220" />
+    </multiply>
+    <noise3d name="sprigs_x" type="float">
+      <input name="position" type="vector3" nodename="sprig_position_x" />
+    </noise3d>
+    <multiply name="cushion_height_x" type="float">
+      <input name="in1" type="float" nodename="cushion_x" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="sprig_height_x" type="float">
+      <input name="in1" type="float" nodename="sprigs_x" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="moss_height_x" type="float">
+      <input name="in1" type="float" nodename="cushion_height_x" />
+      <input name="in2" type="float" nodename="sprig_height_x" />
+    </add>
+    <add name="tap_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.0008, 0" />
+    </add>
+    <multiply name="cushion_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="28" />
+    </multiply>
+    <worleynoise3d name="cushions_y" type="vector2">
+      <input name="position" type="vector3" nodename="cushion_position_y" />
+    </worleynoise3d>
+    <separate2 name="cushion_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="cushions_y" />
+    </separate2>
+    <smoothstep name="cushion_ramp_y" type="float">
+      <input name="in" type="float" nodename="cushion_distances_y" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <invert name="cushion_y" type="float">
+      <input name="in" type="float" nodename="cushion_ramp_y" />
+    </invert>
+    <multiply name="sprig_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="220" />
+    </multiply>
+    <noise3d name="sprigs_y" type="float">
+      <input name="position" type="vector3" nodename="sprig_position_y" />
+    </noise3d>
+    <multiply name="cushion_height_y" type="float">
+      <input name="in1" type="float" nodename="cushion_y" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="sprig_height_y" type="float">
+      <input name="in1" type="float" nodename="sprigs_y" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="moss_height_y" type="float">
+      <input name="in1" type="float" nodename="cushion_height_y" />
+      <input name="in2" type="float" nodename="sprig_height_y" />
+    </add>
+    <add name="tap_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.0008" />
+    </add>
+    <multiply name="cushion_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="28" />
+    </multiply>
+    <worleynoise3d name="cushions_z" type="vector2">
+      <input name="position" type="vector3" nodename="cushion_position_z" />
+    </worleynoise3d>
+    <separate2 name="cushion_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="cushions_z" />
+    </separate2>
+    <smoothstep name="cushion_ramp_z" type="float">
+      <input name="in" type="float" nodename="cushion_distances_z" output="outx" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <invert name="cushion_z" type="float">
+      <input name="in" type="float" nodename="cushion_ramp_z" />
+    </invert>
+    <multiply name="sprig_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="220" />
+    </multiply>
+    <noise3d name="sprigs_z" type="float">
+      <input name="position" type="vector3" nodename="sprig_position_z" />
+    </noise3d>
+    <multiply name="cushion_height_z" type="float">
+      <input name="in1" type="float" nodename="cushion_z" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="sprig_height_z" type="float">
+      <input name="in1" type="float" nodename="sprigs_z" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="moss_height_z" type="float">
+      <input name="in1" type="float" nodename="cushion_height_z" />
+      <input name="in2" type="float" nodename="sprig_height_z" />
+    </add>
+    <combine3 name="height_ahead" type="vector3">
+      <input name="in1" type="float" nodename="moss_height_x" />
+      <input name="in2" type="float" nodename="moss_height_y" />
+      <input name="in3" type="float" nodename="moss_height_z" />
+    </combine3>
+    <subtract name="height_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead" />
+      <input name="in2" type="float" nodename="moss_height" />
+    </subtract>
+    <multiply name="height_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta" />
+      <input name="in2" type="float" value="1250" />
+    </multiply>
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="120" />
+    </multiply>
+    <noise3d name="grain" type="vector3">
+      <input name="position" type="vector3" nodename="grain_position" />
+    </noise3d>
+    <invert name="stone_visible" type="float">
+      <input name="in" type="float" nodename="moss_mask" />
+    </invert>
+    <multiply name="grain_bump" type="float">
+      <input name="in1" type="float" nodename="stone_visible" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="grain_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grain" />
+      <input name="in2" type="float" nodename="grain_bump" />
+    </multiply>
+    <multiply name="moss_bump" type="float">
+      <input name="in1" type="float" nodename="moss_mask" />
+      <input name="in2" type="float" value="0.01" />
+    </multiply>
+    <multiply name="moss_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient" />
+      <input name="in2" type="float" nodename="moss_bump" />
+    </multiply>
+    <add name="mossy_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_gradient" />
+      <input name="in2" type="vector3" nodename="moss_gradient" />
+    </add>
+    <dotproduct name="mossy_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="mossy_gradient_sum" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="mossy_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="mossy_along_normal" />
+    </multiply>
+    <subtract name="mossy_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="mossy_gradient_sum" />
+      <input name="in2" type="vector3" nodename="mossy_normal_part" />
+    </subtract>
+    <subtract name="mossy_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="mossy_surface_gradient" />
+    </subtract>
+    <transformnormal name="mossy_world" type="vector3">
+      <input name="in" type="vector3" nodename="mossy_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="mossy_normal" type="vector3">
+      <input name="in" type="vector3" nodename="mossy_world" />
+    </normalize>
+
+    <!-- Color: grey stone, darker in the cracks and low spots and in damp streaks running down; moss from deep green in the cushions to yellow-green on the tips and edges. -->
+    <multiply name="speck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="180" />
+    </multiply>
+    <cellnoise3d name="speck" type="float">
+      <input name="position" type="vector3" nodename="speck_position" />
+    </cellnoise3d>
+    <remap name="speck_tone" type="float">
+      <input name="in" type="float" nodename="speck" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.85" />
+      <input name="outhigh" type="float" value="1.12" />
+    </remap>
+    <remap name="stone_shade" type="float">
+      <input name="in" type="float" nodename="height" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="stone_tone" type="float">
+      <input name="in1" type="float" nodename="stone_shade" />
+      <input name="in2" type="float" nodename="speck_tone" />
+    </multiply>
+    <multiply name="stone_toned" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="float" nodename="stone_tone" />
+    </multiply>
+    <dotproduct name="damp_position_height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="damp_position_across" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="10" />
+    </multiply>
+    <multiply name="damp_position_along_extra" type="float">
+      <input name="in1" type="float" nodename="damp_position_height" />
+      <input name="in2" type="float" value="-8.5" />
+    </multiply>
+    <multiply name="damp_position_along" type="vector3">
+      <input name="in1" type="vector3" nodename="up_direction" />
+      <input name="in2" type="float" nodename="damp_position_along_extra" />
+    </multiply>
+    <add name="damp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="damp_position_across" />
+      <input name="in2" type="vector3" nodename="damp_position_along" />
+    </add>
+    <noise3d name="damp" type="float">
+      <input name="position" type="vector3" nodename="damp_position" />
+    </noise3d>
+    <smoothstep name="damp_streaks" type="float">
+      <input name="in" type="float" nodename="damp" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+    <remap name="damp_tone" type="float">
+      <input name="in" type="float" nodename="damp_streaks" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.6" />
+    </remap>
+    <multiply name="stone_color_damp" type="color3">
+      <input name="in1" type="color3" nodename="stone_toned" />
+      <input name="in2" type="float" nodename="damp_tone" />
+    </multiply>
+    <multiply name="tip_height" type="float">
+      <input name="in1" type="float" nodename="moss_height" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <invert name="moss_edge" type="float">
+      <input name="in" type="float" nodename="moss_mask" />
+    </invert>
+    <multiply name="edge_tips" type="float">
+      <input name="in1" type="float" nodename="moss_edge" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="tip_raw" type="float">
+      <input name="in1" type="float" nodename="tip_height" />
+      <input name="in2" type="float" nodename="edge_tips" />
+    </add>
+    <clamp name="tip_mix" type="float">
+      <input name="in" type="float" nodename="tip_raw" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <mix name="moss_tinted" type="color3">
+      <input name="bg" type="color3" interfacename="moss_color" />
+      <input name="fg" type="color3" interfacename="tip_color" />
+      <input name="mix" type="float" nodename="tip_mix" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="stone_color_damp" />
+      <input name="fg" type="color3" nodename="moss_tinted" />
+      <input name="mix" type="float" nodename="moss_mask" />
+    </mix>
+    <mix name="fuzz_green" type="color3">
+      <input name="bg" type="color3" interfacename="moss_color" />
+      <input name="fg" type="color3" interfacename="tip_color" />
+      <input name="mix" type="float" nodename="tip_mix" />
+    </mix>
+    <multiply name="fuzz_color" type="color3">
+      <input name="in1" type="color3" nodename="fuzz_green" />
+      <input name="in2" type="float" value="1.4" />
+    </multiply>
+    <multiply name="fuzz_weight" type="float">
+      <input name="in1" type="float" nodename="moss_mask" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <remap name="stone_roughness" type="float">
+      <input name="in" type="float" nodename="damp_streaks" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="stone_roughness" />
+      <input name="fg" type="float" value="0.9" />
+      <input name="mix" type="float" nodename="moss_mask" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="fuzz_color_out" type="color3" nodename="fuzz_color" />
+    <output name="fuzz_weight_out" type="float" nodename="fuzz_weight" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="mossy_normal" />
+    <output name="height_out" type="float" nodename="height" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_mossy_stone" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_mossy_stone" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_weight" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" nodegraph="NG_mossy_stone" output="roughness_out" />
+    <input name="fuzz_weight" type="float" nodegraph="NG_mossy_stone" output="fuzz_weight_out" />
+    <input name="fuzz_color" type="color3" nodegraph="NG_mossy_stone" output="fuzz_color_out" />
+    <input name="fuzz_roughness" type="float" value="0.8" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_mossy_stone" output="normal_out" />
+  </open_pbr_surface>
+  <displacement name="DS_mossy_stone" type="displacementshader">
+    <input name="displacement" type="float" nodegraph="NG_mossy_stone" output="height_out" />
+    <input name="scale" type="float" value="0.05" />
+  </displacement>
+  <surfacematerial name="Mossy_Stone" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_mossy_stone" />
+    <input name="displacementshader" type="displacementshader" nodename="DS_mossy_stone" />
+  </surfacematerial>
+</materialx>

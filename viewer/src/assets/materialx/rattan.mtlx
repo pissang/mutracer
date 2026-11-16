@@ -1,0 +1,1213 @@
+<?xml version="1.0"?>
+<!--
+  Rattan: OpenPBR plain weave of flat cane strands. Horizontal and vertical
+  strands alternate over and under in UV space, arching at each crossing,
+  and the gaps between them are cut out with opacity; forward differences
+  of that height give the normal. The glossy cane skin carries fine fibres,
+  a different tone per strand and a dark node every few cells. Uses UV0 and exposes the strand
+  count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_rattan">
+    <input name="cane_color" type="color3" value="0.42, 0.26, 0.11" uiname="Cane" />
+    <input name="node_color" type="color3" value="0.16, 0.08, 0.03" uiname="Nodes" />
+    <input name="shadow_color" type="color3" value="0.05, 0.026, 0.01" uiname="Shadow" />
+    <input name="tiles" type="vector2" value="30, 15" uiname="Strands per UV" />
+    <input name="strand_width" type="float" value="0.72" uiname="Strand width" uimin="0.3" uimax="1" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="weave_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="weave_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="weave_uv" />
+    </separate2>
+    <floor name="column" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outx" />
+    </floor>
+    <floor name="row" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outy" />
+    </floor>
+    <subtract name="cell_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" nodename="column" />
+    </subtract>
+    <subtract name="cell_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outy" />
+      <input name="in2" type="float" nodename="row" />
+    </subtract>
+    <add name="cell_sum" type="float">
+      <input name="in1" type="float" nodename="column" />
+      <input name="in2" type="float" nodename="row" />
+    </add>
+    <modulo name="parity" type="float">
+      <input name="in1" type="float" nodename="cell_sum" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <subtract name="h_offset" type="float">
+      <input name="in1" type="float" nodename="cell_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="h_abs" type="float">
+      <input name="in" type="float" nodename="h_offset" />
+    </absval>
+    <multiply name="half_width_h" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="h_across" type="float">
+      <input name="in1" type="float" nodename="h_abs" />
+      <input name="in2" type="float" nodename="half_width_h" />
+    </divide>
+    <subtract name="v_offset" type="float">
+      <input name="in1" type="float" nodename="cell_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="v_abs" type="float">
+      <input name="in" type="float" nodename="v_offset" />
+    </absval>
+    <multiply name="half_width_v" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="v_across" type="float">
+      <input name="in1" type="float" nodename="v_abs" />
+      <input name="in2" type="float" nodename="half_width_v" />
+    </divide>
+    <smoothstep name="h_edge" type="float">
+      <input name="in" type="float" nodename="h_across" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_h" type="float">
+      <input name="in" type="float" nodename="h_edge" />
+    </invert>
+    <smoothstep name="v_edge" type="float">
+      <input name="in" type="float" nodename="v_across" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_v" type="float">
+      <input name="in" type="float" nodename="v_edge" />
+    </invert>
+    <multiply name="h_sq" type="float">
+      <input name="in1" type="float" nodename="h_across" />
+      <input name="in2" type="float" nodename="h_across" />
+    </multiply>
+    <invert name="h_dome2" type="float">
+      <input name="in" type="float" nodename="h_sq" />
+    </invert>
+    <max name="h_dome_positive" type="float">
+      <input name="in1" type="float" nodename="h_dome2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="h_dome" type="float">
+      <input name="in" type="float" nodename="h_dome_positive" />
+    </sqrt>
+    <multiply name="v_sq" type="float">
+      <input name="in1" type="float" nodename="v_across" />
+      <input name="in2" type="float" nodename="v_across" />
+    </multiply>
+    <invert name="v_dome2" type="float">
+      <input name="in" type="float" nodename="v_sq" />
+    </invert>
+    <max name="v_dome_positive" type="float">
+      <input name="in1" type="float" nodename="v_dome2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="v_dome" type="float">
+      <input name="in" type="float" nodename="v_dome_positive" />
+    </sqrt>
+    <subtract name="h_center" type="float">
+      <input name="in1" type="float" nodename="cell_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <add name="h_phase_raw" type="float">
+      <input name="in1" type="float" nodename="h_center" />
+      <input name="in2" type="float" nodename="parity" />
+    </add>
+    <multiply name="h_phase" type="float">
+      <input name="in1" type="float" nodename="h_phase_raw" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="h_wave" type="float">
+      <input name="in" type="float" nodename="h_phase" />
+    </cos>
+    <multiply name="h_arch" type="float">
+      <input name="in1" type="float" nodename="h_wave" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="v_center" type="float">
+      <input name="in1" type="float" nodename="cell_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <invert name="parity_inv" type="float">
+      <input name="in" type="float" nodename="parity" />
+    </invert>
+    <add name="v_phase_raw" type="float">
+      <input name="in1" type="float" nodename="v_center" />
+      <input name="in2" type="float" nodename="parity_inv" />
+    </add>
+    <multiply name="v_phase" type="float">
+      <input name="in1" type="float" nodename="v_phase_raw" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="v_wave" type="float">
+      <input name="in" type="float" nodename="v_phase" />
+    </cos>
+    <multiply name="v_arch" type="float">
+      <input name="in1" type="float" nodename="v_wave" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="h_round" type="float">
+      <input name="in1" type="float" nodename="h_dome" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="h_lift" type="float">
+      <input name="in1" type="float" nodename="h_arch" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="h_raw" type="float">
+      <input name="in1" type="float" nodename="h_round" />
+      <input name="in2" type="float" nodename="h_lift" />
+    </add>
+    <multiply name="h_height" type="float">
+      <input name="in1" type="float" nodename="h_raw" />
+      <input name="in2" type="float" nodename="in_h" />
+    </multiply>
+    <multiply name="v_round" type="float">
+      <input name="in1" type="float" nodename="v_dome" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="v_lift" type="float">
+      <input name="in1" type="float" nodename="v_arch" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="v_raw" type="float">
+      <input name="in1" type="float" nodename="v_round" />
+      <input name="in2" type="float" nodename="v_lift" />
+    </add>
+    <multiply name="v_height" type="float">
+      <input name="in1" type="float" nodename="v_raw" />
+      <input name="in2" type="float" nodename="in_v" />
+    </multiply>
+    <ifgreater name="horizontal_on_top" type="float">
+      <input name="value1" type="float" nodename="h_height" />
+      <input name="value2" type="float" nodename="v_height" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <max name="strand_mask" type="float">
+      <input name="in1" type="float" nodename="in_h" />
+      <input name="in2" type="float" nodename="in_v" />
+    </max>
+    <multiply name="fibre_h_across" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outy" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_h_uv" type="vector2">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" nodename="fibre_h_across" />
+    </combine2>
+    <multiply name="fibre_h_scaled" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_h_uv" />
+      <input name="in2" type="vector2" value="0.6, 1" />
+    </multiply>
+    <noise2d name="fibre_h" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_h_scaled" />
+    </noise2d>
+    <multiply name="fibre_v_across" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_v_uv" type="vector2">
+      <input name="in1" type="float" nodename="fibre_v_across" />
+      <input name="in2" type="float" nodename="weave_parts" output="outy" />
+    </combine2>
+    <multiply name="fibre_v_scaled" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_v_uv" />
+      <input name="in2" type="vector2" value="1, 0.6" />
+    </multiply>
+    <noise2d name="fibre_v" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_v_scaled" />
+    </noise2d>
+    <mix name="fibre" type="float">
+      <input name="bg" type="float" nodename="fibre_v" />
+      <input name="fg" type="float" nodename="fibre_h" />
+      <input name="mix" type="float" nodename="horizontal_on_top" />
+    </mix>
+    <floor name="node_row" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outy" />
+    </floor>
+    <combine2 name="node_h_seed" type="vector2">
+      <input name="in1" type="float" nodename="node_row" />
+      <input name="in2" type="float" value="3" />
+    </combine2>
+    <cellnoise2d name="node_h_random" type="float">
+      <input name="texcoord" type="vector2" nodename="node_h_seed" />
+    </cellnoise2d>
+    <multiply name="node_h_offset" type="float">
+      <input name="in1" type="float" nodename="node_h_random" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <multiply name="node_h_phase" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_h_seeded" type="float">
+      <input name="in1" type="float" nodename="node_h_phase" />
+      <input name="in2" type="float" nodename="node_h_offset" />
+    </add>
+    <floor name="node_h_fraction_floor" type="float">
+      <input name="in" type="float" nodename="node_h_seeded" />
+    </floor>
+    <subtract name="node_h_fraction" type="float">
+      <input name="in1" type="float" nodename="node_h_seeded" />
+      <input name="in2" type="float" nodename="node_h_fraction_floor" />
+    </subtract>
+    <subtract name="node_h_center" type="float">
+      <input name="in1" type="float" nodename="node_h_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_h_distance" type="float">
+      <input name="in" type="float" nodename="node_h_center" />
+    </absval>
+    <smoothstep name="node_h_ramp" type="float">
+      <input name="in" type="float" nodename="node_h_distance" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_h" type="float">
+      <input name="in" type="float" nodename="node_h_ramp" />
+    </invert>
+    <floor name="node_column" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outx" />
+    </floor>
+    <combine2 name="node_v_seed" type="vector2">
+      <input name="in1" type="float" nodename="node_column" />
+      <input name="in2" type="float" value="7" />
+    </combine2>
+    <cellnoise2d name="node_v_random" type="float">
+      <input name="texcoord" type="vector2" nodename="node_v_seed" />
+    </cellnoise2d>
+    <multiply name="node_v_phase" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outy" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_v_seeded" type="float">
+      <input name="in1" type="float" nodename="node_v_phase" />
+      <input name="in2" type="float" nodename="node_v_random" />
+    </add>
+    <floor name="node_v_fraction_floor" type="float">
+      <input name="in" type="float" nodename="node_v_seeded" />
+    </floor>
+    <subtract name="node_v_fraction" type="float">
+      <input name="in1" type="float" nodename="node_v_seeded" />
+      <input name="in2" type="float" nodename="node_v_fraction_floor" />
+    </subtract>
+    <subtract name="node_v_center" type="float">
+      <input name="in1" type="float" nodename="node_v_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_v_distance" type="float">
+      <input name="in" type="float" nodename="node_v_center" />
+    </absval>
+    <smoothstep name="node_v_ramp" type="float">
+      <input name="in" type="float" nodename="node_v_distance" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_v" type="float">
+      <input name="in" type="float" nodename="node_v_ramp" />
+    </invert>
+    <mix name="nodes" type="float">
+      <input name="bg" type="float" nodename="node_v" />
+      <input name="fg" type="float" nodename="node_h" />
+      <input name="mix" type="float" nodename="horizontal_on_top" />
+    </mix>
+    <floor name="strand_v_index" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outx" />
+    </floor>
+    <combine2 name="strand_v_seed" type="vector2">
+      <input name="in1" type="float" nodename="strand_v_index" />
+      <input name="in2" type="float" value="11" />
+    </combine2>
+    <cellnoise2d name="strand_v_random" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_v_seed" />
+    </cellnoise2d>
+    <floor name="strand_h_index" type="float">
+      <input name="in" type="float" nodename="weave_parts" output="outy" />
+    </floor>
+    <combine2 name="strand_h_seed" type="vector2">
+      <input name="in1" type="float" nodename="strand_h_index" />
+      <input name="in2" type="float" value="5" />
+    </combine2>
+    <cellnoise2d name="strand_h_random" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_h_seed" />
+    </cellnoise2d>
+    <mix name="strand_random" type="float">
+      <input name="bg" type="float" nodename="strand_v_random" />
+      <input name="fg" type="float" nodename="strand_h_random" />
+      <input name="mix" type="float" nodename="horizontal_on_top" />
+    </mix>
+    <max name="weave_height" type="float">
+      <input name="in1" type="float" nodename="h_height" />
+      <input name="in2" type="float" nodename="v_height" />
+    </max>
+    <multiply name="fibre_height" type="float">
+      <input name="in1" type="float" nodename="fibre" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="node_height" type="float">
+      <input name="in1" type="float" nodename="nodes" />
+      <input name="in2" type="float" value="-0.1" />
+    </multiply>
+    <add name="cane_detail" type="float">
+      <input name="in1" type="float" nodename="fibre_height" />
+      <input name="in2" type="float" nodename="node_height" />
+    </add>
+    <multiply name="cane_detail_masked" type="float">
+      <input name="in1" type="float" nodename="cane_detail" />
+      <input name="in2" type="float" nodename="strand_mask" />
+    </multiply>
+    <add name="cane_height" type="float">
+      <input name="in1" type="float" nodename="weave_height" />
+      <input name="in2" type="float" nodename="cane_detail_masked" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="weave_uv" />
+      <input name="in2" type="vector2" value="0.006, 0" />
+    </add>
+    <separate2 name="weave_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="column_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outx" />
+    </floor>
+    <floor name="row_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outy" />
+    </floor>
+    <subtract name="cell_u_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="column_u" />
+    </subtract>
+    <subtract name="cell_v_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="row_u" />
+    </subtract>
+    <add name="cell_sum_u" type="float">
+      <input name="in1" type="float" nodename="column_u" />
+      <input name="in2" type="float" nodename="row_u" />
+    </add>
+    <modulo name="parity_u" type="float">
+      <input name="in1" type="float" nodename="cell_sum_u" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <subtract name="h_offset_u" type="float">
+      <input name="in1" type="float" nodename="cell_v_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="h_abs_u" type="float">
+      <input name="in" type="float" nodename="h_offset_u" />
+    </absval>
+    <multiply name="half_width_h_u" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="h_across_u" type="float">
+      <input name="in1" type="float" nodename="h_abs_u" />
+      <input name="in2" type="float" nodename="half_width_h_u" />
+    </divide>
+    <subtract name="v_offset_u" type="float">
+      <input name="in1" type="float" nodename="cell_u_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="v_abs_u" type="float">
+      <input name="in" type="float" nodename="v_offset_u" />
+    </absval>
+    <multiply name="half_width_v_u" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="v_across_u" type="float">
+      <input name="in1" type="float" nodename="v_abs_u" />
+      <input name="in2" type="float" nodename="half_width_v_u" />
+    </divide>
+    <smoothstep name="h_edge_u" type="float">
+      <input name="in" type="float" nodename="h_across_u" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_h_u" type="float">
+      <input name="in" type="float" nodename="h_edge_u" />
+    </invert>
+    <smoothstep name="v_edge_u" type="float">
+      <input name="in" type="float" nodename="v_across_u" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_v_u" type="float">
+      <input name="in" type="float" nodename="v_edge_u" />
+    </invert>
+    <multiply name="h_sq_u" type="float">
+      <input name="in1" type="float" nodename="h_across_u" />
+      <input name="in2" type="float" nodename="h_across_u" />
+    </multiply>
+    <invert name="h_dome2_u" type="float">
+      <input name="in" type="float" nodename="h_sq_u" />
+    </invert>
+    <max name="h_dome_positive_u" type="float">
+      <input name="in1" type="float" nodename="h_dome2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="h_dome_u" type="float">
+      <input name="in" type="float" nodename="h_dome_positive_u" />
+    </sqrt>
+    <multiply name="v_sq_u" type="float">
+      <input name="in1" type="float" nodename="v_across_u" />
+      <input name="in2" type="float" nodename="v_across_u" />
+    </multiply>
+    <invert name="v_dome2_u" type="float">
+      <input name="in" type="float" nodename="v_sq_u" />
+    </invert>
+    <max name="v_dome_positive_u" type="float">
+      <input name="in1" type="float" nodename="v_dome2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="v_dome_u" type="float">
+      <input name="in" type="float" nodename="v_dome_positive_u" />
+    </sqrt>
+    <subtract name="h_center_u" type="float">
+      <input name="in1" type="float" nodename="cell_u_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <add name="h_phase_raw_u" type="float">
+      <input name="in1" type="float" nodename="h_center_u" />
+      <input name="in2" type="float" nodename="parity_u" />
+    </add>
+    <multiply name="h_phase_u" type="float">
+      <input name="in1" type="float" nodename="h_phase_raw_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="h_wave_u" type="float">
+      <input name="in" type="float" nodename="h_phase_u" />
+    </cos>
+    <multiply name="h_arch_u" type="float">
+      <input name="in1" type="float" nodename="h_wave_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="v_center_u" type="float">
+      <input name="in1" type="float" nodename="cell_v_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <invert name="parity_inv_u" type="float">
+      <input name="in" type="float" nodename="parity_u" />
+    </invert>
+    <add name="v_phase_raw_u" type="float">
+      <input name="in1" type="float" nodename="v_center_u" />
+      <input name="in2" type="float" nodename="parity_inv_u" />
+    </add>
+    <multiply name="v_phase_u" type="float">
+      <input name="in1" type="float" nodename="v_phase_raw_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="v_wave_u" type="float">
+      <input name="in" type="float" nodename="v_phase_u" />
+    </cos>
+    <multiply name="v_arch_u" type="float">
+      <input name="in1" type="float" nodename="v_wave_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="h_round_u" type="float">
+      <input name="in1" type="float" nodename="h_dome_u" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="h_lift_u" type="float">
+      <input name="in1" type="float" nodename="h_arch_u" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="h_raw_u" type="float">
+      <input name="in1" type="float" nodename="h_round_u" />
+      <input name="in2" type="float" nodename="h_lift_u" />
+    </add>
+    <multiply name="h_height_u" type="float">
+      <input name="in1" type="float" nodename="h_raw_u" />
+      <input name="in2" type="float" nodename="in_h_u" />
+    </multiply>
+    <multiply name="v_round_u" type="float">
+      <input name="in1" type="float" nodename="v_dome_u" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="v_lift_u" type="float">
+      <input name="in1" type="float" nodename="v_arch_u" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="v_raw_u" type="float">
+      <input name="in1" type="float" nodename="v_round_u" />
+      <input name="in2" type="float" nodename="v_lift_u" />
+    </add>
+    <multiply name="v_height_u" type="float">
+      <input name="in1" type="float" nodename="v_raw_u" />
+      <input name="in2" type="float" nodename="in_v_u" />
+    </multiply>
+    <ifgreater name="horizontal_on_top_u" type="float">
+      <input name="value1" type="float" nodename="h_height_u" />
+      <input name="value2" type="float" nodename="v_height_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <max name="strand_mask_u" type="float">
+      <input name="in1" type="float" nodename="in_h_u" />
+      <input name="in2" type="float" nodename="in_v_u" />
+    </max>
+    <multiply name="fibre_h_across_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outy" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_h_uv_u" type="vector2">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="fibre_h_across_u" />
+    </combine2>
+    <multiply name="fibre_h_scaled_u" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_h_uv_u" />
+      <input name="in2" type="vector2" value="0.6, 1" />
+    </multiply>
+    <noise2d name="fibre_h_u" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_h_scaled_u" />
+    </noise2d>
+    <multiply name="fibre_v_across_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_v_uv_u" type="vector2">
+      <input name="in1" type="float" nodename="fibre_v_across_u" />
+      <input name="in2" type="float" nodename="weave_parts_u" output="outy" />
+    </combine2>
+    <multiply name="fibre_v_scaled_u" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_v_uv_u" />
+      <input name="in2" type="vector2" value="1, 0.6" />
+    </multiply>
+    <noise2d name="fibre_v_u" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_v_scaled_u" />
+    </noise2d>
+    <mix name="fibre_u" type="float">
+      <input name="bg" type="float" nodename="fibre_v_u" />
+      <input name="fg" type="float" nodename="fibre_h_u" />
+      <input name="mix" type="float" nodename="horizontal_on_top_u" />
+    </mix>
+    <floor name="node_row_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outy" />
+    </floor>
+    <combine2 name="node_h_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="node_row_u" />
+      <input name="in2" type="float" value="3" />
+    </combine2>
+    <cellnoise2d name="node_h_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="node_h_seed_u" />
+    </cellnoise2d>
+    <multiply name="node_h_offset_u" type="float">
+      <input name="in1" type="float" nodename="node_h_random_u" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <multiply name="node_h_phase_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_h_seeded_u" type="float">
+      <input name="in1" type="float" nodename="node_h_phase_u" />
+      <input name="in2" type="float" nodename="node_h_offset_u" />
+    </add>
+    <floor name="node_h_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="node_h_seeded_u" />
+    </floor>
+    <subtract name="node_h_fraction_u" type="float">
+      <input name="in1" type="float" nodename="node_h_seeded_u" />
+      <input name="in2" type="float" nodename="node_h_fraction_floor_u" />
+    </subtract>
+    <subtract name="node_h_center_u" type="float">
+      <input name="in1" type="float" nodename="node_h_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_h_distance_u" type="float">
+      <input name="in" type="float" nodename="node_h_center_u" />
+    </absval>
+    <smoothstep name="node_h_ramp_u" type="float">
+      <input name="in" type="float" nodename="node_h_distance_u" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_h_u" type="float">
+      <input name="in" type="float" nodename="node_h_ramp_u" />
+    </invert>
+    <floor name="node_column_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outx" />
+    </floor>
+    <combine2 name="node_v_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="node_column_u" />
+      <input name="in2" type="float" value="7" />
+    </combine2>
+    <cellnoise2d name="node_v_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="node_v_seed_u" />
+    </cellnoise2d>
+    <multiply name="node_v_phase_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outy" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_v_seeded_u" type="float">
+      <input name="in1" type="float" nodename="node_v_phase_u" />
+      <input name="in2" type="float" nodename="node_v_random_u" />
+    </add>
+    <floor name="node_v_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="node_v_seeded_u" />
+    </floor>
+    <subtract name="node_v_fraction_u" type="float">
+      <input name="in1" type="float" nodename="node_v_seeded_u" />
+      <input name="in2" type="float" nodename="node_v_fraction_floor_u" />
+    </subtract>
+    <subtract name="node_v_center_u" type="float">
+      <input name="in1" type="float" nodename="node_v_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_v_distance_u" type="float">
+      <input name="in" type="float" nodename="node_v_center_u" />
+    </absval>
+    <smoothstep name="node_v_ramp_u" type="float">
+      <input name="in" type="float" nodename="node_v_distance_u" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_v_u" type="float">
+      <input name="in" type="float" nodename="node_v_ramp_u" />
+    </invert>
+    <mix name="nodes_u" type="float">
+      <input name="bg" type="float" nodename="node_v_u" />
+      <input name="fg" type="float" nodename="node_h_u" />
+      <input name="mix" type="float" nodename="horizontal_on_top_u" />
+    </mix>
+    <floor name="strand_v_index_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outx" />
+    </floor>
+    <combine2 name="strand_v_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="strand_v_index_u" />
+      <input name="in2" type="float" value="11" />
+    </combine2>
+    <cellnoise2d name="strand_v_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_v_seed_u" />
+    </cellnoise2d>
+    <floor name="strand_h_index_u" type="float">
+      <input name="in" type="float" nodename="weave_parts_u" output="outy" />
+    </floor>
+    <combine2 name="strand_h_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="strand_h_index_u" />
+      <input name="in2" type="float" value="5" />
+    </combine2>
+    <cellnoise2d name="strand_h_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_h_seed_u" />
+    </cellnoise2d>
+    <mix name="strand_random_u" type="float">
+      <input name="bg" type="float" nodename="strand_v_random_u" />
+      <input name="fg" type="float" nodename="strand_h_random_u" />
+      <input name="mix" type="float" nodename="horizontal_on_top_u" />
+    </mix>
+    <max name="weave_height_u" type="float">
+      <input name="in1" type="float" nodename="h_height_u" />
+      <input name="in2" type="float" nodename="v_height_u" />
+    </max>
+    <multiply name="fibre_height_u" type="float">
+      <input name="in1" type="float" nodename="fibre_u" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="node_height_u" type="float">
+      <input name="in1" type="float" nodename="nodes_u" />
+      <input name="in2" type="float" value="-0.1" />
+    </multiply>
+    <add name="cane_detail_u" type="float">
+      <input name="in1" type="float" nodename="fibre_height_u" />
+      <input name="in2" type="float" nodename="node_height_u" />
+    </add>
+    <multiply name="cane_detail_masked_u" type="float">
+      <input name="in1" type="float" nodename="cane_detail_u" />
+      <input name="in2" type="float" nodename="strand_mask_u" />
+    </multiply>
+    <add name="cane_height_u" type="float">
+      <input name="in1" type="float" nodename="weave_height_u" />
+      <input name="in2" type="float" nodename="cane_detail_masked_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="weave_uv" />
+      <input name="in2" type="vector2" value="0, 0.006" />
+    </add>
+    <separate2 name="weave_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="column_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outx" />
+    </floor>
+    <floor name="row_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outy" />
+    </floor>
+    <subtract name="cell_u_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="column_v" />
+    </subtract>
+    <subtract name="cell_v_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="row_v" />
+    </subtract>
+    <add name="cell_sum_v" type="float">
+      <input name="in1" type="float" nodename="column_v" />
+      <input name="in2" type="float" nodename="row_v" />
+    </add>
+    <modulo name="parity_v" type="float">
+      <input name="in1" type="float" nodename="cell_sum_v" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <subtract name="h_offset_v" type="float">
+      <input name="in1" type="float" nodename="cell_v_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="h_abs_v" type="float">
+      <input name="in" type="float" nodename="h_offset_v" />
+    </absval>
+    <multiply name="half_width_h_v" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="h_across_v" type="float">
+      <input name="in1" type="float" nodename="h_abs_v" />
+      <input name="in2" type="float" nodename="half_width_h_v" />
+    </divide>
+    <subtract name="v_offset_v" type="float">
+      <input name="in1" type="float" nodename="cell_u_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="v_abs_v" type="float">
+      <input name="in" type="float" nodename="v_offset_v" />
+    </absval>
+    <multiply name="half_width_v_v" type="float">
+      <input name="in1" type="float" interfacename="strand_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <divide name="v_across_v" type="float">
+      <input name="in1" type="float" nodename="v_abs_v" />
+      <input name="in2" type="float" nodename="half_width_v_v" />
+    </divide>
+    <smoothstep name="h_edge_v" type="float">
+      <input name="in" type="float" nodename="h_across_v" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_h_v" type="float">
+      <input name="in" type="float" nodename="h_edge_v" />
+    </invert>
+    <smoothstep name="v_edge_v" type="float">
+      <input name="in" type="float" nodename="v_across_v" />
+      <input name="low" type="float" value="0.85" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="in_v_v" type="float">
+      <input name="in" type="float" nodename="v_edge_v" />
+    </invert>
+    <multiply name="h_sq_v" type="float">
+      <input name="in1" type="float" nodename="h_across_v" />
+      <input name="in2" type="float" nodename="h_across_v" />
+    </multiply>
+    <invert name="h_dome2_v" type="float">
+      <input name="in" type="float" nodename="h_sq_v" />
+    </invert>
+    <max name="h_dome_positive_v" type="float">
+      <input name="in1" type="float" nodename="h_dome2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="h_dome_v" type="float">
+      <input name="in" type="float" nodename="h_dome_positive_v" />
+    </sqrt>
+    <multiply name="v_sq_v" type="float">
+      <input name="in1" type="float" nodename="v_across_v" />
+      <input name="in2" type="float" nodename="v_across_v" />
+    </multiply>
+    <invert name="v_dome2_v" type="float">
+      <input name="in" type="float" nodename="v_sq_v" />
+    </invert>
+    <max name="v_dome_positive_v" type="float">
+      <input name="in1" type="float" nodename="v_dome2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="v_dome_v" type="float">
+      <input name="in" type="float" nodename="v_dome_positive_v" />
+    </sqrt>
+    <subtract name="h_center_v" type="float">
+      <input name="in1" type="float" nodename="cell_u_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <add name="h_phase_raw_v" type="float">
+      <input name="in1" type="float" nodename="h_center_v" />
+      <input name="in2" type="float" nodename="parity_v" />
+    </add>
+    <multiply name="h_phase_v" type="float">
+      <input name="in1" type="float" nodename="h_phase_raw_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="h_wave_v" type="float">
+      <input name="in" type="float" nodename="h_phase_v" />
+    </cos>
+    <multiply name="h_arch_v" type="float">
+      <input name="in1" type="float" nodename="h_wave_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <subtract name="v_center_v" type="float">
+      <input name="in1" type="float" nodename="cell_v_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <invert name="parity_inv_v" type="float">
+      <input name="in" type="float" nodename="parity_v" />
+    </invert>
+    <add name="v_phase_raw_v" type="float">
+      <input name="in1" type="float" nodename="v_center_v" />
+      <input name="in2" type="float" nodename="parity_inv_v" />
+    </add>
+    <multiply name="v_phase_v" type="float">
+      <input name="in1" type="float" nodename="v_phase_raw_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="v_wave_v" type="float">
+      <input name="in" type="float" nodename="v_phase_v" />
+    </cos>
+    <multiply name="v_arch_v" type="float">
+      <input name="in1" type="float" nodename="v_wave_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <multiply name="h_round_v" type="float">
+      <input name="in1" type="float" nodename="h_dome_v" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="h_lift_v" type="float">
+      <input name="in1" type="float" nodename="h_arch_v" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="h_raw_v" type="float">
+      <input name="in1" type="float" nodename="h_round_v" />
+      <input name="in2" type="float" nodename="h_lift_v" />
+    </add>
+    <multiply name="h_height_v" type="float">
+      <input name="in1" type="float" nodename="h_raw_v" />
+      <input name="in2" type="float" nodename="in_h_v" />
+    </multiply>
+    <multiply name="v_round_v" type="float">
+      <input name="in1" type="float" nodename="v_dome_v" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="v_lift_v" type="float">
+      <input name="in1" type="float" nodename="v_arch_v" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <add name="v_raw_v" type="float">
+      <input name="in1" type="float" nodename="v_round_v" />
+      <input name="in2" type="float" nodename="v_lift_v" />
+    </add>
+    <multiply name="v_height_v" type="float">
+      <input name="in1" type="float" nodename="v_raw_v" />
+      <input name="in2" type="float" nodename="in_v_v" />
+    </multiply>
+    <ifgreater name="horizontal_on_top_v" type="float">
+      <input name="value1" type="float" nodename="h_height_v" />
+      <input name="value2" type="float" nodename="v_height_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <max name="strand_mask_v" type="float">
+      <input name="in1" type="float" nodename="in_h_v" />
+      <input name="in2" type="float" nodename="in_v_v" />
+    </max>
+    <multiply name="fibre_h_across_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outy" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_h_uv_v" type="vector2">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="fibre_h_across_v" />
+    </combine2>
+    <multiply name="fibre_h_scaled_v" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_h_uv_v" />
+      <input name="in2" type="vector2" value="0.6, 1" />
+    </multiply>
+    <noise2d name="fibre_h_v" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_h_scaled_v" />
+    </noise2d>
+    <multiply name="fibre_v_across_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" value="30" />
+    </multiply>
+    <combine2 name="fibre_v_uv_v" type="vector2">
+      <input name="in1" type="float" nodename="fibre_v_across_v" />
+      <input name="in2" type="float" nodename="weave_parts_v" output="outy" />
+    </combine2>
+    <multiply name="fibre_v_scaled_v" type="vector2">
+      <input name="in1" type="vector2" nodename="fibre_v_uv_v" />
+      <input name="in2" type="vector2" value="1, 0.6" />
+    </multiply>
+    <noise2d name="fibre_v_v" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_v_scaled_v" />
+    </noise2d>
+    <mix name="fibre_v_2" type="float">
+      <input name="bg" type="float" nodename="fibre_v_v" />
+      <input name="fg" type="float" nodename="fibre_h_v" />
+      <input name="mix" type="float" nodename="horizontal_on_top_v" />
+    </mix>
+    <floor name="node_row_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outy" />
+    </floor>
+    <combine2 name="node_h_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="node_row_v" />
+      <input name="in2" type="float" value="3" />
+    </combine2>
+    <cellnoise2d name="node_h_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="node_h_seed_v" />
+    </cellnoise2d>
+    <multiply name="node_h_offset_v" type="float">
+      <input name="in1" type="float" nodename="node_h_random_v" />
+      <input name="in2" type="float" value="1" />
+    </multiply>
+    <multiply name="node_h_phase_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_h_seeded_v" type="float">
+      <input name="in1" type="float" nodename="node_h_phase_v" />
+      <input name="in2" type="float" nodename="node_h_offset_v" />
+    </add>
+    <floor name="node_h_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="node_h_seeded_v" />
+    </floor>
+    <subtract name="node_h_fraction_v" type="float">
+      <input name="in1" type="float" nodename="node_h_seeded_v" />
+      <input name="in2" type="float" nodename="node_h_fraction_floor_v" />
+    </subtract>
+    <subtract name="node_h_center_v" type="float">
+      <input name="in1" type="float" nodename="node_h_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_h_distance_v" type="float">
+      <input name="in" type="float" nodename="node_h_center_v" />
+    </absval>
+    <smoothstep name="node_h_ramp_v" type="float">
+      <input name="in" type="float" nodename="node_h_distance_v" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_h_v" type="float">
+      <input name="in" type="float" nodename="node_h_ramp_v" />
+    </invert>
+    <floor name="node_column_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outx" />
+    </floor>
+    <combine2 name="node_v_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="node_column_v" />
+      <input name="in2" type="float" value="7" />
+    </combine2>
+    <cellnoise2d name="node_v_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="node_v_seed_v" />
+    </cellnoise2d>
+    <multiply name="node_v_phase_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outy" />
+      <input name="in2" type="float" value="0.27" />
+    </multiply>
+    <add name="node_v_seeded_v" type="float">
+      <input name="in1" type="float" nodename="node_v_phase_v" />
+      <input name="in2" type="float" nodename="node_v_random_v" />
+    </add>
+    <floor name="node_v_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="node_v_seeded_v" />
+    </floor>
+    <subtract name="node_v_fraction_v" type="float">
+      <input name="in1" type="float" nodename="node_v_seeded_v" />
+      <input name="in2" type="float" nodename="node_v_fraction_floor_v" />
+    </subtract>
+    <subtract name="node_v_center_v" type="float">
+      <input name="in1" type="float" nodename="node_v_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="node_v_distance_v" type="float">
+      <input name="in" type="float" nodename="node_v_center_v" />
+    </absval>
+    <smoothstep name="node_v_ramp_v" type="float">
+      <input name="in" type="float" nodename="node_v_distance_v" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.06" />
+    </smoothstep>
+    <invert name="node_v_v" type="float">
+      <input name="in" type="float" nodename="node_v_ramp_v" />
+    </invert>
+    <mix name="nodes_v" type="float">
+      <input name="bg" type="float" nodename="node_v_v" />
+      <input name="fg" type="float" nodename="node_h_v" />
+      <input name="mix" type="float" nodename="horizontal_on_top_v" />
+    </mix>
+    <floor name="strand_v_index_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outx" />
+    </floor>
+    <combine2 name="strand_v_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="strand_v_index_v" />
+      <input name="in2" type="float" value="11" />
+    </combine2>
+    <cellnoise2d name="strand_v_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_v_seed_v" />
+    </cellnoise2d>
+    <floor name="strand_h_index_v" type="float">
+      <input name="in" type="float" nodename="weave_parts_v" output="outy" />
+    </floor>
+    <combine2 name="strand_h_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="strand_h_index_v" />
+      <input name="in2" type="float" value="5" />
+    </combine2>
+    <cellnoise2d name="strand_h_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="strand_h_seed_v" />
+    </cellnoise2d>
+    <mix name="strand_random_v" type="float">
+      <input name="bg" type="float" nodename="strand_v_random_v" />
+      <input name="fg" type="float" nodename="strand_h_random_v" />
+      <input name="mix" type="float" nodename="horizontal_on_top_v" />
+    </mix>
+    <max name="weave_height_v" type="float">
+      <input name="in1" type="float" nodename="h_height_v" />
+      <input name="in2" type="float" nodename="v_height_v" />
+    </max>
+    <multiply name="fibre_height_v" type="float">
+      <input name="in1" type="float" nodename="fibre_v_2" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="node_height_v" type="float">
+      <input name="in1" type="float" nodename="nodes_v" />
+      <input name="in2" type="float" value="-0.1" />
+    </multiply>
+    <add name="cane_detail_v" type="float">
+      <input name="in1" type="float" nodename="fibre_height_v" />
+      <input name="in2" type="float" nodename="node_height_v" />
+    </add>
+    <multiply name="cane_detail_masked_v" type="float">
+      <input name="in1" type="float" nodename="cane_detail_v" />
+      <input name="in2" type="float" nodename="strand_mask_v" />
+    </multiply>
+    <add name="cane_height_v" type="float">
+      <input name="in1" type="float" nodename="weave_height_v" />
+      <input name="in2" type="float" nodename="cane_detail_masked_v" />
+    </add>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="cane_height_u" />
+      <input name="in2" type="float" nodename="cane_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" value="-16.666667" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="cane_height_v" />
+      <input name="in2" type="float" nodename="cane_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" value="-16.666667" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+    <remap name="height_shade" type="float">
+      <input name="in" type="float" nodename="weave_height" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1.35" />
+      <input name="outlow" type="float" value="0.35" />
+      <input name="outhigh" type="float" value="1.05" />
+    </remap>
+    <remap name="strand_tone" type="float">
+      <input name="in" type="float" nodename="strand_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <remap name="fibre_tone" type="float">
+      <input name="in" type="float" nodename="fibre" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.85" />
+      <input name="outhigh" type="float" value="1.12" />
+    </remap>
+    <multiply name="cane_tone" type="float">
+      <input name="in1" type="float" nodename="strand_tone" />
+      <input name="in2" type="float" nodename="fibre_tone" />
+    </multiply>
+    <multiply name="cane_toned" type="color3">
+      <input name="in1" type="color3" interfacename="cane_color" />
+      <input name="in2" type="float" nodename="cane_tone" />
+    </multiply>
+    <multiply name="cane_shaded" type="color3">
+      <input name="in1" type="color3" nodename="cane_toned" />
+      <input name="in2" type="float" nodename="height_shade" />
+    </multiply>
+    <mix name="cane_noded" type="color3">
+      <input name="bg" type="color3" nodename="cane_shaded" />
+      <input name="fg" type="color3" interfacename="node_color" />
+      <input name="mix" type="float" nodename="nodes" />
+    </mix>
+    <smoothstep name="dive_shade" type="float">
+      <input name="in" type="float" nodename="weave_height" />
+      <input name="low" type="float" value="0.15" />
+      <input name="high" type="float" value="0.75" />
+    </smoothstep>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="shadow_color" />
+      <input name="fg" type="color3" nodename="cane_noded" />
+      <input name="mix" type="float" nodename="dive_shade" />
+    </mix>
+    <smoothstep name="opacity" type="float">
+      <input name="in" type="float" nodename="strand_mask" />
+      <input name="low" type="float" value="0.3" />
+      <input name="high" type="float" value="0.7" />
+    </smoothstep>
+    <remap name="roughness" type="float">
+      <input name="in" type="float" nodename="fibre" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.25" />
+      <input name="outhigh" type="float" value="0.4" />
+    </remap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+    <output name="opacity_out" type="float" nodename="opacity" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_rattan" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_rattan" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" nodegraph="NG_rattan" output="roughness_out" />
+    <input name="coat_weight" type="float" value="0.3" />
+    <input name="coat_roughness" type="float" value="0.25" />
+    <input name="geometry_opacity" type="float" nodegraph="NG_rattan" output="opacity_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_rattan" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Rattan" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_rattan" />
+  </surfacematerial>
+</materialx>

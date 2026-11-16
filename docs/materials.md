@@ -518,22 +518,29 @@ or selecting another target stops the pending import and keeps the existing
 material. Download or import failures also keep the existing material.
 
 The **MaterialX** preset category imports procedural samples: flake car paint,
-weathered steel, varnished wood, marble, terrazzo, leather, tartan, cobblestone
-with height displacement, zellige tile, wax, hammered copper, carbon fibre,
-Damascus steel, kintsugi, heat-tinted titanium, abalone, hex plating, a brick
-wall with height displacement, wet asphalt, chipped paint, a Fair Isle knit,
-perforated metal with cut-out holes, a circuit board, thin-walled stained
-glass, rain on glass, agate, guilloché enamel, dragon scales, holographic
-glitter and a gas giant. Ten samples emit light: cooling lava, a hex panel with
-glowing seams, embers, hot forged steel, a sun, neon tubes, an LED matrix,
-office windows at night, a nebula marble and bioluminescent skin. They use only
-graph nodes and no images, so they need WebGPU to show their patterns; WebGL 2
-renders their constant fallback. Wood,
-stone, metal, glass, paint, lava and ember patterns use object-space position
-and follow the model's size; the woven, knitted, tiled, plated, perforated,
-scaled, LED, neon and window ones use UV0 and expose their repeat count. The
-gas giant, the guilloché and the hot steel gradient are laid out along or
-around object Y.
+weathered, galvanized and riveted steel, anodized aluminium, aircraft skin,
+patina bronze, varnished wood, cork, marble, terrazzo, exposed concrete, mossy
+stone with height displacement, lichen, pebbled, stitched saddle, quilted and
+woven leather, crocodile, suede, denim, silk satin, herringbone tweed, rattan
+with open gaps, tartan, cobblestone with height displacement, zellige tile, crackle glaze, wax,
+hammered copper, carbon fibre, Damascus steel, kintsugi, heat-tinted titanium,
+abalone, hex plating, a brick wall with height displacement, wet asphalt,
+chipped paint, a Fair Isle knit, perforated metal with cut-out holes, a circuit
+board, thin-walled stained glass, rain on glass, agate, guilloché enamel,
+dragon scales and holographic glitter. Seven samples emit light: cooling lava,
+a hex panel with glowing seams, embers, hot forged steel, neon tubes, an LED
+matrix and a nebula marble. They use only graph nodes and no images, so they
+need WebGPU to show their patterns; WebGL 2 renders their constant fallback.
+Wood, stone, metal, glass, glaze, cork, suede, lichen, moss, paint, lava and
+ember patterns and the saddle leather's seams use object-space position and
+follow the model's size; the woven, knitted, quilted, denim, satin, tweed,
+rattan, crocodile scales, mossy stone blocks, concrete form, tiled, plated,
+riveted, perforated, scaled, LED and neon ones use UV0 and expose their repeat
+count. The guilloché, the hot steel gradient and the anodized machining lines
+are laid out around object Y. Moss, verdigris, stains and rust runs take an
+**Up** input, object +Y by default; set it to `0, 0, 1` for a Z-up model. Runs
+that start at UV-placed rivets and tie holes follow Up through the mesh
+tangents whatever the UV orientation, and fade on level faces.
 
 The first material in the shallowest `.mtlx` document is used. Missing images
 use the node's default and produce a warning. Imported graphs, images and

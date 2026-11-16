@@ -1,0 +1,657 @@
+<?xml version="1.0"?>
+<!--
+  Patina bronze: OpenPBR cast bronze under weathering. A fractal casting
+  undulation with small pits sets the height: the high points are polished
+  back to bright metal, a dark brown patina covers the rest, and chalky
+  verdigris collects in low areas, on rain-facing surfaces and in streaks
+  running down, as a rough dielectric crust. The Up input (object +Y by
+  default) sets which way is up.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_patina_bronze">
+    <input name="bronze_color" type="color3" value="0.7, 0.45, 0.22" uiname="Bronze" />
+    <input name="brown_patina" type="color3" value="0.05, 0.028, 0.015" uiname="Brown patina" />
+    <input name="verdigris_color" type="color3" value="0.06, 0.155, 0.11" uiname="Verdigris" />
+    <input name="verdigris" type="float" value="0.45" uiname="Verdigris amount" uimin="0" uimax="1" />
+    <input name="polish" type="float" value="0.25" uiname="Polished highs" uimin="0" uimax="1" />
+    <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" interfacename="up" />
+    </normalize>
+    <dotproduct name="facing_up" type="float">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="cast_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <fractal3d name="cast" type="float">
+      <input name="position" type="vector3" nodename="cast_position" />
+      <input name="octaves" type="integer" value="6" />
+    </fractal3d>
+    <multiply name="pit_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="60" />
+    </multiply>
+    <worleynoise3d name="pits" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position" />
+    </worleynoise3d>
+    <separate2 name="pit_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="pits" />
+    </separate2>
+    <smoothstep name="pit_ramp" type="float">
+      <input name="in" type="float" nodename="pit_distances" output="outx" />
+      <input name="low" type="float" value="0.03" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <invert name="pit" type="float">
+      <input name="in" type="float" nodename="pit_ramp" />
+    </invert>
+    <multiply name="pit_depth" type="float">
+      <input name="in1" type="float" nodename="pit" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <subtract name="cast_height" type="float">
+      <input name="in1" type="float" nodename="cast" />
+      <input name="in2" type="float" nodename="pit_depth" />
+    </subtract>
+    <add name="tap_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.002, 0, 0" />
+    </add>
+    <multiply name="cast_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <fractal3d name="cast_x" type="float">
+      <input name="position" type="vector3" nodename="cast_position_x" />
+      <input name="octaves" type="integer" value="6" />
+    </fractal3d>
+    <multiply name="pit_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="60" />
+    </multiply>
+    <worleynoise3d name="pits_x" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_x" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_x" />
+    </separate2>
+    <smoothstep name="pit_ramp_x" type="float">
+      <input name="in" type="float" nodename="pit_distances_x" output="outx" />
+      <input name="low" type="float" value="0.03" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <invert name="pit_x" type="float">
+      <input name="in" type="float" nodename="pit_ramp_x" />
+    </invert>
+    <multiply name="pit_depth_x" type="float">
+      <input name="in1" type="float" nodename="pit_x" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <subtract name="cast_height_x" type="float">
+      <input name="in1" type="float" nodename="cast_x" />
+      <input name="in2" type="float" nodename="pit_depth_x" />
+    </subtract>
+    <add name="tap_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.002, 0" />
+    </add>
+    <multiply name="cast_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <fractal3d name="cast_y" type="float">
+      <input name="position" type="vector3" nodename="cast_position_y" />
+      <input name="octaves" type="integer" value="6" />
+    </fractal3d>
+    <multiply name="pit_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="60" />
+    </multiply>
+    <worleynoise3d name="pits_y" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_y" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_y" />
+    </separate2>
+    <smoothstep name="pit_ramp_y" type="float">
+      <input name="in" type="float" nodename="pit_distances_y" output="outx" />
+      <input name="low" type="float" value="0.03" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <invert name="pit_y" type="float">
+      <input name="in" type="float" nodename="pit_ramp_y" />
+    </invert>
+    <multiply name="pit_depth_y" type="float">
+      <input name="in1" type="float" nodename="pit_y" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <subtract name="cast_height_y" type="float">
+      <input name="in1" type="float" nodename="cast_y" />
+      <input name="in2" type="float" nodename="pit_depth_y" />
+    </subtract>
+    <add name="tap_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.002" />
+    </add>
+    <multiply name="cast_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="5" />
+    </multiply>
+    <fractal3d name="cast_z" type="float">
+      <input name="position" type="vector3" nodename="cast_position_z" />
+      <input name="octaves" type="integer" value="6" />
+    </fractal3d>
+    <multiply name="pit_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="60" />
+    </multiply>
+    <worleynoise3d name="pits_z" type="vector2">
+      <input name="position" type="vector3" nodename="pit_position_z" />
+    </worleynoise3d>
+    <separate2 name="pit_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="pits_z" />
+    </separate2>
+    <smoothstep name="pit_ramp_z" type="float">
+      <input name="in" type="float" nodename="pit_distances_z" output="outx" />
+      <input name="low" type="float" value="0.03" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <invert name="pit_z" type="float">
+      <input name="in" type="float" nodename="pit_ramp_z" />
+    </invert>
+    <multiply name="pit_depth_z" type="float">
+      <input name="in1" type="float" nodename="pit_z" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <subtract name="cast_height_z" type="float">
+      <input name="in1" type="float" nodename="cast_z" />
+      <input name="in2" type="float" nodename="pit_depth_z" />
+    </subtract>
+    <combine3 name="height_ahead" type="vector3">
+      <input name="in1" type="float" nodename="cast_height_x" />
+      <input name="in2" type="float" nodename="cast_height_y" />
+      <input name="in3" type="float" nodename="cast_height_z" />
+    </combine3>
+    <subtract name="height_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead" />
+      <input name="in2" type="float" nodename="cast_height" />
+    </subtract>
+    <multiply name="height_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta" />
+      <input name="in2" type="float" value="500" />
+    </multiply>
+
+    <!-- Verdigris collects in the low areas, on faces that catch rain and in streaks running down, and crusts over the surface. -->
+    <dotproduct name="streak_position_height" type="float">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="streak_position_across" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <multiply name="streak_position_along_extra" type="float">
+      <input name="in1" type="float" nodename="streak_position_height" />
+      <input name="in2" type="float" value="-7.8" />
+    </multiply>
+    <multiply name="streak_position_along" type="vector3">
+      <input name="in1" type="vector3" nodename="up_direction" />
+      <input name="in2" type="float" nodename="streak_position_along_extra" />
+    </multiply>
+    <add name="streak_position" type="vector3">
+      <input name="in1" type="vector3" nodename="streak_position_across" />
+      <input name="in2" type="vector3" nodename="streak_position_along" />
+    </add>
+    <noise3d name="streaks" type="float">
+      <input name="position" type="vector3" nodename="streak_position" />
+    </noise3d>
+    <multiply name="verdigris_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.6" />
+    </multiply>
+    <fractal3d name="verdigris_fractal" type="float">
+      <input name="position" type="vector3" nodename="verdigris_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <multiply name="low_areas" type="float">
+      <input name="in1" type="float" nodename="cast_height" />
+      <input name="in2" type="float" value="-0.5" />
+    </multiply>
+    <multiply name="streak_part" type="float">
+      <input name="in1" type="float" nodename="streaks" />
+      <input name="in2" type="float" value="1.1" />
+    </multiply>
+    <add name="low_streaked" type="float">
+      <input name="in1" type="float" nodename="low_areas" />
+      <input name="in2" type="float" nodename="streak_part" />
+    </add>
+    <multiply name="blotch_part" type="float">
+      <input name="in1" type="float" nodename="verdigris_fractal" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="green_raw" type="float">
+      <input name="in1" type="float" nodename="low_streaked" />
+      <input name="in2" type="float" nodename="blotch_part" />
+    </add>
+    <multiply name="rain_part" type="float">
+      <input name="in1" type="float" nodename="facing_up" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="amount_part" type="float">
+      <input name="in1" type="float" interfacename="verdigris" />
+      <input name="in2" type="float" value="1.2" />
+    </multiply>
+    <add name="green_bias" type="float">
+      <input name="in1" type="float" nodename="rain_part" />
+      <input name="in2" type="float" nodename="amount_part" />
+    </add>
+    <add name="green_field" type="float">
+      <input name="in1" type="float" nodename="green_raw" />
+      <input name="in2" type="float" nodename="green_bias" />
+    </add>
+    <multiply name="fray_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="40" />
+    </multiply>
+    <noise3d name="fray" type="float">
+      <input name="position" type="vector3" nodename="fray_position" />
+    </noise3d>
+    <multiply name="fray_part" type="float">
+      <input name="in1" type="float" nodename="fray" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <multiply name="fray_fine_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="140" />
+    </multiply>
+    <noise3d name="fray_fine" type="float">
+      <input name="position" type="vector3" nodename="fray_fine_position" />
+    </noise3d>
+    <multiply name="fray_fine_part" type="float">
+      <input name="in1" type="float" nodename="fray_fine" />
+      <input name="in2" type="float" value="0.15" />
+    </multiply>
+    <add name="fray_total" type="float">
+      <input name="in1" type="float" nodename="fray_part" />
+      <input name="in2" type="float" nodename="fray_fine_part" />
+    </add>
+    <add name="green_frayed" type="float">
+      <input name="in1" type="float" nodename="green_field" />
+      <input name="in2" type="float" nodename="fray_total" />
+    </add>
+    <smoothstep name="verdigris_mask" type="float">
+      <input name="in" type="float" nodename="green_frayed" />
+      <input name="low" type="float" value="0.55" />
+      <input name="high" type="float" value="0.8" />
+    </smoothstep>
+    <smoothstep name="high_points" type="float">
+      <input name="in" type="float" nodename="cast_height" />
+      <input name="low" type="float" value="0.3" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <invert name="not_green" type="float">
+      <input name="in" type="float" nodename="verdigris_mask" />
+    </invert>
+    <multiply name="polish_available" type="float">
+      <input name="in1" type="float" interfacename="polish" />
+      <input name="in2" type="float" nodename="not_green" />
+    </multiply>
+    <multiply name="polished" type="float">
+      <input name="in1" type="float" nodename="high_points" />
+      <input name="in2" type="float" nodename="polish_available" />
+    </multiply>
+    <multiply name="granule_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="110" />
+    </multiply>
+    <worleynoise3d name="granules" type="vector2">
+      <input name="position" type="vector3" nodename="granule_position" />
+    </worleynoise3d>
+    <separate2 name="granule_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="granules" />
+    </separate2>
+    <subtract name="granule_border" type="float">
+      <input name="in1" type="float" nodename="granule_distances" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances" output="outx" />
+    </subtract>
+    <smoothstep name="granule" type="float">
+      <input name="in" type="float" nodename="granule_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="grit_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="400" />
+    </multiply>
+    <noise3d name="grit" type="float">
+      <input name="position" type="vector3" nodename="grit_position" />
+    </noise3d>
+    <multiply name="grit_height" type="float">
+      <input name="in1" type="float" nodename="grit" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_height" type="float">
+      <input name="in1" type="float" nodename="granule" />
+      <input name="in2" type="float" nodename="grit_height" />
+    </add>
+    <add name="tap_position_x_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.0004, 0, 0" />
+    </add>
+    <multiply name="granule_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x_2" />
+      <input name="in2" type="float" value="110" />
+    </multiply>
+    <worleynoise3d name="granules_x" type="vector2">
+      <input name="position" type="vector3" nodename="granule_position_x" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_x" />
+    </separate2>
+    <subtract name="granule_border_x" type="float">
+      <input name="in1" type="float" nodename="granule_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="granule_x" type="float">
+      <input name="in" type="float" nodename="granule_border_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="grit_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x_2" />
+      <input name="in2" type="float" value="400" />
+    </multiply>
+    <noise3d name="grit_x" type="float">
+      <input name="position" type="vector3" nodename="grit_position_x" />
+    </noise3d>
+    <multiply name="grit_height_x" type="float">
+      <input name="in1" type="float" nodename="grit_x" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_height_x" type="float">
+      <input name="in1" type="float" nodename="granule_x" />
+      <input name="in2" type="float" nodename="grit_height_x" />
+    </add>
+    <add name="tap_position_y_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.0004, 0" />
+    </add>
+    <multiply name="granule_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y_2" />
+      <input name="in2" type="float" value="110" />
+    </multiply>
+    <worleynoise3d name="granules_y" type="vector2">
+      <input name="position" type="vector3" nodename="granule_position_y" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_y" />
+    </separate2>
+    <subtract name="granule_border_y" type="float">
+      <input name="in1" type="float" nodename="granule_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="granule_y" type="float">
+      <input name="in" type="float" nodename="granule_border_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="grit_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y_2" />
+      <input name="in2" type="float" value="400" />
+    </multiply>
+    <noise3d name="grit_y" type="float">
+      <input name="position" type="vector3" nodename="grit_position_y" />
+    </noise3d>
+    <multiply name="grit_height_y" type="float">
+      <input name="in1" type="float" nodename="grit_y" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_height_y" type="float">
+      <input name="in1" type="float" nodename="granule_y" />
+      <input name="in2" type="float" nodename="grit_height_y" />
+    </add>
+    <add name="tap_position_z_2" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.0004" />
+    </add>
+    <multiply name="granule_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z_2" />
+      <input name="in2" type="float" value="110" />
+    </multiply>
+    <worleynoise3d name="granules_z" type="vector2">
+      <input name="position" type="vector3" nodename="granule_position_z" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_z" />
+    </separate2>
+    <subtract name="granule_border_z" type="float">
+      <input name="in1" type="float" nodename="granule_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="granule_z" type="float">
+      <input name="in" type="float" nodename="granule_border_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.3" />
+    </smoothstep>
+    <multiply name="grit_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z_2" />
+      <input name="in2" type="float" value="400" />
+    </multiply>
+    <noise3d name="grit_z" type="float">
+      <input name="position" type="vector3" nodename="grit_position_z" />
+    </noise3d>
+    <multiply name="grit_height_z" type="float">
+      <input name="in1" type="float" nodename="grit_z" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <add name="crust_height_z" type="float">
+      <input name="in1" type="float" nodename="granule_z" />
+      <input name="in2" type="float" nodename="grit_height_z" />
+    </add>
+    <combine3 name="height_ahead_2" type="vector3">
+      <input name="in1" type="float" nodename="crust_height_x" />
+      <input name="in2" type="float" nodename="crust_height_y" />
+      <input name="in3" type="float" nodename="crust_height_z" />
+    </combine3>
+    <subtract name="height_delta_2" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead_2" />
+      <input name="in2" type="float" nodename="crust_height" />
+    </subtract>
+    <multiply name="height_gradient_2" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta_2" />
+      <input name="in2" type="float" value="2500" />
+    </multiply>
+    <multiply name="cast_gradient_scaled" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient" />
+      <input name="in2" type="float" value="0.007" />
+    </multiply>
+    <multiply name="crust_amount" type="float">
+      <input name="in1" type="float" nodename="verdigris_mask" />
+      <input name="in2" type="float" value="0.0012" />
+    </multiply>
+    <multiply name="crust_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient_2" />
+      <input name="in2" type="float" nodename="crust_amount" />
+    </multiply>
+    <add name="bronze_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="cast_gradient_scaled" />
+      <input name="in2" type="vector3" nodename="crust_gradient" />
+    </add>
+    <dotproduct name="bronze_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="bronze_gradient_sum" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="bronze_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="bronze_along_normal" />
+    </multiply>
+    <subtract name="bronze_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="bronze_gradient_sum" />
+      <input name="in2" type="vector3" nodename="bronze_normal_part" />
+    </subtract>
+    <subtract name="bronze_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="bronze_surface_gradient" />
+    </subtract>
+    <transformnormal name="bronze_world" type="vector3">
+      <input name="in" type="vector3" nodename="bronze_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="bronze_normal" type="vector3">
+      <input name="in" type="vector3" nodename="bronze_world" />
+    </normalize>
+
+    <!-- Color: dark brown patina over most of the bronze, bright metal where polished, and chalky green verdigris varying from blue-green to pale. -->
+    <remap name="patina_tone" type="float">
+      <input name="in" type="float" nodename="verdigris_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.4" />
+    </remap>
+    <multiply name="mottle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="70" />
+    </multiply>
+    <noise3d name="mottle" type="float">
+      <input name="position" type="vector3" nodename="mottle_position" />
+    </noise3d>
+    <remap name="patina_mottle" type="float">
+      <input name="in" type="float" nodename="mottle" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="patina_toned" type="float">
+      <input name="in1" type="float" nodename="patina_tone" />
+      <input name="in2" type="float" nodename="patina_mottle" />
+    </multiply>
+    <multiply name="patina" type="color3">
+      <input name="in1" type="color3" interfacename="brown_patina" />
+      <input name="in2" type="float" nodename="patina_toned" />
+    </multiply>
+    <mix name="metal_layer" type="color3">
+      <input name="bg" type="color3" nodename="patina" />
+      <input name="fg" type="color3" interfacename="bronze_color" />
+      <input name="mix" type="float" nodename="polished" />
+    </mix>
+    <multiply name="chalk_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="24" />
+    </multiply>
+    <noise3d name="chalk" type="float">
+      <input name="position" type="vector3" nodename="chalk_position" />
+    </noise3d>
+    <remap name="chalk_patches" type="float">
+      <input name="in" type="float" nodename="chalk" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="0.8" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="0.6" />
+    </remap>
+    <subtract name="granule_tops" type="float">
+      <input name="in1" type="float" nodename="crust_height" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="granule_chalk" type="float">
+      <input name="in1" type="float" nodename="granule_tops" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="chalk_raw" type="float">
+      <input name="in1" type="float" nodename="chalk_patches" />
+      <input name="in2" type="float" nodename="granule_chalk" />
+    </add>
+    <clamp name="chalk_mix" type="float">
+      <input name="in" type="float" nodename="chalk_raw" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <multiply name="verdigris_pale" type="color3">
+      <input name="in1" type="color3" interfacename="verdigris_color" />
+      <input name="in2" type="color3" value="1.6, 1.4, 1.4" />
+    </multiply>
+    <mix name="verdigris_tone" type="color3">
+      <input name="bg" type="color3" interfacename="verdigris_color" />
+      <input name="fg" type="color3" nodename="verdigris_pale" />
+      <input name="mix" type="float" nodename="chalk_mix" />
+    </mix>
+    <multiply name="verdigris_dark" type="color3">
+      <input name="in1" type="color3" interfacename="verdigris_color" />
+      <input name="in2" type="float" value="0.45" />
+    </multiply>
+    <smoothstep name="olive_ramp" type="float">
+      <input name="in" type="float" nodename="verdigris_mask" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <mix name="olive_transition" type="color3">
+      <input name="bg" type="color3" nodename="patina" />
+      <input name="fg" type="color3" nodename="verdigris_dark" />
+      <input name="mix" type="float" nodename="olive_ramp" />
+    </mix>
+    <smoothstep name="olive_mask" type="float">
+      <input name="in" type="float" nodename="verdigris_mask" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+    <mix name="metal_olive" type="color3">
+      <input name="bg" type="color3" nodename="metal_layer" />
+      <input name="fg" type="color3" nodename="olive_transition" />
+      <input name="mix" type="float" nodename="olive_mask" />
+    </mix>
+    <smoothstep name="green_cover" type="float">
+      <input name="in" type="float" nodename="verdigris_mask" />
+      <input name="low" type="float" value="0.3" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="metal_olive" />
+      <input name="fg" type="color3" nodename="verdigris_tone" />
+      <input name="mix" type="float" nodename="green_cover" />
+    </mix>
+    <mix name="patina_metalness" type="float">
+      <input name="bg" type="float" value="0.4" />
+      <input name="fg" type="float" value="1" />
+      <input name="mix" type="float" nodename="polished" />
+    </mix>
+    <mix name="metalness" type="float">
+      <input name="bg" type="float" nodename="patina_metalness" />
+      <input name="fg" type="float" value="0" />
+      <input name="mix" type="float" nodename="verdigris_mask" />
+    </mix>
+    <mix name="metal_roughness" type="float">
+      <input name="bg" type="float" value="0.55" />
+      <input name="fg" type="float" value="0.2" />
+      <input name="mix" type="float" nodename="polished" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="metal_roughness" />
+      <input name="fg" type="float" value="0.85" />
+      <input name="mix" type="float" nodename="verdigris_mask" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="bronze_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_patina_bronze" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_patina_bronze" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_patina_bronze" output="metalness_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.6" />
+    <input name="specular_roughness" type="float" nodegraph="NG_patina_bronze" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_patina_bronze" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Patina_Bronze" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_patina_bronze" />
+  </surfacematerial>
+</materialx>

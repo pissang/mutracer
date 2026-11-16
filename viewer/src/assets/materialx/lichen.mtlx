@@ -1,0 +1,438 @@
+<?xml version="1.0"?>
+<!--
+  Lichen: OpenPBR grey sandstone with crustose lichen. Each object-space
+  Worley cell is one colony grown out from its feature point, with a smoothly
+  varying radius and lobed edge; the Worley cell value picks orange or
+  grey-green, each colony has a brighter growing rim and a paler old centre
+  cracked into areoles, and dark fruiting discs dot the orange ones.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_lichen">
+    <input name="stone_color" type="color3" value="0.16, 0.152, 0.138" uiname="Stone" />
+    <input name="orange_lichen" type="color3" value="0.5, 0.2, 0.025" uiname="Orange lichen" />
+    <input name="grey_lichen" type="color3" value="0.13, 0.16, 0.1" uiname="Grey-green lichen" />
+    <input name="colony_scale" type="float" value="3.5" uiname="Colony scale" uimin="0.5" uimax="40" />
+    <input name="coverage" type="float" value="0.55" uiname="Coverage" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="colony_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="colony_scale" />
+    </multiply>
+
+    <!-- Colonies: each Worley cell is one lichen thallus growing outward from its feature point. The radius varies smoothly, the edge is lobed, and the cell value picks the species. -->
+    <worleynoise3d name="colonies" type="vector2">
+      <input name="position" type="vector3" nodename="colony_position" />
+      <input name="jitter" type="float" value="0.9" />
+    </worleynoise3d>
+    <separate2 name="colony_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="colonies" />
+    </separate2>
+    <worleynoise3d name="colony_species" type="float">
+      <input name="position" type="vector3" nodename="colony_position" />
+      <input name="jitter" type="float" value="0.9" />
+      <input name="style" type="integer" value="1" />
+    </worleynoise3d>
+    <multiply name="lobe_position" type="vector3">
+      <input name="in1" type="vector3" nodename="colony_position" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <fractal3d name="lobes" type="float">
+      <input name="position" type="vector3" nodename="lobe_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <multiply name="lobe_offset" type="float">
+      <input name="in1" type="float" nodename="lobes" />
+      <input name="in2" type="float" value="0.16" />
+    </multiply>
+    <multiply name="radius_position" type="vector3">
+      <input name="in1" type="vector3" nodename="colony_position" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <noise3d name="radius_noise" type="float">
+      <input name="position" type="vector3" nodename="radius_position" />
+    </noise3d>
+    <multiply name="radius_low" type="float">
+      <input name="in1" type="float" interfacename="coverage" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="radius_range" type="float">
+      <input name="in1" type="float" interfacename="coverage" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="radius_high" type="float">
+      <input name="in1" type="float" value="0.3" />
+      <input name="in2" type="float" nodename="radius_range" />
+    </add>
+    <remap name="colony_radius" type="float">
+      <input name="in" type="float" nodename="radius_noise" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" nodename="radius_low" />
+      <input name="outhigh" type="float" nodename="radius_high" />
+    </remap>
+    <add name="lobed_distance" type="float">
+      <input name="in1" type="float" nodename="colony_distances" output="outx" />
+      <input name="in2" type="float" nodename="lobe_offset" />
+    </add>
+    <divide name="colony_unit" type="float">
+      <input name="in1" type="float" nodename="lobed_distance" />
+      <input name="in2" type="float" nodename="colony_radius" />
+    </divide>
+    <smoothstep name="colony_edge" type="float">
+      <input name="in" type="float" nodename="colony_unit" />
+      <input name="low" type="float" value="0.9" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="colony" type="float">
+      <input name="in" type="float" nodename="colony_edge" />
+    </invert>
+    <smoothstep name="rim_ramp" type="float">
+      <input name="in" type="float" nodename="colony_unit" />
+      <input name="low" type="float" value="0.65" />
+      <input name="high" type="float" value="0.95" />
+    </smoothstep>
+    <multiply name="colony_rim" type="float">
+      <input name="in1" type="float" nodename="rim_ramp" />
+      <input name="in2" type="float" nodename="colony" />
+    </multiply>
+    <smoothstep name="old_ramp" type="float">
+      <input name="in" type="float" nodename="colony_unit" />
+      <input name="low" type="float" value="0.1" />
+      <input name="high" type="float" value="0.55" />
+    </smoothstep>
+    <invert name="colony_old" type="float">
+      <input name="in" type="float" nodename="old_ramp" />
+    </invert>
+    <multiply name="areole_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="140" />
+    </multiply>
+    <worleynoise3d name="areoles" type="vector2">
+      <input name="position" type="vector3" nodename="areole_position" />
+    </worleynoise3d>
+    <separate2 name="areole_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="areoles" />
+    </separate2>
+    <subtract name="areole_border" type="float">
+      <input name="in1" type="float" nodename="areole_distances" output="outy" />
+      <input name="in2" type="float" nodename="areole_distances" output="outx" />
+    </subtract>
+    <smoothstep name="areole" type="float">
+      <input name="in" type="float" nodename="areole_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <add name="tap_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0.0004, 0, 0" />
+    </add>
+    <multiply name="areole_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="140" />
+    </multiply>
+    <worleynoise3d name="areoles_x" type="vector2">
+      <input name="position" type="vector3" nodename="areole_position_x" />
+    </worleynoise3d>
+    <separate2 name="areole_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="areoles_x" />
+    </separate2>
+    <subtract name="areole_border_x" type="float">
+      <input name="in1" type="float" nodename="areole_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="areole_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="areole_x" type="float">
+      <input name="in" type="float" nodename="areole_border_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <add name="tap_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0.0004, 0" />
+    </add>
+    <multiply name="areole_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="140" />
+    </multiply>
+    <worleynoise3d name="areoles_y" type="vector2">
+      <input name="position" type="vector3" nodename="areole_position_y" />
+    </worleynoise3d>
+    <separate2 name="areole_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="areoles_y" />
+    </separate2>
+    <subtract name="areole_border_y" type="float">
+      <input name="in1" type="float" nodename="areole_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="areole_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="areole_y" type="float">
+      <input name="in" type="float" nodename="areole_border_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <add name="tap_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="0, 0, 0.0004" />
+    </add>
+    <multiply name="areole_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="140" />
+    </multiply>
+    <worleynoise3d name="areoles_z" type="vector2">
+      <input name="position" type="vector3" nodename="areole_position_z" />
+    </worleynoise3d>
+    <separate2 name="areole_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="areoles_z" />
+    </separate2>
+    <subtract name="areole_border_z" type="float">
+      <input name="in1" type="float" nodename="areole_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="areole_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="areole_z" type="float">
+      <input name="in" type="float" nodename="areole_border_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <combine3 name="height_ahead" type="vector3">
+      <input name="in1" type="float" nodename="areole_x" />
+      <input name="in2" type="float" nodename="areole_y" />
+      <input name="in3" type="float" nodename="areole_z" />
+    </combine3>
+    <subtract name="height_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead" />
+      <input name="in2" type="float" nodename="areole" />
+    </subtract>
+    <multiply name="height_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta" />
+      <input name="in2" type="float" value="2500" />
+    </multiply>
+    <multiply name="grit_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="260" />
+    </multiply>
+    <noise3d name="grit_normal" type="vector3">
+      <input name="position" type="vector3" nodename="grit_normal_position" />
+    </noise3d>
+    <multiply name="rock_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="18" />
+    </multiply>
+    <noise3d name="rock_normal" type="vector3">
+      <input name="position" type="vector3" nodename="rock_normal_position" />
+    </noise3d>
+    <multiply name="crust_bump" type="float">
+      <input name="in1" type="float" nodename="colony" />
+      <input name="in2" type="float" value="0.0012" />
+    </multiply>
+    <multiply name="crust_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient" />
+      <input name="in2" type="float" nodename="crust_bump" />
+    </multiply>
+    <multiply name="grit_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grit_normal" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <multiply name="rock_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="rock_normal" />
+      <input name="in2" type="float" value="0.06" />
+    </multiply>
+    <add name="lichen_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="crust_gradient" />
+      <input name="in2" type="vector3" nodename="grit_gradient" />
+    </add>
+    <add name="lichen_gradient_sum_2" type="vector3">
+      <input name="in1" type="vector3" nodename="lichen_gradient_sum" />
+      <input name="in2" type="vector3" nodename="rock_gradient" />
+    </add>
+    <dotproduct name="lichen_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="lichen_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="lichen_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="lichen_along_normal" />
+    </multiply>
+    <subtract name="lichen_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="lichen_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="lichen_normal_part" />
+    </subtract>
+    <subtract name="lichen_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="lichen_surface_gradient" />
+    </subtract>
+    <transformnormal name="lichen_world" type="vector3">
+      <input name="in" type="vector3" nodename="lichen_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="lichen_normal" type="vector3">
+      <input name="in" type="vector3" nodename="lichen_world" />
+    </normalize>
+
+    <!-- Color: two species, orange Xanthoria and grey-green foliose, each with a brighter growing rim and a paler old centre; tiny dark fruiting discs dot the orange colonies; the stone between is grey sandstone. -->
+    <smoothstep name="species_mix" type="float">
+      <input name="in" type="float" nodename="colony_species" />
+      <input name="low" type="float" value="0.45" />
+      <input name="high" type="float" value="0.55" />
+    </smoothstep>
+    <mix name="lichen_species" type="color3">
+      <input name="bg" type="color3" interfacename="orange_lichen" />
+      <input name="fg" type="color3" interfacename="grey_lichen" />
+      <input name="mix" type="float" nodename="species_mix" />
+    </mix>
+    <remap name="rim_tone" type="float">
+      <input name="in" type="float" nodename="colony_rim" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="1.5" />
+    </remap>
+    <multiply name="lichen_rimmed" type="color3">
+      <input name="in1" type="color3" nodename="lichen_species" />
+      <input name="in2" type="float" nodename="rim_tone" />
+    </multiply>
+    <multiply name="lichen_pale" type="color3">
+      <input name="in1" type="color3" nodename="lichen_species" />
+      <input name="in2" type="color3" value="1.1, 1.15, 1.2" />
+    </multiply>
+    <multiply name="age_mix" type="float">
+      <input name="in1" type="float" nodename="colony_old" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <mix name="lichen_aged" type="color3">
+      <input name="bg" type="color3" nodename="lichen_rimmed" />
+      <input name="fg" type="color3" nodename="lichen_pale" />
+      <input name="mix" type="float" nodename="age_mix" />
+    </mix>
+    <multiply name="disc_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="90" />
+    </multiply>
+    <worleynoise3d name="discs" type="vector2">
+      <input name="position" type="vector3" nodename="disc_position" />
+    </worleynoise3d>
+    <separate2 name="disc_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="discs" />
+    </separate2>
+    <smoothstep name="disc_ramp" type="float">
+      <input name="in" type="float" nodename="disc_distances" output="outx" />
+      <input name="low" type="float" value="0.08" />
+      <input name="high" type="float" value="0.16" />
+    </smoothstep>
+    <invert name="disc_shape" type="float">
+      <input name="in" type="float" nodename="disc_ramp" />
+    </invert>
+    <invert name="orange_only" type="float">
+      <input name="in" type="float" nodename="species_mix" />
+    </invert>
+    <multiply name="disc_orange" type="float">
+      <input name="in1" type="float" nodename="disc_shape" />
+      <input name="in2" type="float" nodename="orange_only" />
+    </multiply>
+    <multiply name="discs_2" type="float">
+      <input name="in1" type="float" nodename="disc_orange" />
+      <input name="in2" type="float" nodename="colony_old" />
+    </multiply>
+    <remap name="areole_shade" type="float">
+      <input name="in" type="float" nodename="areole" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.55" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="mottle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="colony_position" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <fractal3d name="mottle" type="float">
+      <input name="position" type="vector3" nodename="mottle_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="lichen_mottle" type="float">
+      <input name="in" type="float" nodename="mottle" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="areole_tone" type="float">
+      <input name="in1" type="float" nodename="areole_shade" />
+      <input name="in2" type="float" nodename="lichen_mottle" />
+    </multiply>
+    <multiply name="lichen_areoles" type="color3">
+      <input name="in1" type="color3" nodename="lichen_aged" />
+      <input name="in2" type="float" nodename="areole_tone" />
+    </multiply>
+    <multiply name="disc_color" type="color3">
+      <input name="in1" type="color3" interfacename="orange_lichen" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <mix name="lichen_color" type="color3">
+      <input name="bg" type="color3" nodename="lichen_areoles" />
+      <input name="fg" type="color3" nodename="disc_color" />
+      <input name="mix" type="float" nodename="discs_2" />
+    </mix>
+    <multiply name="stone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <fractal3d name="stone_fractal" type="float">
+      <input name="position" type="vector3" nodename="stone_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <remap name="stone_blotch" type="float">
+      <input name="in" type="float" nodename="stone_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="speck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="220" />
+    </multiply>
+    <cellnoise3d name="speck" type="float">
+      <input name="position" type="vector3" nodename="speck_position" />
+    </cellnoise3d>
+    <remap name="speck_tone" type="float">
+      <input name="in" type="float" nodename="speck" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <multiply name="stone_tone" type="float">
+      <input name="in1" type="float" nodename="stone_blotch" />
+      <input name="in2" type="float" nodename="speck_tone" />
+    </multiply>
+    <multiply name="stone_toned" type="color3">
+      <input name="in1" type="color3" interfacename="stone_color" />
+      <input name="in2" type="float" nodename="stone_tone" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="stone_toned" />
+      <input name="fg" type="color3" nodename="lichen_color" />
+      <input name="mix" type="float" nodename="colony" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.7" />
+      <input name="fg" type="float" value="0.9" />
+      <input name="mix" type="float" nodename="colony" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="lichen_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_lichen" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_lichen" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_weight" type="float" value="0.4" />
+    <input name="specular_roughness" type="float" nodegraph="NG_lichen" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_lichen" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Lichen" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_lichen" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,237 @@
+<?xml version="1.0"?>
+<!--
+  Anodized aluminium: OpenPBR dyed metal. Fine machining ridges run around
+  object Y and slope the normal; the oxide takes the dye a little unevenly,
+  and sparse patches of scratches cut through it to bright bare aluminium.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_anodized_aluminum">
+    <input name="dye_color" type="color3" value="0.62, 0.07, 0.05" uiname="Dye" />
+    <input name="bare_color" type="color3" value="0.91, 0.92, 0.92" uiname="Bare aluminium" />
+    <input name="line_scale" type="float" value="700" uiname="Machining lines" uimin="20" uimax="2000" />
+    <input name="scratches" type="float" value="0.5" uiname="Scratches" uimin="0" uimax="1" />
+    <input name="roughness" type="float" value="0.28" uiname="Roughness" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <separate3 name="position_parts" type="multioutput">
+      <input name="in" type="vector3" nodename="object_position" />
+    </separate3>
+
+    <!-- Machining: fine parallel ridges around object Y, wandering slightly, cut before the part was anodized. -->
+    <multiply name="wobble_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <noise3d name="wobble" type="float">
+      <input name="position" type="vector3" nodename="wobble_position" />
+    </noise3d>
+    <multiply name="line_wobble" type="float">
+      <input name="in1" type="float" nodename="wobble" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <multiply name="line_frequency" type="float">
+      <input name="in1" type="float" interfacename="line_scale" />
+      <input name="in2" type="float" value="6.28318" />
+    </multiply>
+    <multiply name="line_angle" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outy" />
+      <input name="in2" type="float" nodename="line_frequency" />
+    </multiply>
+    <add name="line_phase" type="float">
+      <input name="in1" type="float" nodename="line_angle" />
+      <input name="in2" type="float" nodename="line_wobble" />
+    </add>
+    <multiply name="depth_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="3, 40, 3" />
+    </multiply>
+    <noise3d name="line_depth_noise" type="float">
+      <input name="position" type="vector3" nodename="depth_position" />
+    </noise3d>
+    <remap name="line_depth" type="float">
+      <input name="in" type="float" nodename="line_depth_noise" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.3" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <cos name="line_slope" type="float">
+      <input name="in" type="float" nodename="line_phase" />
+    </cos>
+    <multiply name="line_slope_scaled" type="float">
+      <input name="in1" type="float" nodename="line_slope" />
+      <input name="in2" type="float" nodename="line_depth" />
+    </multiply>
+    <multiply name="line_strength" type="float">
+      <input name="in1" type="float" nodename="line_slope_scaled" />
+      <input name="in2" type="float" value="0.02" />
+    </multiply>
+    <multiply name="line_gradient" type="vector3">
+      <input name="in1" type="vector3" value="0, 1, 0" />
+      <input name="in2" type="float" nodename="line_strength" />
+    </multiply>
+
+    <!-- Scratches: thin lines where a stretched noise crosses zero, kept only in sparse patches, cutting through the dye to bare metal. -->
+    <multiply name="scratch_a_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="1.5, 40, 3" />
+    </multiply>
+    <add name="scratch_a_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="scratch_a_position" />
+      <input name="in2" type="vector3" value="0, 0, 0" />
+    </add>
+    <noise3d name="scratch_a_noise" type="float">
+      <input name="position" type="vector3" nodename="scratch_a_offset" />
+    </noise3d>
+    <absval name="scratch_a_abs" type="float">
+      <input name="in" type="float" nodename="scratch_a_noise" />
+    </absval>
+    <smoothstep name="scratch_a_ramp" type="float">
+      <input name="in" type="float" nodename="scratch_a_abs" />
+      <input name="low" type="float" value="0.002" />
+      <input name="high" type="float" value="0.006" />
+    </smoothstep>
+    <invert name="scratch_a" type="float">
+      <input name="in" type="float" nodename="scratch_a_ramp" />
+    </invert>
+    <multiply name="scratch_b_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" value="30, 2, 1.5" />
+    </multiply>
+    <add name="scratch_b_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="scratch_b_position" />
+      <input name="in2" type="vector3" value="13, 7, 3" />
+    </add>
+    <noise3d name="scratch_b_noise" type="float">
+      <input name="position" type="vector3" nodename="scratch_b_offset" />
+    </noise3d>
+    <absval name="scratch_b_abs" type="float">
+      <input name="in" type="float" nodename="scratch_b_noise" />
+    </absval>
+    <smoothstep name="scratch_b_ramp" type="float">
+      <input name="in" type="float" nodename="scratch_b_abs" />
+      <input name="low" type="float" value="0.002" />
+      <input name="high" type="float" value="0.006" />
+    </smoothstep>
+    <invert name="scratch_b" type="float">
+      <input name="in" type="float" nodename="scratch_b_ramp" />
+    </invert>
+    <max name="scratch_lines" type="float">
+      <input name="in1" type="float" nodename="scratch_a" />
+      <input name="in2" type="float" nodename="scratch_b" />
+    </max>
+    <multiply name="scratch_patch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.3" />
+    </multiply>
+    <fractal3d name="scratch_patch" type="float">
+      <input name="position" type="vector3" nodename="scratch_patch_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="scratch_threshold" type="float">
+      <input name="in" type="float" interfacename="scratches" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="0" />
+    </remap>
+    <remap name="scratch_top" type="float">
+      <input name="in" type="float" interfacename="scratches" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <smoothstep name="scratch_patches" type="float">
+      <input name="in" type="float" nodename="scratch_patch" />
+      <input name="low" type="float" nodename="scratch_threshold" />
+      <input name="high" type="float" nodename="scratch_top" />
+    </smoothstep>
+    <multiply name="scratched" type="float">
+      <input name="in1" type="float" nodename="scratch_lines" />
+      <input name="in2" type="float" nodename="scratch_patches" />
+    </multiply>
+
+    <!-- Dye: the oxide takes colour unevenly, faintly blotched across the part. -->
+    <multiply name="dye_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3.5" />
+    </multiply>
+    <fractal3d name="dye_fractal" type="float">
+      <input name="position" type="vector3" nodename="dye_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="dye_tone" type="float">
+      <input name="in" type="float" nodename="dye_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.88" />
+      <input name="outhigh" type="float" value="1.06" />
+    </remap>
+    <multiply name="dyed" type="color3">
+      <input name="in1" type="color3" interfacename="dye_color" />
+      <input name="in2" type="float" nodename="dye_tone" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="dyed" />
+      <input name="fg" type="color3" interfacename="bare_color" />
+      <input name="mix" type="float" nodename="scratched" />
+    </mix>
+    <remap name="line_roughness" type="float">
+      <input name="in" type="float" nodename="line_depth" />
+      <input name="inlow" type="float" value="0.3" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="oxide_roughness" type="float">
+      <input name="in1" type="float" interfacename="roughness" />
+      <input name="in2" type="float" nodename="line_roughness" />
+    </multiply>
+    <mix name="surface_roughness" type="float">
+      <input name="bg" type="float" nodename="oxide_roughness" />
+      <input name="fg" type="float" value="0.18" />
+      <input name="mix" type="float" nodename="scratched" />
+    </mix>
+    <dotproduct name="machined_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="line_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="machined_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="machined_along_normal" />
+    </multiply>
+    <subtract name="machined_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="line_gradient" />
+      <input name="in2" type="vector3" nodename="machined_normal_part" />
+    </subtract>
+    <subtract name="machined_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="machined_surface_gradient" />
+    </subtract>
+    <transformnormal name="machined_world" type="vector3">
+      <input name="in" type="vector3" nodename="machined_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="machined_normal" type="vector3">
+      <input name="in" type="vector3" nodename="machined_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="surface_roughness" />
+    <output name="normal_out" type="vector3" nodename="machined_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_anodized_aluminum" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_anodized_aluminum" output="base_color_out" />
+    <input name="base_metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" nodegraph="NG_anodized_aluminum" output="roughness_out" />
+    <input name="specular_anisotropy" type="float" value="0.35" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_anodized_aluminum" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Anodized_Aluminum" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_anodized_aluminum" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,866 @@
+<?xml version="1.0"?>
+<!--
+  Woven leather: OpenPBR nappa strips in a diagonal plain weave, as in
+  intrecciato. Strips along the two UV diagonals cross over and under in a
+  checkerboard, domed across their width; each strip has its own tone,
+  darker dyed edges and shade where it dives under its neighbour, with dark
+  gaps between strips. Uses UV0 and exposes the strip count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_woven_leather">
+    <input name="leather_color" type="color3" value="0.12, 0.058, 0.03" uiname="Leather" />
+    <input name="gap_color" type="color3" value="0.012, 0.006, 0.003" uiname="Gaps" />
+    <input name="tiles" type="vector2" value="22, 11" uiname="Strips per UV" />
+    <input name="strip_width" type="float" value="0.8" uiname="Strip width" uimin="0.4" uimax="1" />
+    <input name="depth" type="float" value="0.11" uiname="Weave depth" uimin="0" uimax="0.4" />
+    <input name="variation" type="float" value="0.7" uiname="Strip variation" uimin="0" uimax="1" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="weave_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <multiply name="strip_half_width" type="float">
+      <input name="in1" type="float" interfacename="strip_width" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <separate2 name="weave_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="weave_uv" />
+    </separate2>
+    <add name="diagonal_a" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts" output="outy" />
+    </add>
+    <subtract name="diagonal_b" type="float">
+      <input name="in1" type="float" nodename="weave_parts" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts" output="outy" />
+    </subtract>
+    <floor name="strip_a_index" type="float">
+      <input name="in" type="float" nodename="diagonal_a" />
+    </floor>
+    <floor name="strip_b_index" type="float">
+      <input name="in" type="float" nodename="diagonal_b" />
+    </floor>
+    <subtract name="strip_a_fraction" type="float">
+      <input name="in1" type="float" nodename="diagonal_a" />
+      <input name="in2" type="float" nodename="strip_a_index" />
+    </subtract>
+    <subtract name="strip_b_fraction" type="float">
+      <input name="in1" type="float" nodename="diagonal_b" />
+      <input name="in2" type="float" nodename="strip_b_index" />
+    </subtract>
+    <add name="cell_sum" type="float">
+      <input name="in1" type="float" nodename="strip_a_index" />
+      <input name="in2" type="float" nodename="strip_b_index" />
+    </add>
+    <modulo name="cell_parity" type="float">
+      <input name="in1" type="float" nodename="cell_sum" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <ifgreater name="strip_a_on_top" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="cell_parity" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="strip_a_offset" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_a_across" type="float">
+      <input name="in1" type="float" nodename="strip_a_offset" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_a_across_abs" type="float">
+      <input name="in" type="float" nodename="strip_a_across" />
+    </absval>
+    <ifgreater name="strip_a_inside" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_a_across_abs" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_a_across2" type="float">
+      <input name="in1" type="float" nodename="strip_a_across" />
+      <input name="in2" type="float" nodename="strip_a_across" />
+    </multiply>
+    <invert name="strip_a_dome2" type="float">
+      <input name="in" type="float" nodename="strip_a_across2" />
+    </invert>
+    <max name="strip_a_dome_positive" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_a_dome" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome_positive" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_a_along_angle" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_a_arch_sin" type="float">
+      <input name="in" type="float" nodename="strip_a_along_angle" />
+    </sin>
+    <power name="strip_a_arch" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_sin" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_a_top2" type="float">
+      <input name="in1" type="float" nodename="strip_a_on_top" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_a_side" type="float">
+      <input name="in1" type="float" nodename="strip_a_top2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_a_arch_signed" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch" />
+      <input name="in2" type="float" nodename="strip_a_side" />
+    </multiply>
+    <multiply name="strip_a_arch_half" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_signed" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_crossing" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_a_arch_half" />
+    </add>
+    <multiply name="strip_a_crossing_part" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_a_dome_part" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_shape" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing_part" />
+      <input name="in2" type="float" nodename="strip_a_dome_part" />
+    </add>
+    <multiply name="strip_a_height" type="float">
+      <input name="in1" type="float" nodename="strip_a_shape" />
+      <input name="in2" type="float" nodename="strip_a_inside" />
+    </multiply>
+    <invert name="strip_b_on_top" type="float">
+      <input name="in" type="float" nodename="strip_a_on_top" />
+    </invert>
+    <subtract name="strip_b_offset" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_b_across" type="float">
+      <input name="in1" type="float" nodename="strip_b_offset" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_b_across_abs" type="float">
+      <input name="in" type="float" nodename="strip_b_across" />
+    </absval>
+    <ifgreater name="strip_b_inside" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_b_across_abs" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_b_across2" type="float">
+      <input name="in1" type="float" nodename="strip_b_across" />
+      <input name="in2" type="float" nodename="strip_b_across" />
+    </multiply>
+    <invert name="strip_b_dome2" type="float">
+      <input name="in" type="float" nodename="strip_b_across2" />
+    </invert>
+    <max name="strip_b_dome_positive" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_b_dome" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome_positive" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_b_along_angle" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_b_arch_sin" type="float">
+      <input name="in" type="float" nodename="strip_b_along_angle" />
+    </sin>
+    <power name="strip_b_arch" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_sin" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_b_top2" type="float">
+      <input name="in1" type="float" nodename="strip_b_on_top" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_b_side" type="float">
+      <input name="in1" type="float" nodename="strip_b_top2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_b_arch_signed" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch" />
+      <input name="in2" type="float" nodename="strip_b_side" />
+    </multiply>
+    <multiply name="strip_b_arch_half" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_signed" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_crossing" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_b_arch_half" />
+    </add>
+    <multiply name="strip_b_crossing_part" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_b_dome_part" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_shape" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing_part" />
+      <input name="in2" type="float" nodename="strip_b_dome_part" />
+    </add>
+    <multiply name="strip_b_height" type="float">
+      <input name="in1" type="float" nodename="strip_b_shape" />
+      <input name="in2" type="float" nodename="strip_b_inside" />
+    </multiply>
+    <ifgreater name="show_strip_a" type="float">
+      <input name="value1" type="float" nodename="strip_a_height" />
+      <input name="value2" type="float" nodename="strip_b_height" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="grain_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="weave_uv" />
+      <input name="in2" type="float" value="34" />
+    </multiply>
+    <noise2d name="grain" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv" />
+    </noise2d>
+    <max name="weave_height_raw" type="float">
+      <input name="in1" type="float" nodename="strip_a_height" />
+      <input name="in2" type="float" nodename="strip_b_height" />
+    </max>
+    <multiply name="grain_height" type="float">
+      <input name="in1" type="float" nodename="grain" />
+      <input name="in2" type="float" value="0.015" />
+    </multiply>
+    <add name="weave_height" type="float">
+      <input name="in1" type="float" nodename="weave_height_raw" />
+      <input name="in2" type="float" nodename="grain_height" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="weave_uv" />
+      <input name="in2" type="vector2" value="0.004, 0" />
+    </add>
+    <separate2 name="weave_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <add name="diagonal_a_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts_u" output="outy" />
+    </add>
+    <subtract name="diagonal_b_u" type="float">
+      <input name="in1" type="float" nodename="weave_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts_u" output="outy" />
+    </subtract>
+    <floor name="strip_a_index_u" type="float">
+      <input name="in" type="float" nodename="diagonal_a_u" />
+    </floor>
+    <floor name="strip_b_index_u" type="float">
+      <input name="in" type="float" nodename="diagonal_b_u" />
+    </floor>
+    <subtract name="strip_a_fraction_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_u" />
+      <input name="in2" type="float" nodename="strip_a_index_u" />
+    </subtract>
+    <subtract name="strip_b_fraction_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_u" />
+      <input name="in2" type="float" nodename="strip_b_index_u" />
+    </subtract>
+    <add name="cell_sum_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_index_u" />
+      <input name="in2" type="float" nodename="strip_b_index_u" />
+    </add>
+    <modulo name="cell_parity_u" type="float">
+      <input name="in1" type="float" nodename="cell_sum_u" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <ifgreater name="strip_a_on_top_u" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="cell_parity_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="strip_a_offset_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_a_across_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_offset_u" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_a_across_abs_u" type="float">
+      <input name="in" type="float" nodename="strip_a_across_u" />
+    </absval>
+    <ifgreater name="strip_a_inside_u" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_a_across_abs_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_a_across2_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_across_u" />
+      <input name="in2" type="float" nodename="strip_a_across_u" />
+    </multiply>
+    <invert name="strip_a_dome2_u" type="float">
+      <input name="in" type="float" nodename="strip_a_across2_u" />
+    </invert>
+    <max name="strip_a_dome_positive_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_a_dome_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome_positive_u" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_a_along_angle_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_a_arch_sin_u" type="float">
+      <input name="in" type="float" nodename="strip_a_along_angle_u" />
+    </sin>
+    <power name="strip_a_arch_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_sin_u" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_a_top2_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_on_top_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_a_side_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_top2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_a_arch_signed_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_u" />
+      <input name="in2" type="float" nodename="strip_a_side_u" />
+    </multiply>
+    <multiply name="strip_a_arch_half_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_signed_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_crossing_u" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_a_arch_half_u" />
+    </add>
+    <multiply name="strip_a_crossing_part_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing_u" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_a_dome_part_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_shape_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing_part_u" />
+      <input name="in2" type="float" nodename="strip_a_dome_part_u" />
+    </add>
+    <multiply name="strip_a_height_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_shape_u" />
+      <input name="in2" type="float" nodename="strip_a_inside_u" />
+    </multiply>
+    <invert name="strip_b_on_top_u" type="float">
+      <input name="in" type="float" nodename="strip_a_on_top_u" />
+    </invert>
+    <subtract name="strip_b_offset_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_b_across_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_offset_u" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_b_across_abs_u" type="float">
+      <input name="in" type="float" nodename="strip_b_across_u" />
+    </absval>
+    <ifgreater name="strip_b_inside_u" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_b_across_abs_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_b_across2_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_across_u" />
+      <input name="in2" type="float" nodename="strip_b_across_u" />
+    </multiply>
+    <invert name="strip_b_dome2_u" type="float">
+      <input name="in" type="float" nodename="strip_b_across2_u" />
+    </invert>
+    <max name="strip_b_dome_positive_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_b_dome_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome_positive_u" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_b_along_angle_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_b_arch_sin_u" type="float">
+      <input name="in" type="float" nodename="strip_b_along_angle_u" />
+    </sin>
+    <power name="strip_b_arch_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_sin_u" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_b_top2_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_on_top_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_b_side_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_top2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_b_arch_signed_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_u" />
+      <input name="in2" type="float" nodename="strip_b_side_u" />
+    </multiply>
+    <multiply name="strip_b_arch_half_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_signed_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_crossing_u" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_b_arch_half_u" />
+    </add>
+    <multiply name="strip_b_crossing_part_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing_u" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_b_dome_part_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome_u" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_shape_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing_part_u" />
+      <input name="in2" type="float" nodename="strip_b_dome_part_u" />
+    </add>
+    <multiply name="strip_b_height_u" type="float">
+      <input name="in1" type="float" nodename="strip_b_shape_u" />
+      <input name="in2" type="float" nodename="strip_b_inside_u" />
+    </multiply>
+    <ifgreater name="show_strip_a_u" type="float">
+      <input name="value1" type="float" nodename="strip_a_height_u" />
+      <input name="value2" type="float" nodename="strip_b_height_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="grain_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="34" />
+    </multiply>
+    <noise2d name="grain_u" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_u" />
+    </noise2d>
+    <max name="weave_height_raw_u" type="float">
+      <input name="in1" type="float" nodename="strip_a_height_u" />
+      <input name="in2" type="float" nodename="strip_b_height_u" />
+    </max>
+    <multiply name="grain_height_u" type="float">
+      <input name="in1" type="float" nodename="grain_u" />
+      <input name="in2" type="float" value="0.015" />
+    </multiply>
+    <add name="weave_height_u" type="float">
+      <input name="in1" type="float" nodename="weave_height_raw_u" />
+      <input name="in2" type="float" nodename="grain_height_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="weave_uv" />
+      <input name="in2" type="vector2" value="0, 0.004" />
+    </add>
+    <separate2 name="weave_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <add name="diagonal_a_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts_v" output="outy" />
+    </add>
+    <subtract name="diagonal_b_v" type="float">
+      <input name="in1" type="float" nodename="weave_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="weave_parts_v" output="outy" />
+    </subtract>
+    <floor name="strip_a_index_v" type="float">
+      <input name="in" type="float" nodename="diagonal_a_v" />
+    </floor>
+    <floor name="strip_b_index_v" type="float">
+      <input name="in" type="float" nodename="diagonal_b_v" />
+    </floor>
+    <subtract name="strip_a_fraction_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_v" />
+      <input name="in2" type="float" nodename="strip_a_index_v" />
+    </subtract>
+    <subtract name="strip_b_fraction_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_v" />
+      <input name="in2" type="float" nodename="strip_b_index_v" />
+    </subtract>
+    <add name="cell_sum_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_index_v" />
+      <input name="in2" type="float" nodename="strip_b_index_v" />
+    </add>
+    <modulo name="cell_parity_v" type="float">
+      <input name="in1" type="float" nodename="cell_sum_v" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <ifgreater name="strip_a_on_top_v" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="cell_parity_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <subtract name="strip_a_offset_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_a_across_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_offset_v" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_a_across_abs_v" type="float">
+      <input name="in" type="float" nodename="strip_a_across_v" />
+    </absval>
+    <ifgreater name="strip_a_inside_v" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_a_across_abs_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_a_across2_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_across_v" />
+      <input name="in2" type="float" nodename="strip_a_across_v" />
+    </multiply>
+    <invert name="strip_a_dome2_v" type="float">
+      <input name="in" type="float" nodename="strip_a_across2_v" />
+    </invert>
+    <max name="strip_a_dome_positive_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_a_dome_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome_positive_v" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_a_along_angle_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_a_arch_sin_v" type="float">
+      <input name="in" type="float" nodename="strip_a_along_angle_v" />
+    </sin>
+    <power name="strip_a_arch_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_sin_v" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_a_top2_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_on_top_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_a_side_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_top2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_a_arch_signed_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_v" />
+      <input name="in2" type="float" nodename="strip_a_side_v" />
+    </multiply>
+    <multiply name="strip_a_arch_half_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_arch_signed_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_crossing_v" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_a_arch_half_v" />
+    </add>
+    <multiply name="strip_a_crossing_part_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing_v" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_a_dome_part_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_dome_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_a_shape_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_crossing_part_v" />
+      <input name="in2" type="float" nodename="strip_a_dome_part_v" />
+    </add>
+    <multiply name="strip_a_height_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_shape_v" />
+      <input name="in2" type="float" nodename="strip_a_inside_v" />
+    </multiply>
+    <invert name="strip_b_on_top_v" type="float">
+      <input name="in" type="float" nodename="strip_a_on_top_v" />
+    </invert>
+    <subtract name="strip_b_offset_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="strip_b_across_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_offset_v" />
+      <input name="in2" type="float" nodename="strip_half_width" />
+    </divide>
+    <absval name="strip_b_across_abs_v" type="float">
+      <input name="in" type="float" nodename="strip_b_across_v" />
+    </absval>
+    <ifgreater name="strip_b_inside_v" type="float">
+      <input name="value1" type="float" value="1" />
+      <input name="value2" type="float" nodename="strip_b_across_abs_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="strip_b_across2_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_across_v" />
+      <input name="in2" type="float" nodename="strip_b_across_v" />
+    </multiply>
+    <invert name="strip_b_dome2_v" type="float">
+      <input name="in" type="float" nodename="strip_b_across2_v" />
+    </invert>
+    <max name="strip_b_dome_positive_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="strip_b_dome_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome_positive_v" />
+      <input name="in2" type="float" value="0.3" />
+    </power>
+    <multiply name="strip_b_along_angle_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_fraction_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="strip_b_arch_sin_v" type="float">
+      <input name="in" type="float" nodename="strip_b_along_angle_v" />
+    </sin>
+    <power name="strip_b_arch_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_sin_v" />
+      <input name="in2" type="float" value="0.35" />
+    </power>
+    <multiply name="strip_b_top2_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_on_top_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="strip_b_side_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_top2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="strip_b_arch_signed_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_v" />
+      <input name="in2" type="float" nodename="strip_b_side_v" />
+    </multiply>
+    <multiply name="strip_b_arch_half_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_arch_signed_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_crossing_v" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="strip_b_arch_half_v" />
+    </add>
+    <multiply name="strip_b_crossing_part_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing_v" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <multiply name="strip_b_dome_part_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_dome_v" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="strip_b_shape_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_crossing_part_v" />
+      <input name="in2" type="float" nodename="strip_b_dome_part_v" />
+    </add>
+    <multiply name="strip_b_height_v" type="float">
+      <input name="in1" type="float" nodename="strip_b_shape_v" />
+      <input name="in2" type="float" nodename="strip_b_inside_v" />
+    </multiply>
+    <ifgreater name="show_strip_a_v" type="float">
+      <input name="value1" type="float" nodename="strip_a_height_v" />
+      <input name="value2" type="float" nodename="strip_b_height_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="grain_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="34" />
+    </multiply>
+    <noise2d name="grain_v" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_v" />
+    </noise2d>
+    <max name="weave_height_raw_v" type="float">
+      <input name="in1" type="float" nodename="strip_a_height_v" />
+      <input name="in2" type="float" nodename="strip_b_height_v" />
+    </max>
+    <multiply name="grain_height_v" type="float">
+      <input name="in1" type="float" nodename="grain_v" />
+      <input name="in2" type="float" value="0.015" />
+    </multiply>
+    <add name="weave_height_v" type="float">
+      <input name="in1" type="float" nodename="weave_height_raw_v" />
+      <input name="in2" type="float" nodename="grain_height_v" />
+    </add>
+    <multiply name="slope_scale" type="float">
+      <input name="in1" type="float" interfacename="depth" />
+      <input name="in2" type="float" value="-250" />
+    </multiply>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="weave_height_u" />
+      <input name="in2" type="float" nodename="weave_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="weave_height_v" />
+      <input name="in2" type="float" nodename="weave_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: every strip cut from a different part of the hide, darker dyed edges, shade where a strip dives under its neighbour and dark gaps. -->
+    <combine2 name="strip_a_id" type="vector2">
+      <input name="in1" type="float" nodename="strip_a_index" />
+      <input name="in2" type="float" value="3.5" />
+    </combine2>
+    <cellnoise2d name="strip_a_random" type="float">
+      <input name="texcoord" type="vector2" nodename="strip_a_id" />
+    </cellnoise2d>
+    <combine2 name="strip_b_id" type="vector2">
+      <input name="in1" type="float" value="41.5" />
+      <input name="in2" type="float" nodename="strip_b_index" />
+    </combine2>
+    <cellnoise2d name="strip_b_random" type="float">
+      <input name="texcoord" type="vector2" nodename="strip_b_id" />
+    </cellnoise2d>
+    <mix name="strip_random" type="float">
+      <input name="bg" type="float" nodename="strip_b_random" />
+      <input name="fg" type="float" nodename="strip_a_random" />
+      <input name="mix" type="float" nodename="show_strip_a" />
+    </mix>
+    <subtract name="strip_random_centered" type="float">
+      <input name="in1" type="float" nodename="strip_random" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="variation_range" type="float">
+      <input name="in1" type="float" interfacename="variation" />
+      <input name="in2" type="float" value="0.45" />
+    </multiply>
+    <multiply name="strip_random_offset" type="float">
+      <input name="in1" type="float" nodename="strip_random_centered" />
+      <input name="in2" type="float" nodename="variation_range" />
+    </multiply>
+    <add name="strip_tone" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="strip_random_offset" />
+    </add>
+    <mix name="visible_dome" type="float">
+      <input name="bg" type="float" nodename="strip_b_dome" />
+      <input name="fg" type="float" nodename="strip_a_dome" />
+      <input name="mix" type="float" nodename="show_strip_a" />
+    </mix>
+    <mix name="visible_crossing" type="float">
+      <input name="bg" type="float" nodename="strip_b_crossing" />
+      <input name="fg" type="float" nodename="strip_a_crossing" />
+      <input name="mix" type="float" nodename="show_strip_a" />
+    </mix>
+    <power name="edge_curve" type="float">
+      <input name="in1" type="float" nodename="visible_dome" />
+      <input name="in2" type="float" value="0.7" />
+    </power>
+    <remap name="edge_shade" type="float">
+      <input name="in" type="float" nodename="edge_curve" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.3" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="dive_shade" type="float">
+      <input name="in" type="float" nodename="visible_crossing" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.35" />
+      <input name="outhigh" type="float" value="1.05" />
+    </remap>
+    <multiply name="strip_shade" type="float">
+      <input name="in1" type="float" nodename="edge_shade" />
+      <input name="in2" type="float" nodename="dive_shade" />
+    </multiply>
+    <multiply name="strip_shade_toned" type="float">
+      <input name="in1" type="float" nodename="strip_shade" />
+      <input name="in2" type="float" nodename="strip_tone" />
+    </multiply>
+    <multiply name="leather_shaded" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" nodename="strip_shade_toned" />
+    </multiply>
+    <max name="covered" type="float">
+      <input name="in1" type="float" nodename="strip_a_inside" />
+      <input name="in2" type="float" nodename="strip_b_inside" />
+    </max>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="gap_color" />
+      <input name="fg" type="color3" nodename="leather_shaded" />
+      <input name="mix" type="float" nodename="covered" />
+    </mix>
+    <remap name="strip_roughness" type="float">
+      <input name="in" type="float" nodename="visible_crossing" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.48" />
+      <input name="outhigh" type="float" value="0.32" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.8" />
+      <input name="fg" type="float" nodename="strip_roughness" />
+      <input name="mix" type="float" nodename="covered" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_woven_leather" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_woven_leather" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.4" />
+    <input name="specular_roughness" type="float" nodegraph="NG_woven_leather" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_woven_leather" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Woven_Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_woven_leather" />
+  </surfacematerial>
+</materialx>

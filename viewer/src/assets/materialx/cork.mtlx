@@ -1,0 +1,398 @@
+<?xml version="1.0"?>
+<!--
+  Cork board: OpenPBR agglomerated cork. Worley cells of a warped
+  object-space position are the granules, domed toward their centres with
+  crevices between them and finer Worley pores inside; forward differences
+  of that height tilt the normal. Granules vary from pale to dark bark and a
+  little fuzz gives cork its soft, dry look.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_cork">
+    <input name="light_color" type="color3" value="0.4, 0.22, 0.1" uiname="Light granules" />
+    <input name="dark_color" type="color3" value="0.17, 0.075, 0.03" uiname="Dark granules" />
+    <input name="gap_color" type="color3" value="0.03, 0.013, 0.006" uiname="Gaps" />
+    <input name="granule_scale" type="float" value="32" uiname="Granule scale" uimin="2" uimax="400" />
+    <input name="depth" type="float" value="0.35" uiname="Depth" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="granule_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="granule_scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_position" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <noise3d name="granule_warp" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+    </noise3d>
+    <multiply name="warp_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warp" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="granule_warped" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_position" />
+      <input name="in2" type="vector3" nodename="warp_offset" />
+    </add>
+    <worleynoise3d name="granules" type="vector2">
+      <input name="position" type="vector3" nodename="granule_warped" />
+    </worleynoise3d>
+    <separate2 name="granule_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="granules" />
+    </separate2>
+    <subtract name="granule_border" type="float">
+      <input name="in1" type="float" nodename="granule_distances" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances" output="outx" />
+    </subtract>
+    <smoothstep name="granule_dome" type="float">
+      <input name="in" type="float" nodename="granule_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="pore_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <worleynoise3d name="pores" type="vector2">
+      <input name="position" type="vector3" nodename="pore_position" />
+    </worleynoise3d>
+    <separate2 name="pore_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="pores" />
+    </separate2>
+    <smoothstep name="pore_ramp" type="float">
+      <input name="in" type="float" nodename="pore_distances" output="outx" />
+      <input name="low" type="float" value="0.08" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <invert name="pore" type="float">
+      <input name="in" type="float" nodename="pore_ramp" />
+    </invert>
+    <power name="granule_round" type="float">
+      <input name="in1" type="float" nodename="granule_dome" />
+      <input name="in2" type="float" value="0.5" />
+    </power>
+    <multiply name="pore_depth" type="float">
+      <input name="in1" type="float" nodename="pore" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <subtract name="cork_height" type="float">
+      <input name="in1" type="float" nodename="granule_round" />
+      <input name="in2" type="float" nodename="pore_depth" />
+    </subtract>
+    <add name="tap_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="vector3" value="0.02, 0, 0" />
+    </add>
+    <worleynoise3d name="granules_x" type="vector2">
+      <input name="position" type="vector3" nodename="tap_position_x" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_x" />
+    </separate2>
+    <subtract name="granule_border_x" type="float">
+      <input name="in1" type="float" nodename="granule_distances_x" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_x" output="outx" />
+    </subtract>
+    <smoothstep name="granule_dome_x" type="float">
+      <input name="in" type="float" nodename="granule_border_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="pore_position_x" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_x" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <worleynoise3d name="pores_x" type="vector2">
+      <input name="position" type="vector3" nodename="pore_position_x" />
+    </worleynoise3d>
+    <separate2 name="pore_distances_x" type="multioutput">
+      <input name="in" type="vector2" nodename="pores_x" />
+    </separate2>
+    <smoothstep name="pore_ramp_x" type="float">
+      <input name="in" type="float" nodename="pore_distances_x" output="outx" />
+      <input name="low" type="float" value="0.08" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <invert name="pore_x" type="float">
+      <input name="in" type="float" nodename="pore_ramp_x" />
+    </invert>
+    <power name="granule_round_x" type="float">
+      <input name="in1" type="float" nodename="granule_dome_x" />
+      <input name="in2" type="float" value="0.5" />
+    </power>
+    <multiply name="pore_depth_x" type="float">
+      <input name="in1" type="float" nodename="pore_x" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <subtract name="cork_height_x" type="float">
+      <input name="in1" type="float" nodename="granule_round_x" />
+      <input name="in2" type="float" nodename="pore_depth_x" />
+    </subtract>
+    <add name="tap_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="vector3" value="0, 0.02, 0" />
+    </add>
+    <worleynoise3d name="granules_y" type="vector2">
+      <input name="position" type="vector3" nodename="tap_position_y" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_y" />
+    </separate2>
+    <subtract name="granule_border_y" type="float">
+      <input name="in1" type="float" nodename="granule_distances_y" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_y" output="outx" />
+    </subtract>
+    <smoothstep name="granule_dome_y" type="float">
+      <input name="in" type="float" nodename="granule_border_y" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="pore_position_y" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_y" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <worleynoise3d name="pores_y" type="vector2">
+      <input name="position" type="vector3" nodename="pore_position_y" />
+    </worleynoise3d>
+    <separate2 name="pore_distances_y" type="multioutput">
+      <input name="in" type="vector2" nodename="pores_y" />
+    </separate2>
+    <smoothstep name="pore_ramp_y" type="float">
+      <input name="in" type="float" nodename="pore_distances_y" output="outx" />
+      <input name="low" type="float" value="0.08" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <invert name="pore_y" type="float">
+      <input name="in" type="float" nodename="pore_ramp_y" />
+    </invert>
+    <power name="granule_round_y" type="float">
+      <input name="in1" type="float" nodename="granule_dome_y" />
+      <input name="in2" type="float" value="0.5" />
+    </power>
+    <multiply name="pore_depth_y" type="float">
+      <input name="in1" type="float" nodename="pore_y" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <subtract name="cork_height_y" type="float">
+      <input name="in1" type="float" nodename="granule_round_y" />
+      <input name="in2" type="float" nodename="pore_depth_y" />
+    </subtract>
+    <add name="tap_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="vector3" value="0, 0, 0.02" />
+    </add>
+    <worleynoise3d name="granules_z" type="vector2">
+      <input name="position" type="vector3" nodename="tap_position_z" />
+    </worleynoise3d>
+    <separate2 name="granule_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="granules_z" />
+    </separate2>
+    <subtract name="granule_border_z" type="float">
+      <input name="in1" type="float" nodename="granule_distances_z" output="outy" />
+      <input name="in2" type="float" nodename="granule_distances_z" output="outx" />
+    </subtract>
+    <smoothstep name="granule_dome_z" type="float">
+      <input name="in" type="float" nodename="granule_border_z" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="pore_position_z" type="vector3">
+      <input name="in1" type="vector3" nodename="tap_position_z" />
+      <input name="in2" type="float" value="3.1" />
+    </multiply>
+    <worleynoise3d name="pores_z" type="vector2">
+      <input name="position" type="vector3" nodename="pore_position_z" />
+    </worleynoise3d>
+    <separate2 name="pore_distances_z" type="multioutput">
+      <input name="in" type="vector2" nodename="pores_z" />
+    </separate2>
+    <smoothstep name="pore_ramp_z" type="float">
+      <input name="in" type="float" nodename="pore_distances_z" output="outx" />
+      <input name="low" type="float" value="0.08" />
+      <input name="high" type="float" value="0.2" />
+    </smoothstep>
+    <invert name="pore_z" type="float">
+      <input name="in" type="float" nodename="pore_ramp_z" />
+    </invert>
+    <power name="granule_round_z" type="float">
+      <input name="in1" type="float" nodename="granule_dome_z" />
+      <input name="in2" type="float" value="0.5" />
+    </power>
+    <multiply name="pore_depth_z" type="float">
+      <input name="in1" type="float" nodename="pore_z" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <subtract name="cork_height_z" type="float">
+      <input name="in1" type="float" nodename="granule_round_z" />
+      <input name="in2" type="float" nodename="pore_depth_z" />
+    </subtract>
+    <combine3 name="height_ahead" type="vector3">
+      <input name="in1" type="float" nodename="cork_height_x" />
+      <input name="in2" type="float" nodename="cork_height_y" />
+      <input name="in3" type="float" nodename="cork_height_z" />
+    </combine3>
+    <subtract name="height_delta" type="vector3">
+      <input name="in1" type="vector3" nodename="height_ahead" />
+      <input name="in2" type="float" nodename="cork_height" />
+    </subtract>
+    <multiply name="height_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_delta" />
+      <input name="in2" type="float" value="50" />
+    </multiply>
+    <multiply name="bump_scale" type="float">
+      <input name="in1" type="float" interfacename="depth" />
+      <input name="in2" type="float" value="0.09" />
+    </multiply>
+    <multiply name="cork_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="height_gradient" />
+      <input name="in2" type="float" nodename="bump_scale" />
+    </multiply>
+    <dotproduct name="cork_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="cork_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="cork_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="cork_along_normal" />
+    </multiply>
+    <subtract name="cork_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="cork_gradient" />
+      <input name="in2" type="vector3" nodename="cork_normal_part" />
+    </subtract>
+    <subtract name="cork_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="cork_surface_gradient" />
+    </subtract>
+    <transformnormal name="cork_world" type="vector3">
+      <input name="in" type="vector3" nodename="cork_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="cork_normal" type="vector3">
+      <input name="in" type="vector3" nodename="cork_world" />
+    </normalize>
+
+    <!-- Color: each granule a different shade of bark, from blotchy noise at granule size, darker crevices and pores, and a slow tone drift across the board. -->
+    <multiply name="blotch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="float" value="1.1" />
+    </multiply>
+    <noise3d name="blotch" type="float">
+      <input name="position" type="vector3" nodename="blotch_position" />
+    </noise3d>
+    <multiply name="blotch_part" type="float">
+      <input name="in1" type="float" nodename="blotch" />
+      <input name="in2" type="float" value="1.2" />
+    </multiply>
+    <multiply name="patch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="float" value="0.33" />
+    </multiply>
+    <noise3d name="patch" type="float">
+      <input name="position" type="vector3" nodename="patch_position" />
+    </noise3d>
+    <multiply name="patch_part" type="float">
+      <input name="in1" type="float" nodename="patch" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="granule_shade" type="float">
+      <input name="in1" type="float" nodename="blotch_part" />
+      <input name="in2" type="float" nodename="patch_part" />
+    </add>
+    <multiply name="drift_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <fractal3d name="drift" type="float">
+      <input name="position" type="vector3" nodename="drift_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <multiply name="drift_part" type="float">
+      <input name="in1" type="float" nodename="drift" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="shade_raw" type="float">
+      <input name="in1" type="float" nodename="granule_shade" />
+      <input name="in2" type="float" nodename="drift_part" />
+    </add>
+    <add name="shade_shift" type="float">
+      <input name="in1" type="float" nodename="shade_raw" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <clamp name="shade_mix" type="float">
+      <input name="in" type="float" nodename="shade_shift" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <mix name="granule_color" type="color3">
+      <input name="bg" type="color3" interfacename="dark_color" />
+      <input name="fg" type="color3" interfacename="light_color" />
+      <input name="mix" type="float" nodename="shade_mix" />
+    </mix>
+    <multiply name="fleck_position" type="vector3">
+      <input name="in1" type="vector3" nodename="granule_warped" />
+      <input name="in2" type="float" value="6" />
+    </multiply>
+    <cellnoise3d name="fleck" type="float">
+      <input name="position" type="vector3" nodename="fleck_position" />
+    </cellnoise3d>
+    <remap name="fleck_tone" type="float">
+      <input name="in" type="float" nodename="fleck" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.82" />
+      <input name="outhigh" type="float" value="1.12" />
+    </remap>
+    <multiply name="granule_flecked" type="color3">
+      <input name="in1" type="color3" nodename="granule_color" />
+      <input name="in2" type="float" nodename="fleck_tone" />
+    </multiply>
+    <smoothstep name="crevice_ramp" type="float">
+      <input name="in" type="float" nodename="granule_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <invert name="crevice" type="float">
+      <input name="in" type="float" nodename="crevice_ramp" />
+    </invert>
+    <multiply name="pore_shadow" type="float">
+      <input name="in1" type="float" nodename="pore" />
+      <input name="in2" type="float" value="0.85" />
+    </multiply>
+    <max name="cork_shadow" type="float">
+      <input name="in1" type="float" nodename="crevice" />
+      <input name="in2" type="float" nodename="pore_shadow" />
+    </max>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="granule_flecked" />
+      <input name="fg" type="color3" interfacename="gap_color" />
+      <input name="mix" type="float" nodename="cork_shadow" />
+    </mix>
+    <remap name="roughness" type="float">
+      <input name="in" type="float" nodename="granule_dome" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="0.62" />
+    </remap>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="cork_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_cork" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_cork" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.8" />
+    <input name="specular_weight" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" nodegraph="NG_cork" output="roughness_out" />
+    <input name="fuzz_weight" type="float" value="0.15" />
+    <input name="fuzz_color" type="color3" value="0.45, 0.3, 0.18" />
+    <input name="fuzz_roughness" type="float" value="0.7" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_cork" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Cork_Board" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_cork" />
+  </surfacematerial>
+</materialx>

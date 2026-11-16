@@ -1,0 +1,789 @@
+<?xml version="1.0"?>
+<!--
+  Quilted leather: OpenPBR lambskin stitched into diamonds. The two UV
+  diagonals cut the surface into cushions shaped from sin(pi a) sin(pi b);
+  tonal stitches sit in the creases and fine wrinkles gather toward them.
+  Forward differences of the height in UV space give the normal. Uses UV0
+  and exposes the diamond count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_quilted_leather">
+    <input name="leather_color" type="color3" value="0.048, 0.01, 0.011" uiname="Leather" />
+    <input name="thread_color" type="color3" value="0.085, 0.022, 0.02" uiname="Thread" />
+    <input name="tiles" type="vector2" value="20, 10" uiname="Diamonds per UV" />
+    <input name="puff" type="float" value="0.16" uiname="Puff" uimin="0" uimax="0.5" />
+    <input name="stitches" type="float" value="9" uiname="Stitches per diamond" uimin="2" uimax="30" />
+    <input name="wear" type="float" value="0.5" uiname="Wear" uimin="0" uimax="1" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="quilt_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="quilt_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="quilt_uv" />
+    </separate2>
+    <add name="diagonal_a" type="float">
+      <input name="in1" type="float" nodename="quilt_parts" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts" output="outy" />
+    </add>
+    <subtract name="diagonal_b" type="float">
+      <input name="in1" type="float" nodename="quilt_parts" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts" output="outy" />
+    </subtract>
+    <floor name="diagonal_a_fraction_floor" type="float">
+      <input name="in" type="float" nodename="diagonal_a" />
+    </floor>
+    <subtract name="diagonal_a_fraction" type="float">
+      <input name="in1" type="float" nodename="diagonal_a" />
+      <input name="in2" type="float" nodename="diagonal_a_fraction_floor" />
+    </subtract>
+    <floor name="diagonal_b_fraction_floor" type="float">
+      <input name="in" type="float" nodename="diagonal_b" />
+    </floor>
+    <subtract name="diagonal_b_fraction" type="float">
+      <input name="in1" type="float" nodename="diagonal_b" />
+      <input name="in2" type="float" nodename="diagonal_b_fraction_floor" />
+    </subtract>
+    <multiply name="diagonal_a_angle" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_a_sin" type="float">
+      <input name="in" type="float" nodename="diagonal_a_angle" />
+    </sin>
+    <multiply name="diagonal_b_angle" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_b_sin" type="float">
+      <input name="in" type="float" nodename="diagonal_b_angle" />
+    </sin>
+    <multiply name="cushion_product" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_sin" />
+      <input name="in2" type="float" nodename="diagonal_b_sin" />
+    </multiply>
+    <max name="cushion_positive" type="float">
+      <input name="in1" type="float" nodename="cushion_product" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="cushion" type="float">
+      <input name="in1" type="float" nodename="cushion_positive" />
+      <input name="in2" type="float" value="0.45" />
+    </power>
+    <invert name="diagonal_a_back" type="float">
+      <input name="in" type="float" nodename="diagonal_a_fraction" />
+    </invert>
+    <min name="line_a_distance" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction" />
+      <input name="in2" type="float" nodename="diagonal_a_back" />
+    </min>
+    <invert name="diagonal_b_back" type="float">
+      <input name="in" type="float" nodename="diagonal_b_fraction" />
+    </invert>
+    <min name="line_b_distance" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction" />
+      <input name="in2" type="float" nodename="diagonal_b_back" />
+    </min>
+    <ifgreater name="nearest_line_a" type="float">
+      <input name="value1" type="float" nodename="line_b_distance" />
+      <input name="value2" type="float" nodename="line_a_distance" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <min name="line_distance" type="float">
+      <input name="in1" type="float" nodename="line_a_distance" />
+      <input name="in2" type="float" nodename="line_b_distance" />
+    </min>
+    <mix name="along_line" type="float">
+      <input name="bg" type="float" nodename="diagonal_a" />
+      <input name="fg" type="float" nodename="diagonal_b" />
+      <input name="mix" type="float" nodename="nearest_line_a" />
+    </mix>
+    <multiply name="stitch_phase" type="float">
+      <input name="in1" type="float" nodename="along_line" />
+      <input name="in2" type="float" interfacename="stitches" />
+    </multiply>
+    <floor name="stitch_dash_floor" type="float">
+      <input name="in" type="float" nodename="stitch_phase" />
+    </floor>
+    <subtract name="stitch_dash" type="float">
+      <input name="in1" type="float" nodename="stitch_phase" />
+      <input name="in2" type="float" nodename="stitch_dash_floor" />
+    </subtract>
+    <divide name="dash_unit" type="float">
+      <input name="in1" type="float" nodename="stitch_dash" />
+      <input name="in2" type="float" value="0.7" />
+    </divide>
+    <clamp name="dash_unit_clamped" type="float">
+      <input name="in" type="float" nodename="dash_unit" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <multiply name="dash_angle" type="float">
+      <input name="in1" type="float" nodename="dash_unit_clamped" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="dash_shape" type="float">
+      <input name="in" type="float" nodename="dash_angle" />
+    </sin>
+    <divide name="thread_across" type="float">
+      <input name="in1" type="float" nodename="line_distance" />
+      <input name="in2" type="float" value="0.022" />
+    </divide>
+    <smoothstep name="thread_band_ramp" type="float">
+      <input name="in" type="float" nodename="thread_across" />
+      <input name="low" type="float" value="0.6" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="thread_band" type="float">
+      <input name="in" type="float" nodename="thread_band_ramp" />
+    </invert>
+    <smoothstep name="thread_dash_mask" type="float">
+      <input name="in" type="float" nodename="dash_shape" />
+      <input name="low" type="float" value="0.05" />
+      <input name="high" type="float" value="0.25" />
+    </smoothstep>
+    <multiply name="thread_mask" type="float">
+      <input name="in1" type="float" nodename="thread_band" />
+      <input name="in2" type="float" nodename="thread_dash_mask" />
+    </multiply>
+    <multiply name="thread_across2" type="float">
+      <input name="in1" type="float" nodename="thread_across" />
+      <input name="in2" type="float" nodename="thread_across" />
+    </multiply>
+    <invert name="thread_round2" type="float">
+      <input name="in" type="float" nodename="thread_across2" />
+    </invert>
+    <max name="thread_round_positive" type="float">
+      <input name="in1" type="float" nodename="thread_round2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="thread_round" type="float">
+      <input name="in" type="float" nodename="thread_round_positive" />
+    </sqrt>
+    <multiply name="thread_profile" type="float">
+      <input name="in1" type="float" nodename="thread_round" />
+      <input name="in2" type="float" nodename="dash_shape" />
+    </multiply>
+    <multiply name="thread_height" type="float">
+      <input name="in1" type="float" nodename="thread_profile" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <multiply name="grain_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="quilt_uv" />
+      <input name="in2" type="float" value="26" />
+    </multiply>
+    <noise2d name="grain" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv" />
+    </noise2d>
+    <multiply name="wrinkle_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="quilt_uv" />
+      <input name="in2" type="vector2" value="7, 7" />
+    </multiply>
+    <noise2d name="wrinkle" type="float">
+      <input name="texcoord" type="vector2" nodename="wrinkle_uv" />
+    </noise2d>
+    <invert name="crease_gather" type="float">
+      <input name="in" type="float" nodename="cushion" />
+    </invert>
+    <multiply name="grain_height" type="float">
+      <input name="in1" type="float" nodename="grain" />
+      <input name="in2" type="float" value="0.012" />
+    </multiply>
+    <multiply name="wrinkle_gathered" type="float">
+      <input name="in1" type="float" nodename="wrinkle" />
+      <input name="in2" type="float" nodename="crease_gather" />
+    </multiply>
+    <multiply name="wrinkle_height" type="float">
+      <input name="in1" type="float" nodename="wrinkle_gathered" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="texture_height" type="float">
+      <input name="in1" type="float" nodename="grain_height" />
+      <input name="in2" type="float" nodename="wrinkle_height" />
+    </add>
+    <multiply name="thread_height_masked" type="float">
+      <input name="in1" type="float" nodename="thread_height" />
+      <input name="in2" type="float" nodename="thread_mask" />
+    </multiply>
+    <add name="cushion_thread" type="float">
+      <input name="in1" type="float" nodename="cushion" />
+      <input name="in2" type="float" nodename="thread_height_masked" />
+    </add>
+    <add name="quilt_height" type="float">
+      <input name="in1" type="float" nodename="cushion_thread" />
+      <input name="in2" type="float" nodename="texture_height" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="quilt_uv" />
+      <input name="in2" type="vector2" value="0.004, 0" />
+    </add>
+    <separate2 name="quilt_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <add name="diagonal_a_u" type="float">
+      <input name="in1" type="float" nodename="quilt_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts_u" output="outy" />
+    </add>
+    <subtract name="diagonal_b_u" type="float">
+      <input name="in1" type="float" nodename="quilt_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts_u" output="outy" />
+    </subtract>
+    <floor name="diagonal_a_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="diagonal_a_u" />
+    </floor>
+    <subtract name="diagonal_a_fraction_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_u" />
+      <input name="in2" type="float" nodename="diagonal_a_fraction_floor_u" />
+    </subtract>
+    <floor name="diagonal_b_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="diagonal_b_u" />
+    </floor>
+    <subtract name="diagonal_b_fraction_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_u" />
+      <input name="in2" type="float" nodename="diagonal_b_fraction_floor_u" />
+    </subtract>
+    <multiply name="diagonal_a_angle_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_a_sin_u" type="float">
+      <input name="in" type="float" nodename="diagonal_a_angle_u" />
+    </sin>
+    <multiply name="diagonal_b_angle_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_b_sin_u" type="float">
+      <input name="in" type="float" nodename="diagonal_b_angle_u" />
+    </sin>
+    <multiply name="cushion_product_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_sin_u" />
+      <input name="in2" type="float" nodename="diagonal_b_sin_u" />
+    </multiply>
+    <max name="cushion_positive_u" type="float">
+      <input name="in1" type="float" nodename="cushion_product_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="cushion_u" type="float">
+      <input name="in1" type="float" nodename="cushion_positive_u" />
+      <input name="in2" type="float" value="0.45" />
+    </power>
+    <invert name="diagonal_a_back_u" type="float">
+      <input name="in" type="float" nodename="diagonal_a_fraction_u" />
+    </invert>
+    <min name="line_a_distance_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction_u" />
+      <input name="in2" type="float" nodename="diagonal_a_back_u" />
+    </min>
+    <invert name="diagonal_b_back_u" type="float">
+      <input name="in" type="float" nodename="diagonal_b_fraction_u" />
+    </invert>
+    <min name="line_b_distance_u" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction_u" />
+      <input name="in2" type="float" nodename="diagonal_b_back_u" />
+    </min>
+    <ifgreater name="nearest_line_a_u" type="float">
+      <input name="value1" type="float" nodename="line_b_distance_u" />
+      <input name="value2" type="float" nodename="line_a_distance_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <min name="line_distance_u" type="float">
+      <input name="in1" type="float" nodename="line_a_distance_u" />
+      <input name="in2" type="float" nodename="line_b_distance_u" />
+    </min>
+    <mix name="along_line_u" type="float">
+      <input name="bg" type="float" nodename="diagonal_a_u" />
+      <input name="fg" type="float" nodename="diagonal_b_u" />
+      <input name="mix" type="float" nodename="nearest_line_a_u" />
+    </mix>
+    <multiply name="stitch_phase_u" type="float">
+      <input name="in1" type="float" nodename="along_line_u" />
+      <input name="in2" type="float" interfacename="stitches" />
+    </multiply>
+    <floor name="stitch_dash_floor_u" type="float">
+      <input name="in" type="float" nodename="stitch_phase_u" />
+    </floor>
+    <subtract name="stitch_dash_u" type="float">
+      <input name="in1" type="float" nodename="stitch_phase_u" />
+      <input name="in2" type="float" nodename="stitch_dash_floor_u" />
+    </subtract>
+    <divide name="dash_unit_u" type="float">
+      <input name="in1" type="float" nodename="stitch_dash_u" />
+      <input name="in2" type="float" value="0.7" />
+    </divide>
+    <clamp name="dash_unit_clamped_u" type="float">
+      <input name="in" type="float" nodename="dash_unit_u" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <multiply name="dash_angle_u" type="float">
+      <input name="in1" type="float" nodename="dash_unit_clamped_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="dash_shape_u" type="float">
+      <input name="in" type="float" nodename="dash_angle_u" />
+    </sin>
+    <divide name="thread_across_u" type="float">
+      <input name="in1" type="float" nodename="line_distance_u" />
+      <input name="in2" type="float" value="0.022" />
+    </divide>
+    <smoothstep name="thread_band_ramp_u" type="float">
+      <input name="in" type="float" nodename="thread_across_u" />
+      <input name="low" type="float" value="0.6" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="thread_band_u" type="float">
+      <input name="in" type="float" nodename="thread_band_ramp_u" />
+    </invert>
+    <smoothstep name="thread_dash_mask_u" type="float">
+      <input name="in" type="float" nodename="dash_shape_u" />
+      <input name="low" type="float" value="0.05" />
+      <input name="high" type="float" value="0.25" />
+    </smoothstep>
+    <multiply name="thread_mask_u" type="float">
+      <input name="in1" type="float" nodename="thread_band_u" />
+      <input name="in2" type="float" nodename="thread_dash_mask_u" />
+    </multiply>
+    <multiply name="thread_across2_u" type="float">
+      <input name="in1" type="float" nodename="thread_across_u" />
+      <input name="in2" type="float" nodename="thread_across_u" />
+    </multiply>
+    <invert name="thread_round2_u" type="float">
+      <input name="in" type="float" nodename="thread_across2_u" />
+    </invert>
+    <max name="thread_round_positive_u" type="float">
+      <input name="in1" type="float" nodename="thread_round2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="thread_round_u" type="float">
+      <input name="in" type="float" nodename="thread_round_positive_u" />
+    </sqrt>
+    <multiply name="thread_profile_u" type="float">
+      <input name="in1" type="float" nodename="thread_round_u" />
+      <input name="in2" type="float" nodename="dash_shape_u" />
+    </multiply>
+    <multiply name="thread_height_u" type="float">
+      <input name="in1" type="float" nodename="thread_profile_u" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <multiply name="grain_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="26" />
+    </multiply>
+    <noise2d name="grain_u" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_u" />
+    </noise2d>
+    <multiply name="wrinkle_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="vector2" value="7, 7" />
+    </multiply>
+    <noise2d name="wrinkle_u" type="float">
+      <input name="texcoord" type="vector2" nodename="wrinkle_uv_u" />
+    </noise2d>
+    <invert name="crease_gather_u" type="float">
+      <input name="in" type="float" nodename="cushion_u" />
+    </invert>
+    <multiply name="grain_height_u" type="float">
+      <input name="in1" type="float" nodename="grain_u" />
+      <input name="in2" type="float" value="0.012" />
+    </multiply>
+    <multiply name="wrinkle_gathered_u" type="float">
+      <input name="in1" type="float" nodename="wrinkle_u" />
+      <input name="in2" type="float" nodename="crease_gather_u" />
+    </multiply>
+    <multiply name="wrinkle_height_u" type="float">
+      <input name="in1" type="float" nodename="wrinkle_gathered_u" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="texture_height_u" type="float">
+      <input name="in1" type="float" nodename="grain_height_u" />
+      <input name="in2" type="float" nodename="wrinkle_height_u" />
+    </add>
+    <multiply name="thread_height_masked_u" type="float">
+      <input name="in1" type="float" nodename="thread_height_u" />
+      <input name="in2" type="float" nodename="thread_mask_u" />
+    </multiply>
+    <add name="cushion_thread_u" type="float">
+      <input name="in1" type="float" nodename="cushion_u" />
+      <input name="in2" type="float" nodename="thread_height_masked_u" />
+    </add>
+    <add name="quilt_height_u" type="float">
+      <input name="in1" type="float" nodename="cushion_thread_u" />
+      <input name="in2" type="float" nodename="texture_height_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="quilt_uv" />
+      <input name="in2" type="vector2" value="0, 0.004" />
+    </add>
+    <separate2 name="quilt_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <add name="diagonal_a_v" type="float">
+      <input name="in1" type="float" nodename="quilt_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts_v" output="outy" />
+    </add>
+    <subtract name="diagonal_b_v" type="float">
+      <input name="in1" type="float" nodename="quilt_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="quilt_parts_v" output="outy" />
+    </subtract>
+    <floor name="diagonal_a_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="diagonal_a_v" />
+    </floor>
+    <subtract name="diagonal_a_fraction_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_v" />
+      <input name="in2" type="float" nodename="diagonal_a_fraction_floor_v" />
+    </subtract>
+    <floor name="diagonal_b_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="diagonal_b_v" />
+    </floor>
+    <subtract name="diagonal_b_fraction_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_v" />
+      <input name="in2" type="float" nodename="diagonal_b_fraction_floor_v" />
+    </subtract>
+    <multiply name="diagonal_a_angle_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_a_sin_v" type="float">
+      <input name="in" type="float" nodename="diagonal_a_angle_v" />
+    </sin>
+    <multiply name="diagonal_b_angle_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="diagonal_b_sin_v" type="float">
+      <input name="in" type="float" nodename="diagonal_b_angle_v" />
+    </sin>
+    <multiply name="cushion_product_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_sin_v" />
+      <input name="in2" type="float" nodename="diagonal_b_sin_v" />
+    </multiply>
+    <max name="cushion_positive_v" type="float">
+      <input name="in1" type="float" nodename="cushion_product_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <power name="cushion_v" type="float">
+      <input name="in1" type="float" nodename="cushion_positive_v" />
+      <input name="in2" type="float" value="0.45" />
+    </power>
+    <invert name="diagonal_a_back_v" type="float">
+      <input name="in" type="float" nodename="diagonal_a_fraction_v" />
+    </invert>
+    <min name="line_a_distance_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_a_fraction_v" />
+      <input name="in2" type="float" nodename="diagonal_a_back_v" />
+    </min>
+    <invert name="diagonal_b_back_v" type="float">
+      <input name="in" type="float" nodename="diagonal_b_fraction_v" />
+    </invert>
+    <min name="line_b_distance_v" type="float">
+      <input name="in1" type="float" nodename="diagonal_b_fraction_v" />
+      <input name="in2" type="float" nodename="diagonal_b_back_v" />
+    </min>
+    <ifgreater name="nearest_line_a_v" type="float">
+      <input name="value1" type="float" nodename="line_b_distance_v" />
+      <input name="value2" type="float" nodename="line_a_distance_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <min name="line_distance_v" type="float">
+      <input name="in1" type="float" nodename="line_a_distance_v" />
+      <input name="in2" type="float" nodename="line_b_distance_v" />
+    </min>
+    <mix name="along_line_v" type="float">
+      <input name="bg" type="float" nodename="diagonal_a_v" />
+      <input name="fg" type="float" nodename="diagonal_b_v" />
+      <input name="mix" type="float" nodename="nearest_line_a_v" />
+    </mix>
+    <multiply name="stitch_phase_v" type="float">
+      <input name="in1" type="float" nodename="along_line_v" />
+      <input name="in2" type="float" interfacename="stitches" />
+    </multiply>
+    <floor name="stitch_dash_floor_v" type="float">
+      <input name="in" type="float" nodename="stitch_phase_v" />
+    </floor>
+    <subtract name="stitch_dash_v" type="float">
+      <input name="in1" type="float" nodename="stitch_phase_v" />
+      <input name="in2" type="float" nodename="stitch_dash_floor_v" />
+    </subtract>
+    <divide name="dash_unit_v" type="float">
+      <input name="in1" type="float" nodename="stitch_dash_v" />
+      <input name="in2" type="float" value="0.7" />
+    </divide>
+    <clamp name="dash_unit_clamped_v" type="float">
+      <input name="in" type="float" nodename="dash_unit_v" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <multiply name="dash_angle_v" type="float">
+      <input name="in1" type="float" nodename="dash_unit_clamped_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="dash_shape_v" type="float">
+      <input name="in" type="float" nodename="dash_angle_v" />
+    </sin>
+    <divide name="thread_across_v" type="float">
+      <input name="in1" type="float" nodename="line_distance_v" />
+      <input name="in2" type="float" value="0.022" />
+    </divide>
+    <smoothstep name="thread_band_ramp_v" type="float">
+      <input name="in" type="float" nodename="thread_across_v" />
+      <input name="low" type="float" value="0.6" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="thread_band_v" type="float">
+      <input name="in" type="float" nodename="thread_band_ramp_v" />
+    </invert>
+    <smoothstep name="thread_dash_mask_v" type="float">
+      <input name="in" type="float" nodename="dash_shape_v" />
+      <input name="low" type="float" value="0.05" />
+      <input name="high" type="float" value="0.25" />
+    </smoothstep>
+    <multiply name="thread_mask_v" type="float">
+      <input name="in1" type="float" nodename="thread_band_v" />
+      <input name="in2" type="float" nodename="thread_dash_mask_v" />
+    </multiply>
+    <multiply name="thread_across2_v" type="float">
+      <input name="in1" type="float" nodename="thread_across_v" />
+      <input name="in2" type="float" nodename="thread_across_v" />
+    </multiply>
+    <invert name="thread_round2_v" type="float">
+      <input name="in" type="float" nodename="thread_across2_v" />
+    </invert>
+    <max name="thread_round_positive_v" type="float">
+      <input name="in1" type="float" nodename="thread_round2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="thread_round_v" type="float">
+      <input name="in" type="float" nodename="thread_round_positive_v" />
+    </sqrt>
+    <multiply name="thread_profile_v" type="float">
+      <input name="in1" type="float" nodename="thread_round_v" />
+      <input name="in2" type="float" nodename="dash_shape_v" />
+    </multiply>
+    <multiply name="thread_height_v" type="float">
+      <input name="in1" type="float" nodename="thread_profile_v" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <multiply name="grain_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="26" />
+    </multiply>
+    <noise2d name="grain_v" type="float">
+      <input name="texcoord" type="vector2" nodename="grain_uv_v" />
+    </noise2d>
+    <multiply name="wrinkle_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="vector2" value="7, 7" />
+    </multiply>
+    <noise2d name="wrinkle_v" type="float">
+      <input name="texcoord" type="vector2" nodename="wrinkle_uv_v" />
+    </noise2d>
+    <invert name="crease_gather_v" type="float">
+      <input name="in" type="float" nodename="cushion_v" />
+    </invert>
+    <multiply name="grain_height_v" type="float">
+      <input name="in1" type="float" nodename="grain_v" />
+      <input name="in2" type="float" value="0.012" />
+    </multiply>
+    <multiply name="wrinkle_gathered_v" type="float">
+      <input name="in1" type="float" nodename="wrinkle_v" />
+      <input name="in2" type="float" nodename="crease_gather_v" />
+    </multiply>
+    <multiply name="wrinkle_height_v" type="float">
+      <input name="in1" type="float" nodename="wrinkle_gathered_v" />
+      <input name="in2" type="float" value="0.05" />
+    </multiply>
+    <add name="texture_height_v" type="float">
+      <input name="in1" type="float" nodename="grain_height_v" />
+      <input name="in2" type="float" nodename="wrinkle_height_v" />
+    </add>
+    <multiply name="thread_height_masked_v" type="float">
+      <input name="in1" type="float" nodename="thread_height_v" />
+      <input name="in2" type="float" nodename="thread_mask_v" />
+    </multiply>
+    <add name="cushion_thread_v" type="float">
+      <input name="in1" type="float" nodename="cushion_v" />
+      <input name="in2" type="float" nodename="thread_height_masked_v" />
+    </add>
+    <add name="quilt_height_v" type="float">
+      <input name="in1" type="float" nodename="cushion_thread_v" />
+      <input name="in2" type="float" nodename="texture_height_v" />
+    </add>
+    <multiply name="slope_scale" type="float">
+      <input name="in1" type="float" interfacename="puff" />
+      <input name="in2" type="float" value="-250" />
+    </multiply>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="quilt_height_u" />
+      <input name="in2" type="float" nodename="quilt_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="quilt_height_v" />
+      <input name="in2" type="float" nodename="quilt_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: darker creases, a satin sheen on the cushions and lighter rubbed tops. -->
+    <power name="crease_curve" type="float">
+      <input name="in1" type="float" nodename="cushion" />
+      <input name="in2" type="float" value="0.6" />
+    </power>
+    <remap name="crease_shade" type="float">
+      <input name="in" type="float" nodename="crease_curve" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.05" />
+    </remap>
+    <position name="object_position" type="vector3" />
+    <multiply name="tone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.5" />
+    </multiply>
+    <fractal3d name="tone_fractal" type="float">
+      <input name="position" type="vector3" nodename="tone_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="tone" type="float">
+      <input name="in" type="float" nodename="tone_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <smoothstep name="cushion_top" type="float">
+      <input name="in" type="float" nodename="cushion" />
+      <input name="low" type="float" value="0.8" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <multiply name="wear_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="4" />
+    </multiply>
+    <fractal3d name="wear_fractal" type="float">
+      <input name="position" type="vector3" nodename="wear_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="wear_patches" type="float">
+      <input name="in" type="float" nodename="wear_fractal" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <multiply name="rub" type="float">
+      <input name="in1" type="float" nodename="cushion_top" />
+      <input name="in2" type="float" nodename="wear_patches" />
+    </multiply>
+    <multiply name="rubbed" type="float">
+      <input name="in1" type="float" nodename="rub" />
+      <input name="in2" type="float" interfacename="wear" />
+    </multiply>
+    <multiply name="leather_shade" type="float">
+      <input name="in1" type="float" nodename="crease_shade" />
+      <input name="in2" type="float" nodename="tone" />
+    </multiply>
+    <multiply name="leather_shaded" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" nodename="leather_shade" />
+    </multiply>
+    <multiply name="leather_rubbed" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" value="1.7" />
+    </multiply>
+    <multiply name="rub_mix" type="float">
+      <input name="in1" type="float" nodename="rubbed" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <mix name="leather_worn" type="color3">
+      <input name="bg" type="color3" nodename="leather_shaded" />
+      <input name="fg" type="color3" nodename="leather_rubbed" />
+      <input name="mix" type="float" nodename="rub_mix" />
+    </mix>
+    <remap name="thread_shade" type="float">
+      <input name="in" type="float" nodename="thread_round" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="thread_shaded" type="color3">
+      <input name="in1" type="color3" interfacename="thread_color" />
+      <input name="in2" type="float" nodename="thread_shade" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="leather_worn" />
+      <input name="fg" type="color3" nodename="thread_shaded" />
+      <input name="mix" type="float" nodename="thread_mask" />
+    </mix>
+    <remap name="leather_roughness" type="float">
+      <input name="in" type="float" nodename="cushion" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="0.3" />
+    </remap>
+    <multiply name="rub_polish" type="float">
+      <input name="in1" type="float" nodename="rubbed" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <subtract name="leather_polished" type="float">
+      <input name="in1" type="float" nodename="leather_roughness" />
+      <input name="in2" type="float" nodename="rub_polish" />
+    </subtract>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="leather_polished" />
+      <input name="fg" type="float" value="0.42" />
+      <input name="mix" type="float" nodename="thread_mask" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_quilted_leather" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_quilted_leather" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.4" />
+    <input name="specular_roughness" type="float" nodegraph="NG_quilted_leather" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="fuzz_weight" type="float" value="0.05" />
+    <input name="fuzz_color" type="color3" value="0.3, 0.06, 0.07" />
+    <input name="fuzz_roughness" type="float" value="0.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_quilted_leather" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Quilted_Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_quilted_leather" />
+  </surfacematerial>
+</materialx>

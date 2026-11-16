@@ -11,9 +11,17 @@ const sources = import.meta.glob<string>('../assets/materialx/*.mtlx', { query: 
 
 // Panel order and short labels; the documents name their materials in full.
 const LABELS: Record<string, string> = {
-  'car-paint': 'Flake paint', 'weathered-steel': 'Rusty steel', 'varnished-wood': 'Wood',
-  'marble': 'Marble', 'terrazzo': 'Terrazzo', 'leather': 'Leather',
+  'car-paint': 'Flake paint', 'weathered-steel': 'Rusty steel', 'galvanized-steel': 'Galvanized',
+  'riveted-steel': 'Riveted steel', 'anodized-aluminum': 'Anodized', 'aircraft-aluminum': 'Aircraft skin',
+  'patina-bronze': 'Bronze',
+  'varnished-wood': 'Wood', 'cork': 'Cork', 'marble': 'Marble', 'terrazzo': 'Terrazzo',
+  'exposed-concrete': 'Concrete', 'mossy-stone': 'Mossy stone', 'lichen': 'Lichen',
+  'leather': 'Leather', 'saddle-leather': 'Saddle leather', 'quilted-leather': 'Quilted',
+  'woven-leather': 'Woven leather', 'crocodile': 'Crocodile',
+  'suede': 'Suede', 'denim': 'Denim', 'silk-satin': 'Satin', 'herringbone-tweed': 'Tweed',
+  'rattan': 'Rattan',
   'tartan-velvet': 'Tartan', 'cobblestone': 'Cobbles', 'zellige-tile': 'Zellige',
+  'crackle-glaze': 'Crackle glaze',
   'candle-wax': 'Wax', 'hammered-copper': 'Copper', 'carbon-fiber': 'Carbon',
   'damascus-steel': 'Damascus', 'kintsugi': 'Kintsugi', 'heat-tinted-titanium': 'Titanium',
   'abalone': 'Abalone', 'hex-plating': 'Hex plate',
@@ -21,10 +29,8 @@ const LABELS: Record<string, string> = {
   'knit-wool': 'Knit', 'perforated-metal': 'Perforated', 'circuit-board': 'Circuit',
   'stained-glass': 'Stained glass', 'rain-glass': 'Rain glass', 'agate': 'Agate',
   'guilloche-enamel': 'Guilloché', 'dragon-scales': 'Scales', 'holo-glitter': 'Glitter',
-  'gas-giant': 'Gas giant',
   'cooling-lava': 'Lava', 'hex-panel': 'Hex glow', 'embers': 'Embers', 'hot-steel': 'Hot steel',
-  'sun': 'Sun', 'neon-truchet': 'Neon', 'led-matrix': 'LED matrix', 'night-windows': 'Night windows',
-  'nebula': 'Nebula', 'bioluminescence': 'Biolume'
+  'neon-truchet': 'Neon', 'led-matrix': 'LED matrix', 'nebula': 'Nebula'
 };
 const order = Object.keys(LABELS);
 

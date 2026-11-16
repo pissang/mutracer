@@ -1,0 +1,654 @@
+<?xml version="1.0"?>
+<!--
+  Crocodile leather: OpenPBR glazed belly scales. Rows of rounded rectangles
+  in UV space, each row shifted and gently bent, bulge between deep grooves;
+  forward differences of that height give the normal. Scale centres are
+  lighter and polished, the grooves dark, and a glossy coat sits on top.
+  Uses UV0 and exposes the scale count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_crocodile">
+    <input name="leather_color" type="color3" value="0.05, 0.022, 0.009" uiname="Scales" />
+    <input name="groove_color" type="color3" value="0.012, 0.005, 0.003" uiname="Grooves" />
+    <input name="tiles" type="vector2" value="34, 22" uiname="Scales per UV" />
+    <input name="depth" type="float" value="0.3" uiname="Depth" uimin="0" uimax="1" />
+    <input name="glaze" type="float" value="0.6" uiname="Glaze" uimin="0" uimax="1" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="scale_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <multiply name="bend_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_uv" />
+      <input name="in2" type="float" value="0.18" />
+    </multiply>
+    <noise2d name="row_bend" type="vector2">
+      <input name="texcoord" type="vector2" nodename="bend_uv" />
+    </noise2d>
+    <multiply name="bend_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="row_bend" />
+      <input name="in2" type="vector2" value="0.9, 1.1" />
+    </multiply>
+    <add name="rows_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="scale_uv" />
+      <input name="in2" type="vector2" nodename="bend_offset" />
+    </add>
+    <separate2 name="scale_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="rows_uv" />
+    </separate2>
+    <floor name="row" type="float">
+      <input name="in" type="float" nodename="scale_parts" output="outy" />
+    </floor>
+    <combine2 name="row_seed" type="vector2">
+      <input name="in1" type="float" nodename="row" />
+      <input name="in2" type="float" value="17.3" />
+    </combine2>
+    <cellnoise2d name="row_shift" type="float">
+      <input name="texcoord" type="vector2" nodename="row_seed" />
+    </cellnoise2d>
+    <combine2 name="jitter_uv_raw" type="vector2">
+      <input name="in1" type="float" nodename="scale_parts" output="outx" />
+      <input name="in2" type="float" nodename="row" />
+    </combine2>
+    <multiply name="jitter_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="jitter_uv_raw" />
+      <input name="in2" type="vector2" value="0.8, 3.1" />
+    </multiply>
+    <noise2d name="column_jitter" type="float">
+      <input name="texcoord" type="vector2" nodename="jitter_uv" />
+    </noise2d>
+    <add name="row_shifted" type="float">
+      <input name="in1" type="float" nodename="scale_parts" output="outx" />
+      <input name="in2" type="float" nodename="row_shift" />
+    </add>
+    <multiply name="jitter_offset" type="float">
+      <input name="in1" type="float" nodename="column_jitter" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="row_x" type="float">
+      <input name="in1" type="float" nodename="row_shifted" />
+      <input name="in2" type="float" nodename="jitter_offset" />
+    </add>
+    <floor name="column" type="float">
+      <input name="in" type="float" nodename="row_x" />
+    </floor>
+    <combine2 name="scale_seed" type="vector2">
+      <input name="in1" type="float" nodename="column" />
+      <input name="in2" type="float" nodename="row" />
+    </combine2>
+    <cellnoise2d name="scale_random" type="float">
+      <input name="texcoord" type="vector2" nodename="scale_seed" />
+    </cellnoise2d>
+    <subtract name="scale_u" type="float">
+      <input name="in1" type="float" nodename="row_x" />
+      <input name="in2" type="float" nodename="column" />
+    </subtract>
+    <subtract name="scale_v" type="float">
+      <input name="in1" type="float" nodename="scale_parts" output="outy" />
+      <input name="in2" type="float" nodename="row" />
+    </subtract>
+    <multiply name="scale_u2" type="float">
+      <input name="in1" type="float" nodename="scale_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_x" type="float">
+      <input name="in1" type="float" nodename="scale_u2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ax" type="float">
+      <input name="in" type="float" nodename="scale_x" />
+    </absval>
+    <multiply name="scale_v2" type="float">
+      <input name="in1" type="float" nodename="scale_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_y" type="float">
+      <input name="in1" type="float" nodename="scale_v2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ay" type="float">
+      <input name="in" type="float" nodename="scale_y" />
+    </absval>
+    <multiply name="ax2" type="float">
+      <input name="in1" type="float" nodename="scale_ax" />
+      <input name="in2" type="float" nodename="scale_ax" />
+    </multiply>
+    <multiply name="ax2b" type="float">
+      <input name="in1" type="float" nodename="scale_ax" />
+      <input name="in2" type="float" nodename="scale_ax" />
+    </multiply>
+    <multiply name="ax4" type="float">
+      <input name="in1" type="float" nodename="ax2" />
+      <input name="in2" type="float" nodename="ax2b" />
+    </multiply>
+    <multiply name="ay2" type="float">
+      <input name="in1" type="float" nodename="scale_ay" />
+      <input name="in2" type="float" nodename="scale_ay" />
+    </multiply>
+    <multiply name="ay2b" type="float">
+      <input name="in1" type="float" nodename="scale_ay" />
+      <input name="in2" type="float" nodename="scale_ay" />
+    </multiply>
+    <multiply name="ay4" type="float">
+      <input name="in1" type="float" nodename="ay2" />
+      <input name="in2" type="float" nodename="ay2b" />
+    </multiply>
+    <add name="super_sum" type="float">
+      <input name="in1" type="float" nodename="ax4" />
+      <input name="in2" type="float" nodename="ay4" />
+    </add>
+    <power name="super_distance" type="float">
+      <input name="in1" type="float" nodename="super_sum" />
+      <input name="in2" type="float" value="0.25" />
+    </power>
+    <smoothstep name="plate_edge" type="float">
+      <input name="in" type="float" nodename="super_distance" />
+      <input name="low" type="float" value="0.72" />
+      <input name="high" type="float" value="0.98" />
+    </smoothstep>
+    <invert name="plate" type="float">
+      <input name="in" type="float" nodename="plate_edge" />
+    </invert>
+    <multiply name="scale_d2" type="float">
+      <input name="in1" type="float" nodename="super_distance" />
+      <input name="in2" type="float" nodename="super_distance" />
+    </multiply>
+    <invert name="bulge_raw" type="float">
+      <input name="in" type="float" nodename="scale_d2" />
+    </invert>
+    <remap name="bulge_amount" type="float">
+      <input name="in" type="float" nodename="scale_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.15" />
+      <input name="outhigh" type="float" value="0.4" />
+    </remap>
+    <multiply name="bulge" type="float">
+      <input name="in1" type="float" nodename="bulge_raw" />
+      <input name="in2" type="float" nodename="bulge_amount" />
+    </multiply>
+    <multiply name="pebble_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="rows_uv" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise2d name="pebble" type="float">
+      <input name="texcoord" type="vector2" nodename="pebble_uv" />
+    </noise2d>
+    <multiply name="pebble_height" type="float">
+      <input name="in1" type="float" nodename="pebble" />
+      <input name="in2" type="float" value="0.04" />
+    </multiply>
+    <multiply name="bulge_masked" type="float">
+      <input name="in1" type="float" nodename="bulge" />
+      <input name="in2" type="float" nodename="plate" />
+    </multiply>
+    <add name="scale_body" type="float">
+      <input name="in1" type="float" nodename="plate" />
+      <input name="in2" type="float" nodename="bulge_masked" />
+    </add>
+    <add name="scale_height" type="float">
+      <input name="in1" type="float" nodename="scale_body" />
+      <input name="in2" type="float" nodename="pebble_height" />
+    </add>
+    <multiply name="depth_scale" type="float">
+      <input name="in1" type="float" interfacename="depth" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="rows_uv" />
+      <input name="in2" type="vector2" value="0.004, 0" />
+    </add>
+    <separate2 name="scale_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="row_u" type="float">
+      <input name="in" type="float" nodename="scale_parts_u" output="outy" />
+    </floor>
+    <combine2 name="row_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="row_u" />
+      <input name="in2" type="float" value="17.3" />
+    </combine2>
+    <cellnoise2d name="row_shift_u" type="float">
+      <input name="texcoord" type="vector2" nodename="row_seed_u" />
+    </cellnoise2d>
+    <combine2 name="jitter_uv_raw_u" type="vector2">
+      <input name="in1" type="float" nodename="scale_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="row_u" />
+    </combine2>
+    <multiply name="jitter_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="jitter_uv_raw_u" />
+      <input name="in2" type="vector2" value="0.8, 3.1" />
+    </multiply>
+    <noise2d name="column_jitter_u" type="float">
+      <input name="texcoord" type="vector2" nodename="jitter_uv_u" />
+    </noise2d>
+    <add name="row_shifted_u" type="float">
+      <input name="in1" type="float" nodename="scale_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="row_shift_u" />
+    </add>
+    <multiply name="jitter_offset_u" type="float">
+      <input name="in1" type="float" nodename="column_jitter_u" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="row_x_u" type="float">
+      <input name="in1" type="float" nodename="row_shifted_u" />
+      <input name="in2" type="float" nodename="jitter_offset_u" />
+    </add>
+    <floor name="column_u" type="float">
+      <input name="in" type="float" nodename="row_x_u" />
+    </floor>
+    <combine2 name="scale_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="column_u" />
+      <input name="in2" type="float" nodename="row_u" />
+    </combine2>
+    <cellnoise2d name="scale_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="scale_seed_u" />
+    </cellnoise2d>
+    <subtract name="scale_u_u" type="float">
+      <input name="in1" type="float" nodename="row_x_u" />
+      <input name="in2" type="float" nodename="column_u" />
+    </subtract>
+    <subtract name="scale_v_u" type="float">
+      <input name="in1" type="float" nodename="scale_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="row_u" />
+    </subtract>
+    <multiply name="scale_u2_u" type="float">
+      <input name="in1" type="float" nodename="scale_u_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_x_u" type="float">
+      <input name="in1" type="float" nodename="scale_u2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ax_u" type="float">
+      <input name="in" type="float" nodename="scale_x_u" />
+    </absval>
+    <multiply name="scale_v2_u" type="float">
+      <input name="in1" type="float" nodename="scale_v_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_y_u" type="float">
+      <input name="in1" type="float" nodename="scale_v2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ay_u" type="float">
+      <input name="in" type="float" nodename="scale_y_u" />
+    </absval>
+    <multiply name="ax2_u" type="float">
+      <input name="in1" type="float" nodename="scale_ax_u" />
+      <input name="in2" type="float" nodename="scale_ax_u" />
+    </multiply>
+    <multiply name="ax2b_u" type="float">
+      <input name="in1" type="float" nodename="scale_ax_u" />
+      <input name="in2" type="float" nodename="scale_ax_u" />
+    </multiply>
+    <multiply name="ax4_u" type="float">
+      <input name="in1" type="float" nodename="ax2_u" />
+      <input name="in2" type="float" nodename="ax2b_u" />
+    </multiply>
+    <multiply name="ay2_u" type="float">
+      <input name="in1" type="float" nodename="scale_ay_u" />
+      <input name="in2" type="float" nodename="scale_ay_u" />
+    </multiply>
+    <multiply name="ay2b_u" type="float">
+      <input name="in1" type="float" nodename="scale_ay_u" />
+      <input name="in2" type="float" nodename="scale_ay_u" />
+    </multiply>
+    <multiply name="ay4_u" type="float">
+      <input name="in1" type="float" nodename="ay2_u" />
+      <input name="in2" type="float" nodename="ay2b_u" />
+    </multiply>
+    <add name="super_sum_u" type="float">
+      <input name="in1" type="float" nodename="ax4_u" />
+      <input name="in2" type="float" nodename="ay4_u" />
+    </add>
+    <power name="super_distance_u" type="float">
+      <input name="in1" type="float" nodename="super_sum_u" />
+      <input name="in2" type="float" value="0.25" />
+    </power>
+    <smoothstep name="plate_edge_u" type="float">
+      <input name="in" type="float" nodename="super_distance_u" />
+      <input name="low" type="float" value="0.72" />
+      <input name="high" type="float" value="0.98" />
+    </smoothstep>
+    <invert name="plate_u" type="float">
+      <input name="in" type="float" nodename="plate_edge_u" />
+    </invert>
+    <multiply name="scale_d2_u" type="float">
+      <input name="in1" type="float" nodename="super_distance_u" />
+      <input name="in2" type="float" nodename="super_distance_u" />
+    </multiply>
+    <invert name="bulge_raw_u" type="float">
+      <input name="in" type="float" nodename="scale_d2_u" />
+    </invert>
+    <remap name="bulge_amount_u" type="float">
+      <input name="in" type="float" nodename="scale_random_u" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.15" />
+      <input name="outhigh" type="float" value="0.4" />
+    </remap>
+    <multiply name="bulge_u" type="float">
+      <input name="in1" type="float" nodename="bulge_raw_u" />
+      <input name="in2" type="float" nodename="bulge_amount_u" />
+    </multiply>
+    <multiply name="pebble_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise2d name="pebble_u" type="float">
+      <input name="texcoord" type="vector2" nodename="pebble_uv_u" />
+    </noise2d>
+    <multiply name="pebble_height_u" type="float">
+      <input name="in1" type="float" nodename="pebble_u" />
+      <input name="in2" type="float" value="0.04" />
+    </multiply>
+    <multiply name="bulge_masked_u" type="float">
+      <input name="in1" type="float" nodename="bulge_u" />
+      <input name="in2" type="float" nodename="plate_u" />
+    </multiply>
+    <add name="scale_body_u" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" nodename="bulge_masked_u" />
+    </add>
+    <add name="scale_height_u" type="float">
+      <input name="in1" type="float" nodename="scale_body_u" />
+      <input name="in2" type="float" nodename="pebble_height_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="rows_uv" />
+      <input name="in2" type="vector2" value="0, 0.004" />
+    </add>
+    <separate2 name="scale_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="row_v" type="float">
+      <input name="in" type="float" nodename="scale_parts_v" output="outy" />
+    </floor>
+    <combine2 name="row_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="row_v" />
+      <input name="in2" type="float" value="17.3" />
+    </combine2>
+    <cellnoise2d name="row_shift_v" type="float">
+      <input name="texcoord" type="vector2" nodename="row_seed_v" />
+    </cellnoise2d>
+    <combine2 name="jitter_uv_raw_v" type="vector2">
+      <input name="in1" type="float" nodename="scale_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="row_v" />
+    </combine2>
+    <multiply name="jitter_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="jitter_uv_raw_v" />
+      <input name="in2" type="vector2" value="0.8, 3.1" />
+    </multiply>
+    <noise2d name="column_jitter_v" type="float">
+      <input name="texcoord" type="vector2" nodename="jitter_uv_v" />
+    </noise2d>
+    <add name="row_shifted_v" type="float">
+      <input name="in1" type="float" nodename="scale_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="row_shift_v" />
+    </add>
+    <multiply name="jitter_offset_v" type="float">
+      <input name="in1" type="float" nodename="column_jitter_v" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="row_x_v" type="float">
+      <input name="in1" type="float" nodename="row_shifted_v" />
+      <input name="in2" type="float" nodename="jitter_offset_v" />
+    </add>
+    <floor name="column_v" type="float">
+      <input name="in" type="float" nodename="row_x_v" />
+    </floor>
+    <combine2 name="scale_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="column_v" />
+      <input name="in2" type="float" nodename="row_v" />
+    </combine2>
+    <cellnoise2d name="scale_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="scale_seed_v" />
+    </cellnoise2d>
+    <subtract name="scale_u_v" type="float">
+      <input name="in1" type="float" nodename="row_x_v" />
+      <input name="in2" type="float" nodename="column_v" />
+    </subtract>
+    <subtract name="scale_v_v" type="float">
+      <input name="in1" type="float" nodename="scale_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="row_v" />
+    </subtract>
+    <multiply name="scale_u2_v" type="float">
+      <input name="in1" type="float" nodename="scale_u_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_x_v" type="float">
+      <input name="in1" type="float" nodename="scale_u2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ax_v" type="float">
+      <input name="in" type="float" nodename="scale_x_v" />
+    </absval>
+    <multiply name="scale_v2_v" type="float">
+      <input name="in1" type="float" nodename="scale_v_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="scale_y_v" type="float">
+      <input name="in1" type="float" nodename="scale_v2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <absval name="scale_ay_v" type="float">
+      <input name="in" type="float" nodename="scale_y_v" />
+    </absval>
+    <multiply name="ax2_v" type="float">
+      <input name="in1" type="float" nodename="scale_ax_v" />
+      <input name="in2" type="float" nodename="scale_ax_v" />
+    </multiply>
+    <multiply name="ax2b_v" type="float">
+      <input name="in1" type="float" nodename="scale_ax_v" />
+      <input name="in2" type="float" nodename="scale_ax_v" />
+    </multiply>
+    <multiply name="ax4_v" type="float">
+      <input name="in1" type="float" nodename="ax2_v" />
+      <input name="in2" type="float" nodename="ax2b_v" />
+    </multiply>
+    <multiply name="ay2_v" type="float">
+      <input name="in1" type="float" nodename="scale_ay_v" />
+      <input name="in2" type="float" nodename="scale_ay_v" />
+    </multiply>
+    <multiply name="ay2b_v" type="float">
+      <input name="in1" type="float" nodename="scale_ay_v" />
+      <input name="in2" type="float" nodename="scale_ay_v" />
+    </multiply>
+    <multiply name="ay4_v" type="float">
+      <input name="in1" type="float" nodename="ay2_v" />
+      <input name="in2" type="float" nodename="ay2b_v" />
+    </multiply>
+    <add name="super_sum_v" type="float">
+      <input name="in1" type="float" nodename="ax4_v" />
+      <input name="in2" type="float" nodename="ay4_v" />
+    </add>
+    <power name="super_distance_v" type="float">
+      <input name="in1" type="float" nodename="super_sum_v" />
+      <input name="in2" type="float" value="0.25" />
+    </power>
+    <smoothstep name="plate_edge_v" type="float">
+      <input name="in" type="float" nodename="super_distance_v" />
+      <input name="low" type="float" value="0.72" />
+      <input name="high" type="float" value="0.98" />
+    </smoothstep>
+    <invert name="plate_v" type="float">
+      <input name="in" type="float" nodename="plate_edge_v" />
+    </invert>
+    <multiply name="scale_d2_v" type="float">
+      <input name="in1" type="float" nodename="super_distance_v" />
+      <input name="in2" type="float" nodename="super_distance_v" />
+    </multiply>
+    <invert name="bulge_raw_v" type="float">
+      <input name="in" type="float" nodename="scale_d2_v" />
+    </invert>
+    <remap name="bulge_amount_v" type="float">
+      <input name="in" type="float" nodename="scale_random_v" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.15" />
+      <input name="outhigh" type="float" value="0.4" />
+    </remap>
+    <multiply name="bulge_v" type="float">
+      <input name="in1" type="float" nodename="bulge_raw_v" />
+      <input name="in2" type="float" nodename="bulge_amount_v" />
+    </multiply>
+    <multiply name="pebble_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise2d name="pebble_v" type="float">
+      <input name="texcoord" type="vector2" nodename="pebble_uv_v" />
+    </noise2d>
+    <multiply name="pebble_height_v" type="float">
+      <input name="in1" type="float" nodename="pebble_v" />
+      <input name="in2" type="float" value="0.04" />
+    </multiply>
+    <multiply name="bulge_masked_v" type="float">
+      <input name="in1" type="float" nodename="bulge_v" />
+      <input name="in2" type="float" nodename="plate_v" />
+    </multiply>
+    <add name="scale_body_v" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" nodename="bulge_masked_v" />
+    </add>
+    <add name="scale_height_v" type="float">
+      <input name="in1" type="float" nodename="scale_body_v" />
+      <input name="in2" type="float" nodename="pebble_height_v" />
+    </add>
+    <multiply name="slope_scale" type="float">
+      <input name="in1" type="float" nodename="depth_scale" />
+      <input name="in2" type="float" value="-250" />
+    </multiply>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="scale_height_u" />
+      <input name="in2" type="float" nodename="scale_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="scale_height_v" />
+      <input name="in2" type="float" nodename="scale_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" nodename="slope_scale" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: lighter, polished scale centres darkening to the grooves, a different tone per scale and a glazed finish that pools in the grooves. -->
+    <position name="object_position" type="vector3" />
+    <remap name="scale_tone" type="float">
+      <input name="in" type="float" nodename="scale_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.65" />
+      <input name="outhigh" type="float" value="1.3" />
+    </remap>
+    <multiply name="tone_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <fractal3d name="tone_fractal" type="float">
+      <input name="position" type="vector3" nodename="tone_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="hide_tone" type="float">
+      <input name="in" type="float" nodename="tone_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.85" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <multiply name="tone" type="float">
+      <input name="in1" type="float" nodename="scale_tone" />
+      <input name="in2" type="float" nodename="hide_tone" />
+    </multiply>
+    <smoothstep name="center_ramp" type="float">
+      <input name="in" type="float" nodename="super_distance" />
+      <input name="low" type="float" value="0.1" />
+      <input name="high" type="float" value="0.9" />
+    </smoothstep>
+    <invert name="scale_center" type="float">
+      <input name="in" type="float" nodename="center_ramp" />
+    </invert>
+    <remap name="center_tone" type="float">
+      <input name="in" type="float" nodename="scale_center" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.6" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <multiply name="scale_shade" type="float">
+      <input name="in1" type="float" nodename="tone" />
+      <input name="in2" type="float" nodename="center_tone" />
+    </multiply>
+    <multiply name="scale_color" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" nodename="scale_shade" />
+    </multiply>
+    <smoothstep name="groove_mask" type="float">
+      <input name="in" type="float" nodename="plate" />
+      <input name="low" type="float" value="0.05" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" interfacename="groove_color" />
+      <input name="fg" type="color3" nodename="scale_color" />
+      <input name="mix" type="float" nodename="groove_mask" />
+    </mix>
+    <remap name="glaze_roughness" type="float">
+      <input name="in" type="float" interfacename="glaze" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="0.18" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" value="0.5" />
+      <input name="fg" type="float" nodename="glaze_roughness" />
+      <input name="mix" type="float" nodename="plate" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_crocodile" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_crocodile" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.4" />
+    <input name="specular_roughness" type="float" nodegraph="NG_crocodile" output="roughness_out" />
+    <input name="coat_weight" type="float" value="0.6" />
+    <input name="coat_roughness" type="float" value="0.12" />
+    <input name="coat_ior" type="float" value="1.5" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_crocodile" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Crocodile_Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_crocodile" />
+  </surfacematerial>
+</materialx>

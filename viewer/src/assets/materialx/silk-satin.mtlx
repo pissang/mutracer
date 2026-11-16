@@ -1,0 +1,452 @@
+<?xml version="1.0"?>
+<!--
+  Silk satin: OpenPBR five-harness satin weave. Warp threads float over four
+  weft rows, so the surface is long parallel threads with a strong
+  anisotropic sheen; soft drape ripples in UV bend the highlight into bands,
+  and slub streaks vary the dye along the warp. Uses UV0 and exposes the
+  thread count.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_silk_satin">
+    <input name="silk_color" type="color3" value="0.15, 0.004, 0.016" uiname="Silk" />
+    <input name="sheen_color" type="color3" value="0.95, 0.7, 0.62" uiname="Sheen" />
+    <input name="tiles" type="vector2" value="700, 350" uiname="Threads per UV" />
+    <input name="anisotropy" type="float" value="0.75" uiname="Anisotropy" uimin="0" uimax="1" />
+    <input name="ripple" type="float" value="0.5" uiname="Ripple" uimin="0" uimax="1" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="thread_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="thread_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="thread_uv" />
+    </separate2>
+    <floor name="warp_index" type="float">
+      <input name="in" type="float" nodename="thread_parts" output="outx" />
+    </floor>
+    <floor name="weft_index" type="float">
+      <input name="in" type="float" nodename="thread_parts" output="outy" />
+    </floor>
+    <subtract name="warp_fraction" type="float">
+      <input name="in1" type="float" nodename="thread_parts" output="outx" />
+      <input name="in2" type="float" nodename="warp_index" />
+    </subtract>
+    <subtract name="weft_fraction" type="float">
+      <input name="in1" type="float" nodename="thread_parts" output="outy" />
+      <input name="in2" type="float" nodename="weft_index" />
+    </subtract>
+    <multiply name="satin_column_step" type="float">
+      <input name="in1" type="float" nodename="warp_index" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <add name="satin_sum" type="float">
+      <input name="in1" type="float" nodename="satin_column_step" />
+      <input name="in2" type="float" nodename="weft_index" />
+    </add>
+    <modulo name="satin_step" type="float">
+      <input name="in1" type="float" nodename="satin_sum" />
+      <input name="in2" type="float" value="5" />
+    </modulo>
+    <ifgreater name="weft_tack" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="satin_step" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2" type="float">
+      <input name="in1" type="float" nodename="warp_fraction" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across" type="float">
+      <input name="in1" type="float" nodename="warp_across2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq" type="float">
+      <input name="in1" type="float" nodename="warp_across" />
+      <input name="in2" type="float" nodename="warp_across" />
+    </multiply>
+    <invert name="warp_round2" type="float">
+      <input name="in" type="float" nodename="warp_across_sq" />
+    </invert>
+    <max name="warp_round_positive" type="float">
+      <input name="in1" type="float" nodename="warp_round2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round" type="float">
+      <input name="in" type="float" nodename="warp_round_positive" />
+    </sqrt>
+    <multiply name="tack_angle" type="float">
+      <input name="in1" type="float" nodename="weft_fraction" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="tack_shape" type="float">
+      <input name="in" type="float" nodename="tack_angle" />
+    </sin>
+    <multiply name="tack_dip" type="float">
+      <input name="in1" type="float" nodename="weft_tack" />
+      <input name="in2" type="float" nodename="tack_shape" />
+    </multiply>
+    <multiply name="warp_height" type="float">
+      <input name="in1" type="float" nodename="warp_round" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="tack_height" type="float">
+      <input name="in1" type="float" nodename="tack_dip" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <subtract name="satin_height" type="float">
+      <input name="in1" type="float" nodename="warp_height" />
+      <input name="in2" type="float" nodename="tack_height" />
+    </subtract>
+
+    <!-- Drape: soft, long ripples in the cloth bend the anisotropic highlight into bands. -->
+    <multiply name="drape_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" value="7, 4" />
+    </multiply>
+    <multiply name="drape_warp_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="drape_uv" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <noise2d name="drape_warp" type="vector2">
+      <input name="texcoord" type="vector2" nodename="drape_warp_uv" />
+    </noise2d>
+    <multiply name="drape_warp_offset" type="vector2">
+      <input name="in1" type="vector2" nodename="drape_warp" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="drape_warped" type="vector2">
+      <input name="in1" type="vector2" nodename="drape_uv" />
+      <input name="in2" type="vector2" nodename="drape_warp_offset" />
+    </add>
+    <noise2d name="drape" type="float">
+      <input name="texcoord" type="vector2" nodename="drape_warped" />
+    </noise2d>
+    <add name="drape_u_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="drape_uv" />
+      <input name="in2" type="vector2" value="0.013, 0" />
+    </add>
+    <noise2d name="drape_u" type="float">
+      <input name="texcoord" type="vector2" nodename="drape_u_uv" />
+    </noise2d>
+    <add name="drape_v_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="drape_uv" />
+      <input name="in2" type="vector2" value="0, 0.013" />
+    </add>
+    <noise2d name="drape_v" type="float">
+      <input name="texcoord" type="vector2" nodename="drape_v_uv" />
+    </noise2d>
+    <subtract name="drape_du" type="float">
+      <input name="in1" type="float" nodename="drape_u" />
+      <input name="in2" type="float" nodename="drape" />
+    </subtract>
+    <multiply name="ripple_u" type="float">
+      <input name="in1" type="float" interfacename="ripple" />
+      <input name="in2" type="float" value="-1.5" />
+    </multiply>
+    <multiply name="drape_tilt_u" type="float">
+      <input name="in1" type="float" nodename="drape_du" />
+      <input name="in2" type="float" nodename="ripple_u" />
+    </multiply>
+    <subtract name="drape_dv" type="float">
+      <input name="in1" type="float" nodename="drape_v" />
+      <input name="in2" type="float" nodename="drape" />
+    </subtract>
+    <multiply name="ripple_v" type="float">
+      <input name="in1" type="float" interfacename="ripple" />
+      <input name="in2" type="float" value="-1.5" />
+    </multiply>
+    <multiply name="drape_tilt_v" type="float">
+      <input name="in1" type="float" nodename="drape_dv" />
+      <input name="in2" type="float" nodename="ripple_v" />
+    </multiply>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="0.03, 0" />
+    </add>
+    <separate2 name="thread_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="warp_index_u" type="float">
+      <input name="in" type="float" nodename="thread_parts_u" output="outx" />
+    </floor>
+    <floor name="weft_index_u" type="float">
+      <input name="in" type="float" nodename="thread_parts_u" output="outy" />
+    </floor>
+    <subtract name="warp_fraction_u" type="float">
+      <input name="in1" type="float" nodename="thread_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="warp_index_u" />
+    </subtract>
+    <subtract name="weft_fraction_u" type="float">
+      <input name="in1" type="float" nodename="thread_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="weft_index_u" />
+    </subtract>
+    <multiply name="satin_column_step_u" type="float">
+      <input name="in1" type="float" nodename="warp_index_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <add name="satin_sum_u" type="float">
+      <input name="in1" type="float" nodename="satin_column_step_u" />
+      <input name="in2" type="float" nodename="weft_index_u" />
+    </add>
+    <modulo name="satin_step_u" type="float">
+      <input name="in1" type="float" nodename="satin_sum_u" />
+      <input name="in2" type="float" value="5" />
+    </modulo>
+    <ifgreater name="weft_tack_u" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="satin_step_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2_u" type="float">
+      <input name="in1" type="float" nodename="warp_fraction_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across_u" type="float">
+      <input name="in1" type="float" nodename="warp_across2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq_u" type="float">
+      <input name="in1" type="float" nodename="warp_across_u" />
+      <input name="in2" type="float" nodename="warp_across_u" />
+    </multiply>
+    <invert name="warp_round2_u" type="float">
+      <input name="in" type="float" nodename="warp_across_sq_u" />
+    </invert>
+    <max name="warp_round_positive_u" type="float">
+      <input name="in1" type="float" nodename="warp_round2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round_u" type="float">
+      <input name="in" type="float" nodename="warp_round_positive_u" />
+    </sqrt>
+    <multiply name="tack_angle_u" type="float">
+      <input name="in1" type="float" nodename="weft_fraction_u" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="tack_shape_u" type="float">
+      <input name="in" type="float" nodename="tack_angle_u" />
+    </sin>
+    <multiply name="tack_dip_u" type="float">
+      <input name="in1" type="float" nodename="weft_tack_u" />
+      <input name="in2" type="float" nodename="tack_shape_u" />
+    </multiply>
+    <multiply name="warp_height_u" type="float">
+      <input name="in1" type="float" nodename="warp_round_u" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="tack_height_u" type="float">
+      <input name="in1" type="float" nodename="tack_dip_u" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <subtract name="satin_height_u" type="float">
+      <input name="in1" type="float" nodename="warp_height_u" />
+      <input name="in2" type="float" nodename="tack_height_u" />
+    </subtract>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="0, 0.03" />
+    </add>
+    <separate2 name="thread_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="warp_index_v" type="float">
+      <input name="in" type="float" nodename="thread_parts_v" output="outx" />
+    </floor>
+    <floor name="weft_index_v" type="float">
+      <input name="in" type="float" nodename="thread_parts_v" output="outy" />
+    </floor>
+    <subtract name="warp_fraction_v" type="float">
+      <input name="in1" type="float" nodename="thread_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="warp_index_v" />
+    </subtract>
+    <subtract name="weft_fraction_v" type="float">
+      <input name="in1" type="float" nodename="thread_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="weft_index_v" />
+    </subtract>
+    <multiply name="satin_column_step_v" type="float">
+      <input name="in1" type="float" nodename="warp_index_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <add name="satin_sum_v" type="float">
+      <input name="in1" type="float" nodename="satin_column_step_v" />
+      <input name="in2" type="float" nodename="weft_index_v" />
+    </add>
+    <modulo name="satin_step_v" type="float">
+      <input name="in1" type="float" nodename="satin_sum_v" />
+      <input name="in2" type="float" value="5" />
+    </modulo>
+    <ifgreater name="weft_tack_v" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="satin_step_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2_v" type="float">
+      <input name="in1" type="float" nodename="warp_fraction_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across_v" type="float">
+      <input name="in1" type="float" nodename="warp_across2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq_v" type="float">
+      <input name="in1" type="float" nodename="warp_across_v" />
+      <input name="in2" type="float" nodename="warp_across_v" />
+    </multiply>
+    <invert name="warp_round2_v" type="float">
+      <input name="in" type="float" nodename="warp_across_sq_v" />
+    </invert>
+    <max name="warp_round_positive_v" type="float">
+      <input name="in1" type="float" nodename="warp_round2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round_v" type="float">
+      <input name="in" type="float" nodename="warp_round_positive_v" />
+    </sqrt>
+    <multiply name="tack_angle_v" type="float">
+      <input name="in1" type="float" nodename="weft_fraction_v" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <sin name="tack_shape_v" type="float">
+      <input name="in" type="float" nodename="tack_angle_v" />
+    </sin>
+    <multiply name="tack_dip_v" type="float">
+      <input name="in1" type="float" nodename="weft_tack_v" />
+      <input name="in2" type="float" nodename="tack_shape_v" />
+    </multiply>
+    <multiply name="warp_height_v" type="float">
+      <input name="in1" type="float" nodename="warp_round_v" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="tack_height_v" type="float">
+      <input name="in1" type="float" nodename="tack_dip_v" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <subtract name="satin_height_v" type="float">
+      <input name="in1" type="float" nodename="warp_height_v" />
+      <input name="in2" type="float" nodename="tack_height_v" />
+    </subtract>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="satin_height_u" />
+      <input name="in2" type="float" nodename="satin_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" value="-0.333333" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="satin_height_v" />
+      <input name="in2" type="float" nodename="satin_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" value="-0.333333" />
+    </multiply>
+    <add name="tilt_u_total" type="float">
+      <input name="in1" type="float" nodename="tilt_u" />
+      <input name="in2" type="float" nodename="drape_tilt_u" />
+    </add>
+    <add name="tilt_v_total" type="float">
+      <input name="in1" type="float" nodename="tilt_v" />
+      <input name="in2" type="float" nodename="drape_tilt_v" />
+    </add>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u_total" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v_total" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: dyed silk with a pale, warm sheen in the specular, slightly dimmer where the weft tacks down, and faint slub streaks along the warp. -->
+    <multiply name="slub_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" value="900, 6" />
+    </multiply>
+    <noise2d name="slub" type="float">
+      <input name="texcoord" type="vector2" nodename="slub_uv" />
+    </noise2d>
+    <remap name="slub_tone" type="float">
+      <input name="in" type="float" nodename="slub" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="1.08" />
+    </remap>
+    <remap name="tack_tone" type="float">
+      <input name="in" type="float" nodename="weft_tack" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.8" />
+    </remap>
+    <multiply name="silk_tone" type="float">
+      <input name="in1" type="float" nodename="slub_tone" />
+      <input name="in2" type="float" nodename="tack_tone" />
+    </multiply>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" interfacename="silk_color" />
+      <input name="in2" type="float" nodename="silk_tone" />
+    </multiply>
+    <remap name="slub_anisotropy" type="float">
+      <input name="in" type="float" nodename="slub" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="specular_anisotropy" type="float">
+      <input name="in1" type="float" interfacename="anisotropy" />
+      <input name="in2" type="float" nodename="slub_anisotropy" />
+    </multiply>
+    <remap name="slub_sheen" type="float">
+      <input name="in" type="float" nodename="slub" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.92" />
+      <input name="outhigh" type="float" value="1.05" />
+    </remap>
+    <multiply name="sheen_color" type="color3">
+      <input name="in1" type="color3" interfacename="sheen_color" />
+      <input name="in2" type="float" nodename="slub_sheen" />
+    </multiply>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="sheen_out" type="color3" nodename="sheen_color" />
+    <output name="anisotropy_out" type="float" nodename="specular_anisotropy" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_silk_satin" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_silk_satin" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.3" />
+    <input name="specular_color" type="color3" nodegraph="NG_silk_satin" output="sheen_out" />
+    <input name="specular_roughness" type="float" value="0.28" />
+    <input name="specular_anisotropy" type="float" nodegraph="NG_silk_satin" output="anisotropy_out" />
+    <input name="fuzz_weight" type="float" value="0.1" />
+    <input name="fuzz_color" type="color3" value="0.9, 0.6, 0.6" />
+    <input name="fuzz_roughness" type="float" value="0.4" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_silk_satin" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Silk_Satin" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_silk_satin" />
+  </surfacematerial>
+</materialx>

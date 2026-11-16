@@ -1,0 +1,1237 @@
+<?xml version="1.0"?>
+<!--
+  Riveted steel: OpenPBR painted plates on a UV grid. Each plate sits at its
+  own small height with bevelled seams and a row of domed rivets inset from
+  every edge; forward differences of that height give the normal. Paint
+  chips on the rivet heads, along seams and in patches, and rust streaks run
+  down from the rivets, as far as the Rust runs input lets them: the tangent
+  frame turns the down direction into UV space, so the streaks follow
+  gravity whatever way the UVs are laid out. The Up input (object +Y by
+  default) sets which way is up. Uses UV0 and exposes the plate and rivet counts.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_riveted_steel">
+    <input name="paint_color" type="color3" value="0.05, 0.07, 0.06" uiname="Paint" />
+    <input name="rust_color" type="color3" value="0.085, 0.028, 0.009" uiname="Rust" />
+    <input name="tiles" type="vector2" value="6, 3" uiname="Plates per UV" />
+    <input name="rivets" type="float" value="9" uiname="Rivets per edge" uimin="2" uimax="40" />
+    <input name="weathering" type="float" value="0.5" uiname="Weathering" uimin="0" uimax="1" />
+    <input name="rust_runs" type="float" value="0.5" uiname="Rust runs" uimin="0" uimax="1" />
+    <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="plate_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="plate_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="plate_uv" />
+    </separate2>
+    <floor name="plate_column" type="float">
+      <input name="in" type="float" nodename="plate_parts" output="outx" />
+    </floor>
+    <floor name="plate_row" type="float">
+      <input name="in" type="float" nodename="plate_parts" output="outy" />
+    </floor>
+    <subtract name="plate_u" type="float">
+      <input name="in1" type="float" nodename="plate_parts" output="outx" />
+      <input name="in2" type="float" nodename="plate_column" />
+    </subtract>
+    <subtract name="plate_v" type="float">
+      <input name="in1" type="float" nodename="plate_parts" output="outy" />
+      <input name="in2" type="float" nodename="plate_row" />
+    </subtract>
+    <combine2 name="plate_seed" type="vector2">
+      <input name="in1" type="float" nodename="plate_column" />
+      <input name="in2" type="float" nodename="plate_row" />
+    </combine2>
+    <cellnoise2d name="plate_random" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_seed" />
+    </cellnoise2d>
+    <invert name="plate_u_back" type="float">
+      <input name="in" type="float" nodename="plate_u" />
+    </invert>
+    <min name="edge_u" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" nodename="plate_u_back" />
+    </min>
+    <invert name="plate_v_back" type="float">
+      <input name="in" type="float" nodename="plate_v" />
+    </invert>
+    <min name="edge_v" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" nodename="plate_v_back" />
+    </min>
+    <min name="edge_distance" type="float">
+      <input name="in1" type="float" nodename="edge_u" />
+      <input name="in2" type="float" nodename="edge_v" />
+    </min>
+    <smoothstep name="seam_bevel" type="float">
+      <input name="in" type="float" nodename="edge_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.012" />
+    </smoothstep>
+    <multiply name="rivet_col_phase" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_col_fraction_floor" type="float">
+      <input name="in" type="float" nodename="rivet_col_phase" />
+    </floor>
+    <subtract name="rivet_col_fraction" type="float">
+      <input name="in1" type="float" nodename="rivet_col_phase" />
+      <input name="in2" type="float" nodename="rivet_col_fraction_floor" />
+    </subtract>
+    <subtract name="rivet_col_center" type="float">
+      <input name="in1" type="float" nodename="rivet_col_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_col_offset" type="float">
+      <input name="in1" type="float" nodename="rivet_col_center" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <multiply name="rivet_row_phase" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_row_fraction_floor" type="float">
+      <input name="in" type="float" nodename="rivet_row_phase" />
+    </floor>
+    <subtract name="rivet_row_fraction" type="float">
+      <input name="in1" type="float" nodename="rivet_row_phase" />
+      <input name="in2" type="float" nodename="rivet_row_fraction_floor" />
+    </subtract>
+    <subtract name="rivet_row_center" type="float">
+      <input name="in1" type="float" nodename="rivet_row_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_row_offset" type="float">
+      <input name="in1" type="float" nodename="rivet_row_center" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <subtract name="rivet_bottom_dy" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_bottom_x2" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset" />
+      <input name="in2" type="float" nodename="rivet_col_offset" />
+    </multiply>
+    <multiply name="rivet_bottom_y2" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_dy" />
+      <input name="in2" type="float" nodename="rivet_bottom_dy" />
+    </multiply>
+    <add name="rivet_bottom_sq" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_x2" />
+      <input name="in2" type="float" nodename="rivet_bottom_y2" />
+    </add>
+    <sqrt name="rivet_bottom" type="float">
+      <input name="in" type="float" nodename="rivet_bottom_sq" />
+    </sqrt>
+    <subtract name="rivet_top_dy" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_top_x2" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset" />
+      <input name="in2" type="float" nodename="rivet_col_offset" />
+    </multiply>
+    <multiply name="rivet_top_y2" type="float">
+      <input name="in1" type="float" nodename="rivet_top_dy" />
+      <input name="in2" type="float" nodename="rivet_top_dy" />
+    </multiply>
+    <add name="rivet_top_sq" type="float">
+      <input name="in1" type="float" nodename="rivet_top_x2" />
+      <input name="in2" type="float" nodename="rivet_top_y2" />
+    </add>
+    <sqrt name="rivet_top" type="float">
+      <input name="in" type="float" nodename="rivet_top_sq" />
+    </sqrt>
+    <subtract name="rivet_left_dx" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_left_x2" type="float">
+      <input name="in1" type="float" nodename="rivet_left_dx" />
+      <input name="in2" type="float" nodename="rivet_left_dx" />
+    </multiply>
+    <multiply name="rivet_left_y2" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset" />
+      <input name="in2" type="float" nodename="rivet_row_offset" />
+    </multiply>
+    <add name="rivet_left_sq" type="float">
+      <input name="in1" type="float" nodename="rivet_left_x2" />
+      <input name="in2" type="float" nodename="rivet_left_y2" />
+    </add>
+    <sqrt name="rivet_left" type="float">
+      <input name="in" type="float" nodename="rivet_left_sq" />
+    </sqrt>
+    <subtract name="rivet_right_dx" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_right_x2" type="float">
+      <input name="in1" type="float" nodename="rivet_right_dx" />
+      <input name="in2" type="float" nodename="rivet_right_dx" />
+    </multiply>
+    <multiply name="rivet_right_y2" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset" />
+      <input name="in2" type="float" nodename="rivet_row_offset" />
+    </multiply>
+    <add name="rivet_right_sq" type="float">
+      <input name="in1" type="float" nodename="rivet_right_x2" />
+      <input name="in2" type="float" nodename="rivet_right_y2" />
+    </add>
+    <sqrt name="rivet_right" type="float">
+      <input name="in" type="float" nodename="rivet_right_sq" />
+    </sqrt>
+    <min name="rivet_rows" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom" />
+      <input name="in2" type="float" nodename="rivet_top" />
+    </min>
+    <min name="rivet_columns" type="float">
+      <input name="in1" type="float" nodename="rivet_left" />
+      <input name="in2" type="float" nodename="rivet_right" />
+    </min>
+    <min name="rivet_distance" type="float">
+      <input name="in1" type="float" nodename="rivet_rows" />
+      <input name="in2" type="float" nodename="rivet_columns" />
+    </min>
+    <divide name="rivet_head_unit" type="float">
+      <input name="in1" type="float" nodename="rivet_distance" />
+      <input name="in2" type="float" value="0.024" />
+    </divide>
+    <multiply name="rivet_head_unit2" type="float">
+      <input name="in1" type="float" nodename="rivet_head_unit" />
+      <input name="in2" type="float" nodename="rivet_head_unit" />
+    </multiply>
+    <invert name="rivet_head_cap2" type="float">
+      <input name="in" type="float" nodename="rivet_head_unit2" />
+    </invert>
+    <max name="rivet_head_cap_positive" type="float">
+      <input name="in1" type="float" nodename="rivet_head_cap2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="rivet_head" type="float">
+      <input name="in" type="float" nodename="rivet_head_cap_positive" />
+    </sqrt>
+    <multiply name="plate_step" type="float">
+      <input name="in1" type="float" nodename="plate_random" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="plate_level" type="float">
+      <input name="in1" type="float" nodename="plate_step" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="plate_height" type="float">
+      <input name="in1" type="float" nodename="plate_level" />
+      <input name="in2" type="float" nodename="seam_bevel" />
+    </multiply>
+    <multiply name="dent_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_uv" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise2d name="plate_dent" type="float">
+      <input name="texcoord" type="vector2" nodename="dent_uv" />
+    </noise2d>
+    <multiply name="dent_height" type="float">
+      <input name="in1" type="float" nodename="plate_dent" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <multiply name="rivet_height" type="float">
+      <input name="in1" type="float" nodename="rivet_head" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="plate_rivet" type="float">
+      <input name="in1" type="float" nodename="plate_height" />
+      <input name="in2" type="float" nodename="rivet_height" />
+    </add>
+    <add name="steel_height" type="float">
+      <input name="in1" type="float" nodename="plate_rivet" />
+      <input name="in2" type="float" nodename="dent_height" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_uv" />
+      <input name="in2" type="vector2" value="0.0015, 0" />
+    </add>
+    <separate2 name="plate_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="plate_column_u" type="float">
+      <input name="in" type="float" nodename="plate_parts_u" output="outx" />
+    </floor>
+    <floor name="plate_row_u" type="float">
+      <input name="in" type="float" nodename="plate_parts_u" output="outy" />
+    </floor>
+    <subtract name="plate_u_u" type="float">
+      <input name="in1" type="float" nodename="plate_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="plate_column_u" />
+    </subtract>
+    <subtract name="plate_v_u" type="float">
+      <input name="in1" type="float" nodename="plate_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="plate_row_u" />
+    </subtract>
+    <combine2 name="plate_seed_u" type="vector2">
+      <input name="in1" type="float" nodename="plate_column_u" />
+      <input name="in2" type="float" nodename="plate_row_u" />
+    </combine2>
+    <cellnoise2d name="plate_random_u" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_seed_u" />
+    </cellnoise2d>
+    <invert name="plate_u_back_u" type="float">
+      <input name="in" type="float" nodename="plate_u_u" />
+    </invert>
+    <min name="edge_u_u" type="float">
+      <input name="in1" type="float" nodename="plate_u_u" />
+      <input name="in2" type="float" nodename="plate_u_back_u" />
+    </min>
+    <invert name="plate_v_back_u" type="float">
+      <input name="in" type="float" nodename="plate_v_u" />
+    </invert>
+    <min name="edge_v_u" type="float">
+      <input name="in1" type="float" nodename="plate_v_u" />
+      <input name="in2" type="float" nodename="plate_v_back_u" />
+    </min>
+    <min name="edge_distance_u" type="float">
+      <input name="in1" type="float" nodename="edge_u_u" />
+      <input name="in2" type="float" nodename="edge_v_u" />
+    </min>
+    <smoothstep name="seam_bevel_u" type="float">
+      <input name="in" type="float" nodename="edge_distance_u" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.012" />
+    </smoothstep>
+    <multiply name="rivet_col_phase_u" type="float">
+      <input name="in1" type="float" nodename="plate_u_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_col_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="rivet_col_phase_u" />
+    </floor>
+    <subtract name="rivet_col_fraction_u" type="float">
+      <input name="in1" type="float" nodename="rivet_col_phase_u" />
+      <input name="in2" type="float" nodename="rivet_col_fraction_floor_u" />
+    </subtract>
+    <subtract name="rivet_col_center_u" type="float">
+      <input name="in1" type="float" nodename="rivet_col_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_col_offset_u" type="float">
+      <input name="in1" type="float" nodename="rivet_col_center_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <multiply name="rivet_row_phase_u" type="float">
+      <input name="in1" type="float" nodename="plate_v_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_row_fraction_floor_u" type="float">
+      <input name="in" type="float" nodename="rivet_row_phase_u" />
+    </floor>
+    <subtract name="rivet_row_fraction_u" type="float">
+      <input name="in1" type="float" nodename="rivet_row_phase_u" />
+      <input name="in2" type="float" nodename="rivet_row_fraction_floor_u" />
+    </subtract>
+    <subtract name="rivet_row_center_u" type="float">
+      <input name="in1" type="float" nodename="rivet_row_fraction_u" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_row_offset_u" type="float">
+      <input name="in1" type="float" nodename="rivet_row_center_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <subtract name="rivet_bottom_dy_u" type="float">
+      <input name="in1" type="float" nodename="plate_v_u" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_bottom_x2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset_u" />
+      <input name="in2" type="float" nodename="rivet_col_offset_u" />
+    </multiply>
+    <multiply name="rivet_bottom_y2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_dy_u" />
+      <input name="in2" type="float" nodename="rivet_bottom_dy_u" />
+    </multiply>
+    <add name="rivet_bottom_sq_u" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_x2_u" />
+      <input name="in2" type="float" nodename="rivet_bottom_y2_u" />
+    </add>
+    <sqrt name="rivet_bottom_u" type="float">
+      <input name="in" type="float" nodename="rivet_bottom_sq_u" />
+    </sqrt>
+    <subtract name="rivet_top_dy_u" type="float">
+      <input name="in1" type="float" nodename="plate_v_u" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_top_x2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset_u" />
+      <input name="in2" type="float" nodename="rivet_col_offset_u" />
+    </multiply>
+    <multiply name="rivet_top_y2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_top_dy_u" />
+      <input name="in2" type="float" nodename="rivet_top_dy_u" />
+    </multiply>
+    <add name="rivet_top_sq_u" type="float">
+      <input name="in1" type="float" nodename="rivet_top_x2_u" />
+      <input name="in2" type="float" nodename="rivet_top_y2_u" />
+    </add>
+    <sqrt name="rivet_top_u" type="float">
+      <input name="in" type="float" nodename="rivet_top_sq_u" />
+    </sqrt>
+    <subtract name="rivet_left_dx_u" type="float">
+      <input name="in1" type="float" nodename="plate_u_u" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_left_x2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_left_dx_u" />
+      <input name="in2" type="float" nodename="rivet_left_dx_u" />
+    </multiply>
+    <multiply name="rivet_left_y2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset_u" />
+      <input name="in2" type="float" nodename="rivet_row_offset_u" />
+    </multiply>
+    <add name="rivet_left_sq_u" type="float">
+      <input name="in1" type="float" nodename="rivet_left_x2_u" />
+      <input name="in2" type="float" nodename="rivet_left_y2_u" />
+    </add>
+    <sqrt name="rivet_left_u" type="float">
+      <input name="in" type="float" nodename="rivet_left_sq_u" />
+    </sqrt>
+    <subtract name="rivet_right_dx_u" type="float">
+      <input name="in1" type="float" nodename="plate_u_u" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_right_x2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_right_dx_u" />
+      <input name="in2" type="float" nodename="rivet_right_dx_u" />
+    </multiply>
+    <multiply name="rivet_right_y2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset_u" />
+      <input name="in2" type="float" nodename="rivet_row_offset_u" />
+    </multiply>
+    <add name="rivet_right_sq_u" type="float">
+      <input name="in1" type="float" nodename="rivet_right_x2_u" />
+      <input name="in2" type="float" nodename="rivet_right_y2_u" />
+    </add>
+    <sqrt name="rivet_right_u" type="float">
+      <input name="in" type="float" nodename="rivet_right_sq_u" />
+    </sqrt>
+    <min name="rivet_rows_u" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_u" />
+      <input name="in2" type="float" nodename="rivet_top_u" />
+    </min>
+    <min name="rivet_columns_u" type="float">
+      <input name="in1" type="float" nodename="rivet_left_u" />
+      <input name="in2" type="float" nodename="rivet_right_u" />
+    </min>
+    <min name="rivet_distance_u" type="float">
+      <input name="in1" type="float" nodename="rivet_rows_u" />
+      <input name="in2" type="float" nodename="rivet_columns_u" />
+    </min>
+    <divide name="rivet_head_unit_u" type="float">
+      <input name="in1" type="float" nodename="rivet_distance_u" />
+      <input name="in2" type="float" value="0.024" />
+    </divide>
+    <multiply name="rivet_head_unit2_u" type="float">
+      <input name="in1" type="float" nodename="rivet_head_unit_u" />
+      <input name="in2" type="float" nodename="rivet_head_unit_u" />
+    </multiply>
+    <invert name="rivet_head_cap2_u" type="float">
+      <input name="in" type="float" nodename="rivet_head_unit2_u" />
+    </invert>
+    <max name="rivet_head_cap_positive_u" type="float">
+      <input name="in1" type="float" nodename="rivet_head_cap2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="rivet_head_u" type="float">
+      <input name="in" type="float" nodename="rivet_head_cap_positive_u" />
+    </sqrt>
+    <multiply name="plate_step_u" type="float">
+      <input name="in1" type="float" nodename="plate_random_u" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="plate_level_u" type="float">
+      <input name="in1" type="float" nodename="plate_step_u" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="plate_height_u" type="float">
+      <input name="in1" type="float" nodename="plate_level_u" />
+      <input name="in2" type="float" nodename="seam_bevel_u" />
+    </multiply>
+    <multiply name="dent_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise2d name="plate_dent_u" type="float">
+      <input name="texcoord" type="vector2" nodename="dent_uv_u" />
+    </noise2d>
+    <multiply name="dent_height_u" type="float">
+      <input name="in1" type="float" nodename="plate_dent_u" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <multiply name="rivet_height_u" type="float">
+      <input name="in1" type="float" nodename="rivet_head_u" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="plate_rivet_u" type="float">
+      <input name="in1" type="float" nodename="plate_height_u" />
+      <input name="in2" type="float" nodename="rivet_height_u" />
+    </add>
+    <add name="steel_height_u" type="float">
+      <input name="in1" type="float" nodename="plate_rivet_u" />
+      <input name="in2" type="float" nodename="dent_height_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_uv" />
+      <input name="in2" type="vector2" value="0, 0.0015" />
+    </add>
+    <separate2 name="plate_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="plate_column_v" type="float">
+      <input name="in" type="float" nodename="plate_parts_v" output="outx" />
+    </floor>
+    <floor name="plate_row_v" type="float">
+      <input name="in" type="float" nodename="plate_parts_v" output="outy" />
+    </floor>
+    <subtract name="plate_u_v" type="float">
+      <input name="in1" type="float" nodename="plate_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="plate_column_v" />
+    </subtract>
+    <subtract name="plate_v_v" type="float">
+      <input name="in1" type="float" nodename="plate_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="plate_row_v" />
+    </subtract>
+    <combine2 name="plate_seed_v" type="vector2">
+      <input name="in1" type="float" nodename="plate_column_v" />
+      <input name="in2" type="float" nodename="plate_row_v" />
+    </combine2>
+    <cellnoise2d name="plate_random_v" type="float">
+      <input name="texcoord" type="vector2" nodename="plate_seed_v" />
+    </cellnoise2d>
+    <invert name="plate_u_back_v" type="float">
+      <input name="in" type="float" nodename="plate_u_v" />
+    </invert>
+    <min name="edge_u_v" type="float">
+      <input name="in1" type="float" nodename="plate_u_v" />
+      <input name="in2" type="float" nodename="plate_u_back_v" />
+    </min>
+    <invert name="plate_v_back_v" type="float">
+      <input name="in" type="float" nodename="plate_v_v" />
+    </invert>
+    <min name="edge_v_v" type="float">
+      <input name="in1" type="float" nodename="plate_v_v" />
+      <input name="in2" type="float" nodename="plate_v_back_v" />
+    </min>
+    <min name="edge_distance_v" type="float">
+      <input name="in1" type="float" nodename="edge_u_v" />
+      <input name="in2" type="float" nodename="edge_v_v" />
+    </min>
+    <smoothstep name="seam_bevel_v" type="float">
+      <input name="in" type="float" nodename="edge_distance_v" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.012" />
+    </smoothstep>
+    <multiply name="rivet_col_phase_v" type="float">
+      <input name="in1" type="float" nodename="plate_u_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_col_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="rivet_col_phase_v" />
+    </floor>
+    <subtract name="rivet_col_fraction_v" type="float">
+      <input name="in1" type="float" nodename="rivet_col_phase_v" />
+      <input name="in2" type="float" nodename="rivet_col_fraction_floor_v" />
+    </subtract>
+    <subtract name="rivet_col_center_v" type="float">
+      <input name="in1" type="float" nodename="rivet_col_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_col_offset_v" type="float">
+      <input name="in1" type="float" nodename="rivet_col_center_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <multiply name="rivet_row_phase_v" type="float">
+      <input name="in1" type="float" nodename="plate_v_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <floor name="rivet_row_fraction_floor_v" type="float">
+      <input name="in" type="float" nodename="rivet_row_phase_v" />
+    </floor>
+    <subtract name="rivet_row_fraction_v" type="float">
+      <input name="in1" type="float" nodename="rivet_row_phase_v" />
+      <input name="in2" type="float" nodename="rivet_row_fraction_floor_v" />
+    </subtract>
+    <subtract name="rivet_row_center_v" type="float">
+      <input name="in1" type="float" nodename="rivet_row_fraction_v" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <divide name="rivet_row_offset_v" type="float">
+      <input name="in1" type="float" nodename="rivet_row_center_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <subtract name="rivet_bottom_dy_v" type="float">
+      <input name="in1" type="float" nodename="plate_v_v" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_bottom_x2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset_v" />
+      <input name="in2" type="float" nodename="rivet_col_offset_v" />
+    </multiply>
+    <multiply name="rivet_bottom_y2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_dy_v" />
+      <input name="in2" type="float" nodename="rivet_bottom_dy_v" />
+    </multiply>
+    <add name="rivet_bottom_sq_v" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_x2_v" />
+      <input name="in2" type="float" nodename="rivet_bottom_y2_v" />
+    </add>
+    <sqrt name="rivet_bottom_v" type="float">
+      <input name="in" type="float" nodename="rivet_bottom_sq_v" />
+    </sqrt>
+    <subtract name="rivet_top_dy_v" type="float">
+      <input name="in1" type="float" nodename="plate_v_v" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_top_x2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_col_offset_v" />
+      <input name="in2" type="float" nodename="rivet_col_offset_v" />
+    </multiply>
+    <multiply name="rivet_top_y2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_top_dy_v" />
+      <input name="in2" type="float" nodename="rivet_top_dy_v" />
+    </multiply>
+    <add name="rivet_top_sq_v" type="float">
+      <input name="in1" type="float" nodename="rivet_top_x2_v" />
+      <input name="in2" type="float" nodename="rivet_top_y2_v" />
+    </add>
+    <sqrt name="rivet_top_v" type="float">
+      <input name="in" type="float" nodename="rivet_top_sq_v" />
+    </sqrt>
+    <subtract name="rivet_left_dx_v" type="float">
+      <input name="in1" type="float" nodename="plate_u_v" />
+      <input name="in2" type="float" value="0.05" />
+    </subtract>
+    <multiply name="rivet_left_x2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_left_dx_v" />
+      <input name="in2" type="float" nodename="rivet_left_dx_v" />
+    </multiply>
+    <multiply name="rivet_left_y2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset_v" />
+      <input name="in2" type="float" nodename="rivet_row_offset_v" />
+    </multiply>
+    <add name="rivet_left_sq_v" type="float">
+      <input name="in1" type="float" nodename="rivet_left_x2_v" />
+      <input name="in2" type="float" nodename="rivet_left_y2_v" />
+    </add>
+    <sqrt name="rivet_left_v" type="float">
+      <input name="in" type="float" nodename="rivet_left_sq_v" />
+    </sqrt>
+    <subtract name="rivet_right_dx_v" type="float">
+      <input name="in1" type="float" nodename="plate_u_v" />
+      <input name="in2" type="float" value="0.95" />
+    </subtract>
+    <multiply name="rivet_right_x2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_right_dx_v" />
+      <input name="in2" type="float" nodename="rivet_right_dx_v" />
+    </multiply>
+    <multiply name="rivet_right_y2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_row_offset_v" />
+      <input name="in2" type="float" nodename="rivet_row_offset_v" />
+    </multiply>
+    <add name="rivet_right_sq_v" type="float">
+      <input name="in1" type="float" nodename="rivet_right_x2_v" />
+      <input name="in2" type="float" nodename="rivet_right_y2_v" />
+    </add>
+    <sqrt name="rivet_right_v" type="float">
+      <input name="in" type="float" nodename="rivet_right_sq_v" />
+    </sqrt>
+    <min name="rivet_rows_v" type="float">
+      <input name="in1" type="float" nodename="rivet_bottom_v" />
+      <input name="in2" type="float" nodename="rivet_top_v" />
+    </min>
+    <min name="rivet_columns_v" type="float">
+      <input name="in1" type="float" nodename="rivet_left_v" />
+      <input name="in2" type="float" nodename="rivet_right_v" />
+    </min>
+    <min name="rivet_distance_v" type="float">
+      <input name="in1" type="float" nodename="rivet_rows_v" />
+      <input name="in2" type="float" nodename="rivet_columns_v" />
+    </min>
+    <divide name="rivet_head_unit_v" type="float">
+      <input name="in1" type="float" nodename="rivet_distance_v" />
+      <input name="in2" type="float" value="0.024" />
+    </divide>
+    <multiply name="rivet_head_unit2_v" type="float">
+      <input name="in1" type="float" nodename="rivet_head_unit_v" />
+      <input name="in2" type="float" nodename="rivet_head_unit_v" />
+    </multiply>
+    <invert name="rivet_head_cap2_v" type="float">
+      <input name="in" type="float" nodename="rivet_head_unit2_v" />
+    </invert>
+    <max name="rivet_head_cap_positive_v" type="float">
+      <input name="in1" type="float" nodename="rivet_head_cap2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="rivet_head_v" type="float">
+      <input name="in" type="float" nodename="rivet_head_cap_positive_v" />
+    </sqrt>
+    <multiply name="plate_step_v" type="float">
+      <input name="in1" type="float" nodename="plate_random_v" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="plate_level_v" type="float">
+      <input name="in1" type="float" nodename="plate_step_v" />
+      <input name="in2" type="float" value="1" />
+    </add>
+    <multiply name="plate_height_v" type="float">
+      <input name="in1" type="float" nodename="plate_level_v" />
+      <input name="in2" type="float" nodename="seam_bevel_v" />
+    </multiply>
+    <multiply name="dent_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="float" value="3" />
+    </multiply>
+    <noise2d name="plate_dent_v" type="float">
+      <input name="texcoord" type="vector2" nodename="dent_uv_v" />
+    </noise2d>
+    <multiply name="dent_height_v" type="float">
+      <input name="in1" type="float" nodename="plate_dent_v" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <multiply name="rivet_height_v" type="float">
+      <input name="in1" type="float" nodename="rivet_head_v" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="plate_rivet_v" type="float">
+      <input name="in1" type="float" nodename="plate_height_v" />
+      <input name="in2" type="float" nodename="rivet_height_v" />
+    </add>
+    <add name="steel_height_v" type="float">
+      <input name="in1" type="float" nodename="plate_rivet_v" />
+      <input name="in2" type="float" nodename="dent_height_v" />
+    </add>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="steel_height_u" />
+      <input name="in2" type="float" nodename="steel_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" value="-8" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="steel_height_v" />
+      <input name="in2" type="float" nodename="steel_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" value="-8" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Weathering: paint chips on rivet heads, along seams and in patches; rust streaks run down from the rivet rows above them, as far as Rust runs lets them. -->
+    <position name="object_position" type="vector3" />
+    <multiply name="chip_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="14" />
+    </multiply>
+    <fractal3d name="chip_fractal" type="float">
+      <input name="position" type="vector3" nodename="chip_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <multiply name="chip_rivet" type="float">
+      <input name="in1" type="float" nodename="rivet_head" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="chip_rivets" type="float">
+      <input name="in1" type="float" nodename="chip_fractal" />
+      <input name="in2" type="float" nodename="chip_rivet" />
+    </add>
+    <invert name="seam" type="float">
+      <input name="in" type="float" nodename="seam_bevel" />
+    </invert>
+    <multiply name="chip_seam" type="float">
+      <input name="in1" type="float" nodename="seam" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="chip_field" type="float">
+      <input name="in1" type="float" nodename="chip_rivets" />
+      <input name="in2" type="float" nodename="chip_seam" />
+    </add>
+    <remap name="chip_low" type="float">
+      <input name="in" type="float" interfacename="weathering" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.9" />
+      <input name="outhigh" type="float" value="0.35" />
+    </remap>
+    <remap name="chip_high" type="float">
+      <input name="in" type="float" interfacename="weathering" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.95" />
+      <input name="outhigh" type="float" value="0.42" />
+    </remap>
+    <smoothstep name="chipped" type="float">
+      <input name="in" type="float" nodename="chip_field" />
+      <input name="low" type="float" nodename="chip_low" />
+      <input name="high" type="float" nodename="chip_high" />
+    </smoothstep>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" interfacename="up" />
+    </normalize>
+    <tangent name="object_tangent" type="vector3" />
+    <bitangent name="object_bitangent" type="vector3" />
+    <dotproduct name="tangent_up" type="float">
+      <input name="in1" type="vector3" nodename="object_tangent" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="down_u" type="float">
+      <input name="in1" type="float" nodename="tangent_up" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <dotproduct name="bitangent_up" type="float">
+      <input name="in1" type="vector3" nodename="object_bitangent" />
+      <input name="in2" type="vector3" nodename="up_direction" />
+    </dotproduct>
+    <multiply name="down_v" type="float">
+      <input name="in1" type="float" nodename="bitangent_up" />
+      <input name="in2" type="float" value="-1" />
+    </multiply>
+    <multiply name="down_slope_x2" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" nodename="down_u" />
+    </multiply>
+    <multiply name="down_slope_y2" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" nodename="down_v" />
+    </multiply>
+    <add name="down_slope_sq" type="float">
+      <input name="in1" type="float" nodename="down_slope_x2" />
+      <input name="in2" type="float" nodename="down_slope_y2" />
+    </add>
+    <sqrt name="down_slope" type="float">
+      <input name="in" type="float" nodename="down_slope_sq" />
+    </sqrt>
+    <multiply name="streak_width_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_uv" />
+      <input name="in2" type="vector2" value="9, 9" />
+    </multiply>
+    <noise2d name="streak_width_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="streak_width_uv" />
+    </noise2d>
+    <remap name="streak_width" type="float">
+      <input name="in" type="float" nodename="streak_width_noise" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.006" />
+      <input name="outhigh" type="float" value="0.02" />
+    </remap>
+    <multiply name="streak_length_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="plate_uv" />
+      <input name="in2" type="vector2" value="9, 3" />
+    </multiply>
+    <noise2d name="streak_length_noise" type="float">
+      <input name="texcoord" type="vector2" nodename="streak_length_uv" />
+    </noise2d>
+    <remap name="streak_length_variation" type="float">
+      <input name="in" type="float" nodename="streak_length_noise" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.45" />
+    </remap>
+    <multiply name="rust_run_reach" type="float">
+      <input name="in1" type="float" interfacename="rust_runs" />
+      <input name="in2" type="float" value="1.1" />
+    </multiply>
+    <multiply name="streak_length" type="float">
+      <input name="in1" type="float" nodename="streak_length_variation" />
+      <input name="in2" type="float" nodename="rust_run_reach" />
+    </multiply>
+    <multiply name="row_a" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <multiply name="row_da" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <max name="row_streak_db_pos" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" value="0.02" />
+    </max>
+    <min name="row_streak_db_neg" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" value="-0.02" />
+    </min>
+    <ifgreater name="row_streak_db_safe" type="float">
+      <input name="value1" type="float" nodename="down_v" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" nodename="row_streak_db_pos" />
+      <input name="in2" type="float" nodename="row_streak_db_neg" />
+    </ifgreater>
+    <ifgreater name="row_streak_b_src" type="float">
+      <input name="value1" type="float" nodename="down_v" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" value="0.05" />
+      <input name="in2" type="float" value="0.95" />
+    </ifgreater>
+    <subtract name="row_streak_travel_b" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" nodename="row_streak_b_src" />
+    </subtract>
+    <divide name="row_streak_travel_t" type="float">
+      <input name="in1" type="float" nodename="row_streak_travel_b" />
+      <input name="in2" type="float" nodename="row_streak_db_safe" />
+    </divide>
+    <multiply name="row_streak_drift" type="float">
+      <input name="in1" type="float" nodename="row_da" />
+      <input name="in2" type="float" nodename="row_streak_travel_t" />
+    </multiply>
+    <subtract name="row_streak_a_src" type="float">
+      <input name="in1" type="float" nodename="row_a" />
+      <input name="in2" type="float" nodename="row_streak_drift" />
+    </subtract>
+    <floor name="row_streak_a_fraction_floor" type="float">
+      <input name="in" type="float" nodename="row_streak_a_src" />
+    </floor>
+    <subtract name="row_streak_a_fraction" type="float">
+      <input name="in1" type="float" nodename="row_streak_a_src" />
+      <input name="in2" type="float" nodename="row_streak_a_fraction_floor" />
+    </subtract>
+    <subtract name="row_streak_across" type="float">
+      <input name="in1" type="float" nodename="row_streak_a_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="row_streak_dist" type="float">
+      <input name="in" type="float" nodename="row_streak_travel_b" />
+    </absval>
+    <smoothstep name="row_streak_downstream" type="float">
+      <input name="in" type="float" nodename="row_streak_travel_t" />
+      <input name="low" type="float" value="-0.002" />
+      <input name="high" type="float" value="0.002" />
+    </smoothstep>
+    <divide name="row_streak_across_panel" type="float">
+      <input name="in1" type="float" nodename="row_streak_across" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <absval name="row_streak_x" type="float">
+      <input name="in" type="float" nodename="row_streak_across_panel" />
+    </absval>
+    <multiply name="row_streak_spread" type="float">
+      <input name="in1" type="float" nodename="row_streak_dist" />
+      <input name="in2" type="float" value="0.03" />
+    </multiply>
+    <add name="row_streak_width" type="float">
+      <input name="in1" type="float" nodename="streak_width" />
+      <input name="in2" type="float" nodename="row_streak_spread" />
+    </add>
+    <smoothstep name="row_streak_across_ramp" type="float">
+      <input name="in" type="float" nodename="row_streak_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="row_streak_width" />
+    </smoothstep>
+    <invert name="row_streak_across_mask" type="float">
+      <input name="in" type="float" nodename="row_streak_across_ramp" />
+    </invert>
+    <smoothstep name="row_streak_start" type="float">
+      <input name="in" type="float" nodename="row_streak_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.02" />
+    </smoothstep>
+    <smoothstep name="row_streak_fade_ramp" type="float">
+      <input name="in" type="float" nodename="row_streak_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="streak_length" />
+    </smoothstep>
+    <invert name="row_streak_fade" type="float">
+      <input name="in" type="float" nodename="row_streak_fade_ramp" />
+    </invert>
+    <multiply name="row_streak_along" type="float">
+      <input name="in1" type="float" nodename="row_streak_start" />
+      <input name="in2" type="float" nodename="row_streak_fade" />
+    </multiply>
+    <multiply name="row_streak_shape" type="float">
+      <input name="in1" type="float" nodename="row_streak_across_mask" />
+      <input name="in2" type="float" nodename="row_streak_along" />
+    </multiply>
+    <multiply name="row_streak" type="float">
+      <input name="in1" type="float" nodename="row_streak_shape" />
+      <input name="in2" type="float" nodename="row_streak_downstream" />
+    </multiply>
+    <multiply name="column_a" type="float">
+      <input name="in1" type="float" nodename="plate_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <multiply name="column_da" type="float">
+      <input name="in1" type="float" nodename="down_v" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </multiply>
+    <max name="column_streak_db_pos" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" value="0.02" />
+    </max>
+    <min name="column_streak_db_neg" type="float">
+      <input name="in1" type="float" nodename="down_u" />
+      <input name="in2" type="float" value="-0.02" />
+    </min>
+    <ifgreater name="column_streak_db_safe" type="float">
+      <input name="value1" type="float" nodename="down_u" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" nodename="column_streak_db_pos" />
+      <input name="in2" type="float" nodename="column_streak_db_neg" />
+    </ifgreater>
+    <ifgreater name="column_streak_b_src" type="float">
+      <input name="value1" type="float" nodename="down_u" />
+      <input name="value2" type="float" value="0" />
+      <input name="in1" type="float" value="0.05" />
+      <input name="in2" type="float" value="0.95" />
+    </ifgreater>
+    <subtract name="column_streak_travel_b" type="float">
+      <input name="in1" type="float" nodename="plate_u" />
+      <input name="in2" type="float" nodename="column_streak_b_src" />
+    </subtract>
+    <divide name="column_streak_travel_t" type="float">
+      <input name="in1" type="float" nodename="column_streak_travel_b" />
+      <input name="in2" type="float" nodename="column_streak_db_safe" />
+    </divide>
+    <multiply name="column_streak_drift" type="float">
+      <input name="in1" type="float" nodename="column_da" />
+      <input name="in2" type="float" nodename="column_streak_travel_t" />
+    </multiply>
+    <subtract name="column_streak_a_src" type="float">
+      <input name="in1" type="float" nodename="column_a" />
+      <input name="in2" type="float" nodename="column_streak_drift" />
+    </subtract>
+    <floor name="column_streak_a_fraction_floor" type="float">
+      <input name="in" type="float" nodename="column_streak_a_src" />
+    </floor>
+    <subtract name="column_streak_a_fraction" type="float">
+      <input name="in1" type="float" nodename="column_streak_a_src" />
+      <input name="in2" type="float" nodename="column_streak_a_fraction_floor" />
+    </subtract>
+    <subtract name="column_streak_across" type="float">
+      <input name="in1" type="float" nodename="column_streak_a_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="column_streak_dist" type="float">
+      <input name="in" type="float" nodename="column_streak_travel_b" />
+    </absval>
+    <smoothstep name="column_streak_downstream" type="float">
+      <input name="in" type="float" nodename="column_streak_travel_t" />
+      <input name="low" type="float" value="-0.002" />
+      <input name="high" type="float" value="0.002" />
+    </smoothstep>
+    <divide name="column_streak_across_panel" type="float">
+      <input name="in1" type="float" nodename="column_streak_across" />
+      <input name="in2" type="float" interfacename="rivets" />
+    </divide>
+    <absval name="column_streak_x" type="float">
+      <input name="in" type="float" nodename="column_streak_across_panel" />
+    </absval>
+    <multiply name="column_streak_spread" type="float">
+      <input name="in1" type="float" nodename="column_streak_dist" />
+      <input name="in2" type="float" value="0.03" />
+    </multiply>
+    <add name="column_streak_width" type="float">
+      <input name="in1" type="float" nodename="streak_width" />
+      <input name="in2" type="float" nodename="column_streak_spread" />
+    </add>
+    <smoothstep name="column_streak_across_ramp" type="float">
+      <input name="in" type="float" nodename="column_streak_x" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="column_streak_width" />
+    </smoothstep>
+    <invert name="column_streak_across_mask" type="float">
+      <input name="in" type="float" nodename="column_streak_across_ramp" />
+    </invert>
+    <smoothstep name="column_streak_start" type="float">
+      <input name="in" type="float" nodename="column_streak_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.02" />
+    </smoothstep>
+    <smoothstep name="column_streak_fade_ramp" type="float">
+      <input name="in" type="float" nodename="column_streak_dist" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="streak_length" />
+    </smoothstep>
+    <invert name="column_streak_fade" type="float">
+      <input name="in" type="float" nodename="column_streak_fade_ramp" />
+    </invert>
+    <multiply name="column_streak_along" type="float">
+      <input name="in1" type="float" nodename="column_streak_start" />
+      <input name="in2" type="float" nodename="column_streak_fade" />
+    </multiply>
+    <multiply name="column_streak_shape" type="float">
+      <input name="in1" type="float" nodename="column_streak_across_mask" />
+      <input name="in2" type="float" nodename="column_streak_along" />
+    </multiply>
+    <multiply name="column_streak" type="float">
+      <input name="in1" type="float" nodename="column_streak_shape" />
+      <input name="in2" type="float" nodename="column_streak_downstream" />
+    </multiply>
+    <max name="slope_safe" type="float">
+      <input name="in1" type="float" nodename="down_slope" />
+      <input name="in2" type="float" value="0.001" />
+    </max>
+    <absval name="flow_v_abs" type="float">
+      <input name="in" type="float" nodename="down_v" />
+    </absval>
+    <divide name="flow_v_share" type="float">
+      <input name="in1" type="float" nodename="flow_v_abs" />
+      <input name="in2" type="float" nodename="slope_safe" />
+    </divide>
+    <smoothstep name="row_weight" type="float">
+      <input name="in" type="float" nodename="flow_v_share" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <absval name="flow_u_abs" type="float">
+      <input name="in" type="float" nodename="down_u" />
+    </absval>
+    <divide name="flow_u_share" type="float">
+      <input name="in1" type="float" nodename="flow_u_abs" />
+      <input name="in2" type="float" nodename="slope_safe" />
+    </divide>
+    <smoothstep name="column_weight" type="float">
+      <input name="in" type="float" nodename="flow_u_share" />
+      <input name="low" type="float" value="0.25" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="row_streak_weighted" type="float">
+      <input name="in1" type="float" nodename="row_streak" />
+      <input name="in2" type="float" nodename="row_weight" />
+    </multiply>
+    <multiply name="column_streak_weighted" type="float">
+      <input name="in1" type="float" nodename="column_streak" />
+      <input name="in2" type="float" nodename="column_weight" />
+    </multiply>
+    <max name="streak_shape" type="float">
+      <input name="in1" type="float" nodename="row_streak_weighted" />
+      <input name="in2" type="float" nodename="column_streak_weighted" />
+    </max>
+    <smoothstep name="wall_steepness" type="float">
+      <input name="in" type="float" nodename="down_slope" />
+      <input name="low" type="float" value="0.15" />
+      <input name="high" type="float" value="0.45" />
+    </smoothstep>
+    <multiply name="streak_on_walls" type="float">
+      <input name="in1" type="float" nodename="streak_shape" />
+      <input name="in2" type="float" nodename="wall_steepness" />
+    </multiply>
+    <multiply name="streak_weathered" type="float">
+      <input name="in1" type="float" nodename="streak_on_walls" />
+      <input name="in2" type="float" interfacename="weathering" />
+    </multiply>
+    <smoothstep name="rust_runs_present" type="float">
+      <input name="in" type="float" interfacename="rust_runs" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.1" />
+    </smoothstep>
+    <multiply name="streak" type="float">
+      <input name="in1" type="float" nodename="streak_weathered" />
+      <input name="in2" type="float" nodename="rust_runs_present" />
+    </multiply>
+    <multiply name="streak_rust" type="float">
+      <input name="in1" type="float" nodename="streak" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <max name="rust_mask" type="float">
+      <input name="in1" type="float" nodename="chipped" />
+      <input name="in2" type="float" nodename="streak_rust" />
+    </max>
+    <remap name="plate_tone" type="float">
+      <input name="in" type="float" nodename="plate_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.85" />
+      <input name="outhigh" type="float" value="1.12" />
+    </remap>
+    <multiply name="fade_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.5" />
+    </multiply>
+    <fractal3d name="fade_fractal" type="float">
+      <input name="position" type="vector3" nodename="fade_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="paint_fade" type="float">
+      <input name="in" type="float" nodename="fade_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="paint_tone" type="float">
+      <input name="in1" type="float" nodename="plate_tone" />
+      <input name="in2" type="float" nodename="paint_fade" />
+    </multiply>
+    <multiply name="paint_toned" type="color3">
+      <input name="in1" type="color3" interfacename="paint_color" />
+      <input name="in2" type="float" nodename="paint_tone" />
+    </multiply>
+    <remap name="rust_tone" type="float">
+      <input name="in" type="float" nodename="chip_fractal" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.8" />
+      <input name="outlow" type="float" value="0.5" />
+      <input name="outhigh" type="float" value="1.5" />
+    </remap>
+    <multiply name="rust_toned" type="color3">
+      <input name="in1" type="color3" interfacename="rust_color" />
+      <input name="in2" type="float" nodename="rust_tone" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="paint_toned" />
+      <input name="fg" type="color3" nodename="rust_toned" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <remap name="paint_roughness" type="float">
+      <input name="in" type="float" nodename="paint_fade" />
+      <input name="inlow" type="float" value="0.8" />
+      <input name="inhigh" type="float" value="1.25" />
+      <input name="outlow" type="float" value="0.38" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="paint_roughness" />
+      <input name="fg" type="float" value="0.85" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_riveted_steel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_riveted_steel" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.5" />
+    <input name="specular_roughness" type="float" nodegraph="NG_riveted_steel" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_riveted_steel" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Riveted_Steel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_riveted_steel" />
+  </surfacematerial>
+</materialx>

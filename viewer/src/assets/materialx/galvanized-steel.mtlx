@@ -1,0 +1,385 @@
+<?xml version="1.0"?>
+<!--
+  Hot-dip galvanized steel: OpenPBR zinc with spangle. Cells of a
+  domain-warped object-space grid are the zinc grains; each grain is a flat
+  facet at its own tilt and roughness with fine dendrite ridges in its own
+  direction, so neighbouring grains flash differently. Patches of white rust
+  turn the zinc dull and dielectric.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_galvanized_steel">
+    <input name="zinc_color" type="color3" value="0.56, 0.58, 0.61" uiname="Zinc" />
+    <input name="spangle_scale" type="float" value="7" uiname="Spangle scale" uimin="0.5" uimax="60" />
+    <input name="facets" type="float" value="0.07" uiname="Facet tilt" uimin="0" uimax="0.6" />
+    <input name="feathers" type="float" value="0.7" uiname="Feathers" uimin="0" uimax="1" />
+    <input name="white_rust" type="float" value="0.25" uiname="White rust" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Spangle grains: cells of a domain-warped grid, so their borders wander like zinc crystals. Each grain gets its own randoms from the cell noise of the grid and offset copies of it. -->
+    <multiply name="spangle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="spangle_scale" />
+    </multiply>
+    <multiply name="warp_a_position" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <noise3d name="warp_a" type="vector3">
+      <input name="position" type="vector3" nodename="warp_a_position" />
+    </noise3d>
+    <multiply name="warp_b_position" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="float" value="2.7" />
+    </multiply>
+    <noise3d name="warp_b" type="vector3">
+      <input name="position" type="vector3" nodename="warp_b_position" />
+    </noise3d>
+    <multiply name="warp_c_position" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="float" value="8" />
+    </multiply>
+    <noise3d name="warp_c" type="vector3">
+      <input name="position" type="vector3" nodename="warp_c_position" />
+    </noise3d>
+    <multiply name="warp_a_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="warp_a" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <add name="warped_a" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="vector3" nodename="warp_a_offset" />
+    </add>
+    <multiply name="warp_b_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="warp_b" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <add name="warped_b" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_a" />
+      <input name="in2" type="vector3" nodename="warp_b_offset" />
+    </add>
+    <multiply name="warp_c_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="warp_c" />
+      <input name="in2" type="float" value="0.12" />
+    </multiply>
+    <add name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="warped_b" />
+      <input name="in2" type="vector3" nodename="warp_c_offset" />
+    </add>
+    <cellnoise3d name="grain_random_0" type="float">
+      <input name="position" type="vector3" nodename="grain_position" />
+    </cellnoise3d>
+    <add name="grain_random_1_position" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="31, 0, 0" />
+    </add>
+    <cellnoise3d name="grain_random_1" type="float">
+      <input name="position" type="vector3" nodename="grain_random_1_position" />
+    </cellnoise3d>
+    <add name="grain_random_2_position" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="0, 57, 0" />
+    </add>
+    <cellnoise3d name="grain_random_2" type="float">
+      <input name="position" type="vector3" nodename="grain_random_2_position" />
+    </cellnoise3d>
+    <add name="grain_random_3_position" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="0, 0, 91" />
+    </add>
+    <cellnoise3d name="grain_random_3" type="float">
+      <input name="position" type="vector3" nodename="grain_random_3_position" />
+    </cellnoise3d>
+    <add name="grain_random_4_position" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_position" />
+      <input name="in2" type="vector3" value="13, 29, 47" />
+    </add>
+    <cellnoise3d name="grain_random_4" type="float">
+      <input name="position" type="vector3" nodename="grain_random_4_position" />
+    </cellnoise3d>
+
+    <!-- Each grain solidified as a flat facet at its own tilt; that is what makes neighbours flash differently. -->
+    <subtract name="tilt_x" type="float">
+      <input name="in1" type="float" nodename="grain_random_1" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <subtract name="tilt_y" type="float">
+      <input name="in1" type="float" nodename="grain_random_2" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <subtract name="tilt_z" type="float">
+      <input name="in1" type="float" nodename="grain_random_3" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <combine3 name="grain_tilt_raw" type="vector3">
+      <input name="in1" type="float" nodename="tilt_x" />
+      <input name="in2" type="float" nodename="tilt_y" />
+      <input name="in3" type="float" nodename="tilt_z" />
+    </combine3>
+    <multiply name="facet_scale" type="float">
+      <input name="in1" type="float" interfacename="facets" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <multiply name="grain_tilt" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_tilt_raw" />
+      <input name="in2" type="float" nodename="facet_scale" />
+    </multiply>
+
+    <!-- Dendrite feathers: fine ridges across each grain in its own direction. -->
+    <subtract name="feather_x" type="float">
+      <input name="in1" type="float" nodename="grain_random_2" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <subtract name="feather_y" type="float">
+      <input name="in1" type="float" nodename="grain_random_4" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <subtract name="feather_z" type="float">
+      <input name="in1" type="float" nodename="grain_random_1" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <combine3 name="feather_direction_raw" type="vector3">
+      <input name="in1" type="float" nodename="feather_x" />
+      <input name="in2" type="float" nodename="feather_y" />
+      <input name="in3" type="float" nodename="feather_z" />
+    </combine3>
+    <normalize name="feather_direction" type="vector3">
+      <input name="in" type="vector3" nodename="feather_direction_raw" />
+    </normalize>
+    <multiply name="ridge_noise_position" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="float" value="12" />
+    </multiply>
+    <noise3d name="ridge_noise" type="float">
+      <input name="position" type="vector3" nodename="ridge_noise_position" />
+    </noise3d>
+    <dotproduct name="feather_along" type="float">
+      <input name="in1" type="vector3" nodename="spangle_position" />
+      <input name="in2" type="vector3" nodename="feather_direction" />
+    </dotproduct>
+    <multiply name="feather_frequency" type="float">
+      <input name="in1" type="float" nodename="feather_along" />
+      <input name="in2" type="float" value="70" />
+    </multiply>
+    <multiply name="feather_wobble" type="float">
+      <input name="in1" type="float" nodename="ridge_noise" />
+      <input name="in2" type="float" value="2.5" />
+    </multiply>
+    <add name="feather_phase" type="float">
+      <input name="in1" type="float" nodename="feather_frequency" />
+      <input name="in2" type="float" nodename="feather_wobble" />
+    </add>
+    <sin name="feather_ridge" type="float">
+      <input name="in" type="float" nodename="feather_phase" />
+    </sin>
+    <cos name="feather_slope" type="float">
+      <input name="in" type="float" nodename="feather_phase" />
+    </cos>
+    <remap name="feather_grain_amount" type="float">
+      <input name="in" type="float" nodename="grain_random_4" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.2" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="feather_amount" type="float">
+      <input name="in1" type="float" interfacename="feathers" />
+      <input name="in2" type="float" nodename="feather_grain_amount" />
+    </multiply>
+    <multiply name="feather_strength" type="float">
+      <input name="in1" type="float" nodename="feather_amount" />
+      <input name="in2" type="float" value="0.02" />
+    </multiply>
+    <multiply name="feather_slope_scaled" type="float">
+      <input name="in1" type="float" nodename="feather_slope" />
+      <input name="in2" type="float" nodename="feather_strength" />
+    </multiply>
+    <multiply name="feather_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="feather_direction" />
+      <input name="in2" type="float" nodename="feather_slope_scaled" />
+    </multiply>
+
+    <!-- White rust: dull zinc hydroxide blooms in patches. -->
+    <multiply name="rust_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3.2" />
+    </multiply>
+    <fractal3d name="rust_fractal" type="float">
+      <input name="position" type="vector3" nodename="rust_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <multiply name="rust_spot_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="26" />
+    </multiply>
+    <noise3d name="rust_spots" type="float">
+      <input name="position" type="vector3" nodename="rust_spot_position" />
+    </noise3d>
+    <multiply name="rust_spot_part" type="float">
+      <input name="in1" type="float" nodename="rust_spots" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="rust_raw" type="float">
+      <input name="in1" type="float" nodename="rust_fractal" />
+      <input name="in2" type="float" nodename="rust_spot_part" />
+    </add>
+    <smoothstep name="rust_mask_raw" type="float">
+      <input name="in" type="float" nodename="rust_raw" />
+      <input name="low" type="float" value="0.2" />
+      <input name="high" type="float" value="0.6" />
+    </smoothstep>
+    <multiply name="rust_mask" type="float">
+      <input name="in1" type="float" nodename="rust_mask_raw" />
+      <input name="in2" type="float" interfacename="white_rust" />
+    </multiply>
+    <remap name="grain_tone" type="float">
+      <input name="in" type="float" nodename="grain_random_0" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.08" />
+    </remap>
+    <multiply name="feather_tone_scale" type="float">
+      <input name="in1" type="float" nodename="feather_amount" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <multiply name="feather_tone_offset" type="float">
+      <input name="in1" type="float" nodename="feather_ridge" />
+      <input name="in2" type="float" nodename="feather_tone_scale" />
+    </multiply>
+    <add name="feather_tone" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="feather_tone_offset" />
+    </add>
+    <multiply name="metal_tone" type="float">
+      <input name="in1" type="float" nodename="grain_tone" />
+      <input name="in2" type="float" nodename="feather_tone" />
+    </multiply>
+    <multiply name="metal_color" type="color3">
+      <input name="in1" type="color3" interfacename="zinc_color" />
+      <input name="in2" type="float" nodename="metal_tone" />
+    </multiply>
+    <remap name="rust_tone" type="float">
+      <input name="in" type="float" nodename="rust_spots" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="rust_color" type="color3">
+      <input name="in1" type="color3" interfacename="zinc_color" />
+      <input name="in2" type="float" nodename="rust_tone" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="metal_color" />
+      <input name="fg" type="color3" nodename="rust_color" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <multiply name="rust_dielectric" type="float">
+      <input name="in1" type="float" nodename="rust_mask" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <invert name="metalness" type="float">
+      <input name="in" type="float" nodename="rust_dielectric" />
+    </invert>
+    <remap name="grain_roughness" type="float">
+      <input name="in" type="float" nodename="grain_random_1" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.3" />
+      <input name="outhigh" type="float" value="0.62" />
+    </remap>
+    <multiply name="feather_rough_scale" type="float">
+      <input name="in1" type="float" nodename="feather_amount" />
+      <input name="in2" type="float" value="0.08" />
+    </multiply>
+    <multiply name="feather_rough" type="float">
+      <input name="in1" type="float" nodename="feather_ridge" />
+      <input name="in2" type="float" nodename="feather_rough_scale" />
+    </multiply>
+    <add name="metal_roughness" type="float">
+      <input name="in1" type="float" nodename="grain_roughness" />
+      <input name="in2" type="float" nodename="feather_rough" />
+    </add>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="metal_roughness" />
+      <input name="fg" type="float" value="0.85" />
+      <input name="mix" type="float" nodename="rust_mask" />
+    </mix>
+    <multiply name="rust_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="90" />
+    </multiply>
+    <noise3d name="rust_normal_noise" type="vector3">
+      <input name="position" type="vector3" nodename="rust_normal_position" />
+    </noise3d>
+    <invert name="facet_keep" type="float">
+      <input name="in" type="float" nodename="rust_mask" />
+    </invert>
+    <multiply name="facet_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_tilt" />
+      <input name="in2" type="float" nodename="facet_keep" />
+    </multiply>
+    <multiply name="feather_gradient_kept" type="vector3">
+      <input name="in1" type="vector3" nodename="feather_gradient" />
+      <input name="in2" type="float" nodename="facet_keep" />
+    </multiply>
+    <multiply name="rust_bump" type="float">
+      <input name="in1" type="float" nodename="rust_mask" />
+      <input name="in2" type="float" value="0.15" />
+    </multiply>
+    <multiply name="rust_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="rust_normal_noise" />
+      <input name="in2" type="float" nodename="rust_bump" />
+    </multiply>
+    <add name="spangle_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="facet_gradient" />
+      <input name="in2" type="vector3" nodename="feather_gradient_kept" />
+    </add>
+    <add name="spangle_gradient_sum_2" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_gradient_sum" />
+      <input name="in2" type="vector3" nodename="rust_gradient" />
+    </add>
+    <dotproduct name="spangle_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="spangle_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="spangle_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="spangle_along_normal" />
+    </multiply>
+    <subtract name="spangle_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="spangle_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="spangle_normal_part" />
+    </subtract>
+    <subtract name="spangle_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="spangle_surface_gradient" />
+    </subtract>
+    <transformnormal name="spangle_world" type="vector3">
+      <input name="in" type="vector3" nodename="spangle_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="spangle_normal" type="vector3">
+      <input name="in" type="vector3" nodename="spangle_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="metalness_out" type="float" nodename="metalness" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="spangle_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_galvanized_steel" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_galvanized_steel" output="base_color_out" />
+    <input name="base_metalness" type="float" nodegraph="NG_galvanized_steel" output="metalness_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.6" />
+    <input name="specular_roughness" type="float" nodegraph="NG_galvanized_steel" output="roughness_out" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_galvanized_steel" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Galvanized_Steel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_galvanized_steel" />
+  </surfacematerial>
+</materialx>

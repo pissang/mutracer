@@ -1,0 +1,1002 @@
+<?xml version="1.0"?>
+<!--
+  Stitched saddle leather: OpenPBR vegetable-tanned leather cut into panels.
+  Object-space planes one panel apart are the seams; each panel puffs up
+  between them and two rows of slanted saddle stitches run beside each seam,
+  measured by arc length around the seam axis, or by distance from it where
+  the seam runs radially. Panels differ slightly in
+  tone, seams are burnished dark and raised areas wear lighter and polished.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_saddle_leather">
+    <input name="leather_color" type="color3" value="0.2, 0.072, 0.024" uiname="Leather" />
+    <input name="thread_color" type="color3" value="0.5, 0.38, 0.22" uiname="Thread" />
+    <input name="panel_size" type="float" value="0.7" uiname="Panel size" uimin="0.1" uimax="4" />
+    <input name="stitch_length" type="float" value="0.042" uiname="Stitch length" uimin="0.005" uimax="0.2" />
+    <input name="puff" type="float" value="1.3" uiname="Puff" uimin="0" uimax="2" />
+    <input name="wear" type="float" value="0.45" uiname="Wear" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <separate3 name="position_parts" type="multioutput">
+      <input name="in" type="vector3" nodename="object_position" />
+    </separate3>
+    <separate3 name="normal_parts" type="multioutput">
+      <input name="in" type="vector3" nodename="object_normal" />
+    </separate3>
+
+    <!-- Seams: planes across each object axis, one panel apart. Each axis gives the surface distance to its nearest seam, the direction away from it and the arc length along it. -->
+    <divide name="seam_x_cells" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outx" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </divide>
+    <add name="seam_x_shifted" type="float">
+      <input name="in1" type="float" nodename="seam_x_cells" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="seam_x_fraction_floor" type="float">
+      <input name="in" type="float" nodename="seam_x_shifted" />
+    </floor>
+    <subtract name="seam_x_fraction" type="float">
+      <input name="in1" type="float" nodename="seam_x_shifted" />
+      <input name="in2" type="float" nodename="seam_x_fraction_floor" />
+    </subtract>
+    <subtract name="seam_x_offset" type="float">
+      <input name="in1" type="float" nodename="seam_x_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="seam_x_offset_abs" type="float">
+      <input name="in" type="float" nodename="seam_x_offset" />
+    </absval>
+    <subtract name="seam_x_cell_distance" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="seam_x_offset_abs" />
+    </subtract>
+    <multiply name="seam_x_plane_distance" type="float">
+      <input name="in1" type="float" nodename="seam_x_cell_distance" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </multiply>
+    <multiply name="seam_x_cos2" type="float">
+      <input name="in1" type="float" nodename="normal_parts" output="outx" />
+      <input name="in2" type="float" nodename="normal_parts" output="outx" />
+    </multiply>
+    <subtract name="seam_x_sin2" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="seam_x_cos2" />
+    </subtract>
+    <max name="seam_x_sin2_floor" type="float">
+      <input name="in1" type="float" nodename="seam_x_sin2" />
+      <input name="in2" type="float" value="0.03" />
+    </max>
+    <sqrt name="seam_x_sin" type="float">
+      <input name="in" type="float" nodename="seam_x_sin2_floor" />
+    </sqrt>
+    <divide name="seam_x_distance" type="float">
+      <input name="in1" type="float" nodename="seam_x_plane_distance" />
+      <input name="in2" type="float" nodename="seam_x_sin" />
+    </divide>
+    <ifgreater name="seam_x_side" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="seam_x_fraction" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="-1" />
+    </ifgreater>
+    <multiply name="seam_x_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="normal_parts" output="outx" />
+    </multiply>
+    <subtract name="seam_x_tangential" type="vector3">
+      <input name="in1" type="vector3" value="1, 0, 0" />
+      <input name="in2" type="vector3" nodename="seam_x_normal_part" />
+    </subtract>
+    <divide name="seam_x_away_scale" type="float">
+      <input name="in1" type="float" nodename="seam_x_side" />
+      <input name="in2" type="float" nodename="seam_x_sin" />
+    </divide>
+    <multiply name="seam_x_away" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_x_tangential" />
+      <input name="in2" type="float" nodename="seam_x_away_scale" />
+    </multiply>
+    <multiply name="seam_x_b2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outy" />
+      <input name="in2" type="float" nodename="position_parts" output="outy" />
+    </multiply>
+    <multiply name="seam_x_c2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outz" />
+      <input name="in2" type="float" nodename="position_parts" output="outz" />
+    </multiply>
+    <add name="seam_x_r2" type="float">
+      <input name="in1" type="float" nodename="seam_x_b2" />
+      <input name="in2" type="float" nodename="seam_x_c2" />
+    </add>
+    <sqrt name="seam_x_radius" type="float">
+      <input name="in" type="float" nodename="seam_x_r2" />
+    </sqrt>
+    <atan2 name="seam_x_angle" type="float">
+      <input name="iny" type="float" nodename="position_parts" output="outz" />
+      <input name="inx" type="float" nodename="position_parts" output="outy" />
+    </atan2>
+    <multiply name="seam_x_angle_arc" type="float">
+      <input name="in1" type="float" nodename="seam_x_angle" />
+      <input name="in2" type="float" nodename="seam_x_radius" />
+    </multiply>
+    <crossproduct name="seam_x_tangent" type="vector3">
+      <input name="in1" type="vector3" value="1, 0, 0" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </crossproduct>
+    <multiply name="seam_x_axial" type="vector3">
+      <input name="in1" type="vector3" value="1, 0, 0" />
+      <input name="in2" type="float" nodename="position_parts" output="outx" />
+    </multiply>
+    <subtract name="seam_x_radial" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="seam_x_axial" />
+    </subtract>
+    <dotproduct name="seam_x_toward_axis" type="float">
+      <input name="in1" type="vector3" nodename="seam_x_tangent" />
+      <input name="in2" type="vector3" nodename="seam_x_radial" />
+    </dotproduct>
+    <multiply name="seam_x_toward_axis2" type="float">
+      <input name="in1" type="float" nodename="seam_x_toward_axis" />
+      <input name="in2" type="float" nodename="seam_x_toward_axis" />
+    </multiply>
+    <dotproduct name="seam_x_tangent2" type="float">
+      <input name="in1" type="vector3" nodename="seam_x_tangent" />
+      <input name="in2" type="vector3" nodename="seam_x_tangent" />
+    </dotproduct>
+    <multiply name="seam_x_radius2" type="float">
+      <input name="in1" type="float" nodename="seam_x_radius" />
+      <input name="in2" type="float" nodename="seam_x_radius" />
+    </multiply>
+    <multiply name="seam_x_spread2" type="float">
+      <input name="in1" type="float" nodename="seam_x_tangent2" />
+      <input name="in2" type="float" nodename="seam_x_radius2" />
+    </multiply>
+    <subtract name="seam_x_around2" type="float">
+      <input name="in1" type="float" nodename="seam_x_spread2" />
+      <input name="in2" type="float" nodename="seam_x_toward_axis2" />
+    </subtract>
+    <ifgreater name="seam_x_arc" type="float">
+      <input name="value1" type="float" nodename="seam_x_toward_axis2" />
+      <input name="value2" type="float" nodename="seam_x_around2" />
+      <input name="in1" type="float" nodename="seam_x_radius" />
+      <input name="in2" type="float" nodename="seam_x_angle_arc" />
+    </ifgreater>
+    <divide name="seam_y_cells" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outy" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </divide>
+    <add name="seam_y_shifted" type="float">
+      <input name="in1" type="float" nodename="seam_y_cells" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="seam_y_fraction_floor" type="float">
+      <input name="in" type="float" nodename="seam_y_shifted" />
+    </floor>
+    <subtract name="seam_y_fraction" type="float">
+      <input name="in1" type="float" nodename="seam_y_shifted" />
+      <input name="in2" type="float" nodename="seam_y_fraction_floor" />
+    </subtract>
+    <subtract name="seam_y_offset" type="float">
+      <input name="in1" type="float" nodename="seam_y_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="seam_y_offset_abs" type="float">
+      <input name="in" type="float" nodename="seam_y_offset" />
+    </absval>
+    <subtract name="seam_y_cell_distance" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="seam_y_offset_abs" />
+    </subtract>
+    <multiply name="seam_y_plane_distance" type="float">
+      <input name="in1" type="float" nodename="seam_y_cell_distance" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </multiply>
+    <multiply name="seam_y_cos2" type="float">
+      <input name="in1" type="float" nodename="normal_parts" output="outy" />
+      <input name="in2" type="float" nodename="normal_parts" output="outy" />
+    </multiply>
+    <subtract name="seam_y_sin2" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="seam_y_cos2" />
+    </subtract>
+    <max name="seam_y_sin2_floor" type="float">
+      <input name="in1" type="float" nodename="seam_y_sin2" />
+      <input name="in2" type="float" value="0.03" />
+    </max>
+    <sqrt name="seam_y_sin" type="float">
+      <input name="in" type="float" nodename="seam_y_sin2_floor" />
+    </sqrt>
+    <divide name="seam_y_distance" type="float">
+      <input name="in1" type="float" nodename="seam_y_plane_distance" />
+      <input name="in2" type="float" nodename="seam_y_sin" />
+    </divide>
+    <ifgreater name="seam_y_side" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="seam_y_fraction" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="-1" />
+    </ifgreater>
+    <multiply name="seam_y_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="normal_parts" output="outy" />
+    </multiply>
+    <subtract name="seam_y_tangential" type="vector3">
+      <input name="in1" type="vector3" value="0, 1, 0" />
+      <input name="in2" type="vector3" nodename="seam_y_normal_part" />
+    </subtract>
+    <divide name="seam_y_away_scale" type="float">
+      <input name="in1" type="float" nodename="seam_y_side" />
+      <input name="in2" type="float" nodename="seam_y_sin" />
+    </divide>
+    <multiply name="seam_y_away" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_y_tangential" />
+      <input name="in2" type="float" nodename="seam_y_away_scale" />
+    </multiply>
+    <multiply name="seam_y_b2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outz" />
+      <input name="in2" type="float" nodename="position_parts" output="outz" />
+    </multiply>
+    <multiply name="seam_y_c2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outx" />
+      <input name="in2" type="float" nodename="position_parts" output="outx" />
+    </multiply>
+    <add name="seam_y_r2" type="float">
+      <input name="in1" type="float" nodename="seam_y_b2" />
+      <input name="in2" type="float" nodename="seam_y_c2" />
+    </add>
+    <sqrt name="seam_y_radius" type="float">
+      <input name="in" type="float" nodename="seam_y_r2" />
+    </sqrt>
+    <atan2 name="seam_y_angle" type="float">
+      <input name="iny" type="float" nodename="position_parts" output="outx" />
+      <input name="inx" type="float" nodename="position_parts" output="outz" />
+    </atan2>
+    <multiply name="seam_y_angle_arc" type="float">
+      <input name="in1" type="float" nodename="seam_y_angle" />
+      <input name="in2" type="float" nodename="seam_y_radius" />
+    </multiply>
+    <crossproduct name="seam_y_tangent" type="vector3">
+      <input name="in1" type="vector3" value="0, 1, 0" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </crossproduct>
+    <multiply name="seam_y_axial" type="vector3">
+      <input name="in1" type="vector3" value="0, 1, 0" />
+      <input name="in2" type="float" nodename="position_parts" output="outy" />
+    </multiply>
+    <subtract name="seam_y_radial" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="seam_y_axial" />
+    </subtract>
+    <dotproduct name="seam_y_toward_axis" type="float">
+      <input name="in1" type="vector3" nodename="seam_y_tangent" />
+      <input name="in2" type="vector3" nodename="seam_y_radial" />
+    </dotproduct>
+    <multiply name="seam_y_toward_axis2" type="float">
+      <input name="in1" type="float" nodename="seam_y_toward_axis" />
+      <input name="in2" type="float" nodename="seam_y_toward_axis" />
+    </multiply>
+    <dotproduct name="seam_y_tangent2" type="float">
+      <input name="in1" type="vector3" nodename="seam_y_tangent" />
+      <input name="in2" type="vector3" nodename="seam_y_tangent" />
+    </dotproduct>
+    <multiply name="seam_y_radius2" type="float">
+      <input name="in1" type="float" nodename="seam_y_radius" />
+      <input name="in2" type="float" nodename="seam_y_radius" />
+    </multiply>
+    <multiply name="seam_y_spread2" type="float">
+      <input name="in1" type="float" nodename="seam_y_tangent2" />
+      <input name="in2" type="float" nodename="seam_y_radius2" />
+    </multiply>
+    <subtract name="seam_y_around2" type="float">
+      <input name="in1" type="float" nodename="seam_y_spread2" />
+      <input name="in2" type="float" nodename="seam_y_toward_axis2" />
+    </subtract>
+    <ifgreater name="seam_y_arc" type="float">
+      <input name="value1" type="float" nodename="seam_y_toward_axis2" />
+      <input name="value2" type="float" nodename="seam_y_around2" />
+      <input name="in1" type="float" nodename="seam_y_radius" />
+      <input name="in2" type="float" nodename="seam_y_angle_arc" />
+    </ifgreater>
+    <divide name="seam_z_cells" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outz" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </divide>
+    <add name="seam_z_shifted" type="float">
+      <input name="in1" type="float" nodename="seam_z_cells" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <floor name="seam_z_fraction_floor" type="float">
+      <input name="in" type="float" nodename="seam_z_shifted" />
+    </floor>
+    <subtract name="seam_z_fraction" type="float">
+      <input name="in1" type="float" nodename="seam_z_shifted" />
+      <input name="in2" type="float" nodename="seam_z_fraction_floor" />
+    </subtract>
+    <subtract name="seam_z_offset" type="float">
+      <input name="in1" type="float" nodename="seam_z_fraction" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <absval name="seam_z_offset_abs" type="float">
+      <input name="in" type="float" nodename="seam_z_offset" />
+    </absval>
+    <subtract name="seam_z_cell_distance" type="float">
+      <input name="in1" type="float" value="0.5" />
+      <input name="in2" type="float" nodename="seam_z_offset_abs" />
+    </subtract>
+    <multiply name="seam_z_plane_distance" type="float">
+      <input name="in1" type="float" nodename="seam_z_cell_distance" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </multiply>
+    <multiply name="seam_z_cos2" type="float">
+      <input name="in1" type="float" nodename="normal_parts" output="outz" />
+      <input name="in2" type="float" nodename="normal_parts" output="outz" />
+    </multiply>
+    <subtract name="seam_z_sin2" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="seam_z_cos2" />
+    </subtract>
+    <max name="seam_z_sin2_floor" type="float">
+      <input name="in1" type="float" nodename="seam_z_sin2" />
+      <input name="in2" type="float" value="0.03" />
+    </max>
+    <sqrt name="seam_z_sin" type="float">
+      <input name="in" type="float" nodename="seam_z_sin2_floor" />
+    </sqrt>
+    <divide name="seam_z_distance" type="float">
+      <input name="in1" type="float" nodename="seam_z_plane_distance" />
+      <input name="in2" type="float" nodename="seam_z_sin" />
+    </divide>
+    <ifgreater name="seam_z_side" type="float">
+      <input name="value1" type="float" value="0.5" />
+      <input name="value2" type="float" nodename="seam_z_fraction" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="-1" />
+    </ifgreater>
+    <multiply name="seam_z_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="normal_parts" output="outz" />
+    </multiply>
+    <subtract name="seam_z_tangential" type="vector3">
+      <input name="in1" type="vector3" value="0, 0, 1" />
+      <input name="in2" type="vector3" nodename="seam_z_normal_part" />
+    </subtract>
+    <divide name="seam_z_away_scale" type="float">
+      <input name="in1" type="float" nodename="seam_z_side" />
+      <input name="in2" type="float" nodename="seam_z_sin" />
+    </divide>
+    <multiply name="seam_z_away" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_z_tangential" />
+      <input name="in2" type="float" nodename="seam_z_away_scale" />
+    </multiply>
+    <multiply name="seam_z_b2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outx" />
+      <input name="in2" type="float" nodename="position_parts" output="outx" />
+    </multiply>
+    <multiply name="seam_z_c2" type="float">
+      <input name="in1" type="float" nodename="position_parts" output="outy" />
+      <input name="in2" type="float" nodename="position_parts" output="outy" />
+    </multiply>
+    <add name="seam_z_r2" type="float">
+      <input name="in1" type="float" nodename="seam_z_b2" />
+      <input name="in2" type="float" nodename="seam_z_c2" />
+    </add>
+    <sqrt name="seam_z_radius" type="float">
+      <input name="in" type="float" nodename="seam_z_r2" />
+    </sqrt>
+    <atan2 name="seam_z_angle" type="float">
+      <input name="iny" type="float" nodename="position_parts" output="outy" />
+      <input name="inx" type="float" nodename="position_parts" output="outx" />
+    </atan2>
+    <multiply name="seam_z_angle_arc" type="float">
+      <input name="in1" type="float" nodename="seam_z_angle" />
+      <input name="in2" type="float" nodename="seam_z_radius" />
+    </multiply>
+    <crossproduct name="seam_z_tangent" type="vector3">
+      <input name="in1" type="vector3" value="0, 0, 1" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </crossproduct>
+    <multiply name="seam_z_axial" type="vector3">
+      <input name="in1" type="vector3" value="0, 0, 1" />
+      <input name="in2" type="float" nodename="position_parts" output="outz" />
+    </multiply>
+    <subtract name="seam_z_radial" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="vector3" nodename="seam_z_axial" />
+    </subtract>
+    <dotproduct name="seam_z_toward_axis" type="float">
+      <input name="in1" type="vector3" nodename="seam_z_tangent" />
+      <input name="in2" type="vector3" nodename="seam_z_radial" />
+    </dotproduct>
+    <multiply name="seam_z_toward_axis2" type="float">
+      <input name="in1" type="float" nodename="seam_z_toward_axis" />
+      <input name="in2" type="float" nodename="seam_z_toward_axis" />
+    </multiply>
+    <dotproduct name="seam_z_tangent2" type="float">
+      <input name="in1" type="vector3" nodename="seam_z_tangent" />
+      <input name="in2" type="vector3" nodename="seam_z_tangent" />
+    </dotproduct>
+    <multiply name="seam_z_radius2" type="float">
+      <input name="in1" type="float" nodename="seam_z_radius" />
+      <input name="in2" type="float" nodename="seam_z_radius" />
+    </multiply>
+    <multiply name="seam_z_spread2" type="float">
+      <input name="in1" type="float" nodename="seam_z_tangent2" />
+      <input name="in2" type="float" nodename="seam_z_radius2" />
+    </multiply>
+    <subtract name="seam_z_around2" type="float">
+      <input name="in1" type="float" nodename="seam_z_spread2" />
+      <input name="in2" type="float" nodename="seam_z_toward_axis2" />
+    </subtract>
+    <ifgreater name="seam_z_arc" type="float">
+      <input name="value1" type="float" nodename="seam_z_toward_axis2" />
+      <input name="value2" type="float" nodename="seam_z_around2" />
+      <input name="in1" type="float" nodename="seam_z_radius" />
+      <input name="in2" type="float" nodename="seam_z_angle_arc" />
+    </ifgreater>
+    <ifgreater name="nearest_xy_distance" type="float">
+      <input name="value1" type="float" nodename="seam_y_distance" />
+      <input name="value2" type="float" nodename="seam_x_distance" />
+      <input name="in1" type="float" nodename="seam_x_distance" />
+      <input name="in2" type="float" nodename="seam_y_distance" />
+    </ifgreater>
+    <ifgreater name="nearest_xy_away" type="vector3">
+      <input name="value1" type="float" nodename="seam_y_distance" />
+      <input name="value2" type="float" nodename="seam_x_distance" />
+      <input name="in1" type="vector3" nodename="seam_x_away" />
+      <input name="in2" type="vector3" nodename="seam_y_away" />
+    </ifgreater>
+    <ifgreater name="nearest_xy_arc" type="float">
+      <input name="value1" type="float" nodename="seam_y_distance" />
+      <input name="value2" type="float" nodename="seam_x_distance" />
+      <input name="in1" type="float" nodename="seam_x_arc" />
+      <input name="in2" type="float" nodename="seam_y_arc" />
+    </ifgreater>
+    <ifgreater name="nearest_distance" type="float">
+      <input name="value1" type="float" nodename="seam_z_distance" />
+      <input name="value2" type="float" nodename="nearest_xy_distance" />
+      <input name="in1" type="float" nodename="nearest_xy_distance" />
+      <input name="in2" type="float" nodename="seam_z_distance" />
+    </ifgreater>
+    <ifgreater name="nearest_away" type="vector3">
+      <input name="value1" type="float" nodename="seam_z_distance" />
+      <input name="value2" type="float" nodename="nearest_xy_distance" />
+      <input name="in1" type="vector3" nodename="nearest_xy_away" />
+      <input name="in2" type="vector3" nodename="seam_z_away" />
+    </ifgreater>
+    <ifgreater name="nearest_arc" type="float">
+      <input name="value1" type="float" nodename="seam_z_distance" />
+      <input name="value2" type="float" nodename="nearest_xy_distance" />
+      <input name="in1" type="float" nodename="nearest_xy_arc" />
+      <input name="in2" type="float" nodename="seam_z_arc" />
+    </ifgreater>
+
+    <!-- Panels puff up between seams. Each axis rises as 1 - (1 - t)^3 over the puff width; the panel height is the product over the three axes, so it stays smooth where the nearest seam changes. -->
+    <multiply name="puff_width" type="float">
+      <input name="in1" type="float" interfacename="panel_size" />
+      <input name="in2" type="float" value="0.2" />
+    </multiply>
+    <divide name="puff_x_t" type="float">
+      <input name="in1" type="float" nodename="seam_x_distance" />
+      <input name="in2" type="float" nodename="puff_width" />
+    </divide>
+    <clamp name="puff_x_t_clamped" type="float">
+      <input name="in" type="float" nodename="puff_x_t" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <invert name="puff_x_fall" type="float">
+      <input name="in" type="float" nodename="puff_x_t_clamped" />
+    </invert>
+    <multiply name="puff_x_fall2" type="float">
+      <input name="in1" type="float" nodename="puff_x_fall" />
+      <input name="in2" type="float" nodename="puff_x_fall" />
+    </multiply>
+    <multiply name="puff_x_fall3" type="float">
+      <input name="in1" type="float" nodename="puff_x_fall2" />
+      <input name="in2" type="float" nodename="puff_x_fall" />
+    </multiply>
+    <invert name="puff_x_height" type="float">
+      <input name="in" type="float" nodename="puff_x_fall3" />
+    </invert>
+    <multiply name="puff_x_slope" type="float">
+      <input name="in1" type="float" nodename="puff_x_fall2" />
+      <input name="in2" type="float" interfacename="puff" />
+    </multiply>
+    <divide name="puff_y_t" type="float">
+      <input name="in1" type="float" nodename="seam_y_distance" />
+      <input name="in2" type="float" nodename="puff_width" />
+    </divide>
+    <clamp name="puff_y_t_clamped" type="float">
+      <input name="in" type="float" nodename="puff_y_t" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <invert name="puff_y_fall" type="float">
+      <input name="in" type="float" nodename="puff_y_t_clamped" />
+    </invert>
+    <multiply name="puff_y_fall2" type="float">
+      <input name="in1" type="float" nodename="puff_y_fall" />
+      <input name="in2" type="float" nodename="puff_y_fall" />
+    </multiply>
+    <multiply name="puff_y_fall3" type="float">
+      <input name="in1" type="float" nodename="puff_y_fall2" />
+      <input name="in2" type="float" nodename="puff_y_fall" />
+    </multiply>
+    <invert name="puff_y_height" type="float">
+      <input name="in" type="float" nodename="puff_y_fall3" />
+    </invert>
+    <multiply name="puff_y_slope" type="float">
+      <input name="in1" type="float" nodename="puff_y_fall2" />
+      <input name="in2" type="float" interfacename="puff" />
+    </multiply>
+    <divide name="puff_z_t" type="float">
+      <input name="in1" type="float" nodename="seam_z_distance" />
+      <input name="in2" type="float" nodename="puff_width" />
+    </divide>
+    <clamp name="puff_z_t_clamped" type="float">
+      <input name="in" type="float" nodename="puff_z_t" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="1" />
+    </clamp>
+    <invert name="puff_z_fall" type="float">
+      <input name="in" type="float" nodename="puff_z_t_clamped" />
+    </invert>
+    <multiply name="puff_z_fall2" type="float">
+      <input name="in1" type="float" nodename="puff_z_fall" />
+      <input name="in2" type="float" nodename="puff_z_fall" />
+    </multiply>
+    <multiply name="puff_z_fall3" type="float">
+      <input name="in1" type="float" nodename="puff_z_fall2" />
+      <input name="in2" type="float" nodename="puff_z_fall" />
+    </multiply>
+    <invert name="puff_z_height" type="float">
+      <input name="in" type="float" nodename="puff_z_fall3" />
+    </invert>
+    <multiply name="puff_z_slope" type="float">
+      <input name="in1" type="float" nodename="puff_z_fall2" />
+      <input name="in2" type="float" interfacename="puff" />
+    </multiply>
+    <multiply name="puff_x_others" type="float">
+      <input name="in1" type="float" nodename="puff_y_height" />
+      <input name="in2" type="float" nodename="puff_z_height" />
+    </multiply>
+    <multiply name="puff_x_weighted_slope" type="float">
+      <input name="in1" type="float" nodename="puff_x_slope" />
+      <input name="in2" type="float" nodename="puff_x_others" />
+    </multiply>
+    <multiply name="puff_x_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_x_away" />
+      <input name="in2" type="float" nodename="puff_x_weighted_slope" />
+    </multiply>
+    <multiply name="puff_y_others" type="float">
+      <input name="in1" type="float" nodename="puff_z_height" />
+      <input name="in2" type="float" nodename="puff_x_height" />
+    </multiply>
+    <multiply name="puff_y_weighted_slope" type="float">
+      <input name="in1" type="float" nodename="puff_y_slope" />
+      <input name="in2" type="float" nodename="puff_y_others" />
+    </multiply>
+    <multiply name="puff_y_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_y_away" />
+      <input name="in2" type="float" nodename="puff_y_weighted_slope" />
+    </multiply>
+    <multiply name="puff_z_others" type="float">
+      <input name="in1" type="float" nodename="puff_x_height" />
+      <input name="in2" type="float" nodename="puff_y_height" />
+    </multiply>
+    <multiply name="puff_z_weighted_slope" type="float">
+      <input name="in1" type="float" nodename="puff_z_slope" />
+      <input name="in2" type="float" nodename="puff_z_others" />
+    </multiply>
+    <multiply name="puff_z_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_z_away" />
+      <input name="in2" type="float" nodename="puff_z_weighted_slope" />
+    </multiply>
+
+    <!-- Saddle stitches: one row on each side of the seam, slanted dashes of waxed thread. -->
+    <multiply name="row_offset" type="float">
+      <input name="in1" type="float" interfacename="stitch_length" />
+      <input name="in2" type="float" value="0.42" />
+    </multiply>
+    <multiply name="thread_half_width" type="float">
+      <input name="in1" type="float" interfacename="stitch_length" />
+      <input name="in2" type="float" value="0.11" />
+    </multiply>
+    <subtract name="row_distance" type="float">
+      <input name="in1" type="float" nodename="nearest_distance" />
+      <input name="in2" type="float" nodename="row_offset" />
+    </subtract>
+    <divide name="thread_across" type="float">
+      <input name="in1" type="float" nodename="row_distance" />
+      <input name="in2" type="float" nodename="thread_half_width" />
+    </divide>
+    <absval name="thread_across_abs" type="float">
+      <input name="in" type="float" nodename="thread_across" />
+    </absval>
+    <divide name="stitch_phase" type="float">
+      <input name="in1" type="float" nodename="nearest_arc" />
+      <input name="in2" type="float" interfacename="stitch_length" />
+    </divide>
+    <multiply name="stitch_slant" type="float">
+      <input name="in1" type="float" nodename="thread_across" />
+      <input name="in2" type="float" value="0.26" />
+    </multiply>
+    <add name="stitch_phase_slanted" type="float">
+      <input name="in1" type="float" nodename="stitch_phase" />
+      <input name="in2" type="float" nodename="stitch_slant" />
+    </add>
+    <floor name="stitch_dash_floor" type="float">
+      <input name="in" type="float" nodename="stitch_phase_slanted" />
+    </floor>
+    <subtract name="stitch_dash" type="float">
+      <input name="in1" type="float" nodename="stitch_phase_slanted" />
+      <input name="in2" type="float" nodename="stitch_dash_floor" />
+    </subtract>
+    <smoothstep name="dash_start" type="float">
+      <input name="in" type="float" nodename="stitch_dash" />
+      <input name="low" type="float" value="0.04" />
+      <input name="high" type="float" value="0.12" />
+    </smoothstep>
+    <smoothstep name="dash_end_ramp" type="float">
+      <input name="in" type="float" nodename="stitch_dash" />
+      <input name="low" type="float" value="0.58" />
+      <input name="high" type="float" value="0.66" />
+    </smoothstep>
+    <invert name="dash_end" type="float">
+      <input name="in" type="float" nodename="dash_end_ramp" />
+    </invert>
+    <multiply name="dash_mask" type="float">
+      <input name="in1" type="float" nodename="dash_start" />
+      <input name="in2" type="float" nodename="dash_end" />
+    </multiply>
+    <smoothstep name="thread_band_ramp" type="float">
+      <input name="in" type="float" nodename="thread_across_abs" />
+      <input name="low" type="float" value="0.75" />
+      <input name="high" type="float" value="1" />
+    </smoothstep>
+    <invert name="thread_band" type="float">
+      <input name="in" type="float" nodename="thread_band_ramp" />
+    </invert>
+    <multiply name="thread_mask" type="float">
+      <input name="in1" type="float" nodename="dash_mask" />
+      <input name="in2" type="float" nodename="thread_band" />
+    </multiply>
+    <subtract name="hole_phase" type="float">
+      <input name="in1" type="float" nodename="stitch_dash" />
+      <input name="in2" type="float" value="0.8" />
+    </subtract>
+    <absval name="hole_phase_abs" type="float">
+      <input name="in" type="float" nodename="hole_phase" />
+    </absval>
+    <smoothstep name="hole_ramp" type="float">
+      <input name="in" type="float" nodename="hole_phase_abs" />
+      <input name="low" type="float" value="0.03" />
+      <input name="high" type="float" value="0.08" />
+    </smoothstep>
+    <invert name="hole_along" type="float">
+      <input name="in" type="float" nodename="hole_ramp" />
+    </invert>
+    <smoothstep name="hole_across_ramp" type="float">
+      <input name="in" type="float" nodename="thread_across_abs" />
+      <input name="low" type="float" value="0.5" />
+      <input name="high" type="float" value="1.1" />
+    </smoothstep>
+    <invert name="hole_across" type="float">
+      <input name="in" type="float" nodename="hole_across_ramp" />
+    </invert>
+    <multiply name="hole" type="float">
+      <input name="in1" type="float" nodename="hole_along" />
+      <input name="in2" type="float" nodename="hole_across" />
+    </multiply>
+    <crossproduct name="seam_tangent" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="nearest_away" />
+    </crossproduct>
+    <multiply name="thread_across_tilt" type="float">
+      <input name="in1" type="float" nodename="thread_across" />
+      <input name="in2" type="float" value="-0.9" />
+    </multiply>
+    <multiply name="thread_across_masked" type="float">
+      <input name="in1" type="float" nodename="thread_across_tilt" />
+      <input name="in2" type="float" nodename="thread_mask" />
+    </multiply>
+    <multiply name="thread_gradient_across" type="vector3">
+      <input name="in1" type="vector3" nodename="nearest_away" />
+      <input name="in2" type="float" nodename="thread_across_masked" />
+    </multiply>
+    <divide name="dash_unit" type="float">
+      <input name="in1" type="float" nodename="stitch_dash" />
+      <input name="in2" type="float" value="0.62" />
+    </divide>
+    <multiply name="dash_angle" type="float">
+      <input name="in1" type="float" nodename="dash_unit" />
+      <input name="in2" type="float" value="3.14159" />
+    </multiply>
+    <cos name="dash_cos" type="float">
+      <input name="in" type="float" nodename="dash_angle" />
+    </cos>
+    <ifgreater name="dash_inside" type="float">
+      <input name="value1" type="float" value="0.62" />
+      <input name="value2" type="float" nodename="stitch_dash" />
+      <input name="in1" type="float" value="0.8" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="dash_slope" type="float">
+      <input name="in1" type="float" nodename="dash_cos" />
+      <input name="in2" type="float" nodename="dash_inside" />
+    </multiply>
+    <multiply name="thread_along_masked" type="float">
+      <input name="in1" type="float" nodename="dash_slope" />
+      <input name="in2" type="float" nodename="thread_band" />
+    </multiply>
+    <multiply name="thread_gradient_along" type="vector3">
+      <input name="in1" type="vector3" nodename="seam_tangent" />
+      <input name="in2" type="float" nodename="thread_along_masked" />
+    </multiply>
+
+    <!-- Hide grain: Worley pores and fine noise wrinkles, as a vector noise on the normal. -->
+    <multiply name="grain_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="160" />
+    </multiply>
+    <noise3d name="grain_noise" type="vector3">
+      <input name="position" type="vector3" nodename="grain_position" />
+    </noise3d>
+    <multiply name="grain_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="grain_noise" />
+      <input name="in2" type="float" value="0.1" />
+    </multiply>
+    <multiply name="pore_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="520" />
+    </multiply>
+    <noise3d name="pore_noise" type="vector3">
+      <input name="position" type="vector3" nodename="pore_position" />
+    </noise3d>
+    <multiply name="pore_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="pore_noise" />
+      <input name="in2" type="float" value="0.06" />
+    </multiply>
+    <multiply name="crease_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="34" />
+    </multiply>
+    <noise3d name="crease_noise" type="vector3">
+      <input name="position" type="vector3" nodename="crease_position" />
+    </noise3d>
+    <multiply name="crease_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="crease_noise" />
+      <input name="in2" type="float" value="0.04" />
+    </multiply>
+
+    <!-- Color: each panel cut from a slightly different part of the hide, oil darkening, burnished seams and lighter worn high spots. -->
+    <divide name="panel_cells" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="panel_size" />
+    </divide>
+    <add name="panel_cells_shifted" type="vector3">
+      <input name="in1" type="vector3" nodename="panel_cells" />
+      <input name="in2" type="float" value="0.5" />
+    </add>
+    <cellnoise3d name="panel_random" type="float">
+      <input name="position" type="vector3" nodename="panel_cells_shifted" />
+    </cellnoise3d>
+    <remap name="panel_tone" type="float">
+      <input name="in" type="float" nodename="panel_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.84" />
+      <input name="outhigh" type="float" value="1.14" />
+    </remap>
+    <multiply name="mottle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.2" />
+    </multiply>
+    <fractal3d name="mottle" type="float">
+      <input name="position" type="vector3" nodename="mottle_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <remap name="mottle_tone" type="float">
+      <input name="in" type="float" nodename="mottle" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.88" />
+      <input name="outhigh" type="float" value="1.08" />
+    </remap>
+    <multiply name="wear_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="5.5" />
+    </multiply>
+    <fractal3d name="wear_fractal" type="float">
+      <input name="position" type="vector3" nodename="wear_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="wear_patches" type="float">
+      <input name="in" type="float" nodename="wear_fractal" />
+      <input name="low" type="float" value="0.05" />
+      <input name="high" type="float" value="0.5" />
+    </smoothstep>
+    <smoothstep name="wear_away_from_seam" type="float">
+      <input name="in" type="float" nodename="nearest_distance" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.08" />
+    </smoothstep>
+    <multiply name="wear_on_puffs" type="float">
+      <input name="in1" type="float" nodename="wear_patches" />
+      <input name="in2" type="float" nodename="wear_away_from_seam" />
+    </multiply>
+    <multiply name="worn" type="float">
+      <input name="in1" type="float" nodename="wear_on_puffs" />
+      <input name="in2" type="float" interfacename="wear" />
+    </multiply>
+    <smoothstep name="seam_shade_ramp" type="float">
+      <input name="in" type="float" nodename="nearest_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.016" />
+    </smoothstep>
+    <remap name="seam_shade" type="float">
+      <input name="in" type="float" nodename="seam_shade_ramp" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="panel_mottle" type="float">
+      <input name="in1" type="float" nodename="panel_tone" />
+      <input name="in2" type="float" nodename="mottle_tone" />
+    </multiply>
+    <multiply name="leather_tone" type="float">
+      <input name="in1" type="float" nodename="panel_mottle" />
+      <input name="in2" type="float" nodename="seam_shade" />
+    </multiply>
+    <multiply name="dyed_leather" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" nodename="leather_tone" />
+    </multiply>
+    <multiply name="worn_leather" type="color3">
+      <input name="in1" type="color3" interfacename="leather_color" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <multiply name="worn_mix" type="float">
+      <input name="in1" type="float" nodename="worn" />
+      <input name="in2" type="float" value="0.45" />
+    </multiply>
+    <mix name="leather_color_worn" type="color3">
+      <input name="bg" type="color3" nodename="dyed_leather" />
+      <input name="fg" type="color3" nodename="worn_leather" />
+      <input name="mix" type="float" nodename="worn_mix" />
+    </mix>
+    <remap name="hole_shade" type="float">
+      <input name="in" type="float" nodename="hole" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.35" />
+    </remap>
+    <multiply name="leather_holed" type="color3">
+      <input name="in1" type="color3" nodename="leather_color_worn" />
+      <input name="in2" type="float" nodename="hole_shade" />
+    </multiply>
+    <multiply name="thread_round" type="float">
+      <input name="in1" type="float" nodename="thread_across" />
+      <input name="in2" type="float" nodename="thread_across" />
+    </multiply>
+    <remap name="thread_shade" type="float">
+      <input name="in" type="float" nodename="thread_round" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.55" />
+    </remap>
+    <multiply name="thread_shaded" type="color3">
+      <input name="in1" type="color3" interfacename="thread_color" />
+      <input name="in2" type="float" nodename="thread_shade" />
+    </multiply>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="leather_holed" />
+      <input name="fg" type="color3" nodename="thread_shaded" />
+      <input name="mix" type="float" nodename="thread_mask" />
+    </mix>
+    <remap name="leather_roughness_mottle" type="float">
+      <input name="in" type="float" nodename="mottle" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.34" />
+      <input name="outhigh" type="float" value="0.5" />
+    </remap>
+    <multiply name="worn_polish" type="float">
+      <input name="in1" type="float" nodename="worn" />
+      <input name="in2" type="float" value="0.14" />
+    </multiply>
+    <subtract name="leather_roughness" type="float">
+      <input name="in1" type="float" nodename="leather_roughness_mottle" />
+      <input name="in2" type="float" nodename="worn_polish" />
+    </subtract>
+    <smoothstep name="seam_polish_ramp" type="float">
+      <input name="in" type="float" nodename="nearest_distance" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.015" />
+    </smoothstep>
+    <mix name="leather_roughness_seam" type="float">
+      <input name="bg" type="float" value="0.3" />
+      <input name="fg" type="float" nodename="leather_roughness" />
+      <input name="mix" type="float" nodename="seam_polish_ramp" />
+    </mix>
+    <mix name="roughness" type="float">
+      <input name="bg" type="float" nodename="leather_roughness_seam" />
+      <input name="fg" type="float" value="0.55" />
+      <input name="mix" type="float" nodename="thread_mask" />
+    </mix>
+    <add name="leather_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="puff_x_gradient" />
+      <input name="in2" type="vector3" nodename="puff_y_gradient" />
+    </add>
+    <add name="leather_gradient_sum_2" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum" />
+      <input name="in2" type="vector3" nodename="puff_z_gradient" />
+    </add>
+    <add name="leather_gradient_sum_3" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="thread_gradient_across" />
+    </add>
+    <add name="leather_gradient_sum_4" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_3" />
+      <input name="in2" type="vector3" nodename="thread_gradient_along" />
+    </add>
+    <add name="leather_gradient_sum_5" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_4" />
+      <input name="in2" type="vector3" nodename="grain_gradient" />
+    </add>
+    <add name="leather_gradient_sum_6" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_5" />
+      <input name="in2" type="vector3" nodename="pore_gradient" />
+    </add>
+    <add name="leather_gradient_sum_7" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_6" />
+      <input name="in2" type="vector3" nodename="crease_gradient" />
+    </add>
+    <dotproduct name="leather_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_7" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="leather_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="leather_along_normal" />
+    </multiply>
+    <subtract name="leather_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="leather_gradient_sum_7" />
+      <input name="in2" type="vector3" nodename="leather_normal_part" />
+    </subtract>
+    <subtract name="leather_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="leather_surface_gradient" />
+    </subtract>
+    <transformnormal name="leather_world" type="vector3">
+      <input name="in" type="vector3" nodename="leather_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="leather_normal" type="vector3">
+      <input name="in" type="vector3" nodename="leather_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="leather_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_saddle_leather" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_saddle_leather" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.4" />
+    <input name="specular_roughness" type="float" nodegraph="NG_saddle_leather" output="roughness_out" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="fuzz_weight" type="float" value="0.06" />
+    <input name="fuzz_color" type="color3" value="0.4, 0.22, 0.1" />
+    <input name="fuzz_roughness" type="float" value="0.6" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_saddle_leather" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Saddle_Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_saddle_leather" />
+  </surfacematerial>
+</materialx>

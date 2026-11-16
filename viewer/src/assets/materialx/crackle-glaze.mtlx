@@ -1,0 +1,261 @@
+<?xml version="1.0"?>
+<!--
+  Crackle glaze: OpenPBR stoneware under a crazed glaze, after Ge ware. Two
+  Worley nets in object space draw wide dark "iron wire" cracks and a finer
+  net of stained "gold thread" between them, varying in width; the glaze body
+  is cloudy celadon grey with paler pools, a little subsurface depth and a
+  glossy coat with a slight orange-peel undulation.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_crackle_glaze">
+    <input name="glaze_color" type="color3" value="0.4, 0.45, 0.4" uiname="Glaze" />
+    <input name="iron_color" type="color3" value="0.035, 0.028, 0.02" uiname="Iron wire" />
+    <input name="gold_color" type="color3" value="0.42, 0.26, 0.08" uiname="Gold thread" />
+    <input name="crack_scale" type="float" value="8" uiname="Crack scale" uimin="0.5" uimax="60" />
+    <input name="crack_width" type="float" value="0.022" uiname="Crack width" uimin="0.005" uimax="0.2" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+    <multiply name="iron_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="crack_scale" />
+    </multiply>
+    <multiply name="iron_warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="iron_position" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <noise3d name="iron_warp" type="vector3">
+      <input name="position" type="vector3" nodename="iron_warp_position" />
+    </noise3d>
+    <multiply name="iron_warp_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="iron_warp" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="iron_warped" type="vector3">
+      <input name="in1" type="vector3" nodename="iron_position" />
+      <input name="in2" type="vector3" nodename="iron_warp_offset" />
+    </add>
+    <worleynoise3d name="iron_cells" type="vector2">
+      <input name="position" type="vector3" nodename="iron_warped" />
+    </worleynoise3d>
+    <separate2 name="iron_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="iron_cells" />
+    </separate2>
+    <subtract name="iron_border" type="float">
+      <input name="in1" type="float" nodename="iron_distances" output="outy" />
+      <input name="in2" type="float" nodename="iron_distances" output="outx" />
+    </subtract>
+    <multiply name="iron_vary_position" type="vector3">
+      <input name="in1" type="vector3" nodename="iron_position" />
+      <input name="in2" type="float" value="1.7" />
+    </multiply>
+    <noise3d name="iron_vary" type="float">
+      <input name="position" type="vector3" nodename="iron_vary_position" />
+    </noise3d>
+    <remap name="iron_width_scale" type="float">
+      <input name="in" type="float" nodename="iron_vary" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="iron_width" type="float">
+      <input name="in1" type="float" interfacename="crack_width" />
+      <input name="in2" type="float" nodename="iron_width_scale" />
+    </multiply>
+    <smoothstep name="iron_ramp" type="float">
+      <input name="in" type="float" nodename="iron_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="iron_width" />
+    </smoothstep>
+    <invert name="iron_crack" type="float">
+      <input name="in" type="float" nodename="iron_ramp" />
+    </invert>
+    <multiply name="gold_scale" type="float">
+      <input name="in1" type="float" interfacename="crack_scale" />
+      <input name="in2" type="float" value="3.2" />
+    </multiply>
+    <multiply name="gold_width_base" type="float">
+      <input name="in1" type="float" interfacename="crack_width" />
+      <input name="in2" type="float" value="1.2" />
+    </multiply>
+    <multiply name="gold_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" nodename="gold_scale" />
+    </multiply>
+    <multiply name="gold_warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="gold_position" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <noise3d name="gold_warp" type="vector3">
+      <input name="position" type="vector3" nodename="gold_warp_position" />
+    </noise3d>
+    <multiply name="gold_warp_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="gold_warp" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+    <add name="gold_warped" type="vector3">
+      <input name="in1" type="vector3" nodename="gold_position" />
+      <input name="in2" type="vector3" nodename="gold_warp_offset" />
+    </add>
+    <worleynoise3d name="gold_cells" type="vector2">
+      <input name="position" type="vector3" nodename="gold_warped" />
+    </worleynoise3d>
+    <separate2 name="gold_distances" type="multioutput">
+      <input name="in" type="vector2" nodename="gold_cells" />
+    </separate2>
+    <subtract name="gold_border" type="float">
+      <input name="in1" type="float" nodename="gold_distances" output="outy" />
+      <input name="in2" type="float" nodename="gold_distances" output="outx" />
+    </subtract>
+    <multiply name="gold_vary_position" type="vector3">
+      <input name="in1" type="vector3" nodename="gold_position" />
+      <input name="in2" type="float" value="1.7" />
+    </multiply>
+    <noise3d name="gold_vary" type="float">
+      <input name="position" type="vector3" nodename="gold_vary_position" />
+    </noise3d>
+    <remap name="gold_width_scale" type="float">
+      <input name="in" type="float" nodename="gold_vary" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="gold_width" type="float">
+      <input name="in1" type="float" nodename="gold_width_base" />
+      <input name="in2" type="float" nodename="gold_width_scale" />
+    </multiply>
+    <smoothstep name="gold_ramp" type="float">
+      <input name="in" type="float" nodename="gold_border" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" nodename="gold_width" />
+    </smoothstep>
+    <invert name="gold_crack" type="float">
+      <input name="in" type="float" nodename="gold_ramp" />
+    </invert>
+    <multiply name="gold" type="float">
+      <input name="in1" type="float" nodename="gold_crack" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+
+    <!-- Glaze body: cloudy colour from fractal noise and paler, thicker pools. -->
+    <multiply name="cloud_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="2.6" />
+    </multiply>
+    <fractal3d name="cloud" type="float">
+      <input name="position" type="vector3" nodename="cloud_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <remap name="cloud_tone" type="float">
+      <input name="in" type="float" nodename="cloud" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.88" />
+      <input name="outhigh" type="float" value="1.1" />
+    </remap>
+    <multiply name="glaze_clouded" type="color3">
+      <input name="in1" type="color3" interfacename="glaze_color" />
+      <input name="in2" type="float" nodename="cloud_tone" />
+    </multiply>
+    <multiply name="pool_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <noise3d name="pool" type="float">
+      <input name="position" type="vector3" nodename="pool_position" />
+    </noise3d>
+    <smoothstep name="pools" type="float">
+      <input name="in" type="float" nodename="pool" />
+      <input name="low" type="float" value="0" />
+      <input name="high" type="float" value="0.4" />
+    </smoothstep>
+    <multiply name="glaze_pale" type="color3">
+      <input name="in1" type="color3" interfacename="glaze_color" />
+      <input name="in2" type="color3" value="1.15, 1.12, 1.1" />
+    </multiply>
+    <multiply name="pool_mix" type="float">
+      <input name="in1" type="float" nodename="pools" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <mix name="glaze_color" type="color3">
+      <input name="bg" type="color3" nodename="glaze_clouded" />
+      <input name="fg" type="color3" nodename="glaze_pale" />
+      <input name="mix" type="float" nodename="pool_mix" />
+    </mix>
+    <mix name="glaze_gold" type="color3">
+      <input name="bg" type="color3" nodename="glaze_color" />
+      <input name="fg" type="color3" interfacename="gold_color" />
+      <input name="mix" type="float" nodename="gold" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="glaze_gold" />
+      <input name="fg" type="color3" interfacename="iron_color" />
+      <input name="mix" type="float" nodename="iron_crack" />
+    </mix>
+    <remap name="roughness" type="float">
+      <input name="in" type="float" nodename="cloud" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.22" />
+      <input name="outhigh" type="float" value="0.34" />
+    </remap>
+
+    <!-- A gentle orange-peel undulation of the glaze surface, and a hairline dip along the iron cracks. -->
+    <multiply name="peel_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="22" />
+    </multiply>
+    <noise3d name="peel" type="vector3">
+      <input name="position" type="vector3" nodename="peel_position" />
+    </noise3d>
+    <multiply name="peel_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="peel" />
+      <input name="in2" type="float" value="0.025" />
+    </multiply>
+    <dotproduct name="glaze_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="peel_gradient" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="glaze_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="glaze_along_normal" />
+    </multiply>
+    <subtract name="glaze_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="peel_gradient" />
+      <input name="in2" type="vector3" nodename="glaze_normal_part" />
+    </subtract>
+    <subtract name="glaze_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="glaze_surface_gradient" />
+    </subtract>
+    <transformnormal name="glaze_world" type="vector3">
+      <input name="in" type="vector3" nodename="glaze_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="glaze_normal" type="vector3">
+      <input name="in" type="vector3" nodename="glaze_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="roughness_out" type="float" nodename="roughness" />
+    <output name="normal_out" type="vector3" nodename="glaze_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_crackle_glaze" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_crackle_glaze" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_crackle_glaze" output="roughness_out" />
+    <input name="subsurface_weight" type="float" value="0.25" />
+    <input name="subsurface_color" type="color3" value="0.62, 0.68, 0.58" />
+    <input name="subsurface_radius" type="float" value="0.05" />
+    <input name="coat_weight" type="float" value="1" />
+    <input name="coat_roughness" type="float" value="0.06" />
+    <input name="coat_ior" type="float" value="1.52" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_crackle_glaze" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Crackle_Glaze" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_crackle_glaze" />
+  </surfacematerial>
+</materialx>

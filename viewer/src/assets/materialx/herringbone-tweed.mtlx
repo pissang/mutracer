@@ -1,0 +1,619 @@
+<?xml version="1.0"?>
+<!--
+  Herringbone tweed: OpenPBR wool woven as a 2/2 twill whose diagonal
+  reverses every band of warp threads, so the wales meet in chevrons. Thread
+  segments vary in tone like mixed woollen fibres, a few carry coloured
+  flecks, and a heavy fuzz gives the hairy surface. Uses UV0 and exposes the
+  thread count and band width.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_herringbone_tweed">
+    <input name="warp_color" type="color3" value="0.07, 0.05, 0.036" uiname="Warp" />
+    <input name="weft_color" type="color3" value="0.2, 0.165, 0.115" uiname="Weft" />
+    <input name="fleck_color" type="color3" value="0.26, 0.07, 0.04" uiname="Flecks" />
+    <input name="tiles" type="vector2" value="520, 260" uiname="Threads per UV" />
+    <input name="band" type="float" value="10" uiname="Band width" uimin="2" uimax="32" />
+    <texcoord name="uv" type="vector2" />
+    <multiply name="thread_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="uv" />
+      <input name="in2" type="vector2" interfacename="tiles" />
+    </multiply>
+    <separate2 name="thread_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="thread_uv" />
+    </separate2>
+    <floor name="warp_index" type="float">
+      <input name="in" type="float" nodename="thread_parts" output="outx" />
+    </floor>
+    <floor name="weft_index" type="float">
+      <input name="in" type="float" nodename="thread_parts" output="outy" />
+    </floor>
+    <subtract name="warp_fraction" type="float">
+      <input name="in1" type="float" nodename="thread_parts" output="outx" />
+      <input name="in2" type="float" nodename="warp_index" />
+    </subtract>
+    <subtract name="weft_fraction" type="float">
+      <input name="in1" type="float" nodename="thread_parts" output="outy" />
+      <input name="in2" type="float" nodename="weft_index" />
+    </subtract>
+    <divide name="band_phase" type="float">
+      <input name="in1" type="float" nodename="warp_index" />
+      <input name="in2" type="float" interfacename="band" />
+    </divide>
+    <floor name="band_index" type="float">
+      <input name="in" type="float" nodename="band_phase" />
+    </floor>
+    <modulo name="band_flip" type="float">
+      <input name="in1" type="float" nodename="band_index" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <add name="twill_up" type="float">
+      <input name="in1" type="float" nodename="warp_index" />
+      <input name="in2" type="float" nodename="weft_index" />
+    </add>
+    <modulo name="twill_up_step" type="float">
+      <input name="in1" type="float" nodename="twill_up" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <subtract name="twill_down_raw" type="float">
+      <input name="in1" type="float" nodename="weft_index" />
+      <input name="in2" type="float" nodename="warp_index" />
+    </subtract>
+    <add name="twill_down" type="float">
+      <input name="in1" type="float" nodename="twill_down_raw" />
+      <input name="in2" type="float" value="400" />
+    </add>
+    <modulo name="twill_down_step" type="float">
+      <input name="in1" type="float" nodename="twill_down" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <mix name="twill_step" type="float">
+      <input name="bg" type="float" nodename="twill_up_step" />
+      <input name="fg" type="float" nodename="twill_down_step" />
+      <input name="mix" type="float" nodename="band_flip" />
+    </mix>
+    <ifgreater name="warp_on_top" type="float">
+      <input name="value1" type="float" value="1.5" />
+      <input name="value2" type="float" nodename="twill_step" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2" type="float">
+      <input name="in1" type="float" nodename="warp_fraction" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across" type="float">
+      <input name="in1" type="float" nodename="warp_across2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="weft_across2" type="float">
+      <input name="in1" type="float" nodename="weft_fraction" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="weft_across" type="float">
+      <input name="in1" type="float" nodename="weft_across2" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq" type="float">
+      <input name="in1" type="float" nodename="warp_across" />
+      <input name="in2" type="float" nodename="warp_across" />
+    </multiply>
+    <invert name="warp_round2" type="float">
+      <input name="in" type="float" nodename="warp_across_sq" />
+    </invert>
+    <max name="warp_round_positive" type="float">
+      <input name="in1" type="float" nodename="warp_round2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round" type="float">
+      <input name="in" type="float" nodename="warp_round_positive" />
+    </sqrt>
+    <multiply name="weft_across_sq" type="float">
+      <input name="in1" type="float" nodename="weft_across" />
+      <input name="in2" type="float" nodename="weft_across" />
+    </multiply>
+    <invert name="weft_round2" type="float">
+      <input name="in" type="float" nodename="weft_across_sq" />
+    </invert>
+    <max name="weft_round_positive" type="float">
+      <input name="in1" type="float" nodename="weft_round2" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="weft_round" type="float">
+      <input name="in" type="float" nodename="weft_round_positive" />
+    </sqrt>
+    <multiply name="hair_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="6, 6" />
+    </multiply>
+    <noise2d name="hair" type="float">
+      <input name="texcoord" type="vector2" nodename="hair_uv" />
+    </noise2d>
+    <multiply name="hair_height" type="float">
+      <input name="in1" type="float" nodename="hair" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="weft_height" type="float">
+      <input name="in1" type="float" nodename="weft_round" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <mix name="twill_height" type="float">
+      <input name="bg" type="float" nodename="weft_height" />
+      <input name="fg" type="float" nodename="warp_round" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <add name="tweed_height" type="float">
+      <input name="in1" type="float" nodename="twill_height" />
+      <input name="in2" type="float" nodename="hair_height" />
+    </add>
+    <add name="tap_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="0.03, 0" />
+    </add>
+    <separate2 name="thread_parts_u" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_u" />
+    </separate2>
+    <floor name="warp_index_u" type="float">
+      <input name="in" type="float" nodename="thread_parts_u" output="outx" />
+    </floor>
+    <floor name="weft_index_u" type="float">
+      <input name="in" type="float" nodename="thread_parts_u" output="outy" />
+    </floor>
+    <subtract name="warp_fraction_u" type="float">
+      <input name="in1" type="float" nodename="thread_parts_u" output="outx" />
+      <input name="in2" type="float" nodename="warp_index_u" />
+    </subtract>
+    <subtract name="weft_fraction_u" type="float">
+      <input name="in1" type="float" nodename="thread_parts_u" output="outy" />
+      <input name="in2" type="float" nodename="weft_index_u" />
+    </subtract>
+    <divide name="band_phase_u" type="float">
+      <input name="in1" type="float" nodename="warp_index_u" />
+      <input name="in2" type="float" interfacename="band" />
+    </divide>
+    <floor name="band_index_u" type="float">
+      <input name="in" type="float" nodename="band_phase_u" />
+    </floor>
+    <modulo name="band_flip_u" type="float">
+      <input name="in1" type="float" nodename="band_index_u" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <add name="twill_up_u" type="float">
+      <input name="in1" type="float" nodename="warp_index_u" />
+      <input name="in2" type="float" nodename="weft_index_u" />
+    </add>
+    <modulo name="twill_up_step_u" type="float">
+      <input name="in1" type="float" nodename="twill_up_u" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <subtract name="twill_down_raw_u" type="float">
+      <input name="in1" type="float" nodename="weft_index_u" />
+      <input name="in2" type="float" nodename="warp_index_u" />
+    </subtract>
+    <add name="twill_down_u" type="float">
+      <input name="in1" type="float" nodename="twill_down_raw_u" />
+      <input name="in2" type="float" value="400" />
+    </add>
+    <modulo name="twill_down_step_u" type="float">
+      <input name="in1" type="float" nodename="twill_down_u" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <mix name="twill_step_u" type="float">
+      <input name="bg" type="float" nodename="twill_up_step_u" />
+      <input name="fg" type="float" nodename="twill_down_step_u" />
+      <input name="mix" type="float" nodename="band_flip_u" />
+    </mix>
+    <ifgreater name="warp_on_top_u" type="float">
+      <input name="value1" type="float" value="1.5" />
+      <input name="value2" type="float" nodename="twill_step_u" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2_u" type="float">
+      <input name="in1" type="float" nodename="warp_fraction_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across_u" type="float">
+      <input name="in1" type="float" nodename="warp_across2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="weft_across2_u" type="float">
+      <input name="in1" type="float" nodename="weft_fraction_u" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="weft_across_u" type="float">
+      <input name="in1" type="float" nodename="weft_across2_u" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq_u" type="float">
+      <input name="in1" type="float" nodename="warp_across_u" />
+      <input name="in2" type="float" nodename="warp_across_u" />
+    </multiply>
+    <invert name="warp_round2_u" type="float">
+      <input name="in" type="float" nodename="warp_across_sq_u" />
+    </invert>
+    <max name="warp_round_positive_u" type="float">
+      <input name="in1" type="float" nodename="warp_round2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round_u" type="float">
+      <input name="in" type="float" nodename="warp_round_positive_u" />
+    </sqrt>
+    <multiply name="weft_across_sq_u" type="float">
+      <input name="in1" type="float" nodename="weft_across_u" />
+      <input name="in2" type="float" nodename="weft_across_u" />
+    </multiply>
+    <invert name="weft_round2_u" type="float">
+      <input name="in" type="float" nodename="weft_across_sq_u" />
+    </invert>
+    <max name="weft_round_positive_u" type="float">
+      <input name="in1" type="float" nodename="weft_round2_u" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="weft_round_u" type="float">
+      <input name="in" type="float" nodename="weft_round_positive_u" />
+    </sqrt>
+    <multiply name="hair_uv_u" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_u" />
+      <input name="in2" type="vector2" value="6, 6" />
+    </multiply>
+    <noise2d name="hair_u" type="float">
+      <input name="texcoord" type="vector2" nodename="hair_uv_u" />
+    </noise2d>
+    <multiply name="hair_height_u" type="float">
+      <input name="in1" type="float" nodename="hair_u" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="weft_height_u" type="float">
+      <input name="in1" type="float" nodename="weft_round_u" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <mix name="twill_height_u" type="float">
+      <input name="bg" type="float" nodename="weft_height_u" />
+      <input name="fg" type="float" nodename="warp_round_u" />
+      <input name="mix" type="float" nodename="warp_on_top_u" />
+    </mix>
+    <add name="tweed_height_u" type="float">
+      <input name="in1" type="float" nodename="twill_height_u" />
+      <input name="in2" type="float" nodename="hair_height_u" />
+    </add>
+    <add name="tap_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="0, 0.03" />
+    </add>
+    <separate2 name="thread_parts_v" type="multioutput">
+      <input name="in" type="vector2" nodename="tap_uv_v" />
+    </separate2>
+    <floor name="warp_index_v" type="float">
+      <input name="in" type="float" nodename="thread_parts_v" output="outx" />
+    </floor>
+    <floor name="weft_index_v" type="float">
+      <input name="in" type="float" nodename="thread_parts_v" output="outy" />
+    </floor>
+    <subtract name="warp_fraction_v" type="float">
+      <input name="in1" type="float" nodename="thread_parts_v" output="outx" />
+      <input name="in2" type="float" nodename="warp_index_v" />
+    </subtract>
+    <subtract name="weft_fraction_v" type="float">
+      <input name="in1" type="float" nodename="thread_parts_v" output="outy" />
+      <input name="in2" type="float" nodename="weft_index_v" />
+    </subtract>
+    <divide name="band_phase_v" type="float">
+      <input name="in1" type="float" nodename="warp_index_v" />
+      <input name="in2" type="float" interfacename="band" />
+    </divide>
+    <floor name="band_index_v" type="float">
+      <input name="in" type="float" nodename="band_phase_v" />
+    </floor>
+    <modulo name="band_flip_v" type="float">
+      <input name="in1" type="float" nodename="band_index_v" />
+      <input name="in2" type="float" value="2" />
+    </modulo>
+    <add name="twill_up_v" type="float">
+      <input name="in1" type="float" nodename="warp_index_v" />
+      <input name="in2" type="float" nodename="weft_index_v" />
+    </add>
+    <modulo name="twill_up_step_v" type="float">
+      <input name="in1" type="float" nodename="twill_up_v" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <subtract name="twill_down_raw_v" type="float">
+      <input name="in1" type="float" nodename="weft_index_v" />
+      <input name="in2" type="float" nodename="warp_index_v" />
+    </subtract>
+    <add name="twill_down_v" type="float">
+      <input name="in1" type="float" nodename="twill_down_raw_v" />
+      <input name="in2" type="float" value="400" />
+    </add>
+    <modulo name="twill_down_step_v" type="float">
+      <input name="in1" type="float" nodename="twill_down_v" />
+      <input name="in2" type="float" value="4" />
+    </modulo>
+    <mix name="twill_step_v" type="float">
+      <input name="bg" type="float" nodename="twill_up_step_v" />
+      <input name="fg" type="float" nodename="twill_down_step_v" />
+      <input name="mix" type="float" nodename="band_flip_v" />
+    </mix>
+    <ifgreater name="warp_on_top_v" type="float">
+      <input name="value1" type="float" value="1.5" />
+      <input name="value2" type="float" nodename="twill_step_v" />
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" value="0" />
+    </ifgreater>
+    <multiply name="warp_across2_v" type="float">
+      <input name="in1" type="float" nodename="warp_fraction_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="warp_across_v" type="float">
+      <input name="in1" type="float" nodename="warp_across2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="weft_across2_v" type="float">
+      <input name="in1" type="float" nodename="weft_fraction_v" />
+      <input name="in2" type="float" value="2" />
+    </multiply>
+    <subtract name="weft_across_v" type="float">
+      <input name="in1" type="float" nodename="weft_across2_v" />
+      <input name="in2" type="float" value="1" />
+    </subtract>
+    <multiply name="warp_across_sq_v" type="float">
+      <input name="in1" type="float" nodename="warp_across_v" />
+      <input name="in2" type="float" nodename="warp_across_v" />
+    </multiply>
+    <invert name="warp_round2_v" type="float">
+      <input name="in" type="float" nodename="warp_across_sq_v" />
+    </invert>
+    <max name="warp_round_positive_v" type="float">
+      <input name="in1" type="float" nodename="warp_round2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="warp_round_v" type="float">
+      <input name="in" type="float" nodename="warp_round_positive_v" />
+    </sqrt>
+    <multiply name="weft_across_sq_v" type="float">
+      <input name="in1" type="float" nodename="weft_across_v" />
+      <input name="in2" type="float" nodename="weft_across_v" />
+    </multiply>
+    <invert name="weft_round2_v" type="float">
+      <input name="in" type="float" nodename="weft_across_sq_v" />
+    </invert>
+    <max name="weft_round_positive_v" type="float">
+      <input name="in1" type="float" nodename="weft_round2_v" />
+      <input name="in2" type="float" value="0" />
+    </max>
+    <sqrt name="weft_round_v" type="float">
+      <input name="in" type="float" nodename="weft_round_positive_v" />
+    </sqrt>
+    <multiply name="hair_uv_v" type="vector2">
+      <input name="in1" type="vector2" nodename="tap_uv_v" />
+      <input name="in2" type="vector2" value="6, 6" />
+    </multiply>
+    <noise2d name="hair_v" type="float">
+      <input name="texcoord" type="vector2" nodename="hair_uv_v" />
+    </noise2d>
+    <multiply name="hair_height_v" type="float">
+      <input name="in1" type="float" nodename="hair_v" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <multiply name="weft_height_v" type="float">
+      <input name="in1" type="float" nodename="weft_round_v" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <mix name="twill_height_v" type="float">
+      <input name="bg" type="float" nodename="weft_height_v" />
+      <input name="fg" type="float" nodename="warp_round_v" />
+      <input name="mix" type="float" nodename="warp_on_top_v" />
+    </mix>
+    <add name="tweed_height_v" type="float">
+      <input name="in1" type="float" nodename="twill_height_v" />
+      <input name="in2" type="float" nodename="hair_height_v" />
+    </add>
+    <subtract name="slope_u" type="float">
+      <input name="in1" type="float" nodename="tweed_height_u" />
+      <input name="in2" type="float" nodename="tweed_height" />
+    </subtract>
+    <multiply name="tilt_u" type="float">
+      <input name="in1" type="float" nodename="slope_u" />
+      <input name="in2" type="float" value="-1.166667" />
+    </multiply>
+    <subtract name="slope_v" type="float">
+      <input name="in1" type="float" nodename="tweed_height_v" />
+      <input name="in2" type="float" nodename="tweed_height" />
+    </subtract>
+    <multiply name="tilt_v" type="float">
+      <input name="in1" type="float" nodename="slope_v" />
+      <input name="in2" type="float" value="-1.166667" />
+    </multiply>
+    <remap name="normal_encoded_u" type="float">
+      <input name="in" type="float" nodename="tilt_u" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <remap name="normal_encoded_v" type="float">
+      <input name="in" type="float" nodename="tilt_v" />
+      <input name="inlow" type="float" value="-1" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <combine3 name="normal_encoded" type="vector3">
+      <input name="in1" type="float" nodename="normal_encoded_u" />
+      <input name="in2" type="float" nodename="normal_encoded_v" />
+      <input name="in3" type="float" value="1" />
+    </combine3>
+    <normalmap name="surface_normal" type="vector3">
+      <input name="in" type="vector3" nodename="normal_encoded" />
+    </normalmap>
+
+    <!-- Color: woollen yarns are mixed fibres, so each thread segment varies in tone and a few carry coloured flecks. -->
+    <multiply name="segment_column" type="float">
+      <input name="in1" type="float" nodename="warp_index" />
+      <input name="in2" type="float" value="1.37" />
+    </multiply>
+    <separate2 name="segment_parts" type="multioutput">
+      <input name="in" type="vector2" nodename="thread_uv" />
+    </separate2>
+    <multiply name="segment_along" type="float">
+      <input name="in1" type="float" nodename="segment_parts" output="outy" />
+      <input name="in2" type="float" value="0.25" />
+    </multiply>
+    <floor name="segment_row" type="float">
+      <input name="in" type="float" nodename="segment_along" />
+    </floor>
+    <combine2 name="segment_seed" type="vector2">
+      <input name="in1" type="float" nodename="segment_column" />
+      <input name="in2" type="float" nodename="segment_row" />
+    </combine2>
+    <cellnoise2d name="segment_random" type="float">
+      <input name="texcoord" type="vector2" nodename="segment_seed" />
+    </cellnoise2d>
+    <multiply name="fibre_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="6, 6" />
+    </multiply>
+    <noise2d name="fibre" type="float">
+      <input name="texcoord" type="vector2" nodename="fibre_uv" />
+    </noise2d>
+    <remap name="fibre_tone" type="float">
+      <input name="in" type="float" nodename="fibre" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.75" />
+      <input name="outhigh" type="float" value="1.25" />
+    </remap>
+    <multiply name="heather_uv" type="vector2">
+      <input name="in1" type="vector2" nodename="thread_uv" />
+      <input name="in2" type="vector2" value="0.35, 0.35" />
+    </multiply>
+    <noise2d name="heather" type="float">
+      <input name="texcoord" type="vector2" nodename="heather_uv" />
+    </noise2d>
+    <remap name="heather_range" type="float">
+      <input name="in" type="float" nodename="heather" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.7" />
+      <input name="outhigh" type="float" value="1.3" />
+    </remap>
+    <multiply name="heather_tone" type="float">
+      <input name="in1" type="float" nodename="heather_range" />
+      <input name="in2" type="float" nodename="fibre_tone" />
+    </multiply>
+    <multiply name="warp_heather" type="color3">
+      <input name="in1" type="color3" interfacename="warp_color" />
+      <input name="in2" type="float" nodename="heather_tone" />
+    </multiply>
+    <remap name="warp_segment" type="float">
+      <input name="in" type="float" nodename="segment_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="warp_toned" type="color3">
+      <input name="in1" type="color3" nodename="warp_heather" />
+      <input name="in2" type="float" nodename="warp_segment" />
+    </multiply>
+    <multiply name="weft_heather" type="color3">
+      <input name="in1" type="color3" interfacename="weft_color" />
+      <input name="in2" type="float" nodename="heather_tone" />
+    </multiply>
+    <remap name="weft_segment" type="float">
+      <input name="in" type="float" nodename="segment_random" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.85" />
+      <input name="outhigh" type="float" value="1.12" />
+    </remap>
+    <multiply name="weft_toned" type="color3">
+      <input name="in1" type="color3" nodename="weft_heather" />
+      <input name="in2" type="float" nodename="weft_segment" />
+    </multiply>
+    <remap name="weft_shade" type="float">
+      <input name="in" type="float" nodename="weft_round" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.55" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="weft_shaded" type="color3">
+      <input name="in1" type="color3" nodename="weft_toned" />
+      <input name="in2" type="float" nodename="weft_shade" />
+    </multiply>
+    <remap name="warp_shade" type="float">
+      <input name="in" type="float" nodename="warp_round" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.55" />
+      <input name="outhigh" type="float" value="1" />
+    </remap>
+    <multiply name="warp_shaded" type="color3">
+      <input name="in1" type="color3" nodename="warp_toned" />
+      <input name="in2" type="float" nodename="warp_shade" />
+    </multiply>
+    <mix name="yarn_color" type="color3">
+      <input name="bg" type="color3" nodename="weft_shaded" />
+      <input name="fg" type="color3" nodename="warp_shaded" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+    <floor name="fleck_cell" type="vector2">
+      <input name="in" type="vector2" nodename="thread_uv" />
+    </floor>
+    <cellnoise2d name="fleck_random" type="float">
+      <input name="texcoord" type="vector2" nodename="fleck_cell" />
+    </cellnoise2d>
+    <smoothstep name="fleck" type="float">
+      <input name="in" type="float" nodename="fleck_random" />
+      <input name="low" type="float" value="0.988" />
+      <input name="high" type="float" value="0.994" />
+    </smoothstep>
+    <multiply name="fleck_alt" type="color3">
+      <input name="in1" type="color3" interfacename="fleck_color" />
+      <input name="in2" type="color3" value="0.3, 2, 3" />
+    </multiply>
+    <smoothstep name="fleck_hue" type="float">
+      <input name="in" type="float" nodename="segment_random" />
+      <input name="low" type="float" value="0.45" />
+      <input name="high" type="float" value="0.55" />
+    </smoothstep>
+    <mix name="fleck_tint" type="color3">
+      <input name="bg" type="color3" interfacename="fleck_color" />
+      <input name="fg" type="color3" nodename="fleck_alt" />
+      <input name="mix" type="float" nodename="fleck_hue" />
+    </mix>
+    <mix name="base_color" type="color3">
+      <input name="bg" type="color3" nodename="yarn_color" />
+      <input name="fg" type="color3" nodename="fleck_tint" />
+      <input name="mix" type="float" nodename="fleck" />
+    </mix>
+    <multiply name="fuzz_weft" type="color3">
+      <input name="in1" type="color3" interfacename="weft_color" />
+      <input name="in2" type="float" value="0.8" />
+    </multiply>
+    <mix name="fuzz_color" type="color3">
+      <input name="bg" type="color3" nodename="fuzz_weft" />
+      <input name="fg" type="color3" interfacename="warp_color" />
+      <input name="mix" type="float" nodename="warp_on_top" />
+    </mix>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="fuzz_color_out" type="color3" nodename="fuzz_color" />
+    <output name="normal_out" type="vector3" nodename="surface_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_herringbone_tweed" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_herringbone_tweed" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="0.9" />
+    <input name="specular_weight" type="float" value="0.3" />
+    <input name="specular_roughness" type="float" value="0.75" />
+    <input name="fuzz_weight" type="float" value="0.6" />
+    <input name="fuzz_color" type="color3" nodegraph="NG_herringbone_tweed" output="fuzz_color_out" />
+    <input name="fuzz_roughness" type="float" value="0.7" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_herringbone_tweed" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Herringbone_Tweed" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_herringbone_tweed" />
+  </surfacematerial>
+</materialx>

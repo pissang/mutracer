@@ -1,0 +1,327 @@
+<?xml version="1.0"?>
+<!--
+  Suede: OpenPBR split leather with a raised nap. A dense fuzz layer carries
+  the lighter fibre tips over a darker base; warped, stretched object-space
+  noise draws the brush marks where the nap lies in different directions,
+  and rubbed patches lose their pile and darken. Specular is weak and rough.
+  Procedural, CC0.
+-->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_suede">
+    <input name="suede_color" type="color3" value="0.085, 0.04, 0.018" uiname="Suede" />
+    <input name="nap_color" type="color3" value="0.55, 0.33, 0.18" uiname="Nap tips" />
+    <input name="brush_scale" type="float" value="2.2" uiname="Brush scale" uimin="0.1" uimax="20" />
+    <input name="brush_marks" type="float" value="0.6" uiname="Brush marks" uimin="0" uimax="1" />
+    <input name="wear" type="float" value="0.4" uiname="Flattened nap" uimin="0" uimax="1" />
+    <position name="object_position" type="vector3" />
+    <normal name="object_normal" type="vector3" />
+
+    <!-- Brush marks: the nap lies in different directions after a finger or brush passes. Warped, stretched noise draws soft streaks that read lighter or darker. -->
+    <multiply name="brush_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="brush_scale" />
+    </multiply>
+    <multiply name="warp_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_position" />
+      <input name="in2" type="float" value="0.7" />
+    </multiply>
+    <noise3d name="brush_warp" type="vector3">
+      <input name="position" type="vector3" nodename="warp_position" />
+    </noise3d>
+    <multiply name="warp_offset" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warp" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="brush_warped" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_position" />
+      <input name="in2" type="vector3" nodename="warp_offset" />
+    </add>
+    <multiply name="streak_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warped" />
+      <input name="in2" type="vector3" value="1.2, 5.5, 1.2" />
+    </multiply>
+    <fractal3d name="streaks" type="float">
+      <input name="position" type="vector3" nodename="streak_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <multiply name="sweep_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warped" />
+      <input name="in2" type="float" value="0.6" />
+    </multiply>
+    <noise3d name="sweep" type="float">
+      <input name="position" type="vector3" nodename="sweep_position" />
+    </noise3d>
+    <multiply name="patch_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warped" />
+      <input name="in2" type="float" value="1.3" />
+    </multiply>
+    <fractal3d name="nap_patches" type="float">
+      <input name="position" type="vector3" nodename="patch_position" />
+      <input name="octaves" type="integer" value="4" />
+    </fractal3d>
+    <multiply name="streak_part" type="float">
+      <input name="in1" type="float" nodename="streaks" />
+      <input name="in2" type="float" value="0.3" />
+    </multiply>
+    <multiply name="sweep_part" type="float">
+      <input name="in1" type="float" nodename="sweep" />
+      <input name="in2" type="float" value="0.4" />
+    </multiply>
+    <add name="sweep_streaks" type="float">
+      <input name="in1" type="float" nodename="streak_part" />
+      <input name="in2" type="float" nodename="sweep_part" />
+    </add>
+    <multiply name="patch_part" type="float">
+      <input name="in1" type="float" nodename="nap_patches" />
+      <input name="in2" type="float" value="0.9" />
+    </multiply>
+    <add name="marks_raw" type="float">
+      <input name="in1" type="float" nodename="sweep_streaks" />
+      <input name="in2" type="float" nodename="patch_part" />
+    </add>
+    <multiply name="marks" type="float">
+      <input name="in1" type="float" nodename="marks_raw" />
+      <input name="in2" type="float" interfacename="brush_marks" />
+    </multiply>
+
+    <!-- Swipes: where a finger has pushed the nap the other way, a band of darker, flatter pile follows a winding path. -->
+    <multiply name="swipe_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warped" />
+      <input name="in2" type="float" value="0.55" />
+    </multiply>
+    <noise3d name="swipe_noise" type="float">
+      <input name="position" type="vector3" nodename="swipe_position" />
+    </noise3d>
+    <absval name="swipe_distance" type="float">
+      <input name="in" type="float" nodename="swipe_noise" />
+    </absval>
+    <smoothstep name="swipe_ramp" type="float">
+      <input name="in" type="float" nodename="swipe_distance" />
+      <input name="low" type="float" value="0.02" />
+      <input name="high" type="float" value="0.09" />
+    </smoothstep>
+    <invert name="swipe_line" type="float">
+      <input name="in" type="float" nodename="swipe_ramp" />
+    </invert>
+    <multiply name="swipe" type="float">
+      <input name="in1" type="float" nodename="swipe_line" />
+      <input name="in2" type="float" interfacename="brush_marks" />
+    </multiply>
+
+    <!-- Flattened nap: rubbed areas lose their pile and darken. -->
+    <multiply name="flat_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="3.5" />
+    </multiply>
+    <fractal3d name="flat_fractal" type="float">
+      <input name="position" type="vector3" nodename="flat_position" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <smoothstep name="flat_patches" type="float">
+      <input name="in" type="float" nodename="flat_fractal" />
+      <input name="low" type="float" value="0.1" />
+      <input name="high" type="float" value="0.55" />
+    </smoothstep>
+    <multiply name="flattened" type="float">
+      <input name="in1" type="float" nodename="flat_patches" />
+      <input name="in2" type="float" interfacename="wear" />
+    </multiply>
+
+    <!-- Fibre speckle: a per-cell random at fibre scale. -->
+    <multiply name="speckle_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="260" />
+    </multiply>
+    <cellnoise3d name="speckle" type="float">
+      <input name="position" type="vector3" nodename="speckle_position" />
+    </cellnoise3d>
+    <multiply name="fibre_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="240" />
+    </multiply>
+    <noise3d name="fibre" type="float">
+      <input name="position" type="vector3" nodename="fibre_position" />
+    </noise3d>
+    <multiply name="marks_tone" type="float">
+      <input name="in1" type="float" nodename="marks" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <add name="marked" type="float">
+      <input name="in1" type="float" value="1" />
+      <input name="in2" type="float" nodename="marks_tone" />
+    </add>
+    <multiply name="swipe_tone" type="float">
+      <input name="in1" type="float" nodename="swipe" />
+      <input name="in2" type="float" value="0.18" />
+    </multiply>
+    <subtract name="swiped" type="float">
+      <input name="in1" type="float" nodename="marked" />
+      <input name="in2" type="float" nodename="swipe_tone" />
+    </subtract>
+    <subtract name="speckle_centered" type="float">
+      <input name="in1" type="float" nodename="speckle" />
+      <input name="in2" type="float" value="0.5" />
+    </subtract>
+    <multiply name="speckle_tone" type="float">
+      <input name="in1" type="float" nodename="speckle_centered" />
+      <input name="in2" type="float" value="0.22" />
+    </multiply>
+    <add name="tone_raw" type="float">
+      <input name="in1" type="float" nodename="swiped" />
+      <input name="in2" type="float" nodename="speckle_tone" />
+    </add>
+    <remap name="flat_shade" type="float">
+      <input name="in" type="float" nodename="flattened" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.7" />
+    </remap>
+    <multiply name="tone" type="float">
+      <input name="in1" type="float" nodename="tone_raw" />
+      <input name="in2" type="float" nodename="flat_shade" />
+    </multiply>
+    <multiply name="base_color" type="color3">
+      <input name="in1" type="color3" interfacename="suede_color" />
+      <input name="in2" type="float" nodename="tone" />
+    </multiply>
+    <remap name="nap_tone" type="float">
+      <input name="in" type="float" nodename="marks" />
+      <input name="inlow" type="float" value="-0.6" />
+      <input name="inhigh" type="float" value="0.6" />
+      <input name="outlow" type="float" value="0.45" />
+      <input name="outhigh" type="float" value="1.45" />
+    </remap>
+    <multiply name="nap_marked" type="color3">
+      <input name="in1" type="color3" interfacename="nap_color" />
+      <input name="in2" type="float" nodename="nap_tone" />
+    </multiply>
+    <remap name="nap_flat" type="float">
+      <input name="in" type="float" nodename="flattened" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.45" />
+    </remap>
+    <multiply name="nap_flat_shaded" type="color3">
+      <input name="in1" type="color3" nodename="nap_marked" />
+      <input name="in2" type="float" nodename="nap_flat" />
+    </multiply>
+    <remap name="nap_swipe" type="float">
+      <input name="in" type="float" nodename="swipe" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="1" />
+      <input name="outhigh" type="float" value="0.6" />
+    </remap>
+    <multiply name="nap_flattened" type="color3">
+      <input name="in1" type="color3" nodename="nap_flat_shaded" />
+      <input name="in2" type="float" nodename="nap_swipe" />
+    </multiply>
+    <remap name="fibre_tone" type="float">
+      <input name="in" type="float" nodename="fibre" />
+      <input name="inlow" type="float" value="-0.5" />
+      <input name="inhigh" type="float" value="0.5" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.15" />
+    </remap>
+    <remap name="speckle_fuzz" type="float">
+      <input name="in" type="float" nodename="speckle" />
+      <input name="inlow" type="float" value="0" />
+      <input name="inhigh" type="float" value="1" />
+      <input name="outlow" type="float" value="0.8" />
+      <input name="outhigh" type="float" value="1.2" />
+    </remap>
+    <multiply name="fibre_speckle" type="float">
+      <input name="in1" type="float" nodename="fibre_tone" />
+      <input name="in2" type="float" nodename="speckle_fuzz" />
+    </multiply>
+    <multiply name="fuzz_color" type="color3">
+      <input name="in1" type="color3" nodename="nap_flattened" />
+      <input name="in2" type="float" nodename="fibre_speckle" />
+    </multiply>
+    <multiply name="fibre_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="420" />
+    </multiply>
+    <noise3d name="fibre_normal_noise" type="vector3">
+      <input name="position" type="vector3" nodename="fibre_normal_position" />
+    </noise3d>
+    <multiply name="soft_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="brush_warped" />
+      <input name="in2" type="float" value="9" />
+    </multiply>
+    <noise3d name="soft_normal_noise" type="vector3">
+      <input name="position" type="vector3" nodename="soft_normal_position" />
+    </noise3d>
+    <multiply name="pile_normal_position" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" value="70" />
+    </multiply>
+    <noise3d name="pile_normal_noise" type="vector3">
+      <input name="position" type="vector3" nodename="pile_normal_position" />
+    </noise3d>
+    <multiply name="fibre_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="fibre_normal_noise" />
+      <input name="in2" type="float" value="0.15" />
+    </multiply>
+    <multiply name="pile_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="pile_normal_noise" />
+      <input name="in2" type="float" value="0.06" />
+    </multiply>
+    <multiply name="soft_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="soft_normal_noise" />
+      <input name="in2" type="float" value="0.03" />
+    </multiply>
+    <add name="nap_gradient_sum" type="vector3">
+      <input name="in1" type="vector3" nodename="fibre_gradient" />
+      <input name="in2" type="vector3" nodename="pile_gradient" />
+    </add>
+    <add name="nap_gradient_sum_2" type="vector3">
+      <input name="in1" type="vector3" nodename="nap_gradient_sum" />
+      <input name="in2" type="vector3" nodename="soft_gradient" />
+    </add>
+    <dotproduct name="nap_along_normal" type="float">
+      <input name="in1" type="vector3" nodename="nap_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="object_normal" />
+    </dotproduct>
+    <multiply name="nap_normal_part" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="float" nodename="nap_along_normal" />
+    </multiply>
+    <subtract name="nap_surface_gradient" type="vector3">
+      <input name="in1" type="vector3" nodename="nap_gradient_sum_2" />
+      <input name="in2" type="vector3" nodename="nap_normal_part" />
+    </subtract>
+    <subtract name="nap_object" type="vector3">
+      <input name="in1" type="vector3" nodename="object_normal" />
+      <input name="in2" type="vector3" nodename="nap_surface_gradient" />
+    </subtract>
+    <transformnormal name="nap_world" type="vector3">
+      <input name="in" type="vector3" nodename="nap_object" />
+      <input name="fromspace" type="string" value="object" />
+      <input name="tospace" type="string" value="world" />
+    </transformnormal>
+    <normalize name="nap_normal" type="vector3">
+      <input name="in" type="vector3" nodename="nap_world" />
+    </normalize>
+
+    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="fuzz_color_out" type="color3" nodename="fuzz_color" />
+    <output name="normal_out" type="vector3" nodename="nap_normal" />
+  </nodegraph>
+
+  <open_pbr_surface name="SR_suede" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_suede" output="base_color_out" />
+    <input name="base_diffuse_roughness" type="float" value="1" />
+    <input name="specular_weight" type="float" value="0.35" />
+    <input name="specular_roughness" type="float" value="0.8" />
+    <input name="fuzz_weight" type="float" value="0.9" />
+    <input name="fuzz_color" type="color3" nodegraph="NG_suede" output="fuzz_color_out" />
+    <input name="fuzz_roughness" type="float" value="0.35" />
+    <input name="geometry_normal" type="vector3" nodegraph="NG_suede" output="normal_out" />
+  </open_pbr_surface>
+  <surfacematerial name="Suede" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_suede" />
+  </surfacematerial>
+</materialx>
