@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { Button, Dialog, DialogTrigger, Heading, Popover, Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { ChevronDown, ExternalLink, Pin, PinOff, Sparkles } from 'lucide-react';
 import { setUi, useViewer } from '../store';
@@ -76,7 +76,7 @@ function ExamplesBrowser({ onChoose }: { onChoose?: () => void }) {
             <a href={RESEARCH_SCENES_SOURCE} target="_blank" rel="noopener noreferrer">glTF Research Scenes ↗</a>
             {' · '}Original scene lighting; large scenes need more memory.
           </p>}
-          <div className="ex-grid">
+          <ExamplesGrid>
             {MODEL_PRESETS.filter((preset) => (preset.category === 'research') === (category === 'research')).map((preset) => (
               <div key={preset.id} className="ex-entry">
                 <button className="ex" data-on={current === preset.id || undefined} aria-pressed={current === preset.id}
@@ -93,9 +93,29 @@ function ExamplesBrowser({ onChoose }: { onChoose?: () => void }) {
                 </div>}
               </div>
             ))}
-          </div>
+          </ExamplesGrid>
         </TabPanel>
       ))}
     </Tabs>
   );
+}
+
+function ExamplesGrid({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const grid = ref.current!;
+    const style = getComputedStyle(grid);
+    const maxWidth = parseFloat(style.getPropertyValue('--ex-card-max-width'));
+    const gap = parseFloat(style.columnGap);
+    const resize = (width: number) => {
+      // Round up so equal-width columns fill the panel without enlarging thumbnails.
+      const columns = Math.max(1, Math.ceil((width + gap) / (maxWidth + gap)));
+      grid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+    };
+    resize(grid.getBoundingClientRect().width);
+    const observer = new ResizeObserver(([entry]) => resize(entry.contentRect.width));
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, []);
+  return <div ref={ref} className="ex-grid">{children}</div>;
 }

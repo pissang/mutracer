@@ -733,10 +733,10 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .example-note { margin: 0 4px 10px; }
 .example-note a { color: var(--cv-active-text); }
 /* Research scene thumbnails are 160px wide; cap cards to avoid enlarging them. */
-.ex-grid { display: flex; flex-wrap: wrap; align-content: start; gap: 8px; }
-.ex-entry { flex: 1 1 128px; min-width: 0; max-width: 160px; }
+.ex-grid { --ex-card-max-width: 160px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.ex-entry { min-width: 0; }
 .ex-entry .ex { width: 100%; }
-.ex-links { display: flex; gap: 12px; padding: 4px 9px; font-size: 10px; }
+.ex-links { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 9px; font-size: 10px; }
 .ex-links a { color: var(--cv-text-3); }
 .ex { display: grid; overflow: hidden; padding: 0; border-radius: 7px;
   background: rgb(255 255 255 / 0.02); text-align: left; }
