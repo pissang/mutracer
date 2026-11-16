@@ -224,6 +224,9 @@ kbd { font: 10px var(--cv-mono); color: var(--cv-text-4); }
 .viewport-footer > :is(.dock, .camera-controls) :is(.select, .icon-btn) { height: 28px; min-height: 28px; }
 .panel-toggle { display: none; }
 .viewport[data-picking] .viewport__canvas { cursor: crosshair; }
+.viewport__outline { pointer-events: none; }
+/* Above the drop layer, so the outline marks what the MaterialX drop applies to. */
+.viewport[data-dropping] .viewport__outline { z-index: 7; }
 .float {
   position: absolute; display: flex; align-items: center; gap: 4px; padding: 4px;
   border: 0; border-radius: var(--cv-radius-floating);

@@ -40,6 +40,7 @@ import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import {hostMaterials,hostThreeGeometries} from './nativeResources';
 import { groundModel } from './modelGrounding';
+import { SelectionOutline } from './selectionOutline';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
@@ -80,6 +81,10 @@ export class WebEngine implements ViewerEngine {
   private readonly viewSync: Sync;
   private displayed?: Render;
   private readonly canvas: HTMLCanvasElement;
+  /** Web only: native meshes keep their geometry in the host. */
+  private readonly outline: SelectionOutline | null;
+  /** Final samples at the previous frame, to detect restarted accumulation. */
+  private outlineSamples = 0;
   private readonly scene = new THREE.Scene();
   private readonly perspectiveCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
   private readonly orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
@@ -135,6 +140,8 @@ export class WebEngine implements ViewerEngine {
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private denoiserUpdateToken = 0;
   private pickRequest = 0;
+  /** Last viewport click, so quick repeated clicks climb to enclosing groups. */
+  private lastClick: { mesh: string; selected: string; time: number } | null = null;
   private pickObjects = new Map<number, string>();
   private pickMaterials = new Map<number, string>();
   private pointerDown: { x: number; y: number } | null = null;
@@ -162,6 +169,7 @@ export class WebEngine implements ViewerEngine {
     this.settings = get().settings;
     this.engine = createRenderEngine(canvas);
     this.engine._bvhCache = new ViewerBvhCache();
+    this.outline = this.engine instanceof NativeRenderHost ? null : new SelectionOutline(canvas, this.modelGroup);
     this.preview = createRender(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
     this.final = createRender(this.engine, {fallback: this.preview, batchSamples: true});
@@ -284,6 +292,7 @@ export class WebEngine implements ViewerEngine {
     this.controls.dispose();
     this.clearModel();
     this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
+    this.outline?.dispose();
     this.environment.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
@@ -1328,12 +1337,27 @@ export class WebEngine implements ViewerEngine {
         hit = await this.engine._pick(x, y);
       }
       if (request !== this.pickRequest || hit === undefined) return;
-      if (!hit) {this.select(null); return;}
+      if (!hit) {this.lastClick = null; this.select(null); return;}
       const objectId = this.pickObjects.get(hit.object);
-      if (objectId) this.select(objectId, this.pickMaterials.get(hit.material) ?? null);
+      if (!objectId) return;
+      const target = this.clickTarget(objectId);
+      this.select(target, this.pickMaterials.get(hit.material) ?? null);
+      this.lastClick = { mesh: objectId, selected: target, time: performance.now() };
     } catch (error) {
       if (request === this.pickRequest) showToast(`Could not select object: ${(error as Error).message}`, 'error');
     }
+  }
+
+  /**
+   * A click selects the mesh under the cursor. Clicking it again soon after
+   * selects the next enclosing group up to the model root, then the mesh again.
+   */
+  private clickTarget(meshId: string) {
+    const last = this.lastClick, selected = get().selection.objectId;
+    if (!last || last.mesh !== meshId || last.selected !== selected || performance.now() - last.time > REPEAT_CLICK_MS) return meshId;
+    const current = this.modelGroup.getObjectByProperty('uuid', selected);
+    const parent = current?.parent;
+    return parent && parent !== this.modelGroup ? parent.uuid : meshId;
   }
 
   /** Reads the material at a drop position without changing the current selection. */
@@ -1598,9 +1622,26 @@ export class WebEngine implements ViewerEngine {
     };
   }
 
-  private updateSelectionRect() {
-    const id = get().selection.objectId;
-    const object = id ? this.modelGroup.getObjectByProperty('uuid', id) : null;
+  /**
+   * Outlines the material drop target, or else the selection. Any edit that
+   * restarts the render hides the outline until edits settle; the box marks
+   * objects the outline cannot draw.
+   */
+  private updateSelection(dt: number, restarted: boolean) {
+    const state = get();
+    const id = state.dropTarget ?? state.selection.objectId;
+    const object = id && !state.ui.hidden ? this.modelGroup.getObjectByProperty('uuid', id) ?? null : null;
+    // Animation, auto-rotation and focus pulls restart every frame without the user editing anything.
+    const autonomous = this.viewSync.active || this.settings.autoRotate;
+    const editing = !state.dropTarget && (this.dragging || (restarted && !autonomous));
+    if (this.outline?.update(object, this.activeCamera(), editing, dt)) {
+      if (state.selectionRect) set({ selectionRect: null });
+      return;
+    }
+    this.updateSelectionRect(object);
+  }
+
+  private updateSelectionRect(object: THREE.Object3D | null) {
     if (!object || !isVisible(object)) {
       if (get().selectionRect) set({ selectionRect: null });
       return;
@@ -1855,7 +1896,7 @@ export class WebEngine implements ViewerEngine {
 
     if (get().paused) {
       this.publishStats('paused', now, true);
-      this.updateSelectionRect();
+      this.updateSelection(dt, false);
       return;
     }
     const phase = this.loop.tick();
@@ -1868,7 +1909,11 @@ export class WebEngine implements ViewerEngine {
       this.updateAutofocus(now);
     }
     this.publishStats(phase, now, false);
-    this.updateSelectionRect();
+    // Previews and preparation follow edits; final samples drop when accumulation restarts.
+    const samples = this.displaySamples(this.final);
+    const restarted = phase === 'previewing' || phase === 'preparing' || phase === 'compiling' || samples < this.outlineSamples;
+    this.outlineSamples = samples;
+    this.updateSelection(dt, restarted);
   };
 
   private displaySamples(render: Render): number {
@@ -1915,6 +1960,9 @@ export class WebEngine implements ViewerEngine {
   }
 
 }
+
+/** Window in which another click on the same mesh selects its enclosing group. */
+const REPEAT_CLICK_MS = 1500;
 
 const toArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [value]);
 

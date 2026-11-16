@@ -314,6 +314,8 @@ export interface ViewerState {
   /** Labels of the material edits that undo and redo would apply. */
   history: { undo: string | null; redo: string | null };
   selectionRect: { x: number; y: number; w: number; h: number; label: string } | null;
+  /** Object under a MaterialX file dragged over the viewport. */
+  dropTarget: string | null;
   pickingFocus: boolean;
   focusArea: FocusAreaState;
   lens: LensInfo;
@@ -442,6 +444,7 @@ export const useViewer = create<ViewerState>(() => ({
   material: null,
   history: { undo: null, redo: null },
   selectionRect: null,
+  dropTarget: null,
   pickingFocus: false,
   focusArea: { x: 0.5, y: 0.5, status: 'idle', attempt: 0 },
   lens: { focalLength: 0, guessedMetersPerUnit: 1 },

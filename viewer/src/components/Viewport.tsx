@@ -49,6 +49,7 @@ export function Viewport() {
     <section
       className="panel viewport"
       data-picking={picking || undefined}
+      data-dropping={dragging || undefined}
       onDragEnter={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drag.current.active = true; setDragging(true); } }}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes('Files')) return;
@@ -58,16 +59,19 @@ export function Viewport() {
         drag.current.last = performance.now();
         const revision = drag.current.revision;
         void getEngine()?.pickMaterialTarget(e.clientX, e.clientY).then((hit) => {
-          if (drag.current.active && revision === drag.current.revision) setDropName(hit?.name ?? useViewer.getState().material?.name ?? null);
+          if (!drag.current.active || revision !== drag.current.revision) return;
+          setDropName(hit?.name ?? useViewer.getState().material?.name ?? null);
+          if (MATERIALX_IMPORT) useViewer.setState({ dropTarget: hit?.objectId ?? null });
         }).catch(() => {}).finally(() => { drag.current.pending = false; });
       }}
-      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { drag.current.active = false; drag.current.revision++; setDragging(false); setDropName(null); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { drag.current.active = false; drag.current.revision++; setDragging(false); setDropName(null); useViewer.setState({ dropTarget: null }); } }}
       onDrop={async (e) => {
         e.preventDefault();
         drag.current.active = false;
         drag.current.revision++;
         setDragging(false);
         setDropName(null);
+        useViewer.setState({ dropTarget: null });
         const position = { clientX: e.clientX, clientY: e.clientY };
         try {
           const files = await readDroppedItems(e.dataTransfer.items);
