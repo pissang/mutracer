@@ -1,5 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Download, FileUp, ImagePlus, LoaderCircle, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -23,12 +23,9 @@ let lastPresetCategory: MaterialPresetCategory = 'basic';
 export function MaterialPanel() {
   const material = useViewer((s) => s.material);
   const [presetCategory, setPresetCategory] = useState(lastPresetCategory);
-  const [materialXExpanded, setMaterialXExpanded] = useState(false);
-  const presetGridId = useId();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
-  const graphEditing = useViewer((s) => s.ui.graphEditor);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const [dropping, setDropping] = useState(false);
   const graphState = useGraphDiagnostics();
@@ -85,9 +82,12 @@ export function MaterialPanel() {
           <strong>{material.name}</strong>
           <small>{material.meshName || 'Mesh'}{material.users > 1 ? ` · shared by ${material.users} meshes` : ''}<MaterialGraphStatus state={graphState} /></small>
         </div>
-        <button className="icon-btn sm" title="Reset to loaded values" aria-label="Reset material" onClick={() => getEngine()?.resetMaterial(material.id)}>
-          <RotateCcw size={13} />
-        </button>
+        <div className="mat-card__actions">
+          <MaterialTools materialId={material.id} />
+          <button className="icon-btn sm" title="Reset to loaded values" aria-label="Reset material" onClick={() => getEngine()?.resetMaterial(material.id)}>
+            <RotateCcw size={13} />
+          </button>
+        </div>
       </div>
       {material.graph && material.graph.inputs.length > 0 && <div className="mat-graph">
         <Workflow size={12} />
@@ -99,8 +99,8 @@ export function MaterialPanel() {
         <Segmented label="Preset category" value={presetCategory}
           options={MATERIALX_IMPORT ? MATERIAL_PRESET_CATEGORIES : MATERIAL_PRESET_CATEGORIES.filter((c) => c.value !== 'materialx')}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
-        <div id={presetGridId} className="preset-grid" aria-label="Material presets">
-          {presetCategory === 'materialx' ? (materialXExpanded ? MATERIALX_SAMPLES : MATERIALX_SAMPLES.slice(0, 12)).map((sample) => (
+        <div className={`preset-grid${presetCategory === 'materialx' ? ' preset-grid--scroll' : ''}`} aria-label="Material presets">
+          {presetCategory === 'materialx' ? MATERIALX_SAMPLES.map((sample) => (
             <button key={sample.id} className="preset" title={`Import ${sample.label} MaterialX`}
               onClick={() => getEngine()?.importMaterialX(material.id, materialXSampleFiles(sample))}>
               <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
@@ -111,12 +111,6 @@ export function MaterialPanel() {
             </button>
           ))}
         </div>
-        {presetCategory === 'materialx' && MATERIALX_SAMPLES.length > 12 &&
-          <button className="btn" aria-expanded={materialXExpanded} aria-controls={presetGridId}
-            onClick={() => setMaterialXExpanded((expanded) => !expanded)}>
-            {materialXExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            {materialXExpanded ? 'Show less' : 'Show more'}
-          </button>}
       </div>
       <div className="tex-browse hide-m">
         <button className="btn" aria-pressed={browsing} data-on={browsing || undefined}
@@ -124,19 +118,13 @@ export function MaterialPanel() {
           onClick={() => togglePanel('textures')}>
           <PolyHavenLogo />Poly Haven
         </button>
-        {MATERIALX_IMPORT && <>
+        {MATERIALX_IMPORT &&
           <button className="btn" aria-pressed={materialBrowsing} data-on={materialBrowsing || undefined}
             title={materialBrowsing ? 'Hide GPUOpen materials' : 'Browse GPUOpen MaterialX materials'}
             onClick={() => togglePanel('gpuopen')}>
             <Download size={14} />GPUOpen
           </button>
-          <MaterialXImport materialId={material.id} />
-        </>}
-        <button className="btn" aria-pressed={graphEditing} data-on={graphEditing || undefined}
-          title={graphEditing ? 'Hide the node graph' : 'Edit the material node graph'}
-          onClick={() => togglePanel('graph')}>
-          <Workflow size={14} />Graph
-        </button>
+        }
       </div>
       {material.graph && <GraphParameters material={material}
         open={openGroups.graphParameters ?? true}
@@ -203,15 +191,30 @@ function PackageHeightMaps({ material, disabled }: { material: SelectedMaterial;
   </div>;
 }
 
+function MaterialTools({ materialId }: { materialId: string }) {
+  const graphEditing = useViewer((s) => s.ui.graphEditor);
+  return <div className="mat-tools hide-m" role="group" aria-label="Material tools">
+    {MATERIALX_IMPORT && <MaterialXImport materialId={materialId} />}
+    <button className="icon-btn mat-tool mat-tool--graph sm"
+      aria-label="Graph" aria-pressed={graphEditing} data-active={graphEditing || undefined}
+      title={graphEditing ? 'Hide the node graph' : 'Edit the material node graph'}
+      onClick={() => togglePanel('graph')}>
+      <Workflow size={14} />
+    </button>
+  </div>;
+}
+
 /** Picks a MaterialX .zip, or a .mtlx with its textures; folders can be dropped on the viewport. */
 function MaterialXImport({ materialId }: { materialId: string }) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <button className="btn" disabled={busy} title="Import MaterialX: a .zip package, or a .mtlx with its texture images. Folders can be dropped on the viewport."
+      <button className="icon-btn mat-tool mat-tool--import sm" disabled={busy}
+        aria-label={busy ? 'Importing MaterialX' : 'Import MaterialX'} aria-busy={busy}
+        title="Import MaterialX: a .zip package, or a .mtlx with its texture images. Folders can be dropped on the viewport."
         onClick={() => input.current?.click()}>
-        <FileUp size={14} />{busy ? 'Importing…' : 'MaterialX'}
+        {busy ? <LoaderCircle size={14} className="spin" /> : <FileUp size={14} />}
       </button>
       <input ref={input} type="file" hidden multiple accept=".mtlx,.zip,image/png,image/jpeg,image/webp,image/avif"
         onChange={async (e) => {
@@ -219,8 +222,8 @@ function MaterialXImport({ materialId }: { materialId: string }) {
           e.currentTarget.value = '';
           if (!files.length) return;
           setBusy(true);
-          await getEngine()?.importMaterialX(materialId, files);
-          setBusy(false);
+          try { await getEngine()?.importMaterialX(materialId, files); }
+          finally { setBusy(false); }
         }} />
     </>
   );
