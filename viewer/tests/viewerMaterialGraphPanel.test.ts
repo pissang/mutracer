@@ -5,7 +5,8 @@ import { MaterialGraph, OpenPBRMaterial, Texture, type MaterialGraphNode } from 
 
 vi.hoisted(() => { vi.stubGlobal('location', { hash: '', href: 'https://viewer.example.com/' }); });
 vi.mock('../src/engine/modelCache', () => ({ readMaterialEdits: vi.fn(), saveMaterialEdits: vi.fn() }));
-import { disconnectGraphInput, summarizeMaterialGraph } from '../src/engine/materialGraphSummary';
+import { disconnectGraphInput, graphParameters, summarizeMaterialGraph } from '../src/engine/materialGraphSummary';
+import { parseMaterialXGraph } from '../src/engine/materialxGraph';
 import { archiveGraph, graphImageName, rememberGraphImage, restoreGraph } from '../src/engine/materialxGraphArchive';
 import { MaterialEditor, readPendingEdits } from '../src/engine/materialEditor';
 import { readMaterialEdits, saveMaterialEdits, type MaterialXHeight } from '../src/engine/modelCache';
@@ -34,6 +35,50 @@ function skinGraph() {
 }
 
 describe('material graph summary', () => {
+  it('ranks node constants when the graph has no authored parameters', () => {
+    const { graph } = skinGraph();
+    graph.setNode({ id: 'orphan', category: 'constant', type: 'float', inputs: { value: { type: 'float', value: 2 } } });
+    graph.setNode({ id: 'pick', category: 'extract', type: 'float', inputs: { in: { type: 'color3', connection: { node: 'color' } }, index: { type: 'integer', value: 1 } } });
+    graph.setInput('rough', 'uvtiling', { type: 'vector2', value: [2, 2] });
+    graph.setTerminal({ ...graph.terminal, metalness: { node: 'pick' } });
+    const list = graphParameters(graph, 2);
+    expect(list.source).toBe('ranked');
+    expect(list.primary.map(({ node, port, affects }) => ({ node, port, affects }))).toEqual([
+      { node: 'tint', port: 'in2', affects: ['baseColor'] },
+      { node: 'rough', port: 'uvtiling', affects: ['specularRoughness', 'coatRoughness'] }
+    ]);
+    expect(list.more.map(param => param.node)).toEqual(['ior']);
+  });
+
+  it('lists only the MaterialX interface inputs of an imported nodegraph', () => {
+    const { graph } = parseMaterialXGraph(`<?xml version="1.0"?><materialx version="1.39">
+      <nodegraph name="NG">
+        <input name="tint" type="color3" value="1, 0.5, 0.25" uiname="Tint color" />
+        <input name="gain" type="float" value="2" />
+        <multiply name="m1" type="color3"><input name="in1" type="color3" interfacename="tint" /><input name="in2" type="float" value="0.5" /></multiply>
+        <multiply name="m2" type="color3"><input name="in1" type="color3" nodename="m1" /><input name="in2" type="float" interfacename="gain" /></multiply>
+        <dotproduct name="r" type="float"><input name="in1" type="vector3" value="1, 1, 1" /><input name="in2" type="vector3" nodename="pos" /></dotproduct>
+        <position name="pos" type="vector3" />
+        <multiply name="m3" type="float"><input name="in1" type="float" nodename="r" /><input name="in2" type="float" interfacename="gain" /></multiply>
+        <output name="base" type="color3" nodename="m2" /><output name="rough" type="float" nodename="m3" />
+      </nodegraph>
+      <open_pbr_surface name="S" type="surfaceshader">
+        <input name="base_color" type="color3" nodegraph="NG" output="base" />
+        <input name="specular_roughness" type="float" nodegraph="NG" output="rough" />
+      </open_pbr_surface>
+      <surfacematerial name="M" type="material"><input name="surfaceshader" type="surfaceshader" nodename="S" /></surfacematerial>
+    </materialx>`);
+    const list = graphParameters(graph!);
+    expect(list.source).toBe('authored');
+    expect(list.primary.map(({ label, value, affects }) => ({ label, value, affects }))).toEqual([
+      { label: 'Tint color', value: [1, .5, .25], affects: ['baseColor'] },
+      { label: 'gain', value: 2, affects: ['baseColor', 'specularRoughness'] }
+    ]);
+    // One shared node: editing the parameter changes every reader.
+    const gain = graph!.nodes.filter(node => Object.values(node.inputs ?? {}).some(input => input.connection?.node === list.primary[1].node));
+    expect(gain.map(node => node.id).sort()).toEqual(['NG/m2', 'NG/m3']);
+  });
+
   it('names the direct node and upstream images of each input', () => {
     const { graph } = skinGraph();
     const { inputs } = summarizeMaterialGraph(graph, graphImageName);

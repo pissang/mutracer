@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { showToast, useViewer, type SelectedMaterial } from '../../store';
@@ -14,6 +14,8 @@ import { readDroppedItems, toPathedFiles } from '../../engine/droppedFiles';
 import { togglePanel } from '../layout/panels';
 import { isMaterialXDrop, materialDropTarget, TEXTURE_ACCEPT, textureDropError } from '../../engine/materialDrop';
 import { MATERIALX_SAMPLES, materialXSampleFiles } from '../../engine/materialxSamples';
+import { graphParameters, type GraphParameterSummary } from '../../engine/materialGraphSummary';
+import { setParameter } from '../../engine/graphEdit';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -136,6 +138,9 @@ export function MaterialPanel() {
           <Workflow size={14} />Graph
         </button>
       </div>
+      {material.graph && <GraphParameters material={material}
+        open={openGroups.graphParameters ?? true}
+        onOpenChange={(open) => setOpenGroups((g) => ({ ...g, graphParameters: open }))} />}
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
         const extra = material.graph?.inputs.filter(input => !PARAM_LABELS.has(input.key) && groupOf(input.key) === group.id) ?? [];
@@ -521,4 +526,81 @@ function GraphImages({ material, diagnostics }: { material: SelectedMaterial; di
       })}
     </div>
   );
+}
+
+const shortNodeId = (id: string) => id.slice(id.lastIndexOf('/') + 1);
+/** An input's name outside its section: base controls get the section name, e.g. `Base color`. */
+const affectLabel = (key: string) => {
+  const param = MATERIAL_GROUPS[0].params.find(item => item.key === key);
+  return param && MATERIAL_GROUPS[0].id === 'base' ? `Base ${param.label.toLowerCase()}` : inputLabel(key);
+};
+const AXES = ['X', 'Y', 'Z', 'W'];
+
+/**
+ * The graph's editable values: the inputs a MaterialX author exposed, else the
+ * most relevant node constants. Each lists the surface inputs it changes.
+ */
+function GraphParameters({ material, open, onOpenChange }: {
+  material: SelectedMaterial; open: boolean; onOpenChange: (open: boolean) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const list = useMemo(() => {
+    const graph = getEngine()?.materialGraph(material.id);
+    return graph ? graphParameters(graph) : undefined;
+  }, [material]);
+  if (!list?.primary.length) return null;
+  const set = (param: GraphParameterSummary, label: string, value: GraphParameterSummary['value']) => {
+    const graph = getEngine()?.materialGraph(material.id);
+    if (graph) getEngine()?.setMaterialGraph(material.id, setParameter(graph, param.node, param.port, value), label, `${material.id}:${param.node}.${param.port}`);
+  };
+  const shown = all ? [...list.primary, ...list.more] : list.primary;
+  return (
+    <Section title="Graph parameters" value={String(list.primary.length + list.more.length)} open={open} onOpenChange={onOpenChange}>
+      {shown.map(param => {
+        const label = param.label ?? (param.node.startsWith('surface/value/') && param.affects.length ? inputLabel(param.affects[0])
+          : param.port === 'value' ? shortNodeId(param.node) : `${shortNodeId(param.node)} ${param.port}`);
+        const affects = param.affects.map(affectLabel).join(' · ');
+        return <div key={`${param.node}.${param.port}`} className="graph-param">
+          <GraphParameterControl param={param} label={label} onChange={value => set(param, label, value)} />
+          {affects && <small className="graph-param__affects" title={`Changes ${affects}`}>{affects}</small>}
+        </div>;
+      })}
+      {list.more.length > 0 && <button className="btn" aria-expanded={all} onClick={() => setAll(value => !value)}>
+        {all ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        {all ? 'Show fewer' : `Show ${list.more.length} more`}
+      </button>}
+    </Section>
+  );
+}
+
+/** A slider range around the authored value: [0, 1] for unit values, else the next power of ten. */
+function scrubRange(value: number) {
+  const magnitude = Math.abs(value) <= 1 ? 1 : 10 ** Math.ceil(Math.log10(Math.abs(value)));
+  return { min: value < 0 ? -magnitude : 0, max: magnitude };
+}
+
+function GraphNumber({ label, title, value, integer, onChange }: { label: string; title: string; value: number; integer?: boolean; onChange: (value: number) => void }) {
+  // Fix the range while this control is mounted so dragging does not rescale it.
+  const [range] = useState(() => scrubRange(value));
+  return <Scrub label={label} title={title} value={value} min={Math.min(range.min, value)} max={Math.max(range.max, value)}
+    step={integer ? 1 : undefined} format={integer ? undefined : (v) => Number(v.toPrecision(4)).toString()}
+    onChange={(v) => onChange(integer ? Math.round(v) : v)} />;
+}
+
+function GraphParameterControl({ param, label, onChange }: {
+  param: GraphParameterSummary; label: string; onChange: (value: GraphParameterSummary['value']) => void;
+}) {
+  const { type, value } = param;
+  const title = `${param.node}.${param.port}`;
+  if (type === 'boolean') return <Switch label={label} checked={Boolean(value)} onChange={onChange}><span className="field-label">{label}</span></Switch>;
+  if (type === 'float' || type === 'integer') return <GraphNumber label={label} title={title} value={Number(value)} integer={type === 'integer'} onChange={onChange} />;
+  const v = value as readonly number[];
+  if (type === 'color3' || type === 'color4') {
+    return <>
+      <ColorField label={label} value={linearToHex([v[0], v[1], v[2]])}
+        onChange={(hex) => onChange(type === 'color4' ? [...hexToLinear(hex), v[3] ?? 1] : hexToLinear(hex))} />
+      {type === 'color4' && <GraphNumber label={`${label} alpha`} title={title} value={v[3] ?? 1} onChange={a => onChange([v[0], v[1], v[2], a])} />}
+    </>;
+  }
+  return <>{v.map((x, i) => <GraphNumber key={i} label={`${label} ${AXES[i]}`} title={title} value={x} onChange={n => onChange(v.map((old, j) => (j === i ? n : old)))} />)}</>;
 }

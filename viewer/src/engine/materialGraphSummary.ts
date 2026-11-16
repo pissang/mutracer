@@ -1,5 +1,5 @@
 import { MaterialGraph, Texture, type MaterialGraphNode, type MaterialGraphTerminal } from '@meimu/mutracer';
-import { terminalAliases } from '../../../src/renderer/materialGraph/nodes';
+import { terminalAliases, terminalTypes } from '../../../src/renderer/materialGraph/nodes';
 
 /** A surface input driven by the graph. */
 export interface GraphInputSummary {
@@ -98,4 +98,78 @@ export function disconnectGraphInput(graph: MaterialGraph, terminal: string): Ma
 /** A copy of the graph with one input replaced; a parameter edit when the input type is unchanged. */
 export function withGraphInput(graph: MaterialGraph, node: string, port: string, value: Texture) {
   return new MaterialGraph({ nodes: graph.nodes, terminal: graph.terminal }).setInput(node, port, { type: 'filename', value });
+}
+
+/** An editable constant input of a graph node. */
+export interface GraphParameterSummary {
+  node: string;
+  port: string;
+  type: 'float' | 'integer' | 'boolean' | 'color3' | 'color4' | 'vector2' | 'vector3' | 'vector4';
+  value: number | boolean | readonly number[];
+  /** Author's name for a MaterialX interface input; absent for other node inputs. */
+  label?: string;
+  /** Canonical names of the surface inputs this value reaches, in terminal order. */
+  affects: string[];
+}
+
+export interface GraphParameterList {
+  /** `authored`: the inputs the MaterialX author exposed. `ranked`: the most relevant node inputs. */
+  source: 'authored' | 'ranked';
+  /** Parameters to show first: every authored one, or at most `limit` ranked ones. */
+  primary: GraphParameterSummary[];
+  /** The remaining ranked parameters. */
+  more: GraphParameterSummary[];
+}
+
+const PARAMETER_TYPES = new Set<string>(['float', 'integer', 'boolean', 'color3', 'color4', 'vector2', 'vector3', 'vector4']);
+// Interface constants made by the MaterialX importer; see `INTERFACE_SEGMENT` in materialxGraph.ts.
+const isInterface = (node: MaterialGraphNode) => node.category === 'constant' && node.id.includes('/interface/');
+// Plumbing whose literals select channels or convert types rather than shape the look.
+const PLUMBING = new Set(['extract', 'convert', 'dot', 'swizzle', 'combine2', 'combine3', 'combine4', 'separate2', 'separate3', 'separate4']);
+// Nodes the importer adds to map a surface onto OpenPBR, other than authored surface constants.
+const generated = (id: string) => id.startsWith('surface/') && !id.startsWith('surface/value/') || /\/(extract\d|channels|decode|bias|cross|bitangent)$/.test(id);
+
+/**
+ * Editable values of a graph. Graphs imported from MaterialX nodegraphs list
+ * the inputs their author exposed. Other graphs list authored numeric, boolean
+ * and color inputs of the nodes the surface reaches, without type and channel
+ * plumbing, ranked by surface constants, then colors, then graph order, and
+ * keep at most `limit` in `primary`.
+ */
+export function graphParameters(graph: MaterialGraph, limit = 10): GraphParameterList {
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const order = new Set<string>();
+  const affects = new Map<string, string[]>();
+  for (const [terminal, edge] of Object.entries(graph.terminal)) {
+    if (!edge) continue;
+    const key = terminalAliases[terminal] ?? terminal;
+    for (const id of upstream(nodes, edge.node)) {
+      order.add(id);
+      const list = affects.get(id) ?? [];
+      if (!list.includes(key)) affects.set(id, [...list, key]);
+    }
+  }
+  const terminals = Object.keys(terminalTypes);
+  for (const [id, list] of affects) affects.set(id, list.sort((a, b) => (terminals.indexOf(a) >>> 0) - (terminals.indexOf(b) >>> 0)));
+  const reached = [...order].map(id => nodes.get(id)).filter(node => !!node);
+  // Authored parameters keep their declaration order.
+  const authored = graph.nodes.filter(node => order.has(node.id) && isInterface(node));
+  if (authored.length) {
+    return { source: 'authored', more: [], primary: authored.flatMap(node => {
+      const input = node.inputs?.value;
+      if (!input || input.connection || input.value === undefined || !PARAMETER_TYPES.has(input.type)) return [];
+      return [{ node: node.id, port: 'value', type: input.type as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'],
+        label: node.id.slice(node.id.lastIndexOf('/') + 1), affects: affects.get(node.id) ?? [] }];
+    }) };
+  }
+  const candidates = reached.flatMap(node => {
+    if (PLUMBING.has(node.category) || generated(node.id)) return [];
+    return Object.entries(node.inputs ?? {}).flatMap(([port, input]): GraphParameterSummary[] => {
+      if (input.connection || input.value === undefined || input.value instanceof Texture || !PARAMETER_TYPES.has(input.type) || input.type === 'integer') return [];
+      return [{ node: node.id, port, type: input.type as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'], affects: affects.get(node.id) ?? [] }];
+    });
+  });
+  const rank = (param: GraphParameterSummary) => param.node.startsWith('surface/value/') ? 0 : param.type.startsWith('color') ? 1 : 2;
+  const ranked = candidates.map((param, index) => ({ param, index })).sort((a, b) => rank(a.param) - rank(b.param) || a.index - b.index).map(item => item.param);
+  return { source: 'ranked', primary: ranked.slice(0, limit), more: ranked.slice(limit) };
 }

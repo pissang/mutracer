@@ -598,6 +598,8 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .graph-link__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .graph-link__label { color: var(--cv-text); font-size: 10.5px; white-space: nowrap; }
 .graph-link__source { min-width: 0; overflow: hidden; color: var(--cv-text-3); font: 10px var(--cv-mono); white-space: nowrap; text-overflow: ellipsis; text-align: right; }
+.graph-param { display: grid; gap: 3px; }
+.graph-param__affects { min-width: 0; overflow: hidden; padding: 0 4px; color: var(--cv-text-3); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
 .graph-use { flex: none; height: 22px; padding: 0 8px; border-radius: 6px; color: var(--cv-text-2); font-size: 10px; font-weight: 500; white-space: nowrap;
   background: rgb(255 255 255 / 0.06); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1); cursor: pointer; }
 .graph-use:hover { color: var(--cv-text); background: rgb(255 255 255 / 0.1); }

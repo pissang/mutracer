@@ -233,7 +233,7 @@ describe('MaterialX export', () => {
 
   it('round-trips an edited graph, and writes images with their names and color spaces', () => {
     const imported = graphOf('cobblestone');
-    let graph = setParameter(imported.graph!, imported.graph!.nodes[0].id, 'index', 1);
+    let graph = setParameter(imported.graph!, imported.graph!.nodes.find(node => node.category === 'texcoord')!.id, 'index', 1);
     const added = addNode(graph, 'noise3d');
     graph = connect(added.graph, { node: added.id }, { terminal: 'baseMetalness' });
     const again = parseMaterialXGraph(exportMaterialX(graph, imported.values, 'Edited / stone').text);

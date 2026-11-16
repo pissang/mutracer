@@ -23,6 +23,11 @@ const inactiveImageInputs = materialXInactiveImageInputs;
 // Unsupported surface inputs that match the default shading frame.
 const defaultFrame:Record<string,string>={coatNormal:'normal',tangent:'tangent'};
 const path=(e:Element):string=>e.parent&&e.parent.tag!=='materialx'?`${path(e.parent)}/${e.attrs.name??e.tag}`:e.attrs.name??e.tag;
+// Interface inputs that can drive any port through a connection; filenames,
+// strings and integers stay literal because some nodes need them uniform.
+const PARAMETER_TYPES=new Set(['float','boolean','color3','color4','vector2','vector3','vector4']);
+/** Path segment that marks constant nodes made from MaterialX nodegraph interface inputs. */
+export const INTERFACE_SEGMENT='interface';
 interface Context {prefix?:string;interfaces?:Record<string,Input>;cache:Map<Element,string>}
 /** Viewer-only XML adapter. Unknown graph nodes remain authored nodes so the
  * library reports its normal located diagnostics and fallback. */
@@ -31,6 +36,7 @@ class Reader {
     uniformValues:MaterialValues={};
     images=new Map<string,{file:string;srgb:boolean;wrapS?:'repeat'|'clamp-to-edge'|'mirrored-repeat';wrapT?:'repeat'|'clamp-to-edge'|'mirrored-repeat'}>();
     private context:Context={cache:new Map()};
+    private parameters=new Map<Element,string>();
     constructor(readonly root:Element){}
     find(e:Element,name:string):Element|undefined {
         for(let scope:Element|null=e;scope;scope=scope.parent){const found=child(scope,name);if(found)return found;}
@@ -57,7 +63,9 @@ class Reader {
         if(a.interfacename){
             if(ctx.interfaces)return ctx.interfaces[a.interfacename]??fallback;
             let scope:Element|null=e.parent;while(scope&&scope.tag!=='nodegraph')scope=scope.parent;
-            return this.resolve(scope?input(scope,a.interfacename):undefined,fallback,ctx);
+            const port=scope?input(scope,a.interfacename):undefined;
+            return port&&PARAMETER_TYPES.has(port.attrs.type)&&port.attrs.value!==undefined&&!port.attrs.nodename&&!port.attrs.nodegraph
+                ?{type:port.attrs.type as Type,connection:{node:this.parameter(scope!,port,fallback)}}:this.resolve(port,fallback,ctx);
         }
         if(a.nodegraph){
             const graph=child(this.root,a.nodegraph),output=graph?.children.find(c=>c.tag==='output'&&(!a.output||c.attrs.name===a.output));
@@ -83,6 +91,24 @@ class Reader {
             return literal(type,width(type)===1?nums[0]:nums);
         }
         return fallback;
+    }
+    /** One constant node per authored nodegraph interface input, shared by every
+     * node that reads it, so editing it changes all of them. The ID ends with the
+     * input's `uiname`, which the material panel shows. */
+    private parameter(scope:Element,port:Element,fallback:Input):string {
+        const prior=this.parameters.get(port);if(prior)return prior;
+        // Declare the scope's parameters in authored order; unused ones stay unreachable.
+        if(!this.parameters.has(scope)){
+            this.parameters.set(scope,'');
+            for(const e of scope.children)if(e.tag==='input'&&PARAMETER_TYPES.has(e.attrs.type)&&e.attrs.value!==undefined&&!e.attrs.nodename&&!e.attrs.nodegraph)this.parameter(scope,e,{type:e.attrs.type as Type});
+            if(this.parameters.has(port))return this.parameters.get(port)!;
+        }
+        const base=`${path(scope)}/${INTERFACE_SEGMENT}/`,label=port.attrs.uiname?.replace(/\//g,' ').trim();
+        let id=base+(label||port.attrs.name);
+        if(this.nodes.some(n=>n.id===id))id=base+port.attrs.name;
+        this.parameters.set(port,id);
+        this.nodes.push({id,category:'constant',type:port.attrs.type as Type,inputs:{value:this.resolve(port,fallback)}});
+        return id;
     }
     private missing(name:string,type:Type):Input {
         const id=`missing/${name}`;
@@ -252,6 +278,8 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
     const r=new Reader(root),surface=input(material,'surfaceshader'),shader=surface?.attrs.nodename?r.find(root,surface.attrs.nodename):undefined;if(!shader)throw Error('No surface shader found');
     const defaults=new OpenPBRMaterial();
     const authored=r.terminals(shader),terminal:Record<string,Edge>={},values:MaterialValues={...r.uniformValues},warnings:string[]=[];
+    // Folded inputs that read authored parameters; kept connected when the material has a graph anyway.
+    const parameterized=new Map<string,Edge>();
     for(const [name,a] of Object.entries(authored)){
         const port=terminalAliases[name]??name,type=terminalTypes[port]??a.type;
         let edge=a.connection;
@@ -267,6 +295,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
         if(!normalized.diagnostics.length&&!dynamic&&canStore&&port!=='normal'){
             const folded=evaluateGraph(normalized)[probe??port];
             (values as Record<string,unknown>)[property]=a.type==='boolean'?Boolean(folded[0]):width(a.type)===1?folded[0]:folded;
+            if(port in terminalTypes&&normalized.nodes.some(n=>n.id.includes(`/${INTERFACE_SEGMENT}/`)))parameterized.set(port,edge);
         }else if(inactive(r.nodes,port,edge)){
             // An unsupported input left at zero, or at the default frame, has no effect.
         }else terminal[port]=edge;
@@ -274,6 +303,7 @@ export function parseMaterialXGraph(text:string,materialName?:string):MaterialXG
     // OpenPBR/Standard Surface multiply subsurface by its weight. A texture
     // on that inactive lobe is not an unsupported shading dependency.
     for(const [weight,ports] of Object.entries(materialXInactiveLobes))if((values as Record<string,unknown>)[weight]===0&&!terminal[weight])for(const port of ports)delete terminal[port];
+    if(Object.keys(terminal).length)for(const [port,edge] of parameterized)terminal[port]??=edge;
     const graph=Object.keys(terminal).length?new MaterialGraph({nodes:r.nodes,terminal}):undefined;
     if(graph){
         const state=new OpenPBRMaterial();Object.assign(state,values);state.graph=graph;
