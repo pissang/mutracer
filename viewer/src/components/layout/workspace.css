@@ -1,23 +1,32 @@
 /* Desktop workspace: tabsets are the viewer's panels; separators are the gaps between them (width mirrored by `GAP` in workspaceModel.ts). */
-.ws { height: 100%; min-height: 0; }
+.ws { --ws-tab-radius: 5px; height: 100%; min-height: 0; }
 .ws-tabset { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden;
   border-radius: var(--cv-radius-panel); background: var(--cv-panel); }
-.ws-header { display: flex; align-items: stretch; gap: 4px; height: 30px; flex: none; padding: 0 4px 0 0;
-  border-bottom: 1px solid var(--cv-divider-subtle); background: var(--cv-tabstrip); }
-.ws-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.ws-tab { position: relative; display: flex; flex: none; align-items: center; gap: 6px; padding: 0 10px;
-  color: var(--cv-text-3); font-size: 11px; font-weight: 500; white-space: nowrap; cursor: default; user-select: none; outline: none; }
-.ws-tab + .ws-tab::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 1px; background: var(--cv-divider-subtle); }
-.ws-tab > svg { width: 13px; height: 13px; color: var(--cv-text-4); }
+/* Tabs sit on a darker strip; the selected tab takes the panel color and joins the panel below it,
+   with brighter text in the focused tabset. The strip has no bottom border, so nothing separates the
+   selected tab from its panel. */
+.ws-header { display: flex; align-items: stretch; gap: 4px; height: 28px; flex: none; padding: 0 4px 0 0;
+  background: var(--cv-tabstrip); }
+/* The inline padding leaves room for the selected tab's outer corners inside the scroll clip. */
+.ws-tabs { display: flex; flex: 1; align-items: flex-end; min-width: 0; padding: 0 6px; overflow-x: auto; scrollbar-width: none; }
+.ws-tab { position: relative; display: flex; flex: none; align-items: center; gap: 6px; height: 26px; padding: 0 9px;
+  border-radius: var(--cv-radius-panel) var(--cv-radius-panel) 0 0; color: var(--cv-text-3); font-size: 11px; font-weight: 500;
+  white-space: nowrap; cursor: default; user-select: none; outline: none; transition: background 120ms, color 120ms; }
+.ws-tab > svg { width: 13px; height: 13px; color: var(--cv-text-4); transition: color 120ms; }
 .ws-tab:hover { color: var(--cv-text-2); }
 .ws-tab:focus-visible { outline: 2px solid var(--cv-focus); outline-offset: -2px; }
-.ws-tab[data-tab-selected] { margin-bottom: -1px; background: var(--cv-panel); color: var(--cv-text); box-shadow: inset 0 2px var(--cv-text-3); }
-.ws-tab[data-tab-selected]::before, .ws-tab[data-tab-selected] + .ws-tab::before { display: none; }
-.ws-tabset[data-tabset-active] .ws-tab[data-tab-selected] { box-shadow: inset 0 2px var(--cv-active); }
-.ws-tab[data-tab-selected] > svg { color: var(--cv-text-2); }
-.ws-tab__close { display: grid; place-items: center; width: 16px; height: 16px; margin-right: -4px; padding: 0; border: 0; border-radius: 4px;
-  background: none; color: var(--cv-text-4); cursor: pointer; }
-.ws-tab__close:hover { background: var(--cv-control-hover); color: var(--cv-text); }
+.ws-tab[data-tab-selected] { background: var(--cv-panel); color: var(--cv-text-2); box-shadow: inset 0 1px rgb(255 255 255 / 0.05); }
+.ws-tab[data-tab-selected] > svg { color: var(--cv-text-3); }
+/* Concave corners where the selected tab meets the panel. */
+.ws-tab[data-tab-selected]::before, .ws-tab[data-tab-selected]::after { content: ''; position: absolute; bottom: 0; width: var(--ws-tab-radius); height: var(--ws-tab-radius); pointer-events: none; }
+.ws-tab[data-tab-selected]::before { right: 100%; background: radial-gradient(circle at 0 0, transparent calc(var(--ws-tab-radius) - 0.5px), var(--cv-panel) var(--ws-tab-radius)); }
+.ws-tab[data-tab-selected]::after { left: 100%; background: radial-gradient(circle at 100% 0, transparent calc(var(--ws-tab-radius) - 0.5px), var(--cv-panel) var(--ws-tab-radius)); }
+.ws-tabset[data-tabset-active] .ws-tab[data-tab-selected] { color: var(--cv-active-text); box-shadow: inset 0 1px rgb(255 255 255 / 0.1); }
+.ws-tabset[data-tabset-active] .ws-tab[data-tab-selected] > svg { color: var(--cv-text-2); }
+.ws-tab__close { display: grid; place-items: center; width: 16px; height: 16px; margin-right: -5px; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--cv-text-4); cursor: pointer; opacity: 0; transition: opacity 120ms; }
+.ws-tab:is(:hover, :focus-visible, [data-tab-selected]) .ws-tab__close { opacity: 1; }
+.ws-tab__close:hover { background: rgb(255 255 255 / 0.08); color: var(--cv-text); }
 .ws-panels { position: relative; flex: 1; min-height: 0; }
 .ws-panels [data-tab-content] { height: 100%; }
 .ws-panels [data-tab-content] > .panel { height: 100%; border-radius: 0; background: none; }
@@ -35,9 +44,9 @@
 
 /* Collapsed tabsets become a strip of icons along their split. */
 .ws-tabset[data-tabset-collapsed] .ws-header { flex-direction: column; height: 100%; padding: 4px; border: 0; background: none; }
-.ws-tabset[data-tabset-collapsed] .ws-tabs { flex-direction: column; overflow: visible; }
+.ws-tabset[data-tabset-collapsed] .ws-tabs { flex-direction: column; align-items: center; padding: 0; overflow: visible; }
+.ws-tabset[data-tabset-collapsed] .ws-tab::before, .ws-tabset[data-tabset-collapsed] .ws-tab::after { display: none; }
 .ws-tabset[data-tabset-collapsed] .ws-tab { justify-content: center; width: 30px; height: 30px; margin: 0; padding: 0; border-radius: var(--cv-radius-compact); background: none; box-shadow: none; }
-.ws-tabset[data-tabset-collapsed] .ws-tab::before { display: none; }
 .ws-tabset[data-tabset-collapsed] .ws-tab:hover { background: rgb(255 255 255 / 0.04); }
 .ws-tabset[data-tabset-collapsed] :is(.ws-tab__title, .ws-tab__close) { display: none; }
 
