@@ -315,9 +315,10 @@ The signature rules and existing runtime vertex layout apply to Metal as well as
 D3D12. The D3D12-only decoder, shared surface/opacity loop and texture-slot loop
 are gated through `graphCompilerBackend()`. No resolved-material, BSDF,
 surface-interaction, path or host buffer layout changes. Metal keeps its decoder
-and graph evaluation shape; the changed eager scheduling and widened signature
-capacities have not been timed on Mac. Vulkan keeps static vertex offsets until
-it is measured.
+and graph evaluation shape. On an M4 Max the widened signature raised the cold
+universal compile from about 4.7 s to 7.2 s, with unchanged sampling cost; in the
+viewer the variant became ready about 0.9 s later despite the earlier start.
+Vulkan keeps static vertex offsets until it is measured.
 
 Parameter, transform and visibility edits never recompile: parameters are
 material records, and tier decisions stay fixed per structure set.
