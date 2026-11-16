@@ -58,7 +58,7 @@ describe('editing shader prefetch', () => {
       expect(request.constants.NUM_MAPS).toBe(EDITING_MAP_CAPACITY);
       expect(request.constants.LIGHT_CAPABILITIES).toBe(ALL_LIGHT_SHADER_CAPABILITIES);
       expect(request.constants.HAS_SHADOW_CATCHER).toBe(true);
-      expect(request.constants.HAS_BEVEL).toBe(true);
+      expect(request.constants.HAS_BEVEL).toBe(false);
       // Calibration can exceed the budget while this request is still compiling.
       pass.graphs.calibration.override = 20;
       expect(trace()).toBe('waiting');
@@ -67,7 +67,7 @@ describe('editing shader prefetch', () => {
       await complete(); trace();
       Object.assign(pass._constants, {NUM_MAPS: 220, TLAS_STACK_SIZE: 32, BLAS_STACK_SIZE: 64,
         HAS_THIN_FILM: true, USE_ENVMAP: true, LIGHT_CAPABILITIES: 127, NUM_DIFFUSE_MAPS: 100,
-        NUM_UDIM_MAPS: 7, USE_UDIM_MAPS: true, USE_MATERIALX_NORMAL_MAPS: true, HAS_SHADOW_CATCHER: true, HAS_BEVEL: true,
+        NUM_UDIM_MAPS: 7, USE_UDIM_MAPS: true, USE_MATERIALX_NORMAL_MAPS: true, HAS_SHADOW_CATCHER: true, HAS_BEVEL: false,
         MATERIALINDEX_OFF: 9000, NORMAL_FLOAT: true, HAS_VERTEX_TANGENT: true});
       pass._preparedMeshData = {geometry: {tangent: {}}};
       pass._hasDisplacement = true;
@@ -78,6 +78,48 @@ describe('editing shader prefetch', () => {
       pass.startEditingPrefetch();
       expect(compile).toHaveBeenCalledTimes(2);
     } finally { setMaterialGraphPlanner(); }
+  });
+
+  it.each(['d3d12', 'metal'] as const)('compiles a compatible editing variant when bevel first appears (%s)', async compileBackend => {
+    setMaterialGraphPlanner({compileBackend});
+    try {
+      const {pass, trace, complete, compile} = fixture('editing', true, false);
+      pass.startEditingPrefetch(); trace(); await complete(); trace();
+      const original = pass._editingRequest;
+      expect(pass._traceVariants.get(original.signature).status).toBe('ready');
+      pass.graphs.calibration.override = 20;
+      pass._constants.HAS_BEVEL = true;
+      expect(trace()).toBe('waiting');
+      const bevel = pass._editingRequest;
+      expect(bevel.signature).not.toBe(original.signature);
+      expect(bevel.constants.HAS_BEVEL).toBe(true);
+      for (let frame = 0; frame < 4; frame++) { await complete(); trace(); }
+      expect(trace()).toBe('sampling');
+      expect(pass._traceVariants.get(bevel.signature).status).toBe('ready');
+      const count = compile.mock.calls.length;
+      pass._constants.HAS_BEVEL = false;
+      expect(trace()).toBe('sampling');
+      expect(pass._editingRequest.signature).toBe(original.signature);
+      expect(compile).toHaveBeenCalledTimes(count);
+    } finally {setMaterialGraphPlanner();}
+  });
+
+  it('does not install a pending kernel with missing bevel support', async () => {
+    setMaterialGraphPlanner({compileBackend: 'd3d12'});
+    try {
+      const {pass, trace, complete} = fixture('editing', true, false);
+      pass.startEditingPrefetch(); trace();
+      const old = pass._editingRequest;
+      pass._constants.HAS_BEVEL = true;
+      expect(trace()).toBe('waiting');
+      const bevel = pass._editingRequest;
+      pass.graphs.calibration.override = 20;
+      expect(bevel.signature).not.toBe(old.signature);
+      for (let frame = 0; frame < 6; frame++) { await complete(); trace(); }
+      expect(trace()).toBe('sampling');
+      expect(pass._traceVariants.get(bevel.signature).status).toBe('ready');
+      expect(JSON.parse(pass._activeVariant.structureKey).constants).toContainEqual(['HAS_BEVEL', true]);
+    } finally {setMaterialGraphPlanner();}
   });
 
   it('uses a different request when atlas capacity or transport/geometry support is exceeded', async () => {

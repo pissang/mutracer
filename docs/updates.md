@@ -235,7 +235,9 @@ accumulation.
 
 The common D3D12/Metal variant reserves 256 atlas metadata entries and
 supports shadow catchers and the default BVH2 geometry layout, including generated
-vertex tangents, material bevel and both normal formats. Atlas capacities round
+vertex tangents and both normal formats. First use of material bevel compiles
+a compatible editing variant in the background; rendering waits for a shader
+that supports it. Returning to an already prepared bevel combination reuses it. Atlas capacities round
 up in tens, so more than 250 entries or other BVH layouts can need another
 editing variant. Dispersion, caustics, sampling
 pattern, bevel sample count, alpha-blend strategy or a texture-binding fallback

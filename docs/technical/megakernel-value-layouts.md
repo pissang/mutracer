@@ -37,6 +37,20 @@ that type in declarations only because the current reflection dependency reports
 zero-sized non-host-shareable booleans. See the
 [WGSL layout rules](https://gpuweb.github.io/gpuweb/wgsl/#alignment-and-size).
 
+## Editing continuation storage
+
+Unified editing queries retain the existing value layouts above. Their private
+`MaterialQueryState` contains the original face normal, facing cosine, shading
+normal, medium-event flag and prepared BSDF: 768 bytes with the tangent/coat
+profile. A two-element indexed array occupies 1536 WGSL bytes. Only this material
+continuation is indexed; `PendingSceneQuery` and `CatcherQueryState` are 80 and
+16 bytes, and no second surface interaction or suspended traversal is retained.
+`editingQueries.test.ts` pins these layouts and binding compatibility. Compare
+real-GPU editing and direct output with `npm run test:editing-queries` before
+changing their lifetime or representation, and record timestamp benchmarks
+separately for the edited scenes.
+WGSL allocation sizes do not establish actual GPU registers, spills or occupancy.
+
 ## Compiler sensitivity and measured headroom
 
 On Apple M4 Max / Chrome Metal, one leading boolean added to either resolved

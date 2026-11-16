@@ -1,3 +1,4 @@
+import {queryState} from './queryPoints.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -5,7 +6,10 @@
 // Estimate the direct lighting integral using multiple importance sampling
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
-export default /*wgsl*/ `
+export function createSampleShadowCatcherWgsl(queryPoints = false) {
+  const state = queryState(queryPoints, 'CatcherQueryState', 'catcherQueryState', {counts: 'vec2f', candidate: 'u32'});
+  const {counts, candidate} = state.refs;
+  return state.declarations + /*wgsl*/ `
 
 // A one-sample binary shadow test leaves scattered fully dark pixels far
 // from the occluder at low sample counts. Averaging a few light samples per
@@ -17,16 +21,16 @@ const SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
 // all samples; samples that carry no light, such as those from below the
 // receiver, do not dilute it. Weighting by Le * cos / pdf instead is unbiased
 // but noisier, because the environment CDF dilates bright texels.
-fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>) -> vec2f {
+fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>${queryPoints ? ', resume: bool' : ''}) -> vec2f {
   let viewDir = -(*path).ray.d;
-  var counts = vec2f(0.0);
-
+${queryPoints ? '  if (!resume) {\n' : ''}  ${state.init('counts', 'vec2f(0.0)')}
+${queryPoints ? `${state.init('candidate', '0u')} } var resumed = resume;\n` : ''}
   // The catcher table holds only the environment and analytic lights, as in
   // WebGL 2: emissive meshes are scene objects, not light in the plate.
   if (rtUniform.shadowCatcherChoiceCount > 0) {
-    for (var candidate = 0u; candidate < SHADOW_CATCHER_LIGHT_SAMPLES; candidate++) {
-      var lightSample: LightSampleRec;
-      let lightRnd = vec3f(sample2D(lightDim(candidate, 1u)), sample1D(lightDim(candidate, 0u)));
+    for (${queryPoints ? '' : 'var candidate = 0u'}; ${candidate} < SHADOW_CATCHER_LIGHT_SAMPLES; ${candidate}++) {
+${queryPoints ? '      if (!resumed) {\n' : ''}      var lightSample: LightSampleRec;
+      let lightRnd = vec3f(sample2D(lightDim(${candidate}, 1u)), sample1D(lightDim(${candidate}, 0u)));
       sampleLightChoiceTable(
         si.position,
         lightRnd,
@@ -42,13 +46,24 @@ fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, 
         if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
           var ray: Ray;
           initRay(&ray, si.position + EPS * lightDir, lightDir);
-          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex,si.instanceIndex);
-          counts += vec2f(select(0.0, 1.0, occluded), 1.0);
+${queryPoints ? /* wgsl */ `          requestSceneVisibility(ray, lightSample.dist - EPS, si.triangleIndex, si.instanceIndex, 2);
+          return ${counts};
         }
       }
+      continue;
+      }
+      resumed = false;
+      let occluded = pendingSceneQuery.occluded;
+` : /* wgsl */ `          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex,si.instanceIndex);
+`}          ${counts} += vec2f(select(0.0, 1.0, occluded), 1.0);
+${queryPoints ? '' : '        }\n      }'}
     }
   }
   (*path).fromEye = false;
-  return counts;
+  return ${counts};
 }
 `;
+
+}
+
+export default createSampleShadowCatcherWgsl();
