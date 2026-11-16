@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Download, FileUp, ImagePlus, MousePointerClick, RotateCcw, Workflow, X } from 'lucide-react';
 import type { MaterialGraphDiagnostic } from '@meimu/mutracer';
 import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
@@ -21,6 +21,8 @@ let lastPresetCategory: MaterialPresetCategory = 'basic';
 export function MaterialPanel() {
   const material = useViewer((s) => s.material);
   const [presetCategory, setPresetCategory] = useState(lastPresetCategory);
+  const [materialXExpanded, setMaterialXExpanded] = useState(false);
+  const presetGridId = useId();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const materialBrowsing = useViewer((s) => s.ui.materialBrowser);
@@ -95,8 +97,8 @@ export function MaterialPanel() {
         <Segmented label="Preset category" value={presetCategory}
           options={MATERIALX_IMPORT ? MATERIAL_PRESET_CATEGORIES : MATERIAL_PRESET_CATEGORIES.filter((c) => c.value !== 'materialx')}
           onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
-        <div className="preset-grid" aria-label="Material presets">
-          {presetCategory === 'materialx' ? MATERIALX_SAMPLES.map((sample) => (
+        <div id={presetGridId} className="preset-grid" aria-label="Material presets">
+          {presetCategory === 'materialx' ? (materialXExpanded ? MATERIALX_SAMPLES : MATERIALX_SAMPLES.slice(0, 12)).map((sample) => (
             <button key={sample.id} className="preset" title={`Import ${sample.label} MaterialX`}
               onClick={() => getEngine()?.importMaterialX(material.id, materialXSampleFiles(sample))}>
               <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
@@ -107,6 +109,12 @@ export function MaterialPanel() {
             </button>
           ))}
         </div>
+        {presetCategory === 'materialx' && MATERIALX_SAMPLES.length > 12 &&
+          <button className="btn" aria-expanded={materialXExpanded} aria-controls={presetGridId}
+            onClick={() => setMaterialXExpanded((expanded) => !expanded)}>
+            {materialXExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {materialXExpanded ? 'Show less' : 'Show more'}
+          </button>}
       </div>
       <div className="tex-browse hide-m">
         <button className="btn" aria-pressed={browsing} data-on={browsing || undefined}
