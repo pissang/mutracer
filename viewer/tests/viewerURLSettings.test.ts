@@ -105,11 +105,11 @@ describe('viewer URL settings', () => {
   });
 
   it('retains explicit defaults and the model when first normalizing an incoming query', async () => {
-    vi.stubGlobal('location', new URL('https://viewer.example.com/viewer/?hdrOutputEnabled=false&maxSamples=64#model=dragon'));
+    vi.stubGlobal('location', new URL('https://viewer.example.com/viewer/?hdrOutputEnabled=false&maxSamples=64#model=crystal-lens'));
     const { useViewer, writeHash, hashModelPreset } = await import('../src/store');
     writeHash(useViewer.getState().settings, hashModelPreset());
     expect(location.hash).toContain('hdrOutputEnabled=false');
     expect(location.hash).toContain('maxSamples=64');
-    expect(hashModelPreset()).toBe('dragon');
+    expect(hashModelPreset()).toBe('crystal-lens');
   });
 });

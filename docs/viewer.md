@@ -58,12 +58,12 @@ https://mutracer.meimu-studio.com/viewer/?hdrOutputEnabled=true
 Combine settings with `&`, and use `#model=…` to choose an example:
 
 ```text
-https://mutracer.meimu-studio.com/viewer/?hdrOutputEnabled=true&maxSamples=128#model=dragon
+https://mutracer.meimu-studio.com/viewer/?hdrOutputEnabled=true&maxSamples=128#model=crystal-lens
 ```
 
 The viewer updates the URL as lighting, render and display settings change.
 Copy the address bar to share those settings and the selected example model.
-Settings also work in the hash, such as `#model=dragon&hdrOutputEnabled=true`.
+Settings also work in the hash, such as `#model=crystal-lens&hdrOutputEnabled=true`.
 A link with only `#model=…` opens the example with its own render settings, as
 the Examples menu does. Settings in a link win over the example's.
 
