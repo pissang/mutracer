@@ -6,6 +6,9 @@ import {queryState} from './queryPoints.wgsl.js';
 // Estimate the direct lighting integral using multiple importance sampling
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
+/** Light samples per catcher receiver; each issues one visibility query. */
+export const SHADOW_CATCHER_LIGHT_SAMPLES = 4;
+
 export function createSampleShadowCatcherWgsl(queryPoints = false) {
   const state = queryState(queryPoints, 'CatcherQueryState', 'catcherQueryState', {counts: 'vec2f', candidate: 'u32'});
   const {counts, candidate} = state.refs;
@@ -14,7 +17,7 @@ export function createSampleShadowCatcherWgsl(queryPoints = false) {
 // A one-sample binary shadow test leaves scattered fully dark pixels far
 // from the occluder at low sample counts. Averaging a few light samples per
 // primary hit costs only shadow rays and lets the mask settle much sooner.
-const SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
+const SHADOW_CATCHER_LIGHT_SAMPLES = ${SHADOW_CATCHER_LIGHT_SAMPLES}u;
 
 // Returns the occluded and the total count of light samples that reach the
 // visible side of this hit. The shadow opacity is the ratio of their sums over

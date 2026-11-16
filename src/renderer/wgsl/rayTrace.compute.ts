@@ -28,7 +28,7 @@ import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
 import {spectrumWgsl} from '../spectrum.js';
 import {queryPointsWgsl} from './chunks/queryPoints.wgsl.js';
-import {createSampleShadowCatcherWgsl} from './chunks/sampleShadowCatcher.wgsl.js';
+import {createSampleShadowCatcherWgsl, SHADOW_CATCHER_LIGHT_SAMPLES} from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
@@ -120,6 +120,12 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
 } = options;
   const queryPoints = !!options.unifiedEditingQueries && spectral === false && !hasAlpha && blasLayoutMask === 1 &&
     compactVertices && sharedGraph && !!materialHooks.graph?.opacity && !enabled && !lightTracing && !photonMapping;
+  // A vertex runs its camera query and then each visibility query in one of
+  // eight stages (twice the runtime loop guard of four): one NEE ray, or the
+  // primary catcher's light samples. A query left pending would drop shading.
+  if (queryPoints && 1 + Math.max(1, SHADOW_CATCHER_LIGHT_SAMPLES) > 8) {
+    throw new Error('Unified editing queries: catcher light samples exceed the query stages');
+  }
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
