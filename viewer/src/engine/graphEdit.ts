@@ -46,23 +46,45 @@ export const PALETTE: PaletteEntry[] = materialGraphCategories
 export const defaultType = (types: readonly Type[]): Type =>
   types.includes('float') ? 'float' : types.includes('color3') ? 'color3' : types[0];
 
-/** Resolve a catalog overload in port order, retaining defaults for invalid authored types. */
-function nodeSignature(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): MaterialGraphNodeSignature | undefined {
-  let signatures = describeMaterialGraphNode(node.category)?.signatures.filter(s => s.type === node.type) ?? [];
-  for (const port of Object.keys(signatures[0]?.inputs ?? {})) {
-    const input = node.inputs?.[port];
-    const source = input?.connection && graph?.nodes.find(n => n.id === input.connection!.node);
-    const type = input?.type ?? (source && outputType(source, input?.connection?.output)) ?? signatures[0].inputs[port].types[0];
-    const matching = signatures.filter(s => s.inputs[port].types.includes(type));
-    if (matching.length) signatures = matching;
+const WIDTH: Partial<Record<Type, number>> = { float: 1, integer: 1, vector2: 2, color3: 3, vector3: 3, color4: 4, vector4: 4 };
+/** Whether a parameter value has the shape of a type, mirroring the engine's value inference. */
+const fits = (type: Type, value: Input['value']) =>
+  type === 'boolean' ? typeof value === 'boolean'
+    : type === 'string' ? typeof value === 'string'
+      : type === 'filename' ? typeof value === 'object' && !Array.isArray(value)
+        : WIDTH[type] === 1 ? typeof value === 'number' && (type !== 'integer' || Number.isInteger(value))
+          : Array.isArray(value) && value.length === WIDTH[type];
+
+/** Types fixed by an explicit type or a connected output. */
+function fixedTypes(node: Node, graph?: Pick<MaterialGraph, 'nodes'>) {
+  const types: Record<string, Type> = {};
+  for (const [port, input] of Object.entries(node.inputs ?? {})) {
+    const source = input.connection && graph?.nodes.find(n => n.id === input.connection!.node);
+    const type = input.type ?? (source && outputType(source, input.connection?.output));
+    if (type) types[port] = type;
   }
-  return signatures[0];
+  return types;
+}
+
+/** The catalog signature of the node's output type that accepts its fixed input types. */
+function nodeSignature(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): MaterialGraphNodeSignature | undefined {
+  const signatures = describeMaterialGraphNode(node.category)?.signatures.filter(s => s.type === node.type) ?? [];
+  const fixed = Object.entries(fixedTypes(node, graph));
+  return signatures.find(s => fixed.every(([port, type]) => s.inputs[port]?.some(option => option.type === type))) ?? signatures[0];
 }
 
 /** The node's inputs with their effective types and defaults; authored-only inputs for unknown categories. */
 export function nodePorts(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): Record<string, Input & {type: Type}> {
   const signature = nodeSignature(node, graph);
-  return signature ? Object.fromEntries(Object.entries(signature.inputs).map(([port, input]) => [port, {type: input.types[0], value: input.default}])) : Object.fromEntries(Object.entries(node.inputs ?? {}).map(([port, input]) => [port, {...input, type: input.type ?? node.type}]));
+  if (!signature) return Object.fromEntries(Object.entries(node.inputs ?? {}).map(([port, input]) => [port, {...input, type: input.type ?? node.type}]));
+  const fixed = fixedTypes(node, graph);
+  return Object.fromEntries(Object.entries(signature.inputs).map(([port, options]) => {
+    const value = node.inputs?.[port]?.value;
+    const accepted = options.some(o => o.type === fixed[port]) ? fixed[port] : undefined;
+    const type = accepted ?? (value === undefined || fits(options[0].type, value) ? options[0].type : options.find(option => fits(option.type, value))?.type ?? options[0].type);
+    const option = options.find(o => o.type === type) ?? options[0];
+    return [port, {type: option.type, value: option.default}];
+  }));
 }
 const outputType = (node: Node, port = 'out') => nodeSignature(node)?.outputs[port];
 /** Output port names of a node. */
@@ -351,8 +373,8 @@ export function setParameter(graph: MaterialGraph, id: string, port: string, val
     const inputs = { ...node.inputs };
     if (value === undefined) delete inputs[port];
     else {
-      const defaultInput = describeMaterialGraphNode(node.category)?.signatures.find(s => s.type === node.type)?.inputs[port];
-      inputs[port] = defaultInput?.types[0] === type ? {value} : {type, value};
+      const defaultType = nodeSignature(node, graph)?.inputs[port]?.[0]?.type;
+      inputs[port] = defaultType === type ? {value} : {type, value};
     }
     nodes.set(id, { ...node, inputs });
   });

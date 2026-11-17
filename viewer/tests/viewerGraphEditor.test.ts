@@ -111,7 +111,8 @@ describe('graph edits', () => {
       {id: 'dot', category: 'dotproduct', type: 'float'},
       {id: 'color', category: 'constant', type: 'color3', inputs: {value: {value: [.2, .4, .6]}}}
     ], terminal: {baseColor: {node: 'color'}}});
-    expect(connectionError(graph, {node: 'uv'}, {node: 'dot', port: 'in2'})).toMatch(/takes/);
+    expect(connectionError(graph, {node: 'uv'}, {node: 'dot', port: 'in2'})).toBeNull();
+    expect(connectionError(graph, {node: 'color'}, {node: 'dot', port: 'in2'})).toMatch(/takes/);
     graph.setInput('dot', 'in1', {connection: {node: 'uv'}});
     expect(nodePorts(graph.nodes[1], graph).in2.type).toBe('vector2');
     expect(connectionError(graph, {node: 'uv'}, {node: 'dot', port: 'in2'})).toBeNull();

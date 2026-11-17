@@ -114,7 +114,7 @@ class Reader {
     }
     private missing(name:string,type:Type):Input {
         const id=`missing/${name}`;
-        if(!this.nodes.some(n=>n.id===id))this.nodes.push({id,category:'missing_node' as Node['category'],type});
+        if(!this.nodes.some(n=>n.id===id))this.nodes.push({id,category:'missing_node',type});
         return {type,connection:{node:id}};
     }
     emit(e:Element,ctx=this.context):string {
@@ -138,7 +138,7 @@ class Reader {
         }else if(category==='swizzle'){
             this.swizzle(id,type,inputs.in,String(inputs.channels?.value??''));
         }else{
-            this.nodes.push({id,category:category as Node['category'],type,inputs});
+            this.nodes.push({id,category,type,inputs});
             if(inputs.file?.value){
                 const prefix=this.inherited(e,'fileprefix');
                 const colorspace=input(e,'file')?.attrs.colorspace??this.inherited(e,'colorspace');
@@ -157,7 +157,7 @@ class Reader {
     // connected vectors use extract/combine, scalar sources are replicated.
     // https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/source/MaterialXCore/Version.cpp
     private swizzle(id:string,type:Type,source:Input|undefined,channels:string){
-        if(!source){this.nodes.push({id,category:'invalid_swizzle' as Node['category'],type});return;}
+        if(!source){this.nodes.push({id,category:'invalid_swizzle',type});return;}
         const index=(c:string)=>'rgba'.includes(c)&&c!==''?'rgba'.indexOf(c):'xyzw'.includes(c)&&c!==''?'xyzw'.indexOf(c):-1;
         const n=width(type),sourceWidth=width(source.type);
         if(!source.connection&&source.value!==undefined){
@@ -179,7 +179,7 @@ class Reader {
     }
     private inherited(e:Element,key:string):string {for(let p:Element|null=e;p;p=p.parent)if(p.attrs[key])return p.attrs[key];return '';}
     add(type:Type,category:string,inputs:Record<string,Input>,name:string):Input {
-        const id=`surface/${name}`;this.nodes.push({id,type,category:category as Node['category'],inputs});return {type,connection:{node:id}};
+        const id=`surface/${name}`;this.nodes.push({id,type,category,inputs});return {type,connection:{node:id}};
     }
     terminals(shader:Element):Record<string,Input> {
         if(shader.tag==='standard_surface'){
