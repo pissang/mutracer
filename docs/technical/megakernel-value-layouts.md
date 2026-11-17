@@ -51,6 +51,17 @@ changing their lifetime or representation, and record timestamp benchmarks
 separately for the edited scenes.
 WGSL allocation sizes do not establish actual GPU registers, spills or occupancy.
 
+The unified RGB integrator also uses a two-element **function-local**
+`SurfaceInteraction` array, indexed at runtime through the guard value of four.
+Only slot zero is live under that contract. Its nominal 544 WGSL bytes replace a
+272-byte scalar local; the 26-member surface type, resolved material, prepared
+BSDF and path layouts remain unchanged. Traversal and shading receive the same
+slot, rather than keeping another active surface or a traversal cursor.
+`editingQueries.test.ts` compares the complete value definitions and bindings of
+both generated shapes, including bevel, displacement and production formatting.
+Use the editing/direct HDR and timestamp comparisons when changing this storage:
+less scalar promotion and fewer PHIs need not mean a smaller DXIL binary.
+
 ## Compiler sensitivity and measured headroom
 
 On Apple M4 Max / Chrome Metal, one leading boolean added to either resolved

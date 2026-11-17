@@ -46,6 +46,18 @@ describe('unified editing query generation', () => {
       });
     }
 
+    it.each([false, true])('preserves complete value contracts across query storage forms (displacement=%s)', displacement => {
+      const definitions = (unified: boolean) => makeShaderDataDefinitions(
+        generate(original, displacement, 50, unified, true).replace(/struct\s+\w+\s*\{[^}]*\}/g,
+          text => text.replace(/\bbool\b/g, 'u32')));
+      const direct = definitions(false), editing = definitions(true);
+      for (const name of ['SurfaceInteraction', 'OpenPbrResolvedMaterial', 'OpenPbrPreparedBsdf', 'Path']) {
+        expect(editing.structs[name], name).toEqual(direct.structs[name]);
+      }
+      expect(editing.uniforms).toEqual(direct.uniforms);
+      expect(editing.storages).toEqual(direct.storages);
+    });
+
     it.each([false, true].flatMap(unified => [0, 1, 20].map(max => ({unified, max}))))('respects host path-event bound $max (queries=$unified) without changing bindings', ({unified, max}) => {
         const compact = generate(stripped, true, max, unified);
         expect(makeShaderDataDefinitions(compact).entryPoints.main).toBeDefined();

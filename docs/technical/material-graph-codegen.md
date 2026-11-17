@@ -170,9 +170,35 @@ different bounces and serializes their shading work.
 `intersect.wgsl.ts` emits the ordinary BVH traversal with a runtime closest/any-hit
 mode. The triangle tests, PDM stepping and surface completion are shared with the
 direct templates. Shadow opacity stays inside that traversal, with one independent
-opacity interpreter. No BVH cursor or duplicate `SurfaceInteraction` is suspended
-across shading, and alpha rejection continues the original nested loops. Bevel
-uses its independent traversal only when the scene requires it.
+opacity interpreter. No BVH cursor is suspended across shading, and alpha
+rejection continues the original nested loops. Bevel uses its independent
+traversal only when the scene requires it.
+
+The common integrator keeps its live `SurfaceInteraction` in a two-element
+function array. The runtime index `(loopUnrollGuard - 4) & 1` is zero under the
+existing guard contract. References passed to traversal, material evaluation and
+shading name that same slot; the other slot does not carry another vertex.
+`primaryGuidesFor` supplies the selected reference to the existing guide template.
+Direct generation keeps its scalar local. This changes addressability and the
+loop-carried PHI graph, while retaining every value member and host layout. It
+spends 544 nominal WGSL bytes for this array instead of a 272-byte local; actual
+register and scratch allocation must be measured separately.
+
+Count compiled call chains rather than declarations in the complete WGSL module:
+its picking and AOV functions also contain BSDF calls but are not part of the
+main trace entry. The editing trace retains these sites:
+
+| Work | Main trace sites and cost |
+| --- | --- |
+| BSDF prepare / eval / direction sample | One each; no second optical graph to merge. |
+| Surface/emission graph interpreter | One shared site; shadow opacity retains its independent runner. |
+| Light choice | NEE and catcher keep their own sampling scopes. A shared service would carry the RIS reservoir and sampled light across extra continuations. |
+| Material texture filtering | One surface-slot loop; opacity, normal, displacement and light queries retain their required sampling contexts. |
+
+Reducing source calls does not by itself reduce compiler work. Local arrays and
+extra continuations can replace inlined instructions with address calculations,
+loads and PHIs, or move cost from DXC to pipeline creation. Compare the full cold
+pipeline and GPU timestamps for each shape, including the lean variant.
 
 `primaryGuides`, `completeVertex` and `shadeVertex` keep one arithmetic source.
 Query points change the surrounding control flow and explicitly name the saved

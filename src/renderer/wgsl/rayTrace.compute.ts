@@ -142,27 +142,33 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
     ...surfacePrefix, si: ['SurfaceInteraction', 'si'], ma: ['OpenPbrResolvedMaterial', 'ma'],
     aux: ['RayTraceAuxiliary', 'wavelengthAux']
   };
-  const primaryVariables = /* wgsl */ `
-  var si: SurfaceInteraction;
+  // Query loops retain one live vertex in a function array. The uniform index
+  // is zero for the guard value of four; its second slot keeps the value
+  // addressable across traversal and shading instead of expanding every field
+  // into loop-carried PHIs. Direct templates use their original locals.
+  const primaryVariablesFor = (interaction = 'si', storage = 'var si: SurfaceInteraction;') => /* wgsl */ `
+  ${storage}
   var ma: OpenPbrResolvedMaterial;
-  si.albedoSampled = false;
-  si.mediumType = 0;
-  si.mediumExtinction = vec3f(0.0);
-  si.mediumScattering = vec3f(0.0);
-  si.mediumAnisotropy = 0.0;
-  si.barycentrics = vec2f(0.0);
+  ${interaction}.albedoSampled = false;
+  ${interaction}.mediumType = 0;
+  ${interaction}.mediumExtinction = vec3f(0.0);
+  ${interaction}.mediumScattering = vec3f(0.0);
+  ${interaction}.mediumAnisotropy = 0.0;
+  ${interaction}.barycentrics = vec2f(0.0);
 
 `;
-  const primaryGuides = /* wgsl */ `${inputHooks?.primarySurface ?? ''}  if (${hasShadowCatcher ? /* wgsl */ `si.hit && ma.materialType == SHADOW_CATCHER` : /* wgsl */ `false`}) {
+  const primaryVariables = primaryVariablesFor();
+  const primaryInput = (interaction: string) => !inputHooks?.primarySurface ? '' : interaction === 'si' ? inputHooks.primarySurface : `\n  { var si = ${interaction};\n${inputHooks.primarySurface}\n    ${interaction} = si; }\n`;
+  const primaryGuidesFor = (interaction = 'si') => /* wgsl */ `${primaryInput(interaction)}  if (${hasShadowCatcher ? /* wgsl */ `${interaction}.hit && ma.materialType == SHADOW_CATCHER` : /* wgsl */ `false`}) {
     (*outAux).isShadowCatcher = true;
     // The composed denoising input includes this receiver's shadow. Supply
     // neutral reflectance and its shading normal, independent of visibility.
     (*outAux).albedo = vec3f(1.0);
-    (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
+    (*outAux).normal = select(${interaction}.normal, -${interaction}.normal, dot(${interaction}.normal, ray.d) > 0.0);
     var path: Path;
     path.ray = ray;
     path.fromEye = true;
-    (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path${queryPoints ? ', queryStage != 0u' : ''});
+    (*outAux).shadowCounts = sampleShadowCatcher(${interaction}, 0, &path${queryPoints ? ', queryStage != 0u' : ''});
 ${queryPoints ? '    if (pendingSceneQuery.pending) { continue; }\n' : ''}    // RGB stores primary catcher coverage. The shadow travels in the
     // auxiliary counts, out of reach of color clamping.
     return vec4f(1.0);
@@ -170,23 +176,23 @@ ${queryPoints ? '    if (pendingSceneQuery.pending) { continue; }\n' : ''}    //
   else {
     if (HAS_BEVEL && rtUniform.bevel != 0) {
       if (ma.bevel > 0.0) {
-        si.normal = getBevelNormal(si, ma.bevel);
+        ${interaction}.normal = getBevelNormal(${interaction}, ma.bevel);
       }
     }
 
     // Store a clean first-hit fallback. Glass retains this stable guide;
     // other delta paths may replace it at their first non-delta hit.
-    if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
+    if (${interaction}.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
       (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
       (*outAux).normal = select(
-        si.normal,
-        -si.normal,
-        dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0
+        ${interaction}.normal,
+        -${interaction}.normal,
+        dot(${interaction}.normal, ${interaction}.position - cameraUniform.viewInv[3].xyz) > 0.0
       );
 
       // Do not replace a glass guide with a randomly selected downstream
       // refraction/reflection hit; OIDN auxiliary features must stay clean.
-      si.albedoSampled = ma.transmissionWeight > 0.5;
+      ${interaction}.albedoSampled = ma.transmissionWeight > 0.5;
     }
 
     (*outAux).isShadowCatcher = false;
@@ -194,6 +200,8 @@ ${queryPoints ? '    if (pendingSceneQuery.pending) { continue; }\n' : ''}    //
 
   }
 `;
+  const primaryGuides = primaryGuidesFor();
+  const mainSi = queryPoints ? 'querySurfaces[(rtUniform.loopUnrollGuard - 4u) & 1u]' : 'si';
   const source = /* wgsl */ `
 
 ${commonWgsl}
@@ -870,7 +878,7 @@ ${primaryGuides}
   return vec4f(0.0);
 }
 ` : spectral === false && !deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
-${primaryVariables}
+${queryPoints ? primaryVariablesFor(mainSi, 'var querySurfaces: array<SurfaceInteraction, 2>;') : primaryVariables}
   var path: Path;
   path.ray = ray;
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
@@ -888,36 +896,36 @@ ${primaryVariables}
 ${queryPoints ? /* wgsl */ `
     pendingSceneQuery.ray = path.ray;
     pendingSceneQuery.maximum = RAY_MAX_DISTANCE;
-    pendingSceneQuery.triangle = si.triangleIndex;
-    pendingSceneQuery.instance = si.instanceIndex;
+    pendingSceneQuery.triangle = ${mainSi}.triangleIndex;
+    pendingSceneQuery.instance = ${mainSi}.instanceIndex;
     pendingSceneQuery.kind = 0;
     // Lanes finish each vertex together. A free-running phase switch lets
     // paths drift into different bounces and serializes their shading work.
     for (var queryStage = 0u; queryStage < rtUniform.loopUnrollGuard * 2u; queryStage++) {
       let shadow = queryStage != 0u;
-      pendingSceneQuery.occluded = intersectSceneQuery(pendingSceneQuery.ray, &si,
+      pendingSceneQuery.occluded = intersectSceneQuery(pendingSceneQuery.ray, &${mainSi},
         select(depth, 1, shadow), (event != 0) || shadow, !shadow && path.isNextRefraction,
         select(0, 1, shadow), pendingSceneQuery.maximum,
         pendingSceneQuery.triangle, pendingSceneQuery.instance);
       if (!shadow) {
-        mx_vertex(true, &ma, &si, select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored), si.hit & (event < eventLimit));
+        mx_vertex(true, &ma, &${mainSi}, select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored), ${mainSi}.hit & (event < eventLimit));
       }
       pendingSceneQuery.pending = false;
-${materialHooks.materialXNormals ? '      if (!shadow) { materialx_normal(&si); }' : ''}
+${materialHooks.materialXNormals ? `      if (!shadow) { materialx_normal(&${mainSi}); }` : ''}
       if (pendingSceneQuery.kind != 1) {
-` : /* wgsl */ `    ${sharedGraph ? materialQuery('true', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+` : /* wgsl */ `    ${sharedGraph ? materialQuery('true', `intersectScene(path.ray, &${mainSi}, depth, event != 0, path.isNextRefraction);`, '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, `${mainSi}.hit & (event < eventLimit)`) : `intersectScene(path.ray, &${mainSi}, depth, event != 0, path.isNextRefraction);
     ${materialCall('&ma', 'si', materialHooks)}`}
 `}
     if (event == 0) {
-${primaryGuides}
+${primaryGuidesFor(mainSi)}
       isNotTransparent = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99;
     } else {
-      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+      completeVertex(&path, &depth, &${mainSi}, &ma, sampleIgnored);
     }
     if (isNotTransparent && event > bounceLimit) { path.abort = true; }
     if (path.abort || event >= eventLimit) { ${queryPoints ? 'return vec4f(path.li, path.alpha);' : 'break;'} }
 ${queryPoints ? '      }' : ''}
-    shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored${queryPoints ? ', queryStage != 0u' : ''});
+    shadeVertex(uv, &path, &depth, &${mainSi}, &ma, outAux, &sampleIgnored${queryPoints ? ', queryStage != 0u' : ''});
 ${queryPoints ? '      if (pendingSceneQuery.pending) { continue; }' : ''}
     if (path.abort) { ${queryPoints ? 'return vec4f(path.li, path.alpha);' : 'break;'} }
 ${queryPoints ? `      break;
