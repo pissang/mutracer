@@ -12,7 +12,7 @@ import {generateGraph} from '../../src/renderer/materialGraph/codegen.js';
 const f=(value:number):Input=>({type:'float',value});
 const v=(value:number[],type:Type='vector3'):Input=>({type,value});
 function run(category:string, inputs:Record<string,Input>, type:Type='float') {
-    const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category:category as MaterialGraph['nodes'][number]['category'],type,inputs},{id:'c',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'c'}}}));
+    const graph=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category,type,inputs},{id:'c',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'c'}}}));
     expect(graph.diagnostics).toEqual([]);
     generateGraph(graph);
     return evaluateGraph(graph).baseColor;
@@ -119,7 +119,7 @@ describe('opacity graph commits',()=>{
         const graph=new MaterialGraph({nodes:[{id:'source',category:frame?'normal':'texcoord',type:frame?'vector3':'vector2'},{id:'a',category:'extract',type:'float',inputs:{in:{type:frame?'vector3':'vector2',connection:{node:'source'}}}}],terminal:{[kind==='emission'?'emissionLuminance':'opacity']:{node:'a'}}});
         const material=new OpenPBRMaterial({graph,unlit:kind==='emission',alphaMode:frame?'opaque':'auto'}),state=new MaterialGraphState();
         state.request([material]);expect(state.diagnostics).toEqual([]);state.install(state.requested,state.revision);const installed=state.active.graphs[0];
-        material.graph=new MaterialGraph({nodes:[{id:'unknown',category:'future_node' as MaterialGraph['nodes'][number]['category'],type:'color3'}],terminal:{baseColor:{node:'unknown'}}});
+        material.graph=new MaterialGraph({nodes:[{id:'unknown',category:'future_node',type:'color3'}],terminal:{baseColor:{node:'unknown'}}});
         if(kind==='emission')material.unlit=false;else if(kind==='projection')material.uvProjection='triplanar';else material.alphaMode='blend';
         state.request([material]);expect(state.requested.graphs[0]).toBeUndefined();expect(state.pack(new Float32Array(MATERIAL_FLOAT_COUNT),[])).toEqual(new Float32Array(MATERIAL_FLOAT_COUNT));
         expect(state.diagnostics).toContainEqual(expect.objectContaining({code:kind==='emission'?'unsupported-emission-graph':kind==='projection'?'unsupported-opacity-projection':'unsupported-opacity-context'}));

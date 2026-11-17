@@ -130,7 +130,8 @@ export function nodeInputs(node: DefinitionNode): Record<string, Input> | undefi
         case 'combine2':
         case 'combine3':
         case 'combine4': return Object.fromEntries(Array.from({ length: width(t) }, (_, i) => [`in${i + 1}`, input('float')]));
-        case 'dotproduct': return { in1: input(a.in1?.type ?? 'vector3'), in2: input(a.in1?.type ?? 'vector3') };
+        // Either typed input selects the nodedef, as in MaterialX; in1 wins when both are typed.
+        case 'dotproduct': { const t = a.in1?.type ?? a.in2?.type ?? 'vector3'; return { in1: input(t), in2: input(t) }; }
         case 'crossproduct': return { in1: input('vector3'), in2: input('vector3') };
         case 'rgbtohsv':
         case 'hsvtorgb': return { in: same(node) };

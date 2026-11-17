@@ -661,8 +661,8 @@ Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear
 ## MaterialGraph
 
 `new MaterialGraph({nodes: [], terminal: {}})` creates an empty graph. Attach it as
-`material.graph` (default `undefined`). Nodes have `id`, `category` (the exported
-`MaterialGraphCategory` union), required output `type`, and optional `inputs`
+`material.graph` (default `undefined`). Nodes have `id`, `category` (typed as the exported
+`MaterialGraphCategory` union; other strings are accepted and reported), required output `type`, and optional `inputs`
 (default empty). Connections use `{node, output?}`, with `output: 'out'` by default.
 Separate nodes expose component outputs; `gltf_colorimage` exposes
 `outcolor`/`outa` and uses node type `color4`.
@@ -671,16 +671,17 @@ Separate nodes expose component outputs; `gltf_colorimage` exposes
 `describeMaterialGraphNode(category: string)` returns a readonly
 `MaterialGraphNodeDefinition`, or `undefined` for an unknown category. Each
 `MaterialGraphNodeSignature` has a node `type`, named `outputs`, and named
-`inputs` with accepted `types` and optional `default` values. The first signature
-for each node type gives its default overload. Coupled input types appear in
-separate signatures; choose a complete signature when selecting an overload.
-An absent input default means implicit geometry or an unbound texture.
+`inputs`, each a list of accepted `{type, default?}` options with the default
+first. Inputs pick their types independently, so each node type usually has one
+signature; inputs whose types must match (`dotproduct`) get one signature per
+type. An absent `default` means implicit geometry or an unbound texture.
 
-`MaterialGraphInput.type` defaults to the connected output's type, or the node
-definition's default overload for a value or empty input. A value must match
-that default; specify `type` to select another overload. For example, a `color3`
-`multiply` defaults `in2` to `color3`: `{value: 0.5}` produces `input-type`, while
-`{type: 'float', value: 0.5}` selects scalar multiplication. Values accept numbers,
+`MaterialGraphInput.type` defaults to the connected output's type. For a value,
+it is the default overload if the value fits it, otherwise the only accepted type
+the value fits: on a `color3` `multiply`, `in2: {value: 0.5}` selects scalar
+multiplication. A value that fits several accepted types but not the default
+(`[1, 2, 3]` for `convert.in`: `color3` or `vector3`) produces `input-type`;
+specify `type`. Values accept numbers,
 booleans, strings, readonly numeric arrays and loaded `Texture` objects.
 Connections override values; omitted inputs use node defaults.
 
@@ -701,10 +702,11 @@ canonical terminal, replacing any aliases; its default `undefined` connection
 removes that terminal. Call `engine.update()` after edits. Node and terminal
 snapshots cannot be edited in place.
 
-`graph.validate(): MaterialGraphDiagnostic[]` synchronously checks reachable
-structure, types and terminals without changing the graph. Unused nodes are not
-checked, except for duplicate IDs. It takes no material or backend options; an
-empty result does not guarantee engine acceptance. Material context, backend,
+`graph.validate(): MaterialGraphDiagnostic[]` synchronously checks the structure,
+types and terminals of every node without changing the graph. The engine ignores
+nodes the terminal does not reach, so it can accept a graph that `validate()`
+reports. It takes no material or backend options; an empty result does not
+guarantee engine acceptance. Material context, backend,
 capability and shader compilation failures are reported after `engine.update()`
 in `engine.getDiagnostics()?.materialGraphs`.
 

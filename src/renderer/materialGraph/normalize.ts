@@ -3,7 +3,7 @@ import type { MaterialGraphDiagnostic as Diagnostic, MaterialGraphInput as Input
 import Texture from '../../scene/Texture.js';
 import { nodeInputs, outputType, terminalTypes, terminalAliases, validNodeType, nodeTypeDiagnostic, width } from './nodes.js';
 import {graphTypes} from './ir.js';
-import {resolveNodeInputs, inputValueMatches} from './resolve.js';
+import {resolveNodeInputs} from './resolve.js';
 export interface GraphNode {
     id: string;
     category: string;
@@ -37,7 +37,8 @@ export function graphHash(key: string) {
 }
 /** Canonical port-ordered DFS removes author IDs, declaration order and dead nodes.
  * Exact canonical keys accompany the short hash to avoid cache collisions. */
-export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): NormalizedGraph {
+/** `unused` also checks nodes the terminal does not reach; only validate() uses it. */
+export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas', options: {unused?: boolean} = {}): NormalizedGraph {
     const diagnostics: Diagnostic[] = [], nodes: GraphNode[] = [], parameters: Input['value'][] = [];
     const source = new Map<string, Node>(), indices = new Map<string, number>(), visiting = new Set<string>();
     const report = (code: Diagnostic['code'], message: string, node?: string, port?: string) => diagnostics.push({ code, message, node, port });
@@ -50,7 +51,7 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
         if (indices.has(id))
             return indices.get(id)!;
         const authoredNode = source.get(id);
-        const node = authoredNode && resolveNodeInputs(authoredNode, source);
+        const resolved = authoredNode && resolveNodeInputs(authoredNode, source), node = resolved?.node;
         if (!node) {
             report('missing-node', `Unknown source node ${id}`, id);
             return -1;
@@ -73,11 +74,19 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
                 report('unsupported-input', `Unsupported input ${port}`, id, port);
         for (const port of Object.keys(defaults ?? {}).sort()) {
             const expected = defaults![port], authored = node.inputs?.[port], value = authored ?? expected;
-            const original = authoredNode!.inputs?.[port];
-            if (original && original.type === undefined && !original.connection && original.value !== undefined && !inputValueMatches(value.type, original.value))
-                report('input-type', `Value does not match default ${value.type} overload; specify type for another overload`, id, port);
-            if (value.type !== expected.type)
-                report('input-type', `Expected ${expected.type}, got ${value.type}`, id, port);
+            const original = authoredNode!.inputs?.[port], issue = resolved!.issues.get(port);
+            if (issue) {
+                // One diagnostic per unresolved value; parameter checks would repeat the cause.
+                report('input-type', issue, id, port);
+                inputs[port] = { type: expected.type, slot: parameters.length };
+                parameters.push(expected.value);
+                continue;
+            }
+            if (value.type !== expected.type) {
+                if (original?.connection && original.type === undefined)
+                    report('connection-type', `Expected ${expected.type}, got ${value.type}`, id, port);
+                else report('input-type', `Expected ${expected.type}, got ${value.type}`, id, port);
+            }
             if (value.connection) {
                 const edge = value.connection, index = visit(edge.node), parent = source.get(edge.node), output = edge.output ?? 'out';
                 const type = parent && outputType(parent, output);
@@ -142,6 +151,7 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
             report('terminal-type', `Expected ${terminalTypes[port]} terminal`, edge.node, port);
         terminal[port] = { node: index, output };
     }
+    if (options.unused) for (const id of source.keys()) visit(id);
     const key = JSON.stringify([GRAPH_IMPLEMENTATION_VERSION, 'webgpu', capabilities, nodes.map(({ category, type, inputs }) => ({ category, type, inputs })), terminal]);
     return { key, hash: graphHash(key), nodes, terminal, parameters, diagnostics };
 }

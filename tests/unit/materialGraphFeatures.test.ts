@@ -6,7 +6,7 @@ import {MaterialGraphState} from '../../src/renderer/materialGraph/state.js';
 import {materialGraphConstants} from '../../src/renderer/materialGraph/features.js';
 const base={USE_ANISOTROPY_DIRECTIONS:false,USE_COAT_NORMAL_FRAMES:false,USE_TANGENT:false,USE_UV1:false,HAS_COAT:false,HAS_FUZZ:false,HAS_THIN_FILM:false,HAS_ALPHA:false,MATERIAL_CAPABILITIES:0};
 function scene(terminal:string,category='constant',type:'float'|'vector3'='float'){
- const m=new OpenPBRMaterial({graph:new MaterialGraph({nodes:[{id:'n',category:category as MaterialGraph['nodes'][number]['category'],type}],terminal:{[terminal]:{node:'n'}}})});
+ const m=new OpenPBRMaterial({graph:new MaterialGraph({nodes:[{id:'n',category,type}],terminal:{[terminal]:{node:'n'}}})});
  const s=new MaterialGraphState();s.request([m]);return {m,plan:s.requested};
 }
 describe('graph shader capabilities',()=>{

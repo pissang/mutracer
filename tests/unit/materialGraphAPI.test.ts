@@ -30,14 +30,23 @@ describe('public MaterialGraph catalog', () => {
                 expect(definition.signatures.some(s => s.type === type), `${category}/${type}`).toBe(accepted);
             }
             for (const signature of definition.signatures) {
-                const inputs = Object.fromEntries(Object.entries(signature.inputs).map(([port, input]) => [port, {type: input.types[0]}]));
+                const inputs = Object.fromEntries(Object.entries(signature.inputs).map(([port, options]) => [port, {type: options[0].type}]));
                 const node = {id: 'n', category, type: signature.type, inputs};
                 const defaults = nodeInputs(node)!;
-                expect(nodeTypeDiagnostic(node)).toBeUndefined();
                 expect(Object.keys(signature.inputs)).toEqual(Object.keys(defaults));
-                for (const [port, input] of Object.entries(defaults)) {
-                    expect(signature.inputs[port].types).toEqual([input.type]);
-                    expect(signature.inputs[port].default).toEqual(input.value);
+                // Every combination of per-input options is an accepted overload with the listed defaults.
+                let combinations: Record<string, {type: MaterialGraphType}>[] = [{}];
+                for (const [port, options] of Object.entries(signature.inputs))
+                    combinations = combinations.flatMap(combination => options.map(option => ({...combination, [port]: {type: option.type}})));
+                for (const combination of combinations) {
+                    const probe = {category, type: signature.type, inputs: combination};
+                    const resolved = nodeInputs(probe)!;
+                    expect(nodeTypeDiagnostic(probe), `${category}/${signature.type}`).toBeUndefined();
+                    for (const [port, input] of Object.entries(resolved)) {
+                        const option = signature.inputs[port].find(o => o.type === input.type);
+                        expect(option?.type, `${category}/${signature.type}.${port}`).toBe(combination[port].type);
+                        expect(option!.default).toEqual(input.value);
+                    }
                 }
                 expect(signature.outputs).toEqual(Object.fromEntries(graphOutputs.flatMap(port => {
                     const type = outputType(node, port);
@@ -50,25 +59,35 @@ describe('public MaterialGraph catalog', () => {
                 expect(normalized.diagnostics, `${category}/${signature.type}`).toEqual([]);
                 expect(validateGraphIR(flattenGraph(normalized))).toEqual([]);
                 for (const [port, input] of Object.entries(normalized.nodes[0].inputs)) {
-                    if (input.slot !== undefined) expect(normalized.parameters[input.slot]).toEqual(signature.inputs[port].default);
+                    if (input.slot !== undefined) expect(normalized.parameters[input.slot]).toEqual(signature.inputs[port][0].default);
                 }
                 // Every accepted single-port type probe is represented, including coupled ports.
                 for (const port of Object.keys(inputs)) for (const type of graphTypes) {
                     const probe = {category, type: signature.type, inputs: {...inputs, [port]: {type}}};
                     const resolved = nodeInputs(probe)!;
                     if (nodeTypeDiagnostic({...probe, inputs: resolved})) continue;
-                    expect(definition.signatures.some(s => s.type === signature.type && Object.keys(resolved).every(p => s.inputs[p].types.includes(resolved[p].type))), `${category}.${port}/${type}`).toBe(true);
+                    expect(definition.signatures.some(s => s.type === signature.type && Object.keys(resolved).every(p => s.inputs[p].some(o => o.type === resolved[p].type))), `${category}.${port}/${type}`).toBe(true);
                 }
             }
         }
     });
+    it('lists independent input types in one signature per output type', () => {
+        const range = describeMaterialGraphNode('range')!;
+        expect(range.signatures.map(s => s.type)).toEqual([...new Set(range.signatures.map(s => s.type))]);
+        expect(range.signatures.find(s => s.type === 'color3')!.inputs.inlow.map(o => o.type)).toEqual(['color3', 'float']);
+        expect(describeMaterialGraphNode('multiply')!.signatures.find(s => s.type === 'color3')!.inputs.in2).toEqual([{type: 'color3', default: [1, 1, 1]}, {type: 'float', default: 1}]);
+        const total = materialGraphCategories.reduce((count, category) => count + describeMaterialGraphNode(category)!.signatures.length, 0);
+        const pairs = materialGraphCategories.reduce((count, category) => count + new Set(describeMaterialGraphNode(category)!.signatures.map(s => s.type)).size, 0);
+        // Only coupled inputs (dotproduct.in2 follows in1) add signatures beyond one per output type.
+        expect(total - pairs).toBe(2);
+    });
     it('preserves coupled input constraints and freezes nested data', () => {
         const definition = describeMaterialGraphNode('dotproduct')!;
-        expect(definition.signatures.map(s => s.inputs.in1.types[0])).toEqual(['vector3', 'vector2', 'vector4']);
-        for (const s of definition.signatures) expect(s.inputs.in2.types).toEqual(s.inputs.in1.types);
+        expect(definition.signatures.map(s => s.inputs.in1.map(o => o.type))).toEqual([['vector3'], ['vector2'], ['vector4']]);
+        for (const s of definition.signatures) expect(s.inputs.in2).toEqual(s.inputs.in1);
         expect(() => (materialGraphCategories as string[]).push('bad')).toThrow();
-        expect(() => (definition.signatures[0].inputs.in1.types as string[]).push('bad')).toThrow();
-        const defaults = describeMaterialGraphNode('multiply')!.signatures.find(s => s.type === 'color3')!.inputs.in2.default as number[];
+        expect(() => (definition.signatures[0].inputs.in1 as unknown[]).push('bad')).toThrow();
+        const defaults = describeMaterialGraphNode('multiply')!.signatures.find(s => s.type === 'color3')!.inputs.in2[0].default as number[];
         expect(() => { defaults[0] = 10; }).toThrow();
         expect(materialGraphTerminals.geometryNormal).toEqual({name: 'normal', type: 'vector3'});
     });
@@ -92,8 +111,8 @@ describe('MaterialGraph input inference and validation', () => {
     it('infers numeric connections for every catalog overload', () => {
         for (const category of materialGraphCategories) for (const signature of describeMaterialGraphNode(category)!.signatures) {
             const parents: MaterialGraphNode[] = [], explicit: Record<string, MaterialGraphInput> = {}, inferred: Record<string, MaterialGraphInput> = {};
-            for (const [port, input] of Object.entries(signature.inputs)) {
-                const type = input.types[0];
+            for (const [port, options] of Object.entries(signature.inputs)) {
+                const type = options[0].type;
                 if (type === 'filename' || type === 'string') continue;
                 const id = `source/${port}`;
                 parents.push({id, category: 'constant', type});
@@ -117,23 +136,40 @@ describe('MaterialGraph input inference and validation', () => {
         const graph = new MaterialGraph({nodes, terminal: {specularRoughness: {node: 'dot'}}});
         expect(graph.validate()).toEqual([]);
         expect(normalizeGraph(graph).nodes[1].inputs.in2.type).toBe('vector2');
+        const reversed = new MaterialGraph({nodes: [{id: 'dot', category: 'dotproduct', type: 'float', inputs: {in1: {}, in2: {connection: {node: 'uv'}}}}, nodes[1]], terminal: graph.terminal});
+        expect(reversed.validate()).toEqual([]);
+        expect(normalizeGraph(reversed).nodes[1].inputs.in1.type).toBe('vector2');
         const separated = new MaterialGraph({nodes: [{id: 'rgba', category: 'gltf_colorimage', type: 'color4'}, {id: 'n', category: 'multiply', type: 'float', inputs: {in1: {connection: {node: 'rgba', output: 'outa'}}}}], terminal: {specularRoughness: {node: 'n'}}});
         expect(separated.validate()).toEqual([]);
         separated.setInput('n', 'in1', {connection: {node: 'rgba', output: 'missing'}});
         expect(separated.validate()).toContainEqual(expect.objectContaining({code: 'connection-type', port: 'in1'}));
+        const scalarIntoColor = new MaterialGraph({nodes: [{id: 'f', category: 'constant', type: 'float'}, {id: 'n', category: 'multiply', type: 'color3', inputs: {in1: {connection: {node: 'f'}}}}], terminal: {baseColor: {node: 'n'}}});
+        expect(scalarIntoColor.validate()).toEqual([expect.objectContaining({code: 'connection-type', node: 'n', port: 'in1'})]);
     });
     it('uses default overloads for empty inputs and diagnoses values requiring another overload', () => {
         expect(normalizeGraph(roughness({in1: {}, in2: {}}))).toEqual(normalizeGraph(roughness()));
         const geometry = rooted({id: 'n', category: 'noise3d', type: 'float', inputs: {position: {}}});
         expect(normalizeGraph(geometry)).toEqual(normalizeGraph(rooted({id: 'n', category: 'noise3d', type: 'float'})));
-        const graph = roughness({in2: {value: .5}}, 'multiply', 'color3');
-        expect(graph.validate()).toContainEqual(expect.objectContaining({code: 'input-type', port: 'in2'}));
-        graph.setInput('n', 'in2', {type: 'float', value: .5});
-        expect(graph.validate()).toEqual([]);
+    });
+    it('selects the only overload a value fits and reports one diagnostic otherwise', () => {
+        const scalar = roughness({in2: {value: .5}}, 'multiply', 'color3');
+        expect(scalar.validate()).toEqual([]);
+        expect(normalizeGraph(scalar)).toEqual(normalizeGraph(roughness({in2: {type: 'float', value: .5}}, 'multiply', 'color3')));
         const mix = roughness({mix: {value: [.1, .2, .3]}}, 'mix', 'color3');
-        expect(mix.validate()).toContainEqual(expect.objectContaining({code: 'input-type', port: 'mix'}));
-        mix.setInput('n', 'mix', {type: 'color3', value: [.1, .2, .3]});
-        expect(mix.validate()).toEqual([]);
+        expect(normalizeGraph(mix)).toEqual(normalizeGraph(roughness({mix: {type: 'color3', value: [.1, .2, .3]}}, 'mix', 'color3')));
+        // A value that fits the default overload keeps it, even if another type also fits.
+        expect(normalizeGraph(roughness({value1: {value: 2}}, 'ifgreater')).nodes[0].inputs.value1.type).toBe('float');
+        const ambiguous = rooted({id: 'n', category: 'convert', type: 'color3', inputs: {in: {value: [1, 2, 3]}}});
+        expect(ambiguous.validate()).toEqual([expect.objectContaining({code: 'input-type', node: 'n', port: 'in', message: expect.stringMatching(/color3, vector3/)})]);
+        ambiguous.setInput('n', 'in', {type: 'vector3', value: [1, 2, 3]});
+        expect(ambiguous.validate()).toEqual([]);
+        expect(roughness({in2: {value: [1, 2]}}, 'multiply', 'color3').validate()).toEqual([expect.objectContaining({code: 'input-type', port: 'in2', message: expect.stringMatching(/fits no/)})]);
+    });
+    it('checks unused nodes in validate() while the engine ignores them', () => {
+        const graph = roughness().setNode({id: 'typo', category: 'multiplyy', type: 'float'}).setNode({id: 'dangling', category: 'add', type: 'float', inputs: {in1: {connection: {node: 'gone'}}}});
+        expect(graph.validate()).toEqual(expect.arrayContaining([expect.objectContaining({code: 'unsupported-node', node: 'typo'}), expect.objectContaining({code: 'missing-node', node: 'gone'})]));
+        expect(normalizeGraph(graph).diagnostics).toEqual([]);
+        expect(normalizeGraph(graph)).toEqual(normalizeGraph(roughness()));
     });
     it('keeps explicit types authoritative and returns engine diagnostics without mutating the graph', () => {
         const graph = roughness({in1: {type: 'color3', connection: {node: 'n'}}});
@@ -149,6 +185,8 @@ describe('MaterialGraph input inference and validation', () => {
         unknown.setTerminal({opacity: {node: 'missing'}});
         expect(unknown.validate()).toContainEqual(expect.objectContaining({code: 'missing-node'}));
         unknown.setTerminal({});
+        expect(unknown.validate()).toEqual([expect.objectContaining({code: 'unsupported-node', node: 'bad'})]);
+        unknown.removeNode('bad');
         expect(unknown.validate()).toEqual([]);
     });
 });

@@ -10,7 +10,7 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 const f = (value: number): MaterialGraphInput => ({ type: 'float', value });
 const v = (value: number[]): MaterialGraphInput => ({ type: value.length === 2 ? 'vector2' : value.length === 3 ? 'vector3' : 'vector4', value });
 function run(category: string, inputs: Record<string, MaterialGraphInput>, type: MaterialGraphNode['type'] = 'float', output = 'out') {
-    const nodes: MaterialGraphNode[] = [{ id: 'test', category: category as MaterialGraphNode['category'], type, inputs }];
+    const nodes: MaterialGraphNode[] = [{ id: 'test', category, type, inputs }];
     if (type === 'vector2') {
         nodes.push({id:'converted',category:'convert',type:'color3',inputs:{in:{type:'vector2',connection:{node:'test',output}}}});
         return normalizeGraph(new MaterialGraph({nodes,terminal:{baseColor:{node:'converted'}}}));
@@ -94,7 +94,7 @@ describe('MaterialX numeric semantics', () => {
     });
     it('installs valid materials even when another material graph is unsupported',()=>{
         const valid=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
-        const invalid=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node' as MaterialGraphNode['category'],type:'float'}],terminal:{specularRoughness:{node:'bad'}}});
+        const invalid=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node',type:'float'}],terminal:{specularRoughness:{node:'bad'}}});
         const state=new MaterialGraphState();state.request([new OpenPBRMaterial({graph:valid}),new OpenPBRMaterial({graph:invalid})]);
         expect(state.status).toBe('compiling');expect(state.requested.structures).toHaveLength(1);
         expect(state.install(state.requested,state.revision)).toBe(true);expect(state.active.graphs[0]).toBeDefined();expect(state.active.graphs[1]).toBeUndefined();expect(state.status).toBe('failed');
@@ -103,7 +103,7 @@ describe('MaterialX numeric semantics', () => {
         const graph=new MaterialGraph({nodes:[{id:'a',category:'constant',type:'float'}],terminal:{specularRoughness:{node:'a'}}});
         const material=new OpenPBRMaterial({graph}),state=new MaterialGraphState();
         state.request([material]);state.install(state.requested,state.revision);const installed=state.installedRevision;
-        graph.setNode({id:'a',category:'unknown_node' as MaterialGraphNode['category'],type:'float'});state.request([material]);
+        graph.setNode({id:'a',category:'unknown_node',type:'float'});state.request([material]);
         expect(state.status).toBe('failed');expect(state.installedRevision).toBe(installed);expect(state.revision).toBeGreaterThan(installed);expect(state.diagnostics[0].materialId).toBe(material.aovId);
     });
     it('uses constants when a previously valid graph enters an unsupported material context',()=>{

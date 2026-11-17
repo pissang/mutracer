@@ -10,7 +10,7 @@ const v = (value: number[], type?: Type): Input => ({ type: type ?? (value.lengt
 const edge = (node: string, type: Type = 'float', output = 'out'): Input => ({ type, connection: { node, output } });
 const uv = [0.37, 0.61], normal = [0, 0, 1];
 function testGraph(category: string, inputs: Record<string, Input> = {}, type: Type = 'float') {
-    const nodes: Node[] = [{ id: 'uv', category: 'texcoord', type: 'vector2' }, { id: 'separate', category: 'separate2', type: 'vector2', inputs: { in: edge('uv', 'vector2') } }, { id: 'node', category: category as Node['category'], type, inputs }];
+    const nodes: Node[] = [{ id: 'uv', category: 'texcoord', type: 'vector2' }, { id: 'separate', category: 'separate2', type: 'vector2', inputs: { in: edge('uv', 'vector2') } }, { id: 'node', category, type, inputs }];
     const result = category.startsWith('separate') ? edge('node', 'float', type.startsWith('color') ? 'outr' : 'outx') : edge('node', type);
     nodes.push({ id: 'out', category: 'convert', type: 'color3', inputs: { in: result } });
     return new MaterialGraph({ nodes, terminal: { emissionColor: { node: 'out' } } });

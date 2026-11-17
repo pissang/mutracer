@@ -14,14 +14,14 @@ export interface MaterialGraphConnection {
 }
 /** One parameter or connection, with an optional explicit overload. */
 export interface MaterialGraphInput {
-    /** MaterialX input type. Default the connected output type, otherwise the node definition's default overload; values never select a different overload. */ type?: MaterialGraphType;
+    /** MaterialX input type. Default the connected output type; for a value, the default overload if the value fits it, otherwise the only accepted type the value fits. */ type?: MaterialGraphType;
     /** Uniform value; numbers, booleans, strings, numeric vectors or loaded textures. Default is the node definition's default. */ value?: number | boolean | string | readonly number[] | Texture;
     /** Connected output; when present, value is ignored. Default undefined. */ connection?: MaterialGraphConnection;
 }
 /** An authored MaterialX node. Unsupported categories produce diagnostics. */
 export interface MaterialGraphNode {
     /** Stable, unique ID used in connections and diagnostics. */ id: string;
-    /** MaterialX category, for example `multiply` or `image`. */ category: MaterialGraphCategory;
+    /** MaterialX category, for example `multiply` or `image`. Other strings are accepted and reported as `unsupported-node`. */ category: MaterialGraphCategory | (string & {});
     /** Output type (source type for separate2/3/4; color4 for gltf_colorimage). */ type: MaterialGraphType;
     /** Authored inputs. Omitted inputs use node defaults. Default empty. */ inputs?: Readonly<Record<string, MaterialGraphInput>>;
 }
@@ -116,11 +116,11 @@ export default class MaterialGraph {
         if (connection) terminal[canonical] = connection;
         return this.setTerminal(terminal);
     }
-    /** Checks reachable structure, types and terminals synchronously, without changing revision.
-     * Unused nodes are not checked, except for duplicate IDs. An empty result does not
-     * guarantee engine acceptance: material context, backend, capabilities and shader
-     * compilation are checked by engine.update(). */
-    validate(): MaterialGraphDiagnostic[] { return normalizeGraph(this).diagnostics; }
+    /** Checks structure, types and terminals of every node synchronously, without changing revision.
+     * The engine ignores nodes not reachable from the terminal, so it may accept a graph this
+     * reports. An empty result does not guarantee engine acceptance: material context, backend,
+     * capabilities and shader compilation are checked by engine.update(). */
+    validate(): MaterialGraphDiagnostic[] { return normalizeGraph(this, undefined, {unused: true}).diagnostics; }
     /** Returns version 1 authored JSON. Default no texture mapper; texture values then throw.
      * JSON.stringify(graph) is supported for graphs without textures. */
     toJSON(options?: MaterialGraphSerializationOptions): MaterialGraphJSON;

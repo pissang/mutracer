@@ -78,7 +78,7 @@ describe('material graph interpreter programs', () => {
 
     it('reuses registers by liveness and rejects structures beyond the register file', () => {
         // A chain needs one register regardless of its length.
-        const nodes = [{id: 'n0', category: 'texcoord' as const, type: 'vector2' as const}];
+        const nodes = [{id: 'n0', category: 'texcoord', type: 'vector2' as const}];
         for (let i = 1; i < 40; i++) nodes.push({id: `n${i}`, category: 'multiply', type: 'vector2', inputs: {in1: {type: 'vector2', connection: {node: `n${i - 1}`}}, in2: {type: 'float', value: 1.01}}} as never);
         const chain = normalizeGraph(new MaterialGraph({nodes: [...nodes, {id: 'c', category: 'convert', type: 'color3', inputs: {in: {type: 'vector2', connection: {node: 'n39'}}}}], terminal: {baseColor: {node: 'c'}}}));
         expect(buildGraphProgram(flattenGraph(chain)).program!.registers).toBe(1);
@@ -101,7 +101,7 @@ describe('material graph interpreter programs', () => {
         const graph = (k: number, unary: string) => new MaterialGraph({nodes: [
             {id: 'uv', category: 'texcoord', type: 'vector2'},
             {id: 'x', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}, index: {type: 'integer', value: 0}}},
-            {id: 'f', category: unary as MaterialGraph['nodes'][number]['category'], type: 'float', inputs: {in: {type: 'float', connection: {node: 'x'}}}},
+            {id: 'f', category: unary, type: 'float', inputs: {in: {type: 'float', connection: {node: 'x'}}}},
             {id: 'r', category: 'multiply', type: 'float', inputs: {in1: {type: 'float', connection: {node: 'f'}}, in2: {type: 'float', value: k}}}
         ], terminal: {specularRoughness: {node: 'r'}}});
         setMaterialGraphPlanner({tier: 'interpreter'});

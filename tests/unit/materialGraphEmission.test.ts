@@ -17,7 +17,7 @@ import {MaterialChangeTracker} from '../../src/renderer/materialChanges.js';
 const offset=materialLayoutFields().find(f=>f.name==='emission')!.offset/4;
 function graph(category='texcoord') {
  const type=category==='texcoord'?'vector2':'vector3';
- return new MaterialGraph({nodes:[{id:'source',category:category as MaterialGraph['nodes'][number]['category'],type},{id:'color',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'source'}}}}],terminal:{emissionColor:{node:'color'}}});
+ return new MaterialGraph({nodes:[{id:'source',category,type},{id:'color',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'source'}}}}],terminal:{emissionColor:{node:'color'}}});
 }
 function install(material:OpenPBRMaterial) {const state=new MaterialGraphState();state.request([material]);state.install(state.requested,state.revision);return state;}
 describe('lit graph emission',()=>{
