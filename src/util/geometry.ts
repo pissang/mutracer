@@ -1,6 +1,6 @@
 import { attributeLength, attributeValue, indexStorage } from '../scene/attributeData.js';
 import { read, write } from '../math/access.js';
-import { vec3 } from '../math.js';
+import * as vec3 from '../math/sceneVec3.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
 
 /** Computes smooth, area-weighted vertex normals into `geometry.normal`. */

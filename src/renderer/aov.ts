@@ -9,7 +9,7 @@
  */
 export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion' | 'diffuseColor' | 'specularColor' | 'centerNormal' | 'centerDepth' | 'centerPosition';
 export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion', 'diffuseColor', 'specularColor', 'centerNormal', 'centerDepth', 'centerPosition'];
-export const AOV_BACKGROUND_ID = 0xffffffff;
+export {AOV_BACKGROUND_ID, allocateAovId, validateAovId} from '../scene/aovId.js';
 /** Display-resolution AOVs only guide texture detail; 4 jittered samples match 16 within measurement noise. */
 export const DISPLAY_AOV_SAMPLE_CAP = 4;
 /** Mask bits of directional reflectance quadrature (diffuseAlbedo, specularAlbedo). */
@@ -35,15 +35,6 @@ export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32, primaryBytes: 
 /** Kind index read by resolve and display shaders; colors resolve like the albedo sharing their lane. */
 export function aovLaneKind(kind: AovKind): number {
   return kind === 'diffuseColor' ? 3 : kind === 'specularColor' ? 4 : AOV_KINDS.indexOf(kind);
-}
-let nextId = 0;
-export function allocateAovId(): number {
-  if (nextId >= AOV_BACKGROUND_ID) throw new RangeError('AOV ID space exhausted');
-  return nextId++;
-}
-export function validateAovId(value: number): number {
-  if (!Number.isInteger(value) || value < 0 || value >= AOV_BACKGROUND_ID) throw new RangeError('AOV ID must be uint32 excluding 0xFFFFFFFF');
-  return value;
 }
 export function aovMask(kinds: readonly AovKind[]): number {
   let mask = 0;

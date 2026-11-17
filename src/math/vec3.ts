@@ -1,6 +1,7 @@
 // Adapted from gl-matrix 3.4.4, https://github.com/toji/gl-matrix/tree/v3.4.4/src
 // Copyright (c) 2015-2025 Brandon Jones and Colin MacKenzie IV, MIT.
 // See LICENSES/GlMatrix-MIT.txt. Arithmetic/order retained; creators use Float32Array.
+import {create} from './sceneVec3.js';
 import type { MathArray, ReadonlyMathArray } from './types.js';
 
 export function clone<T0 extends ReadonlyMathArray>(a: T0): Float32Array {
@@ -15,24 +16,6 @@ export function copy<T0 extends MathArray, T1 extends ReadonlyMathArray>(out: T0
   out[0] = a[0];
   out[1] = a[1];
   out[2] = a[2];
-  return out;
-}
-
-export function create(): Float32Array {
-  var out = new Float32Array(3);
-  return out;
-}
-
-export function cross<T0 extends MathArray, T1 extends ReadonlyMathArray, T2 extends ReadonlyMathArray>(out: T0, a: T1, b: T2): T0 {
-  var ax = a[0],
-    ay = a[1],
-    az = a[2];
-  var bx = b[0],
-    by = b[1],
-    bz = b[2];
-  out[0] = ay * bz - az * by;
-  out[1] = az * bx - ax * bz;
-  out[2] = ax * by - ay * bx;
   return out;
 }
 
@@ -84,21 +67,6 @@ export function min<T0 extends MathArray, T1 extends ReadonlyMathArray, T2 exten
   return out;
 }
 
-export function normalize<T0 extends MathArray, T1 extends ReadonlyMathArray>(out: T0, a: T1): T0 {
-  var x = a[0];
-  var y = a[1];
-  var z = a[2];
-  var len = x * x + y * y + z * z;
-  if (len > 0) {
-    //TODO: evaluate use of glm_invsqrt here?
-    len = 1 / Math.sqrt(len);
-  }
-  out[0] = a[0] * len;
-  out[1] = a[1] * len;
-  out[2] = a[2] * len;
-  return out;
-}
-
 export const len = length;
 
 export function scale<T0 extends MathArray, T1 extends ReadonlyMathArray>(out: T0, a: T1, b: number): T0 {
@@ -112,22 +80,6 @@ export function scaleAndAdd<T0 extends MathArray, T1 extends ReadonlyMathArray, 
   out[0] = a[0] + b[0] * scale;
   out[1] = a[1] + b[1] * scale;
   out[2] = a[2] + b[2] * scale;
-  return out;
-}
-
-export function set<T0 extends MathArray>(out: T0, x: number, y: number, z: number): T0 {
-  out[0] = x;
-  out[1] = y;
-  out[2] = z;
-  return out;
-}
-
-export const sub = subtract;
-
-export function subtract<T0 extends MathArray, T1 extends ReadonlyMathArray, T2 extends ReadonlyMathArray>(out: T0, a: T1, b: T2): T0 {
-  out[0] = a[0] - b[0];
-  out[1] = a[1] - b[1];
-  out[2] = a[2] - b[2];
   return out;
 }
 
@@ -166,3 +118,5 @@ export function forEach<T extends MathArray, A = undefined>(a: T, stride: number
 }
 
 export type Vec3Array = Float32Array | Float64Array | number[];
+
+export {create,cross,normalize,set,subtract,sub} from './sceneVec3.js';

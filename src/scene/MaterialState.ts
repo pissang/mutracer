@@ -1,4 +1,4 @@
-import { allocateAovId, validateAovId } from '../renderer/aov.js';
+import { allocateAovId, validateAovId } from './aovId.js';
 import type { Vec2 } from '../types.js';
 import type { ColorRGB } from '../types.js';
 import type TextureState from './TextureState.js';
