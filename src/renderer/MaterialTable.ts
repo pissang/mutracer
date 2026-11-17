@@ -17,7 +17,7 @@ import {
   constants,
   Texture2D,
   type TexturePixelSource
-} from './webgl.js';
+} from './textureData.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import {MaterialGraphState} from './materialGraph/state.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';

@@ -13,7 +13,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | --- | --- | --- |
 | `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
-| `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
+| `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2. WebGL code loads during `init()` only when selected; loading failures reject initialization |
 | `textureBinding` | `'atlas'` | Constructor-only; `'auto'` tries experimental WebGPU bindless textures, with atlas fallback; see [texture bindings](#texture-bindings) |
 | `shaderPrefetch` | `'off'` | Constructor-only; `'editing'` prepares material/graph editing shaders in the background, starting at device initialization where supported; see [editing prefetch](./updates.md#editing-prefetch) for reuse, capacities and costs |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |

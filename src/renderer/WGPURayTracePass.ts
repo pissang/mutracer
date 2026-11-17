@@ -51,7 +51,7 @@ import {wgpuMaterialConstants} from './wgpuMaterialConstants.js';
 import {wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS} from './wgpuShaderSource.js';
 import {packWgpuVertexLayout} from './wgpuVertexLayout.js';
 import {makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES} from './wgpuSceneUniform.js';
-import {constants} from './webgl.js';
+import {constants} from './textureData.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WGPU} from './pathLimits.js';
 import {updateMeshInstanceColors} from './prepareMeshBVH.js';

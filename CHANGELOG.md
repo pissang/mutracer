@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- WebGL 2 loads during engine initialization only when selected, reducing the initial WebGPU download.
+
 ### Fixed
 
 - npm consumers can bundle BVH workers without a missing entry error, and Material Graph scenes no longer require installing `gl-matrix`.
