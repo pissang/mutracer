@@ -152,6 +152,11 @@ color decoding, factor and emission/coat ordering; normal and displacement
 queries keep their existing sites. The existing loop guard (value 4) prevents
 static unrolling. Its repeat-filter footprint reaches only `[-1,size]`, so the
 two boundary texels can wrap with selects instead of general signed remainders.
+Both axes select wrapped or clamped integer coordinates in vector data flow;
+the UDIM rejection and repeat-footprint tests use eager boolean operators over
+pure, already available values. This avoids duplicating short-circuit blocks
+when DXC inlines each filtering site. Texture reads, floating-point filtering
+and color decoding keep their original order.
 These changes target expanded compiler work, not source byte count. Profile both
 DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
 for the complete browser wait. Generated native, non-graph and non-D3D12
