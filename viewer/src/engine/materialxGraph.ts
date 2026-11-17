@@ -1,7 +1,7 @@
 import {graphContextDiagnostics} from '../../../src/renderer/materialGraph/context';
 import {flattenGraphUnchecked} from '../../../src/renderer/materialGraph/flatten';
 import {graphTerminals} from '../../../src/renderer/materialGraph/ir';
-import {MaterialGraph, OpenPBRMaterial, type MaterialGraphInput as Input, type MaterialGraphNode as Node, type MaterialGraphType as Type, type MaterialGraphConnection as Edge} from '@meimu/mutracer';
+import {MaterialGraph, OpenPBRMaterial, type MaterialGraphInput as GraphInput, type MaterialGraphNode as Node, type MaterialGraphType as Type, type MaterialGraphConnection as Edge} from '@meimu/mutracer';
 import {normalizeGraph} from '../../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../../src/renderer/materialGraph/evaluate';
 import {generateGraph} from '../../../src/renderer/materialGraph/codegen';
@@ -12,6 +12,8 @@ import {materialXSurfaceInputs, materialXInactiveLobes, materialXInactiveImageIn
 import type {MaterialValues} from './materialParams';
 import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
+// The XML reader authors explicit input types, including unsupported imported categories.
+type Input = GraphInput & {type: Type};
 const literal=(type:Type,value:Input['value']):Input=>({type,value});
 /** MaterialX surface input names (camel-cased) that map to differently named material properties. */
 export const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled:'thinWalled',geometryNormal:'normal',specularRoughnessAnisotropy:'specularAnisotropy',coatRoughnessAnisotropy:'coatAnisotropy',subsurfaceScatterAnisotropy:'subsurfaceAnisotropy'};
@@ -262,7 +264,7 @@ function inactive(nodes:Node[],port:string,edge:Edge){
     const normalized=normalizeGraph(new MaterialGraph({nodes,terminal:{[probe]:edge}}));
     return !normalized.diagnostics.length&&!isDynamic(normalized)&&evaluateGraph(normalized)[probe].every(v=>v===0);
 }
-const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
+const dropInactiveImageInputs=(inputs:Record<string,GraphInput>)=>{
     for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
 };
 /** Removes inputs that have no effect from a graph saved by an earlier

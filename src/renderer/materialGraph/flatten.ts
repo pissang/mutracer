@@ -22,7 +22,7 @@ export function flattenGraphUnchecked(graph: NormalizedGraph) {
             ir.inputs.push(graphPorts.indexOf(port), graphTypes.indexOf(input.type), kind,
                 input.node ?? (input.geometry ? graphGeometry.indexOf(input.geometry) : input.slot!), graphOutputs.indexOf(input.output ?? 'out'));
         }
-        ir.nodes.push(graphCategories.indexOf(node.category), 1, graphTypes.indexOf(node.type), first, ir.inputs.length / 5 - first);
+        ir.nodes.push((graphCategories as readonly string[]).indexOf(node.category), 1, graphTypes.indexOf(node.type), first, ir.inputs.length / 5 - first);
     }
     for (const [port, edge] of Object.entries(graph.terminal)) ir.terminal.push(graphTerminals.indexOf(port), edge.node, graphOutputs.indexOf(edge.output));
     return ir;

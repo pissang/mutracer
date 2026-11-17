@@ -327,23 +327,27 @@ The direction and strength inputs use native OpenPBR semantics by default. For i
 
 Attach a `MaterialGraph` to an `OpenPBRMaterial`. Terminal names use the material's
 camelCase inputs; inputs without a terminal connection retain the material's
-constants and maps. Use `setNode`, `removeNode`, `setInput` and `setTerminal` to
-edit a graph, then call `engine.update()`. With RenderLoop running, await the
-committed request when an operation needs to know whether installation succeeded:
+constants and maps. Inspect a node definition, build the graph, validate it, then
+commit edits with `engine.update()`. With RenderLoop running, await the committed
+request when an operation needs to know whether installation succeeded:
 
 ```ts
-import {MaterialGraph, OpenPBRMaterial} from '@meimu/mutracer';
+import {MaterialGraph, OpenPBRMaterial, describeMaterialGraphNode} from '@meimu/mutracer';
 
+const constant = describeMaterialGraphNode('constant')!;
+console.log(constant.signatures); // Supported types, inputs, defaults and outputs.
 const graph = new MaterialGraph({
   nodes: [{
     id: 'roughness', category: 'constant', type: 'float',
-    inputs: {value: {type: 'float', value: 0.4}}
-  }],
-  terminal: {specularRoughness: {node: 'roughness'}}
+    inputs: {value: {value: 0.4}}
+  }]
 });
+graph.setTerminalInput('specularRoughness', {node: 'roughness'});
 const material = new OpenPBRMaterial({graph, baseColor: [0.8, 0.2, 0.1]});
-
-graph.setInput('roughness', 'value', {type: 'float', value: 0.6});
+// Include material in the engine's scene before committing.
+graph.setInput('roughness', 'value', {value: 0.6});
+const diagnostics = graph.validate();
+if (diagnostics.length) throw new Error(diagnostics.map(d => d.message).join('\n'));
 engine.update();
 const result = await engine.waitForMaterialGraphs();
 if (result.outcome === 'settled' && result.state.status === 'failed') {
@@ -351,17 +355,23 @@ if (result.outcome === 'settled' && result.state.status === 'failed') {
 }
 ```
 
-Nodes have stable IDs and typed inputs. Connect an input with
-`{type: 'float', connection: {node: 'roughness'}}`; the output defaults to `out`.
-`separate2/3/4` use `outx/outy/outz/outw` for vectors and
-`outr/outg/outb/outa` for colors. Node declarations, input values and terminal
-connections are immutable snapshots; edit them through the graph's methods.
-Textures remain editable resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
+Connect a node input with `{connection: {node: 'roughness'}}`. Use the catalog to
+choose output ports and overloads; see the [API reference](./api.md#materialgraph)
+for inference, validation, editing methods and defaults. Textures remain editable
+resources with [the usual update notifications](./updates.md#materials-textures-and-lights).
 
-Terminal keys are checked in TypeScript, including the supported compatibility
-aliases. Use `MaterialGraphTerminalName` for a terminal name or
-`MaterialGraphTerminal` for a connection map. `setInput(id, port, undefined)` removes
-an authored value or connection and restores that input's node default.
+Exchange authored graphs with `graph.toJSON()` and `MaterialGraph.fromJSON(json)`.
+For textures, supply ID and lookup callbacks; textures must already be loaded:
+
+```ts
+const json = graph.toJSON({textureId: texture => textureIds.get(texture)!});
+const restored = MaterialGraph.fromJSON(json, {
+  resolveTexture: id => texturesById.get(id)
+});
+```
+
+JSON contains graph descriptions and texture IDs, without texture pixels. Missing
+mappers or unresolved IDs throw. See [JSON options](./api.md#materialgraph).
 
 The compiler loads when the committed scene first uses a graph, or when
 `shaderPrefetch: 'editing'` is enabled. Loading failures appear in Material Graph
@@ -445,7 +455,7 @@ its type is `color4`. The viewer upgrades deprecated `swizzle` nodes to
 
 Terminals support base weight/color/diffuse roughness/metalness, specular
 weight/color/roughness/IOR/anisotropy, transmission weight/color, fuzz and coat
-inputs, thin-film weight/thickness/IOR, `geometryNormal` (`normal` is an
+inputs, thin-film weight/thickness/IOR, `normal` (`geometryNormal` is an
 alias), and `opacity` (`geometryOpacity` is an alias). The material's anisotropy
 aliases also work here.
 Opacity replaces the scalar coverage before ordinary alpha texture factors and

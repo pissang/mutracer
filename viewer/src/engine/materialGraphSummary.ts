@@ -1,4 +1,5 @@
 import { MaterialGraph, Texture, type MaterialGraphNode, type MaterialGraphTerminal } from '@meimu/mutracer';
+import {nodePorts} from './graphEdit';
 import { terminalAliases, terminalTypes } from '../../../src/renderer/materialGraph/nodes';
 
 /** A surface input driven by the graph. */
@@ -157,16 +158,17 @@ export function graphParameters(graph: MaterialGraph, limit = 10): GraphParamete
   if (authored.length) {
     return { source: 'authored', more: [], primary: authored.flatMap(node => {
       const input = node.inputs?.value;
-      if (!input || input.connection || input.value === undefined || !PARAMETER_TYPES.has(input.type)) return [];
-      return [{ node: node.id, port: 'value', type: input.type as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'],
+      if (!input || input.connection || input.value === undefined || !PARAMETER_TYPES.has(input.type ?? node.type)) return [];
+      return [{ node: node.id, port: 'value', type: (input.type ?? node.type) as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'],
         label: node.id.slice(node.id.lastIndexOf('/') + 1), affects: affects.get(node.id) ?? [] }];
     }) };
   }
   const candidates = reached.flatMap(node => {
     if (PLUMBING.has(node.category) || generated(node.id)) return [];
     return Object.entries(node.inputs ?? {}).flatMap(([port, input]): GraphParameterSummary[] => {
-      if (input.connection || input.value === undefined || input.value instanceof Texture || !PARAMETER_TYPES.has(input.type) || input.type === 'integer') return [];
-      return [{ node: node.id, port, type: input.type as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'], affects: affects.get(node.id) ?? [] }];
+      const type = input.type ?? nodePorts(node, graph)[port]?.type;
+      if (input.connection || input.value === undefined || input.value instanceof Texture || !type || !PARAMETER_TYPES.has(type) || type === 'integer') return [];
+      return [{ node: node.id, port, type: type as GraphParameterSummary['type'], value: input.value as GraphParameterSummary['value'], affects: affects.get(node.id) ?? [] }];
     });
   });
   const rank = (param: GraphParameterSummary) => param.node.startsWith('surface/value/') ? 0 : param.type.startsWith('color') ? 1 : 2;
