@@ -1,10 +1,11 @@
 import {materialEmission} from './materialEmission.js';
-import {materialGraphConstants} from './materialGraph/features.js';
+import {materialGraphConstants} from './materialGraph/lazy.js';
 import {EDITING_MAP_CAPACITY, universalEditingConstants} from './wgpuEditingVariant.js';
-import {MaterialGraphState, graphShaderKey, type GraphPlan} from './materialGraph/state.js';
-import {materialGraphShader} from './materialGraph/shader.js';
-import {materialSurfaceAreas} from './materialGraph/usage.js';
-import {GraphCompileCalibration, GraphCompileClock, graphCompilerBackend, nextGraphCompile, type GraphCompileRole as CompileRole} from './materialGraph/tierPolicy.js';
+import type {GraphPlan} from './materialGraph/state.js';
+import {createMaterialGraphState, graphShaderKey, type GraphState} from './materialGraph/lazy.js';
+import {materialGraphShader} from './materialGraph/lazy.js';
+import {materialSurfaceAreas} from './materialGraph/lazy.js';
+import {GraphCompileCalibration, GraphCompileClock, graphCompilerBackend, nextGraphCompile, type GraphCompileRole as CompileRole} from './shaderCompilePolicy.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
@@ -310,7 +311,7 @@ class WGPURayTracePass {
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
-  private _graphs?: MaterialGraphState;
+  private _graphs?: GraphState;
   /** Editing prefetch: eagerly compile eligible universal kernels; otherwise, after a variant installs, compile every lobe in the
    * background, so a later material edit that needs another lobe installs without waiting.
    * Default off. */
@@ -324,7 +325,7 @@ class WGPURayTracePass {
   private _failedPrefetch = new Set<string>();
   get graphs() {
     if (!this._graphs) {
-      this._graphs = new MaterialGraphState(); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes);
+      this._graphs = createMaterialGraphState(() => {if (!this._disposed) {this._needsUpdateMeshData = true; this.startEditingPrefetch();}}); this._graphs.interpreterAvailable = true; this._graphs.usage = () => materialSurfaceAreas(this._meshes);
       if (this._device) this._graphs.calibration = deviceCompileProfile(this._device).calibration;
     }
     return this._graphs;

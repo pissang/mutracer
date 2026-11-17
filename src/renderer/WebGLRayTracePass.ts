@@ -1,3 +1,4 @@
+import {loadMaterialGraphRuntime, getMaterialGraphRuntime} from './materialGraph/lazy.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
 import {materialNeedsVertexTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
@@ -339,7 +340,7 @@ class WebGLRayTracePass {
   }
 
   preparePrograms() {
-    this.prepare();
+    if (!this.prepare()) return false;
     const main = this._mainPass.isProgramReady();
     const shadow = !this._hasShadowCatcher || this._shadowCatcherPass.isProgramReady();
     return main && shadow;
@@ -350,7 +351,7 @@ class WebGLRayTracePass {
     tile: { x: number; y: number; width: number; height: number },
     disableShadowCatcher = false
   ) {
-    this.prepare();
+    if (!this.prepare()) return;
     const options = {
       clear,
       blend: !clear,
@@ -1127,7 +1128,16 @@ class WebGLRayTracePass {
     return this._shareSpectralPrefix && !this._independentSpectralPaths;
   }
 
-  prepare(): void {
+  private _graphModuleLoad?: Promise<void>;
+  private _graphModuleError?: Error;
+  prepare(): boolean {
+    if (this._graphModuleError) throw this._graphModuleError;
+    if (!getMaterialGraphRuntime() && this._meshes.some(mesh => mesh.materials.some(m => !!m.graph))) {
+      this._graphModuleLoad ??= loadMaterialGraphRuntime().then(() => {}, cause => {
+        this._graphModuleError = new Error('Material Graph texture-slot module failed to load.', {cause});
+      });
+      return false;
+    }
     if (this._needsUpdateMeshData) {
       this._updateMeshData();
     } else if (this._needsUpdateMeshMembership) {
@@ -1214,6 +1224,7 @@ class WebGLRayTracePass {
         USE_GROUNDED_BACKGROUND: this._groundedBackgroundParams[3] > 0
       });
     });
+    return true;
   }
 
   setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
@@ -1238,7 +1249,7 @@ class WebGLRayTracePass {
   prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
     if (!kinds.length) return true;
     // An AOV channel may be the first thing to render a new scene.
-    this.prepare();
+    if (!this.prepare()) return false;
     if (!this._preparedMeshData || !this._tlas) return true;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
@@ -1291,7 +1302,7 @@ class WebGLRayTracePass {
   private async _readDepthSamples(area: DepthSampleArea, aspect?: number, picking = false): Promise<Float32Array | undefined> {
     if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
       !this._renderer.isAllProgramCompiled()) return;
-    this.prepare();
+    if (!this.prepare()) return;
     const packed = packDepthSampleArea(area, aspect ?? this._depthAspect);
     if (picking) packed.set([-1, -1], 2);
     this._depthPass.setUniform('depthArea', packed);

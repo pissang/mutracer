@@ -309,7 +309,7 @@ export default class Engine {
     this._checkMaterialGraphWaiters();
   }
   /**
-   * Waits for graphs in the scene most recently committed by update(). Options default empty.
+   * Waits for graph module loading and compilation in the scene most recently committed by update(). Options default empty.
    * Resolves with idle/ready/failed diagnostics; never rejects. Any newer committed scene
    * edit supersedes the wait (camera-only edits do not). Abort cancels only this waiter.
    * Keep calling Render.refine() or running RenderLoop: this method does not drive rendering.

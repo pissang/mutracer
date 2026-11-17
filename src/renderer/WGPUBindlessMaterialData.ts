@@ -8,7 +8,7 @@ import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureS
 import {mergeTexturesFromMaterials} from './materialTextures.js';
 import {createMaterialBufferData, repackMaterialParams} from './materialParams.js';
 import {packMaterialBuffer, MATERIAL_FLOAT_COUNT} from './materialLayout.js';
-import type {MaterialGraphState} from './materialGraph/state.js';
+import type {GraphState} from './materialGraph/lazy.js';
 
 // Browser adapter intentionally keeps the shared/native MaterialData entry intact.
 export class WGPUBindlessMaterialData {
@@ -21,7 +21,7 @@ export class WGPUBindlessMaterialData {
   materials: OpenPBRMaterial[];
   private readonly retainedCapabilities: OpenPBRMaterial[];
   get capabilityMaterials() { return this.graphs?.capabilityMaterials(this.retainedCapabilities) ?? this.materials; }
-  constructor(materials: OpenPBRMaterial[], lights: SceneLight[], private readonly graphs?: MaterialGraphState) {
+  constructor(materials: OpenPBRMaterial[], lights: SceneLight[], private readonly graphs?: GraphState) {
     this.materialCount = materials.length; graphs?.request(materials);
     this.retainedCapabilities = graphs?.slotCapabilities() ?? [];
     materials = this.materials = graphs?.renderMaterials(materials) ?? materials;

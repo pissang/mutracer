@@ -1,5 +1,5 @@
 import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
-import {materialSlotPlan} from './materialGraph/slotTextures.js';
+import {materialSlotPlan} from './materialGraph/lazy.js';
 import Texture from '../scene/Texture.js';
 import { colorLuminance } from './lightSampling.js';
 import { materialEmission } from './materialEmission.js';

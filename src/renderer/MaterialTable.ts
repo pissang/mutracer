@@ -1,5 +1,5 @@
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
-import {slotTextureSources} from './materialGraph/slotTextures.js';
+import {slotTextureSources} from './materialGraph/slotSources.js';
 import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureSlots.js';
 import MaterialData from './MaterialData.js';
 import { packMaterialBuffer } from './materialLayout.js';
@@ -19,7 +19,7 @@ import {
   type TexturePixelSource
 } from './textureData.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
-import {MaterialGraphState} from './materialGraph/state.js';
+import {createMaterialGraphState, type GraphState} from './materialGraph/lazy.js';
 import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import { isTextureDataSource } from '../scene/Texture.js';
 import type Texture from '../scene/Texture.js';
@@ -155,7 +155,7 @@ class MaterialTable {
   private _graphTextures: Texture[] = [];
   private _materialCount = 0;
   materials: OpenPBRMaterial[] = [];
-  private readonly slotState: MaterialGraphState;
+  private readonly slotState: GraphState;
   private readonly retainedCapabilities: OpenPBRMaterial[];
   get capabilityMaterials() { return this.slotState.capabilityMaterials(this.retainedCapabilities); }
 
@@ -166,11 +166,11 @@ class MaterialTable {
     materials: OpenPBRMaterial[],
     lights: SceneLight[],
     options: MaterialTableOptions = {},
-    private readonly graphs?: MaterialGraphState
+    private readonly graphs?: GraphState
   ) {
     const packStart = performance.now();
     this._materialCount = materials.length;
-    this.slotState = graphs ?? new MaterialGraphState();
+    this.slotState = graphs ?? createMaterialGraphState();
     this.slotState.request(materials);
     if (!graphs) this.slotState.install(this.slotState.requested, this.slotState.revision);
     this.retainedCapabilities = this.slotState.slotCapabilities();

@@ -1,3 +1,5 @@
+import {loadMaterialGraphRuntime} from '../../src/renderer/materialGraph/lazy';
+await loadMaterialGraphRuntime();
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import WGPURayTracePass, {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {WGPUShaderCache} from '../../src/renderer/WGPUShaderCache';
