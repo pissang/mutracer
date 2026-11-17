@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
-  Separator, TabCloseButton, Workspace, useWorkspaceCallbackRef,
+  Separator, TabCloseButton, Workspace, normalizeWorkspaceModel, useWorkspaceCallbackRef,
   type TabNode, type TabRenderProps, type WorkspaceChangedMeta, type WorkspaceImperativeHandle
 } from 'react-resizable-panels';
 import { Aperture, Box, Camera, Download, Globe, Monitor, Palette, Sparkles, Workflow, X, type LucideIcon } from 'lucide-react';
@@ -66,10 +66,10 @@ function initialModel(ui: Ui) {
   return restoreModel(readSaved(), id => ui[TRANSIENT[id]]) ?? defaultModel(ui.tab, ui.left, ui.right);
 }
 
-function openPanel(handle: Handle, id: TransientPanel) {
+function openPanel(handle: Handle, id: TransientPanel, applyModel: (model: Model) => void) {
   const model = handle.getModel();
   const placed = placePanel(model, id);
-  if ('model' in placed) handle.setModel(placed.model);
+  if ('model' in placed) applyModel(normalizeWorkspaceModel<null, PanelData>(placed.model)!);
   else handle.addTab(panelTab(id), { tabsetId: placed.tabsetId });
 }
 
@@ -134,7 +134,7 @@ export function DesktopWorkspace() {
   const onModelChanged = useCallback((next: Model, meta: WorkspaceChangedMeta) => {
     writeSaved(next);
     if (!handle) return;
-    if (meta.reason === 'collapse' || meta.reason === 'expand') setTimeout(() => pin(handle.getModel()), 50);
+    if (meta.reason === 'collapse' || meta.reason === 'expand' || meta.reason === 'close') setTimeout(() => pin(handle.getModel()), 50);
     if (meta.isUserInteraction && (meta.reason === 'resize' || meta.reason === 'move')) queueMicrotask(() => pin(next, true));
     const patch = uiFromModel(next, useViewer.getState().ui, handle.getActiveTabsetId());
     if (Object.keys(patch).length) setUi(patch);
@@ -149,10 +149,12 @@ export function DesktopWorkspace() {
     if (!handle) return;
     for (const [id, flag] of Object.entries(TRANSIENT) as [TransientPanel, (typeof TRANSIENT)[TransientPanel]][]) {
       const present = !!findTabset(handle.getModel(), id);
-      if (ui[flag] && !present) openPanel(handle, id);
+      // Recompute the viewport's share before inserting a panel: a collapsed sibling's
+      // saved expanded size must not become part of the new split's layout weights.
+      if (ui[flag] && !present) openPanel(handle, id, pin);
       else if (!ui[flag] && present) handle.closeTab(id);
     }
-  }, [handle, ui.textureBrowser, ui.materialBrowser, ui.examplesPinned, ui.graphEditor]);
+  }, [handle, pin, ui.textureBrowser, ui.materialBrowser, ui.examplesPinned, ui.graphEditor]);
 
   useEffect(() => {
     if (!handle) return;
