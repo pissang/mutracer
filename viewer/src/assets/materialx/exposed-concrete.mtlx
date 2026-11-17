@@ -6,7 +6,7 @@
   normal. Laitance varies from panel to panel in cloudy blotches, and water
   and algae stains run down from the tie holes, traced through the tangent
   frame so they follow gravity whatever way the UVs are laid out. The Up
-  input (object +Y by default) sets which way is up. Uses UV0 and exposes the
+  input (scene +Y by default) sets which way is up. Uses UV0 and exposes the
   panel count.
   Procedural, CC0.
 -->
@@ -730,8 +730,13 @@
       <input name="outlow" type="float" value="0.88" />
       <input name="outhigh" type="float" value="1.08" />
     </remap>
-    <normalize name="up_direction" type="vector3">
+    <transformvector name="up_object" type="vector3">
       <input name="in" type="vector3" interfacename="up" />
+      <input name="fromspace" type="string" value="world" />
+      <input name="tospace" type="string" value="object" />
+    </transformvector>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" nodename="up_object" />
     </normalize>
     <tangent name="object_tangent" type="vector3" />
     <bitangent name="object_bitangent" type="vector3" />

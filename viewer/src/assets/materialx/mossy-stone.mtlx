@@ -5,7 +5,7 @@
   chipped bevels and deep joints; tilted sedimentary layers inside each one
   alternate harder ledges and recessed softer bands, under fractal
   weathering. The height uses UV space only, so the viewer bakes it into a
-  height map. Moss grows on faces turned toward the Up input (object +Y by
+  height map. Moss grows on faces turned toward the Up input (scene +Y by
   default), in the joints and recessed layers and in soft-edged patches, as
   a fuzz layer over round cushions of shoots; it is deep green in the
   cushions and yellow-green on the tips and at the patch edges. Uses UV0 and
@@ -219,8 +219,13 @@
     </clamp>
     <position name="object_position" type="vector3" />
     <normal name="object_normal" type="vector3" />
-    <normalize name="up_direction" type="vector3">
+    <transformvector name="up_object" type="vector3">
       <input name="in" type="vector3" interfacename="up" />
+      <input name="fromspace" type="string" value="world" />
+      <input name="tospace" type="string" value="object" />
+    </transformvector>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" nodename="up_object" />
     </normalize>
     <dotproduct name="facing_up" type="float">
       <input name="in1" type="vector3" nodename="object_normal" />

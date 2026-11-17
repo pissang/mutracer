@@ -4,7 +4,7 @@
   undulation with small pits sets the height: the high points are polished
   back to bright metal, a dark brown patina covers the rest, and chalky
   verdigris collects in low areas, on rain-facing surfaces and in streaks
-  running down, as a rough dielectric crust. The Up input (object +Y by
+  running down, as a rough dielectric crust. The Up input (scene +Y by
   default) sets which way is up.
   Procedural, CC0.
 -->
@@ -18,8 +18,13 @@
     <input name="up" type="vector3" value="0, 1, 0" uiname="Up" />
     <position name="object_position" type="vector3" />
     <normal name="object_normal" type="vector3" />
-    <normalize name="up_direction" type="vector3">
+    <transformvector name="up_object" type="vector3">
       <input name="in" type="vector3" interfacename="up" />
+      <input name="fromspace" type="string" value="world" />
+      <input name="tospace" type="string" value="object" />
+    </transformvector>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" nodename="up_object" />
     </normalize>
     <dotproduct name="facing_up" type="float">
       <input name="in1" type="vector3" nodename="object_normal" />

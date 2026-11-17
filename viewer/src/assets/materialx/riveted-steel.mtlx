@@ -6,7 +6,7 @@
   chips on the rivet heads, along seams and in patches, and rust streaks run
   down from the rivets, as far as the Rust runs input lets them: the tangent
   frame turns the down direction into UV space, so the streaks follow
-  gravity whatever way the UVs are laid out. The Up input (object +Y by
+  gravity whatever way the UVs are laid out. The Up input (scene +Y by
   default) sets which way is up. Uses UV0 and exposes the plate and rivet counts.
   Procedural, CC0.
 -->
@@ -797,8 +797,13 @@
       <input name="low" type="float" nodename="chip_low" />
       <input name="high" type="float" nodename="chip_high" />
     </smoothstep>
-    <normalize name="up_direction" type="vector3">
+    <transformvector name="up_object" type="vector3">
       <input name="in" type="vector3" interfacename="up" />
+      <input name="fromspace" type="string" value="world" />
+      <input name="tospace" type="string" value="object" />
+    </transformvector>
+    <normalize name="up_direction" type="vector3">
+      <input name="in" type="vector3" nodename="up_object" />
     </normalize>
     <tangent name="object_tangent" type="vector3" />
     <bitangent name="object_bitangent" type="vector3" />
