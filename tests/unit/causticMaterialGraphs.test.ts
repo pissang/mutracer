@@ -4,7 +4,8 @@ import MaterialGraph from '../../src/scene/MaterialGraph.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 import Mesh from '../../src/scene/Mesh.js';
 import {createSphereGeometry} from '../../src/util/commonGeometry.js';
-import {causticCasterSpheres, graphAffectsCausticCaster, hasStochasticCausticCaster, isCausticSpecular, packCausticGraphFlags} from '../../src/renderer/caustics.js';
+import {causticCasterSpheres, graphAffectsCausticCaster, hasStochasticCausticCaster, isCausticCaster, isCausticSpecular, packCausticGraphFlags, type CausticCasterTest} from '../../src/renderer/caustics.js';
+import Texture from '../../src/scene/Texture.js';
 import {MATERIAL_FLOAT_COUNT, materialBufferWgsl, materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 import {MaterialGraphState, setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state.js';
 import {materialGraphShader} from '../../src/renderer/materialGraph/shader.js';
@@ -35,13 +36,70 @@ describe('graph caustic ownership', () => {
     const material = new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0, graph: graph(port)});
     const unrelated = ['baseDiffuseRoughness', 'emissionColor', 'emissionLuminance'].includes(port);
     expect(graphAffectsCausticCaster(material)).toBe(!unrelated);
-    expect(isCausticSpecular(material)).toBe(unrelated);
+    expect(isCausticCaster(material)).toBe(unrelated);
+    expect(isCausticSpecular(material)).toBe(true);
     const mesh = new Mesh(createSphereGeometry(8, 4), material);
     expect(causticCasterSpheres([mesh])).toHaveLength(unrelated ? 1 : 0);
     material.alphaMode = 'blend'; material.geometryOpacity = .5;
     expect(hasStochasticCausticCaster([mesh])).toBe(unrelated);
     material.graph = undefined;
-    expect(isCausticSpecular(material)).toBe(true);
+    expect(isCausticCaster(material)).toBe(true);
+  });
+
+  function slotGraph() {
+    const texture = new Texture({width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255])});
+    texture.colorSpace = 'linear';
+    return new MaterialGraph({nodes: [
+      {id: 'image', category: 'image', type: 'vector3', inputs: {file: {type: 'filename', value: texture}}},
+      {id: 'channel', category: 'extract', type: 'float', inputs: {in: {type: 'vector3', connection: {node: 'image'}}, index: {type: 'integer', value: 1}}},
+      {id: 'gain', category: 'multiply', type: 'float', inputs: {in1: {type: 'float', connection: {node: 'channel'}}, in2: {type: 'float', value: .05}}}
+    ], terminal: {specularRoughness: {node: 'gain'}}});
+  }
+  // Mirrors the WebGPU pass: exclusion follows the graph code the plan evaluates and
+  // smoothness follows the rendered (slot-applied) constants.
+  const casterTest = (state: MaterialGraphState): CausticCasterTest => material => {
+    const m = material as OpenPBRMaterial;
+    return !graphAffectsCausticCaster(m, x => state.evaluatedTerminals(x)) && isCausticSpecular(state.renderMaterials([m])[0]);
+  };
+
+  it('keeps texture-slot graphs as casters and excludes them once they need evaluation', () => {
+    const material = new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0, graph: slotGraph()});
+    const state = new MaterialGraphState(); state.interpreterAvailable = true;
+    state.request([material]);
+    expect(state.requested.structures).toHaveLength(0);
+    expect(state.evaluatedTerminals(material)).toBeUndefined();
+    const mesh = new Mesh(createSphereGeometry(8, 4), material);
+    expect(causticCasterSpheres([mesh], casterTest(state))).toHaveLength(1);
+    expect(isCausticCaster(material)).toBe(false); // Authored default stays conservative.
+    const packed = packCausticGraphFlags(new Float32Array(MATERIAL_FLOAT_COUNT), [material], x => state.evaluatedTerminals(x));
+    expect((Math.trunc(packed[address] * 2) & 1) !== 0).toBe(false);
+
+    material.graph!.setNode({id: 'gain', category: 'add', type: 'float', inputs: {in1: {type: 'float', connection: {node: 'channel'}}, in2: {type: 'float', value: .01}}});
+    state.request([material]);
+    expect(state.evaluatedTerminals(material)).toEqual(['specularRoughness']); // Requested before install.
+    expect(causticCasterSpheres([mesh], casterTest(state))).toHaveLength(0);
+    packCausticGraphFlags(packed, [material], x => state.evaluatedTerminals(x));
+    expect((Math.trunc(packed[address] * 2) & 1) !== 0).toBe(true);
+  });
+
+  it('classifies slot plans by their rendered constants', () => {
+    const graph = slotGraph();
+    graph.setInput('gain', 'in2', {type: 'float', value: .5});
+    const material = new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0, graph});
+    const state = new MaterialGraphState(); state.request([material]);
+    expect(state.renderMaterials([material])[0].specularRoughness).toBe(.5);
+    expect(casterTest(state)(material)).toBe(false);
+  });
+
+  it('keeps an installed graph excluded until its slot replacement installs', () => {
+    const material = new OpenPBRMaterial({transmissionWeight: 1, specularRoughness: 0, graph: graph('specularRoughness')});
+    const state = install([material], 'specialized');
+    expect(state.evaluatedTerminals(material)).toEqual(['specularRoughness']);
+    material.graph = slotGraph(); state.request([material]);
+    expect(state.requested.key).toBe('');
+    expect(state.evaluatedTerminals(material)).toEqual(['specularRoughness']); // Active plan still evaluates it.
+    state.install(state.requested, state.revision);
+    expect(state.evaluatedTerminals(material)).toBeUndefined();
   });
 
   it.each(['specialized', 'interpreter'] as const)('packs the exclusion bit without changing %s parameter/program addresses or record layout', tier => {

@@ -65,6 +65,7 @@ class GraphFreeState implements GraphState {
     capabilityMaterials(retained: readonly OpenPBRMaterial[] = []) {return [...this.materials, ...retained];}
     textures() {return [];}
     emissionProposal() {return undefined;}
+    evaluatedTerminals() {return undefined;}
     pack(buffer: Float32Array) {return buffer;}
 }
 

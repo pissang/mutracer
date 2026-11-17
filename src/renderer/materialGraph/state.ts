@@ -739,6 +739,30 @@ export class MaterialGraphState {
         }
         return [...textures];
     }
+    /** Terminals of the graph code this material runs in the requested or still
+     * installed plan, matching what `pack` writes. Texture-slot plans and constant
+     * fallbacks run none. */
+    evaluatedTerminals(material: OpenPBRMaterial): string[] | undefined {
+        if (this.constantFallback.has(material)) return;
+        let ports: Set<string> | undefined;
+        for (const plan of [this.requested, this.active]) {
+            if (!plan.key) continue;
+            const graph = this.planGraph(plan, material);
+            if (graph) for (const port of Object.keys(graph.terminal)) (ports ??= new Set()).add(port);
+        }
+        return ports && [...ports];
+    }
+    private planGraphs = new WeakMap<GraphPlan, Map<OpenPBRMaterial, NormalizedGraph>>();
+    private planGraph(plan: GraphPlan, material: OpenPBRMaterial) {
+        if (!plan.materials) return plan.graphs[this.materials.indexOf(material)];
+        let graphs = this.planGraphs.get(plan);
+        if (!graphs) {
+            graphs = new Map();
+            plan.graphs.forEach((graph, i) => {if (graph) graphs!.set(plan.materials![i], graph);});
+            this.planGraphs.set(plan, graphs);
+        }
+        return graphs.get(material);
+    }
     emissionProposal(material: OpenPBRMaterial): number[] | undefined {
         if(!this.emissionSampling || material.unlit || material.shadowCatcher || this.constantFallback.has(material))return;
         const i=this.active.materials?.indexOf(material) ?? this.materials.indexOf(material);

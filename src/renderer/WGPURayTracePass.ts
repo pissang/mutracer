@@ -21,7 +21,8 @@ import {
   graphAffectsCausticCaster,
   hasStochasticCausticCaster,
   causticCasterSphere,
-  isCausticSpecular
+  isCausticSpecular,
+  type CausticCasterTest
 } from './caustics.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {WGPUAov} from './WGPUAov.js';
@@ -1005,7 +1006,7 @@ class WGPURayTracePass {
       }
 
       this._setCaustics(this._causticSettings);
-      if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._visibleMeshes());
+      if (this._lightTracing || this._photonMapping) this._causticBounds = causticCasterSphere(this._visibleMeshes(), this._isCausticCaster);
       this._targetTransport.set(this._activeTarget, (+this._lightTracing) | (+this._photonMapping << 1));
       this._preparePhotonTarget();
       // The tier policy may start a gated upgrade or switch tiers while verifying one.
@@ -1257,7 +1258,7 @@ class WGPURayTracePass {
         ? proceduralEnvironmentPower(this._envImageSource)
         : estimateEnvironmentPower(this._envImageSource)
     );
-    const casters = () => causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._visibleMeshes());
+    const casters = () => causticDiagnostics.aggregateCasters ? [this._causticBounds] : causticCasterSpheres(this._visibleMeshes(), this._isCausticCaster);
     if (this._lightTracing && this._causticLight) {
       this._causticLight.setDistribution(casters(), emission());
       this._causticLight.use(variant.lightEmitter!);
@@ -1871,7 +1872,7 @@ class WGPURayTracePass {
         initial = typeof requested === 'object' ? requested.initialRadius : undefined;
       const radius =
         Number.isFinite(initial) && initial! > 0 ? initial! : Math.max((causticDiagnostics.photonPerCasterRadius
-          ? causticCasterSpheres(this._visibleMeshes()).reduce((maximum, s) => Math.max(maximum, s[3]), 0)
+          ? causticCasterSpheres(this._visibleMeshes(), this._isCausticCaster).reduce((maximum, s) => Math.max(maximum, s[3]), 0)
           : this._causticBounds[3]) * 0.03, 1e-4);
       const batch = Math.max(
         1,
@@ -2127,13 +2128,13 @@ class WGPURayTracePass {
     const transport = researchTransport()?.configure(this, 'webgpu');
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
-    this._causticGraphFlags = !!(settings?.lightTracing || settings?.photonMapping) && this._visibleMeshes().some(mesh => mesh.materials.some(material => graphAffectsCausticCaster(material as OpenPBRMaterial)));
+    this._causticGraphFlags = !!(settings?.lightTracing || settings?.photonMapping) && this._visibleMeshes().some(mesh => mesh.materials.some(material => graphAffectsCausticCaster(material as OpenPBRMaterial, this._graphTerminals)));
     const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
-      this._visibleMeshes().some((mesh) => mesh.materials.some(isCausticSpecular));
+      this._visibleMeshes().some((mesh) => mesh.materials.some(this._isCausticCaster));
     const photonSupported =
       !(settings?.lightTracing || settings?.photonMapping) ||
       !hasCaster ||
-      !hasStochasticCausticCaster(this._visibleMeshes());
+      !hasStochasticCausticCaster(this._visibleMeshes(), this._isCausticCaster);
     this._lightTracing = !!settings?.lightTracing && hasCaster && photonSupported;
     const photonMapping = !!settings?.photonMapping && hasCaster && photonSupported;
     this._photonMapping = photonMapping;
@@ -2911,8 +2912,22 @@ class WGPURayTracePass {
     this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear();
   }
 
+  // Caster eligibility follows what the shaders evaluate: texture-slot plans render
+  // through ordinary maps (classified by their slot constants) and stay casters.
+  private get _graphTerminals() {
+    const graphs = this.graphs;
+    return (material: OpenPBRMaterial) => graphs.evaluatedTerminals(material);
+  }
+  private get _isCausticCaster(): CausticCasterTest {
+    const graphs = this.graphs, terminals = this._graphTerminals;
+    return state => {
+      const material = state as OpenPBRMaterial;
+      return !graphAffectsCausticCaster(material, terminals) && isCausticSpecular(graphs.renderMaterials([material])[0]);
+    };
+  }
+
   private _materialBufferArray() {
-    return packCausticGraphFlags(this._materialData!.getBufferArray(), this._preparedMeshData!.materials);
+    return packCausticGraphFlags(this._materialData!.getBufferArray(), this._preparedMeshData!.materials, this._graphTerminals);
   }
 
   private _updateMaterialData() {
