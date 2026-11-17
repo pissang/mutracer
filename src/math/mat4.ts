@@ -472,3 +472,35 @@ export function translate<T0 extends MathArray, T1 extends ReadonlyMathArray, T2
 }
 
 export type Mat4Array = Float32Array | Float64Array | number[];
+
+export function determinant(a: ReadonlyMathArray): number {
+  var a00 = a[0],
+    a01 = a[1],
+    a02 = a[2],
+    a03 = a[3];
+  var a10 = a[4],
+    a11 = a[5],
+    a12 = a[6],
+    a13 = a[7];
+  var a20 = a[8],
+    a21 = a[9],
+    a22 = a[10],
+    a23 = a[11];
+  var a30 = a[12],
+    a31 = a[13],
+    a32 = a[14],
+    a33 = a[15];
+  var b0 = a00 * a11 - a01 * a10;
+  var b1 = a00 * a12 - a02 * a10;
+  var b2 = a01 * a12 - a02 * a11;
+  var b3 = a20 * a31 - a21 * a30;
+  var b4 = a20 * a32 - a22 * a30;
+  var b5 = a21 * a32 - a22 * a31;
+  var b6 = a00 * b5 - a01 * b4 + a02 * b3;
+  var b7 = a10 * b5 - a11 * b4 + a12 * b3;
+  var b8 = a20 * b2 - a21 * b1 + a22 * b0;
+  var b9 = a30 * b2 - a31 * b1 + a32 * b0;
+
+  // Calculate the determinant
+  return a13 * b6 - a03 * b7 + a33 * b8 - a23 * b9;
+}

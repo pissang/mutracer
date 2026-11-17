@@ -77,6 +77,9 @@ describe('vendored gl-matrix behavior', () => {
     }
   });
   it('preserves creators, scalar results and strided callbacks', () => {
+    for (const matrix of [Array.from(reference4.create()), Array.from({length: 16}, (_, i) => Math.sin(i * 3.7)), new Array(16).fill(0)]) {
+      expect(mat4.determinant(matrix)).toBe(reference4.determinant(matrix));
+    }
     const v = [1.25, -3, .5];
     expect(vec3.fromValues(...v as [number, number, number])).toStrictEqual(referenceVector3.fromValues(...v as [number, number, number]));
     expect(vec3.clone(v)).toStrictEqual(referenceVector3.clone(v));

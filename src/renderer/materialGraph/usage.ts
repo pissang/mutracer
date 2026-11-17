@@ -1,4 +1,5 @@
-import {mat4} from 'gl-matrix';
+import * as mat4 from '../../math/mat4.js';
+import type {ReadonlyMathArray} from '../../math/types.js';
 import type Geometry from '../../scene/Geometry.js';
 import type MeshState from '../../scene/MeshState.js';
 import type MaterialState from '../../scene/MaterialState.js';
@@ -22,7 +23,7 @@ function geometrySlotAreas(geometry: Geometry) {
 }
 const scratch = mat4.create();
 /** Area scale of a transform, assuming roughly uniform scale. */
-const areaScale = (m: ArrayLike<number>) => Math.cbrt(Math.abs(mat4.determinant(m as mat4))) ** 2;
+const areaScale = (m: ReadonlyMathArray) => Math.cbrt(Math.abs(mat4.determinant(m))) ** 2;
 
 /**
  * World-space surface area per material over visible meshes: the planner's
