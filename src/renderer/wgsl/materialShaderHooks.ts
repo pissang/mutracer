@@ -10,6 +10,8 @@ export interface MaterialShaderHooks {
     /** Sample and apply surface texture slots through one atlas filtering site. */
     textureLoop?: boolean};
   materialXNormals?: boolean;
+  /** Decode WebGPU caster-exclusion metadata in scenes with authored graphs. */
+  causticGraphFlags?: boolean;
 }
 
 /** Explicit call site, including post-transform normal sampling. */

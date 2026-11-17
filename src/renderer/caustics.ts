@@ -7,11 +7,31 @@ import {meshInstanceCount,meshInstanceTransform} from './meshInstances.js';
 import {mat4,vec3} from '../math.js';
 import type OpenPBRMaterial from '../scene/MaterialState.js';
 import {resolveMaterialAlphaMode} from '../scene/MaterialState.js';
+import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from './materialLayoutSchema.js';
+
+/** Only these terminals provably leave specular transport and coverage unchanged.
+ * Unknown terminals (including aliases) deliberately take the conservative path. */
+export function graphAffectsCausticCaster(m: {graph?: {readonly terminal: object}}) {
+  return Object.keys(m.graph?.terminal ?? {}).some(port =>
+    !['baseDiffuseRoughness', 'emissionColor', 'emissionLuminance'].includes(port));
+}
+
+// WebGPU-only metadata: the low half-unit bit of the graph parameter address.
+// All graph readers convert the address to i32, preserving its integer record
+// index. This leaves the shared 416-byte material layout and native/GLSL intact.
+const graphParameterOffset = materialLayoutFields().find(f => f.name === '_padding2')!.offset / 4;
+export function packCausticGraphFlags(buffer: Float32Array, materials: readonly {graph?: {readonly terminal: object}}[]) {
+  materials.forEach((material, i) => {
+    const offset = i * MATERIAL_FLOAT_COUNT + graphParameterOffset;
+    buffer[offset] = Math.floor(buffer[offset]) + (graphAffectsCausticCaster(material) ? .5 : 0);
+  });
+  return buffer;
+}
 
 export const CAUSTIC_ROUGHNESS_MAX = 0.1;
 /** Material-only classification, shared by caster collection and GPU estimators. */
-export function isCausticSpecular(m: Pick<OpenPBRMaterial, 'baseWeight' | 'baseMetalness' | 'transmissionWeight' | 'subsurfaceWeight' | 'fuzzWeight' | 'coatWeight' | 'specularRoughness'>) {
-  return m.baseWeight * (1 - m.baseMetalness) * (1 - m.transmissionWeight) <= 1e-6 &&
+export function isCausticSpecular(m: Pick<OpenPBRMaterial, 'baseWeight' | 'baseMetalness' | 'transmissionWeight' | 'subsurfaceWeight' | 'fuzzWeight' | 'coatWeight' | 'specularRoughness'> & {graph?: {readonly terminal: object}}) {
+  return !graphAffectsCausticCaster(m) && m.baseWeight * (1 - m.baseMetalness) * (1 - m.transmissionWeight) <= 1e-6 &&
     m.subsurfaceWeight <= 0 && m.fuzzWeight <= 0 && m.coatWeight <= 0 && m.specularRoughness <= CAUSTIC_ROUGHNESS_MAX;
 }
 

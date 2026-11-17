@@ -196,7 +196,7 @@ export interface MaterialGraphCompilationState {
  * snapshots graph parameters and guards installation by revision. */
 export class MaterialGraphState {
     capabilities = 'atlas';
-    /** Browser transport opts out while graph evaluation is disabled. */
+    /** Browser transport opts out until graph emission is available at emission points. */
     emissionSampling = true;
     private readonly slotTextures = new SlotTextures();
     private hasSlotHistory = false;

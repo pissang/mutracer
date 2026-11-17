@@ -17,6 +17,8 @@ import {causticEmissionTable} from './causticEmission.js';
 import type {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
 import {
   causticCasterSpheres,
+  packCausticGraphFlags,
+  graphAffectsCausticCaster,
   hasStochasticCausticCaster,
   causticCasterSphere,
   isCausticSpecular
@@ -307,6 +309,7 @@ class WGPURayTracePass {
   private _causticBounds: [number, number, number, number] = [0, 0, 0, 0];
   private _transport?: ResearchPassState;
   private _lightTracing = false;
+  private _causticGraphFlags = false;
   private _sceneEnvironment = new SceneEnvironmentCache();
   private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
@@ -1236,7 +1239,7 @@ class WGPURayTracePass {
       this.graphs.compilation={sourceBytes:variant.diagnostics.sourceBytes,sourceGenerationTimeMs:variant.diagnostics.sourceGenerationTimeMs,moduleCreationTimeMs:variant.diagnostics.moduleCreationTimeMs,totalTimeMs:variant.diagnostics.totalTimeMs};
       this._emissiveTriangles=this._collectEmissiveTriangles();
       this._updateLightSamplingData();
-      this._materialsBuffer = this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData!.getBufferArray(),MATERIAL_FLOAT_COUNT * 4);
+      this._materialsBuffer = this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialBufferArray(),MATERIAL_FLOAT_COUNT * 4);
       this._needsUpdateBindGroups = true;
     }
     this._canTraceOldGraph = false;
@@ -1292,12 +1295,7 @@ class WGPURayTracePass {
       !constants.SPECTRAL && !shader.hasAlpha && blasLayoutMask === 1 && !this._transport && !this._causticKey && !lightTracing && !photonMapping;
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
-    const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
-      let code = getCausticsRuntime()!.causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
-        causticDiagnostics.fullEmissionRandom !== false, true, true, false, true,
-        {materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS}, true);
-      return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
-    };
+    const causticGraphFlags = this._causticGraphFlags;
     const lightEmitter = lightTracing ? this._causticLight ??= new (getCausticsRuntime()!.WGPUCausticLightPass)(this._device) : undefined;
     const photonEmitter = photonMapping ? this._photonMap?.emission : undefined;
     const pipelineDiagnostic: ShaderCompilationDiagnostics['pipelines'][number] = {
@@ -1318,6 +1316,20 @@ class WGPURayTracePass {
     let startedAt = 0;
     const compile = async () => {
       startedAt = shaderCompilationNow();
+      // Both transports read the camera's packed graph parameters/programs from
+      // group 0. Disable lit graph emission at every hit until emitter points can
+      // evaluate it too; surface and unlit graph outputs remain enabled.
+      const materialHooks = {
+        ...materialGraphShader(shader.graphPlan, !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES, !lightTracing && !photonMapping),
+        materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS,
+        causticGraphFlags
+      };
+      const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
+        let code = getCausticsRuntime()!.causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
+          causticDiagnostics.fullEmissionRandom !== false, true, true, false, true,
+          materialHooks, true);
+        return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
+      };
       // Override values are not part of the WGSL unless they are baked, so a
       // quality edit can share the module that the driver has already parsed.
       const moduleKey = JSON.stringify([graphShaderKey(shader.graphPlan), causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement, unifiedEditingQueries,
@@ -1328,11 +1340,7 @@ class WGPURayTracePass {
         let code = wgpuShaderSource(
           constants,
           {
-            materialHooks: {
-              ...materialGraphShader(lightTracing || photonMapping ? {...shader.graphPlan, key: '', interpreter: false} : shader.graphPlan,
-                !!constants.USE_ANISOTROPY_DIRECTIONS || !!constants.USE_COAT_NORMAL_FRAMES),
-              materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS
-            },
+            materialHooks,
             maxPathEvents: MAX_PATH_EVENTS_WGPU,
             emissiveInstanceIndices: true,
             hasDisplacement,
@@ -1403,7 +1411,7 @@ class WGPURayTracePass {
         pipeline = await request;
         // Calibrates this device's compile speed (cache hits and queueing are detected there).
         const {ms, overlapMs} = clock.end(timing, shaderCompilationNow());
-        this.graphs.observeCompile(lightTracing || photonMapping ? {...shader.graphPlan, key: '', shape: undefined} : shader.graphPlan, source.bytes, ms, overlapMs);
+        this.graphs.observeCompile(shader.graphPlan, source.bytes, ms, overlapMs);
         const scopedError = await scope;
         if (scopedError) throw scopedError;
       } catch (error) {
@@ -1972,9 +1980,18 @@ class WGPURayTracePass {
   getDiagnostics() {
     const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     const materialGraphs = this.graphs.diagnosticsState;
-    if((this._lightTracing || this._photonMapping) && materialGraphs.topologyCount) {
-      materialGraphs.status = 'failed';
-      materialGraphs.diagnostics.push({code:'unsupported-transport',message:'Material graphs currently use the constant material fallback with light tracing or photon mapping.'});
+    if (this._lightTracing || this._photonMapping) {
+      const plan = this.graphs.requested;
+      plan.graphs.forEach((graph, i) => {
+        const material = plan.materials?.[i];
+        if (!graph || !material || material.unlit || material.shadowCatcher) return;
+        const ports = ['emissionColor', 'emissionLuminance', ...(material.emissionLuminance > 0 ? ['coatColor', 'coatWeight'] : [])];
+        for (const port of ports) if (port in graph.terminal) {
+          if (materialGraphs.status !== 'compiling') materialGraphs.status = 'failed';
+          materialGraphs.diagnostics.push({code: 'unsupported-transport', materialId: material.aovId, port,
+            message: `Material ${material.aovId}: ${port} uses constant emission with light tracing or photon mapping because graph emission is not evaluated at light emission points.`});
+        }
+      });
     }
     return {
       textureAtlas: atlas,
@@ -2110,6 +2127,7 @@ class WGPURayTracePass {
     const transport = researchTransport()?.configure(this, 'webgpu');
     if (!!transport?.enabled !== !!this._transport?.enabled) this._needsUpdateLightSamplingData = true;
     this._transport = transport;
+    this._causticGraphFlags = !!(settings?.lightTracing || settings?.photonMapping) && this._visibleMeshes().some(mesh => mesh.materials.some(material => graphAffectsCausticCaster(material as OpenPBRMaterial)));
     const hasCaster = !!(settings?.lightTracing || settings?.photonMapping) &&
       this._visibleMeshes().some((mesh) => mesh.materials.some(isCausticSpecular));
     const photonSupported =
@@ -2123,7 +2141,7 @@ class WGPURayTracePass {
     if(this.graphs.emissionSampling!==emissionSampling) {
       this.graphs.emissionSampling=emissionSampling;
       if(this._preparedMeshData && this._materialData) {
-        this._materialsBuffer=this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialData.getBufferArray(),MATERIAL_FLOAT_COUNT*4);
+        this._materialsBuffer=this._updateGPUBuffer('Materials',this._materialsBuffer,this._materialBufferArray(),MATERIAL_FLOAT_COUNT*4);
         this._emissiveTriangles=this._collectEmissiveTriangles();
         this._needsUpdateLightSamplingData=true;
         this._needsUpdateBindGroups=true;
@@ -2131,7 +2149,7 @@ class WGPURayTracePass {
     }
     this._causticKey =
       this._transport?.enabled || this._lightTracing || this._photonMapping
-        ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${causticDiagnostics.photonDirectSubset !== false}/${this._transport?.key ?? ''}`
+        ? `${this._lightTracing}/${this._photonMapping}/${causticDiagnostics.fullEmissionRandom !== false}/${causticDiagnostics.photonMaxDepth ?? 20}/${causticDiagnostics.debugGroup}/${causticDiagnostics.photonDirectSubset !== false}/${this._transport?.key ?? ''}${this._causticGraphFlags ? '/graph-casters' : ''}`
         : '';
 
   }
@@ -2769,7 +2787,7 @@ class WGPURayTracePass {
       Math.ceil((attrBufferData.byteLength + Math.min(attrBufferData.byteLength >> 1, 64 * 1024 * 1024) + 255) / 256) * 256);
 
     if (!reuseMaterials) this._materialsBuffer = this._updateGPUBuffer(
-      'Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
+      'Materials', this._materialsBuffer, this._materialBufferArray(), MATERIAL_FLOAT_COUNT * 4);
 
     const traversalStackSizes = getTraversalStackSizes(tlas, res.blases);
     const blasLayoutBits = {
@@ -2893,6 +2911,10 @@ class WGPURayTracePass {
     this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear();
   }
 
+  private _materialBufferArray() {
+    return packCausticGraphFlags(this._materialData!.getBufferArray(), this._preparedMeshData!.materials);
+  }
+
   private _updateMaterialData() {
     const update = this._pendingMaterialUpdate!;
     const res = this._preparedMeshData!;
@@ -2905,7 +2927,7 @@ class WGPURayTracePass {
       });
       this._updateTextures(materialData);
     } else materialData.repackParams(res.materials);
-    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
+    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, this._materialBufferArray(), MATERIAL_FLOAT_COUNT * 4);
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
     if (update.emission || update.emissiveMap) {
       this._emissiveTriangles = this._collectEmissiveTriangles();

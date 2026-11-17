@@ -477,8 +477,11 @@ constant emission fallback to help light sampling; a black fallback still works,
 but small, bright graph features can need more samples. Complex emission
 networks increase direct-light sampling cost. Displacement, volume, subsurface
 and tangent terminals are not supported. With WebGPU light tracing or photon
-mapping, graphs that still require graph evaluation use their constant fallback
-and report `unsupported-transport`. This API takes an authored graph; it does not
+mapping, surface graphs work on receivers and ordinary surfaces. Lit emission
+and its coat absorption use constant emission when they require graph evaluation,
+and report `unsupported-transport` with the material and port; other surface outputs
+and unlit emission still evaluate. Graph-driven specular surfaces stay with
+[ordinary path tracing](./caustics.md#limits). This API takes an authored graph; it does not
 load `.mtlx`/USD files or convert other surface models.
 
 Parameter edits update without a graph compile while the installed graph program
