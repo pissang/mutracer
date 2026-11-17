@@ -56,7 +56,6 @@ import {MATERIAL_FLOAT_COUNT} from './materialLayoutSchema.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WGPU} from './pathLimits.js';
 import {updateMeshInstanceColors} from './prepareMeshBVH.js';
 import {updateTLASInstanceColors,tlasInstanceSlots} from './bvhAccel.js';
-import {getMaterialHashKey} from '../scene/openPbrSchema.js';
 import {sameInstanceMembership} from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import {dirtyMeshInstanceIndices} from './prepareMeshBVH.js';
@@ -72,14 +71,15 @@ import {
   unpackDepthSamples,
   type DepthSampleArea
 } from './depthQuery.js';
-import {MeshMembershipCache} from './meshMembership.js';
+import {MeshMembershipCache, snapshotMeshes, snapshotsByMesh, meshMembershipChanged, membershipMaterialsChanged,
+  mergeMaterialUpdate, type MeshSnapshot, type PendingMaterialUpdate} from './meshMembership.js';
 import {
   updatePreparedGeometries,
   canUpdateGeometries,
   geometryTopologyChanged,
 } from './geometryUpdates.js';
 import {SceneEnvironmentCache, RectLightTextureTracker} from './sceneLightChanges.js';
-import {MaterialChangeTracker, type MaterialUpdateLevel} from './materialChanges.js';
+import {MaterialChangeTracker} from './materialChanges.js';
 import {WGPUEnvMapDistribution} from './WGPUEnvMapDistribution.js';
 import {WGPUShaderCache, retainedShaderCapacity} from './WGPUShaderCache.js';
 import {WGPUShaderCapabilities} from './WGPUShaderCapabilities.js';
@@ -332,7 +332,7 @@ class WGPURayTracePass {
   }
   private _canTraceOldGraph = false;
   private _materialChanges = new MaterialChangeTracker();
-  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
+  private _pendingMaterialUpdate?: PendingMaterialUpdate;
   private _materialData: MaterialTable | WGPUBindlessMaterialData | undefined;
   private _bindless?: WGPUBindlessTextures;
   private _retiredBindless = new Set<WGPUBindlessTextures>();
@@ -348,35 +348,9 @@ class WGPURayTracePass {
   private _pendingMembershipData?: ReturnType<typeof updateMeshInstances>;
   private _residentPreparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _tlas?: FlattendBVH;
-  private _meshSnapshot: {
-    mesh: Mesh;
-    instanceCount: number;
-    instanceVersion: number;
-    instanceTransforms?: Float32Array;
-    instanceColors?: Float32Array;
-    colorVersion: number;
-    geometry: Geometry;
-    bvh?: FlattendBVH;
-    materials: OpenPBRMaterial[];
-    materialKeys: string[];
-    visible: boolean;
-    geometryVersion: number;
-    positionArray: Float32Array;
-    positionItemSize: number;
-    indexArray: Uint16Array | Uint32Array;
-    indexItemSize: number;
-    materialIndexArray?: Int32Array;
-    materialIndexItemSize?: number;
-    matrix: number[];
-  }[] = [];
-  private _snapshotByMesh = new WeakMap<
-    Mesh,
-    (typeof this._meshSnapshot)[number]
-  >();
-  private _residentSnapshotByMesh = new WeakMap<
-    Mesh,
-    (typeof this._meshSnapshot)[number]
-  >();
+  private _meshSnapshot: MeshSnapshot[] = [];
+  private _snapshotByMesh = new WeakMap<Mesh, MeshSnapshot>();
+  private _residentSnapshotByMesh = new WeakMap<Mesh, MeshSnapshot>();
   private _dirtyTransformMeshes = new Set<Mesh>();
   private _dirtyColorMeshes = new Set<Mesh>();
   private _geometriesNeedRefit = new Set<Geometry>();
@@ -2257,13 +2231,7 @@ class WGPURayTracePass {
       const materialUpdate = this._materialChanges.classify(update.materials ?? []);
       if (materialUpdate.level !== 'geometry' && canUpdateGeometries(this._preparedMeshData, update.geometries ?? [])) {
         if (update.materials?.length) {
-          const pending = this._pendingMaterialUpdate;
-          this._pendingMaterialUpdate = {
-            level: pending?.level === 'textures' ? 'textures' : materialUpdate.level,
-            emission: !!pending?.emission || materialUpdate.emission,
-            emissiveMap: !!pending?.emissiveMap || materialUpdate.emissiveMap,
-            materials: new Set([...(pending?.materials ?? []), ...update.materials])
-          };
+          this._pendingMaterialUpdate = mergeMaterialUpdate(this._pendingMaterialUpdate, materialUpdate, update.materials);
           refreshMaterialKeys(this._meshSnapshot, update.materials);
         }
         for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
@@ -2318,49 +2286,16 @@ class WGPURayTracePass {
       return transformChange;
     }
     const previousSnapshot = this._meshSnapshot;
-    // Materials are shared by many meshes; hash each once per call.
-    const materialKeys = new Map<OpenPBRMaterial, string>();
-    const materialKey = (material: OpenPBRMaterial) => {
-      let key = materialKeys.get(material);
-      if (key === undefined) { key = getMaterialHashKey(material); materialKeys.set(material, key); }
-      return key;
-    };
-    const nextSnapshot = meshes.map((mesh) => ({
-      mesh,
-      instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
-      instanceVersion: mesh instanceof InstancedMesh ? mesh.transformsVersion : 0,
-      instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
-      instanceColors: mesh instanceof InstancedMesh ? mesh.colors : undefined,
-      colorVersion: mesh instanceof InstancedMesh ? mesh.colorsVersion : 0,
-      geometry: mesh.geometry,
-      bvh: getGeometryBvh(mesh.geometry),
-      materials: mesh.materials.slice(),
-      materialKeys: mesh.materials.map(materialKey),
-      visible: mesh.visible,
-      geometryVersion: mesh.geometry.version,
-      positionArray: mesh.geometry.position.array,
-      positionItemSize: mesh.geometry.position.itemSize,
-      indexArray: mesh.geometry.indices.array,
-      indexItemSize: mesh.geometry.indices.itemSize,
-      materialIndexArray: mesh.geometry.materialIndex?.array,
-      materialIndexItemSize: mesh.geometry.materialIndex?.itemSize,
-      matrix: Array.from(mesh.transform as ArrayLike<number>)
-    }));
-    const membershipChanged = nextSnapshot.length !== previousSnapshot.length ||
-      nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh || item.instanceCount !== previousSnapshot[i]?.instanceCount ||
-        item.visible !== previousSnapshot[i]?.visible || item.materials.some((material, k) => material !== previousSnapshot[i]?.materials[k]));
+    const nextSnapshot = snapshotMeshes(meshes);
+    const membershipChanged = meshMembershipChanged(nextSnapshot, previousSnapshot);
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
     if (membership) {
-      const versions = new Map(previousSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialKeys[i]] as const)));
-      const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
-        membership.materials.some((m, i) => m !== this._preparedMeshData!.materials[i] ||
-          versions.has(m) && getMaterialHashKey(m) !== versions.get(m));
+      const materialsChanged = membershipMaterialsChanged(previousSnapshot, membership.materials, this._preparedMeshData!.materials);
       this._pendingMembershipData = membership;
       this._meshes = meshes;
       this._meshSnapshot = nextSnapshot;
-      this._snapshotByMesh = new WeakMap();
-      nextSnapshot.forEach(item => this._snapshotByMesh.set(item.mesh, item));
+      this._snapshotByMesh = snapshotsByMesh(nextSnapshot);
       this._needsUpdateMeshMembership = true;
       this._needsRefitTLAS = false;
       this._dirtyTransformMeshes.clear();
@@ -2403,10 +2338,7 @@ class WGPURayTracePass {
     if (membershipOnlyChange) {
       this._meshes = meshes;
       this._meshSnapshot = nextSnapshot;
-      this._snapshotByMesh = new WeakMap();
-      nextSnapshot.forEach((snapshot) => {
-        this._snapshotByMesh.set(snapshot.mesh, snapshot);
-      });
+      this._snapshotByMesh = snapshotsByMesh(nextSnapshot);
       this._needsUpdateMeshMembership = true;
       this._needsRefitTLAS = false;
       this._dirtyTransformMeshes.clear();
@@ -2461,10 +2393,7 @@ class WGPURayTracePass {
       }
     });
     this._meshSnapshot = nextSnapshot;
-    this._snapshotByMesh = new WeakMap();
-    nextSnapshot.forEach((snapshot) => {
-      this._snapshotByMesh.set(snapshot.mesh, snapshot);
-    });
+    this._snapshotByMesh = snapshotsByMesh(nextSnapshot);
     if (structuralChange) {
       this._needsUpdateMeshData = true;
       this._needsUpdateMeshMembership = false;
@@ -2864,10 +2793,7 @@ class WGPURayTracePass {
       snapshot.bvh = getGeometryBvh(snapshot.geometry);
     });
     this._residentPreparedMeshData = res;
-    this._residentSnapshotByMesh = new WeakMap();
-    this._meshSnapshot.forEach((snapshot) => {
-      this._residentSnapshotByMesh.set(snapshot.mesh, snapshot);
-    });
+    this._residentSnapshotByMesh = snapshotsByMesh(this._meshSnapshot);
     this._materialChanges.capture(materials);
     this._pendingMaterialUpdate = undefined;
     this._needsUpdateMeshData = false;
