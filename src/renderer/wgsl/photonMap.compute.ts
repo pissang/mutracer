@@ -1,6 +1,5 @@
 export const PHOTON_BYTES = 20;
 export const PHOTON_GRID_SIZE = 262144;
-export const PHOTON_SCAN_BLOCK = 256;
 export const PHOTON_REFERENCE_COUNT = 2 ** 18;
 export type PhotonRadiusScaling = 'none' | 'ppm' | 'constant-count';
 /** Internal density A/B, with the same progressive schedule in all modes. */

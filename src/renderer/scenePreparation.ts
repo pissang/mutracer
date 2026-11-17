@@ -3,6 +3,7 @@ import { Box3 } from './Box3.js';
 import MeshState from '../scene/MeshState.js';
 import MaterialState from '../scene/MaterialState.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
+import { accumulateVertexNormals } from '../util/vertexNormals.js';
 import { mat4, vec3 } from '../math.js';
 import { meshInstanceCount, meshInstanceTransform, PackedMeshInstances, type MeshInstances } from './meshInstances.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
@@ -503,74 +504,8 @@ export function appendMergedGeometry(
 }
 
 export function computeGeometryNormals(geometry: Geometry) {
-  const indices = geometry.indexArray;
-  const positions = geometry.position.array;
-  geometry.normal = new Attribute(new Float32Array(positions.length), 3);
-  const normals = geometry.normal.array;
-
-  const p1 = vec3.create();
-  const p2 = vec3.create();
-  const p3 = vec3.create();
-
-  const v21 = vec3.create();
-  const v32 = vec3.create();
-
-  const n = vec3.create();
-
-  const len = indices
-    ? indices.length
-    : geometry.vertexCount;
-  let i1, i2, i3;
-  for (let f = 0; f < len; ) {
-    if (indices) {
-      i1 = attributeValue(indices, f++);
-      i2 = attributeValue(indices, f++);
-      i3 = attributeValue(indices, f++);
-    } else {
-      i1 = f++;
-      i2 = f++;
-      i3 = f++;
-    }
-
-    vec3.set(
-      p1,
-      positions[i1 * 3],
-      positions[i1 * 3 + 1],
-      positions[i1 * 3 + 2]
-    );
-    vec3.set(
-      p2,
-      positions[i2 * 3],
-      positions[i2 * 3 + 1],
-      positions[i2 * 3 + 2]
-    );
-    vec3.set(
-      p3,
-      positions[i3 * 3],
-      positions[i3 * 3 + 1],
-      positions[i3 * 3 + 2]
-    );
-
-    vec3.sub(v21, p1, p2);
-    vec3.sub(v32, p2, p3);
-    vec3.cross(n, v21, v32);
-    // Already be weighted by the triangle area
-    for (let i = 0; i < 3; i++) {
-      normals[i1 * 3 + i] = normals[i1 * 3 + i] + n[i];
-      normals[i2 * 3 + i] = normals[i2 * 3 + i] + n[i];
-      normals[i3 * 3 + i] = normals[i3 * 3 + i] + n[i];
-    }
-  }
-
-  for (let i = 0; i < normals.length; ) {
-    vec3.set(n, normals[i], normals[i + 1], normals[i + 2]);
-    vec3.normalize(n, n);
-    normals[i++] = n[0];
-    normals[i++] = n[1];
-    normals[i++] = n[2];
-  }
+  geometry.normal = new Attribute(accumulateVertexNormals(geometry.position.array, geometry.indexArray, geometry.vertexCount), 3);
 }
-
 
 function finiteValues(values: Float32Array | Float64Array | number[]): boolean {
   if (values instanceof Float32Array) return finiteStorage(values);

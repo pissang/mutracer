@@ -105,7 +105,6 @@ export function setMaterialGraphPlanner(options: MaterialGraphPlannerOptions = {
         budget: options.budget, interim: options.interim ?? true, policy: {...DEFAULT_GRAPH_TIER_POLICY, ...options.policy}, compileSpeed: options.compileSpeed, compileBackend: options.compileBackend,
         onInstall: options.onInstall, onUpgrade: options.onUpgrade, onCompile: options.onCompile};
 }
-export function materialGraphPlanner(): Readonly<Planner> { return planner; }
 let policyFrozen = false;
 /** Measurement only: stops upgrade decisions (and verification switches) without replanning. */
 export function freezeMaterialGraphPolicy(frozen: boolean) { policyFrozen = frozen; }

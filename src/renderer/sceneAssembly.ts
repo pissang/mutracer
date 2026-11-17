@@ -1,4 +1,3 @@
-import type Geometry from '../scene/Geometry.js';
 import type {AnalyticLightState} from './analyticLightState.js';
 import {retainedShaderCapacity} from './shaderCapacity.js';
 import {makeRayTraceUniform, packWgpuAnalyticLights} from './wgpuSceneUniform.js';
@@ -15,19 +14,6 @@ type TraceViews = ReturnType<typeof makeRayTraceUniform>['views'];
 export function initialSceneConstants(): Record<string, boolean | number> {
   return {USE_BACKGROUND: false, USE_BACKGROUND_MAP: false, USE_GROUNDED_BACKGROUND: false,
     SAMPLING_PATTERN: 0, BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES};
-}
-
-export function sceneAttributeLayout(geometry: Geometry) {
-  const names = ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const;
-  const offsets: number[] = [];
-  const constants: Record<string, boolean | number> = {USE_UV: geometry.uv != null, USE_VERTEX_COLOR: geometry.color != null};
-  let stride = 0;
-  for (const name of names) {
-    offsets.push(stride); constants[name.toUpperCase() + '_OFF'] = stride / 4;
-    if (geometry[name]) stride += 4;
-  }
-  constants.ATTR_STRIDE = stride / 4;
-  return {stride, offsets, constants};
 }
 
 export function sceneTraversalConstants(tlas: number, blas: number, previous: Record<string, boolean | number> = {}) {

@@ -2,16 +2,9 @@ import Mesh from './Mesh.js';
 import Geometry from './Geometry.js';
 import type OpenPBRMaterial from './OpenPBRMaterial.js';
 import type { InstanceData } from './MeshState.js';
+import { checkInstanceRange, fillIdentityTransforms, validateInstances, type InstancedMeshOptions } from './instanceStorage.js';
+export type { InstancedMeshOptions } from './instanceStorage.js';
 
-/** Options for a batch sharing geometry and materials. */
-export interface InstancedMeshOptions {
-  /** Required active instance count; a nonnegative integer. */
-  count: number;
-  /** Column-major local matrices, at least 16 * count floats. Default: count identity matrices. The array is retained. */
-  transforms?: Float32Array;
-  /** Linear RGB multipliers, at least 3 * count floats. Default undefined (white). The array is retained. */
-  colors?: Float32Array;
-}
 
 /** A batch of instances. World matrices are transform * transforms[i]. */
 export default class InstancedMesh extends Mesh {
@@ -40,10 +33,7 @@ export default class InstancedMesh extends Mesh {
     this.transforms = options.transforms ?? new Float32Array(this.count * 16);
     this.colors = options.colors;
     this.validate();
-    if (!options.transforms) for (let i = 0; i < this.count; i++) {
-      const offset = i * 16;
-      this.transforms[offset] = this.transforms[offset + 5] = this.transforms[offset + 10] = this.transforms[offset + 15] = 1;
-    }
+    if (!options.transforms) fillIdentityTransforms(this.transforms, this.count);
   }
   /**
    * Notify edits to both local matrices and colors for all active instances.
@@ -61,9 +51,7 @@ export default class InstancedMesh extends Mesh {
    */
   markTransformsUpdated(start = 0, count = this.count - start): this {
     this.validate();
-    if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > this.count) {
-      throw new RangeError('Instance transform range must fit the active count.');
-    }
+    checkInstanceRange(start, count, this.count, 'transform');
     this._transformVersion++; this._version++;
     return this;
   }
@@ -73,19 +61,12 @@ export default class InstancedMesh extends Mesh {
    */
   markColorsUpdated(start = 0, count = this.count - start): this {
     this.validate();
-    if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > this.count) {
-      throw new RangeError('Instance color range must fit the active count.');
-    }
+    checkInstanceRange(start, count, this.count, 'color');
     this._colorVersion++; this._version++;
     return this;
   }
   /** @internal */
   validate() {
-    if (!Number.isInteger(this.count) || this.count < 0 || !(this.transforms instanceof Float32Array) || this.transforms.length < this.count * 16) {
-      throw new RangeError('InstancedMesh requires a nonnegative count and at least 16 * count Float32 transforms.');
-    }
-    if (this.colors !== undefined && (!(this.colors instanceof Float32Array) || this.colors.length < this.count * 3)) {
-      throw new RangeError('InstancedMesh colors must contain at least 3 * count Float32 values.');
-    }
+    validateInstances(this.count, this.transforms, this.colors);
   }
 }
