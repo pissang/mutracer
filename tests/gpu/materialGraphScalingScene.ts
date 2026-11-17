@@ -18,7 +18,7 @@ export function scalingGraph(index: number, graphClass: GraphClass, valueSeed = 
   const r = random(index * 7919 + (graphClass === 'noise' ? 104729 : 0) + 1), v = random(valueSeed * 31 + 17);
   const nodes: MaterialGraphNode[] = [];
   let next = 0;
-  const add = (category: string, type: MaterialGraphNode['type'], inputs: MaterialGraphNode['inputs'] = {}) => {
+  const add = (category: MaterialGraphNode['category'], type: MaterialGraphNode['type'], inputs: MaterialGraphNode['inputs'] = {}) => {
     const id = `n${next++}`; nodes.push({id, category, type, inputs}); return id;
   };
   const f = (value: number) => ({type: 'float' as const, value});
@@ -31,7 +31,7 @@ export function scalingGraph(index: number, graphClass: GraphClass, valueSeed = 
   pool.push(add('multiply', 'float', {in1: c(split, 'float', 'outx'), in2: f(1 + v() * 8)}));
   pool.push(add('multiply', 'float', {in1: c(split, 'float', 'outy'), in2: f(1 + v() * 8)}));
   if (graphClass === 'noise') {
-    const sources = ['noise2d', 'cellnoise2d', 'worleynoise2d'];
+    const sources = ['noise2d', 'cellnoise2d', 'worleynoise2d'] as const;
     const count = 1 + Math.floor(r() * 2);
     for (let i = 0; i < count; i++) {
       const category = sources[Math.floor(r() * sources.length)];

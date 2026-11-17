@@ -89,7 +89,7 @@ async function run() {
         const parameterPixel = await pixel(), parameterCompiles = compiles - beforeParameter;
         const beforeStructure = compiles, samplesAtStart = render.samples;
         const revisions: number[] = [];
-        for (const category of ['mix', 'add', 'multiply']) {
+        for (const category of ['mix', 'add', 'multiply'] as const) {
             graph.setNode(category === 'mix' ? { id: 'color', category, type: 'color3', inputs: { bg: { type: 'color3', value: [0.1, 0.1, 0.1] }, fg: { type: 'color3', value: [0.8, 0.8, 0.8] } } } : { id: 'color', category, type: 'color3', inputs: { in1: { type: 'color3', value: [0.4, 0.4, 0.4] }, in2: { type: 'color3', value: [0.5, 0.5, 0.5] } } });
             engine.update();
             render.refine();
@@ -117,7 +117,7 @@ async function run() {
         if (structureState.status !== 'ready') throw Error(JSON.stringify(structureState));
         const structureMs = performance.now() - started, structureCompiles = compiles - beforeStructure, structurePixel = await pixel(), installed = state()!.installedRevision;
         const stable = structurePixel;
-        graph.setNode({ id: 'color', category: 'unknown_node', type: 'color3' });
+        graph.setNode({ id: 'color', category: 'unknown_node' as MaterialGraph['nodes'][number]['category'], type: 'color3' });
         engine.update();
         render.refine();
         await pause();

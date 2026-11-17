@@ -3,6 +3,8 @@ import {MaterialGraph, type MaterialGraphTerminal, type MaterialGraphTerminalNam
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 
 it('accepts typed terminal names and aliases while preserving dynamic-data diagnostics', () => {
+    // @ts-expect-error Node categories are closed literals.
+    new MaterialGraph({nodes: [{id: 'n', category: 'constnat', type: 'float'}]});
     const name: MaterialGraphTerminalName = 'geometryNormal';
     const terminal: MaterialGraphTerminal = {[name]: {node: 'normal'}, specularRoughnessAnisotropy: {node: 'roughness'}};
     const graph = new MaterialGraph({terminal});

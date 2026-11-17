@@ -5,7 +5,7 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 import Mesh from '../../src/scene/Mesh.js';
 import {createPlaneGeometry} from '../../src/util/commonGeometry.js';
 import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
-const constant=(id:string,value:number)=>({id,category:'constant',type:'float' as const,inputs:{value:{type:'float' as const,value}}});
+const constant=(id:string,value:number)=>({id,category:'constant' as const,type:'float' as const,inputs:{value:{type:'float' as const,value}}});
 describe('MaterialGraph',()=>{
  it('separates parameters and canonical reachable structure',()=>{
   const a=new MaterialGraph({nodes:[constant('a',0.2),constant('dead',0.7)],terminal:{specularRoughness:{node:'a'}}});
@@ -15,14 +15,14 @@ describe('MaterialGraph',()=>{
   expect(normalizeGraph(a,'bindless').key).not.toBe(an.key);
  });
  it('normalizes author order and locates invalid edges',()=>{
-  const nodes=[constant('a',0.2),{id:'b',category:'multiply',type:'float' as const,inputs:{in1:{type:'float' as const,connection:{node:'a'}},in2:{type:'float' as const,value:2}}}];
+  const nodes=[constant('a',0.2),{id:'b',category:'multiply' as const,type:'float' as const,inputs:{in1:{type:'float' as const,connection:{node:'a'}},in2:{type:'float' as const,value:2}}}];
   const a=new MaterialGraph({nodes,terminal:{specularRoughness:{node:'b'}}});
   expect(normalizeGraph(a).key).toBe(normalizeGraph(new MaterialGraph({nodes:[...nodes].reverse(),terminal:a.terminal})).key);
   a.setInput('b','in1',{type:'float',connection:{node:'b'}});
   expect(normalizeGraph(a).diagnostics).toContainEqual(expect.objectContaining({code:'cycle',node:'b'}));
  });
  it('reports unsupported graphs and type mismatches without dropping terminal connections',()=>{
-  const graph=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node',type:'float'}],terminal:{baseColor:{node:'bad'}}});
+  const graph=new MaterialGraph({nodes:[{id:'bad',category:'unknown_node' as MaterialGraph['nodes'][number]['category'],type:'float'}],terminal:{baseColor:{node:'bad'}}});
   expect(normalizeGraph(graph).diagnostics.map(d=>d.code)).toEqual(['unsupported-node','terminal-type']);
  });
  it('commits graph edits as incremental material changes',()=>{

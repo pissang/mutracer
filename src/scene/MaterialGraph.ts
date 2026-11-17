@@ -1,3 +1,7 @@
+import {normalizeGraph} from '../renderer/materialGraph/normalize.js';
+import {terminalAliases} from '../renderer/materialGraph/nodes.js';
+import type {MaterialGraphCategory} from './materialGraphCatalog.js';
+import {serializeMaterialGraph, deserializeMaterialGraph, type MaterialGraphJSON, type MaterialGraphSerializationOptions, type MaterialGraphDeserializationOptions} from './materialGraphJSON.js';
 import type Texture from './Texture.js';
 import type {MaterialGraphTerminalName} from '../renderer/materialGraph/nodes.js';
 export type {MaterialGraphTerminalName} from '../renderer/materialGraph/nodes.js';
@@ -8,16 +12,16 @@ export interface MaterialGraphConnection {
     /** Stable source node ID. */ node: string;
     /** Source port. Default `out`; separate nodes expose component ports and gltf_colorimage exposes `outcolor`/`outa`. */ output?: string;
 }
-/** One typed input, either a parameter or a connection. */
+/** One parameter or connection, with an optional explicit overload. */
 export interface MaterialGraphInput {
-    /** MaterialX input type. */ type: MaterialGraphType;
+    /** MaterialX input type. Default the connected output type, otherwise the node definition's default overload; values never select a different overload. */ type?: MaterialGraphType;
     /** Uniform value; numbers, booleans, strings, numeric vectors or loaded textures. Default is the node definition's default. */ value?: number | boolean | string | readonly number[] | Texture;
     /** Connected output; when present, value is ignored. Default undefined. */ connection?: MaterialGraphConnection;
 }
 /** An authored MaterialX node. Unsupported categories produce diagnostics. */
 export interface MaterialGraphNode {
     /** Stable, unique ID used in connections and diagnostics. */ id: string;
-    /** MaterialX category, for example `multiply` or `image`. */ category: string;
+    /** MaterialX category, for example `multiply` or `image`. */ category: MaterialGraphCategory;
     /** Output type (source type for separate2/3/4; color4 for gltf_colorimage). */ type: MaterialGraphType;
     /** Authored inputs. Omitted inputs use node defaults. Default empty. */ inputs?: Readonly<Record<string, MaterialGraphInput>>;
 }
@@ -76,10 +80,11 @@ export default class MaterialGraph {
     get terminal() { return this._terminal; }
     /** Monotonic authored edit counter, initially zero; independent of engine compilation revisions. Every successful edit call advances it once, including no-ops. */
     get revision() { return this._revision; }
-    /** Adds or replaces a node by ID and advances revision. */
+    /** Adds a new node at the end or replaces an existing ID in place; advances revision. */
     setNode(node: MaterialGraphNode) {
-        const nodes = this._nodes.filter(item => item.id !== node.id);
-        nodes.push(copyNode(node));
+        const nodes = [...this._nodes], index = nodes.findIndex(item => item.id === node.id);
+        if (index < 0) nodes.push(copyNode(node));
+        else nodes[index] = copyNode(node);
         this._nodes = Object.freeze(nodes);
         this._revision++;
         return this;
@@ -103,5 +108,29 @@ export default class MaterialGraph {
         this._terminal = Object.freeze(Object.fromEntries(Object.entries(terminal).map(([key, value]) => [key, Object.freeze({ ...value })])));
         this._revision++;
         return this;
+    }
+    /** Sets or removes one OpenPBR terminal and advances revision. Aliases replace the same canonical input. Default undefined removes the connection. */
+    setTerminalInput(name: MaterialGraphTerminalName, connection?: MaterialGraphConnection) {
+        const canonical = terminalAliases[name] ?? name;
+        const terminal = Object.fromEntries(Object.entries(this._terminal).filter(([key]) => (terminalAliases[key] ?? key) !== canonical));
+        if (connection) terminal[canonical] = connection;
+        return this.setTerminal(terminal);
+    }
+    /** Checks reachable structure, types and terminals synchronously, without changing revision.
+     * Unused nodes are not checked, except for duplicate IDs. An empty result does not
+     * guarantee engine acceptance: material context, backend, capabilities and shader
+     * compilation are checked by engine.update(). */
+    validate(): MaterialGraphDiagnostic[] { return normalizeGraph(this).diagnostics; }
+    /** Returns version 1 authored JSON. Default no texture mapper; texture values then throw.
+     * JSON.stringify(graph) is supported for graphs without textures. */
+    toJSON(options?: MaterialGraphSerializationOptions): MaterialGraphJSON;
+    toJSON(options: MaterialGraphSerializationOptions | string = {}): MaterialGraphJSON {
+        return serializeMaterialGraph(this, typeof options === 'string' ? {} : options);
+    }
+    /** Loads version 1 authored JSON with revision zero. Default no texture resolver.
+     * Throws for malformed data, unknown versions or unresolved textures. Semantic errors
+     * remain available through validate(); no network or texture loading is performed. */
+    static fromJSON(json: unknown, options: MaterialGraphDeserializationOptions = {}): MaterialGraph {
+        return new MaterialGraph(deserializeMaterialGraph(json, options));
     }
 }

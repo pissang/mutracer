@@ -1,7 +1,9 @@
 import type MaterialGraph from '../../scene/MaterialGraph.js';
 import type { MaterialGraphDiagnostic as Diagnostic, MaterialGraphInput as Input, MaterialGraphNode as Node, MaterialGraphType as Type } from '../../scene/MaterialGraph.js';
 import Texture from '../../scene/Texture.js';
-import { nodeInputs, outputType, terminalTypes, terminalAliases, validNodeType, width } from './nodes.js';
+import { nodeInputs, outputType, terminalTypes, terminalAliases, validNodeType, nodeTypeDiagnostic, width } from './nodes.js';
+import {graphTypes} from './ir.js';
+import {resolveNodeInputs, inputValueMatches} from './resolve.js';
 export interface GraphNode {
     id: string;
     category: string;
@@ -47,7 +49,8 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
     const visit = (id: string): number => {
         if (indices.has(id))
             return indices.get(id)!;
-        const node = source.get(id);
+        const authoredNode = source.get(id);
+        const node = authoredNode && resolveNodeInputs(authoredNode, source);
         if (!node) {
             report('missing-node', `Unknown source node ${id}`, id);
             return -1;
@@ -60,11 +63,9 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
         const defaults = nodeInputs(node);
         if (!defaults)
             report('unsupported-node', `Unsupported MaterialX category ${node.category}`, id);
-        if (node.category === 'convert' && node.inputs?.in && ((width(node.inputs.in.type) > 1 && width(node.type) === 1) || ['filename', 'string'].includes(node.inputs.in.type)))
-            report('unsupported-conversion', `Unsupported convert ${node.inputs.in.type} to ${node.type}`, id, 'in');
-        if(node.category==='dotproduct' && !['vector2','vector3','vector4'].includes(node.inputs?.in1?.type ?? 'vector3'))report('unsupported-type','dotproduct requires vector inputs',id,'in1');
-        if (node.category === 'extract' && !['color3','color4','vector2','vector3','vector4'].includes(node.inputs?.in?.type ?? 'color3')) report('unsupported-type','extract requires a color or vector',id,'in');
-        if (!validNodeType(node))
+        const typeDiagnostic = nodeTypeDiagnostic(node);
+        if (typeDiagnostic) report(typeDiagnostic.code, typeDiagnostic.message, id, typeDiagnostic.port);
+        if (!graphTypes.includes(node.type) || !validNodeType(node))
             report('unsupported-type', `Unsupported ${node.category}/${node.type}`, id);
         const inputs: Record<string, GraphInput> = {};
         for (const port of Object.keys(node.inputs ?? {}))
@@ -72,6 +73,9 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
                 report('unsupported-input', `Unsupported input ${port}`, id, port);
         for (const port of Object.keys(defaults ?? {}).sort()) {
             const expected = defaults![port], authored = node.inputs?.[port], value = authored ?? expected;
+            const original = authoredNode!.inputs?.[port];
+            if (original && original.type === undefined && !original.connection && original.value !== undefined && !inputValueMatches(value.type, original.value))
+                report('input-type', `Value does not match default ${value.type} overload; specify type for another overload`, id, port);
             if (value.type !== expected.type)
                 report('input-type', `Expected ${expected.type}, got ${value.type}`, id, port);
             if (value.connection) {
@@ -81,7 +85,7 @@ export function normalizeGraph(graph: MaterialGraph, capabilities = 'atlas'): No
                     report('connection-type', `Expected ${value.type}, got ${type ?? 'unknown output'}`, id, port);
                 inputs[port] = { type: value.type, node: index, output };
             }
-            else if (!authored && expected.value === undefined && expected.type !== 'filename') {
+            else if ((!authored || original?.type === undefined && !original?.connection && original?.value === undefined) && expected.value === undefined && expected.type !== 'filename') {
                 inputs[port] = { type: expected.type, geometry: port === 'position' ? 'objectPosition' : port };
             }
             else {

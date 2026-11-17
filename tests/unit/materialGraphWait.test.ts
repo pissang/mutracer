@@ -76,7 +76,7 @@ describe('Engine.waitForMaterialGraphs', () => {
         const waiting = engine.waitForMaterialGraphs();
         graphs.fail(graphs.revision, new Error('driver failure')); engine._reportShaderProgress();
         expect(await waiting).toMatchObject({outcome: 'settled', state: {status: 'failed', diagnostics: [{code: 'shader-compilation', message: 'driver failure'}]}});
-        graph.setNode({id: 'c', category: 'unknown', type: 'color3'}); engine.update();
+        graph.setNode({id: 'c', category: 'unknown' as MaterialGraph['nodes'][number]['category'], type: 'color3'}); engine.update();
         expect(await engine.waitForMaterialGraphs()).toMatchObject({outcome: 'settled', state: {status: 'failed', diagnostics: [expect.objectContaining({code: 'unsupported-node'})]}});
         graph.setNode({id: 'c', category: 'constant', type: 'color3'}); engine.update();
         const recovery = engine.waitForMaterialGraphs();

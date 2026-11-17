@@ -4,15 +4,15 @@ interface Input {
     value?: number | number[] | string | boolean;
     connection?: {node: string; output?: string};
 }
-interface Node {
+export interface DefinitionNode {
     category: string;
     type: Type;
-    inputs?: Record<string, {type: Type}>;
+    inputs?: Readonly<Record<string, {type?: Type}>>;
 }
 import {width} from './types.js';
 export {width} from './types.js';
 const input = (type: Type, value?: Input['value']): Input => ({ type, value: type === 'boolean' ? Boolean(value) : type === 'filename' || type === 'string' ? value : value ?? (width(type) === 1 ? 0 : Array<number>(width(type)).fill(0)) });
-const same = (node: Node, value = 0) => input(node.type, width(node.type) === 1 ? value : Array<number>(width(node.type)).fill(value));
+const same = (node: DefinitionNode, value = 0) => input(node.type, width(node.type) === 1 ? value : Array<number>(width(node.type)).fill(value));
 const terminalInputAliases = { geometryOpacity: 'opacity', geometryNormal: 'normal', specularRoughnessAnisotropy: 'specularAnisotropy', coatRoughnessAnisotropy: 'coatAnisotropy' } as const;
 const terminalInputTypes = {
     baseWeight: 'float', baseColor: 'color3', baseDiffuseRoughness: 'float', baseMetalness: 'float',
@@ -30,7 +30,7 @@ export const terminalAliases: Readonly<Record<string, string>> = terminalInputAl
 export const terminalTypes: Readonly<Record<string, Type>> = terminalInputTypes;
 /** Definitions are authored against MaterialX v1.39.4 stdlib_defs.mtlx/stdlib_ng.mtlx.
  * Parameters remain runtime data even for conditional controls and UV transforms. */
-export function nodeInputs(node: Node): Record<string, Input> | undefined {
+export function nodeInputs(node: DefinitionNode): Record<string, Input> | undefined {
     const t = node.type, a = node.inputs ?? {}, scalar = input('float');
     switch (node.category) {
         case 'noise2d':
@@ -152,13 +152,13 @@ export function nodeInputs(node: Node): Record<string, Input> | undefined {
         default: return undefined;
     }
 }
-export function outputType(node: Node, port = 'out'): Type | undefined {
+export function outputType(node: DefinitionNode, port = 'out'): Type | undefined {
     if (node.category === 'gltf_colorimage') return port === 'outcolor' ? 'color3' : port === 'outa' ? 'float' : undefined;
     if (node.category.startsWith('separate'))
         return (node.type.startsWith('color') ? 'rgba' : 'xyzw').slice(0, width(node.type)).split('').some(c => port === `out${c}`) ? 'float' : undefined;
     return port === 'out' ? node.type : undefined;
 }
-export function validNodeType(node: Node) {
+export function validNodeType(node: DefinitionNode) {
     const { category: c, type: t } = node;
     if (c === 'gltf_colorimage') return t === 'color4';
     if (c === 'gltf_normalmap') return t === 'vector3';
@@ -182,4 +182,16 @@ export function validNodeType(node: Node) {
     if (c === 'constant' || c === 'convert' || c === 'dot')
         return t !== 'filename' && t !== 'string';
     return !['filename', 'string', 'boolean', 'integer'].includes(t);
+}
+
+/** Type restrictions shared by authored validation and catalog discovery. */
+export function nodeTypeDiagnostic(node: DefinitionNode): {code: 'unsupported-conversion' | 'unsupported-type'; message: string; port?: string} | undefined {
+    const source = node.inputs?.in?.type;
+    if (node.category === 'convert' && source && ((width(source) > 1 && width(node.type) === 1) || ['filename', 'string'].includes(source)))
+        return {code: 'unsupported-conversion', message: `Unsupported convert ${source} to ${node.type}`, port: 'in'};
+    if (node.category === 'dotproduct' && !['vector2', 'vector3', 'vector4'].includes(node.inputs?.in1?.type ?? 'vector3'))
+        return {code: 'unsupported-type', message: 'dotproduct requires vector inputs', port: 'in1'};
+    if (node.category === 'extract' && !['color3', 'color4', 'vector2', 'vector3', 'vector4'].includes(source ?? 'color3'))
+        return {code: 'unsupported-type', message: 'extract requires a color or vector', port: 'in'};
+    return undefined;
 }

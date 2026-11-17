@@ -4,8 +4,8 @@ import MaterialGraph from '../../src/scene/MaterialGraph.js';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial.js';
 import {MaterialGraphState} from '../../src/renderer/materialGraph/state.js';
 function graph(value:number,structure=false,invalid=false) {
-    return new MaterialGraph({nodes:[{id:'value',category:invalid?'unknown':'constant',type:'color3',inputs:{value:{type:'color3',value:[value,value,value]}}},
-        ...(structure?[{id:'multiply',category:'multiply',type:'color3' as const,inputs:{in1:{type:'color3' as const,connection:{node:'value'}},in2:{type:'float' as const,value:1}}}]:[])],terminal:{emissionColor:{node:structure?'multiply':'value'}}});
+    return new MaterialGraph({nodes:[{id:'value',category:(invalid?'unknown':'constant') as MaterialGraph['nodes'][number]['category'],type:'color3',inputs:{value:{type:'color3',value:[value,value,value]}}},
+        ...(structure?[{id:'multiply',category:'multiply' as const,type:'color3' as const,inputs:{in1:{type:'color3' as const,connection:{node:'value'}},in2:{type:'float' as const,value:1}}}]:[])],terminal:{emissionColor:{node:structure?'multiply':'value'}}});
 }
 describe('material graph preparation schedule',()=>{
     it('keeps the installed graph sampling and installs only the newest request',()=>{

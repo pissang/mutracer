@@ -12,7 +12,7 @@ describe('MaterialX HSV adjustment',()=>{
    expect(graph.diagnostics).toEqual([]);const rgb=evaluateGraph(graph).baseColor;rgb.forEach((x,i)=>expect(x).toBeCloseTo(want[i],6));
   }
  });
- it.each(['rgbtohsv','hsvtorgb','hsvadjust'])('retains alpha, including alpha larger than RGB, through %s',category=>{
+ it.each(['rgbtohsv','hsvtorgb','hsvadjust'] as const)('retains alpha, including alpha larger than RGB, through %s',category=>{
   const g=normalizeGraph(new MaterialGraph({nodes:[{id:'n',category,type:'color4',inputs:{in:{type:'color4',value:[.2,.4,.6,3]}}},{id:'a',category:'extract',type:'float',inputs:{in:{type:'color4',connection:{node:'n'}},index:{type:'integer',value:3}}}],terminal:{opacity:{node:'a'}}}));
   expect(g.diagnostics).toEqual([]);expect(evaluateGraph(g).opacity).toEqual([3]);
  });
@@ -22,7 +22,7 @@ describe('MaterialX HSV adjustment',()=>{
  });
  it('generates valid varying WGSL for both color types and HSV conversion variants',()=>{
   gpu();
-  for(const type of ['color3','color4'] as const)for(const category of ['rgbtohsv','hsvtorgb','hsvadjust']){
+  for(const type of ['color3','color4'] as const)for(const category of ['rgbtohsv','hsvtorgb','hsvadjust'] as const){
    const g=normalizeGraph(new MaterialGraph({nodes:[{id:'uv',category:'texcoord',type:'vector2'},{id:'c',category:'convert',type,inputs:{in:{type:'vector2',connection:{node:'uv'}}}},{id:'n',category,type,inputs:{in:{type,connection:{node:'c'}}}},{id:'out',category:'convert',type:'color3',inputs:{in:{type,connection:{node:'n'}}}}],terminal:{baseColor:{node:'out'}}}));
    expect(g.diagnostics).toEqual([]);
    const source=original('src/renderer/wgsl/rayTrace.compute.ts').default({hasDisplacement:false,hasAnisotropyDirections:true,hasCoatNormals:true,hasAlpha:false,materialHooks:materialGraphShader({key:g.key,graphs:[g],structures:[g]})});
