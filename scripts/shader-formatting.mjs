@@ -2,7 +2,7 @@ import ts from 'typescript';
 import { createShaderIdentifierMap, readShaderSourceFiles, renameShaderIdentifiers } from './shader-identifiers.mjs';
 import { isRendererSource, shaderTemplateLanguage, shaderTemplateParts } from './shader-template-context.mjs';
 
-// Keep newlines (including GLSL directive boundaries) and expression spacing.
+// Keep directive boundaries and token separation while compacting punctuation.
 // The NUL separator stands for a template interpolation; comments containing
 // one stay intact so an interpolation inside a comment cannot become code.
 export function stripShaderFormatting(source, trimFirstLine = true) {
@@ -38,8 +38,62 @@ export function stripShaderFormatting(source, trimFirstLine = true) {
     result += comment.includes('\0') ? comment
       : comment.startsWith('/*') ? ' ' + comment.replace(/[^\r\n]/g, '') : '';
   }
-  return trimFirstLine ? result.replace(/^[\t ]+/gm, '')
+  result = trimFirstLine ? result.replace(/^[\t ]+/gm, '')
     : result.replace(/([\r\n])[\t ]+/g, '$1');
+  return compactShaderWhitespace(result);
+}
+
+// Tokens that can be accidentally created by joining separated punctuation.
+const joinedOperators = new Set(['++', '--', '<<', '>>', '<=', '>=', '==', '!=', '&&', '||',
+  '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '->', '//', '/*', '*/']);
+const punctuation = /^[+\-*/%&|^!<>=?:;,(){}\[\].@]$/;
+function compactShaderWhitespace(source) {
+  let result = '', previous = '', spaces = '', directive = false, lineStart = true;
+  let blank = false;
+  for (let i = 0; i < source.length;) {
+    const start = i, char = source[i];
+    if (char === '\r' || char === '\n') {
+      const newline = char === '\r' && source[i + 1] === '\n' ? '\r\n' : char;
+      // A continued macro may intentionally end with a blank line.
+      const continued = directive && previous === '\\';
+      if (!blank || continued) result += spaces + newline;
+      blank = !previous && !continued;
+      i += newline.length; previous = ''; spaces = ''; lineStart = true; directive = continued;
+      continue;
+    }
+    if (char === ' ' || char === '\t') {spaces += char; i++; continue;}
+    if (lineStart && char === '#') directive = true;
+    if (char === '"' || char === "'") {
+      const quote = source[i++];
+      while (i < source.length) {
+        if (source[i] === '\\') i += 2;
+        else if (source[i++] === quote) break;
+      }
+    } else if (source.startsWith('//', i) || source.startsWith('/*', i)) {
+      // Only comments containing interpolation (or malformed comments) remain.
+      // Keep their entire text, so interpolation never escapes its comment.
+      if (source.startsWith('//', i)) while (i < source.length && !/[\r\n]/.test(source[i])) i++;
+      else {
+        let depth = 1; i += 2;
+        while (i < source.length && depth) {
+          if (source.startsWith('/*', i)) {depth++; i += 2;}
+          else if (source.startsWith('*/', i)) {depth--; i += 2;}
+          else i++;
+        }
+      }
+    } else if (/[A-Za-z0-9_]/.test(char)) {
+      // Words/numbers remain intact; their internal punctuation is visited later.
+      while (i < source.length && /[A-Za-z0-9_]/.test(source[i])) i++;
+    } else i++;
+    const token = source.slice(start, i);
+    const a = previous.at(-1), b = token[0];
+    const numericDot = (a === '.' && /\d/.test(b)) || (/\d/.test(a ?? '') && b === '.');
+    const removable = !directive && previous && token !== '\0' && previous !== '\0' &&
+      (punctuation.test(a) || punctuation.test(b)) && !numericDot && !joinedOperators.has(a + b);
+    result += (removable ? '' : spaces) + token;
+    previous = token; spaces = ''; lineStart = false; blank = false;
+  }
+  return result + spaces;
 }
 
 /** Only shader modules and explicitly marked/tagged shader templates are
