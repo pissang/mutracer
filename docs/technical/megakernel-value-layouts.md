@@ -1,7 +1,8 @@
 # Megakernel value layouts
 
-Changes to `OpenPbrResolvedMaterial`, `OpenPbrPreparedBsdf`, `SurfaceInteraction`
-and `Path` need both the CPU layout contract and the informational GPU benchmark:
+Changes to `OpenPbrResolvedMaterial`, `OpenPbrPreparedBsdf`, `SurfaceInteraction`,
+`Path` and `MXResult` need both the CPU layout contract and the informational
+GPU benchmark:
 
 ```bash
 npx vitest run tests/unit/shaderValueLayouts.test.ts
@@ -60,6 +61,22 @@ real-GPU editing and direct output with `npm run test:editing-queries` before
 changing their lifetime or representation, and record timestamp benchmarks
 separately for the edited scenes.
 WGSL allocation sizes do not establish actual GPU registers, spills or occupancy.
+
+The D3D12 universal graph interpreter represents its complete `MXResult` as
+27 vector slots (432 WGSL bytes) rather than 27 named fields (208 bytes).
+Terminal bytecode already carries the slot index, so Store writes the slot
+directly; consumers retain the terminal's scalar or RGB interpretation.
+Other shapes keep named fields. The logical instruction register budget stays
+at 16. Five additional browser slots hold the context's UV, object position,
+normal, tangent and bitangent. CPU packing redirects geometry operands to those
+slots, and the shared opacity boundary refreshes its three frame values.
+Shader installation repacks the private instruction copies for the installed
+shape; its shader key distinguishes the slot encoding from an equal family/terminal
+union in a natural shape. Cached logical programs retain their portable encoding.
+This representation needs both cold compilation and GPU timestamp comparisons: eager context loads
+and indexed values can change rendering cost even when compilation improves.
+Compare full-frame timestamps at matching sample indices across interleaved
+variants, including arithmetic-only graphs as well as complex materials.
 
 The unified RGB integrator also uses a two-element **function-local**
 `SurfaceInteraction` array, indexed at runtime through the guard value of four.

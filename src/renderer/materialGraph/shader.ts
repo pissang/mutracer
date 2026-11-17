@@ -8,7 +8,8 @@ import {materialGraphShaderIR, graphMathShaderIR} from './specialize.js';
 export function materialGraphShader(plan: GraphPlan, frames = true) {
     // Without graphs only the universal editing interpreter is compiled, so a first graph renders at once.
     if (!plan.key && !plan.shape?.universal) return {};
-    const hooks = materialGraphShaderIR((plan.specialized ?? plan.structures).map(flattenGraph), frames, (plan.interpreter ?? !!plan.programs?.size) ? {terminals: plan.interpreterTerminals ?? [], salt: plan.interpreterSalt, families: plan.interpreterFamilies, emission: plan.interpreterEmission, opacity: plan.interpreterOpacity, operandLoop: graphCompilerBackend() === 'd3d12', vectorCells: !!plan.shape?.universal && graphCompilerBackend() === 'd3d12', flatPerlin: !!plan.shape?.universal && graphCompilerBackend() === 'd3d12'} : undefined, true);
+    const indexedValues = !!plan.shape?.universal && graphCompilerBackend() === 'd3d12';
+    const hooks = materialGraphShaderIR((plan.specialized ?? plan.structures).map(flattenGraph), frames, (plan.interpreter ?? !!plan.programs?.size) ? {terminals: plan.interpreterTerminals ?? [], salt: plan.interpreterSalt, families: plan.interpreterFamilies, emission: plan.interpreterEmission, opacity: plan.interpreterOpacity, operandLoop: graphCompilerBackend() === 'd3d12', indexedResults: indexedValues, geometryRegisters: indexedValues, vectorCells: !!plan.shape?.universal && graphCompilerBackend() === 'd3d12', flatPerlin: !!plan.shape?.universal && graphCompilerBackend() === 'd3d12'} : undefined, true);
     if (hooks.graph && plan.shape?.universal && graphCompilerBackend() === 'd3d12') hooks.graph.textureLoop = true;
     return hooks;
 }

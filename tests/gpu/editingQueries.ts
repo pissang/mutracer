@@ -4,6 +4,7 @@ import type {SceneLight} from '../../src/scene/Scene.js';
 import WGPURayTracePass from '../../src/renderer/WGPURayTracePass.js';
 import {freezeMaterialGraphPolicy, setMaterialGraphPlanner} from '../../src/renderer/materialGraph/state.js';
 import {generateVertexTangents} from '../../src/util/geometry.js';
+import {runEditingTextureSampling} from './editingTextureSampling.js';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const graph = (opacity = false) => new MaterialGraph({nodes: [
@@ -12,7 +13,7 @@ const graph = (opacity = false) => new MaterialGraph({nodes: [
   {id: 'rough', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}, index: {type: 'integer', value: 0}}}
 ], terminal: {baseColor: {node: 'color'}, specularRoughness: {node: 'rough'}, ...(opacity ? {opacity: {node: 'rough'}} : {})}});
 
-export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-mask', 'medium', 'catcher', 'bevel', 'displacement', 'lights', 'cube', 'zsobol', 'alpha-zsobol']) {
+export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-mask', 'medium', 'catcher', 'bevel', 'displacement', 'lights', 'cube', 'zsobol', 'alpha-zsobol'], identifiers?: readonly (readonly [string, string])[]) {
   // Tests inspect installation, so a passing comparison cannot silently use lean twice.
   const prototype = WGPURayTracePass.prototype as any, start = prototype._startTraceVariant;
   const passes: any[] = [];
@@ -61,6 +62,7 @@ export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-m
     throw Error('Editing query regression timed out');
   };
   try {
+    rows.push(await runEditingTextureSampling(identifiers));
     for (const kind of cases) {
       const editing = await make('editing', kind), lean = await make('off', kind);
       try {

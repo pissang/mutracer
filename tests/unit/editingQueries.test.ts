@@ -12,7 +12,8 @@ function generate(loader: typeof original, hasDisplacement: boolean, maxPathEven
     gpu();
     const families = new Set(Object.values(GraphOp).filter((op): op is GraphOp => typeof op === 'number'));
     const hooks = loader('src/renderer/materialGraph/specialize.ts').materialGraphShaderIR([], true,
-        {terminals: Object.keys(terminalTypes), families, opacity: families, emission: families, operandLoop: true, vectorCells: true, flatPerlin: true}, true);
+        {terminals: Object.keys(terminalTypes), families, opacity: families, emission: families, operandLoop: true,
+            indexedResults: true, geometryRegisters: true, vectorCells: true, flatPerlin: true}, true);
     hooks.graph.textureLoop = true;
     return loader('src/renderer/wgpuShaderSource.ts').wgpuShaderSource(universalEditingConstants({HAS_BEVEL: bevel, SAMPLING_PATTERN: samplingPattern}), {
         materialHooks: {...hooks, materialXNormals: true}, hasDisplacement, maxPathEvents,
@@ -35,6 +36,7 @@ describe('unified editing query generation', () => {
         expect(values.structs.SurfaceInteraction.size).toBe(272);
         expect(values.structs.OpenPbrPreparedBsdf.size).toBe(736);
         expect(values.structs.Path.size).toBe(96);
+        expect(values.structs.MXResult.size).toBe(432);
         if (unified) {
           expect(values.structs.MaterialQueryState.size).toBe(96);
           expect(values.structs.ScatteringWork.size).toBe(48);

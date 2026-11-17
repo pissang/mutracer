@@ -4,6 +4,7 @@ import MaterialGraph from '../../src/scene/MaterialGraph.js';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {flattenGraph} from '../../src/renderer/materialGraph/flatten.js';
 import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize.js';
+import {terminalTypes} from '../../src/renderer/materialGraph/nodes.js';
 import {rayTrace,gpu} from './shaderSourceFormattingFixture';
 
 // WGSL value layouts are compiler inputs, not Metal register counts. A change
@@ -25,6 +26,13 @@ function valueDefinitions(source:string) {
     return makeShaderDataDefinitions(source.replace(/struct\s+\w+\s*\{[^}]*\}/g,block=>block.replace(/\bbool\b/g,'u32')));
 }
 describe('megakernel value-layout contracts',()=>{
+    for (const indexed of [false,true]) it(`keeps the complete graph result layout (indexed=${indexed})`,()=>{
+        gpu();
+        const hooks=materialGraphShaderIR([],true,{terminals:Object.keys(terminalTypes),operandLoop:true,indexedResults:indexed,geometryRegisters:indexed},true);
+        const declaration=hooks.graph!.declarations.match(/struct MXResult\s*\{[^}]*\}/)![0];
+        const result=makeShaderDataDefinitions(declaration).structs.MXResult;
+        expect([Object.keys(result.fields).length,result.size]).toEqual(indexed?[1,432]:[27,208]);
+    });
     it('accounts for boolean size and alignment in nested value types',()=>{
         gpu();const structs=valueDefinitions('struct Flag { value:bool, }; struct Mixed { flag:Flag, normal:vec3f, };').structs;
         expect(structs.Flag.size).toBe(4);expect(structs.Mixed.fields.normal.offset).toBe(16);expect(structs.Mixed.size).toBe(32);

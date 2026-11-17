@@ -11,7 +11,7 @@ import {GRAPH_COMPILE_COEFFICIENTS, GRAPH_FREE_MS_PER_KB, GraphCompileCalibratio
 import {materialGraphConstants} from './features.js';
 import {generateGraphIR} from './generate.js';
 import {graphMathShaderIR} from './specialize.js';
-import {graphInterpreterHelpers, graphInterpreterShader, graphProgramFamilies, GraphOp, buildGraphProgram, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
+import {graphInterpreterHelpers, graphInterpreterShader, graphProgramFamilies, GraphOp, buildGraphProgram, lowerBrowserGeometryOperands, graphTerminalMask, GRAPH_INSTRUCTION_FLOATS, type GraphProgram, type GraphProgramResult} from './interpreter.js';
 import type OpenPBRMaterial from '../../scene/OpenPBRMaterial.js';
 import Texture from '../../scene/Texture.js';
 import type { MaterialGraphDiagnostic } from '../../scene/MaterialGraph.js';
@@ -595,7 +595,10 @@ export class MaterialGraphState {
     private universalShape() {
         if (this.universal?.planner !== planner) {
             const shape = this.shape([], {terminals: Object.keys(terminalTypes), families: ALL_FAMILIES, emission: ALL_FAMILIES, opacity: ALL_FAMILIES}, []);
-            this.universal = {planner, shape: {...shape, universal: true}};
+            // The same terminal/family union can occur in a natural shape, whose
+            // instructions retain geometry operands and whose result has fields.
+            const shaderKey = graphCompilerBackend() === 'd3d12' ? `${shape.shaderKey}:indexed-values-1` : shape.shaderKey;
+            this.universal = {planner, shape: {...shape, shaderKey, universal: true}};
         }
         return this.universal.shape;
     }
@@ -795,6 +798,7 @@ export class MaterialGraphState {
         // Programs follow the parameter records; materials address their structure's
         // header record with a negative topology ID.
         const headers = new Map<string, number>();
+        const geometryRegisters = !!this.active.shape?.universal && graphCompilerBackend() === 'd3d12';
         for (const [key, program] of this.active.programs ?? []) {
             headers.set(key, buffer.length / MATERIAL_FLOAT_COUNT + chunks.length);
             const entries = [program.surface, program.opacity, program.emission];
@@ -804,7 +808,12 @@ export class MaterialGraphState {
             chunks.push(header);
             for (const entry of entries) for (let at = 0; at < entry.instructions.length; at += GRAPH_INSTRUCTION_FLOATS) {
                 const record = new Float32Array(MATERIAL_FLOAT_COUNT);
-                programRows.forEach((row, r) => record.set(entry.instructions.slice(at + r * 4, at + r * 4 + 4), row));
+                const instruction = geometryRegisters ? entry.instructions.slice(at, at + GRAPH_INSTRUCTION_FLOATS) : entry.instructions;
+                const offset = geometryRegisters ? 0 : at;
+                // installShader stages this buffer with the installed shape. Keep
+                // cached logical programs portable when switching back to lean.
+                if (geometryRegisters) lowerBrowserGeometryOperands(instruction);
+                programRows.forEach((row, r) => record.set(instruction.slice(offset + r * 4, offset + r * 4 + 4), row));
                 chunks.push(record);
             }
         }
