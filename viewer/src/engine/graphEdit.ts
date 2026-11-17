@@ -1,6 +1,9 @@
-import { MaterialGraph, type MaterialGraphConnection as Edge, type MaterialGraphInput as Input, type MaterialGraphNode as Node, type MaterialGraphTerminal, type MaterialGraphType as Type } from '@meimu/mutracer';
-import { graphCategories, graphOutputs, graphTypes } from '../../../src/renderer/materialGraph/ir';
-import { nodeInputs, outputType, terminalAliases, terminalTypes, validNodeType, width } from '../../../src/renderer/materialGraph/nodes';
+import {
+  describeMaterialGraphNode, materialGraphCategories, materialGraphTerminals, MaterialGraph,
+  type MaterialGraphNodeSignature, type MaterialGraphTerminalName, type MaterialGraphCategory,
+  type MaterialGraphConnection as Edge, type MaterialGraphInput as Input, type MaterialGraphNode as Node,
+  type MaterialGraphTerminal, type MaterialGraphType as Type
+} from '@meimu/mutracer';
 
 /**
  * Pure edits of a MaterialGraph for the node editor. The graph stays the single
@@ -12,7 +15,7 @@ import { nodeInputs, outputType, terminalAliases, terminalTypes, validNodeType, 
 export type Target = { node: string; port: string } | { terminal: string };
 
 export interface PaletteEntry {
-  category: string;
+  category: MaterialGraphCategory;
   types: Type[];
   group: string;
 }
@@ -30,11 +33,11 @@ const groupOf = (category: string) => GROUPS.find(([, re]) => re.test(category))
 
 /** Output types a category supports, in the engine's type order. */
 export function categoryTypes(category: string): Type[] {
-  return graphTypes.filter(type => validNodeType({ category, type }) && !!nodeInputs({ category, type }));
+  return [...new Set(describeMaterialGraphNode(category)?.signatures.map(signature => signature.type) ?? [])];
 }
 
 /** Every node category the engine implements, with its types and a palette group. */
-export const PALETTE: PaletteEntry[] = graphCategories
+export const PALETTE: PaletteEntry[] = materialGraphCategories
   .map(category => ({ category, types: categoryTypes(category), group: groupOf(category) }))
   .filter(entry => entry.types.length > 0)
   .sort((a, b) => a.category.localeCompare(b.category));
@@ -43,21 +46,36 @@ export const PALETTE: PaletteEntry[] = graphCategories
 export const defaultType = (types: readonly Type[]): Type =>
   types.includes('float') ? 'float' : types.includes('color3') ? 'color3' : types[0];
 
-/** The node's inputs with their effective types and defaults; authored-only inputs for unknown categories. */
-export function nodePorts(node: Node): Record<string, Input> {
-  return nodeInputs({ category: node.category, type: node.type, inputs: node.inputs as Record<string, { type: Type }> }) as Record<string, Input> | undefined
-    ?? { ...node.inputs };
+/** Resolve a catalog overload in port order, retaining defaults for invalid authored types. */
+function nodeSignature(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): MaterialGraphNodeSignature | undefined {
+  let signatures = describeMaterialGraphNode(node.category)?.signatures.filter(s => s.type === node.type) ?? [];
+  for (const port of Object.keys(signatures[0]?.inputs ?? {})) {
+    const input = node.inputs?.[port];
+    const source = input?.connection && graph?.nodes.find(n => n.id === input.connection!.node);
+    const type = input?.type ?? (source && outputType(source, input?.connection?.output)) ?? signatures[0].inputs[port].types[0];
+    const matching = signatures.filter(s => s.inputs[port].types.includes(type));
+    if (matching.length) signatures = matching;
+  }
+  return signatures[0];
 }
 
+/** The node's inputs with their effective types and defaults; authored-only inputs for unknown categories. */
+export function nodePorts(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): Record<string, Input & {type: Type}> {
+  const signature = nodeSignature(node, graph);
+  return signature ? Object.fromEntries(Object.entries(signature.inputs).map(([port, input]) => [port, {type: input.types[0], value: input.default}])) : Object.fromEntries(Object.entries(node.inputs ?? {}).map(([port, input]) => [port, {...input, type: input.type ?? node.type}]));
+}
+const outputType = (node: Node, port = 'out') => nodeSignature(node)?.outputs[port];
 /** Output port names of a node. */
 export function nodeOutputs(node: Node): string[] {
-  return graphOutputs.filter(port => outputType(node, port));
+  return Object.keys(nodeSignature(node)?.outputs ?? {});
 }
 
+const terminalDefinition = (name: string) => (materialGraphTerminals as Readonly<Record<string, {name: MaterialGraphTerminalName; type: Type}>>)[name];
+const terminalTypes = Object.fromEntries(Object.entries(materialGraphTerminals).filter(([name, value]) => name === value.name).map(([name, value]) => [name, value.type]));
 /** OpenPBR terminal names the engine accepts, without aliases, and their types. */
 export const TERMINALS = Object.entries(terminalTypes) as [string, Type][];
 /** The canonical terminal name of an authored terminal key. */
-export const canonicalTerminal = (name: string) => terminalAliases[name] ?? name;
+export const canonicalTerminal = (name: string): string => terminalDefinition(name)?.name ?? name;
 
 const byId = (graph: MaterialGraph) => new Map(graph.nodes.map(node => [node.id, node]));
 
@@ -81,14 +99,12 @@ export function reachable(graph: MaterialGraph) {
 }
 
 /** Checks node-local rules the normalizer applies beyond input types. */
-function nodeError(node: Node): string | null {
-  if (!validNodeType(node)) return `${node.category} has no ${node.type} variant`;
-  const inType = node.inputs?.in?.type;
-  if (node.category === 'convert' && inType && ((width(inType) > 1 && width(node.type) === 1) || inType === 'filename' || inType === 'string'))
-    return `Cannot convert ${inType} to ${node.type}`;
-  if (node.category === 'extract' && inType && !['color3', 'color4', 'vector2', 'vector3', 'vector4'].includes(inType)) return 'extract needs a color or vector';
-  const in1 = node.inputs?.in1?.type;
-  if (node.category === 'dotproduct' && in1 && !['vector2', 'vector3', 'vector4'].includes(in1)) return 'dotproduct needs vectors';
+function nodeError(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): string | null {
+  if (!categoryTypes(node.category).includes(node.type)) return `${node.category} has no ${node.type} variant`;
+  const ports = nodePorts(node, graph);
+  for (const [port, input] of Object.entries(node.inputs ?? {})) {
+    if (input.type && ports[port] && input.type !== ports[port].type) return `${port} takes ${ports[port].type}, not ${input.type}`;
+  }
   return null;
 }
 
@@ -109,24 +125,33 @@ export function connectionError(graph: MaterialGraph, source: Edge, target: Targ
   }
   const to = nodes.get(target.node);
   if (!to) return `Unknown node ${target.node}`;
-  const defaults = nodeInputs(to);
+  const defaults = nodePorts(to, graph);
   if (!defaults?.[target.port]) return `${to.category} has no input ${target.port}`;
   const candidate: Node = { ...to, inputs: { ...to.inputs, [target.port]: { type } } };
-  const resolved = nodeInputs(candidate)?.[target.port]?.type;
+  const resolved = nodePorts(candidate, graph)?.[target.port]?.type;
   if (resolved !== type) return `${target.port} takes ${defaults[target.port].type}, not ${type}`;
-  const local = nodeError(candidate);
+  const local = nodeError(candidate, graph);
   if (local) return local;
   if (upstream(graph, source.node, nodes).has(target.node)) return 'Connection would create a cycle';
   return null;
 }
 
 /** Drops authored inputs whose type no longer matches what the node resolves. */
-function reconcile(node: Node): Node {
+function reconcile(node: Node, graph?: Pick<MaterialGraph, 'nodes'>): Node {
   let current = node;
   for (let pass = 0; pass < 3; pass++) {
-    const defaults = nodeInputs(current);
+    const defaults = nodePorts(current, graph);
     if (!defaults) return current;
-    const inputs = Object.fromEntries(Object.entries(current.inputs ?? {}).filter(([port, input]) => !defaults[port] || defaults[port].type === input.type));
+    const inputs = Object.fromEntries(Object.entries(current.inputs ?? {}).filter(([port, input]) => {
+      const expected = defaults[port];
+      if (!expected) return true;
+      const source = input.connection && graph?.nodes.find(n => n.id === input.connection!.node);
+      const type = input.type ?? (source && outputType(source, input.connection?.output));
+      if (type) return type === expected.type;
+      if (input.connection || input.value === undefined || expected.value === undefined) return true;
+      // Values with inferred types follow the new default overload after a type edit.
+      return Array.isArray(expected.value) ? Array.isArray(input.value) && input.value.length === expected.value.length : typeof input.value === typeof expected.value;
+    }));
     if (Object.keys(inputs).length === Object.keys(current.inputs ?? {}).length) return current;
     current = { ...current, inputs };
   }
@@ -161,12 +186,13 @@ function revalidateConsumers(nodes: Map<string, Node>, terminal: Record<string, 
       if (type) inputs[port] = { type, connection: input.connection };
       else delete inputs[port];
       let candidate: Node = { ...next, inputs };
-      if (!type || nodeInputs(candidate)?.[port]?.type !== type || nodeError(candidate)) {
+      const context = {nodes: [...nodes.values()]};
+      if (!type || nodePorts(candidate, context)?.[port]?.type !== type || nodeError(candidate, context)) {
         const rest = { ...next.inputs };
         delete rest[port];
         candidate = { ...next, inputs: rest };
       }
-      next = reconcile(candidate);
+      next = reconcile(candidate, context);
     }
     if (next !== node) nodes.set(node.id, next);
   }
@@ -183,7 +209,7 @@ export function addNode(graph: MaterialGraph, category: string, type?: Type) {
   const types = categoryTypes(category);
   if (!types.length) throw Error(`Unsupported node category ${category}`);
   const id = uniqueId(graph, category);
-  return { graph: edit(graph, nodes => { nodes.set(id, { id, category, type: type && types.includes(type) ? type : defaultType(types), inputs: {} }); }), id };
+  return { graph: edit(graph, nodes => { nodes.set(id, { id, category: category as MaterialGraphCategory, type: type && types.includes(type) ? type : defaultType(types), inputs: {} }); }), id };
 }
 
 /** A wire dragged from an output, or backwards from an input. */
@@ -289,27 +315,18 @@ export function connect(graph: MaterialGraph, source: Edge, target: Target) {
   const error = connectionError(graph, source, target);
   if (error) throw Error(error);
   const connection: Edge = source.output && source.output !== 'out' ? { node: source.node, output: source.output } : { node: source.node };
-  return edit(graph, (nodes, terminal) => {
-    if ('terminal' in target) {
-      const name = canonicalTerminal(target.terminal);
-      for (const key of Object.keys(terminal)) if (canonicalTerminal(key) === name) delete terminal[key];
-      terminal[name] = connection;
-      return;
-    }
+  if ('terminal' in target) return build(graph.nodes, graph.terminal).setTerminalInput(target.terminal as MaterialGraphTerminalName, connection);
+  return edit(graph, nodes => {
     const from = nodes.get(source.node)!, node = nodes.get(target.node)!;
     const type = outputType(from, source.output ?? 'out')!;
-    nodes.set(node.id, reconcile({ ...node, inputs: { ...node.inputs, [target.port]: { type, connection } } }));
+    nodes.set(node.id, reconcile({ ...node, inputs: { ...node.inputs, [target.port]: { type, connection } } }, {nodes: [...nodes.values()]}));
   });
 }
 
 /** Removes the connection into `target`; a node input returns to its default value. */
 export function disconnect(graph: MaterialGraph, target: Target) {
-  return edit(graph, (nodes, terminal) => {
-    if ('terminal' in target) {
-      const name = canonicalTerminal(target.terminal);
-      for (const key of Object.keys(terminal)) if (canonicalTerminal(key) === name) delete terminal[key];
-      return;
-    }
+  if ('terminal' in target) return build(graph.nodes, graph.terminal).setTerminalInput(target.terminal as MaterialGraphTerminalName);
+  return edit(graph, nodes => {
     const node = nodes.get(target.node);
     if (!node?.inputs?.[target.port]) return;
     const inputs = { ...node.inputs };
@@ -328,12 +345,15 @@ export function reconnect(graph: MaterialGraph, source: Edge, from: Target, to: 
 export function setParameter(graph: MaterialGraph, id: string, port: string, value: Input['value'] | undefined) {
   const node = graph.nodes.find(item => item.id === id);
   if (!node) throw Error(`Unknown node ${id}`);
-  const type = nodePorts(node)[port]?.type ?? node.inputs?.[port]?.type;
+  const type = nodePorts(node, graph)[port]?.type ?? node.inputs?.[port]?.type;
   if (!type) throw Error(`${node.category} has no input ${port}`);
   return edit(graph, nodes => {
     const inputs = { ...node.inputs };
     if (value === undefined) delete inputs[port];
-    else inputs[port] = { type, value };
+    else {
+      const defaultInput = describeMaterialGraphNode(node.category)?.signatures.find(s => s.type === node.type)?.inputs[port];
+      inputs[port] = defaultInput?.types[0] === type ? {value} : {type, value};
+    }
     nodes.set(id, { ...node, inputs });
   });
 }
@@ -344,7 +364,7 @@ export function setNodeType(graph: MaterialGraph, id: string, type: Type) {
   if (!node) throw Error(`Unknown node ${id}`);
   if (!categoryTypes(node.category).includes(type)) throw Error(`${node.category} has no ${type} variant`);
   return edit(graph, (nodes, terminal) => {
-    nodes.set(id, reconcile({ ...node, type }));
+    nodes.set(id, reconcile({ ...node, type }, {nodes: [...nodes.values()]}));
     revalidateConsumers(nodes, terminal, id);
   });
 }

@@ -105,6 +105,24 @@ describe('graph edits', () => {
     expect(normalizeGraph(graph).diagnostics).toEqual([]);
   });
 
+  it('edits inferred parameters and connections while respecting coupled defaults', () => {
+    const graph = new MaterialGraph({nodes: [
+      {id: 'uv', category: 'texcoord', type: 'vector2'},
+      {id: 'dot', category: 'dotproduct', type: 'float'},
+      {id: 'color', category: 'constant', type: 'color3', inputs: {value: {value: [.2, .4, .6]}}}
+    ], terminal: {baseColor: {node: 'color'}}});
+    expect(connectionError(graph, {node: 'uv'}, {node: 'dot', port: 'in2'})).toMatch(/takes/);
+    graph.setInput('dot', 'in1', {connection: {node: 'uv'}});
+    expect(nodePorts(graph.nodes[1], graph).in2.type).toBe('vector2');
+    expect(connectionError(graph, {node: 'uv'}, {node: 'dot', port: 'in2'})).toBeNull();
+    const edited = setParameter(graph, 'color', 'value', [.6, .4, .2]);
+    expect(edited.nodes[2].inputs!.value).toEqual({value: [.6, .4, .2]});
+    expect(edited.validate()).toEqual([]);
+    const changed = setNodeType(edited, 'color', 'float');
+    expect(changed.nodes[2].inputs!.value).toBeUndefined();
+    expect(changed.validate()).toEqual([]);
+  });
+
   it('undoes and redoes graph replacements through the viewer history', () => {
     let current = small();
     const apply = (next: MaterialGraph, label: string) => {

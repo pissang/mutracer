@@ -1,7 +1,7 @@
 import {graphContextDiagnostics} from '../../../src/renderer/materialGraph/context';
 import {flattenGraphUnchecked} from '../../../src/renderer/materialGraph/flatten';
 import {graphTerminals} from '../../../src/renderer/materialGraph/ir';
-import {MaterialGraph, OpenPBRMaterial, type MaterialGraphInput as Input, type MaterialGraphNode as Node, type MaterialGraphType as Type, type MaterialGraphConnection as Edge} from '@meimu/mutracer';
+import {MaterialGraph, OpenPBRMaterial, type MaterialGraphInput as GraphInput, type MaterialGraphNode as Node, type MaterialGraphType as Type, type MaterialGraphConnection as Edge} from '@meimu/mutracer';
 import {normalizeGraph} from '../../../src/renderer/materialGraph/normalize';
 import {evaluateGraph} from '../../../src/renderer/materialGraph/evaluate';
 import {generateGraph} from '../../../src/renderer/materialGraph/codegen';
@@ -12,6 +12,8 @@ import {materialXSurfaceInputs, materialXInactiveLobes, materialXInactiveImageIn
 import type {MaterialValues} from './materialParams';
 import {planDisplacement, type DisplacementPlan} from './materialxDisplacement';
 
+// The XML reader authors explicit input types, including unsupported imported categories.
+type Input = GraphInput & {type: Type};
 const literal=(type:Type,value:Input['value']):Input=>({type,value});
 /** MaterialX surface input names (camel-cased) that map to differently named material properties. */
 export const fields:Record<string,string>={geometryOpacity:'opacity',geometryThinWalled:'thinWalled',geometryNormal:'normal',specularRoughnessAnisotropy:'specularAnisotropy',coatRoughnessAnisotropy:'coatAnisotropy',subsurfaceScatterAnisotropy:'subsurfaceAnisotropy'};
@@ -112,7 +114,7 @@ class Reader {
     }
     private missing(name:string,type:Type):Input {
         const id=`missing/${name}`;
-        if(!this.nodes.some(n=>n.id===id))this.nodes.push({id,category:'missing_node',type});
+        if(!this.nodes.some(n=>n.id===id))this.nodes.push({id,category:'missing_node' as Node['category'],type});
         return {type,connection:{node:id}};
     }
     emit(e:Element,ctx=this.context):string {
@@ -136,7 +138,7 @@ class Reader {
         }else if(category==='swizzle'){
             this.swizzle(id,type,inputs.in,String(inputs.channels?.value??''));
         }else{
-            this.nodes.push({id,category,type,inputs});
+            this.nodes.push({id,category:category as Node['category'],type,inputs});
             if(inputs.file?.value){
                 const prefix=this.inherited(e,'fileprefix');
                 const colorspace=input(e,'file')?.attrs.colorspace??this.inherited(e,'colorspace');
@@ -155,7 +157,7 @@ class Reader {
     // connected vectors use extract/combine, scalar sources are replicated.
     // https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/source/MaterialXCore/Version.cpp
     private swizzle(id:string,type:Type,source:Input|undefined,channels:string){
-        if(!source){this.nodes.push({id,category:'invalid_swizzle',type});return;}
+        if(!source){this.nodes.push({id,category:'invalid_swizzle' as Node['category'],type});return;}
         const index=(c:string)=>'rgba'.includes(c)&&c!==''?'rgba'.indexOf(c):'xyzw'.includes(c)&&c!==''?'xyzw'.indexOf(c):-1;
         const n=width(type),sourceWidth=width(source.type);
         if(!source.connection&&source.value!==undefined){
@@ -177,7 +179,7 @@ class Reader {
     }
     private inherited(e:Element,key:string):string {for(let p:Element|null=e;p;p=p.parent)if(p.attrs[key])return p.attrs[key];return '';}
     add(type:Type,category:string,inputs:Record<string,Input>,name:string):Input {
-        const id=`surface/${name}`;this.nodes.push({id,type,category,inputs});return {type,connection:{node:id}};
+        const id=`surface/${name}`;this.nodes.push({id,type,category:category as Node['category'],inputs});return {type,connection:{node:id}};
     }
     terminals(shader:Element):Record<string,Input> {
         if(shader.tag==='standard_surface'){
@@ -262,7 +264,7 @@ function inactive(nodes:Node[],port:string,edge:Edge){
     const normalized=normalizeGraph(new MaterialGraph({nodes,terminal:{[probe]:edge}}));
     return !normalized.diagnostics.length&&!isDynamic(normalized)&&evaluateGraph(normalized)[probe].every(v=>v===0);
 }
-const dropInactiveImageInputs=(inputs:Record<string,Input>)=>{
+const dropInactiveImageInputs=(inputs:Record<string,GraphInput>)=>{
     for(const [port,value] of Object.entries(inactiveImageInputs))if(inputs[port]&&!inputs[port].connection&&inputs[port].value===value)delete inputs[port];
 };
 /** Removes inputs that have no effect from a graph saved by an earlier

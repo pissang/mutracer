@@ -153,7 +153,7 @@ function Workspace({ material }: { material: SelectedMaterial }) {
         const nodeErrors = errors.get(node.id) ?? [];
         if (previous && sameNode(previous.data.node, node) && previous.data.unused === !live.has(node.id) && sameList(previous.data.errors, nodeErrors))
           return previous.position === place(node.id) ? previous : { ...previous, position: place(node.id) };
-        const ports = nodePorts(node);
+        const ports = nodePorts(node, graph);
         const view: PortView[] = Object.entries(ports).map(([name, def]) => {
           const authored = node.inputs?.[name];
           return { name, type: authored?.type ?? def.type, input: authored ?? def, connected: !!authored?.connection };
