@@ -1,3 +1,5 @@
+import {loadCausticsRuntime} from '../../src/renderer/lazyCaustics';
+await loadCausticsRuntime();
 import {describe, expect, it, vi} from 'vitest';
 import {lightShaderCapabilities, LIGHT_SHADER_CAPABILITIES, MATERIAL_SHADER_CAPABILITIES,
   updateSceneShaderCapabilities, retainedShaderCapabilities} from '../../src/renderer/shaderCapabilities';

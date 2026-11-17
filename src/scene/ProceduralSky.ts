@@ -12,7 +12,8 @@ export interface ProceduralSkyOptions {
 /**
  * Clear-sky HDR environment for EnvironmentLight.map and scene backgrounds.
  * Change time or resolution, then call engine.update(). Supports environments
- * and backgrounds only; cannot be used in material texture slots.
+ * and backgrounds only; cannot be used in material texture slots. WebGPU loads
+ * the sky renderer on first use and waits for preparation before sampling.
  */
 export default class ProceduralSky extends Texture {
   declare image: ProceduralSkyImage;

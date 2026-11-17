@@ -1,3 +1,5 @@
+import {loadCausticsRuntime} from '../../src/renderer/lazyCaustics';
+await loadCausticsRuntime();
 import rayTrace from '../../src/renderer/wgsl/rayTrace.compute';
 import {gpu} from './shaderSourceFormattingFixture';
 import {expect,it,vi} from 'vitest';

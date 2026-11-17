@@ -10,12 +10,11 @@ import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanc
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from './compactVertices.js';
 import {causticDiagnostics} from './causticDiagnostics.js';
-import {WGPUPhotonMap, photonRadius} from './WGPUPhotonMap.js';
-import {defaultPhotonMapPhotons} from './wgsl/photonMap.compute.js';
+import type {WGPUPhotonMap} from './WGPUPhotonMap.js';
+import {getCausticsRuntime, loadCausticsRuntime} from './lazyCaustics.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
 import {causticEmissionTable} from './causticEmission.js';
-import {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
-import {causticLightCompute} from './wgsl/causticLight.compute.js';
+import type {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
 import {
   causticCasterSpheres,
   hasStochasticCausticCaster,
@@ -27,7 +26,7 @@ import {WGPUAov} from './WGPUAov.js';
 import {packAovScene} from './aovScene.js';
 import {aovMask, AOV_PRIMARY_MASK, AOV_ACCUMULATED_MASK, AOV_REFLECTANCE_MASK, COMPACT_AOV_KINDS, type AovKind} from './aov.js';
 import {proceduralEnvironmentPower} from './proceduralEnvironmentPower.js';
-import {WGPUSkyBaker} from './WGPUSkyBaker.js';
+import type {WGPUSkyBaker} from './WGPUSkyBaker.js';
 import {
   initialSceneConstants,
   sceneTraversalConstants,
@@ -150,7 +149,6 @@ import {
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
 } from './openPbrEnergyLut.browser.js';
-import {offlineAdaptiveCompute} from './wgsl/offlineAdaptive.compute.js';
 import {
   normalizeOfflineAdaptiveSamplingOptions,
   type OfflineAdaptiveSamplingOptions,
@@ -300,6 +298,8 @@ class WGPURayTracePass {
   private _causticKey = '';
   private _photonMapping = false;
   private _photonMap?: WGPUPhotonMap;
+  private _causticLoading?: Promise<void>;
+  private _causticError?: Error;
   private _causticLight?: WGPUCausticLightPass;
   private _causticSettings?: import('../Render.js').CausticSettings;
   private _causticPerspective = true;
@@ -476,6 +476,28 @@ class WGPURayTracePass {
   private _envDistributionTex?: GPUTexture;
   private _envDistribution?: WGPUEnvMapDistribution;
   private _skyBaker?: WGPUSkyBaker;
+  private _skyLoading?: Promise<void>;
+  private _skyError?: Error;
+  private _skyTasks = new Map<'env' | 'background', {source: Extract<EnvironmentSource, {sky: unknown}>; output: GPUTexture}>();
+  private _bakeSky(kind: 'env' | 'background', source: Extract<EnvironmentSource, {sky: unknown}>, output: GPUTexture) {
+    if (this._skyBaker) {this._skyBaker.bake(source, output); return;}
+    this._skyTasks.set(kind, {source, output});
+    this._skyLoading ??= import('./WGPUSkyBaker.js').then(({WGPUSkyBaker}) => {
+      if (this._disposed) return;
+      this._skyBaker = new WGPUSkyBaker(this._device);
+      for (const [kind, {source, output}] of this._skyTasks) {
+        // A later committed edit may have replaced the source or its texture.
+        if (kind === 'env' ? source !== this._envImageSource || output !== this._envTex
+          : source !== this._backgroundImageSource || output !== this._backgroundTex) continue;
+        this._skyBaker.bake(source, output);
+        if (kind === 'env') {
+          this._envDistribution ??= new WGPUEnvMapDistribution(this._device);
+          this._envDistribution.build(output, this._envDistributionTex!);
+        }
+      }
+      this._skyTasks.clear();
+    }).catch(cause => {if (!this._disposed) this._skyError = new Error('Failed to load or prepare the WebGPU procedural sky.', {cause});});
+  }
   private _backgroundImageSource: EnvironmentSource | undefined;
   private _backgroundTex?: GPUTexture;
 
@@ -649,6 +671,11 @@ class WGPURayTracePass {
     if (!width || !height || !this._outColorBuffer || !this._outNormalBuffer) {
       return undefined;
     }
+
+    const {offlineAdaptiveCompute} = await import('./wgsl/offlineAdaptive.compute.js').catch(cause => {
+      throw new Error('Failed to load offline adaptive sampling.', {cause});
+    });
+    if (this._disposed) return;
 
     const normalized = normalizeOfflineAdaptiveSamplingOptions(
       options,
@@ -947,6 +974,7 @@ class WGPURayTracePass {
 
   private _preparePhotonTarget() {
     if (!this._photonMapping) return;
+    const {WGPUPhotonMap, defaultPhotonMapPhotons} = getCausticsRuntime()!;
     this._photonMap ??= new WGPUPhotonMap(this._device);
     const before = this._photonMap.get(this._activeTarget)?.data;
     const requested = this._causticSettings?.photonMapping;
@@ -966,7 +994,13 @@ class WGPURayTracePass {
    * requested state waits on the GPU; undefined means nothing is outstanding.
    */
   updatePipeline(): Promise<void> | undefined {
-    if (this._disposed) return;
+    if (this._disposed || this._skyError || ((this._lightTracing || this._photonMapping) && this._causticError)) return;
+    if ((this._lightTracing || this._photonMapping) && !getCausticsRuntime()) {
+      return this._causticLoading ??= loadCausticsRuntime().then(() => {}, cause => {
+        this._causticError = cause instanceof Error ? cause : new Error(String(cause));
+      });
+    }
+    if (!this._skyBaker && this._skyLoading) return this._skyLoading;
     if (this._needsUpdateMeshData || this._needsUpdateMeshMembership || this._pendingGeometryUpdates.size ||
       this._needsRefitTLAS || this._dirtyColorMeshes.size || this._pendingMaterialUpdate || this._needsUpdateLightSamplingData) {
       // A failure can have the same shader signature as its repaired scene.
@@ -1285,12 +1319,12 @@ class WGPURayTracePass {
     const causticKey = this._causticKey, transport = this._transport;
     const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
     const emitterSource = (mode: 'lightTracing' | 'photonMapping') => {
-      let code = causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
+      let code = getCausticsRuntime()!.causticLightCompute(constants, blasLayoutMask, hasDisplacement, mode, '',
         causticDiagnostics.fullEmissionRandom !== false, true, true, false, true,
         {materialXNormals: !!constants.USE_MATERIALX_NORMAL_MAPS}, true);
       return bindless ? bindlessShaderSource(code, this._textureSelection.support!.enable) : code;
     };
-    const lightEmitter = lightTracing ? this._causticLight ??= new WGPUCausticLightPass(this._device) : undefined;
+    const lightEmitter = lightTracing ? this._causticLight ??= new (getCausticsRuntime()!.WGPUCausticLightPass)(this._device) : undefined;
     const photonEmitter = photonMapping ? this._photonMap?.emission : undefined;
     const pipelineDiagnostic: ShaderCompilationDiagnostics['pipelines'][number] = {
       label: 'Ray Trace', entryPoint: 'main', firstFrameRequired: true, status: 'compiling',
@@ -1665,7 +1699,7 @@ class WGPURayTracePass {
 
   /** Whether the latest request waits on GPU work that will settle on its own. */
   isCompilingShader() {
-    return !!this._awaitingRetirement || (!this._canTraceOldGraph && this._requestedVariant?.status === 'pending');
+    return ((this._lightTracing || this._photonMapping) && !!this._causticLoading && !getCausticsRuntime() && !this._causticError) || (!!this._skyLoading && !this._skyBaker && !this._skyError) || !!this._awaitingRetirement || (!this._canTraceOldGraph && this._requestedVariant?.status === 'pending');
   }
 
   isPipelineReady() {
@@ -1677,7 +1711,7 @@ class WGPURayTracePass {
 
   /** Failure of the latest request. A failed variant does not affect other renders. */
   getPipelineError() {
-    return this._resourceError ?? (this._canTraceOldGraph ? undefined : this._requestedVariant?.error);
+    return ((this._lightTracing || this._photonMapping) ? this._causticError : undefined) ?? this._skyError ?? this._resourceError ?? (this._canTraceOldGraph ? undefined : this._requestedVariant?.error);
   }
 
   private _updateBindGroups() {
@@ -1867,7 +1901,7 @@ class WGPURayTracePass {
         encoder,
         this._photonEmissionGroups!,
         this._activeTarget,
-        photonRadius(
+        getCausticsRuntime()!.photonRadius(
           radius,
           causticDiagnostics.photonDebugBatch ?? batch,
           causticDiagnostics.photonAlpha ?? 2 / 3,
@@ -2179,8 +2213,7 @@ class WGPURayTracePass {
       }
       if (envImage) {
         if ('sky' in envImage) {
-          this._skyBaker ??= new WGPUSkyBaker(device);
-          this._skyBaker.bake(envImage, this._envTex!);
+          this._bakeSky('env', envImage, this._envTex!);
         } else device.queue.writeTexture(
           {
             texture: this._envTex!
@@ -2195,7 +2228,7 @@ class WGPURayTracePass {
             depthOrArrayLayers: 1
           }
         );
-        if (gpuDistribution) {
+        if (gpuDistribution && (!('sky' in envImage) || this._skyBaker)) {
           this._envDistribution ??= new WGPUEnvMapDistribution(device);
           this._envDistribution.build(this._envTex!, this._envDistributionTex!);
         } else if (distribution) {
@@ -2527,8 +2560,7 @@ class WGPURayTracePass {
       });
     }
     if (backgroundImage && 'sky' in backgroundImage) {
-      this._skyBaker ??= new WGPUSkyBaker(this._device);
-      this._skyBaker.bake(backgroundImage, this._backgroundTex!);
+      this._bakeSky('background', backgroundImage, this._backgroundTex!);
     } else if (backgroundImage) {
       const source = backgroundImage.data;
       const data =
@@ -3333,7 +3365,7 @@ class WGPURayTracePass {
   dispose() {
     this._disposed = true;
     this._envDistribution?.dispose();
-    this._skyBaker?.dispose();
+    this._skyBaker?.dispose(); this._skyTasks.clear();
     this._bindless?.dispose();
     this._retiredBindless.forEach((textures) => textures.dispose());
     this._retiredBindless.clear();

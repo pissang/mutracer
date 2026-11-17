@@ -6,6 +6,9 @@ Enable caustics on the render that needs them:
 render.caustics = {lightTracing: true, photonMapping: true};
 ```
 
+On WebGPU, first use downloads the caustic passes before sampling begins.
+Loading failures report an engine error.
+
 Choose the estimators for the visible receiver:
 
 | Scene | Settings |

@@ -206,7 +206,7 @@ fallback is not traced again. Fallback chains and cycles are rejected.
 | `camera` | committed camera | Copied override for this call; does not change engine.camera |
 | `samplesPerBatch` | `8` | Samples per submission |
 | `targetBatchTimeMs` | undefined | Adapt batch sizes on WebGPU |
-| `adaptiveSampling` | undefined | Two-stage variance allocation on WebGPU; WebGL falls back to fixed spp |
+| `adaptiveSampling` | undefined | Two-stage variance allocation on WebGPU, with a shader download on first use; WebGL falls back to fixed spp |
 | `sampleSequenceOffset` | `0` | Sequence base; disjoint ranges for independent frames |
 | `previewIntervalMs` | undefined | Minimum delay between intermediate resolved images; never implicitly presents |
 | `onProgress` | undefined | `{stage: 'pilot' | 'final' | 'denoising', samples, targetSamples}` |
@@ -609,6 +609,7 @@ Use `EnvironmentLight.intensity` and `transform` for brightness and rotation.
 With Three.js, pass the sky as the `environment` option to `THREESync` or
 `fromTHREEScene`; the Three.js scene still supplies intensity and rotation.
 
+WebGPU downloads and prepares the sky renderer on first use before sampling; loading failures report an engine error.
 Higher resolutions use more memory and can exceed device limits. Frequent
 time edits can be slower with WebGL 2. Dispose the engine when finished;
 `ProceduralSky` needs no separate disposal.

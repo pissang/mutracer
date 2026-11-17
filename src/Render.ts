@@ -55,7 +55,7 @@ export interface CustomDenoiserOptions {
   /** Required caller-owned instance, keyed by object identity; never serialized or released by Render/Engine. */ denoiser: Denoiser;
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
 }
-/** Built-in joint non-local means filter on both backends. */
+/** Built-in joint non-local means filter on both backends. WebGPU loads the filter on first use. */
 export interface JNLMDenoiserOptions extends JNLMOptions {
   /** Required implementation selector. */ type: 'jnlm';
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
@@ -89,7 +89,7 @@ export type OIDNDenoiserOptions = OIDNSettings & (
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
 export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
-/** Optional caustic estimators. All are disabled by default. Both fall back to path tracing when a smooth caster has stochastic blend coverage. */
+/** Optional caustic estimators. All are disabled by default; WebGPU loads their passes on first use. Both fall back to path tracing when a smooth caster has stochastic blend coverage. */
 export interface CausticSettings {
   /** WebGPU progressive photon mapping; ignored on WebGL. Used alone, it can reduce denoising blotches on directly visible receivers, with noisier raw output. Default `false`. */
   photonMapping?: boolean | {
@@ -147,7 +147,7 @@ export type RenderOptions = RenderSettings & (
 export interface ConvergeOptions {
   /** Final complete-sample budget. Required. */ samples: number;
   /** Camera override for this output only, copied on entry. Default committed engine camera. */ camera?: Camera;
-  /** Two-stage variance sampling; WebGPU only, ignored on WebGL. Default undefined. */ adaptiveSampling?: Omit<OfflineAdaptiveSamplingOptions, 'maxSamples'>;
+  /** Two-stage variance sampling; WebGPU only, ignored on WebGL. First use loads its shader. Default undefined. */ adaptiveSampling?: Omit<OfflineAdaptiveSamplingOptions, 'maxSamples'>;
   /** Deterministic sequence base. Default 0. */ sampleSequenceOffset?: number;
   /** Maximum samples per submission batch. Default 8. */ samplesPerBatch?: number;
   /** WebGPU target batch completion time in milliseconds. Default undefined (fixed batch size). */ targetBatchTimeMs?: number;

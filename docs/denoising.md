@@ -4,7 +4,8 @@ MuTracer has two built-in denoisers. Both filter the complete composed image usi
 albedo and normal guides.
 
 - **JNLM**: a built-in joint non-local means filter, on WebGPU and
-  WebGL 2. It needs no weight download.
+  WebGL 2. It needs no weight download. WebGPU downloads the filter on first use,
+  which can delay the first denoised result; loading failures report an engine error.
 - **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
   networks, run through [`oidn-webgpu`](https://github.com/pissang/oidn-webgpu),
   WebGPU only. They take longer and need weights, but are cleaner at one or
