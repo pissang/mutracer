@@ -15,9 +15,15 @@ var<private> ${instance}: ${addressable ? `array<${type}, 2>` : type};
   };
 }
 
-/** One outstanding query per invocation. A shadow query resumes its caller
- * before any continuation random draw. Bevel retains its direct traversal. */
-export const queryPointsWgsl = /* wgsl */ `
+/** One outstanding query per invocation. Sequential random continuation draws
+ * wait for visibility; structured draws may finish earlier. Bevel stays direct. */
+export function pendingSceneQueryRef(addressable = false) {
+  return addressable ? 'pendingSceneQuery[(rtUniform.loopUnrollGuard - 4u) & 1u]' : 'pendingSceneQuery';
+}
+
+export function createQueryPointsWgsl(addressable = false) {
+  const pendingQuery = pendingSceneQueryRef(addressable);
+  return /* wgsl */ `
 struct PendingSceneQuery {
   ray: Ray,
   maximum: f32,
@@ -29,14 +35,17 @@ struct PendingSceneQuery {
   contribution: vec3f,
   weight: f32,
 };
-var<private> pendingSceneQuery: PendingSceneQuery;
+var<private> pendingSceneQuery: ${addressable ? 'array<PendingSceneQuery, 2>' : 'PendingSceneQuery'};
 
 fn requestSceneVisibility(ray: Ray, maximum: f32, triangle: i32, instance: i32, kind: i32) {
-  pendingSceneQuery.ray = ray;
-  pendingSceneQuery.maximum = maximum;
-  pendingSceneQuery.triangle = triangle;
-  pendingSceneQuery.instance = instance;
-  pendingSceneQuery.kind = kind;
-  pendingSceneQuery.pending = true;
+  ${pendingQuery}.ray = ray;
+  ${pendingQuery}.maximum = maximum;
+  ${pendingQuery}.triangle = triangle;
+  ${pendingQuery}.instance = instance;
+  ${pendingQuery}.kind = kind;
+  ${pendingQuery}.pending = true;
 }
 `;
+}
+
+export const queryPointsWgsl = createQueryPointsWgsl();

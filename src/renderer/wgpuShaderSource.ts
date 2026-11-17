@@ -71,6 +71,7 @@ export function wgpuShaderSource(constants: Record<string, boolean | number>, fe
   const source = rayTraceCompute({
     ...features,
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
+    samplingPattern: bake ? Number(constants.SAMPLING_PATTERN) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,
     lightCapabilities: bake && constants.LIGHT_CAPABILITIES !== undefined ? Number(constants.LIGHT_CAPABILITIES) : undefined

@@ -41,10 +41,20 @@ zero-sized non-host-shareable booleans. See the
 
 Unified editing queries retain the existing value layouts above. Their private
 `MaterialQueryState` contains the original face normal, facing cosine, shading
-normal, medium-event flag and prepared BSDF: 768 bytes with the tangent/coat
-profile. A two-element indexed array occupies 1536 WGSL bytes. Only this material
-continuation is indexed; `PendingSceneQuery` and `CatcherQueryState` are 80 and
-16 bytes, and no second surface interaction or suspended traversal is retained.
+normal and medium-event flag. With known Sobol/ZSobol constants it also stores a
+48-byte scattering result and the discrete-event flag: 96 bytes, or 192 WGSL
+bytes for the two-element indexed array. The prepared BSDF stays local and dies
+before visibility traversal. Structured continuation dimensions are independent
+of traversal's hashed samples; NEE accumulation and throughput/direction updates
+still wait for visibility to return.
+
+Sequential random queries retain the prepared BSDF instead: 768 bytes with the
+tangent/coat profile, or 1536 bytes for the array. Queries without a known
+sampling constant keep that form too. `PendingSceneQuery` and `CatcherQueryState`
+remain 80 and 16 bytes. Known structured queries index two-element private arrays
+of those records (160 and 32 WGSL bytes); random and unknown-constant queries
+keep the scalar records. No second surface interaction or suspended traversal is
+retained.
 `editingQueries.test.ts` pins these layouts and binding compatibility. Compare
 real-GPU editing and direct output with `npm run test:editing-queries` before
 changing their lifetime or representation, and record timestamp benchmarks
@@ -61,6 +71,14 @@ slot, rather than keeping another active surface or a traversal cursor.
 both generated shapes, including bevel, displacement and production formatting.
 Use the editing/direct HDR and timestamp comparisons when changing this storage:
 less scalar promotion and fewer PHIs need not mean a smaller DXIL binary.
+
+With known structured sampling, the same slot selects two-element function
+arrays for the resolved material and path: 800 and 192 nominal WGSL bytes with
+the tangent/coat profile, versus 400 and 96 for their scalar locals. Neither
+value type changes. Primary-surface instrumentation keeps scalar material/path
+locals so its local names retain their meaning. The extra array elements do not
+carry another material or path; compare both HDR output and GPU timestamps when
+changing their addressability.
 
 ## Compiler sensitivity and measured headroom
 

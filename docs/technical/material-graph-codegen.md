@@ -123,6 +123,11 @@ the first. Three rules keep one copy on the main path:
   families, and only when an interpreted structure has such a program.
 - Noise helpers call `mx_perlin` from one channel loop, and the interpreter
   evaluates noise and fractal octaves through one `mx_noise_octaves` call.
+  D3D12 universal kernels evaluate the three cellular hash channels in vector
+  lanes, sharing dimension control flow while retaining each channel's integer
+  mixing and float conversion. Their Perlin lattice uses one flat corner loop
+  in the original x/y/z order, retaining each weighted accumulation. Other
+  variants keep the scalar helpers and nested lattice loops.
 
 The register file holds 16 values, enough for every viewer sample; it did not
 change compile time measurably. Specialized code still inlines the noise
@@ -134,9 +139,9 @@ maximum port count, derived from `graphInstructions`; absent ports still decode
 as zero. This preserves bytecode, casts, register liveness and evaluation order
 while avoiding repeated inlining of operand/context decoding at every expression.
 The array and loop cost GPU work while the interpreter serves. Metal, specialized
-code and native retain their existing decoder. Consolidating noise hash call sites
-and bounding noise lattice loops separately gave only a small compile improvement;
-those changes were not adopted.
+code and native retain their existing decoder. Scalar hash call-site consolidation
+and changing the nested lattice bounds alone gave only a small compile improvement;
+those shapes were not adopted.
 
 D3D12's shared graph site also executes the surface program and its following
 opacity program in one `mx_run` loop. At their boundary the context switches to
@@ -172,6 +177,19 @@ use that same query site for their four light candidates. Paths finish the event
 together; a free-running switch over complete paths lets lanes drift into
 different bounces and serializes their shading work.
 
+Known structured queries keep the pending visibility and catcher records in
+two-element private arrays. The existing guard selects slot zero; addressable
+records reduce compiler work on the loop-carried control flow. Sequential random
+queries retain scalar pending/catcher records.
+
+With baked Sobol/ZSobol constants, scattering finishes before the selected
+visibility query. Its dimensions do not depend on traversal's separate hashed
+counter, so the query stores only the scattering result and discrete-event flag.
+On return, NEE is accumulated before applying that result, including a rejected
+BSDF proposal or a volume event. Sequential random queries retain the prepared
+BSDF and draw the continuation after visibility. Both shapes use the same
+sampling and BSDF evaluation expressions; no second optical graph is emitted.
+
 `intersect.wgsl.ts` emits the ordinary BVH traversal with a runtime closest/any-hit
 mode. The triangle tests, PDM stepping and surface completion are shared with the
 direct templates. Shadow opacity stays inside that traversal, with one independent
@@ -188,6 +206,11 @@ Direct generation keeps its scalar local. This changes addressability and the
 loop-carried PHI graph, while retaining every value member and host layout. It
 spends 544 nominal WGSL bytes for this array instead of a 272-byte local; actual
 register and scratch allocation must be measured separately.
+
+Known structured queries also index two-element resolved-material and path
+arrays, using the same slot. Primary-surface instrumentation retains its scalar
+material/path locals. The value types and evaluation order stay unchanged; the
+additional nominal storage needs its own GPU comparison.
 
 Count compiled call chains rather than declarations in the complete WGSL module:
 its picking and AOV functions also contain BSDF calls but are not part of the

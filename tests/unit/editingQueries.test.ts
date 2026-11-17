@@ -8,13 +8,13 @@ import {makeRayTraceUniform} from '../../src/renderer/wgpuSceneUniform';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-function generate(loader: typeof original, hasDisplacement: boolean, maxPathEvents = 50, unifiedEditingQueries = true, bevel = false): string {
+function generate(loader: typeof original, hasDisplacement: boolean, maxPathEvents = 50, unifiedEditingQueries = true, bevel = false, samplingPattern = 0): string {
     gpu();
     const families = new Set(Object.values(GraphOp).filter((op): op is GraphOp => typeof op === 'number'));
     const hooks = loader('src/renderer/materialGraph/specialize.ts').materialGraphShaderIR([], true,
-        {terminals: Object.keys(terminalTypes), families, opacity: families, emission: families, operandLoop: true}, true);
+        {terminals: Object.keys(terminalTypes), families, opacity: families, emission: families, operandLoop: true, vectorCells: true, flatPerlin: true}, true);
     hooks.graph.textureLoop = true;
-    return loader('src/renderer/wgpuShaderSource.ts').wgpuShaderSource(universalEditingConstants({HAS_BEVEL: bevel}), {
+    return loader('src/renderer/wgpuShaderSource.ts').wgpuShaderSource(universalEditingConstants({HAS_BEVEL: bevel, SAMPLING_PATTERN: samplingPattern}), {
         materialHooks: {...hooks, materialXNormals: true}, hasDisplacement, maxPathEvents,
         hasAnisotropyDirections: true, hasCoatNormals: true, hasAlpha: false, hasSceneAlpha: true,
         blasLayoutMask: 1, compactVertices: true, runtimeVertexLayout: true,
@@ -36,7 +36,8 @@ describe('unified editing query generation', () => {
         expect(values.structs.OpenPbrPreparedBsdf.size).toBe(736);
         expect(values.structs.Path.size).toBe(96);
         if (unified) {
-          expect(values.structs.MaterialQueryState.size).toBe(768);
+          expect(values.structs.MaterialQueryState.size).toBe(96);
+          expect(values.structs.ScatteringWork.size).toBe(48);
           expect(values.structs.PendingSceneQuery.size).toBe(80);
           expect(values.structs.CatcherQueryState.size).toBe(16);
         }
@@ -56,6 +57,21 @@ describe('unified editing query generation', () => {
       }
       expect(editing.uniforms).toEqual(direct.uniforms);
       expect(editing.storages).toEqual(direct.storages);
+    });
+
+    it.each([0, 1, 2])('preserves sampler %i continuation layouts and production bindings', samplingPattern => {
+      const full = generate(original, true, 50, true, true, samplingPattern);
+      const compact = generate(stripped, true, 50, true, true, samplingPattern);
+      expect(tokens(compact)).toEqual(tokens(full));
+      const definitions = (source: string) => makeShaderDataDefinitions(source.replace(
+        /struct\s+\w+\s*\{[^}]*\}/g, text => text.replace(/\bbool\b/g, 'u32')));
+      const values = definitions(full);
+      expect(values.structs.MaterialQueryState.size).toBe(samplingPattern === 2 ? 768 : 96);
+      expect(values.structs.ScatteringWork.size).toBe(48);
+      expect(values.structs.OpenPbrPreparedBsdf.size).toBe(736);
+      const direct = definitions(generate(original, true, 50, false, true, samplingPattern));
+      expect(values.uniforms).toEqual(direct.uniforms);
+      expect(values.storages).toEqual(direct.storages);
     });
 
     it.each([false, true].flatMap(unified => [0, 1, 20].map(max => ({unified, max}))))('respects host path-event bound $max (queries=$unified) without changing bindings', ({unified, max}) => {
