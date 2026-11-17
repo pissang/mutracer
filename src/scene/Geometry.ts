@@ -36,14 +36,6 @@ function sequentialIndices(count: number): Attribute<Uint32Array> {
   return new Attribute(indices, 1);
 }
 
-export type AttributeName =
-  | 'position'
-  | 'normal'
-  | 'tangent'
-  | 'uv'
-  | 'uv1'
-  | 'color';
-
 /** Triangle geometry construction data. */
 export interface GeometryInit {
   /** Required vertex positions in scene units, itemSize 3. */
