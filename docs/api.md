@@ -661,31 +661,70 @@ Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear
 ## MaterialGraph
 
 `new MaterialGraph({nodes: [], terminal: {}})` creates an empty graph. Attach it as
-`material.graph` (default `undefined`). Nodes have `id`, MaterialX `category`,
-output `type`, and optional typed `inputs`; connections use `{node, output?}`,
-with `output: 'out'` by default. Separate nodes expose component outputs;
-`gltf_colorimage` exposes `outcolor`/`outa` and uses type `color4`.
-Omitted inputs use node defaults. `MaterialGraphInput.value` accepts numbers,
-booleans, strings, readonly numeric arrays and loaded `Texture` objects; the
-input's `type` determines which values are valid. Connections override values.
-`MaterialGraphTerminalName` is the union of connectable OpenPBR input names and
-aliases; `MaterialGraphTerminal` is a readonly partial mapping of those names to
-connections. Unknown names in JavaScript or imported data still produce diagnostics.
-Node categories and port names accept strings and are checked at runtime.
+`material.graph` (default `undefined`). Nodes have `id`, `category` (the exported
+`MaterialGraphCategory` union), required output `type`, and optional `inputs`
+(default empty). Connections use `{node, output?}`, with `output: 'out'` by default.
+Separate nodes expose component outputs; `gltf_colorimage` exposes
+`outcolor`/`outa` and uses node type `color4`.
 
-Use `setNode(node)`, `removeNode(id)`, `setInput(id, port, input?)` and
-`setTerminal(connections)` to edit; each returns the graph and advances its
-read-only `revision` from zero, including replacements with the same value or
-removal of a missing node. This authored counter is independent of engine-wide
-compilation revisions. `setInput(..., undefined)` removes the authored value or
-connection and restores the node default. A missing ID passed to `setInput`
-throws. `setTerminal` replaces all terminal connections. Call `engine.update()`
-after edits. Node and terminal snapshots cannot be edited in place.
+`materialGraphCategories` is a readonly array of supported categories.
+`describeMaterialGraphNode(category: string)` returns a readonly
+`MaterialGraphNodeDefinition`, or `undefined` for an unknown category. Each
+`MaterialGraphNodeSignature` has a node `type`, named `outputs`, and named
+`inputs` with accepted `types` and optional `default` values. The first signature
+for each node type gives its default overload. Coupled input types appear in
+separate signatures; choose a complete signature when selecting an overload.
+An absent input default means implicit geometry or an unbound texture.
 
-See [material graphs](./materials.md#material-graphs) for an example, supported
-nodes, terminal inputs (including coverage), compilation/fallback behavior and
-limits. Compilation state and located diagnostics are available on
-`engine.getDiagnostics()?.materialGraphs`.
+`MaterialGraphInput.type` defaults to the connected output's type, or the node
+definition's default overload for a value or empty input. A value must match
+that default; specify `type` to select another overload. For example, a `color3`
+`multiply` defaults `in2` to `color3`: `{value: 0.5}` produces `input-type`, while
+`{type: 'float', value: 0.5}` selects scalar multiplication. Values accept numbers,
+booleans, strings, readonly numeric arrays and loaded `Texture` objects.
+Connections override values; omitted inputs use node defaults.
+
+`MaterialGraphTerminalName` includes connectable OpenPBR names and compatibility
+aliases. `MaterialGraphTerminal` is a readonly partial mapping to connections.
+`materialGraphTerminals` maps each accepted name to its required `type` and
+canonical `name`. Unknown categories or terminal names in JavaScript or imported
+data produce diagnostics.
+
+Edit with `setNode(node)`, `removeNode(id)`, `setInput(id, port, input?)`,
+`setTerminal(connections)` and
+`setTerminalInput(name: MaterialGraphTerminalName, connection?)`. Each returns the
+graph and advances its readonly `revision` from zero, including no-ops.
+`setNode` replaces an existing ID in place; new IDs append. `setInput` defaults to
+removing the authored input and restoring its node default; an unknown node ID
+throws. `setTerminal` replaces all connections. `setTerminalInput` changes one
+canonical terminal, replacing any aliases; its default `undefined` connection
+removes that terminal. Call `engine.update()` after edits. Node and terminal
+snapshots cannot be edited in place.
+
+`graph.validate(): MaterialGraphDiagnostic[]` synchronously checks reachable
+structure, types and terminals without changing the graph. Unused nodes are not
+checked, except for duplicate IDs. It takes no material or backend options; an
+empty result does not guarantee engine acceptance. Material context, backend,
+capability and shader compilation failures are reported after `engine.update()`
+in `engine.getDiagnostics()?.materialGraphs`.
+
+`graph.toJSON(options?)` returns `MaterialGraphJSON`: `{version: 1, nodes, terminal}`,
+including unused nodes and authored input types, without `revision` or texture
+data. Options default to `{}`; `textureId?: (texture: Texture) => string` defaults
+to undefined and is required if any input contains a texture. Such values become
+`{texture: id}`. `JSON.stringify(graph)` works without textures; with textures,
+serialize `graph.toJSON({textureId})` instead.
+
+`MaterialGraph.fromJSON(json: unknown, options?)` loads that object with revision
+zero. Options default to `{}`; `resolveTexture?: (id: string) => Texture | undefined`
+defaults to undefined and is required for texture references. Malformed data,
+unknown versions, missing mappers and unresolved textures throw. Semantic errors
+remain available through `validate()`. Loading performs no resource fetching.
+`MaterialGraphSerializationOptions`, `MaterialGraphDeserializationOptions` and
+`MaterialGraphJSONInput` describe the options and serialized inputs.
+
+See [material graphs](./materials.md#material-graphs) for usage, supported nodes,
+terminal inputs, compilation/fallback behavior and limits.
 
 `engine.waitForMaterialGraphs({signal?})` returns `Promise<MaterialGraphWaitResult>`.
 The default options are empty; `signal` defaults to undefined. `outcome` is
