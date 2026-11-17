@@ -32,7 +32,7 @@ export interface GraphInterpreterOptions { terminals: readonly string[]; /** Ine
  * candidates' emission in one loop at `mx_vertex`, its only graph call site;
  * `getMaterialPrecomputed` and light sampling read those results. Every extra
  * inlined evaluator otherwise costs about as much compile time as the first. */
-export function materialGraphShaderIR(structures: GraphIR[], frames = true, interpreter?: GraphInterpreterOptions, shared = false): MaterialShaderHooks {
+export function materialGraphShaderIR(structures: GraphIR[], frames = true, interpreter?: GraphInterpreterOptions, shared = false, litEmission = true): MaterialShaderHooks {
     if (!structures.length && !interpreter) return {};
     const v = (n: number) => `vec${n}f`;
     const mat = '(*ma)', p = (field: string) => `${mat}.${fields[field] ?? field}`;
@@ -41,7 +41,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     if (used.some(field => emission.includes(field))) for (const field of emission) if (!used.includes(field)) used.push(field);
     // Only an interpreter is worth sharing: a fully specialized variant inlines only its
     // emissive structures twice, and evaluating them ahead of NEE costs GPU time.
-    const sharedSite = shared && !!interpreter && emission.some(field => used.includes(field));
+    const sharedSite = shared && litEmission && !!interpreter && emission.some(field => used.includes(field));
     const sharedOpacity = sharedSite && !!interpreter?.operandLoop && !!interpreter.opacity && used.includes('opacity');
     const members = used.map(name => {const type=terminalTypes[name];return `  ${name}: ${width(type) === 1 ? 'f32' : v(width(type))},`;}).join('\n');
     let declarations = `struct MXResult {\n${members}\n};\n`;
@@ -82,6 +82,10 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
     const base = 'i32(materialsBuffer[materialIndex]._padding2)';
     const id = 'i32(materialsBuffer[materialIndex]._padding1)';
     // `pre` reads results that mx_vertex evaluated at the integrator's shared graph site.
+    // Caustic emitters sample constant lit emission. Keep hit emission (including
+    // coat absorption) identical while still applying every surface graph output.
+    // Unlit emission is visible only and has no emission-point dependency.
+    const emissionAssignment = `${!litEmission ? `if(${mat}.materialType != 0) {` : ''}${mat}.emission = mx_result.emissionColor * mx_result.emissionLuminance;\n      if(${mat}.materialType == 0) { ${mat}.emission *= mix(${v(3)}(1.0), sqrt(max(mx_result.coatColor, ${v(3)}(0.0))), clamp(mx_result.coatWeight,0.0,1.0)); }${!litEmission ? '}' : ''}\n`;
     const surfaceBody = (pre: boolean) => {
         let body = `\n  let mx_id = ${id};\n  if(mx_id ${interpreter ? '!=' : '>'} 0) {\n${frames ? `    ${mat}.anisotropyDirectionEnabled |= 2u;` : ''}\n    let mx_base = ${base};\n    var mx_result: MXResult;\n${init}\n`;
         const tangents = frames ? `normalize(${si}.geometryTangent), normalize(${si}.geometryBitangent)` : `${v(3)}(1.0,0.0,0.0), ${v(3)}(0.0,1.0,0.0)`;
@@ -96,7 +100,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
             if (used.includes('normal'))
                 body += `      if((mx_mask & ${bit('normal')}) != 0u) { mx_normal = mx_result.normal;\n      ${mat}.coatNormalEnabled = ${mat}.coatWeight > 0.0; }\n`;
             if (used.includes('emissionColor'))
-                body += `      if((mx_mask & (${emission.map(bit).join(' | ')})) != 0u) {\n      ${mat}.emission = mx_result.emissionColor * mx_result.emissionLuminance;\n      if(${mat}.materialType == 0) { ${mat}.emission *= mix(${v(3)}(1.0), sqrt(max(mx_result.coatColor, ${v(3)}(0.0))), clamp(mx_result.coatWeight,0.0,1.0)); }\n      }\n`;
+                body += `      if((mx_mask & (${emission.map(bit).join(' | ')})) != 0u) {\n      ${emissionAssignment}      }\n`;
             body += '    }\n';
         }
         structures.forEach((g, index) => {
@@ -108,7 +112,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
             if (hasTerminal(g, 'normal'))
                 body += `      mx_normal = mx_result.normal;\n      ${mat}.coatNormalEnabled = ${mat}.coatWeight > 0.0;\n`;
             if (['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor'].some(field => hasTerminal(g,field)))
-                body += `      ${mat}.emission = mx_result.emissionColor * mx_result.emissionLuminance;\n      if(${mat}.materialType == 0) { ${mat}.emission *= mix(${v(3)}(1.0), sqrt(max(mx_result.coatColor, ${v(3)}(0.0))), clamp(mx_result.coatWeight,0.0,1.0)); }\n`;
+                body += `      ${emissionAssignment}`;
             body += '    }\n';
         });
         body += `  }\n`;
@@ -130,7 +134,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
         helper+=`fn mx_shadow_opacity(materialIndex:i32,index:vec3i,bary:vec3f,position:vec3f,instanceIndex:i32,fallback:f32) -> f32 { return mx_opacity(materialIndex,${uv(false)},${uv(true)},(mx_l2w(instanceIndex)*vec4f(position,1.0)).xyz,instanceIndex,fallback); }\n`;
         declarations+=helper;
     }
-    const lightEmission=emission.some(field=>used.includes(field));
+    const lightEmission=litEmission && emission.some(field=>used.includes(field));
     if(lightEmission && !sharedSite) {
         const zero=(field:string)=>width(terminalTypes[field])===1?'0.0':`${v(width(terminalTypes[field]))}(0.0)`;
         const init=used.map(field=>`  result.${field} = ${field==='emissionColor'?'mx_parameter(base,0).rgb':field==='emissionLuminance'?'mx_parameter(base,1).x':field==='coatColor'?'data.coatColor':field==='coatWeight'?'coatWeight':zero(field)};`).join('\n');

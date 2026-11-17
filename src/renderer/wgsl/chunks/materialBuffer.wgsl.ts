@@ -202,7 +202,10 @@ ${materialHooks.graph?.textureLoop && name === 'getMaterialPrecomputed' ? materi
   (*ma).baseColor *= color;
   if ((*ma).materialType == UNLIT) { (*ma).emission *= color; }
 
-${caustics ? /* wgsl */ `  (*ma).causticRoughness = (*ma).specularRoughness;
+${caustics ? /* wgsl */ `  ${materialHooks.causticGraphFlags ? `// The half-unit address bit excludes authored graph-driven casters, even
+  // when this hit has not installed its graph yet. A roughness sentinel keeps
+  // all three partition predicates on the ordinary-PT side.
+  (*ma).causticRoughness = select((*ma).specularRoughness, 1.0, (u32(matData._padding2 * 2.0) & 1u) != 0u);` : '(*ma).causticRoughness = (*ma).specularRoughness;'}
   (*ma).causticNormalMapped = matData.normalMapIndex >= 0.0;
 ` : ''}  (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);

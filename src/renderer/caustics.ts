@@ -7,6 +7,32 @@ import {meshInstanceCount,meshInstanceTransform} from './meshInstances.js';
 import {mat4,vec3} from '../math.js';
 import type OpenPBRMaterial from '../scene/MaterialState.js';
 import {resolveMaterialAlphaMode} from '../scene/MaterialState.js';
+import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from './materialLayoutSchema.js';
+
+type GraphMaterial = {graph?: {readonly terminal: object}};
+/** Graph terminals a material evaluates in shader code. Texture-slot plans and
+ * constant fallbacks evaluate none. The default reads the authored graph. */
+export type CausticGraphTerminals<M extends GraphMaterial = GraphMaterial> = (material: M) => readonly string[] | undefined;
+const authoredTerminals: CausticGraphTerminals = m => m.graph ? Object.keys(m.graph.terminal) : undefined;
+const CASTER_NEUTRAL_TERMINALS = ['baseDiffuseRoughness', 'emissionColor', 'emissionLuminance'];
+
+/** Only these terminals provably leave specular transport and coverage unchanged.
+ * Unknown terminals (including aliases) deliberately take the conservative path. */
+export function graphAffectsCausticCaster<M extends GraphMaterial>(m: M, terminals: CausticGraphTerminals<M> = authoredTerminals) {
+  return (terminals(m) ?? []).some(port => !CASTER_NEUTRAL_TERMINALS.includes(port));
+}
+
+// WebGPU-only metadata: the low half-unit bit of the graph parameter address.
+// All graph readers convert the address to i32, preserving its integer record
+// index. This leaves the shared 416-byte material layout and native/GLSL intact.
+const graphParameterOffset = materialLayoutFields().find(f => f.name === '_padding2')!.offset / 4;
+export function packCausticGraphFlags<M extends GraphMaterial>(buffer: Float32Array, materials: readonly M[], terminals: CausticGraphTerminals<M> = authoredTerminals) {
+  materials.forEach((material, i) => {
+    const offset = i * MATERIAL_FLOAT_COUNT + graphParameterOffset;
+    buffer[offset] = Math.floor(buffer[offset]) + (graphAffectsCausticCaster(material, terminals) ? .5 : 0);
+  });
+  return buffer;
+}
 
 export const CAUSTIC_ROUGHNESS_MAX = 0.1;
 /** Material-only classification, shared by caster collection and GPU estimators. */
@@ -14,6 +40,10 @@ export function isCausticSpecular(m: Pick<OpenPBRMaterial, 'baseWeight' | 'baseM
   return m.baseWeight * (1 - m.baseMetalness) * (1 - m.transmissionWeight) <= 1e-6 &&
     m.subsurfaceWeight <= 0 && m.fuzzWeight <= 0 && m.coatWeight <= 0 && m.specularRoughness <= CAUSTIC_ROUGHNESS_MAX;
 }
+/** Caster eligibility: smooth constants and no evaluated graph driving specular
+ * transport or coverage. The default conservatively uses authored graphs. */
+export type CausticCasterTest = (material: OpenPBRMaterial) => boolean;
+export const isCausticCaster: CausticCasterTest = m => !graphAffectsCausticCaster(m as GraphMaterial) && isCausticSpecular(m);
 
 export type CasterSphere = [number,number,number,number];
 const casterBounds=new WeakMap<Geometry,{version:number;positions:Float32Array;bounds:[Float64Array,Float64Array]}>();
@@ -24,17 +54,17 @@ function localCasterBounds(geometry:Geometry){
  casterBounds.set(geometry,{version:geometry.version,positions,bounds});return bounds;
 }
 /** One conservative world-space sphere per smooth mesh instance. */
-export function causticCasterSpheres(meshes: readonly Mesh[]): CasterSphere[] {
+export function causticCasterSpheres(meshes: readonly Mesh[], isCaster: CausticCasterTest = isCausticCaster): CasterSphere[] {
   const spheres:CasterSphere[]=[];
   const matrix=mat4.create(),point=vec3.create();
   for(const mesh of meshes) {
-    if(!mesh.materials.some(isCausticSpecular))continue;
+    if(!mesh.materials.some(m=>isCaster(m)))continue;
     // Geometry.boundingBox is optional caller metadata and starts at zero.
     // Caster collection must also work for a raw public Geometry descriptor.
     const bounds=localCasterBounds(mesh.geometry),minCorner=bounds[0],maxCorner=bounds[1];
     if(!Number.isFinite(minCorner[0])||!Number.isFinite(maxCorner[0]))continue;
     let expansion=0;
-    for(const material of mesh.materials)if(isCausticSpecular(material))expansion=Math.max(expansion,
+    for(const material of mesh.materials)if(isCaster(material))expansion=Math.max(expansion,
       Math.abs(material.displacementBias)+(material.displacementMap?Math.abs(material.displacementScale):0));
     for(let instance=0;instance<meshInstanceCount(mesh);instance++) {
       const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
@@ -50,8 +80,8 @@ export function causticCasterSpheres(meshes: readonly Mesh[]): CasterSphere[] {
   return spheres;
 }
 /** Conservative sphere enclosing the caster mixture. */
-export function causticCasterSphere(meshes:readonly Mesh[]):CasterSphere {
-  const spheres=causticCasterSpheres(meshes);if(!spheres.length)return [0,0,0,0];
+export function causticCasterSphere(meshes:readonly Mesh[],isCaster:CausticCasterTest=isCausticCaster):CasterSphere {
+  const spheres=causticCasterSpheres(meshes,isCaster);if(!spheres.length)return [0,0,0,0];
   const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
   for(const s of spheres){const components:number[]=[s[0],s[1],s[2]];for(let i=0;i<3;i++){min[i]=Math.min(min[i],components[i]-s[3]);max[i]=Math.max(max[i],components[i]+s[3]);}}
   const center=min.map((v,i)=>(v+max[i])*.5);
@@ -72,6 +102,6 @@ export function casterDirectionPdf(origin:readonly number[],direction:readonly n
 /** Stochastic smooth coverage currently disagrees with PT energy.
  * Keep those scenes on PT until transport and endpoint weights are verified.
  */
-export function hasStochasticCausticCaster(meshes:readonly Mesh[]){
- return meshes.some(mesh=>mesh.materials.some(m=>isCausticSpecular(m)&&resolveMaterialAlphaMode(m)==='blend'));
+export function hasStochasticCausticCaster(meshes:readonly Mesh[],isCaster:CausticCasterTest=isCausticCaster){
+ return meshes.some(mesh=>mesh.materials.some(m=>isCaster(m)&&resolveMaterialAlphaMode(m)==='blend'));
 }

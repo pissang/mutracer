@@ -4,7 +4,7 @@ import {createMneeGlsl} from './mnee.glsl.js';
 import {createCausticPartitionGlsl} from './partition.glsl.js';
 import {glslFragments} from './glslFragments.js';
 import {prepareResearch} from './hostPreparation.js';
-import {isCausticSpecular} from '../../renderer/caustics.js';
+import {isCausticCaster} from '../../renderer/caustics.js';
 import createFragment from '../../renderer/glsl/rayTrace.frag.js';
 
 export interface MneeOptions {
@@ -63,7 +63,7 @@ export function registerMnee(): void {
     configure(object,backend,disabled=false) {
       // The adapter owns all experimental fields; private renderer layouts stay unchanged.
       const pass=object as any, state=stateFor(pass), d=mneeDiagnostics;
-      const enabled=!disabled&&!!d.mnee&&pass._meshes.some((mesh:any)=>mesh.materials.some(isCausticSpecular));
+      const enabled=!disabled&&!!d.mnee&&pass._meshes.some((mesh:any)=>mesh.materials.some(isCausticCaster));
       const method=typeof d.mnee==='object'?d.mnee.method??'newton':'newton';
       const depth=d.mneeMaxDepth??(backend==='webgl'?2:20), debug=d.mneeDebugGroup??-1;
       const key=enabled?`${method}/${debug}/${d.mneeSeeds??4}/${!!d.mneeDamping}/${!!d.smsRoulette}/${depth}`:'';
