@@ -1,3 +1,5 @@
+import {initOpenPbrEnergyLut} from '/src/renderer/openPbrEnergyLut.browser.ts';
+await initOpenPbrEnergyLut();
 // Fixed additive inputs; all display decisions and trace nodes belong to production.
 import {makeWGPURenderTargets} from '/src/renderer/WGPURenderingPipeline.ts';
 import {makeWebGLRenderTargets} from '/src/renderer/WebGLRenderingPipeline.ts';

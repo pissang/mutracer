@@ -45,7 +45,7 @@ import { WGPUComputePass } from './WGPUComputePass.js';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
 import { type JNLMDenoiser } from './jnlm.js';
 import type { DenoiserHandle, OIDNWeb, OIDNWebGPUData, OIDNWebGPUOutputData } from './denoiser.js';
-import { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
+import type { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
 
 export const oidnAlbedoSrgbEncodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
@@ -1218,11 +1218,15 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   /** Runs the built-in JNLM filter on the current composed image. */
-  function performJNLMDenoise(
+  async function performJNLMDenoise(
     denoiser: JNLMDenoiser
   ): Promise<boolean> {
     const generation = denoiseGeneration;
 
+    const {WGPUJNLMDenoisePass} = await import('./WGPUJNLMDenoiser.js').catch(cause => {
+      throw new Error('Failed to load the WebGPU JNLM denoiser.', {cause});
+    });
+    if (disposed || generation !== denoiseGeneration) return false;
     jnlmPass ??= scratch.get('jnlm', () => new WGPUJNLMDenoisePass(device));
     const rayBuffers = rayTracePass.getOutputBuffer();
     const encoder = device.createCommandEncoder({ label: 'JNLM denoise' });

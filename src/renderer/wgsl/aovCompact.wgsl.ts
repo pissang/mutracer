@@ -7,7 +7,9 @@ fn aovPack(value: vec4f) -> vec2u {return vec2u(pack2x16float(value.xy),pack2x16
 `;
 
 export function compactAovReadShader(code: string, declaration: string, type: string): string {
-  return aovCompactStorage + code.replace(declaration, `@group(0) @binding(0) var<storage,read> accumulation: array<u32>;
+  // The caller can supply unformatted declarations while production code is compact.
+  const pattern = new RegExp(declaration.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*'));
+  return aovCompactStorage + code.replace(pattern, `@group(0) @binding(0) var<storage,read> accumulation: array<u32>;
 fn loadAov(source: u32) -> ${type} {
   if(AOV_COMPACT){let o=source*6u;return ${type}(vec4f(bitcast<f32>(accumulation[o]),0,0,0),
     vec4f(0,0,0,bitcast<f32>(accumulation[o+1u])),aovUnpack(vec2u(accumulation[o+2u],accumulation[o+3u])),aovUnpack(vec2u(accumulation[o+4u],accumulation[o+5u])));}

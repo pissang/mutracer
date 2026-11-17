@@ -25,16 +25,16 @@ function evaluate(source: string, compact: boolean, fileName = filename) {
 }
 
 describe('production shader formatting', () => {
-  it('keeps GLSL directives, line endings and expression spacing', () => {
+  it('keeps GLSL directives and line endings while compacting expressions', () => {
     const source = '#version 300 es\r\n  #define VALUE 1 // explanation\r\n\t#if VALUE\r\n  float x = clamp(v, 0.0, 1.0);\r\n  #endif\r\n';
     expect(stripShaderFormatting(source)).toBe(
-      '#version 300 es\r\n#define VALUE 1 \r\n#if VALUE\r\nfloat x = clamp(v, 0.0, 1.0);\r\n#endif\r\n');
+      '#version 300 es\r\n#define VALUE 1 \r\n#if VALUE\r\nfloat x=clamp(v,0.0,1.0);\r\n#endif\r\n');
   });
 
   it('removes nested WGSL block comments without joining tokens or losing newlines', () => {
-    expect(stripShaderFormatting('let/* outer /* inner */\n comment */value = 1; // end')).toBe('let \nvalue = 1; ');
+    expect(stripShaderFormatting('let/* outer /* inner */\n comment */value = 1; // end')).toBe('let \nvalue=1; ');
     expect(stripShaderFormatting('a/* comment */b')).toBe('a b');
-    expect(stripShaderFormatting('/* comment with // marker */\nfn main() {}')).toBe('\nfn main() {}');
+    expect(stripShaderFormatting('/* comment with // marker */\nfn main() {}')).toBe('\nfn main(){}');
     expect(stripShaderFormatting('/* unterminated\n  comment')).toBe('/* unterminated\ncomment');
   });
 
@@ -60,8 +60,8 @@ describe('production shader formatting', () => {
     expect(compact.raw).toBe(original.raw);
     expect(compact.wgsl).not.toContain('//');
     expect(compact.wgsl).toContain('fn main()');
-    expect(compact.wgsl).toContain('\nlet value = 1;');
-    expect(compact.fragment).toBe('#version 300 es\n\nvoid main() {}\n');
+    expect(compact.wgsl).toContain('\nlet value=1;');
+    expect(compact.fragment).toBe('#version 300 es\n\nvoid main(){}\n');
     expect(stripShaderFormatting(compact.wgsl)).toBe(stripShaderFormatting(original.wgsl));
     expect(evaluate(source, true, path.resolve('src/util/formattingFixture.ts'))).toEqual(original);
   });
@@ -73,14 +73,14 @@ describe('production shader formatting', () => {
     `;
     const original = evaluate(source, false).shader, compact = evaluate(source, true).shader;
     expect(compact).toContain('// commented value must stay commented\n');
-    expect(compact).toContain('let value = 1;');
+    expect(compact).toContain('let value=1;');
     expect(stripShaderFormatting(compact)).toBe(stripShaderFormatting(original));
   });
 
   it('compacts unmarked templates in dedicated shader modules', () => {
     const source = 'export const shader = `\n  // comment\n  fn main() {}\n`;';
     expect(evaluate(source, true, path.resolve('src/renderer/wgsl/fixture.ts')).shader)
-      .toBe('\n\nfn main() {}\n');
+      .toBe('\nfn main(){}\n');
   });
 
   it('preserves leading spaces in nested fragments inserted between tokens', () => {
@@ -88,7 +88,7 @@ describe('production shader formatting', () => {
       const keyword = 'let';
       export const shader = /* wgsl */ \`\${keyword}\${true ? \` value \` : ''}= 1;\`;
     `;
-    expect(evaluate(source, true).shader).toBe('let value = 1;');
+    expect(evaluate(source, true).shader).toBe('let value =1;');
   });
 
   it('emits source maps containing the original shader source for Vite builds', async () => {
@@ -102,7 +102,7 @@ describe('production shader formatting', () => {
     }
     const map = typeof output.map === 'string' ? JSON.parse(output.map) : output.map;
     expect(map.sourcesContent).toEqual([source]);
-    expect(evaluate(output.code, false).shader).toBe('\n\nfn main() {}\n');
+    expect(evaluate(output.code, false).shader).toBe('\nfn main(){}\n');
     expect(await plugin.transform.call({} as any, source, path.resolve('src/util/fixture.ts'))).toBeNull();
   });
 
@@ -136,8 +136,18 @@ describe('production shader formatting', () => {
         if (!chunk || chunk.type !== 'chunk') throw new Error('Expected shader bundle');
         const shader = evaluate(chunk.code, false).shader;
         const inverse = new Map([...nextNames].map(([a, b]) => [b, a]));
-        expect(renameShaderIdentifiers(shader, inverse)).toBe(definition + body(extra));
+        expect(renameShaderIdentifiers(shader, inverse)).toBe(stripShaderFormatting(definition + body(extra), false));
       } finally { await second.close(); }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+});
+
+it('preserves token boundaries, macro continuations, quotes and interpolation separators', () => {
+  expect(stripShaderFormatting('a + +b - -c / *d / /e; x < < y; z > = q;'))
+    .toBe('a+ +b- -c/ *d/ /e;x< <y;z> =q;');
+  const macro = '#define MIX(a, b) ((a) + \\\n  (b))\n';
+  expect(stripShaderFormatting(macro)).toBe('#define MIX(a, b) ((a) + \\\n(b))\n');
+  expect(stripShaderFormatting('let a = "quoted + / *";\n\n\n\nlet b = x + \0 + y;'))
+    .toBe('let a="quoted + / *";\n\nlet b=x+ \0 +y;');
+  expect(stripShaderFormatting('value . 5 + 1 . suffix')).toBe('value. 5+1 .suffix');
 });

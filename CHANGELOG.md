@@ -3,6 +3,19 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- WebGPU downloads caustic passes, JNLM, procedural sky rendering and offline adaptive sampling shaders on first use, reducing the initial download.
+- Material Graph compilation loads on first use, or for editing shader prefetch; graph waits include module loading.
+- Energy compensation tables ship as the binary asset `openPbrEnergyLut.bin`, fetched during engine initialization instead of bundled as JavaScript.
+- WebGL 2 loads during engine initialization only when selected, reducing the initial WebGPU download.
+
+### Fixed
+
+- npm consumers can bundle BVH workers without a missing entry error, and Material Graph scenes no longer require installing `gl-matrix`.
+
 ## 0.3.1 - 2026-11-05
 
 Display upscaling with texture detail recovery, faster tiled rendering and faster dispersion.

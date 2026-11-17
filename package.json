@@ -78,8 +78,8 @@
     "watch": "vite build -w",
     "preview": "vite preview",
     "prepare": "npm run build:lib",
-    "prepublishOnly": "npm run build && npm run build:lib",
-    "build:lib": "npm run check:material-comparison && node scripts/build-lib.mjs",
+    "prepublishOnly": "npm run build && npm run build:lib && npm run check:consumer-bundle",
+    "build:lib": "npm run check:material-comparison && npm run check:energy-lut && node scripts/build-lib.mjs",
     "watch:lib": "tsc --watch",
     "viewer": "vite --config viewer/vite.config.ts",
     "build:viewer": "vite build --config viewer/vite.config.ts && node scripts/check-research-artifacts.mjs dist-viewer",
@@ -116,7 +116,10 @@
     "test:parity": "node scripts/test-parity.mjs",
     "test:editing-queries": "node scripts/test-editing-queries.mjs",
     "pbrt:inspect": "node scripts/pbrt-inspect.mjs",
-    "pbrt:compare": "node scripts/pbrt-compare.mjs"
+    "pbrt:compare": "node scripts/pbrt-compare.mjs",
+    "check:consumer-bundle": "node scripts/check-consumer-bundle.mjs",
+    "generate:energy-lut": "node scripts/pack-openpbr-energy-lut.mjs",
+    "check:energy-lut": "node scripts/pack-openpbr-energy-lut.mjs --check"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",

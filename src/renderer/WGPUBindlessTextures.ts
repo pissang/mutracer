@@ -1,4 +1,4 @@
-import {slotTextureSources} from './materialGraph/slotTextures.js';
+import {slotTextureSources} from './materialGraph/slotSources.js';
 import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';

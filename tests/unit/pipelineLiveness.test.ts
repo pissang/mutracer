@@ -1,3 +1,5 @@
+import {loadCausticsRuntime} from '../../src/renderer/lazyCaustics';
+await loadCausticsRuntime();
 import {describe, expect, it, vi} from 'vitest';
 import WGPURayTracePass, {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {WGPUShaderCache} from '../../src/renderer/WGPUShaderCache';

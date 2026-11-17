@@ -17,20 +17,10 @@
  * https://github.com/adobe/openpbr-bsdf
  */
 
-export const OPENPBR_ENERGY_LUT_SIZE = 32;
-export const OPENPBR_ENERGY_LUT_AVERAGE_ROW = 1024;
-export const OPENPBR_ENERGY_LUT_WIDTH = OPENPBR_ENERGY_LUT_SIZE;
-/** Ideal-metal complement: roughness rows, cosine columns. */
-export const OPENPBR_METAL_ENERGY_LUT_ROW = 1056;
-/** Ideal-metal cosine-weighted average: roughness columns, one row. */
-export const OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW = 1088;
-/** Ideal-dielectric loss: IOR-major, roughness rows, cosine columns. */
-export const OPENPBR_DIELECTRIC_ENERGY_LUT_ROW = 1089;
-/** Exact u16 averages: IOR rows, roughness columns. */
-export const OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW = 2113;
-/** Multiple-scattering reflection ratio: IOR rows, roughness columns. */
-export const OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW = 2145;
-export const OPENPBR_ENERGY_LUT_HEIGHT = 2177;
+// Canonical delta data and synchronous decoder for native/AOT consumers.
+// Regenerate the browser asset (openPbrEnergyLut.bin) with scripts/pack-openpbr-energy-lut.mjs.
+import {decodeOpenPbrEnergyLut} from './decodeOpenPbrEnergyLut.js';
+export * from './decodeOpenPbrEnergyLut.js';
 
 const OPENPBR_ENERGY_LUT_ROW_DELTA_BASE64 =
   [
@@ -944,57 +934,6 @@ export function getOpenPbrEnergyLutData(): Float32Array {
   const encoded = atob(OPENPBR_ENERGY_LUT_ROW_DELTA_BASE64)
     + atob(OPENPBR_METAL_ENERGY_LUT_ROW_DELTA_BASE64)
     + atob(OPENPBR_DIELECTRIC_ENERGY_LUT_ROW_DELTA_BASE64);
-  const data = new Float32Array(
-    OPENPBR_ENERGY_LUT_WIDTH * OPENPBR_ENERGY_LUT_HEIGHT
-  );
-  let min = 0, max = 0;
-  const samples = new Uint8Array(OPENPBR_ENERGY_LUT_WIDTH);
-  let encodedRow = 0;
-  for (let row = 0; row < OPENPBR_ENERGY_LUT_HEIGHT; row++) {
-    if (row === OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW
-      || (row >= OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW
-        && row < OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW)) continue;
-    const byteOffset = encodedRow++ * (OPENPBR_ENERGY_LUT_WIDTH + 4);
-    min = (min + (encoded.charCodeAt(byteOffset)
-      | (encoded.charCodeAt(byteOffset + 1) << 8))) & 65535;
-    max = (max + (encoded.charCodeAt(byteOffset + 2)
-      | (encoded.charCodeAt(byteOffset + 3) << 8))) & 65535;
-    for (let column = 0; column < OPENPBR_ENERGY_LUT_WIDTH; column++) {
-      const sample = (samples[column]! + encoded.charCodeAt(byteOffset + 4 + column)) & 255;
-      samples[column] = sample;
-      data[row * OPENPBR_ENERGY_LUT_WIDTH + column] = (
-        min + (max - min) * sample / 255
-      ) / 65535;
-    }
-  }
-  // Keep division in Number precision before the final Float32 assignment,
-  // exactly as the previous min=max rows were decoded.
-  const averages = atob(OPENPBR_METAL_AVERAGE_U16_BASE64)
-    + atob(OPENPBR_DIELECTRIC_AVERAGE_U16_BASE64);
-  for (let index = 0; index < 32 + 32 * 32; index++) {
-    const value = (averages.charCodeAt(index * 2)
-      | (averages.charCodeAt(index * 2 + 1) << 8)) / 65535;
-    const offset = index < 32
-      ? OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + index
-      : OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW * 32 + index - 32;
-    data[offset] = value;
-  }
-  // Integrating before interpolation in roughness commutes with that linear
-  // interpolation. Use the exact integral of 2*mu times each linear segment,
-  // rather than the separately tabulated u16 average: low-roughness rows have
-  // narrow grazing features that the 32 cosine samples cannot resolve exactly.
-  // This makes the compensation lobe integrate to its directional loss for any
-  // roughness without changing the directional table or the Fresnel model.
-  for (let row = 0; row < OPENPBR_ENERGY_LUT_SIZE; row++) {
-    const offset = (OPENPBR_METAL_ENERGY_LUT_ROW + row) * OPENPBR_ENERGY_LUT_WIDTH;
-    const h = 1 / (OPENPBR_ENERGY_LUT_SIZE - 1);
-    let average = 0;
-    for (let i = 0; i < OPENPBR_ENERGY_LUT_SIZE - 1; i++) {
-      const a = data[offset + i]!, b = data[offset + i + 1]!;
-      average += h * (i * h * (a + b) + h * (a + 2 * b) / 3);
-    }
-    data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * OPENPBR_ENERGY_LUT_WIDTH + row] = average;
-  }
-  cachedData = data;
-  return data;
+  const averages = atob(OPENPBR_METAL_AVERAGE_U16_BASE64) + atob(OPENPBR_DIELECTRIC_AVERAGE_U16_BASE64);
+  return cachedData = decodeOpenPbrEnergyLut(encoded, averages);
 }

@@ -1,6 +1,6 @@
 import type { Mat4, Vec3 } from '../types.js';
 import { read, write } from '../math/access.js';
-import { mat4 } from '../math.js';
+import * as mat4 from '../math/sceneMat4.js';
 
 /** Base class of objects positioned by a local-to-world transform. */
 export default abstract class SceneNode {

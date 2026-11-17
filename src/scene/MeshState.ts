@@ -1,4 +1,4 @@
-import { allocateAovId, validateAovId } from '../renderer/aov.js';
+import { allocateAovId, validateAovId } from './aovId.js';
 import Geometry from './Geometry.js';
 import SceneNode from './SceneNode.js';
 import type MaterialState from './MaterialState.js';

@@ -15,7 +15,7 @@ function execute(source: string) {
   const code = ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS,
     target:ts.ScriptTarget.ES2022}}).outputText;
   new Function('exports', 'require', code)(exports, (name:string) => {
-    if (name === '../renderer/aov.js') return {allocateAovId:()=>next++, validateAovId};
+    if (name === './aovId.js') return {allocateAovId:()=>next++, validateAovId};
     if (name === './SceneNode.js') return {default:SceneNode};
     throw new Error(`Unexpected runtime import ${name}`);
   });

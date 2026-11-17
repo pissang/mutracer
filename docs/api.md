@@ -5,6 +5,8 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
+`init()` fetches the energy compensation table, `openPbrEnergyLut.bin` (79 KB, about 35 KB with HTTP compression), from beside the module; bundlers emit it as an asset. If it cannot be fetched, `init()` rejects.
+
 `new Engine({canvas?, backend?, device?, textureBinding?, shaderPrefetch?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
@@ -13,7 +15,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | --- | --- | --- |
 | `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
-| `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
+| `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2. WebGL code loads during `init()` only when selected; loading failures reject initialization |
 | `textureBinding` | `'atlas'` | Constructor-only; `'auto'` tries experimental WebGPU bindless textures, with atlas fallback; see [texture bindings](#texture-bindings) |
 | `shaderPrefetch` | `'off'` | Constructor-only; `'editing'` prepares material/graph editing shaders in the background, starting at device initialization where supported; see [editing prefetch](./updates.md#editing-prefetch) for reuse, capacities and costs |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
@@ -204,7 +206,7 @@ fallback is not traced again. Fallback chains and cycles are rejected.
 | `camera` | committed camera | Copied override for this call; does not change engine.camera |
 | `samplesPerBatch` | `8` | Samples per submission |
 | `targetBatchTimeMs` | undefined | Adapt batch sizes on WebGPU |
-| `adaptiveSampling` | undefined | Two-stage variance allocation on WebGPU; WebGL falls back to fixed spp |
+| `adaptiveSampling` | undefined | Two-stage variance allocation on WebGPU, with a shader download on first use; WebGL falls back to fixed spp |
 | `sampleSequenceOffset` | `0` | Sequence base; disjoint ranges for independent frames |
 | `previewIntervalMs` | undefined | Minimum delay between intermediate resolved images; never implicitly presents |
 | `onProgress` | undefined | `{stage: 'pilot' | 'final' | 'denoising', samples, targetSamples}` |
@@ -607,6 +609,7 @@ Use `EnvironmentLight.intensity` and `transform` for brightness and rotation.
 With Three.js, pass the sky as the `environment` option to `THREESync` or
 `fromTHREEScene`; the Three.js scene still supplies intensity and rotation.
 
+WebGPU downloads and prepares the sky renderer on first use before sampling; loading failures report an engine error.
 Higher resolutions use more memory and can exceed device limits. Frequent
 time edits can be slower with WebGL 2. Dispose the engine when finished;
 `ProceduralSky` needs no separate disposal.

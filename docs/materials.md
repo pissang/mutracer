@@ -363,8 +363,12 @@ aliases. Use `MaterialGraphTerminalName` for a terminal name or
 `MaterialGraphTerminal` for a connection map. `setInput(id, port, undefined)` removes
 an authored value or connection and restores that input's node default.
 
+The compiler loads when the committed scene first uses a graph, or when
+`shaderPrefetch: 'editing'` is enabled. Loading failures appear in Material Graph
+diagnostics.
+
 `engine.waitForMaterialGraphs({signal})` accepts an optional `AbortSignal`
-(default undefined) and waits for the whole committed scene. It always resolves:
+(default undefined) and waits for module loading and compilation for the whole committed scene. It always resolves:
 `outcome: 'settled'` means the request reached `idle`, `ready` or `failed`;
 inspect `state.status` and `state.diagnostics` to distinguish success from fallback.
 A newer committed scene edit returns `superseded`; call again to wait for the new

@@ -5,12 +5,8 @@ import {createCanvas} from '../../util/canvas.js';
 import {normalizeGraph} from './normalize.js';
 import {planDirectMaterial, type DirectMap} from './lower.js';
 
-const slotSources = new WeakSet<object>();
-export function slotTextureSource(texture: Texture) { return slotSources.has(texture) ? texture.image : texture; }
-export function slotTextureSources(textures: readonly Texture[]) {
-    const images = new Set(textures.filter(texture => slotSources.has(texture)).map(texture => texture.image));
-    return (texture: Texture) => images.has(texture.image) ? texture.image : texture;
-}
+import {slotSources} from './slotSources.js';
+export {slotTextureSource, slotTextureSources} from './slotSources.js';
 
 /** GPU channel copies keep DOM images off the synchronous CPU readback path.
  * A batch uploads each source once, and releases its temporary GL resources. */

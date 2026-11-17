@@ -22,6 +22,8 @@ when changing shader generation or its build transforms. Changes to test
 configuration or shared build tooling require the full suite. A related run
 with no matching tests fails so it cannot be mistaken for validation.
 
+`npm run check:consumer-bundle` checks the existing `lib/` with Vite and esbuild, rejects undeclared runtime dependencies, and reports chunk and asset sizes; it also runs before publishing.
+
 Tests run in Node without a GPU. They check behavior and contracts, not image
 quality. Check GPU output separately by rendering the examples, or a fixed
 scene with a fixed sample count, before and after a change (see

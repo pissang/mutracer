@@ -1,6 +1,6 @@
 import type { Vec3 } from '../types.js';
 import { generateVertexNormals } from '../util/geometry.js';
-import { vec3 } from '../math.js';
+import * as vec3 from '../math/sceneVec3.js';
 import { attributeLength, attributeValue } from './attributeData.js';
 
 type AttributeData = Float32Array | Uint16Array | Uint32Array | Int32Array;
