@@ -5,6 +5,8 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
+`init()` fetches the energy compensation table, `openPbrEnergyLut.bin` (79 KB, about 35 KB with HTTP compression), from beside the module; bundlers emit it as an asset. If it cannot be fetched, `init()` rejects.
+
 `new Engine({canvas?, backend?, device?, textureBinding?, shaderPrefetch?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).

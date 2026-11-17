@@ -1,4 +1,5 @@
 import type {MaterialGraphCompilationState} from './renderer/materialGraph/state.js';
+import {initOpenPbrEnergyLut} from './renderer/openPbrEnergyLut.browser.js';
 import type {SurfaceHit} from './renderer/surfaceHit.js';
 import InstancedMesh from './scene/InstancedMesh.js';
 import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
@@ -206,7 +207,7 @@ export default class Engine {
     this._sceneChangeDetector = new SceneChangeDetector();
     this.display = Display._create(this, params.canvas ?? createCanvas());
   }
-  /** Initializes once; concurrent/repeated calls share the result. */
+  /** Initializes once; concurrent/repeated calls share the result. Fetches the energy table asset; loading failures reject and emit error. */
   init(): Promise<EngineInfo> {
     return this._initPromise ??= (async () => {
       if (this._disposed) throw new Error('Engine is disposed.');
@@ -424,6 +425,10 @@ export default class Engine {
 
       this._events.emit('progress', {stage: 'device', progress: 0});
       this._pipelineInitError = undefined;
+      // Fetch the energy table while the device is requested; both backends need it.
+      let lutFailed = false;
+      const lut = initOpenPbrEnergyLut().catch(error => {lutFailed = true; throw error;});
+      lut.catch(() => {});
       if (preferWebGPU && (this._suppliedDevice || (typeof navigator !== 'undefined' && navigator.gpu))) {
         try {
           const gpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
@@ -437,6 +442,7 @@ export default class Engine {
             materialTextures.fallbackReason = shared?.fallbackReason ?? (support ? await probeBindless(gpuDevice, support) : 'Resource-table feature is not enabled on this device.');
             if (!materialTextures.fallbackReason) materialTextures.support = support;
           }
+          await lut;
           if (this._disposed) return;
           validateDevice(gpuDevice);
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
@@ -447,7 +453,7 @@ export default class Engine {
           this._watchDevice(gpuDevice);
           gpuCreated = true;
         } catch (e) {
-          if (this._backendChoice === 'webgpu') throw e;
+          if (this._backendChoice === 'webgpu' || lutFailed) throw e;
           this._webgpuFallbackReason = e instanceof Error ? e.message : String(e);
           this._gpuDevice = undefined;
           this._gpuAdapterInfo = undefined;
@@ -459,7 +465,7 @@ export default class Engine {
           this._webgpuFallbackReason = 'WebGPU is not available in this environment';
         }
         const [{WebGLDevice}, {makeWebGLRenderTargets}] = await Promise.all([
-          import('./renderer/webgl.js'), import('./renderer/WebGLRenderingPipeline.js')
+          import('./renderer/webgl.js'), import('./renderer/WebGLRenderingPipeline.js'), lut
         ]);
         if (this._disposed) return;
         this._webglRenderer = new WebGLDevice({

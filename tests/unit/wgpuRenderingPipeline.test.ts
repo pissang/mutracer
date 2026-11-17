@@ -1,3 +1,5 @@
+import {initOpenPbrEnergyLut} from '../../src/renderer/openPbrEnergyLut.browser';
+await initOpenPbrEnergyLut();
 import Engine from '../../src/Engine';
 import schedule from '../fixtures/display-schedule.json';
 import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';

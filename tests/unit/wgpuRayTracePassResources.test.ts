@@ -1,3 +1,5 @@
+import {initOpenPbrEnergyLut} from '../../src/renderer/openPbrEnergyLut.browser';
+await initOpenPbrEnergyLut();
 import { makeShaderDataDefinitions } from 'webgpu-utils';
 import rayTraceCore from '../../src/renderer/wgsl/chunks/rayTraceCore.wgsl';
 import { MaterialChangeTracker } from '../../src/renderer/materialChanges';

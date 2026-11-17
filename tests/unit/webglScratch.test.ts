@@ -1,3 +1,5 @@
+import {initOpenPbrEnergyLut} from '../../src/renderer/openPbrEnergyLut.browser';
+await initOpenPbrEnergyLut();
 import Engine from '../../src/Engine';
 import {makeWebGLRenderTargets} from '../../src/renderer/WebGLRenderingPipeline';
 import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';

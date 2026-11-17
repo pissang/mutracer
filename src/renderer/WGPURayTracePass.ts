@@ -148,7 +148,7 @@ import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
-} from './openPbrEnergyLut.js';
+} from './openPbrEnergyLut.browser.js';
 import {offlineAdaptiveCompute} from './wgsl/offlineAdaptive.compute.js';
 import {
   normalizeOfflineAdaptiveSamplingOptions,

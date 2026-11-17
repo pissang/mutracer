@@ -103,7 +103,7 @@ import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
-} from './openPbrEnergyLut.js';
+} from './openPbrEnergyLut.browser.js';
 
 type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight | DiskLight | CylinderLight;
 // A defensive mixture keeps weak-but-wide lights from being starved by an

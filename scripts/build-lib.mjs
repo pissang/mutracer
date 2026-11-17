@@ -52,6 +52,12 @@ copyFileSync(
   path.join(tinyBvhOutput, 'LICENSE')
 );
 
+// Fetched by renderer/openPbrEnergyLut.browser.js through an adjacent URL.
+copyFileSync(
+  path.join(projectRoot, 'src', 'renderer', 'openPbrEnergyLut.bin'),
+  path.join(outputRoot, 'renderer', 'openPbrEnergyLut.bin')
+);
+
 // Source builds let Vite discover the TypeScript worker; published ESM uses
 // the adjacent compiled JavaScript entry so consumers need no TS loader.
 const workerClientPath = path.join(outputRoot, 'renderer', 'bvhWorkerClient.js');
