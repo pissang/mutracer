@@ -234,6 +234,11 @@ export class MaterialEditor {
     this.commit(materialId, { values, textures: {} }, label, mergeKey);
   }
 
+  /** Applies value presets without retaining graph-driven inputs; one undo step. */
+  setPreset(materialId: string, values: MaterialValues, label: string) {
+    this.commit(materialId, { values, textures: {}, graph: null }, label);
+  }
+
   setTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
     const material = this.entries.get(materialId)?.converted.values().next().value as OpenPBRMaterial | undefined;
     const texture = material?.[slot];

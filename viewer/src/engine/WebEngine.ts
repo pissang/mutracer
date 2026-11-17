@@ -54,8 +54,14 @@ import { DEFAULT_F_STOP, MATERIALX_IMPORT, type ExportOptions, type ViewerEngine
 const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
-// A background height bake must not overwrite a later import or reset.
-const materialXImports = new WeakMap<object,Map<string,symbol>>();
+// Neither a background bake nor image decoding may overwrite a later choice.
+const materialXImports = new WeakMap<object, Map<string, AbortController>>();
+
+function cancelMaterialXImport(viewer: object, materialId: string) {
+  const imports = materialXImports.get(viewer);
+  imports?.get(materialId)?.abort();
+  imports?.delete(materialId);
+}
 
 
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -608,6 +614,7 @@ export class WebEngine implements ViewerEngine {
    * the camera is one undo step.
    */
   resetAll() {
+    materialXImports.get(this)?.forEach(request => request.abort());
     materialXImports.get(this)?.clear();
     recordGroup('Reset all', () => {
       resetSettings();
@@ -1413,6 +1420,12 @@ export class WebEngine implements ViewerEngine {
     this.materials.setValues(materialId, values, label, mergeKey);
   }
 
+  /** Applies a value preset in place of the graph; one undo step. */
+  applyMaterialPreset(materialId: string, values: MaterialValues, label: string) {
+    cancelMaterialXImport(this, materialId);
+    this.materials.setPreset(materialId, values, label);
+  }
+
   setMaterialTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
     this.materials.setTextureSampling(materialId, slot, patch, label, mergeKey);
   }
@@ -1550,7 +1563,10 @@ export class WebEngine implements ViewerEngine {
     let name = files[0]?.file.name ?? 'MaterialX';
     let imports=materialXImports.get(this);
     if(!imports){imports=new Map();materialXImports.set(this,imports);}
-    const request=Symbol(),model=this.modelGroup;imports.set(materialId,request);
+    imports.get(materialId)?.abort();
+    const request = new AbortController(), model = this.modelGroup;
+    imports.set(materialId, request);
+    signal = signal ? AbortSignal.any([signal, request.signal]) : request.signal;
     try {
       const pkg=await readMaterialXPackage(files), material=parseMaterialXGraph(pkg.text);
       name=material.name;
@@ -1588,7 +1604,7 @@ export class WebEngine implements ViewerEngine {
   }
 
   resetMaterial(materialId: string) {
-    materialXImports.get(this)?.delete(materialId);
+    cancelMaterialXImport(this, materialId);
     this.materials.reset(materialId);
   }
 

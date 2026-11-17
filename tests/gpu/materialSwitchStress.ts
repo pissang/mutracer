@@ -106,7 +106,7 @@ run.onclick = async () => {
       canvas: [current.engine.display.canvas.width, current.engine.display.canvas.height]});
     for (let i = 0; i < iterations; i++) {
       const preset = MATERIAL_PRESETS[i % MATERIAL_PRESETS.length];
-      current.setMaterialValues(mesh.materials[0].id, preset.values, preset.label);
+      current.applyMaterialPreset(mesh.materials[0].id, preset.values, preset.label);
       const interval = intervals[Math.min(3, Math.floor(i * intervals.length / iterations))];
       await wait(interval); check();
       log({switch: i + 1, preset: preset.id, interval, samples: current.final.samples, status: current.final.status,

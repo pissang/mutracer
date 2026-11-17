@@ -29,17 +29,19 @@ describe('viewer MaterialX graph replacement',()=>{
   expect(args[2]).toEqual(expect.objectContaining({baseColor:[0.8,0.1,0.2],baseMetalness:1}));
   expect(args[3]).toBe('Car_Paint MaterialX');
  });
- it.each(['replace','reset'])('does not install a late bake after %s',async action=>{
+ it.each(['replace','reset','preset'])('does not install a late bake after %s',async action=>{
   let complete!:(value:Awaited<ReturnType<typeof bakeDisplacement>>)=>void;
   vi.mocked(bakeDisplacement).mockImplementationOnce(()=>new Promise(resolve=>{complete=resolve;}));
-  const setTextures=vi.fn(async()=>{}),reset=vi.fn(),receiver={materials:{setTextures,reset}};
+  const setTextures=vi.fn(async()=>{}),reset=vi.fn(),setPreset=vi.fn(),receiver={materials:{setTextures,reset,setPreset}};
   const source='<materialx version="1.39"><noise2d name="h" type="float"/><standard_surface name="S" type="surfaceshader"/><displacement name="D" type="displacementshader"><input name="displacement" type="float" nodename="h"/></displacement><surfacematerial name="M"><input name="surfaceshader" type="surfaceshader" nodename="S"/><input name="displacementshader" type="displacementshader" nodename="D"/></surfacematerial></materialx>';
   const pending=WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file:new Blob([source]) as File,path:'h.mtlx'}]);
   await vi.waitFor(()=>expect(complete).toBeTypeOf('function'));
   if(action==='reset')WebEngine.prototype.resetMaterial.call(receiver as unknown as WebEngine,'id');
+  else if(action==='preset')WebEngine.prototype.applyMaterialPreset.call(receiver as unknown as WebEngine,'id',{baseColor:[1,1,1]},'Preset');
   else await WebEngine.prototype.importMaterialX.call(receiver as unknown as WebEngine,'id',[{file:new Blob([xml]) as File,path:'new.mtlx'}]);
   complete({file:new Blob(['height']),scale:.2,bias:0,maxError:0,width:1024,height:1024,backend:'webgpu',timings:{compileMs:0,executeMs:1,readbackMs:1,cacheHit:true}});
   expect(await pending).toBe(false);expect(setTextures).toHaveBeenCalledTimes(action==='replace'?1:0);
+  if(action==='preset')expect(setPreset).toHaveBeenCalledWith('id',{baseColor:[1,1,1]},'Preset');
  });
  it('waits for background height baking and installs surface and height as one undo step',async()=>{
   let complete!:(value:Awaited<ReturnType<typeof bakeDisplacement>>)=>void;

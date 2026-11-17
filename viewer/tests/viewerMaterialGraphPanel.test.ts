@@ -11,6 +11,7 @@ import { archiveGraph, graphImageName, rememberGraphImage, restoreGraph } from '
 import { MaterialEditor, readPendingEdits } from '../src/engine/materialEditor';
 import { readMaterialEdits, saveMaterialEdits, type MaterialXHeight } from '../src/engine/modelCache';
 import { discardHistory, redo, undo } from '../src/history';
+import { MATERIAL_PRESETS } from '../src/engine/materialParams';
 
 class Bitmap { close() {} }
 const texture = () => new Texture({ data: new Uint8Array(4), width: 1, height: 1 });
@@ -152,6 +153,55 @@ describe('material graph edits', () => {
     expect(editor.describe(id)?.graph?.webgl).toBe(true);
     editor.setGraph(id, new MaterialGraph({ nodes: [{ id: 'n', category: 'noise3d', type: 'color3' }], terminal: { baseColor: { node: 'n' } } }), 'Noise');
     expect(editor.describe(id)?.graph?.webgl).toBe(false);
+  });
+
+  it('replaces a graph with a value preset as one persistent, undoable edit for every variant', async () => {
+    const { id, material, source, mesh } = setup();
+    const { graph } = skinGraph();
+    const values = MATERIAL_PRESETS.find(preset => preset.id === 'white')!.values;
+    await editor.setTextures(id, {}, {baseColor: [.2, .3, .4], specularRoughness: .2}, 'Import', undefined, undefined, graph);
+    const variant = new OpenPBRMaterial();
+    editor.onConverted(source, variant, mesh.uuid);
+    // Ordinary value edits still leave graph inputs connected.
+    editor.setValues(id, {specularRoughness: .3}, 'Roughness');
+    expect(material.graph).toBe(graph);
+    editor.modelId = 'model';
+    editor.setPreset(id, values, 'White model preset');
+    for (const target of [material, variant]) {
+      expect(target.graph).toBeUndefined();
+      expect(target.baseColor).toEqual([1, 1, 1]);
+      expect(target.specularRoughness).toBe(.8);
+    }
+    expect(editor.describe(id)?.graph).toBeNull();
+    undo();
+    for (const target of [material, variant]) {
+      expect(target.graph).toBe(graph);
+      expect(target.baseColor).toEqual([.2, .3, .4]);
+      expect(target.specularRoughness).toBe(.3);
+    }
+    redo();
+    editor.flush();
+    const stored = vi.mocked(saveMaterialEdits).mock.lastCall![0];
+    vi.mocked(readMaterialEdits).mockResolvedValueOnce(stored);
+    const pending = await readPendingEdits('model');
+    editor.setModel(mesh, pending);
+    const restored = new OpenPBRMaterial();
+    editor.onConverted(source, restored, mesh.uuid);
+    expect(restored.graph).toBeUndefined();
+    expect(restored.baseColor).toEqual([1, 1, 1]);
+    expect(restored.specularRoughness).toBe(.8);
+  });
+
+  it('keeps texture slots and displacement when applying a value preset', () => {
+    const { id, material } = setup();
+    const map = texture(), height = texture();
+    material.map = map;
+    material.displacementMap = height;
+    material.displacementScale = .02;
+    editor.setPreset(id, MATERIAL_PRESETS[0].values, 'Preset');
+    expect(material.map).toBe(map);
+    expect(material.displacementMap).toBe(height);
+    expect(material.displacementScale).toBe(.02);
   });
 
   it('replaces a graph image keeping its texture settings and persists it', async () => {

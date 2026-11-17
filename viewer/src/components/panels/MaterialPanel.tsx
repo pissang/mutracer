@@ -106,7 +106,8 @@ export function MaterialPanel() {
               <img src={thumbnailUrl(`materialx-${sample.id}`)} alt="" /><span>{sample.label}</span>
             </button>
           )) : MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
-            <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
+            <button key={preset.id} className="preset" title={`Apply ${preset.label}`}
+              onClick={() => getEngine()?.applyMaterialPreset(material.id, preset.values, `${preset.label} preset`)}>
               <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
             </button>
           ))}

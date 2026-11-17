@@ -111,7 +111,7 @@ async function generateThumbnails() {
   const materialId = flatten(useViewer.getState().tree).find((n) => n.name === sphere.name)!.materials[0].id;
   for (const preset of MATERIAL_PRESETS) {
     console.log(`Rendering ${preset.label}`);
-    engine.setMaterialValues(materialId, preset.values);
+    engine.applyMaterialPreset(materialId, preset.values, `${preset.label} preset`);
     shots.push([`material-${preset.id}`, await engine.renderImage({ ...MATERIAL_SIZE, transparent: false }, 'image/webp', 0.9)]);
   }
   for (const sample of MATERIALX_SAMPLES) {

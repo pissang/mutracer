@@ -40,6 +40,7 @@ export interface ViewerEngine {
   selectMaterial(materialId: string, objectId: string): void;
   setVisible(objectId: string, visible: boolean): void;
   setMaterialValues(materialId: string, values: MaterialValues, label?: string, mergeKey?: string): void;
+  applyMaterialPreset(materialId: string, values: MaterialValues, label: string): void;
   setMaterialTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string): void;
   setMaterialTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string): Promise<void>;
   setMaterialXHeight(materialId: string, name: string): Promise<boolean>;
