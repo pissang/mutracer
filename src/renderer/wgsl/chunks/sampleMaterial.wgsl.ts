@@ -1,10 +1,20 @@
-import {queryState} from './queryPoints.wgsl.js';
+import {queryState, pendingSceneQueryRef} from './queryPoints.wgsl.js';
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false) {
-  const state = queryState(queryPoints, 'MaterialQueryState', 'materialQueryState', {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool', prepared: 'OpenPbrPreparedBsdf'}, queryPoints);
-  const {originalFace, ndv1, ffnormal, mediumSampled, prepared} = state.refs;
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false) {
+  earlyScattering &&= queryPoints;
+  const pendingQuery = pendingSceneQueryRef(earlyScattering);
+  const continuation: Record<string, string> = {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool'};
+  if (earlyScattering) { continuation.scattering = 'ScatteringWork'; continuation.discrete = 'bool'; }
+  else { continuation.prepared = 'OpenPbrPreparedBsdf'; }
+  const state = queryState(queryPoints, 'MaterialQueryState', 'materialQueryState', continuation, queryPoints);
+  const {originalFace, ndv1, ffnormal, mediumSampled} = state.refs;
+  const prepared = earlyScattering ? 'prepared' : state.refs.prepared;
+  const discrete = `!${prepared}.material.thinWalled &
+      (abs(${prepared}.material.relativeIor - 1.0) <= 1e-6) &
+      (${prepared}.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6)`;
+  const scatter = `sampleScattering(si, *ma, ${prepared}, path, ${ffnormal}, !${mediumSampled}${queryPoints ? earlyScattering ? ', false' : ', resume' : ''})`;
   return state.declarations + /* wgsl */ `
 
 struct ShadowRayWork {
@@ -161,11 +171,13 @@ fn sampleScattering(
   var selectedTarget = 0.0;
   var scalarWeightSum = 0.0;
   var result: ScatteringWork;
-  // The final iteration samples the continuation after NEE and its shadow ray.
+  // The final iteration samples the continuation after NEE${earlyScattering ? '' : ' and its shadow ray'}.
   // Both proposals use one BSDF evaluation call site, avoiding a second inlined
-  // optical graph. Keep all random draws and visibility queries in their
-  // original order, including the short-circuit reservoir replacement draw.
-  for (var event = ${queryPoints ? 'select(0u, candidateCount, resume)' : '0u'}; event <= candidateCount; event++) {
+  // optical graph.${earlyScattering ? ` Structured BSDF/phase dimensions are independent of
+  // traversal's hashed samples, so the continuation can finish before visibility.
+  // Only its result survives the query; NEE is still accumulated on return.` : ` Keep all random draws and visibility queries in their
+  // original order, including the short-circuit reservoir replacement draw.`}
+  for (var event = ${queryPoints && !earlyScattering ? 'select(0u, candidateCount, resume)' : '0u'}; event <= candidateCount; event++) {
     let continuation = event == candidateCount;
     var lightSample: LightSampleRec;
     var lightDir: vec3f;
@@ -183,12 +195,12 @@ fn sampleScattering(
         }
       }
 ${queryPoints ? /* wgsl */ `      if (valid && !resume) {
-        pendingSceneQuery.contribution = selected.contribution;
-        pendingSceneQuery.weight = candidateUCW;
+        ${pendingQuery}.contribution = selected.contribution;
+        ${pendingQuery}.weight = candidateUCW;
         requestSceneVisibility(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex, 1);
-        return result;
+${earlyScattering ? '' : '        return result;'}
       }
-      if (resume && !pendingSceneQuery.occluded) { (*path).li += pendingSceneQuery.contribution * pendingSceneQuery.weight; }
+${earlyScattering ? '' : `      if (resume && !${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight; }`}
 ` : /* wgsl */ `      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
 ${caustics?`        var connection=*path;
         if(isSurface&&isCausticSpecular(ma)){causticAdvance(&connection,ma,dot(ffnormal,selected.ray.d)<0.0,true);}
@@ -414,7 +426,7 @@ ${caustics?`    let emissionWeight=emissiveHitMisWeight(si,path);
   }
   // Surface and medium events share the light estimator. Emission is added
   // before NEE, then the continuation direction is sampled.
-  ${queryPoints ? state.init('prepared', 'OpenPbrPreparedBsdf()') : 'var prepared: OpenPbrPreparedBsdf;'}
+  ${queryPoints && !earlyScattering ? state.init('prepared', 'OpenPbrPreparedBsdf()') : 'var prepared: OpenPbrPreparedBsdf;'}
   if (!${mediumSampled}) {
 ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).directionTangent = (*si).directionTangent;
@@ -424,11 +436,15 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
     ${prepared} = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ${ffnormal});
   }
-${queryPoints ? `  }
+${earlyScattering ? `  ${state.refs.scattering} = ${scatter};
+  ${state.refs.discrete} = ${discrete};
+` : ''}${queryPoints ? `  }${earlyScattering ? ` else {
+    if (!${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight; }
+  }` : ''}
   var scatteringPdf: f32;
   var scatterDir: vec3f;\n` : ''}${researchContribution}${photonMapping?/* wgsl */ `  if(!${mediumSampled}){let value=(*path).beta*photonContribution(*si,${prepared},(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
-` : ''}  let scattered = sampleScattering(si, *ma, ${prepared}, path, ${ffnormal}, !${mediumSampled}${queryPoints ? ', resume' : ''});
-${queryPoints ? '  if (pendingSceneQuery.pending) { return; }\n' : ''}  scatterDir = scattered.direction;
+` : ''}  let scattered = ${earlyScattering ? state.refs.scattering : scatter};
+${queryPoints ? `  if (${pendingQuery}.pending) { return; }\n` : ''}  scatterDir = scattered.direction;
   scatteringPdf = scattered.pdf;
   if (!${mediumSampled}) {
     let f = scattered.response;
@@ -446,9 +462,7 @@ ${queryPoints ? '  if (pendingSceneQuery.pending) { return; }\n' : ''}  scatterD
     }
     // Exactly index-matched solid transmission is a discrete null boundary;
     // environment NEE has no competing density for that event.
-    (*path).scatteringIsDelta = !${prepared}.material.thinWalled &
-      (abs(${prepared}.material.relativeIor - 1.0) <= 1e-6) &
-      (${prepared}.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6);
+    (*path).scatteringIsDelta = ${earlyScattering ? state.refs.discrete : discrete};
 ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
 ` : ''}    (*path).beta *= f / scatteringPdf;
     // Zero throughput cannot contribute at subsequent vertices or light connections.

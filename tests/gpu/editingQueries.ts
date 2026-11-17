@@ -12,7 +12,7 @@ const graph = (opacity = false) => new MaterialGraph({nodes: [
   {id: 'rough', category: 'extract', type: 'float', inputs: {in: {type: 'vector2', connection: {node: 'uv'}}, index: {type: 'integer', value: 0}}}
 ], terminal: {baseColor: {node: 'color'}, specularRoughness: {node: 'rough'}, ...(opacity ? {opacity: {node: 'rough'}} : {})}});
 
-export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-mask', 'medium', 'catcher', 'bevel', 'displacement', 'lights', 'cube']) {
+export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-mask', 'medium', 'catcher', 'bevel', 'displacement', 'lights', 'cube', 'zsobol', 'alpha-zsobol']) {
   // Tests inspect installation, so a passing comparison cannot silently use lean twice.
   const prototype = WGPURayTracePass.prototype as any, start = prototype._startTraceVariant;
   const passes: any[] = [];
@@ -26,7 +26,7 @@ export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-m
     const geometry = kind === 'bevel' || kind === 'cube' ? createCubeGeometry() : createSphereGeometry(24, 12);
     const mesh = new Mesh(geometry, material), meshes = [mesh];
     if (kind === 'bevel') material.bevelSize = .08;
-    if (kind === 'alpha' || kind === 'catcher') material.alphaMode = 'blend';
+    if (kind === 'alpha' || kind === 'catcher' || kind === 'alpha-zsobol') material.alphaMode = 'blend';
     if (kind === 'alpha-mask') { material.alphaMode = 'mask'; material.alphaCutoff = .55; }
     if (kind === 'medium') Object.assign(material, {transmissionWeight: 1, transmissionDepth: .6, transmissionColor: [.6, .8, .9], transmissionScatter: [.6, .5, .3]});
     if (kind === 'displacement') {
@@ -48,7 +48,7 @@ export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-m
     }
     engine.scene = {meshes, lights, background: [.3, .4, .5, 1]};
     const camera = new Camera({projection: 'perspective', fov: 40}); camera.position = [2, 1.2, 4]; camera.lookAt([0, 0, 0]); engine.camera = camera;
-    const render = new Render(engine, {width: 64, height: 64, maxSamples: 16, denoiser: null, samplingPattern: 'sobol', bounces: 6, directLightCandidates: 3, bevel: kind === 'bevel'});
+    const render = new Render(engine, {width: 64, height: 64, maxSamples: 16, denoiser: null, samplingPattern: kind.endsWith('zsobol') ? 'zsobol' : 'sobol', bounces: 6, directLightCandidates: 3, bevel: kind === 'bevel'});
     engine.update(); return {engine, render, material};
   };
   const drive = async (s: Awaited<ReturnType<typeof make>>, done: () => boolean, pass?: any) => {
@@ -71,7 +71,7 @@ export async function runEditingQueryTests(cases = ['surface', 'alpha', 'alpha-m
         freezeMaterialGraphPolicy(true);
         for (const s of [lean, editing]) {
           const before = s.engine.getDiagnostics()?.materialGraphs?.revision ?? 0;
-          s.material.graph = graph(kind === 'alpha' || kind === 'alpha-mask' || kind === 'catcher'); s.engine.update();
+          s.material.graph = graph(kind === 'alpha' || kind === 'alpha-mask' || kind === 'catcher' || kind === 'alpha-zsobol'); s.engine.update();
           await drive(s, () => { const g = s.engine.getDiagnostics()?.materialGraphs; return !!g && g.revision > before && g.revision === g.installedRevision && g.status !== 'compiling'; }, pass);
         }
         if (!pass.graphs.editingInstalled) throw Error('Comparison did not install the editing program');

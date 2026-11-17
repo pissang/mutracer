@@ -123,6 +123,11 @@ the first. Three rules keep one copy on the main path:
   families, and only when an interpreted structure has such a program.
 - Noise helpers call `mx_perlin` from one channel loop, and the interpreter
   evaluates noise and fractal octaves through one `mx_noise_octaves` call.
+  D3D12 universal kernels evaluate the three cellular hash channels in vector
+  lanes, sharing dimension control flow while retaining each channel's integer
+  mixing and float conversion. Their Perlin lattice uses one flat corner loop
+  in the original x/y/z order, retaining each weighted accumulation. Other
+  variants keep the scalar helpers and nested lattice loops.
 
 The register file holds 16 values, enough for every viewer sample; it did not
 change compile time measurably. Specialized code still inlines the noise
@@ -134,9 +139,9 @@ maximum port count, derived from `graphInstructions`; absent ports still decode
 as zero. This preserves bytecode, casts, register liveness and evaluation order
 while avoiding repeated inlining of operand/context decoding at every expression.
 The array and loop cost GPU work while the interpreter serves. Metal, specialized
-code and native retain their existing decoder. Consolidating noise hash call sites
-and bounding noise lattice loops separately gave only a small compile improvement;
-those changes were not adopted.
+code and native retain their existing decoder. Scalar hash call-site consolidation
+and changing the nested lattice bounds alone gave only a small compile improvement;
+those shapes were not adopted.
 
 D3D12's shared graph site also executes the surface program and its following
 opacity program in one `mx_run` loop. At their boundary the context switches to
@@ -152,6 +157,11 @@ color decoding, factor and emission/coat ordering; normal and displacement
 queries keep their existing sites. The existing loop guard (value 4) prevents
 static unrolling. Its repeat-filter footprint reaches only `[-1,size]`, so the
 two boundary texels can wrap with selects instead of general signed remainders.
+Both axes select wrapped or clamped integer coordinates in vector data flow;
+the UDIM rejection and repeat-footprint tests use eager boolean operators over
+pure, already available values. This avoids duplicating short-circuit blocks
+when DXC inlines each filtering site. Texture reads, floating-point filtering
+and color decoding keep their original order.
 These changes target expanded compiler work, not source byte count. Profile both
 DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
 for the complete browser wait. Generated native, non-graph and non-D3D12
@@ -167,12 +177,56 @@ use that same query site for their four light candidates. Paths finish the event
 together; a free-running switch over complete paths lets lanes drift into
 different bounces and serializes their shading work.
 
+Known structured queries keep the pending visibility and catcher records in
+two-element private arrays. The existing guard selects slot zero; addressable
+records reduce compiler work on the loop-carried control flow. Sequential random
+queries retain scalar pending/catcher records.
+
+With baked Sobol/ZSobol constants, scattering finishes before the selected
+visibility query. Its dimensions do not depend on traversal's separate hashed
+counter, so the query stores only the scattering result and discrete-event flag.
+On return, NEE is accumulated before applying that result, including a rejected
+BSDF proposal or a volume event. Sequential random queries retain the prepared
+BSDF and draw the continuation after visibility. Both shapes use the same
+sampling and BSDF evaluation expressions; no second optical graph is emitted.
+
 `intersect.wgsl.ts` emits the ordinary BVH traversal with a runtime closest/any-hit
 mode. The triangle tests, PDM stepping and surface completion are shared with the
 direct templates. Shadow opacity stays inside that traversal, with one independent
-opacity interpreter. No BVH cursor or duplicate `SurfaceInteraction` is suspended
-across shading, and alpha rejection continues the original nested loops. Bevel
-uses its independent traversal only when the scene requires it.
+opacity interpreter. No BVH cursor is suspended across shading, and alpha
+rejection continues the original nested loops. Bevel uses its independent
+traversal only when the scene requires it.
+
+The common integrator keeps its live `SurfaceInteraction` in a two-element
+function array. The runtime index `(loopUnrollGuard - 4) & 1` is zero under the
+existing guard contract. References passed to traversal, material evaluation and
+shading name that same slot; the other slot does not carry another vertex.
+`primaryGuidesFor` supplies the selected reference to the existing guide template.
+Direct generation keeps its scalar local. This changes addressability and the
+loop-carried PHI graph, while retaining every value member and host layout. It
+spends 544 nominal WGSL bytes for this array instead of a 272-byte local; actual
+register and scratch allocation must be measured separately.
+
+Known structured queries also index two-element resolved-material and path
+arrays, using the same slot. Primary-surface instrumentation retains its scalar
+material/path locals. The value types and evaluation order stay unchanged; the
+additional nominal storage needs its own GPU comparison.
+
+Count compiled call chains rather than declarations in the complete WGSL module:
+its picking and AOV functions also contain BSDF calls but are not part of the
+main trace entry. The editing trace retains these sites:
+
+| Work | Main trace sites and cost |
+| --- | --- |
+| BSDF prepare / eval / direction sample | One each; no second optical graph to merge. |
+| Surface/emission graph interpreter | One shared site; shadow opacity retains its independent runner. |
+| Light choice | NEE and catcher keep their own sampling scopes. A shared service would carry the RIS reservoir and sampled light across extra continuations. |
+| Material texture filtering | One surface-slot loop; opacity, normal, displacement and light queries retain their required sampling contexts. |
+
+Reducing source calls does not by itself reduce compiler work. Local arrays and
+extra continuations can replace inlined instructions with address calculations,
+loads and PHIs, or move cost from DXC to pipeline creation. Compare the full cold
+pipeline and GPU timestamps for each shape, including the lean variant.
 
 `primaryGuides`, `completeVertex` and `shadeVertex` keep one arithmetic source.
 Query points change the surrounding control flow and explicitly name the saved

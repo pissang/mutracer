@@ -29,6 +29,11 @@ export function createMaterialBufferWgsl({
   hasTransmission?: boolean; caustics?: boolean;
   hasMetalness?: boolean;
 } = {}) {
+  // All terms are pure and already available at the atlas sample. Eager
+  // predicates keep DXC from cloning short-circuit blocks at each call site.
+  const textureAnd = materialHooks.graph?.textureLoop ? '&' : '&&';
+  const textureOr = materialHooks.graph?.textureLoop ? '|' : '||';
+  const texturePredicate = (value: string) => materialHooks.graph?.textureLoop ? '(' + value + ')' : value;
   const directionFlags = !!(materialHooks.graph || materialHooks.materialXNormals);
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
@@ -291,14 +296,14 @@ fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
 
 fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
   let transformed = uv * mapInfo[idx + NUM_MAPS].xy + mapInfo[idx + NUM_MAPS].zw;
-  if (isUdimMap(idx) && (transformed.x < 0.0 || transformed.y < 0.0 || transformed.x >= 10.0 || transformed.y >= 10.0)) { return vec4f(0.0); }
+  if (isUdimMap(idx) ${textureAnd} (${texturePredicate('transformed.x < 0.0')} ${textureOr} ${texturePredicate('transformed.y < 0.0')} ${textureOr} ${texturePredicate('transformed.x >= 10.0')} ${textureOr} ${texturePredicate('transformed.y >= 10.0')})) { return vec4f(0.0); }
   let size = ${independentTextures ? 'vec2i(getMapSize(idx))' : 'vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)))'};
   let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);
   let modes = mapInfo[idx + NUM_MAPS * 2].zw;
   // Repeat filtering must cross the logical image boundary, never another
   // atlas placement. Interior/clamped/mirrored footprints use hardware filtering.
-  if (!isUdimMap(idx) && ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > f32(size.x - 1))) ||
-      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > f32(size.y - 1))))) {
+  if (!isUdimMap(idx) ${textureAnd} ((${texturePredicate('size.x > 1')} ${textureAnd} ${texturePredicate('modes.x < 0.5')} ${textureAnd} (${texturePredicate('texel.x < 0.0')} ${textureOr} ${texturePredicate('texel.x > f32(size.x - 1)')})) ${textureOr}
+      (${texturePredicate('size.y > 1')} ${textureAnd} ${texturePredicate('modes.y < 0.5')} ${textureAnd} (${texturePredicate('texel.y < 0.0')} ${textureOr} ${texturePredicate('texel.y > f32(size.y - 1)')})))) {
     let base = vec2i(floor(texel));
     let weight = fract(texel);
     let origin = ${independentTextures ? 'vec2i(0)' : 'vec2i(round(getMapOffset(idx) * vec2f(textureDimensions(map).xy) - vec2f(0.5)))'};
@@ -310,10 +315,12 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
 }
 
 fn loadMapTexel(idx: i32, coordinate: vec2i, size: vec2i, origin: vec2i, modes: vec2f) -> vec4f {
-  var p = clamp(coordinate, vec2i(0), size - vec2i(1));
 ${materialHooks.graph?.textureLoop ? `  // sampleMap's repeat footprint reaches only [-1,size]. Wrap its boundary texels.
-  if (modes.x < 0.5) { p.x = select(select(coordinate.x, 0, coordinate.x >= size.x), size.x - 1, coordinate.x < 0); }
-  if (modes.y < 0.5) { p.y = select(select(coordinate.y, 0, coordinate.y >= size.y), size.y - 1, coordinate.y < 0); }` : `  if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
+  // Keep both axes in data flow: these pure integer choices are inlined at
+  // every texture call, where scalar branches multiply DXC's control flow.
+  let wrapped = select(select(coordinate, vec2i(0), coordinate >= size), size - vec2i(1), coordinate < vec2i(0));
+  let p = select(clamp(coordinate, vec2i(0), size - vec2i(1)), wrapped, modes < vec2f(0.5));` : `  var p = clamp(coordinate, vec2i(0), size - vec2i(1));
+  if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
   if (modes.y < 0.5) { p.y = ((coordinate.y % size.y) + size.y) % size.y; }`}
   return ${independentTextures ? 'textureLoad(map[getMapLayer(idx)], p, 0)' : 'textureLoad(map, origin + p, getMapLayer(idx), 0)'};
 }

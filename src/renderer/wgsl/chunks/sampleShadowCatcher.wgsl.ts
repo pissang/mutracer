@@ -1,4 +1,4 @@
-import {queryState} from './queryPoints.wgsl.js';
+import {queryState, pendingSceneQueryRef} from './queryPoints.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -9,8 +9,9 @@ import {queryState} from './queryPoints.wgsl.js';
 /** Light samples per catcher receiver; each issues one visibility query. */
 export const SHADOW_CATCHER_LIGHT_SAMPLES = 4;
 
-export function createSampleShadowCatcherWgsl(queryPoints = false) {
-  const state = queryState(queryPoints, 'CatcherQueryState', 'catcherQueryState', {counts: 'vec2f', candidate: 'u32'});
+export function createSampleShadowCatcherWgsl(queryPoints = false, addressableQueries = false) {
+  const pendingQuery = pendingSceneQueryRef(addressableQueries);
+  const state = queryState(queryPoints, 'CatcherQueryState', 'catcherQueryState', {counts: 'vec2f', candidate: 'u32'}, addressableQueries);
   const {counts, candidate} = state.refs;
   return state.declarations + /*wgsl*/ `
 
@@ -56,7 +57,7 @@ ${queryPoints ? /* wgsl */ `          requestSceneVisibility(ray, lightSample.di
       continue;
       }
       resumed = false;
-      let occluded = pendingSceneQuery.occluded;
+      let occluded = ${pendingQuery}.occluded;
 ` : /* wgsl */ `          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex,si.instanceIndex);
 `}          ${counts} += vec2f(select(0.0, 1.0, occluded), 1.0);
 ${queryPoints ? '' : '        }\n      }'}

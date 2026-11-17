@@ -22,7 +22,9 @@ const fields: Record<string, string> = { baseDiffuseRoughness: 'diffuseRoughness
 export interface GraphInterpreterOptions { terminals: readonly string[]; /** Inert literal that changes the source; measurement only. */ salt?: number; /** Opcode families the programs use. Default all. */ families?: ReadonlySet<GraphOp>;
     /** Opcode families of the interpreted emission programs. Absent: light sampling never runs the interpreter. */ emission?: ReadonlySet<GraphOp>;
     /** Opcode families of the interpreted opacity programs. Absent: shadow rays never run the interpreter. */ opacity?: ReadonlySet<GraphOp>;
-    /** Share a decoder loop in D3D12 browser kernels. Default false preserves other hosts. */ operandLoop?: boolean }
+    /** Share a decoder loop in D3D12 browser kernels. Default false preserves other hosts. */ operandLoop?: boolean;
+    /** Share cellular hash channels in D3D12 universal kernels. Default false. */ vectorCells?: boolean;
+    /** Flatten Perlin corners in D3D12 universal kernels. Default false. */ flatPerlin?: boolean }
 /** Pure shared graph fragments; templates own signatures, call sites and layout.
  * Specialized structures get IDs 1..N; with `interpreter`, negative IDs address a
  * program header record in `materialsBuffer` (see `graphInterpreterShader`).
@@ -49,7 +51,7 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
   if(color) { texel = vec4f(decodeMapColor(index,texel.rgb),texel.a); } return texel;
 }
 `;
-    declarations += graphMathShaderIR(structures, !!interpreter && !interpreter.families, interpreter?.families && graphInterpreterHelpers(interpreter.families));
+    declarations += graphMathShaderIR(structures, !!interpreter && !interpreter.families, interpreter?.families && graphInterpreterHelpers(interpreter.families), interpreter?.vectorCells, interpreter?.flatPerlin);
     structures.forEach((g, index) => declarations += generateGraphIR(g, `mx_eval_${index + 1}`).source + '\n');
     const matrix = (inverse: boolean) => {
         const columns = Array.from({ length: 4 }, (_, c) => `instancesBuffer[index * ${INSTANCE_VEC4_STRIDE} + ${c + (inverse ? 1 : 5)}]`);
@@ -253,7 +255,7 @@ fn mx_nee_random(candidate:u32) -> vec3f {
 }
 
 /** Pure MaterialX helpers shared by surface rendering and UV height baking. */
-export function graphMathShaderIR(structures:readonly GraphIR[], all = false, extra?: {noise: boolean; hsv: boolean; rotate3d: boolean}) {
+export function graphMathShaderIR(structures:readonly GraphIR[], all = false, extra?: {noise: boolean; hsv: boolean; rotate3d: boolean}, vectorCells = false, flatPerlin = false) {
     let declarations=`fn mx_rotate(p: vec2f, degrees: f32) -> vec2f { let a=degrees*0.017453292519943295; return vec2f(cos(a)*p.x-sin(a)*p.y,sin(a)*p.x+cos(a)*p.y); }
 fn mx_place2d(uv:vec2f,pivot:vec2f,scale:vec2f,angle:f32,offset:vec2f,order:f32) -> vec2f {
   if(order<0.5) { return mx_rotate((uv-pivot)/scale,angle)-offset+pivot; }
@@ -282,7 +284,7 @@ fn mx_rgbtohsv(value:vec3f) -> vec3f {
 }
 `;
     }
-    if(all || extra?.noise || structures.some(g=>hasCategory(g, ['noise2d','noise3d','fractal3d','cellnoise2d','cellnoise3d','worleynoise2d','worleynoise3d']))) declarations += noiseShader();
+    if(all || extra?.noise || structures.some(g=>hasCategory(g, ['noise2d','noise3d','fractal3d','cellnoise2d','cellnoise3d','worleynoise2d','worleynoise3d']))) declarations += noiseShader(vectorCells, flatPerlin);
     if(all || extra?.rotate3d || structures.some(g => hasCategory(g, ['rotate3d']))) {
         declarations += `fn mx_rotate3d(p:vec3f,degrees:f32,axis:vec3f) -> vec3f {
   let n=normalize(axis);let a=degrees*0.017453292519943295;let c=cos(a);let s=sin(a);

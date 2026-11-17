@@ -2,7 +2,27 @@
 // https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/genglsl/lib/mx_noise.glsl
 // Copyright (c) 2009-2010 Sony Pictures Imageworks Inc., et al. (OSL BSD-3-Clause).
 // See LICENSES/MaterialX-OSL-BSD-3-Clause.txt and THIRD_PARTY_NOTICES.md.
-export function noiseShader() {
+export function noiseShader(vectorCells = false, flatPerlin = false) {
+    // The three cellular channels share dimension control flow; each lane
+    // retains the scalar hash's u32 mixing and float conversion.
+    const cellular = vectorCells ? 'mx_cell3(q,dim)' : 'vec3f(mx_cell(q,dim,0),mx_cell(q,dim,1),mx_cell(q,dim,2))';
+    const vectorHash = vectorCells ? /* wgsl */ `fn mx_rot3(x:vec3u,k:u32) -> vec3u {return (x<<vec3u(k)) | (x>>vec3u(32u-k));}
+fn mx_cell3(p:vec3f,dim:i32) -> vec3f {
+ let base=vec3i(floor(p));let hd=select(4u,3u,dim==2);
+ let seed=0xdeadbeefu+hd*4u+13u;
+ var a=vec3u(seed+bitcast<u32>(base.x));var b=vec3u(seed+bitcast<u32>(base.y));
+ var c=vec3u(seed)+select(vec3u(bitcast<u32>(base.z)),vec3u(0u,1u,2u),dim==2);
+ if(dim!=2){
+ a-=c;a^=mx_rot3(c,4u);c+=b;b-=a;b^=mx_rot3(a,6u);a+=c;c-=b;c^=mx_rot3(b,8u);b+=a;
+ a-=c;a^=mx_rot3(c,16u);c+=b;b-=a;b^=mx_rot3(a,19u);a+=c;c-=b;c^=mx_rot3(b,4u);b+=a;
+ a+=vec3u(0u,1u,2u);
+ }
+ c^=b;c-=mx_rot3(b,14u);a^=c;a-=mx_rot3(c,11u);b^=a;b-=mx_rot3(a,25u);
+ c^=b;c-=mx_rot3(b,16u);a^=c;a-=mx_rot3(c,4u);b^=a;b-=mx_rot3(a,14u);c^=b;c-=mx_rot3(b,24u);
+ return vec3f(c)/4294967295.0;
+}
+
+` : '';
     return `fn mx_rot(x:u32,k:u32) -> u32 { return (x<<k)|(x>>(32u-k)); }
 fn mx_hash(p:vec3i,dim:i32,extra:i32) -> u32 {
   let seed:u32=0xdeadbeefu+u32(dim)*4u+13u;
@@ -30,16 +50,15 @@ fn mx_perlin(p:vec3f,dim:i32,channel:i32) -> f32 {
   let base:vec3i=vec3i(floor(p));let f:vec3f=p-floor(p);
   let t:vec3f=f*f*f*(f*(f*6.0-15.0)+10.0);
   var result:f32=0.0;
-  for(var z:i32=0;z<2;z++){
+  ${flatPerlin ? 'for(var corner=0;corner<select(8,4,dim==2);corner++){let x=corner&1;let y=(corner>>1)&1;let z=corner>>2;' : `for(var z:i32=0;z<2;z++){
     if(dim==2 && z==1){break;}
-    for(var y:i32=0;y<2;y++){for(var x:i32=0;x<2;x++){
+    for(var y:i32=0;y<2;y++){for(var x:i32=0;x<2;x++){`}
       let off:vec3i=vec3i(x,y,z);var h:u32=mx_hash(base+off,dim,0);
       if(channel>=0){h=(h>>u32(channel*8))&255u;}
       var weight:f32=mx_pick(1.0-t.x,t.x,x==1)*mx_pick(1.0-t.y,t.y,y==1);
       if(dim==3){weight*=mx_pick(1.0-t.z,t.z,z==1);}
       result+=mx_grad(h,f-vec3f(off),dim)*weight;
-    }}
-  }
+${flatPerlin ? '  }' : '    }}\n  }'}
   return result*mx_pick(0.9820,0.6616,dim==2);
 }
 // One mx_perlin call site in a channel loop: every inlined copy of the lattice
@@ -79,19 +98,19 @@ fn mx_cell(p:vec3f,dim:i32,channel:i32) -> f32 {
   if(channel<0){h=mx_hash(base,dim,0);}else if(dim==2){h=mx_hash(vec3i(base.xy,channel),3,0);}else{h=mx_hash(base,4,channel);}
   return f32(h)/4294967295.0;
 }
-fn mx_worley(p:vec3f,dim:i32,n:i32,jitter:f32,style:i32) -> vec3f {
+${vectorHash}fn mx_worley(p:vec3f,dim:i32,n:i32,jitter:f32,style:i32) -> vec3f {
   let base:vec3f=floor(p);let local:vec3f=p-base;var distances:vec3f=vec3f(1e6);var minpos:vec3f=vec3f(0.0);
   for(var x:i32=-1;x<=1;x++){for(var y:i32=-1;y<=1;y++){for(var z:i32=-1;z<=1;z++){
     if(dim==2 && z!=0){continue;}
     let off:vec3f=vec3f(f32(x),f32(y),f32(z));let q:vec3f=base+off;
-    var cp:vec3f=off+(vec3f(mx_cell(q,dim,0),mx_cell(q,dim,1),mx_cell(q,dim,2))-0.5)*jitter+0.5-local;
+    var cp:vec3f=off+(${cellular}-0.5)*jitter+0.5-local;
     if(dim==2){cp.z=0.0;}
     let d:f32=dot(cp,cp);
     if(d<distances.x){distances=vec3f(d,distances.xy);minpos=cp;}
     else if(d<distances.y){distances=vec3f(distances.x,d,distances.y);}
     else if(d<distances.z){distances.z=d;}
   }}}
-  if(style==1){let q:vec3f=p+minpos;if(n==1){return vec3f(mx_cell(q,dim,-1));}return vec3f(mx_cell(q,dim,0),mx_cell(q,dim,1),mx_cell(q,dim,2));}
+  if(style==1){let q:vec3f=p+minpos;if(n==1){return vec3f(mx_cell(q,dim,-1));}return ${cellular};}
   return sqrt(distances);
 }
 `;
