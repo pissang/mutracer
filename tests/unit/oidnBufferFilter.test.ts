@@ -116,3 +116,71 @@ it('releases its network after an active call is cancelled by disposal', async (
   expect(network.dispose).toHaveBeenCalledOnce();
   engine.dispose();
 });
+
+it('loads a fresh network after device recovery even when the first reload fails', async () => {
+  const {engine, network} = fixture();
+  const filter = await createOIDNFilter(engine, {weightsUrl: '/color-only', aux: false});
+  const data = {...input(), albedo: undefined, normal: undefined};
+  const state = engine as unknown as {_invalidateDevice(error: Error, recovering: boolean): void; _pipeline: unknown; _info: unknown; _gpuDevice: unknown};
+  const {_pipeline: pipeline, _info: info, _gpuDevice: device} = state;
+  state._invalidateDevice(new Error('device lost'), true);
+  expect(network.dispose).toHaveBeenCalledOnce();
+  Object.assign(state, {_pipeline: pipeline, _info: info, _gpuDevice: device});
+
+  vi.mocked(loadOIDNNetwork).mockRejectedValueOnce(new Error('weights unavailable'));
+  await expect(filter.denoise(data)).rejects.toThrow(/weights unavailable/);
+
+  let finish = () => {};
+  const recovered = {dispose: vi.fn(), tileExecute: vi.fn(({done}) => {
+    finish = () => done({data: image(), width: 2, height: 2});
+    return vi.fn();
+  })};
+  vi.mocked(loadOIDNNetwork).mockResolvedValueOnce(recovered as unknown as OIDNDenoiser);
+  const task = filter.denoise(data);
+  await tick(); await tick();
+  finish();
+  await task;
+  expect(network.tileExecute).not.toHaveBeenCalled();
+  expect(recovered.tileExecute).toHaveBeenCalledOnce();
+  filter.dispose();
+  expect(recovered.dispose).toHaveBeenCalledOnce();
+  engine.dispose();
+});
+
+it('warns when a call inside a custom denoiser waits without that callback signal', async () => {
+  const {engine, finish} = fixture();
+  const filter = await createOIDNFilter(engine, {weightsUrl: '/color-only', aux: false});
+  const data = {...input(), albedo: undefined, normal: undefined};
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.useFakeTimers();
+  try {
+    const context = new AbortController();
+    let nested: Promise<void> | undefined;
+    let release = () => {};
+    const outer = engine._enqueueDenoise(() => engine._withCustomDenoiseLease(context.signal, async () => {
+      // Joins the active lease: runs immediately and never warns.
+      const joined = filter.denoise(data, {signal: context.signal});
+      await vi.advanceTimersByTimeAsync(0);
+      finish();
+      await joined;
+      // Derived signal: queued behind this callback, so it warns.
+      nested = filter.denoise(data, {signal: AbortSignal.any([context.signal])});
+      await new Promise<void>(resolve => { release = resolve; });
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0][0]).toMatch(/context\.signal/);
+    release();
+    await outer;
+    await vi.advanceTimersByTimeAsync(0);
+    finish();
+    await nested;
+  } finally {
+    vi.useRealTimers();
+    warn.mockRestore();
+  }
+  filter.dispose();
+  engine.dispose();
+});

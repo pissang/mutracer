@@ -214,8 +214,11 @@ RGB determines the input color space. Built-in Render OIDN receives a composed
 display-linear image, so filtering raw HDR from a custom denoiser can give a
 different result. Use the output's RGB and retain coverage separately.
 
-Inside a custom denoiser pass its callback's `signal` to `denoise` so the call
-can run within the active filter. Calls on one engine run serially. Keep the
+Inside a custom denoiser pass the callback's own `context.signal` to `denoise`
+so the call runs within the active filter. Omitting it or passing a derived
+signal such as `AbortSignal.any([...])` queues the call behind the callback that
+awaits it, which stops all denoising on the engine; the filter warns after five
+seconds. Calls on one engine run serially. Keep the
 buffers alive until the promise settles and discard the output if the signal
 aborts. After device recovery, recreate the buffers on the new device and
 reuse the filter. Creating a filter on WebGL rejects.

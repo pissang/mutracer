@@ -193,6 +193,7 @@ export default class Engine {
   private _customPrepared = new WeakMap<Denoiser, {device: GPUDevice; width: number; height: number}>();
   private _denoiseTail: Promise<unknown> = Promise.resolve();
   private _customDenoiseLeases = new WeakMap<AbortSignal, {tail: Promise<unknown>}>();
+  private _activeCustomDenoises = 0;
   private _lastError: Error | undefined;
   /** Most recent synchronous engine/render failure. Default undefined. */
   get lastError() { return this._lastError; }
@@ -726,12 +727,17 @@ export default class Engine {
   async _withCustomDenoiseLease<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
     const lease = {tail: Promise.resolve() as Promise<unknown>};
     this._customDenoiseLeases.set(signal, lease);
+    this._activeCustomDenoises++;
     try { return await work(); }
     finally {
       this._customDenoiseLeases.delete(signal);
-      await lease.tail;
+      try { await lease.tail; } finally { this._activeCustomDenoises--; }
     }
   }
+  /** @internal True while a custom denoiser callback holds the inference lease. */
+  get _customDenoiseActive() { return this._activeCustomDenoises > 0; }
+  /** @internal Whether a nested buffer filter call with this signal joins an active callback's lease. */
+  _hasCustomDenoiseLease(signal?: AbortSignal) { return !!signal && this._customDenoiseLeases.has(signal); }
   /** @internal Device lifetime for storage borrowed by a buffer denoise job. */
   get _denoiseDeviceSignal() {
     return this._disposed

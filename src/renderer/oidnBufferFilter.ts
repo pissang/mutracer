@@ -6,6 +6,8 @@ import type {OwnedDenoiser} from './ownedDenoiser.js';
 import {loadOIDNNetwork} from './oidnNetwork.js';
 
 type Network = Extract<OwnedDenoiser, {kind: 'oidn'}>;
+/** Longer than any expected OIDN wait behind a normal queued job at interactive sizes. */
+export const NESTED_CALL_WARNING_MS = 5000;
 
 function infer(network: OIDNWeb, input: {color: OIDNWebGPUData; albedo?: OIDNWebGPUData; normal?: OIDNWebGPUData}, signal: AbortSignal) {
   return new Promise<OIDNWebGPUOutputData>((resolve, reject) => {
@@ -84,10 +86,14 @@ export async function createBufferFilter(engine: Engine, options: OIDNFilterOpti
     signal.throwIfAborted();
     if (engine.backend !== 'webgpu' || !engine.device) throw new Error('OIDN requires a WebGPU engine.');
     if (!filter || generation !== engine._deviceGeneration) {
-      generation = engine._deviceGeneration;
+      // Device invalidation already force-released the previous network. Forget it
+      // before loading, so a failed load cannot leave a disposed network marked current.
+      filter = undefined;
+      const current = engine._deviceGeneration;
       filter = await engine._acquireDenoiser(key, async () => ({
         kind: 'oidn', denoiser: await loadOIDNNetwork(engine, {...settings, signal: weightSignal})
       }));
+      generation = current;
     }
     signal.throwIfAborted();
     return filter.denoiser;
@@ -119,8 +125,17 @@ export async function createBufferFilter(engine: Engine, options: OIDNFilterOpti
       const device = engine.device!;
       const data = {...input};
       pending++;
+      // A call from inside a custom denoiser that does not pass that callback's own
+      // signal waits for the callback, which waits for this call. It cannot be told
+      // apart from an ordinary queued call, so only warn when it stays blocked.
+      const blocked = engine._customDenoiseActive && !engine._hasCustomDenoiseLease(signal)
+        ? setTimeout(() => console.warn('OIDN filter is waiting for an active custom denoiser. ' +
+          'Inside Denoiser.denoise, pass its context.signal itself (not a derived signal) to filter.denoise, or the engine deadlocks.'),
+        NESTED_CALL_WARNING_MS)
+        : undefined;
       try {
         await engine._enqueueDenoise(async () => {
+          clearTimeout(blocked);
           jobSignal.throwIfAborted();
           const network = await acquire(jobSignal);
           const needsGuides = settings.aux !== false || network.auxiliaryDenoisers !== undefined;
@@ -140,6 +155,7 @@ export async function createBufferFilter(engine: Engine, options: OIDNFilterOpti
         }, jobSignal, signal);
         jobSignal.throwIfAborted();
       } finally {
+        clearTimeout(blocked);
         pending--;
         if (lifetime.signal.aborted && pending === 0) release();
       }
