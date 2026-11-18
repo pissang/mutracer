@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchWithProgress } from '../src/engine/fetchWithProgress';
+import { RESEARCH_MODEL_PRESETS } from '../src/engine/researchModelPresets';
 
 const sample = 'https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/model.glb';
 
@@ -40,9 +41,29 @@ describe('viewer downloads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  const lfsRaw = 'https://raw.githubusercontent.com/ErfanMo77/gltf-research-scenes/main/scenes/test/mesh.bin';
+  const bathroom = RESEARCH_MODEL_PRESETS.find(preset => preset.id === 'research-bathroom')!.url!;
+  const lfsRaw = new URL('bathroom.bin', bathroom).href;
   const lfsMedia = lfsRaw.replace('raw.githubusercontent.com/', 'media.githubusercontent.com/media/');
   const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 3\n`;
+
+  it.each([[bathroom, 'model'], [lfsRaw, pointer]])('uses a matching research mirror after repeated 503s for %s', async (url, payload) => {
+    const mirror = url.replace(
+      /^https:\/\/raw\.githubusercontent\.com\/ErfanMo77\/gltf-research-scenes\/([a-f0-9]{40})\//,
+      'https://cdn.jsdelivr.net/gh/ErfanMo77/gltf-research-scenes@$1/'
+    );
+    const fetchMock = vi.fn(async (address: string) => {
+      if (address === url) return new Response(null, { status: 503 });
+      if (address === mirror) return new Response(payload);
+      if (address === lfsMedia) return new Response('abc');
+      throw new Error(`Unexpected URL: ${address}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fetchWithProgress(url);
+    await vi.runAllTimersAsync();
+    const lfs = url === lfsRaw;
+    expect(new TextDecoder().decode(await result)).toBe(lfs ? 'abc' : 'model');
+    expect(fetchMock.mock.calls.map(([address]) => address)).toEqual([url, url, url, mirror, ...(lfs ? [lfsMedia] : [])]);
+  });
 
   it('resolves GitHub LFS pointers and reports progress for the real payload', async () => {
     const fetchMock = vi.fn()
