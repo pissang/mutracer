@@ -74,3 +74,45 @@ export function resolveOIDNAuxiliaryModelUrls(
     normal: `${prefix}${OIDN_AUXILIARY_MODEL_FILENAMES.normal}`
   };
 }
+
+export type {OIDNFilterOptions} from './oidnOptions.js';
+
+/** Tightly packed rgba32float images, top row first, width * height * 16 bytes per buffer. */
+export interface OIDNFilterInput {
+  /** Width in pixels. Required. */
+  width: number;
+  /** Height in pixels. Required. */
+  height: number;
+  /** Linear RGB for HDR models, or the model's expected LDR encoding. Required. Usage STORAGE | COPY_SRC | COPY_DST. */
+  color: GPUBuffer;
+  /** Linear RGB albedo as in DenoiseInput. Same usage as color. Required for guide models; otherwise defaults to undefined. */
+  albedo?: GPUBuffer;
+  /** World-space normal encoded as in DenoiseInput. Same usage as color. Required for guide models; otherwise defaults to undefined. */
+  normal?: GPUBuffer;
+  /** Filtered RGB, in the input color space. Required. Same usage as color. Alpha is unspecified. */
+  output: GPUBuffer;
+}
+
+export interface OIDNFilter {
+  /**
+   * Runs the network on the engine's current device. Keep buffers alive until settlement.
+   * When called from a Render custom denoiser, pass that callback's signal to share its lease.
+   */
+  denoise(input: OIDNFilterInput, options?: OIDNFilterCallOptions): Promise<void>;
+  /** Cancels pending work and releases this filter's network reference. Safe to repeat. */
+  dispose(): void;
+}
+
+export interface OIDNFilterCallOptions {
+  /** Cancels inference. Default undefined. Discard the output if this signal aborts. */
+  signal?: AbortSignal;
+}
+
+/** Loads a reusable filter for caller-owned buffers. Rejects on WebGL. Default options select the standard model. */
+export async function createOIDNFilter(
+  engine: import('./Engine.js').default,
+  options: import('./oidnOptions.js').OIDNFilterOptions = {}
+): Promise<OIDNFilter> {
+  const {createBufferFilter} = await import('./renderer/oidnBufferFilter.js');
+  return createBufferFilter(engine, options);
+}

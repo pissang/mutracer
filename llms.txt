@@ -45,7 +45,7 @@
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `transform`.
 - Rect lights are one-sided; rotate them to face the scene.
 - Custom denoisers: `{type:'custom',denoiser}` on WebGPU; caller owns disposal; tightly packed native HDR RGBA32F input/output before display composition, linear albedo and 0–1 normal guides; [lifecycle and buffers](docs/denoising.md#custom-denoisers).
-- OIDN: packaged `model` or custom `weightsUrl` through `render.setDenoiser()`; `/oidn` only exports weight constants/URL helpers. OIDN and HDR output require WebGPU; [options](docs/denoising.md#custom-oidn-networks).
+- OIDN (WebGPU): choose packaged `model` or custom `weightsUrl` with `render.setDenoiser()` or `createOIDNFilter(engine, options)` from `@meimu/mutracer/oidn` for [caller-owned GPU buffers](docs/denoising.md#oidn-on-gpu-buffers).
 - Call `engine.display.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next engine.update().
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.

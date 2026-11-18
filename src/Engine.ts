@@ -192,6 +192,7 @@ export default class Engine {
   private _weights = new Map<string, Promise<ArrayBuffer>>();
   private _customPrepared = new WeakMap<Denoiser, {device: GPUDevice; width: number; height: number}>();
   private _denoiseTail: Promise<unknown> = Promise.resolve();
+  private _customDenoiseLeases = new WeakMap<AbortSignal, {tail: Promise<unknown>}>();
   private _lastError: Error | undefined;
   /** Most recent synchronous engine/render failure. Default undefined. */
   get lastError() { return this._lastError; }
@@ -721,7 +722,35 @@ export default class Engine {
     await denoiser.prepare?.({device, width, height});
     this._customPrepared.set(denoiser, {device, width, height});
   }
-  /** @internal A cancelled job loses its lease if it does not settle within the grace period. */ _enqueueDenoise<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  /** @internal Binds a nested buffer filter to this callback's active lease. */
+  async _withCustomDenoiseLease<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    const lease = {tail: Promise.resolve() as Promise<unknown>};
+    this._customDenoiseLeases.set(signal, lease);
+    try { return await work(); }
+    finally {
+      this._customDenoiseLeases.delete(signal);
+      await lease.tail;
+    }
+  }
+  /** @internal Device lifetime for storage borrowed by a buffer denoise job. */
+  get _denoiseDeviceSignal() {
+    return this._disposed
+      ? AbortSignal.abort(new Error('Engine is disposed.'))
+      : (this._lossController ??= new AbortController()).signal;
+  }
+  /** @internal Shared OIDN guide passes for caller-owned buffers. */
+  _oidnBufferGuides() {
+    const guides = this._pipeline?.getOIDNBufferGuides?.();
+    if (!guides) throw new Error('OIDN requires a WebGPU engine.');
+    return guides;
+  }
+  /** @internal A cancelled job loses its lease if it does not settle within the grace period. */ _enqueueDenoise<T>(work: () => Promise<T>, signal?: AbortSignal, leaseSignal?: AbortSignal): Promise<T | undefined> {
+    const lease = leaseSignal && this._customDenoiseLeases.get(leaseSignal);
+    if (lease) {
+      const task = lease.tail.then(work);
+      lease.tail = task.catch(() => {});
+      return task;
+    }
     const task = this._denoiseTail.then(async () => {
       const device = this._gpuDevice, generation = this._deviceRevision;
       let settle: Promise<T> | undefined;

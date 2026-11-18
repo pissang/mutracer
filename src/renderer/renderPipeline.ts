@@ -29,6 +29,7 @@ export interface RenderTarget extends TargetPipeline {
 }
 export interface RenderPipeline {
   getSharedMemoryBytes(): number;
+  getOIDNBufferGuides?(): ReturnType<typeof import('./WGPUOIDNGuides.js').getOIDNGuidePasses>;
   createTarget(label: string): RenderTarget;
   releaseTarget(target: RenderTarget): void;
   setMeshes: SceneResources['setMeshes'];

@@ -1,7 +1,8 @@
 /// <reference types="@webgpu/types" preserve="true" />
 import { initUNetFromBuffer, type UNet } from 'oidn-webgpu';
 import type Engine from '../Engine.js';
-import type { OIDNDenoiserOptions } from '../Render.js';
+import type { OIDNFilterOptions } from '../oidnOptions.js';
+import type { DenoiseSchedule } from '../Render.js';
 import {
   resolveOIDNModelUrl, resolveOIDNAuxiliaryModelUrls, DEFAULT_OIDN_WEIGHTS_BASE_URL,
   OIDN_WEIGHTS_PACKAGE
@@ -207,7 +208,7 @@ function initializeOIDN(
 }
 
 /** Internal lazy loader; both public OIDN option branches use this path. */
-export function loadOIDNNetwork(engine: Engine, options: Readonly<OIDNDenoiserOptions>): Promise<OIDNDenoiser> {
+export function loadOIDNNetwork(engine: Engine, options: Readonly<OIDNFilterOptions & {type?: 'oidn'; schedule?: DenoiseSchedule}>): Promise<OIDNDenoiser> {
   if (options.weightsUrl !== undefined) return initializeOIDNFromURL(engine, options.weightsUrl, options);
   return initializeOIDN(engine, options);
 }

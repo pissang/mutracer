@@ -188,10 +188,37 @@ load; its initial request's signal controls that download. Loading failures
 reject the returned promise and can be retried by calling `setDenoiser(null)`
 and then the configuration again. Nested tile/URL settings are copied and frozen too.
 
-`@meimu/mutracer/oidn` contains only weight constants and the
-`resolveOIDNModelUrl` / `resolveOIDNAuxiliaryModelUrls` URL helpers. Loading
-functions and network handles are internal; configure them through Render.
-OIDN option types are exported from the main entry.
+## OIDN on GPU buffers
+
+Use the filter with images you already have on the engine's WebGPU device.
+
+```ts
+import {createOIDNFilter} from '@meimu/mutracer/oidn';
+
+const filter = await createOIDNFilter(engine, {model: 'cleanAuxLarge'});
+try {
+  await filter.denoise({width, height, color, albedo, normal, output}, {signal});
+} finally {
+  filter.dispose();
+}
+```
+
+Choose the same [model, weights and execution options](#custom-oidn-networks)
+as for built-in OIDN. The default model is `standard`. Use `dynamicTile: false`
+for fixed tiles. For a color-only custom network, set `aux: false` and omit both
+guides. All other models require both guides.
+
+Buffers use the [custom denoiser layout](#custom-denoisers). Use linear RGB
+with HDR networks, linear albedo and encoded world-space normals. The supplied
+RGB determines the input color space. Built-in Render OIDN receives a composed
+display-linear image, so filtering raw HDR from a custom denoiser can give a
+different result. Use the output's RGB and retain coverage separately.
+
+Inside a custom denoiser pass its callback's `signal` to `denoise` so the call
+can run within the active filter. Calls on one engine run serially. Keep the
+buffers alive until the promise settles and discard the output if the signal
+aborts. After device recovery, recreate the buffers on the new device and
+reuse the filter. Creating a filter on WebGL rejects.
 
 ## Custom denoisers
 

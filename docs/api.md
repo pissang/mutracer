@@ -638,7 +638,11 @@ for environments and backgrounds, not material texture slots.
 `DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL`) and `resolveOIDNModelUrl` /
 `resolveOIDNAuxiliaryModelUrls`. Configure packaged/custom OIDN networks,
 execution engines, precision and dynamic tiles through `render.setDenoiser()`;
-see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
+see [denoising](./denoising.md#custom-oidn-networks). The subpath also exports
+`createOIDNFilter(engine, options?) → Promise<OIDNFilter>`. Use
+`filter.denoise(input, {signal}?) → Promise<void>` and `filter.dispose()` with
+[caller-owned GPU buffers](./denoising.md#oidn-on-gpu-buffers).
+The main entry exports
 `OIDNEngine`, `OIDNPrecision`, `OIDNHDRTransfer`, `OIDNDynamicTileOptions`,
 `OIDNDynamicTileSetting` and `OIDNAuxiliaryModelUrls` as types.
 
