@@ -78,6 +78,15 @@ export function operandCode(kind: OperandKind, index: number, selector: number, 
 export function decodeOperand(code: number) {
     return {width: code & 7, selector: (code >> 3) & 7, kind: ((code >> 6) & 3) as OperandKind, index: code >> 8};
 }
+/** Normalize geometry operands in a private browser instruction copy. The
+ * logical register budget stays unchanged; the interpreter seeds extra slots. */
+export function lowerBrowserGeometryOperands(record: number[]) {
+    for (let k = 4; k < GRAPH_INSTRUCTION_FLOATS; k++) {
+        const code = record[k];
+        if (code >= 0 && ((code >> 6) & 3) === OperandKind.Geometry)
+            record[k] = operandCode(OperandKind.Register, GRAPH_INTERPRETER_REGISTERS + (code >> 8), (code >> 3) & 7, code & 7);
+    }
+}
 function selector(output: string) { return output === 'out' ? 0 : output === 'outcolor' ? 5 : 'xyzwrgba'.indexOf(output.slice(3)) % 4 + 1; }
 const geometryWidth = (name: string) => name === 'texcoord' ? 2 : 3;
 
@@ -239,9 +248,12 @@ export interface GraphInterpreterRunner { fields: readonly string[]; families: R
  * emission and opacity are evaluated at several call sites (light sampling,
  * shadow rays), where every inlined copy of the full surface loop costs compile time.
  * `operandLoop` (default false) shares one decoder in D3D12 browser kernels;
- * other hosts retain their existing generated source. */
-export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}, operandLoop = false, sharedOpacity = false) {
-    const R = GRAPH_INTERPRETER_REGISTERS;
+ * other hosts retain their existing generated source. `indexedResults` and
+ * `geometryRegisters` default false; the latter consumes CPU-lowered geometry
+ * operands in extra slots beyond the logical register budget. */
+export function graphInterpreterShader(fields: readonly string[], salt = 0, families?: ReadonlySet<GraphOp>, runners: Readonly<Record<string, GraphInterpreterRunner>> = {}, operandLoop = false, sharedOpacity = false, indexedResults = false, geometryRegisters = false) {
+    geometryRegisters = geometryRegisters && operandLoop;
+    const R = GRAPH_INTERPRETER_REGISTERS + (geometryRegisters ? graphGeometry.length : 0);
     const operandCounts = Array<number>(GraphOp.Normalmap + 1).fill(1);
     for (const instruction of Object.values(graphInstructions))
         operandCounts[instruction.op] = Math.max(operandCounts[instruction.op], instruction.ports.length);
@@ -396,22 +408,27 @@ ${kase(GraphOp.Normalmap, `    case ${GraphOp.Normalmap}: { return vec4f(mx_norm
   }
 }
 fn mx_store${s}(terminal: i32, v: vec4f, result: ptr<function, MXResult>) {
-  switch terminal {
+${indexedResults ? `  if(${fields.length === graphTerminals.length ? `(terminal>=0)&(terminal<${graphTerminals.length})` : fields.map(field => `terminal==${graphTerminals.indexOf(field)}`).join('|') || 'false'}) { (*result).values[terminal]=v; }` : `  switch terminal {
 ${store}
     default: {}
-  }
+  }`}
 }
 /** Runs \`count\` instruction records starting at record \`program\`. */
 fn mx_run${s}(program: i32, count: i32, base: i32, ${sharedOpacity && !s ? 'initialContext: MXContext, opacityStart: i32' : 'ctx: MXContext'}, result: ptr<function, MXResult>) {
 ${sharedOpacity && !s ? `  var ctx = initialContext;` : ''}
-  var regs: array<vec4f, ${R}>;
+  var regs: array<vec4f, ${R}>;${geometryRegisters ? `
+  regs[${GRAPH_INTERPRETER_REGISTERS}]=vec4f(ctx.uv,0.0,0.0);
+  regs[${GRAPH_INTERPRETER_REGISTERS + 1}]=mx_geometry(1,ctx);
+  regs[${GRAPH_INTERPRETER_REGISTERS + 2}]=vec4f(ctx.normal,0.0);
+  regs[${GRAPH_INTERPRETER_REGISTERS + 3}]=vec4f(ctx.tangent,0.0);
+  regs[${GRAPH_INTERPRETER_REGISTERS + 4}]=vec4f(ctx.bitangent,0.0);` : ''}
   for(var pc = 0; pc < count; pc++) {
-${sharedOpacity && !s ? `    if(pc == opacityStart) { ctx.normal = vec3f(0.0,0.0,1.0); ctx.tangent = vec3f(1.0,0.0,0.0); ctx.bitangent = vec3f(0.0,1.0,0.0); }` : ''}
+${sharedOpacity && !s ? `    if(pc == opacityStart) { ctx.normal = vec3f(0.0,0.0,1.0); ctx.tangent = vec3f(1.0,0.0,0.0); ctx.bitangent = vec3f(0.0,1.0,0.0);${geometryRegisters ? ` regs[${GRAPH_INTERPRETER_REGISTERS + 2}]=vec4f(ctx.normal,0.0); regs[${GRAPH_INTERPRETER_REGISTERS + 3}]=vec4f(ctx.tangent,0.0); regs[${GRAPH_INTERPRETER_REGISTERS + 4}]=vec4f(ctx.bitangent,0.0);` : ''} }` : ''}
     let rec = program + pc;
     let header = vec4i(vec4f(materialsBuffer[rec].color, materialsBuffer[rec].matType));
 ${operandLoop ? `    var args: array<vec4f, 12>;
     let counts = array<i32,${operandCounts.length}>(${operandCounts.join(",")});
-    for(var k=0;k<counts[clamp(header.x,0,${operandCounts.length-1})];k++){ args[k]=mx_arg(rec,k,base,ctx,&regs); }
+    for(var k=0;k<counts[clamp(header.x,0,${operandCounts.length-1})];k++){ args[k]=mx_arg(rec,k,base,${geometryRegisters ? '' : 'ctx,'}&regs); }
     if(header.x == ${GraphOp.Store}) { mx_store${s}(header.y,args[0],result); continue; }
 ` : `    let codes = vec4i(mx_codes(rec));
     let x0 = mx_operand(codes.x, base, ctx, &regs);
@@ -422,7 +439,7 @@ ${operandLoop ? `    var args: array<vec4f, 12>;
     if(header.x == ${GraphOp.Copy} && header.y == 0) {
       if(tid == 2) { v = vec4f(select(0.0, 1.0, v.x != 0.0)); } else if(tid == 1) { v = vec4f(trunc(v.x)); }
     }
-    regs[clamp(header.z, 0, ${R - 1})] = mx_canon(v, w);
+    regs[clamp(header.z, 0, ${GRAPH_INTERPRETER_REGISTERS - 1})] = mx_canon(v, w);
   }
 }
 `;
@@ -448,17 +465,17 @@ fn mx_geometry(index: i32, ctx: MXContext) -> vec4f {
     default: { return vec4f(ctx.bitangent, 0.0); }
   }
 }
-fn mx_operand(code: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+fn mx_operand(code: i32, base: i32, ${geometryRegisters ? '' : 'ctx: MXContext, '}regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
   if(code < 0) { return vec4f(0.0); }
   let index = code >> 8u; let kind = (code >> 6u) & 3; let selector = (code >> 3u) & 7;
   var v: vec4f;
-  if(kind == 0) { v = mx_parameter(base, index); } else if(kind == 1) { v = (*regs)[index]; } else { v = mx_geometry(index, ctx); }
+  if(kind == 0) { v = mx_parameter(base, index); } else ${geometryRegisters ? '{ v = (*regs)[index]; }' : 'if(kind == 1) { v = (*regs)[index]; } else { v = mx_geometry(index, ctx); }'}
   if(selector == 0) { return mx_canon(v, code & 7); }
   if(selector == 5) { return vec4f(v.xyz, 0.0); }
   return vec4f(v[selector - 1]);
 }
-fn mx_arg(rec: i32, k: i32, base: i32, ctx: MXContext, regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
-  return mx_operand(mx_code(rec, k), base, ctx, regs);
+fn mx_arg(rec: i32, k: i32, base: i32, ${geometryRegisters ? '' : 'ctx: MXContext, '}regs: ptr<function, array<vec4f, ${R}>>) -> vec4f {
+  return mx_operand(mx_code(rec, k), base, ${geometryRegisters ? '' : 'ctx, '}regs);
 }
 ` + runner('', fields, families) + Object.entries(runners).map(([name, r]) => runner(`_${name}`, r.fields, r.families)).join('');
 }

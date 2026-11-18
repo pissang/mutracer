@@ -162,6 +162,10 @@ the UDIM rejection and repeat-footprint tests use eager boolean operators over
 pure, already available values. This avoids duplicating short-circuit blocks
 when DXC inlines each filtering site. Texture reads, floating-point filtering
 and color decoding keep their original order.
+The atlas sampler's hardware-filter path reuses the wrapped UV already
+computed for the repeat-footprint check; wrapping and atlas/UDIM clamping
+retain the same arithmetic. Binding-array samplers keep their prior coordinate
+generation.
 These changes target expanded compiler work, not source byte count. Profile both
 DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
 for the complete browser wait. Generated native, non-graph and non-D3D12

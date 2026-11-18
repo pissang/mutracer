@@ -34,6 +34,34 @@ export function createMaterialBufferWgsl({
   const textureAnd = materialHooks.graph?.textureLoop ? '&' : '&&';
   const textureOr = materialHooks.graph?.textureLoop ? '|' : '||';
   const texturePredicate = (value: string) => materialHooks.graph?.textureLoop ? '(' + value + ')' : value;
+  const sharedTextureCoordinates = !!materialHooks.graph?.textureLoop && !independentTextures;
+  // The universal sampler reuses its wrapped UV for the hardware path. Keep
+  // the atlas/UDIM arithmetic shared with callers that wrap their own input.
+  const mapUv = (prepared = false) => /* wgsl */ `fn ${prepared ? 'getMapUVFromWrapped' : 'getMapUV'}(idx: i32, ${prepared ? 'inputWrapped' : 'uv'}: vec2f) -> vec2f {
+${independentTextures ? `  let halfTexel = 0.5 / getMapSize(idx);
+  var value = ${prepared ? 'inputWrapped' : 'wrappedMapUv(idx, uv)'};
+  if (isUdimMap(idx)) {
+    let cell = floor(value * 10.0);
+    value = (cell + clamp(fract(value * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
+  return clamp(value, halfTexel, 1.0 - halfTexel);` : `  var repeatedUv = ${prepared ? 'inputWrapped' : 'wrappedMapUv(idx, uv)'};
+  let atlasTexel = 1.0 / vec2f(textureDimensions(map).xy);
+  let firstTexelCenter = getMapOffset(idx);
+  let sourceExtent = getMapSize(idx) + atlasTexel;
+  if (isUdimMap(idx)) {
+    let halfTexel = 0.5 * atlasTexel / sourceExtent;
+    let cell = floor(repeatedUv * 10.0);
+    repeatedUv = (cell + clamp(fract(repeatedUv * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
+  }
+  let sourceOrigin = firstTexelCenter - 0.5 * atlasTexel;
+  let lastTexelCenter = firstTexelCenter + sourceExtent - atlasTexel;
+  return clamp(
+    sourceOrigin + repeatedUv * sourceExtent,
+    firstTexelCenter,
+    lastTexelCenter
+  );`}
+}`;
+  const sampleUv = sharedTextureCoordinates ? 'getMapUVFromWrapped(idx, preparedWrapped)' : 'getMapUV(idx, uv)';
   const directionFlags = !!(materialHooks.graph || materialHooks.materialXNormals);
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
@@ -268,30 +296,7 @@ fn wrappedMapUv(idx: i32, uv: vec2f) -> vec2f {
   return vec2f(wrapMapCoordinate(value.x, modes.x), wrapMapCoordinate(value.y, modes.y));
 }
 
-fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
-${independentTextures ? `  let halfTexel = 0.5 / getMapSize(idx);
-  var value = wrappedMapUv(idx, uv);
-  if (isUdimMap(idx)) {
-    let cell = floor(value * 10.0);
-    value = (cell + clamp(fract(value * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
-  }
-  return clamp(value, halfTexel, 1.0 - halfTexel);` : `  var repeatedUv = wrappedMapUv(idx, uv);
-  let atlasTexel = 1.0 / vec2f(textureDimensions(map).xy);
-  let firstTexelCenter = getMapOffset(idx);
-  let sourceExtent = getMapSize(idx) + atlasTexel;
-  if (isUdimMap(idx)) {
-    let halfTexel = 0.5 * atlasTexel / sourceExtent;
-    let cell = floor(repeatedUv * 10.0);
-    repeatedUv = (cell + clamp(fract(repeatedUv * 10.0), halfTexel * 10.0, 1.0 - halfTexel * 10.0)) / 10.0;
-  }
-  let sourceOrigin = firstTexelCenter - 0.5 * atlasTexel;
-  let lastTexelCenter = firstTexelCenter + sourceExtent - atlasTexel;
-  return clamp(
-    sourceOrigin + repeatedUv * sourceExtent,
-    firstTexelCenter,
-    lastTexelCenter
-  );`}
-}
+${mapUv()}${sharedTextureCoordinates ? '\n\n' + mapUv(true) : ''}
 
 fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
   return select(uv, uv1, mapInfo[idx + NUM_MAPS * 2].x > 0.5);
@@ -301,7 +306,8 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
   let transformed = uv * mapInfo[idx + NUM_MAPS].xy + mapInfo[idx + NUM_MAPS].zw;
   if (isUdimMap(idx) ${textureAnd} (${texturePredicate('transformed.x < 0.0')} ${textureOr} ${texturePredicate('transformed.y < 0.0')} ${textureOr} ${texturePredicate('transformed.x >= 10.0')} ${textureOr} ${texturePredicate('transformed.y >= 10.0')})) { return vec4f(0.0); }
   let size = ${independentTextures ? 'vec2i(getMapSize(idx))' : 'vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)))'};
-  let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);
+${sharedTextureCoordinates ? `  let preparedWrapped = wrappedMapUv(idx, uv);
+  let texel = preparedWrapped * vec2f(size) - vec2f(0.5);` : `  let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);`}
   let modes = mapInfo[idx + NUM_MAPS * 2].zw;
   // Repeat filtering must cross the logical image boundary, never another
   // atlas placement. Interior/clamped/mirrored footprints use hardware filtering.
@@ -314,7 +320,7 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
       mix(loadMapTexel(idx, base, size, origin, modes), loadMapTexel(idx, base + vec2i(1, 0), size, origin, modes), weight.x),
       mix(loadMapTexel(idx, base + vec2i(0, 1), size, origin, modes), loadMapTexel(idx, base + vec2i(1, 1), size, origin, modes), weight.x), weight.y);
   }
-  return ${independentTextures ? 'textureSampleLevel(map[getMapLayer(idx)], mapSampler, getMapUV(idx, uv), 0.0)' : 'textureSampleLevel(map, mapSampler, getMapUV(idx, uv), getMapLayer(idx), 0.0)'};
+  return ${independentTextures ? `textureSampleLevel(map[getMapLayer(idx)], mapSampler, ${sampleUv}, 0.0)` : `textureSampleLevel(map, mapSampler, ${sampleUv}, getMapLayer(idx), 0.0)`};
 }
 
 fn loadMapTexel(idx: i32, coordinate: vec2i, size: vec2i, origin: vec2i, modes: vec2f) -> vec4f {

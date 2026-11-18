@@ -82,6 +82,14 @@ layout against its own baseline.
 MNEE/SMS live in `src/research/mnee/` and never enter release artifacts.
 Tests and research scripts import `registerMnee` and `mneeDiagnostics` from its `index.ts`, then call `registerMnee()` before creating renders.
 
+`npm run test:editing-queries` compares direct and universal editing HDR output
+for surface, alpha, medium, catcher, displacement, bevel, light and sampling
+cases. It also compares their atlas filtering across wrap modes, image sizes,
+RGBA8/half-float storage and UDIM boundaries. Set
+`MUTRACER_EDITING_QUERY_BUILT=1` after `npm run build:lib` to check the packaged
+shader generation; `MUTRACER_EDITING_QUERY_CASES` selects comma-separated path
+cases while retaining the filtering comparison.
+
 ## Megakernel performance
 
 `node scripts/benchmark-megakernel.mjs --repeats 5 --output /tmp/megakernel.json`
