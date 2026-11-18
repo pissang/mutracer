@@ -254,10 +254,9 @@ support are errors. GitHub-hosted CI does not run it.
 - CPU-only module and viewer builds run beside the GPU steps; step durations are
   recorded in `checks.json`.
 
-The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and
-`dev`, and manual dispatch. It validates CPU and static contracts and builds the
-SDK and viewer for macOS arm64, Linux x64 and Windows x64, including oidn-webgpu
-and licenses.
+Pull requests and pushes to `main` and `dev` run the Web checks. Manual dispatch
+and `native-v*` tag pushes also validate native CPU and static contracts and
+build the SDK and viewer for the selected platforms.
 
 - Artifacts `native-macos-arm64`, `native-linux-x64` and `native-windows-x64`
   hold the app and SDK archives and SHA-256 checksums for 14 days;
