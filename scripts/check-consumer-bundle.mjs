@@ -40,6 +40,7 @@ for await (const file of files(path.join(root, 'lib'))) {
 }
 
 const fixtures = {
+  materialx: "import {parseMaterialX} from '@meimu/mutracer/materialx'; globalThis.fixture = parseMaterialX;",
   engine: "import {Engine} from '@meimu/mutracer'; globalThis.fixture = new Engine();",
   application: "import {Engine, Render, RenderLoop} from '@meimu/mutracer'; import { THREESync, fromTHREEScene } from '@meimu/mutracer/three'; globalThis.fixture = [new Engine(), Render, RenderLoop, THREESync, fromTHREEScene];",
   scene: "import {Mesh, OpenPBRMaterial, Geometry} from '@meimu/mutracer'; globalThis.fixture = [Mesh, OpenPBRMaterial, Geometry];",

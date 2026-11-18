@@ -1,7 +1,7 @@
 import { Texture, type MaterialGraph, type MaterialGraphInput as Input, type MaterialGraphNode as Node, type MaterialGraphType as Type } from '@meimu/mutracer';
 import { parseXml } from './materialx';
 import { camel, fields } from './materialxGraph';
-import standardSurface from './materialxStandardSurface';
+import standardSurface from '../../../src/materialx/standardSurface';
 import { canonicalTerminal } from './graphEdit';
 import type { MaterialValues } from './materialParams';
 

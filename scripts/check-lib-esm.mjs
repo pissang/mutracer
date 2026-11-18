@@ -8,6 +8,19 @@ for (const name of ['THREESync', 'fromTHREEScene', 'fromTHREECamera']) {
   if (typeof adapter[name] !== 'function' || name in library) throw new Error(`Unexpected Three.js adapter export: ${name}`);
 }
 
+const materialx = await import('@meimu/mutracer/materialx');
+if (Object.keys(materialx).join() !== 'parseMaterialX' || 'parseMaterialX' in library) {
+  throw new Error('Unexpected MaterialX parser exports');
+}
+const parsed = materialx.parseMaterialX(`<materialx>
+  <image name="albedo" type="color3"><input name="file" type="filename" value="wall.png"/></image>
+  <open_pbr_surface name="shader"><input name="base_color" type="color3" nodename="albedo"/></open_pbr_surface>
+  <surfacematerial name="wall"><input name="surfaceshader" nodename="shader"/></surfacematerial>
+</materialx>`);
+if (!(parsed.graph instanceof library.MaterialGraph) || parsed.images.get('albedo')?.file !== 'wall.png') {
+  throw new Error('MaterialX image references must resolve to nodes in the public MaterialGraph');
+}
+
 // Inspect every declaration, including re-exported and implementation modules.
 const { readdirSync, readFileSync } = await import('node:fs');
 const path = await import('node:path');
@@ -70,3 +83,6 @@ checkStaticDependencies(path.join(declarationsRoot, 'main.js'));
 console.log('Main ESM static dependency graph does not import oidn-webgpu.');
 checkStaticDependencies(path.join(declarationsRoot, 'main.d.ts'));
 console.log('Main declaration dependency graph does not import oidn-webgpu.');
+checkStaticDependencies(path.join(declarationsRoot, 'materialx.js'));
+checkStaticDependencies(path.join(declarationsRoot, 'materialx.d.ts'));
+console.log('MaterialX parses in Node using the core MaterialGraph without a Three.js dependency.');

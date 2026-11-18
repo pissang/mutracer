@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `parseMaterialX` from `@meimu/mutracer/materialx` reads a surface material from `.mtlx` text and returns OpenPBR values, an optional graph and image references. See [MaterialX parsing](docs/materialx.md).
 - Author, validate and exchange `MaterialGraph` networks on OpenPBR materials. WebGPU evaluates procedural graphs. Both renderers support compatible image graphs through texture slots. Use `engine.waitForMaterialGraphs()` to await committed edits. See [material graphs](docs/materials.md#material-graphs).
 - `UdimTexture` accepts loaded RGBA tiles. See [UDIM textures](docs/materials.md#udim-textures) for tile addressing and CPU memory costs.
 - `DiskLight` and `CylinderLight` provide area emitters with optional power normalization. See [lights](docs/getting-started.md#lights).

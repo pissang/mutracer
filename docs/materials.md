@@ -486,8 +486,7 @@ mapping, surface graphs work on receivers and ordinary surfaces. Lit emission
 and its coat absorption use constant emission when they require graph evaluation,
 and report `unsupported-transport` with the material and port; other surface outputs
 and unlit emission still evaluate. Graph-driven specular surfaces stay with
-[ordinary path tracing](./caustics.md#limits). This API takes an authored graph; it does not
-load `.mtlx`/USD files or convert other surface models.
+[ordinary path tracing](./caustics.md#limits). To import a `.mtlx` document, see [parsing MaterialX documents](./materialx.md).
 
 Parameter edits update without a graph compile while the installed graph program
 or a compatible texture-slot plan can represent them. An edit that makes a slot
@@ -587,8 +586,7 @@ fallback during compilation, after rejection and on WebGL 2.
 Disney Principled and Simple Hair surfaces are unsupported. USD Preview uses the metallic workflow; specular-workflow
 inputs, occlusion controls and independent coat-normal graphs produce diagnostics.
 Subsurface, tangent and lit-emission graph inputs retain the limits described
-above. To load `.mtlx` files, use the viewer; the library's
-graph API accepts typed nodes and loaded textures.
+above.
 
 If the material has no displacement connection, the viewer also detects package
 PNG, JPEG, WebP and AVIF images with `height`, `displacement` or `disp` as a

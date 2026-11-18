@@ -203,9 +203,9 @@ Modified for MuTracer renderer features, texture exports and batched timelines.
 
 The shared browser/native material graph's node defaults, placement, normal-map, adjustment, compositing, ramp and noise
 operators follow MaterialX 1.39.4's standard library definitions and implementations.
-The viewer and Hydra delegate also include the official Standard Surface to OpenPBR translation:
+The MaterialX parser and Hydra delegate also include the official Standard Surface to OpenPBR translation:
 https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/bxdf/translation/standard_surface_to_open_pbr.mtlx.
-The viewer's legacy normal-map and atan2 upgrades follow
+The parser's legacy normal-map and atan2 upgrades follow
 https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/source/MaterialXCore/Version.cpp.
 HSV adjustment follows the `NG_hsvadjust_color3/4` definitions in
 https://github.com/AcademySoftwareFoundation/MaterialX/blob/v1.39.4/libraries/stdlib/stdlib_ng.mtlx.

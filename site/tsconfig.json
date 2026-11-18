@@ -20,6 +20,9 @@
       "@meimu/mutracer": [
         "src/main.ts"
       ],
+      "@meimu/mutracer/materialx": [
+        "src/materialx.ts"
+      ],
       "@meimu/mutracer/three": [
         "src/three.ts"
       ],

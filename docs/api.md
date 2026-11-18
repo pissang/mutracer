@@ -1,6 +1,8 @@
 # API reference
 
-Import the core API from `@meimu/mutracer`, the Three.js adapter from `@meimu/mutracer/three`, and OIDN weight helpers from `@meimu/mutracer/oidn`.
+Import the core API, including `MaterialGraph`, from `@meimu/mutracer`.
+The Three.js adapter uses `@meimu/mutracer/three` and OIDN weight helpers use `@meimu/mutracer/oidn`.
+To read a `.mtlx` document, import `parseMaterialX` from `@meimu/mutracer/materialx`. See [MaterialX parsing](materialx.md).
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine

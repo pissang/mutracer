@@ -37,6 +37,11 @@
       "import": "./lib/main.js",
       "default": "./lib/main.js"
     },
+    "./materialx": {
+      "types": "./lib/materialx.d.ts",
+      "import": "./lib/materialx.js",
+      "default": "./lib/materialx.js"
+    },
     "./three": {
       "types": "./lib/three.d.ts",
       "import": "./lib/three.js",

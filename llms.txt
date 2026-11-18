@@ -70,4 +70,5 @@
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
 
 - [Material graphs](docs/materials.md#material-graphs): discover nodes with materialGraphCategories/describeMaterialGraphNode, build with inferred input types, validate(), attach to material.graph and engine.update(); exchange authored JSON with texture ID callbacks.
+- [MaterialX parsing](docs/materialx.md): import `parseMaterialX` from `@meimu/mutracer/materialx` to read `.mtlx` text and resolve its image references in your application.
   See [API defaults](docs/api.md#materialgraph), engine.waitForMaterialGraphs({signal}) completion/fallback semantics in the guide, and [update costs](docs/updates.md#material-graph-edits).
