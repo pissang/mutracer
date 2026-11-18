@@ -253,6 +253,26 @@ describe('WGPURayTracePass output resource lifetime', () => {
     expect(pass._needsUpdateMeshData).toBe(false);
   });
 
+  it('prepares meshes again when a material needs tangents its geometry has not generated', () => {
+    const edit = (tangent: boolean) => {
+      const pass = makeMeshTrackingPass();
+      const mesh = makeTriangleMesh();
+      mesh.geometry.uv = new Attribute(new Float32Array([0, 0, 1, 0, 0, 1]), 2);
+      if (tangent) mesh.geometry.tangent = new Attribute(new Float32Array([1, 0, 0, 1, 0, 0, 1, 0, 0]), 3);
+      const meshes = [mesh];
+      pass.setMeshes(meshes);
+      pass._preparedMeshData = {}; pass._materialData = {}; pass._pendingGeometryUpdates = new Set();
+      pass._materialChanges.capture(mesh.materials);
+      pass._needsUpdateMeshData = false;
+      mesh.materials[0].specularAnisotropy = 0.5;
+      expect(pass.setMeshes(meshes, {materials: mesh.materials})).toBe(true);
+      return pass._needsUpdateMeshData;
+    };
+    // An incremental material edit would otherwise keep vertices without tangents.
+    expect(edit(false)).toBe(true);
+    expect(edit(true)).toBe(false);
+  });
+
   it('keeps resized output buffers alive until submitted GPU work completes', async () => {
     let completeSubmittedWork!: () => void;
     const submittedWorkDone = new Promise<void>((resolve) => {

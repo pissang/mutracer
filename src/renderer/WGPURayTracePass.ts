@@ -123,6 +123,7 @@ import {
 import {updateMeshInstances, updateMeshInstanceTransforms} from './prepareMeshBVH.js';
 import {selectVisibleInstances} from './scenePreparation.js';
 import {refreshMaterialKeys} from './meshMembership.js';
+import {meshesNeedGeneratedTangents} from './tangentRequirements.js';
 import {
   buildWebTLAS,
   type BLASInstance,
@@ -2245,6 +2246,7 @@ class WGPURayTracePass {
   setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[]; added?: readonly Mesh[] }) {
     this._appendOnly = !!update?.added?.length;
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
+    if (meshesNeedGeneratedTangents(meshes)) this._needsUpdateMeshData = true;
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
       const materialUpdate = this._materialChanges.classify(update.materials ?? []);

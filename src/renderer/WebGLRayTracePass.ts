@@ -1,6 +1,6 @@
 import {loadMaterialGraphRuntime, getMaterialGraphRuntime} from './materialGraph/lazy.js';
 import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanceTransformChanges.js';
-import {materialNeedsVertexTangents} from './tangentRequirements.js';
+import {materialNeedsVertexTangents, meshesNeedGeneratedTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {researchTransport} from './researchTransport.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
@@ -445,6 +445,7 @@ class WebGLRayTracePass {
   setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[]; visibility?: readonly Mesh[]; added?: readonly Mesh[] }) {
     this._appendOnly = !!update?.added?.length;
     for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
+    if (meshesNeedGeneratedTangents(meshes)) this._needsUpdateMeshData = true;
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && meshes === this._meshes) {
       const change = this._materialChanges.classify(update.materials ?? []);
