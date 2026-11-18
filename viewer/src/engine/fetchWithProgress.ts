@@ -16,35 +16,53 @@ function retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Fetches bytes with two retries for transient failures. */
+function isTransientDownloadError(error: unknown) {
+  return error instanceof DownloadError
+    ? error.status === 408 || error.status === 429 || error.status >= 500 && error.status <= 599
+    : error instanceof TypeError;
+}
+
+/** Fetches bytes with bounded retries, including a mirror for research scenes. */
 export async function fetchWithProgress(
   url: string,
   onProgress?: (loaded: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<ArrayBuffer> {
-  let resource = url;
+  const parsed = new URL(url, 'https://localhost/');
+  const githubRaw = parsed.protocol === 'https:' && parsed.hostname === 'raw.githubusercontent.com';
+  const researchPath = githubRaw && parsed.pathname.match(/^(\/ErfanMo77\/gltf-research-scenes)\/([^/]+)(\/scenes\/.+)$/);
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await fetchWithRetries(url, onProgress, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (!researchPath || !isTransientDownloadError(error)) throw error;
+    const [, repo, ref, path] = researchPath;
+    onProgress?.(0, 0);
+    bytes = await fetchWithRetries(`https://cdn.jsdelivr.net/gh${repo}@${ref}${path}${parsed.search}`, onProgress, signal);
+  }
+  // Both origins can return an LFS pointer. Resolve it using the original
+  // GitHub path so the glTF resource base and cache keys stay canonical.
+  if (githubRaw && bytes.byteLength < 1024 &&
+    /^version https:\/\/git-lfs.github.com\/spec\/v1\r?\noid sha256:[a-f0-9]{64}\r?\nsize \d+\s*$/.test(new TextDecoder().decode(bytes))) {
+    onProgress?.(0, 0);
+    return fetchWithRetries(`https://media.githubusercontent.com/media${parsed.pathname}${parsed.search}`, onProgress, signal);
+  }
+  return bytes;
+}
+
+async function fetchWithRetries(
+  url: string,
+  onProgress: ((loaded: number, total: number) => void) | undefined,
+  signal: AbortSignal | undefined
+): Promise<ArrayBuffer> {
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
-    const address = resource;
     try {
-      const bytes = await fetchOnce(address, onProgress, signal);
-      // GitHub raw serves pointer text for LFS files. Keep the original URL
-      // for relative glTF resources and caches; fetch the bytes from GitHub's
-      // media endpoint without relying on the authenticated LFS batch API.
-      const parsed = new URL(address, 'https://localhost/');
-      if (parsed.protocol === 'https:' && parsed.hostname === 'raw.githubusercontent.com' && bytes.byteLength < 1024 &&
-        /^version https:\/\/git-lfs.github.com\/spec\/v1\r?\noid sha256:[a-f0-9]{64}\r?\nsize \d+\s*$/.test(new TextDecoder().decode(bytes))) {
-        resource = `https://media.githubusercontent.com/media${parsed.pathname}${parsed.search}`;
-        onProgress?.(0, 0);
-        return await fetchOnce(resource, onProgress, signal);
-      }
-      return bytes;
+      return await fetchOnce(url, onProgress, signal);
     } catch (error) {
       signal?.throwIfAborted();
-      const transient = error instanceof DownloadError
-        ? error.status === 408 || error.status === 429 || error.status >= 500 && error.status <= 599
-        : error instanceof TypeError;
-      if (!transient || attempt === 2) throw error;
+      if (!isTransientDownloadError(error) || attempt === 2) throw error;
       await retryDelay(attempt === 0 ? 250 : 750, signal);
       onProgress?.(0, 0);
     }
