@@ -163,6 +163,6 @@ arrays become
 transferable typed views before leaving the Worker; statement locations share
 the same parameter objects. Binary assets are prefetched six at a time before
 conversion; progress sums completed and in-flight bytes. The download preflight
-uses unique encoded input sizes and an 8x expansion estimate against an 8 GiB
-working budget. This estimate is deliberately conservative and cannot predict
-total process/GPU memory or prevent every browser allocation failure.
+uses unique encoded input sizes and an 8x expansion estimate with confirmation
+above 8 GiB. This estimate is deliberately conservative and cannot predict total
+process/GPU memory or prevent every browser allocation failure.

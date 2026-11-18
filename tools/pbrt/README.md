@@ -96,10 +96,11 @@ metals can appear too bright.
 Optical constants accept named spectra or SPD files. Spatial optical-constant
 maps and coat roughness maps use warned mean-value approximations.
 
-The viewer asks before downloading 1 GB or more, up to its 1 GiB encoded-input
-limit (about 1.074 GB). Larger inputs and unknown total sizes are rejected before
-binary downloads. The memory estimate is eight times input size, capped at 8 GiB.
-This is an estimate; available browser and GPU memory can impose a lower limit.
+The viewer asks before downloading 1 GB or more. For local and remote scenes,
+estimated working memory above 8 GiB requires choosing **Load anyway** before
+loading continues. The estimate is eight times input size; it is not a measured
+requirement or a hard limit. Loading can still fail if browser or GPU memory is
+insufficient. Unknown total sizes are rejected before binary downloads.
 Local folders with multiple scenes open the first entry containing `WorldBegin`
 in path order. Open an individual scene and its dependencies to choose another.
 Standalone code export is unavailable for PBRT scenes; use the viewer or the
