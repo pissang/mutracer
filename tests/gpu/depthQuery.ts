@@ -1,6 +1,7 @@
 // Run npm run dev and open /tests/gpu/depthQuery.html on a real GPU.
 import * as THREE from 'three';
-import { Engine, Render, THREESync, fromTHREECamera } from '../../src/main.js';
+import { Engine, Render } from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 import { measureAreaDepth, pickFocusDepth } from '../../viewer/src/engine/areaFocus.js';
 
 async function fixture(webgl: boolean, layout: Engine['bvhLayout'] = 'bvh2') {

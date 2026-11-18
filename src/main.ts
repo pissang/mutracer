@@ -4,8 +4,7 @@
  * MuTracer: a physically based WebGPU path tracer with a
  * WebGL 2 fallback.
  *
- * Build a {@link Scene} from {@link Mesh}es and lights (or convert a Three.js
- * scene with {@link fromTHREEScene}), then call {@link Engine.update} and {@link Render.refine} once
+ * Build a {@link Scene} from {@link Mesh}es and lights, then call {@link Engine.update} and {@link Render.refine} once
  * per animation frame.
  *
  * @packageDocumentation
@@ -80,14 +79,8 @@ export {
   parseIESProfile
 } from './scene/IESProfile.js';
 
-// Loaders and integrations
+// Loaders
 export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
-export { fromTHREECamera, fromTHREEScene, THREESync } from './util/fromTHREE.js';
-export type {
-  FromTHREESceneOptions,
-  THREESyncOptions, THREEControls,
-  FromTHREECameraOptions
-} from './util/fromTHREE.js';
 
 // Geometry helpers
 export {

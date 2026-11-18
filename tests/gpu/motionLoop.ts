@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, Render, RenderLoop, THREESync, fromTHREECamera} from '../../src/main.js';
+import {Engine, Render, RenderLoop} from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 
 async function captureMotionLoop() {
   const engine = new Engine({canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});

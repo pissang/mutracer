@@ -1,6 +1,7 @@
 import { Matrix4, Vector3, Quaternion, Scene as ThreeScene } from 'three';
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { Camera, Mesh, Geometry, OpenPBRMaterial, fromTHREEScene } from '../../src/main';
+import { Camera, Mesh, Geometry, OpenPBRMaterial } from '../../src/main';
+import { fromTHREEScene } from '../../src/three';
 import { Attribute } from '../../src/scene/Geometry';
 import {hostMaterials,hostThreeGeometries} from '../src/engine/nativeResources';
 import {HEADER as H} from '../../native/src/layout';

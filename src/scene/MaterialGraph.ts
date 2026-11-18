@@ -52,7 +52,12 @@ export interface MaterialGraphDiagnostic {
     /** Authored node ID, if applicable. Default undefined. */ node?: string;
     /** Input/output/terminal port, if applicable. Default undefined. */ port?: string;
 }
-function copyNode(node: MaterialGraphNode): MaterialGraphNode {
+// Edits copy and freeze descriptors. Texture pixels and sampling settings stay editable.
+type FrozenInput = Readonly<Omit<MaterialGraphInput, 'connection'>> & {readonly connection?: Readonly<MaterialGraphConnection>};
+type FrozenNode = Readonly<Omit<MaterialGraphNode, 'inputs'>> & {readonly inputs?: Readonly<Record<string, FrozenInput>>};
+type FrozenTerminal = Readonly<Partial<Record<MaterialGraphTerminalName, Readonly<MaterialGraphConnection>>>>;
+
+function copyNode(node: MaterialGraphNode): FrozenNode {
     const inputs = Object.fromEntries(Object.entries(node.inputs ?? {}).map(([key, input]) => [key, Object.freeze({
             ...input, value: Array.isArray(input.value) ? Object.freeze([...input.value]) : input.value,
             connection: input.connection && Object.freeze({ ...input.connection })
@@ -66,8 +71,8 @@ function copyNode(node: MaterialGraphNode): MaterialGraphNode {
  * remains visible (initially material constants/maps).
  */
 export default class MaterialGraph {
-    private _nodes: readonly MaterialGraphNode[];
-    private _terminal: MaterialGraphTerminal;
+    private _nodes: readonly FrozenNode[];
+    private _terminal: FrozenTerminal;
     private _revision = 0;
     /** Creates an empty graph by default. */
     constructor(options: MaterialGraphOptions = {}) {

@@ -1,8 +1,8 @@
 import {mat4} from 'gl-matrix';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
-import {Engine, InstancedMesh, Mesh, OpenPBRMaterial, RectLight, AmbientLight, RenderLoop, THREESync,
-  createCubeGeometry, createPlaneGeometry} from '@meimu/mutracer';
+import {Engine, InstancedMesh, Mesh, OpenPBRMaterial, RectLight, AmbientLight, RenderLoop, createCubeGeometry, createPlaneGeometry} from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import {showStatus} from './shared/status';
 
 const canvas = document.querySelector('canvas')!;

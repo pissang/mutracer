@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { expect, it } from 'vitest';
-import { fromTHREEScene } from '@meimu/mutracer';
+import { fromTHREEScene } from '@meimu/mutracer/three';
 import { Environment } from '../src/engine/environment';
 
 it('updates scene intensity and orientation without rewriting radiance pixels', () => {

@@ -5,7 +5,8 @@
 // cardioid inside the ring).
 import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
-import {Engine, RenderLoop, THREESync, type CausticSettings} from '@meimu/mutracer';
+import {Engine, RenderLoop, type CausticSettings} from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import {showStatus} from './shared/status';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#main')!;

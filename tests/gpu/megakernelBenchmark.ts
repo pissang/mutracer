@@ -1,4 +1,5 @@
-import {Engine,Render,Camera,Mesh,OpenPBRMaterial,AmbientLight,SphereLight,createSphereGeometry,createPlaneGeometry,THREESync} from '../../src/main.js';
+import {Engine,Render,Camera,Mesh,OpenPBRMaterial,AmbientLight,SphereLight,createSphereGeometry,createPlaneGeometry} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 import {createMaterialSpheres} from '../../viewer/src/engine/loadModel.js';
 import * as THREE from 'three';
 const pause=()=>new Promise(resolve=>setTimeout(resolve,5));

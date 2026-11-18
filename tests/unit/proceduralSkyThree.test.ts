@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { expect, it } from 'vitest';
-import { Engine, ProceduralSky, THREESync, fromTHREEScene } from '../../src/main';
+import { Engine, ProceduralSky } from '../../src/main';
+import { THREESync, fromTHREEScene } from '../../src/three';
 
 it('overrides Three.js lighting without losing rotation, intensity or grounded backgrounds', () => {
   const sky = new ProceduralSky({ time: 9 });

@@ -1,11 +1,9 @@
 # API reference
 
-Exports come from `@meimu/mutracer`; declarations carry TSDoc and defaults.
+Import the core API from `@meimu/mutracer`, the Three.js adapter from `@meimu/mutracer/three`, and OIDN weight helpers from `@meimu/mutracer/oidn`.
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
-
-`init()` fetches the energy compensation table, `openPbrEnergyLut.bin` (79 KB, about 35 KB with HTTP compression), from beside the module; bundlers emit it as an asset. If it cannot be fetched, `init()` rejects.
 
 `new Engine({canvas?, backend?, device?, textureBinding?, shaderPrefetch?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call

@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Engine, Render, THREESync, Texture } from '../../src/main.js';
+import { Engine, Render, Texture } from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 const parameters = new URLSearchParams(location.search);
 const webgl = parameters.has('webgl');

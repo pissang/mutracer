@@ -17,6 +17,7 @@ export default defineConfig({
   publicDir: false,
   resolve: {
     alias: [
+      { find: /^@meimu\/mutracer\/three$/, replacement: path.join(repoRoot, 'src/three.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
       { find: /^@meimu\/mutracer$/, replacement: path.join(repoRoot, 'src/main.ts') }
     ]

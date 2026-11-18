@@ -1,6 +1,7 @@
 // Fixed-sequence HDR comparisons against equivalent source radiance and scene orientations.
 import * as THREE from 'three';
-import { Engine, Render, THREESync } from '../../src/main.js';
+import { Engine, Render } from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 async function run() {
   const webgl = location.search.includes('webgl');

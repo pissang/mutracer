@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, Render, THREESync, fromTHREECamera, type AovKind} from '../../src/main.js';
+import {Engine, Render, type AovKind} from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 import MaterialData from '../../src/renderer/MaterialData.js';
 import {MATERIAL_FLOAT_COUNT, materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 const primary: AovKind[] = ['centerNormal', 'centerDepth', 'centerPosition'];

@@ -1,6 +1,7 @@
 // Real-GPU radiance contract; run with ?webgl for the second backend.
 import * as THREE from 'three';
-import { Engine, Render, THREESync } from '../../src/main.js';
+import { Engine, Render } from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 async function run() {
   const backend = location.search.includes('webgl') ? 'webgl' : 'webgpu';

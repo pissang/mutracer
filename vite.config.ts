@@ -21,6 +21,7 @@ export default defineConfig(({ command }) => ({
     // Examples import the package by name, exactly like applications do.
     alias: [
       ...(command === 'build' ? [{ find: /^\.\/oidnBundledWeights(?:\.js)?$/, replacement: path.resolve(__dirname, 'src/oidnBundledWeights.cdn.ts') }] : []),
+      { find: /^@meimu\/mutracer\/three$/, replacement: path.resolve(__dirname, 'src/three.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
       { find: /^@meimu\/mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
     ]
@@ -38,7 +39,7 @@ export default defineConfig(({ command }) => ({
       }
     },
     lib: {
-      entry: path.resolve(__dirname, 'src/main.ts'),
+      entry: path.resolve(__dirname, 'src/standalone.ts'),
       name: 'MuTracer',
       // npm's ESM entry is lib/main.js; dist only supplies the CDN global build.
       formats: ['umd'],

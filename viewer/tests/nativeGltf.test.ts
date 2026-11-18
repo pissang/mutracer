@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { Camera, Geometry, Mesh, OpenPBRMaterial, Texture, fromTHREEScene } from '../../src/main';
+import { Camera, Geometry, Mesh, OpenPBRMaterial, Texture } from '../../src/main';
+import { fromTHREEScene } from '../../src/three';
 import { Attribute } from '../../src/scene/Geometry';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import * as THREE from 'three';

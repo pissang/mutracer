@@ -194,12 +194,17 @@ float/integer tiles promotes the set to float storage.
 
 Each tile is filtered only within its own boundary, so missing or adjacent tiles
 do not bleed into it. Material textures currently sample LOD 0 on both backends;
-UDIM follows the same filtering rule and does not create a mip chain. The set
-uses a sparse 10×10 logical image, including storage for missing cells, and is
-scaled with other material textures when `textureAtlasBudgetBytes` is exceeded.
-If even the minimum allocation cannot fit, scene preparation reports the same
-budget error as an ordinary texture. Call `markUpdated()` after changing tile
-pixels in place; replace the `UdimTexture` to change its tile set.
+UDIM follows the same filtering rule and does not create a mip chain.
+
+Construction allocates a full 10×10 image in CPU memory, including missing
+tiles. A single 2048×2048 RGBA8 tile needs 1.56 GiB for this image alone,
+or 6.25 GiB with float storage. The original tile pixels are retained.
+Reduce tile resolution before construction to limit CPU memory.
+`textureAtlasBudgetBytes` limits the later GPU upload.
+
+Call `markUpdated()` after changing tile pixels in place. It builds a new
+composite while the previous one is still allocated. Replace the
+`UdimTexture` to change its tile set.
 
 ## Alpha
 

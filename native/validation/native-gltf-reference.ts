@@ -1,6 +1,7 @@
 // Both import paths use the viewer's material conversion and scene-light metadata.
 import * as THREE from 'three';
-import { fromTHREEScene, fromTHREECamera, EnvironmentLight, Texture } from '../../src/main';
+import { EnvironmentLight, Texture } from '../../src/main';
+import { fromTHREEScene, fromTHREECamera } from '../../src/three';
 import Camera from '../../src/scene/Camera';
 import { buildNativeGltf, type NativeGltfManifest } from '../../viewer/src/engine/nativeGltf';
 import { loadModelFromURL } from '../../viewer/src/engine/loadModel';

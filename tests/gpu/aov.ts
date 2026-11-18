@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, Render, THREESync, fromTHREECamera} from '../../src/main.js';
+import {Engine, Render} from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 async function captureAovs() {
   const engine = new Engine({canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   const render = new Render(engine, {width: 48, height: 32, bounces: 1});

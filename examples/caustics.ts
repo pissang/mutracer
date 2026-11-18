@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
-import {Engine,RenderLoop,THREESync,Mesh,OpenPBRMaterial,SpotLight,createPlaneGeometry,createSphereGeometry} from '@meimu/mutracer';
+import {Engine,RenderLoop,Mesh,OpenPBRMaterial,SpotLight,createPlaneGeometry,createSphereGeometry} from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import {showStatus} from './shared/status';
 const canvas=document.querySelector<HTMLCanvasElement>('#main')!;
 const engine=new Engine({canvas,backend:location.search.includes('webgl')?'webgl':'auto'});

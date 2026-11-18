@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { Engine, Render, THREESync, ProceduralSky } from '../../src/main.js';
+import { Engine, Render, ProceduralSky } from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 import { WGPUSkyBaker } from '../../src/renderer/WGPUSkyBaker.js';
 import { WebGLSkyBaker } from '../../src/renderer/WebGLSkyBaker.js';
 import type { ProceduralEnvironmentSource } from '../../src/renderer/envMapDistribution.js';

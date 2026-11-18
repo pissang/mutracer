@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { fromTHREEScene } from '@meimu/mutracer';
+import { fromTHREEScene } from '@meimu/mutracer/three';
 import { loadModelLighting, parsePFM, reprojectEnvironment } from '../src/engine/modelLighting';
 import { groundModel } from '../src/engine/modelGrounding';
 

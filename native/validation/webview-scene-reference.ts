@@ -1,7 +1,8 @@
 // Fixed-seed scenes authored by the same GLTFLoader/THREESync used by WebEngine.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Engine, Render, THREESync, MaterialGraph, Texture, RectLight, EnvironmentLight, OpenPBRMaterial } from '../../src/main';
+import { Engine, Render, MaterialGraph, Texture, RectLight, EnvironmentLight, OpenPBRMaterial } from '../../src/main';
+import { THREESync } from '../../src/three';
 import { NativeSceneEncoder } from '../../viewer/src/engine/nativeScene';
 import { parseMaterialXGraph } from '../../viewer/src/engine/materialxGraph';
 const save = async (name: string, body: BodyInit) => { const r = await fetch('/evidence/' + name, { method: 'POST', body }); if (!r.ok)

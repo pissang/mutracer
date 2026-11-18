@@ -6,7 +6,7 @@ people and coding agents changing the library. For using it, read
 
 ## Layout
 
-- `src/main.ts`: public API. `src/oidn.ts`: the `@meimu/mutracer/oidn` entry point.
+- `src/main.ts`: core API. `src/three.ts`: Three.js adapter. `src/oidn.ts`: OIDN weight helpers.
 - `src/Engine.ts`: device, committed scene/camera and shared resources.
 - `src/Display.ts`: canvas, display settings and image export.
 - `src/Render.ts`: independent accumulation, denoising and convergence.
@@ -89,7 +89,7 @@ of stopping for confirmation.
 
 ## Rules
 
-- Exports from `src/main.ts` and `src/oidn.ts` are public contracts. Keep
+- Exports from `src/main.ts`, `src/three.ts` and `src/oidn.ts` are public contracts. Keep
   TSDoc with defaults on every public option. Treat renames or removals as
   breaking changes.
 - Keep the two backends in sync: a material, light or sampling change usually

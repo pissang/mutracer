@@ -8,12 +8,12 @@ import {
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
   RectLight,
-  Engine, RenderLoop, THREESync,
-  type Scene, type DisplaySettings,
+  Engine, RenderLoop, type Scene, type DisplaySettings,
   createCubeGeometry,
   createPlaneGeometry,
   createSphereGeometry
 } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 import { createCrosshairPass } from './shared/crosshairPass';

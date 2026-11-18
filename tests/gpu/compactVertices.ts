@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, Render, THREESync, GeometryAttribute, OpenPBRMaterial} from '../../src/main.js';
+import {Engine, Render, GeometryAttribute, OpenPBRMaterial} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 /** Small real-GPU check for compact material records, color fallback and region updates. */
 export async function captureCompactVertices() {

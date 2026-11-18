@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, THREESync} from '@meimu/mutracer';
+import {Engine} from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import {expect, it} from 'vitest';
 
 function setup(source: THREE.Mesh) {

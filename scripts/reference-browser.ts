@@ -2,7 +2,8 @@
 import * as THREE from '/node_modules/three/build/three.module.js';
 import {GLTFExporter} from '/node_modules/three/examples/jsm/exporters/GLTFExporter.js';
 import {GLTFLoader} from '/node_modules/three/examples/jsm/loaders/GLTFLoader.js';
-import {Engine, Render, THREESync} from '/lib/main.js';
+import {Engine, Render} from '/lib/main.js';
+import { THREESync } from '/lib/util/fromTHREE.js';
 import {WGPUJNLMDenoisePass} from '/lib/renderer/WGPUJNLMDenoiser.js';
 import {WebGLJNLMDenoisePass} from '/lib/renderer/WebGLJNLMDenoiser.js';
 import {createJNLMDenoiser} from '/lib/renderer/jnlm.js';

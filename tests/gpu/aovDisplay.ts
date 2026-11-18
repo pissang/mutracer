@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { Engine, Render, RenderLoop, THREESync, fromTHREECamera, type AovKind } from '../../src/main.js';
+import { Engine, Render, RenderLoop, type AovKind } from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 async function capture() {
   const mark = (stage: string) => { document.querySelector('#result')!.textContent = `Running: ${stage}`; };
   const engine = new Engine({ canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu' });

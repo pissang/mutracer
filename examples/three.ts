@@ -4,9 +4,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, RenderLoop,
-    THREESync
+  Engine, RenderLoop
 } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 

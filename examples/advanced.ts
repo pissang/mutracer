@@ -7,7 +7,7 @@ import {
   EnvironmentLight,
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
-  Engine, RenderLoop, THREESync, Sync,
+  Engine, RenderLoop, Sync,
   SphereLight,
   type OIDNModel,
   type SamplingPattern,
@@ -15,6 +15,7 @@ import {
   createPlaneGeometry,
   createSphereGeometry
 } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 import { copyDenoiser } from './shared/copyDenoiser';

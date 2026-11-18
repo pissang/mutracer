@@ -29,7 +29,8 @@ interface Scene {
 ```ts
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+import { Engine, RenderLoop } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 const engine = new Engine({canvas});
 engine.scene = scene;
 const camera = new THREE.PerspectiveCamera(40, 1, .1, 100);
@@ -302,9 +303,8 @@ async chunk, fetched on first use. Configuring a single-file build or inlining
 dynamic imports can include that code in the main bundle instead; initialization
 is still deferred, but its download is no longer deferred.
 
-Vite development prebundles dependencies and can relocate asset URLs. Exclude
-MuTracer so the bundled OIDN standard/small weights and the optional TinyBVH
-wasm load from the package:
+In Vite development, exclude MuTracer from dependency prebundling so OIDN
+weights and the TinyBVH WASM file resolve from the package.
 
 ```ts
 export default defineConfig({
@@ -312,6 +312,13 @@ export default defineConfig({
 });
 ```
 
-Vite production builds and webpack 5 copy these assets without extra
-configuration. With bundlers that do not support asset URLs, self-host the
-OIDN weights with `weightsBaseUrl` (see [denoising](./denoising.md#hosting-the-weights)).
+With code splitting, `engine.init()` downloads the energy compensation
+table (about 41 KiB with gzip). In plain esbuild, use `format: 'esm'` and
+`splitting: true` for this behavior. The standalone UMD includes the table
+and decodes it without a network request.
+
+Vite production builds and webpack 5 handle the BVH worker and package asset
+URLs. With plain esbuild, bundle `lib/renderer/bvh.worker.js` as an additional
+worker entry beside the chunk that references it to enable BVH workers.
+For TinyBVH, copy `lib/tinybvh/tinybvh.wasm` beside each chunk that references
+it. For OIDN, [configure weight hosting](./denoising.md#hosting-the-weights).

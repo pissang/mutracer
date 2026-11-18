@@ -28,7 +28,7 @@ const config = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root);
 const program = ts.createProgram(config.fileNames, config.options);
 const checker = program.getTypeChecker();
 const inventory = {};
-for (const entry of ['src/main.ts', 'src/oidn.ts']) {
+for (const entry of ['src/main.ts', 'src/three.ts', 'src/oidn.ts']) {
   const source = program.getSourceFile(resolve(root, entry));
   const module = checker.getSymbolAtLocation(source);
   inventory[entry] = checker.getExportsOfModule(module).map(symbol => {

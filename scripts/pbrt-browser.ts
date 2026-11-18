@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { Engine, Render, THREESync } from '../src/main';
+import { Engine, Render } from '../src/main';
+import { THREESync } from '../src/three';
 import { buildScene } from '../tools/pbrt/scene';
 import { convert } from '../tools/pbrt/convert';
 import { urlResolver } from '../tools/pbrt/source';

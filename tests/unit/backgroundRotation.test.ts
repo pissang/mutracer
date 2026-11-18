@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { expect, it } from 'vitest';
-import { Engine, Texture, THREESync, fromTHREEScene, type EquirectBackground } from '../../src/main';
+import { Engine, Texture, type EquirectBackground } from '../../src/main';
+import { THREESync, fromTHREEScene } from '../../src/three';
 import { backgroundMapRotation, backgroundMapTransform, generateBackgroundMapFromSceneBackground } from '../../src/renderer/envMapCreation';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 

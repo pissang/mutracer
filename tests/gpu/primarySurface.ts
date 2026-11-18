@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {Engine, Render, THREESync, fromTHREECamera, type AovKind} from '../../src/main.js';
+import {Engine, Render, type AovKind} from '../../src/main.js';
+import { THREESync, fromTHREECamera } from '../../src/three.js';
 const primary: AovKind[] = ['centerNormal', 'centerDepth', 'centerPosition'];
 const legacy: AovKind[] = ['depth', 'position', 'roughness', 'id', 'motion', 'diffuseAlbedo', 'specularAlbedo'];
 const check = (ok: boolean, message: string) => {if (!ok) throw Error(message);};

@@ -101,7 +101,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   const lines: string[] = [];
   const out = (...rows: string[]) => lines.push(...rows);
   const upscale = snapshot.webgpu && s.displayUpscale && s.resolutionScale < 1 && s.output === 'final';
-  const imports = ['Engine', 'RenderLoop', 'THREESync'];
+  const imports = ['Engine', 'RenderLoop'];
   if (lens || snapshot.animation) imports.push('Sync');
   if (procedural) imports.push('ProceduralSky');
   if (upscale) imports.push('createEasuPass');
@@ -125,6 +125,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     ...(hdr ? ["import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';"] : []),
     "import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';",
     `import { ${imports.join(', ')} } from '@meimu/mutracer';`,
+    "import { THREESync } from '@meimu/mutracer/three';",
     '',
     "const canvas = document.querySelector('canvas');",
     'const scene = new THREE.Scene();',

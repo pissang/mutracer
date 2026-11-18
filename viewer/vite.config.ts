@@ -66,6 +66,7 @@ export function createViewerConfig(native = false): UserConfig { return {
   resolve: {
     alias: [
       { find: '#viewer-engine', replacement: path.join(__dirname, native ? 'src/engine/createNativeEngine.ts' : 'src/engine/createEngine.ts') },
+      { find: /^@meimu\/mutracer\/three$/, replacement: path.join(repoRoot, 'src/three.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
       { find: /^@meimu\/mutracer$/, replacement: path.join(repoRoot, 'src/main.ts') }
     ]

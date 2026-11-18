@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import {GLTFExporter} from 'three/examples/jsm/exporters/GLTFExporter.js';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
-import {Engine, Render, THREESync} from '../../src/main.js';
+import {Engine, Render} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 /** One-sample GPU picking probe; no full-frame ID AOV is enabled. */
 export async function capturePicking() {

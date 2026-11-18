@@ -3,18 +3,29 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.4.0 - Unreleased
+
+### Added
+
+- Author, validate and exchange `MaterialGraph` networks on OpenPBR materials. WebGPU evaluates procedural graphs. Both renderers support compatible image graphs through texture slots. Use `engine.waitForMaterialGraphs()` to await committed edits. See [material graphs](docs/materials.md#material-graphs).
+- `UdimTexture` accepts loaded RGBA tiles. See [UDIM textures](docs/materials.md#udim-textures) for tile addressing and CPU memory costs.
+- `DiskLight` and `CylinderLight` provide area emitters with optional power normalization. See [lights](docs/getting-started.md#lights).
+- `centerNormal`, `centerDepth` and `centerPosition` expose single-sample pixel-center hits on both backends. See [surface outputs](docs/api.md#surface-outputs).
+- Set `mesh.visible` to hide or show an existing mesh and commit the change with `engine.update()`.
+- The Viewer can import MaterialX materials and edit their node graphs. See the [Viewer guide](docs/viewer.md).
 
 ### Changed
 
-- WebGPU downloads caustic passes, JNLM, procedural sky rendering and offline adaptive sampling shaders on first use, reducing the initial download.
-- Material Graph compilation loads on first use, or for editing shader prefetch; graph waits include module loading.
-- Energy compensation tables ship as the binary asset `openPbrEnergyLut.bin`, fetched during engine initialization instead of bundled as JavaScript.
-- WebGL 2 loads during engine initialization only when selected, reducing the initial WebGPU download.
+- **Three.js import migration.** Import `THREESync`, `fromTHREEScene`, `fromTHREECamera` and their option and control types from `@meimu/mutracer/three`. Core imports such as `Engine` stay at `@meimu/mutracer` and work without Three.js types. Script-tag users can continue using `MuTracer.THREESync`. See [Three.js integration](docs/threejs.md).
+- Update exhaustive TypeScript switches and records over `AovKind` or `DisplayChannel` for the three center outputs, and over `SceneLight` or `AnalyticLight` for disk and cylinder lights.
+- With code splitting, engine initialization loads the energy table on demand and downloads the WebGL backend only when selected. WebGPU loads caustic passes, JNLM, procedural sky rendering and offline adaptive sampling on first use. Graph compilation loads when needed or when editing prefetch is enabled.
+- The Viewer offers confirmation for large local and remote PBRT imports whose estimated working memory exceeds 8 GiB.
 
 ### Fixed
 
-- npm consumers can bundle BVH workers without a missing entry error, and Material Graph scenes no longer require installing `gl-matrix`.
+- npm consumers can bundle BVH workers, and Material Graph scenes work without installing `gl-matrix`.
+- Switching to a material that needs generated tangents updates existing meshes.
+- WebGPU HDR output preserves rare hit coverage.
 
 ## 0.3.1 - 2026-11-05
 

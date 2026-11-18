@@ -41,7 +41,7 @@ for await (const file of files(path.join(root, 'lib'))) {
 
 const fixtures = {
   engine: "import {Engine} from '@meimu/mutracer'; globalThis.fixture = new Engine();",
-  application: "import {Engine, Render, RenderLoop, THREESync, fromTHREEScene} from '@meimu/mutracer'; globalThis.fixture = [new Engine(), Render, RenderLoop, THREESync, fromTHREEScene];",
+  application: "import {Engine, Render, RenderLoop} from '@meimu/mutracer'; import { THREESync, fromTHREEScene } from '@meimu/mutracer/three'; globalThis.fixture = [new Engine(), Render, RenderLoop, THREESync, fromTHREEScene];",
   scene: "import {Mesh, OpenPBRMaterial, Geometry} from '@meimu/mutracer'; globalThis.fixture = [Mesh, OpenPBRMaterial, Geometry];",
   namespace: "import * as mutracer from '@meimu/mutracer'; globalThis.fixture = mutracer;"
 };

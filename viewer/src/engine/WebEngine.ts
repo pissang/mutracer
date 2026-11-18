@@ -7,9 +7,9 @@ import * as THREE from 'three';
 import { ViewerOrbitControls } from './orbitControls';
 import {
   Engine, Render, RenderLoop, Sync, ProceduralSky, OpenPBRMaterial, createEasuPass,
-  THREESync, type DisplaySettings, type MaterialGraph,
-  fromTHREECamera,
+  type DisplaySettings, type MaterialGraph,
 } from '@meimu/mutracer';
+import { THREESync, fromTHREECamera } from '@meimu/mutracer/three';
 import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, renderResolutionScale, resetSettings, setSettings, setUi, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';

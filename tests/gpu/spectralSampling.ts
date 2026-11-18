@@ -2,7 +2,8 @@
 // Compare scalar-proportional targets to isolate channel dependence from the
 // intentional change of target norm in multi-candidate spectral rendering.
 import * as THREE from 'three';
-import {Engine, Render, THREESync} from '../../src/main.js';
+import {Engine, Render} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 async function run() {
   const backend = location.search.includes('webgl') ? 'webgl' : 'webgpu';

@@ -1,14 +1,16 @@
 # Three.js integration
 
 Build or load a Three.js scene, then bind it and its camera with THREESync.
-RenderLoop calls the sync automatically. Three.js is an optional peer dependency
-(`npm install three`).
+RenderLoop calls the sync automatically. Install `three` and import the adapter
+from `@meimu/mutracer/three`. For TypeScript, also install `@types/three`
+matching your Three.js version.
 
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+import { Engine, RenderLoop } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 const scene = new THREE.Scene();
 scene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
 const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);

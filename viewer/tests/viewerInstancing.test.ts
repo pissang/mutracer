@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {expect, it, vi, afterAll} from 'vitest';
-import {Engine, InstancedMesh, THREESync} from '@meimu/mutracer';
+import {Engine, InstancedMesh} from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 vi.hoisted(() => {vi.stubGlobal('location', {hash: '', href: 'https://viewer.example.com/'});});
 afterAll(() => vi.unstubAllGlobals());
 

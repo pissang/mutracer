@@ -2,7 +2,7 @@ import {expect, it, vi} from 'vitest';
 import {createHash} from 'node:crypto';
 import {getOpenPbrEnergyLutData as synchronous} from '../../src/renderer/openPbrEnergyLut';
 
-it('decodes the asset to the synchronous native table, byte for byte', async () => {
+it('loads the same energy table as the synchronous decoder, byte for byte', async () => {
   const lut = await import('../../src/renderer/openPbrEnergyLut.browser');
   const first = lut.initOpenPbrEnergyLut();
   expect(lut.initOpenPbrEnergyLut()).toBe(first);
@@ -14,11 +14,11 @@ it('decodes the asset to the synchronous native table, byte for byte', async () 
   expect(lut.getOpenPbrEnergyLutData()).toBe(lut.getOpenPbrEnergyLutData());
 });
 
-it('reports a failed download and allows a later retry', async () => {
+it('reports a decoding failure and allows a later retry', async () => {
   vi.resetModules();
   const fresh = await import('../../src/renderer/openPbrEnergyLut.browser');
-  vi.stubGlobal('fetch', async () => new Response(null, {status: 404}));
-  try {await expect(fresh.initOpenPbrEnergyLut()).rejects.toThrow('loading failed: HTTP 404');}
+  vi.stubGlobal('atob', () => {throw new Error('invalid base64');});
+  try {await expect(fresh.initOpenPbrEnergyLut()).rejects.toThrow('loading failed: invalid base64');}
   finally {vi.unstubAllGlobals();}
   expect(() => fresh.getOpenPbrEnergyLutData()).toThrow('not initialized');
   await fresh.initOpenPbrEnergyLut();

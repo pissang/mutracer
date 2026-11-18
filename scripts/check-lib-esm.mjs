@@ -3,6 +3,10 @@ const library = await import('../lib/main.js');
 for (const name of ['Engine', 'Display', 'Render']) if (typeof library[name] !== 'function') throw new Error(`Missing ${name} export`);
 if ('Renderer' in library) throw new Error('Removed Renderer export is still exposed');
 console.log(`Library ESM resolves in Node (${Object.keys(library).length} exports).`);
+const adapter = await import('@meimu/mutracer/three');
+for (const name of ['THREESync', 'fromTHREEScene', 'fromTHREECamera']) {
+  if (typeof adapter[name] !== 'function' || name in library) throw new Error(`Unexpected Three.js adapter export: ${name}`);
+}
 
 // Inspect every declaration, including re-exported and implementation modules.
 const { readdirSync, readFileSync } = await import('node:fs');
@@ -55,6 +59,7 @@ function checkStaticDependencies(file) {
     if (!specifier || !ts.isStringLiteral(specifier)) continue;
     const name = specifier.text;
     if (/^oidn-web(?:gpu)?(?:\/|$)/.test(name)) throw new Error(`Static OIDN dependency in ${file}.`);
+    if (name === 'three' || name.startsWith('three/')) throw new Error(`Static Three.js dependency in ${file}.`);
     if (name.startsWith('.') && name.endsWith('.js')) {
       const target = path.resolve(path.dirname(file), name);
       checkStaticDependencies(file.endsWith('.d.ts') ? target.replace(/\.js$/, '.d.ts') : target);

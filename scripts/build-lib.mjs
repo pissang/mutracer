@@ -23,7 +23,7 @@ const parsed = ts.parseJsonConfigFileContent(config.config ?? {}, ts.sys, projec
 assertNoProductionResearchImports(projectRoot);
 // Emit the public entry points and their dependencies, rather than every source
 // file in the repository (which also contains disconnected experiments).
-const program = ts.createProgram(['src/main.ts', 'src/oidn.ts', 'src/renderer/bvh.worker.ts'].map(filename =>
+const program = ts.createProgram(['src/main.ts', 'src/three.ts', 'src/oidn.ts', 'src/renderer/bvh.worker.ts'].map(filename =>
   path.join(projectRoot, filename)), parsed.options);
 const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
   ...ts.getPreEmitDiagnostics(program)];
@@ -50,12 +50,6 @@ copyFileSync(
 copyFileSync(
   path.join(projectRoot, 'src', 'tinybvh', 'LICENSE'),
   path.join(tinyBvhOutput, 'LICENSE')
-);
-
-// Fetched by renderer/openPbrEnergyLut.browser.js through an adjacent URL.
-copyFileSync(
-  path.join(projectRoot, 'src', 'renderer', 'openPbrEnergyLut.bin'),
-  path.join(outputRoot, 'renderer', 'openPbrEnergyLut.bin')
 );
 
 // Source builds let Vite discover the TypeScript worker; published ESM uses

@@ -1,6 +1,6 @@
 {
   "name": "@meimu/mutracer",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "MuTracer: a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
   "keywords": [
     "path tracing",
@@ -36,6 +36,11 @@
       "types": "./lib/main.d.ts",
       "import": "./lib/main.js",
       "default": "./lib/main.js"
+    },
+    "./three": {
+      "types": "./lib/three.d.ts",
+      "import": "./lib/three.js",
+      "default": "./lib/three.js"
     },
     "./oidn": {
       "types": "./lib/oidn.d.ts",
@@ -79,7 +84,7 @@
     "preview": "vite preview",
     "prepare": "npm run build:lib",
     "prepublishOnly": "npm run build && npm run build:lib && npm run check:consumer-bundle",
-    "build:lib": "npm run check:material-comparison && npm run check:energy-lut && node scripts/build-lib.mjs",
+    "build:lib": "npm run check:material-comparison && node scripts/build-lib.mjs",
     "watch:lib": "tsc --watch",
     "viewer": "vite --config viewer/vite.config.ts",
     "build:viewer": "vite build --config viewer/vite.config.ts && node scripts/check-research-artifacts.mjs dist-viewer",
@@ -117,9 +122,7 @@
     "test:editing-queries": "node scripts/test-editing-queries.mjs",
     "pbrt:inspect": "node scripts/pbrt-inspect.mjs",
     "pbrt:compare": "node scripts/pbrt-compare.mjs",
-    "check:consumer-bundle": "node scripts/check-consumer-bundle.mjs",
-    "generate:energy-lut": "node scripts/pack-openpbr-energy-lut.mjs",
-    "check:energy-lut": "node scripts/pack-openpbr-energy-lut.mjs --check"
+    "check:consumer-bundle": "node scripts/check-consumer-bundle.mjs"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",

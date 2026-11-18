@@ -51,7 +51,8 @@ function compositeTiles(tiles: readonly UdimTile[]): TextureDataSource {
  * Material texture selected by integer UV tiles. Tile `(u, v)` uses number
  * `1001 + u + 10 * v`. Missing and out-of-range tiles sample transparent black.
  * Tiles are resampled to the largest tile size and share this texture's color
- * space, UV transform and UV channel. Only loaded RGBA pixel sources are accepted.
+ * space, UV transform and UV channel. The CPU image allocates all 100 cells,
+ * even for a single tile. Only loaded RGBA pixel sources are accepted.
  */
 export default class UdimTexture extends Texture {
   override readonly udim = true;

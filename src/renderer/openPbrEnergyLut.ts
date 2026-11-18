@@ -17,8 +17,6 @@
  * https://github.com/adobe/openpbr-bsdf
  */
 
-// Canonical delta data and synchronous decoder for native/AOT consumers.
-// Regenerate the browser asset (openPbrEnergyLut.bin) with scripts/pack-openpbr-energy-lut.mjs.
 import {decodeOpenPbrEnergyLut} from './decodeOpenPbrEnergyLut.js';
 export * from './decodeOpenPbrEnergyLut.js';
 

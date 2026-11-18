@@ -13,12 +13,13 @@ APIs may change between minor releases.
 
 - **WebGPU first, WebGL 2 as fallback**: unidirectional progressive path
   tracing with next-event estimation and multiple importance sampling over
-  rect, sphere, spot (with IES profiles), directional and HDR environment
+  rect, disk, cylinder, sphere, spot (with IES profiles), directional and HDR environment
   lights. Without WebGPU, the same code renders on WebGL 2.
 - **OpenPBR 1.1 surface**: F82 metals, anisotropic GGX specular and coat,
   fuzz, thin-film interference, dispersive transmission with absorption and
   volume scattering, subsurface scattering, emission and ray-marched
-  height-field displacement.
+  height-field displacement. Author procedural or image-based materials with
+  [Material Graphs](docs/materials.md#material-graphs).
 - **Experimental caustics (WebGPU)**: light tracing for directly visible
   receivers and photon mapping for receivers seen through glass or water. See
   the [caustics guide](docs/caustics.md).
@@ -82,8 +83,9 @@ default settings (6 bounces), BVH builds on CPU threads excluding worker startup
 npm install @meimu/mutracer
 ```
 
-Install `three` to load glTF with `GLTFLoader` + `THREESync` or to use
-the Three.js helpers. The quick start below also uses `gl-matrix` for matrix math.
+For the Three.js example, install `three` and import `THREESync` from
+`@meimu/mutracer/three`. TypeScript users of the adapter also need matching
+`@types/three` declarations. The MuTracer scene example uses `gl-matrix` for matrix math.
 
 The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
 with a `MuTracer` global is at `dist/mutracer.umd.js`; deploy its `dist/assets/`
@@ -100,7 +102,8 @@ sync with it. `RenderLoop` renders progressively and calls the sync each frame.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+import { Engine, RenderLoop } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
 
 const canvas = document.querySelector('canvas')!;
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { expect, it } from 'vitest';
-import { Texture, fromTHREEScene, type GroundedSkyboxBackground } from '../../src/main';
+import { Texture, type GroundedSkyboxBackground } from '../../src/main';
+import { fromTHREEScene } from '../../src/three';
 import { backgroundMapTransform, generateBackgroundMapFromSceneBackground } from '../../src/renderer/envMapCreation';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 

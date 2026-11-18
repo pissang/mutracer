@@ -4,7 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { beforeAll, expect, it, vi } from 'vitest';
 import { build } from 'vite';
 import type { OutputAsset, OutputChunk } from 'rollup';
-import * as library from '../../src/main';
+import * as library from '../../src/standalone';
 
 let main: OutputChunk, worker: OutputAsset;
 const wasm = readFileSync('src/tinybvh/tinybvh.wasm');

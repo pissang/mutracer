@@ -1,7 +1,8 @@
 // Open coatNormals.html and ?webgl on a real GPU. HDR comparisons use fixed
 // samples and sequence offsets, without denoising or radiance clamping.
 import * as THREE from 'three';
-import {Engine, Render, THREESync} from '../../src/main.js';
+import {Engine, Render} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 
 async function run() {
   const canvas = document.createElement('canvas'); document.body.append(canvas);

@@ -6,7 +6,8 @@ import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
-import {Engine, THREESync} from '../../lib/main.js';
+import {Engine} from '../../lib/main.js';
+import { THREESync } from '../../lib/three.js';
 
 const dir = resolve(process.argv[2] ?? (() => {throw new Error('Expected evidence directory');})());
 const bytes = await readFile(resolve(dir, 'layers.gltf'), 'utf8');

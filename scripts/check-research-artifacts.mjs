@@ -27,7 +27,7 @@ export function isResearchSource(root,filename){
 export function assertNoProductionResearchImports(root=project){
  const config=ts.readConfigFile(resolve(root,'tsconfig.json'),ts.sys.readFile);
  const parsed=ts.parseJsonConfigFileContent(config.config,ts.sys,root);
- const entries=['src/main.ts','src/oidn.ts','native/src/render-core.ts','viewer/src/main.tsx',
+ const entries=['src/main.ts', 'src/three.ts','src/oidn.ts','native/src/render-core.ts','viewer/src/main.tsx',
   ...files(resolve(root,'examples')).filter(p=>p.endsWith('.ts')).map(p=>relative(root,p))]
   .map(p=>resolve(root,p)).filter(existsSync);
  const program=ts.createProgram(entries,{...parsed.options,noEmit:true});

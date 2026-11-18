@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadModelFromFiles, loadModelFromSource, loadModelFromURL } from '../src/engine/loadModel';
 import { groundModel } from '../src/engine/modelGrounding';
-import { fromTHREEScene } from '@meimu/mutracer';
+import { fromTHREEScene } from '@meimu/mutracer/three';
 
 const nativeFetch = globalThis.fetch;
 const vertices = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);

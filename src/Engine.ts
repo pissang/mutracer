@@ -207,7 +207,7 @@ export default class Engine {
     this._sceneChangeDetector = new SceneChangeDetector();
     this.display = Display._create(this, params.canvas ?? createCanvas());
   }
-  /** Initializes once; concurrent/repeated calls share the result. Fetches the energy table asset; loading failures reject and emit error. */
+  /** Initializes once; concurrent/repeated calls share the result. Loads the energy table. Initialization failures reject and emit an error. */
   init(): Promise<EngineInfo> {
     return this._initPromise ??= (async () => {
       if (this._disposed) throw new Error('Engine is disposed.');
@@ -425,7 +425,7 @@ export default class Engine {
 
       this._events.emit('progress', {stage: 'device', progress: 0});
       this._pipelineInitError = undefined;
-      // Fetch the energy table while the device is requested; both backends need it.
+      // Both backends need the energy table. Load it while requesting the device.
       let lutFailed = false;
       const lut = initOpenPbrEnergyLut().catch(error => {lutFailed = true; throw error;});
       lut.catch(() => {});

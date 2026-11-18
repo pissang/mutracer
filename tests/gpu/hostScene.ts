@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import {mat4} from 'gl-matrix';
-import {EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, THREESync,
-  createCubeGeometry, createPlaneGeometry, createSphereGeometry, type Scene,
+import {EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, createCubeGeometry, createPlaneGeometry, createSphereGeometry, type Scene,
   type OpenPBRMaterialParams, type Engine} from '../../src/main.js';
+import { THREESync } from '../../src/three.js';
 import {createSkyTexture} from '../../examples/shared/sky.js';
 
 /** Exact procedural basic example, fixed at 128×96 for host integration probes. */
