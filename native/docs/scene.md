@@ -129,7 +129,7 @@ object and takes longer than later edits.
 Assign a normalized `MaterialGraph` with `OpenPbrMaterial::set_graph` (Rust) or
 `mt_scene_material_set_graph` (C), then submit and update the scene. `None` / a
 null graph restores the material's constants and maps. Graphs use the browser's
-[MaterialX node and terminal subset](../../docs/materials.md#material-graphs)
+[MaterialX node and terminal subset](../../docs/material-graphs.md)
 on both Software and HWRT, including surface and shadow opacity. HSV conversions
 and `hsvadjust` accept color3/color4 and preserve alpha. The
 [C graph declarations](../include/mutracer-material-graph.h) and

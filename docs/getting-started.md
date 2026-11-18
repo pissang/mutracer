@@ -140,9 +140,9 @@ failing the render (through `error` events when attached).
 
 Load `.hdr` environments with `await loadRGBE(url)`, which resolves to a
 float `Texture`. Emissive materials (`emissionLuminance > 0`) also act as
-lights. A scene supports at most 1,024 analytic lights. Storage and scene-update
-upload cost grow with the count. WebGPU uses constant-time power-weighted
-selection; WebGL recompiles when the count changes and searches its light CDF.
+lights. A scene supports at most 1,024 analytic lights; memory and update cost grow
+with the count. On WebGL 2, changing the light count recompiles shaders and
+light selection slows as the count grows.
 
 ## Backgrounds
 

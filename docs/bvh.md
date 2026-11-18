@@ -94,15 +94,11 @@ five times slower.
 BLASes are cached internally by geometry: share one `Geometry`
 between meshes to share its BLAS.
 
-Adding supported new geometry builds only its missing BLAS and appends it to
-reserved GPU storage. If the reservation is exhausted, the BVH buffer grows and
-resident BLAS data is uploaded again; this costs more for that update but does
-not rebuild the resident BLASes. Removing geometry does not immediately compact
-the buffer.
-
-For repeated deformation, use [dynamic geometry](./updates.md#dynamic-geometry).
-Large shape changes can make a refitted BVH slower to trace than a rebuilt one;
-dynamic geometry automatically rebuilds when its quality limit is exceeded.
+Adding geometry builds only its own BLAS and leaves resident BLASes in place;
+see [adding meshes](./updates.md#adding-removing-and-reassigning-meshes) for
+buffer growth. For repeated deformation, use
+[dynamic geometry](./updates.md#dynamic-geometry), which refits and rebuilds
+automatically when a refit would trace too slowly.
 
 ## Layouts
 

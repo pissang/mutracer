@@ -19,7 +19,7 @@ APIs may change between minor releases.
   fuzz, thin-film interference, dispersive transmission with absorption and
   volume scattering, subsurface scattering, emission and ray-marched
   height-field displacement. Author procedural or image-based materials with
-  [Material Graphs](docs/materials.md#material-graphs).
+  [Material Graphs](docs/material-graphs.md).
 - **Experimental caustics (WebGPU)**: light tracing for directly visible
   receivers and photon mapping for receivers seen through glass or water. See
   the [caustics guide](docs/caustics.md).

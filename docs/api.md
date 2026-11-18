@@ -27,7 +27,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | Method / property | Meaning |
 | --- | --- |
 | `update(): boolean` | Sole scene/camera edit detection point; returns whether inputs changed |
-| `waitForMaterialGraphs({signal?})` | Await current committed graphs; signal defaults to undefined; see [graph waits](./materials.md#material-graphs) |
+| `waitForMaterialGraphs({signal?})` | Await current committed graphs; signal defaults to undefined; see [graph waits](./material-graphs.md#waiting-for-graphs) |
 | `prepare(scene, {onProgress?, signal?})` | Optional CPU preparation for a future scene; options default undefined |
 | `init()` / `info` | Shared initialization promise and `EngineInfo`; info initially undefined |
 | `setDevice(device)` | Replace a caller-owned device; see [device loss](#device-loss) |
@@ -703,11 +703,9 @@ removes that terminal. Call `engine.update()` after edits. Node and terminal
 snapshots cannot be edited in place.
 
 `graph.validate(): MaterialGraphDiagnostic[]` synchronously checks the structure,
-types and terminals of every node without changing the graph. The engine ignores
-nodes the terminal does not reach, so it can accept a graph that `validate()`
-reports. It takes no material or backend options; an empty result does not
-guarantee engine acceptance. Material context, backend,
-capability and shader compilation failures are reported after `engine.update()`
+types and terminals of every node, including nodes the terminal does not reach,
+which the engine ignores. An empty result does not guarantee engine acceptance:
+material, backend and shader compilation failures appear after `engine.update()`
 in `engine.getDiagnostics()?.materialGraphs`.
 
 `graph.toJSON(options?)` returns `MaterialGraphJSON`: `{version: 1, nodes, terminal}`,
@@ -725,14 +723,14 @@ remain available through `validate()`. Loading performs no resource fetching.
 `MaterialGraphSerializationOptions`, `MaterialGraphDeserializationOptions` and
 `MaterialGraphJSONInput` describe the options and serialized inputs.
 
-See [material graphs](./materials.md#material-graphs) for usage, supported nodes,
+See [material graphs](./material-graphs.md) for usage, supported nodes,
 terminal inputs, compilation/fallback behavior and limits.
 
 `engine.waitForMaterialGraphs({signal?})` returns `Promise<MaterialGraphWaitResult>`.
 The default options are empty; `signal` defaults to undefined. `outcome` is
 `settled`, `superseded`, `aborted` or `unavailable`, and `state` is a detached
-`MaterialGraphCompilationState` snapshot. See [waiting and fallback semantics](./materials.md#material-graphs).
-The method waits for the whole engine; it has no per-material option.
+`MaterialGraphCompilationState` snapshot. It waits for the whole engine, not
+per material; see [outcomes and fallback](./material-graphs.md#waiting-for-graphs).
 
 `MaterialGraphCompilationState` fields:
 

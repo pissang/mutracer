@@ -35,11 +35,15 @@ The parser reads XML synchronously. Your application resolves image filenames,
 loads pixels and owns the resulting textures.
 
 The supported surface models are `open_pbr_surface`, `standard_surface`,
-`gltf_pbr` and `UsdPreviewSurface`. Check `warnings` and `coverage` for unsupported
-inputs. A missing selected material or surface shader throws. Rendering support
-depends on the node network and backend. See [MaterialGraph](api.md#materialgraph).
+`gltf_pbr` and `UsdPreviewSurface`. Standard Surface uses MaterialX's official
+conversion, which does not make OpenPBR identical to the source renderer.
+`UsdPreviewSurface` supports the metallic workflow only. Disney Principled and
+Simple Hair are unsupported. Check `warnings` and `coverage` for unsupported
+inputs. A missing selected material or surface shader throws. Uniform networks
+become `values`; varying networks become a `graph`, whose rendering support
+depends on its nodes and the backend. See [material graphs](material-graphs.md).
 
 A connected scalar displacement shader produces a separate `displacement` plan.
 Its mode indicates whether the height can use a texture directly, needs baking
 in UV space, or falls back. The example above loads the surface material only.
-The [Viewer](viewer.md) also handles texture packages and height baking.
+The [Viewer](viewer.md#materialx) also handles texture packages and height baking.

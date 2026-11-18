@@ -55,13 +55,13 @@ perspective and orthographic cameras, depth of field and dispersion. Photon
 mapping adds caustics throughout the allowed camera path. Volume scattering
 events and shadow catchers remain with ordinary path tracing.
 
-Materials whose graphs require graph evaluation for base weight/color/metalness,
-specular properties, transmission, coat, fuzz, subsurface, thin film, normals or
-opacity stay with ordinary path tracing instead of casting caustics through either
-estimator. Unknown graph inputs are excluded too. Graphs driving only diffuse
-roughness or emission, and image graphs rendered through
-[texture slots](./materials.md#material-graphs), do not change caster eligibility. Surface graphs still work on caustic
-receivers; see [material graph emission limits](./materials.md#material-graphs).
+Materials whose [graphs](./material-graphs.md) evaluate base
+weight, color or metalness, specular, transmission, coat, fuzz, subsurface, thin
+film, normal, opacity or unknown inputs do not cast caustics through either
+estimator. Graphs driving only diffuse roughness or emission, and image graphs
+rendered through [texture slots](./material-graphs.md#backends-and-texture-slots), keep
+the material a caster. Graph materials still receive caustics; see
+[emission limits](./material-graphs.md#terminals).
 
 Complete caustic light-to-camera paths can be longer than `bounces`. Align total
 path-length limits when comparing radiance with another renderer.

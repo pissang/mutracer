@@ -54,18 +54,18 @@ when only one object changed.
 | `mesh.transform`, instance matrices | Refit the top-level BVH; small edits limit instance uploads to affected ranges |
 | Vertex attributes with unchanged storage and topology | Refit or rebuild the changed BLAS, upload that geometry, and refresh bounds of every instance sharing it |
 | `mesh.visible` | Rebuild the top-level BVH and instance data; geometry, BLASes and materials stay on the GPU |
-| Add, remove or reorder meshes whose geometry is already on the GPU | Same as visibility, plus the material table when the set of materials changes. See [adding and removing](#adding-removing-and-reassigning-meshes) |
+| Add, remove or reorder single-material meshes without displacement or `materialIndex` | Same as visibility, plus the material table when the set of materials changes; new geometry builds and appends only its own BLAS and vertex data. See [adding and removing](#adding-removing-and-reassigning-meshes) |
 | Texture references, such as `material.map = other` | Rebuild the texture atlas, or with bindless bindings upload the newly referenced images; geometry and BVHs are untouched |
-| Add new single-material geometry without displacement or `materialIndex` | Build and append its BLAS and vertex data, then rebuild the top-level BVH; existing geometry stays resident while reserved capacity is available |
+| Material graph values or structure | Parameter repack, or a background compile; see [material graph edits](#material-graph-edits) |
 | Displacement, array replacement, or incompatible geometry/material structure | [Full mesh update](#full-mesh-updates) |
 
 ## Transforms
 
 Edit `mesh.transform` in place while retaining the mesh objects and the
 `scene.meshes` array. Both WebGPU and WebGL 2 refit the top-level BVH over the
-changed instances. Small edits upload the ranges covering changed instance
-records and bounds; WebGL 2 uploads complete texture rows. Large edits can process and upload the whole top-level BVH and instance
-buffer, while geometry and BLAS data stay resident.
+changed instances. Small edits upload only the affected instance ranges; large
+edits can upload the whole top-level BVH and instance buffer. Geometry and BLAS
+data stay resident.
 
 ## Visibility
 
@@ -213,44 +213,58 @@ Analytic-light edits keep the environment map. Ambient and environment edits
 rebuild it. Rect-light texture edits require a full mesh update, because those
 textures live in the material atlas.
 
+### Material graph edits
+
+Changing an input value of a [material graph](./material-graphs.md)
+updates parameters without compiling, as long as the installed graph program or
+texture-slot plan can represent it. Texture references and pixel edits cost the
+same as texture edits above.
+
+Changing categories, types, connections or terminals, or an edit that no longer
+fits a texture slot, compiles after a short debounce. Compilation can take
+hundreds of milliseconds or longer; materials with the same reachable structure
+share code. Rendering keeps the previous graph meanwhile, then restarts
+accumulation once the new one installs. With [editing prefetch](#editing-prefetch)
+a new structure renders without that wait.
+
+When a scene has more distinct structures than compile in about a second, the
+less used ones run on a shared WebGPU graph interpreter, which costs more per
+hit. Structures covering the most surface area get specialized code shortly
+after, without restarting accumulation.
+
+Graphs add work at each hit of their materials; opacity graphs also run on
+shadow rays. Each material keeps its own parameters even when it shares code.
+Shader caches grow as new structures are tried; disposing the engine releases them.
+
 ### Editing prefetch
 
 To compile shaders behind a loading screen, `await render.converge({samples: 1})`
 before showing the image: it waits for the shaders the committed scene needs.
 
-Apps that let users edit materials can construct the engine with
-`shaderPrefetch: 'editing'` (WebGPU). Call `engine.init()` before loading a model
-to start device initialization alongside the download and parsing. On D3D12 and
-Metal, eligible editing prefetch starts as soon as the device is initialized;
-it does not wait for the scene's first shader or for a Render to sample.
+Material editors can construct the engine with `shaderPrefetch: 'editing'`
+(WebGPU) and call `engine.init()` before loading a model. On D3D12 and Metal,
+a shared editing variant starts compiling once the device is ready, while the
+model downloads and parses. Other WebGPU backends prefetch from the committed scene.
 
-The prefetched variant supports every material lobe, media, transparency,
-texture slot, analytic-light type, anisotropy and coat-normal frames, UV1 textures,
-displacement and [material graph](./materials.md#material-graphs) replacements.
-Once ready, it serves compatible material and graph edits without waiting for
-compilation. Model or scene replacement reuses the same pending or ready variant
-when its capacities and settings still fit. After about two seconds of stable
-rendering, the scene's lean variant compiles and replaces it without restarting
-accumulation.
+The editing variant supports every material lobe, media, transparency, texture
+slot, analytic-light type, anisotropy and coat-normal frames, UV1 textures,
+displacement and material graph replacements. Once ready, it serves compatible
+material and graph edits without waiting for compilation, and later scenes reuse
+it when their capacities and settings fit. After about two seconds of stable
+rendering, the scene's own leaner variant replaces it without restarting
+accumulation; until then sampling is slower.
 
-The common D3D12/Metal variant reserves 256 atlas metadata entries and
-supports shadow catchers and the default BVH2 geometry layout, including generated
-vertex tangents and both normal formats. First use of material bevel compiles
-a compatible editing variant in the background; rendering waits for a shader
-that supports it. Returning to an already prepared bevel combination reuses it. Atlas capacities round
-up in tens, so more than 250 entries or other BVH layouts can need another
-editing variant. Dispersion, caustics, sampling
-pattern, bevel sample count, alpha-blend strategy or a texture-binding fallback
-can also select another variant. Returning to a prepared combination reuses it.
-Geometry preparation, texture uploads and BVH construction still take time.
+The shared variant covers up to 250 atlas entries, shadow catchers and the
+default BVH2 layout. More atlas entries, other BVH layouts, material bevel,
+dispersion, caustics, sampling pattern, bevel sample count, alpha-blend strategy
+or a texture-binding fallback select another variant, compiled in the
+background; returning to a prepared combination reuses it. Geometry preparation,
+texture uploads and BVH construction still take their usual time.
 
-Prefetch consumes background compilation resources and can overlap the scene's
-own shader compilation. Cold preparation can still take seconds or tens of
-seconds; browser and driver caches can make later visits much faster. Sampling
-through the editing variant is slower until the lean replacement is ready.
-Forced graph tiers, unsupported graph structures and devices beyond the
-background compile budget retain their usual compilation behavior. Other WebGPU
-backends keep their existing scene-based prefetch.
+Prefetch uses background compilation and can compete with the scene's own
+shaders. A cold start can take seconds to tens of seconds; browser and driver
+caches make later visits much faster. Graph structures the editing variant cannot
+represent compile as usual.
 
 ## Geometry
 
@@ -296,20 +310,17 @@ and morph targets set `dynamic` automatically; try the
 
 ## Adding, removing and reassigning meshes
 
-Adding, removing or reordering meshes is cheap when every mesh uses a single
-material without displacement or `materialIndex`: the renderer rebuilds the
-top-level BVH and instance data, copies only added meshes, and builds and
-uploads only previously unseen geometry. Replacing a mesh's material or adding
-geometry with displacement, per-triangle materials, or a new material-table
-structure needs a full mesh update.
+Adding, removing or reordering meshes, or replacing a mesh's material, is cheap
+when every mesh uses a single material without displacement or `materialIndex`:
+the renderer rebuilds the top-level BVH and instance data, and builds and uploads
+only geometry it has not seen before. Displacement, per-triangle materials or a
+change to the material-table structure need a [full mesh update](#full-mesh-updates).
 
-Geometry and BLAS buffers reserve growth space. When an append exceeds it, the
-affected buffer grows by roughly 50% (capped at 64 MiB of spare space) and its
-resident contents are uploaded again. Removed geometry leaves reusable resident
-storage rather than triggering compaction; recreating the engine or a later
-growth allocation releases that space. To take a mesh out temporarily, prefer
-[visibility](#visibility): it stays cheap for every mesh, keeps the mesh resident
-and does not rebuild the material table.
+Geometry and BLAS buffers reserve room to grow. When an addition exceeds it, the
+buffer grows by about 50% (at most 64 MiB of spare space) and its contents upload
+again. Removed geometry is not compacted; its space is reused by later additions
+and released when the buffer grows again or the engine is recreated. To take a
+mesh out temporarily, prefer [visibility](#visibility), which keeps it resident.
 
 ## Full mesh updates
 
@@ -332,15 +343,3 @@ Selection and coalescing of continuous animation changes belong to the
 application. Render.refine only executes the chosen settings, and samples
 always count that render's complete samples. For fixed-quality animation, use
 converge on each frame with disjoint sequence offsets.
-
-### Material graph edits
-
-For [material graphs](./materials.md#material-graphs), changing a typed input's
-value updates parameters without compiling a shader. Texture references and pixel
-edits still incur the texture upload costs above. Changing categories, types,
-connections or terminal inputs can require compilation; materials with the same
-reachable structure share code. Rendering keeps the previous graph and parameters
-until the new structure is ready, then restarts accumulation; a later switch of
-the same structures to faster code does not restart it. With
-[editing prefetch](#editing-prefetch) a new structure renders without that wait. Inspect
-`engine.getDiagnostics()?.materialGraphs` for progress or a located failure.
