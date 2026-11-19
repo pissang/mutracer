@@ -22,3 +22,5 @@ native/toolchain/node_modules
 
 dist-viewer-native/
 native/webview-viewer/target/
+
+native/cli/target/

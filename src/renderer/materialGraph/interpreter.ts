@@ -6,8 +6,10 @@ import {GraphSource, graphCategories, graphGeometry, graphOutputs, graphPorts, g
 
 /** Opcode families used by a program's entries. */
 export function graphProgramFamilies(program: GraphProgram, into = new Set<GraphOp>(), entries: readonly ('surface' | 'opacity' | 'emission')[] = ['surface', 'opacity', 'emission']) {
-    for (const entry of entries.map(name => program[name]))
+    for (const name of entries) {
+        const entry = name === 'surface' ? program.surface : name === 'opacity' ? program.opacity : program.emission;
         for (let at = 0; at < entry.instructions.length; at += GRAPH_INSTRUCTION_FLOATS) if (entry.instructions[at] !== GraphOp.Store) into.add(entry.instructions[at]);
+    }
     return into;
 }
 /** Helper libraries an interpreter with these families needs. */
@@ -38,10 +40,10 @@ const gltfPorts = ['file', 'default', 'texcoord', 'pivot', 'scale', 'rotate', 'o
 /** Category → opcode family, sub-operation and operand port order. */
 export const graphInstructions: Readonly<Record<string, {op: GraphOp; sub: number; ports: Ports}>> = {
     ...family(GraphOp.Unary, graphUnary, ['in']),
-    ...family(GraphOp.Binary, binaryNames, name => name === 'atan2' ? ['iny', 'inx'] : ['in1', 'in2']),
+    ...family(GraphOp.Binary, binaryNames, (name): Ports => name === 'atan2' ? ['iny', 'inx'] : ['in1', 'in2']),
     mix: op(GraphOp.Mix, 0, ['bg', 'fg', 'mix']),
     clamp: op(GraphOp.Clamp, 0, ['in', 'low', 'high']),
-    ...family(GraphOp.Copy, ['convert', 'constant', 'dot', 'separate2', 'separate3', 'separate4'], name => [name === 'constant' ? 'value' : 'in']),
+    ...family(GraphOp.Copy, ['convert', 'constant', 'dot', 'separate2', 'separate3', 'separate4'], (name): Ports => [name === 'constant' ? 'value' : 'in']),
     ...family(GraphOp.Combine, ['combine2', 'combine3', 'combine4'], ['in1', 'in2', 'in3', 'in4']),
     extract: op(GraphOp.Extract, 0, ['in', 'index']),
     ...family(GraphOp.If, ['ifgreater', 'ifequal'], ['value1', 'value2', 'in1', 'in2']),
@@ -58,13 +60,13 @@ export const graphInstructions: Readonly<Record<string, {op: GraphOp; sub: numbe
     place2d: op(GraphOp.Place2d, 0, ['texcoord', 'pivot', 'scale', 'rotate', 'offset', 'operationorder']),
     ...family(GraphOp.Rotate, ['rotate2d', 'rotate3d'], ['in', 'amount', 'axis']),
     ...family(GraphOp.Hsv, ['rgbtohsv', 'hsvtorgb', 'hsvadjust'], ['in', 'amount']),
-    ...family(GraphOp.Noise, noiseNames, name => [name.endsWith('2d') ? 'texcoord' : 'position', 'amplitude', 'pivot', 'octaves', 'lacunarity', 'diminish', 'jitter', 'style']),
+    ...family(GraphOp.Noise, noiseNames, (name): Ports => [name.endsWith('2d') ? 'texcoord' : 'position', 'amplitude', 'pivot', 'octaves', 'lacunarity', 'diminish', 'jitter', 'style']),
     image: op(GraphOp.Image, 0, ['file', 'default', 'texcoord']),
     tiledimage: op(GraphOp.Image, 1, ['file', 'default', 'texcoord', 'uvtiling', 'uvoffset', 'realworldimagesize', 'realworldtilesize']),
     gltf_image: op(GraphOp.Image, 2, gltfPorts),
     gltf_colorimage: op(GraphOp.Image, 3, gltfPorts),
     gltf_normalmap: op(GraphOp.Image, 4, gltfPorts),
-    ...family(GraphOp.Geometry, ['texcoord', 'position', 'normal', 'tangent', 'bitangent'], name => [name === 'texcoord' ? 'index' : 'space']),
+    ...family(GraphOp.Geometry, ['texcoord', 'position', 'normal', 'tangent', 'bitangent'], (name): Ports => [name === 'texcoord' ? 'index' : 'space']),
     ...family(GraphOp.Transform, ['transformpoint', 'transformvector', 'transformnormal'], ['in', 'fromspace', 'tospace']),
     normalmap: op(GraphOp.Normalmap, 0, ['in', 'scale', 'normal', 'tangent', 'bitangent']),
 };

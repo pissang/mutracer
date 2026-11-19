@@ -6,6 +6,7 @@ import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRad
 import { localMaterialIndex } from './materialIndices.js';
 import { attributeLength, attributeValue } from '../scene/attributeData.js';
 import { type TexturePixelSource, vec3 } from '../math.js';
+import { set as setVec3, subtract as subtractVec3, cross as crossVec3 } from '../math/sceneVec3.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import Geometry from '../scene/Geometry.js';
 import type Mesh from '../scene/MeshState.js';
@@ -275,7 +276,7 @@ export function collectEmissiveTriangles(
         ];
         for (let corner = 0; corner < 3; corner++) {
           const vertex = triangleIndices[corner];
-          vec3.set(
+          setVec3(
             local[corner],
             positions[vertex * geometry.position.itemSize],
             positions[vertex * geometry.position.itemSize + 1],
@@ -283,9 +284,9 @@ export function collectEmissiveTriangles(
           );
           vec3.transformMat4(world[corner], local[corner], matrix);
         }
-        vec3.sub(edge0, world[1], world[0]);
-        vec3.sub(edge1, world[2], world[0]);
-        vec3.cross(cross, edge0, edge1);
+        subtractVec3(edge0, world[1], world[0]);
+        subtractVec3(edge1, world[2], world[0]);
+        crossVec3(cross, edge0, edge1);
         const area = 0.5 * vec3.length(cross);
         if (!(area > 1e-10) || !isFinite(area)) continue;
 

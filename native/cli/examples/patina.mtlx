@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <nodegraph name="Patina">
+    <input name="amount" type="float" value="0"/>
+    <noise3d name="grain" type="float">
+      <input name="amplitude" type="float" value="0.4"/>
+      <input name="pivot" type="float" value="0.35"/>
+    </noise3d>
+    <multiply name="coverage" type="float">
+      <input name="in1" type="float" nodename="grain"/>
+      <input name="in2" type="float" interfacename="amount"/>
+    </multiply>
+    <mix name="patina" type="color3">
+      <input name="bg" type="color3" value="0.65,0.22,0.09"/>
+      <input name="fg" type="color3" value="0.08,0.72,0.45"/>
+      <input name="mix" type="float" nodename="coverage"/>
+    </mix>
+    <output name="color" type="color3" nodename="patina"/>
+  </nodegraph>
+  <open_pbr_surface name="Surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="Patina" output="color"/>
+    <input name="base_metalness" type="float" value="0.75"/>
+    <input name="specular_roughness" type="float" value="0.36"/>
+  </open_pbr_surface>
+  <surfacematerial name="Metal" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Surface"/>
+  </surfacematerial>
+</materialx>

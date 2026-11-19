@@ -6,7 +6,7 @@ import * as vec3 from '../math/sceneVec3.js';
  * length is twice its area) to its three vertices, then every sum is normalized.
  * Without indices, consecutive vertex triples form the triangles.
  */
-export function accumulateVertexNormals(positions: ArrayLike<number>, indices: Uint32Array | undefined,
+export function accumulateVertexNormals(positions: Float32Array, indices: Uint32Array | undefined,
   vertexCount: number): Float32Array {
   const normals = new Float32Array(positions.length);
   const p1 = vec3.create();

@@ -1,6 +1,7 @@
 import Geometry, {Attribute} from '../scene/Geometry.js';
 import MaterialState from '../scene/MaterialState.js';
 import { vec2, vec3 } from '../math.js';
+import { set as setVec3, normalize as normalizeVec3 } from '../math/sceneVec3.js';
 import { read, write } from '../math/access.js';
 import { attributeValue, attributeLength } from '../scene/attributeData.js';
 
@@ -202,7 +203,7 @@ function findRoots(
       for (let y = minTexelY; y <= maxTexelY; y++) {
         for (let x = minTexelX; x <= maxTexelX; x++) {
           if (rootCount < roots.length) {
-            vec3.set(
+            setVec3(
               roots[rootCount],
               Math.floor(x),
               Math.floor(y),
@@ -289,16 +290,16 @@ export function computeTrianglesDisplacementRange(geometry: Geometry,
 
     let onSeam = false;
     if (isTriplanar || isSpherical || isCylindrical) {
-      vec3.set(n1, attributeValue(normal, i1_3), attributeValue(normal, i1_3 + 1), attributeValue(normal, i1_3 + 2));
-      vec3.set(n2, attributeValue(normal, i2_3), attributeValue(normal, i2_3 + 1), attributeValue(normal, i2_3 + 2));
-      vec3.set(n3, attributeValue(normal, i3_3), attributeValue(normal, i3_3 + 1), attributeValue(normal, i3_3 + 2));
-      vec3.normalize(n1, n1);
-      vec3.normalize(n2, n2);
-      vec3.normalize(n3, n3);
+      setVec3(n1, attributeValue(normal, i1_3), attributeValue(normal, i1_3 + 1), attributeValue(normal, i1_3 + 2));
+      setVec3(n2, attributeValue(normal, i2_3), attributeValue(normal, i2_3 + 1), attributeValue(normal, i2_3 + 2));
+      setVec3(n3, attributeValue(normal, i3_3), attributeValue(normal, i3_3 + 1), attributeValue(normal, i3_3 + 2));
+      normalizeVec3(n1, n1);
+      normalizeVec3(n2, n2);
+      normalizeVec3(n3, n3);
       if (isTriplanar || isSpherical || isCylindrical) {
-        vec3.set(p1, attributeValue(position, i1_3), attributeValue(position, i1_3 + 1), attributeValue(position, i1_3 + 2));
-        vec3.set(p2, attributeValue(position, i2_3), attributeValue(position, i2_3 + 1), attributeValue(position, i2_3 + 2));
-        vec3.set(p3, attributeValue(position, i3_3), attributeValue(position, i3_3 + 1), attributeValue(position, i3_3 + 2));
+        setVec3(p1, attributeValue(position, i1_3), attributeValue(position, i1_3 + 1), attributeValue(position, i1_3 + 2));
+        setVec3(p2, attributeValue(position, i2_3), attributeValue(position, i2_3 + 1), attributeValue(position, i2_3 + 2));
+        setVec3(p3, attributeValue(position, i3_3), attributeValue(position, i3_3 + 1), attributeValue(position, i3_3 + 2));
       }
       if (isTriplanar) {
         // Is on the seam. Needs full prism to avoid empty seams.
@@ -315,9 +316,9 @@ export function computeTrianglesDisplacementRange(geometry: Geometry,
           uv1, uv2, uv3
         );
       } else if (isSpherical) {
-        vec3.normalize(p1, p1);
-        vec3.normalize(p2, p2);
-        vec3.normalize(p3, p3);
+        normalizeVec3(p1, p1);
+        normalizeVec3(p2, p2);
+        normalizeVec3(p3, p3);
         onSeam = sphericalProjectionTriangle(p1, p2, p3, uv1, uv2, uv3);
       } else {
         const u1 = Math.atan2(p1[2], p1[0]) / (Math.PI * 2) + 0.5;

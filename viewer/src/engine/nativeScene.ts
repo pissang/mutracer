@@ -127,6 +127,7 @@ export function cameraWords(camera: Camera) {
     f.set(camera.transform, 16);
     return u;
 }
+export type ImagePixels = (image: Texture['image']) => Uint8Array;
 export type SkyResolver = (source: ProceduralEnvironmentSource) => Promise<EnvironmentMapSource>;
 export class NativeSceneEncoder {
     private committed?: Encoding;
@@ -153,7 +154,7 @@ export class NativeSceneEncoder {
     private graphs = new WeakMap<OpenPBRMaterial, {graph: NonNullable<OpenPBRMaterial['graph']>; revision: number; normalized: ReturnType<typeof normalizeGraph>; ir: ReturnType<typeof flattenGraph>}>();
     private canonicalPixels = new WeakMap<Texture, Map<string, {raw: Uint8Array | Float32Array; linear: boolean; data: Uint8Array | Float32Array}>>();
     private skyCache = new Map<string, Promise<EnvironmentMapSource>>();
-    constructor(private sky: SkyResolver) { }
+    constructor(private sky: SkyResolver, private imagePixels?: ImagePixels) { }
     private readPixels(texture: Texture): Uint8Array | Float32Array {
         const cached = this.pixels.get(texture);
         if (cached?.image === texture.image && cached.version === texture.version)
@@ -164,15 +165,10 @@ export class NativeSceneEncoder {
             pixels = image.data instanceof Uint8Array || image.data instanceof Uint8ClampedArray
                 ? new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength)
                 : image.data instanceof Float32Array ? new Float32Array(image.data.buffer, image.data.byteOffset, image.data.length) : Float32Array.from(image.data);
-        else {
-            const canvas = document.createElement('canvas');
-            canvas.width = image.width;
-            canvas.height = image.height;
-            const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-            ctx.drawImage(image as CanvasImageSource, 0, 0);
-            const data = ctx.getImageData(0, 0, image.width, image.height).data;
-            pixels = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-        }
+        else if (this.imagePixels)
+            pixels = this.imagePixels(image);
+        else
+            throw new Error('Native scene textures require decoded image pixels');
         this.pixels.set(texture, { image, version: texture.version, pixels });
         return pixels;
     }

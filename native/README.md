@@ -23,6 +23,11 @@ and optional OIDN with a caller-supplied runtime.
 MaterialX, environment, animation and export controls. See
 [viewer usage and limits](webview-viewer/README.md).
 
+## Native video CLI
+
+Use the [video CLI](cli/README.md) to render animated shots on the native GPU,
+preview motion, resume frames after interruption and encode MP4.
+
 ## APIs
 
 | Task | Rust (`mutracer_native`) | C header | Guide |

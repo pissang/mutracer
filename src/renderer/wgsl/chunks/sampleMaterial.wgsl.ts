@@ -320,7 +320,7 @@ fn SampleMaterial(
 ) {
 ${queryPoints ? `  var crossedBoundary = false;
   if (!resume) {\n` : ''}${hasCoatNormals ? /* wgsl */ `
-  ${state.init('originalFace', '(*si).faceNormal', true)}
+  ${state.init('originalFace', '(*si).faceNormal', true, false)}
   let originalNormal = (*si).normal;
 ` : ''}
   ${state.init('ndv1', '-dot((*si).faceNormal, (*path).ray.d)', false, true)}
@@ -345,7 +345,7 @@ ${queryPoints ? `  var crossedBoundary = false;
   (*ma).inside = (ndv <= 0.0) & !(*ma).thinWalled;
   // In or out
   (*ma).relativeIor = select((*ma).specularIor, (1.0 / (*ma).specularIor), ndv > 0.0);
-  ${state.init('ffnormal', 'select(-N, N, ndv >= 0.0)')}
+  ${state.init('ffnormal', 'select(-N, N, ndv >= 0.0)', false, false)}
 ${hasCoatNormals ? /* wgsl */ `
   if ((*ma).coatNormalEnabled) {
     let view = -(*path).ray.d;
@@ -359,7 +359,7 @@ ${hasCoatNormals ? /* wgsl */ `
 ` : ''}
 
   (*path).scatteringIsDelta = false;
-  ${state.init('mediumSampled', 'false')}
+  ${state.init('mediumSampled', 'false', false, false)}
 ${queryPoints ? '' : '  var crossedBoundary = false;'}
   let mediumType = (*si).mediumType;
 ${queryPoints ? '' : `
@@ -426,7 +426,7 @@ ${caustics?`    let emissionWeight=emissiveHitMisWeight(si,path);
   }
   // Surface and medium events share the light estimator. Emission is added
   // before NEE, then the continuation direction is sampled.
-  ${queryPoints && !earlyScattering ? state.init('prepared', 'OpenPbrPreparedBsdf()') : 'var prepared: OpenPbrPreparedBsdf;'}
+  ${queryPoints && !earlyScattering ? state.init('prepared', 'OpenPbrPreparedBsdf()', false, false) : 'var prepared: OpenPbrPreparedBsdf;'}
   if (!${mediumSampled}) {
 ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).directionTangent = (*si).directionTangent;

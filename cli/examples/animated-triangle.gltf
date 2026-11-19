@@ -1,0 +1,177 @@
+{
+  "asset": {
+    "version": "2.0",
+    "copyright": "Procedural MuTracer sample, CC0 1.0"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Card",
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Paint",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "roughnessFactor": 0.5,
+        "metallicFactor": 0
+      }
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    }
+  ],
+  "images": [
+    {
+      "bufferView": 6,
+      "mimeType": "image/png"
+    }
+  ],
+  "animations": [
+    {
+      "name": "Tilt",
+      "samplers": [
+        {
+          "input": 4,
+          "output": 5,
+          "interpolation": "LINEAR"
+        }
+      ],
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 0,
+            "path": "rotation"
+          }
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "type": "VEC3",
+      "count": 3,
+      "min": [
+        -0.85,
+        -0.55,
+        0
+      ],
+      "max": [
+        0.85,
+        0.75,
+        0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "type": "VEC3",
+      "count": 3
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "type": "VEC2",
+      "count": 3
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "type": "SCALAR",
+      "count": 3
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "type": "SCALAR",
+      "count": 2,
+      "min": [
+        0
+      ],
+      "max": [
+        1
+      ]
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "type": "VEC4",
+      "count": 2
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 36,
+      "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 72,
+      "byteLength": 24
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 6
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 104,
+      "byteLength": 8
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 112,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 144,
+      "byteLength": 84
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 228,
+      "uri": "data:application/octet-stream;base64,mplZv83MDL8AAAAAmplZP83MDL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA1c4FPwAAAAAMP1o/iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4nGP40CP3XzLlzn8GuS3T/r++FP8fAFgPCnSAbIFpAAAAAElFTkSuQmCC"
+    }
+  ]
+}

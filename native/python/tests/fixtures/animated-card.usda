@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    upAxis = "Z"
+    metersPerUnit = 1
+    startTimeCode = 1
+    endTimeCode = 24
+    framesPerSecond = 24
+    timeCodesPerSecond = 24
+)
+
+def Xform "Motion"
+{
+    double3 xformOp:translate.timeSamples = { 1: (-0.3, 0, 0), 24: (0.3, 0, 0) }
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Mesh "Card" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(-0.85, 0, 0.55), (0.85, 0, 0.55), (0, 0, 1.85)]
+        uniform token subdivisionScheme = "none"
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (0.5, 1)] (
+            interpolation = "faceVarying"
+        )
+        rel material:binding = </Paint>
+    }
+}
+def Material "Paint"
+{
+    token outputs:surface.connect = </Paint/Surface.outputs:surface>
+    def Shader "Surface"
+    {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor = (0.42, 0.16, 0.06)
+        float inputs:roughness = 0.45
+        float inputs:metallic = 0.28
+        token outputs:surface
+    }
+}
+def Camera "Camera"
+{
+    double3 xformOp:translate = (0, -4, 1.2)
+    float3 xformOp:rotateXYZ = (90, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    float focalLength = 26
+}
+def RectLight "Key"
+{
+    float inputs:intensity = 12
+    float inputs:width = 1.2
+    float inputs:height = 1
+    double3 xformOp:translate = (0.6, -1.8, 1.6)
+    float3 xformOp:rotateXYZ = (90, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+}

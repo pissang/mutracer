@@ -27,8 +27,8 @@ const SHADOW_CATCHER_LIGHT_SAMPLES = ${SHADOW_CATCHER_LIGHT_SAMPLES}u;
 // but noisier, because the environment CDF dilates bright texels.
 fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>${queryPoints ? ', resume: bool' : ''}) -> vec2f {
   let viewDir = -(*path).ray.d;
-${queryPoints ? '  if (!resume) {\n' : ''}  ${state.init('counts', 'vec2f(0.0)')}
-${queryPoints ? `${state.init('candidate', '0u')} } var resumed = resume;\n` : ''}
+${queryPoints ? '  if (!resume) {\n' : ''}  ${state.init('counts', 'vec2f(0.0)', false, false)}
+${queryPoints ? `${state.init('candidate', '0u', false, false)} } var resumed = resume;\n` : ''}
   // The catcher table holds only the environment and analytic lights, as in
   // WebGL 2: emissive meshes are scene objects, not light in the plate.
   if (rtUniform.shadowCatcherChoiceCount > 0) {
