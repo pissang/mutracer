@@ -92,7 +92,12 @@ void main() {
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
   float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
-  bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || material.coatWeight>0.0 || material.fuzzWeight>0.0 || material.specularAnisotropy>0.0 || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
+  bool unsupportedCoat = material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0
+#ifdef USE_COAT_NORMAL_FRAMES
+    || material.coatNormalEnabled
+#endif
+  );
+  bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || unsupportedCoat || material.fuzzWeight>0.0 || material.specularAnisotropy>0.0 || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
   out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,unsupported?1.0:0.0);
   #ifdef AOV_REFLECTANCE
   if((aovMask&24)!=0 && !unsupported){
@@ -108,9 +113,10 @@ void main() {
     tangent=si.tangent;
 #endif
     OpenPbrPreparedBsdf prepared=openpbr_prepare(tangent,material,-ray.d,normal);
-    vec3 diffuse,specular;aovReflectance(prepared,(aovMask&8)!=0,(aovMask&16)!=0,diffuse,specular);
+    vec3 diffuse,specular,coat;
+    aovReflectance(prepared,(aovMask&8)!=0,(aovMask&16)!=0,diffuse,specular,coat);
     if((aovMask&8)!=0)out_diffuse+=vec4(diffuse,1.0);
-    if((aovMask&16)!=0)out_specular+=vec4(specular,1.0);
+    if((aovMask&16)!=0)out_specular+=vec4(specular + coat,1.0);
   }
   #endif
   // Resolved texture colors (diffuseColor/specularColor), matching WGSL.

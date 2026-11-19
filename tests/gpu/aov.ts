@@ -88,8 +88,11 @@ async function captureAovs() {
     const orthoMotion=await render.readPixels('motion');const orthoValid=Array.from({length:orthoMotion.width*orthoMotion.height},(_,i)=>i*4).filter(o=>orthoMotion.data[o+3]===3);
     check(orthoValid.length>100&&orthoValid.every(o=>Math.abs(orthoMotion.data[o]-2)<.001),'Orthographic motion mismatch');
     source.materials[0].coatWeight=.5;engine.update();await render.converge({samples:4});
+    const coatedDiffuse=await render.readPixels('diffuseAlbedo');
+    check(coatedDiffuse.data[3]===1&&coatedDiffuse.data[0]>0,'Isotropic coat must have valid reflectance');
+    source.materials[0].coatAnisotropy=.5;engine.update();await render.converge({samples:4});
     const unsupportedRoughness=await render.readPixels('roughness'),unsupportedDiffuse=await render.readPixels('diffuseAlbedo');
-    check(unsupportedRoughness.data.every((v,i)=>i%4!==2||v===1),'Unsupported coat flag missing');
+    check(unsupportedRoughness.data.every((v,i)=>i%4!==2||v===1),'Unsupported anisotropic coat flag missing');
     check(unsupportedDiffuse.data.every(v=>v===0),'Unsupported reflectance must have zero validity');
     // Two disconnected surfaces in one object must reject disoccluded history,
     // even where perspective NDC depths differ by less than 0.001.
