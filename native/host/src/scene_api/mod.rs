@@ -693,6 +693,69 @@ struct Resolved {
     background_index: u32,
 }
 impl Scene {
+    /// Copies meshes and their scene-owned resource tables from another scene.
+    /// Returns new mesh handles in source order. Geometry and texture pixel
+    /// storage are shared until edited. Lights, environment and camera are
+    /// unchanged. Invalid source handles return an error before any additions.
+    pub fn append_meshes_from(&mut self, source: &Scene) -> Result<Vec<MeshId>> {
+        for (_, material) in source.materials.iter() {
+            material.validate_references(source)?;
+        }
+        for (_, mesh) in source.meshes.iter() {
+            mesh.validate_references(source)?;
+        }
+
+        let geometries = source
+            .geometries
+            .iter()
+            .map(|(key, value)| {
+                (
+                    GeometryId(key),
+                    GeometryId(self.geometries.add(value.clone())),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let textures = source
+            .textures
+            .iter()
+            .map(|(key, value)| (TextureId(key), TextureId(self.textures.add(value.clone()))))
+            .collect::<BTreeMap<_, _>>();
+        let map_texture = |id: Option<TextureId>| id.map(|id| textures[&id]);
+        let materials = source
+            .materials
+            .iter()
+            .map(|(key, value)| {
+                let mut value = value.clone();
+                value.textures = value.textures.map(map_texture);
+                for id in value.texture_properties.values_mut() {
+                    *id = map_texture(*id);
+                }
+                if let Some(graph) = &mut value.graph {
+                    for id in &mut graph.textures {
+                        *id = map_texture(*id);
+                    }
+                }
+                (MaterialId(key), MaterialId(self.materials.add(value)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let meshes = source
+            .meshes
+            .iter()
+            .map(|(_, value)| {
+                let mut value = value.clone();
+                value.geometry = geometries[&value.geometry];
+                value.material = materials[&value.material];
+                for id in &mut value.materials {
+                    *id = materials[id];
+                }
+                MeshId(self.meshes.add(value))
+            })
+            .collect();
+        self.dirty.get_mut().unwrap().structure = true;
+        self.changed();
+        Ok(meshes)
+    }
+
     /// Sets visibility without removing resources or changing the mesh identity.
     /// Default true; false hides the entire instance batch. Invalid/stale handles
     /// return InvalidHandle without editing the scene. Commit the next snapshot
@@ -1494,6 +1557,44 @@ pub(crate) fn predict_with(previous: &[u8], next: &[u8], changes: Option<&Change
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_meshes_remaps_resources_and_rejects_stale_sources() {
+        let mut source = Scene::new();
+        let texture = source.add_texture(Texture::rgba8(1, 1, vec![12, 34, 56, 255])).unwrap();
+        let mut material = OpenPbrMaterial::default();
+        material.textures[0] = Some(texture);
+        let material = source.add_material(material).unwrap();
+        let geometry = source.add_geometry(Geometry::new(
+            vec![-1., -1., -3., 1., -1., -3., 0., 1., -3.],
+            vec![0, 1, 2],
+        )).unwrap();
+        let mut mesh = Mesh::new(geometry, material);
+        mesh.transform = Mat4::from_translation(Vec3::Y);
+        let source_mesh = source.add_mesh(mesh).unwrap();
+        let mut target = Scene::new();
+        let first = target.append_meshes_from(&source).unwrap()[0];
+        let second = target.append_meshes_from(&source).unwrap()[0];
+        assert_ne!(first, second);
+        assert_ne!(first, source_mesh);
+        let mesh = target.mesh(first).unwrap();
+        assert_eq!(mesh.transform, Mat4::from_translation(Vec3::Y));
+        assert!(target.geometry(geometry).is_err());
+        assert!(Arc::ptr_eq(
+            &target.geometry(mesh.geometry).unwrap().positions,
+            &source.geometry(geometry).unwrap().positions,
+        ));
+        let copied = target.material(mesh.material).unwrap().textures[0].unwrap();
+        match &target.texture(copied).unwrap().pixels {
+            TexturePixels::Rgba8(pixels) => assert_eq!(&**pixels, &[12, 34, 56, 255]),
+            _ => panic!("unexpected texture encoding"),
+        }
+
+        source.remove_texture(texture).unwrap();
+        assert!(target.append_meshes_from(&source).is_err());
+        assert_eq!(target.meshes.iter().count(), 2);
+    }
+
     #[test]
     fn arena_reuses_lowest_hole_without_reviving_handles_or_exhausted_slots() {
         let mut arena = Arena::new(17);
