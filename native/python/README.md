@@ -48,3 +48,22 @@ shot.render_stream("output.mp4", turn, size=[1280, 720], spp=32)
 The callback receives seconds and a zero-based frame index. Reusing a frame
 requires the same callback values, input files and render settings. The
 callback runs for reused frames so changes can carry forward.
+
+## Optional OpenUSD import
+
+Install the `usd` extra or use a Python with OpenUSD's `pxr` bindings. Set
+`MUTRACER_PYTHON` when the bindings are installed in another Python.
+
+```sh
+mutracer import-usd scene.usda --lint
+mutracer import-usd scene.usda --camera /Camera -o shot.json
+mutracer validate shot.json
+```
+
+The importer writes a shot and binary mesh sidecars. It supports polygon
+meshes, UVs, sampled transforms, perspective cameras, UsdLux emitters,
+PreviewSurface constants and local MaterialX source assets. It converts Y-up
+or Z-up coordinates using the authored `metersPerUnit` and samples animated
+properties in the stage's authored time range. Tessellate subdivision meshes
+and split material subsets before import. Animated vertex buffers, shear,
+orthographic cameras and textured PreviewSurface node networks are unsupported.

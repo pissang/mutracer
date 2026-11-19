@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 numpy = ["numpy"]
+usd = ["usd-core"]
 
 [tool.setuptools]
 packages = ["mutracer"]

@@ -55,6 +55,16 @@ enum Action {
         #[arg(long, required = true)]
         stdio: bool,
     },
+    /// Convert and lint an OpenUSD scene with the optional Python adapter.
+    ImportUsd {
+        source: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        camera: Option<String>,
+        #[arg(long)]
+        lint: bool,
+    },
     /// Print the JSON Schema for shot files.
     Schema,
     /// Print the CLI and shot-authoring guide.
@@ -95,6 +105,55 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Action::Serve { stdio: _ } => stdio::serve(),
+        Action::ImportUsd {
+            source,
+            output,
+            camera,
+            lint,
+        } => {
+            if !lint && output.is_none() {
+                return Err(error::Error::validation(
+                    "/output",
+                    "Expected -o SHOT.json",
+                    "Use --lint to check without writing a shot.",
+                ));
+            }
+            let python = std::env::var_os("MUTRACER_PYTHON").unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "python".into()
+                } else {
+                    "python3".into()
+                }
+            });
+            let mut command = std::process::Command::new(python);
+            command.args(["-m", "mutracer.usd"]).arg(source);
+            if let Some(output) = output {
+                command.arg("-o").arg(output);
+            }
+            if let Some(camera) = camera {
+                command.arg("--camera").arg(camera);
+            }
+            if lint {
+                command.arg("--lint");
+            }
+            let status = command
+                .status()
+                .map_err(|e| error::Error::asset("/source", e.to_string()))?;
+            match status.code() {
+                Some(0) => Ok(()),
+                Some(2) => Err(error::Error::validation(
+                    "/source",
+                    "OpenUSD lint failed",
+                    "See the located USD error above.",
+                )),
+                _ => Err(error::Error::at(
+                    3,
+                    "/source",
+                    "OpenUSD import failed",
+                    "Install the Python frontend with the usd extra, or set MUTRACER_PYTHON to a Python with pxr.",
+                )),
+            }
+        }
         Action::Schema => {
             print!("{}", shot::SCHEMA);
             Ok(())
