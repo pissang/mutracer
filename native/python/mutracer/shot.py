@@ -238,3 +238,19 @@ class Shot:
 
     def render(self, output, **options):
         return self._run("render", output, **options)
+
+    def render_stream(self, output, callback, *, keep_frames=None, fps=None, progress=None, **settings):
+        """Render callback edits over stdio and encode the resulting PNG sequence.
+
+        The callback receives (time, frame) and returns a mapping from JSON
+        pointers to absolute channel values. Values persist until replaced.
+        """
+        from .stream import render_frames
+
+        if self._path is None:
+            raise ValueError("Call shot.save(path) before invoking the CLI.")
+        output = Path(output)
+        directory = Path(keep_frames) if keep_frames is not None else output.with_name(output.name + ".frames")
+        rate, events = render_frames(self.to_dict(self._path.parent), self._path.parent, directory,
+                                     callback, settings, fps, progress)
+        return events + invoke("encode", directory, output, progress, fps=rate)

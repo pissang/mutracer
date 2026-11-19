@@ -115,7 +115,7 @@ impl Settings {
         this.validate(shot.output.duration)?;
         Ok(this)
     }
-    fn validate(self, duration: f64) -> Result<()> {
+    pub fn validate(self, duration: f64) -> Result<()> {
         shot::check_size(self.size)?;
         shot::check_samples(self.spp, self.sample_sequence_offset)?;
         shot::frame_count(duration, self.fps)?;
@@ -175,25 +175,37 @@ impl Input {
                 "Shot JSON exceeds 32 MiB. Move large arrays to binary sidecars.",
             ));
         }
-        let shot = shot::parse(&bytes)?;
+        Self::from_bytes(&bytes, base)
+    }
+
+    pub fn from_bytes(bytes: &[u8], base: &Path) -> Result<Self> {
+        if bytes.len() as u64 > shot::MAX_SHOT_BYTES {
+            return Err(Error::budget("Shot JSON exceeds 32 MiB."));
+        }
+        let shot = shot::parse(bytes)?;
         let mut assets = Assets::load(&shot, base)?;
         let prepared = Prepared::new(&shot, &mut assets)?;
         Ok(Self {
             shot,
             prepared,
             assets,
-            hash: assets::digest(&bytes),
+            hash: assets::digest(bytes),
+        })
+    }
+
+    pub fn scene_identity(&self) -> serde_json::Value {
+        json!({
+            "build": env!("MUTRACER_CLI_BUILD_ID"),
+            "shotSha256": self.hash,
+            "assets": self.assets.fingerprints().collect::<Vec<_>>(),
         })
     }
 
     fn manifest(&self, settings: Settings) -> serde_json::Value {
-        json!({
-            "version": 1,
-            "build": env!("MUTRACER_CLI_BUILD_ID"),
-            "shotSha256": self.hash,
-            "assets": self.assets.fingerprints().collect::<Vec<_>>(),
-            "settings": settings,
-        })
+        let mut manifest = self.scene_identity();
+        manifest["version"] = json!(1);
+        manifest["settings"] = json!(settings);
+        manifest
     }
 
     fn estimate(&self, settings: Settings, frames: u32) -> serde_json::Value {

@@ -4,6 +4,7 @@ mod error;
 mod run;
 mod scene;
 mod shot;
+mod stdio;
 
 use clap::{Parser, Subcommand, error::ErrorKind};
 use error::Result;
@@ -44,6 +45,11 @@ enum Action {
         #[arg(long)]
         fps: u32,
     },
+    /// Serve native frames over the versioned binary stdio protocol.
+    Serve {
+        #[arg(long, required = true)]
+        stdio: bool,
+    },
     /// Print the JSON Schema for shot files.
     Schema,
     /// Print the CLI and shot-authoring guide.
@@ -77,6 +83,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Action::Serve { stdio: _ } => stdio::serve(),
         Action::Schema => {
             print!("{}", shot::SCHEMA);
             Ok(())

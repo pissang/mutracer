@@ -31,3 +31,20 @@ write little-endian binary sidecars.
 Pass `progress=callback` to receive each decoded JSON progress event. A failed
 command raises `RenderError` with the CLI exit code and stderr. See the
 [CLI guide](../cli/guide.md) for defaults, frame reuse and exit codes.
+
+## Procedural frames
+
+Use `shot.render_stream("output.mp4", callback)` with a callback that returns
+absolute changes to existing channels. For example, if object 0 has a
+`rotation` value, this callback rotates it steadily:
+
+```python
+def turn(time, frame):
+    return {"/objects/0/rotation": [0, 90 * time, 0]}
+
+shot.render_stream("output.mp4", turn, size=[1280, 720], spp=32)
+```
+
+The callback receives seconds and a zero-based frame index. Reusing a frame
+requires the same callback values, input files and render settings. The
+callback runs for reused frames so changes can carry forward.
