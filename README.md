@@ -1,44 +1,77 @@
-<h1><img src="site/src/assets/mutracer-logo.png" alt="" width="40" align="absmiddle" /> MuTracer</h1>
+<div align="center">
+
+<img src="site/src/assets/mutracer-logo.png" alt="" width="72" />
+
+# MuTracer
+
+**Physically based path tracing in the browser.**
+
+WebGPU first with a WebGL 2 fallback · OpenPBR 1.1 materials · MaterialX node graphs · OIDN denoising
 
 [![npm version](https://img.shields.io/npm/v/@meimu/mutracer)](https://www.npmjs.com/package/@meimu/mutracer)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-**MuTracer** is a physically based path tracer for the web.
-It renders on WebGPU and falls back to WebGL 2, with OpenPBR materials,
-TinyBVH acceleration and denoising built in.
+**[Open the viewer](https://mutracer.meimu-studio.com/viewer/)** ·
+[Website](https://mutracer.meimu-studio.com/) ·
+[Docs](./docs) ·
+[Examples](https://mutracer.meimu-studio.com/examples/) ·
+[Changelog](./CHANGELOG.md)
 
-Try the
-[viewer](https://mutracer.meimu-studio.com/viewer/). MuTracer is a 0.x library;
-APIs may change between minor releases.
+<a href="https://mutracer.meimu-studio.com/viewer/#model=crystal-lens"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/thumbnail.webp" alt="Crystal Lens path traced in MuTracer with dispersion and caustics" width="100%" /></a>
 
-- **WebGPU first, WebGL 2 as fallback**: unidirectional progressive path
-  tracing with next-event estimation and multiple importance sampling over
-  rect, disk, cylinder, sphere, spot (with IES profiles), directional and HDR environment
-  lights. Without WebGPU, the same code renders on WebGL 2.
-- **OpenPBR 1.1 surface**: F82 metals, anisotropic GGX specular and coat,
-  fuzz, thin-film interference, dispersive transmission with absorption and
-  volume scattering, subsurface scattering, emission and ray-marched
-  height-field displacement. Author procedural or image-based materials with
-  [Material Graphs](docs/material-graphs.md).
-- **Experimental caustics (WebGPU)**: light tracing for directly visible
-  receivers and photon mapping for receivers seen through glass or water. See
-  the [caustics guide](docs/caustics.md).
-- **Interactive with millions of triangles**: a two-level BVH whose BLASes are
-  built with binned SAH in parallel Workers (a JavaScript port of TinyBVH, or
-  the TinyBVH WebAssembly builder with SBVH and CWBVH layouts). Moving
-  instances only refits the TLAS. See [performance](#performance).
-- **Low-noise sampling and denoising**: Owen-scrambled Sobol or blue-noise
-  ZSobol sequences. Albedo- and normal-guided denoising with Intel Open Image
-  Denoise (WebGPU) or a joint non-local means filter (WebGPU and WebGL 2),
-  while the image converges or on the final frame.
-- **Incremental Three.js sync**: `THREESync` converts standard and physical
-  materials, lights, instancing, skinning and morph targets, and picks up
-  transform, material and light edits on every update without reconverting
-  the scene.
-- **Offline-quality output**: deterministic `converge()` with variance-driven
-  adaptive sampling (WebGPU); AgX, ACES, Cineon, Reinhard and linear tone
-  mapping, color grading, bloom, thin-lens depth of field, shadow catchers and
-  transparent backgrounds.
+<sub>Crystal Lens, path traced with dispersion and caustics in a browser tab · <a href="https://github.com/pissang/mutracer-assets">Yi Shen</a>, CC0</sub>
+
+</div>
+
+## Quick start
+
+```bash
+npm install @meimu/mutracer three
+```
+
+Keep building your scene with Three.js; `THREESync` converts it once and follows
+transform, material and light edits on every frame.
+
+```ts
+import { Engine, RenderLoop } from '@meimu/mutracer';
+import { THREESync } from '@meimu/mutracer/three';
+
+const engine = new Engine({ canvas });
+const sync = new THREESync(engine, { scene, camera, controls });
+const loop = new RenderLoop(engine, { sync });
+loop.start();
+
+loop.final.setDenoiser({ type: 'oidn' }); // denoise the converged frame (WebGPU)
+```
+
+More starting points are [below](#more-ways-to-start), and the
+[getting started guide](./docs/getting-started.md) covers the scene model,
+render loop, lights and export.
+
+## Highlights
+
+| | |
+| --- | --- |
+| **Light transport** | Progressive unidirectional path tracing with next-event estimation and MIS over rect, disk, cylinder, sphere, IES spot, directional and HDR environment lights. Continuous-wavelength dispersion. [Experimental caustics](./docs/caustics.md) on WebGPU. |
+| **Materials** | The [OpenPBR 1.1](./docs/materials.md) surface: F82 metals, anisotropic specular and coat, fuzz, thin film, dispersive transmission with volume scattering, subsurface scattering and displacement. Drive any input from [material graphs](./docs/material-graphs.md) or [MaterialX documents](./docs/materialx.md). |
+| **Large scenes** | Two-level BVH with binned-SAH BLASes built in parallel Workers (JavaScript or TinyBVH WebAssembly). Moving instances only refits the TLAS; new meshes upload only their geometry. See [performance](#performance). |
+| **Clean images** | Owen-scrambled Sobol or blue-noise ZSobol samples, variance-driven adaptive sampling, and albedo- and normal-guided [denoising](./docs/denoising.md) with Intel OIDN (WebGPU) or JNLM (both backends). |
+| **Output** | Deterministic `converge()`, AgX, ACES and other tone mappers, bloom, thin-lens depth of field, shadow catchers, transparent backgrounds, AOVs, HDR output and PNG export. |
+| **Integration** | Incremental [Three.js sync](./docs/threejs.md), your own `GPUDevice`, OffscreenCanvas workers and display [post-processing passes](./docs/post-processing.md). Without WebGPU, the same code renders on WebGL 2. |
+
+## New in 0.4
+
+- **Material graphs**: drive OpenPBR inputs from a [`MaterialGraph`](./docs/material-graphs.md)
+  of MaterialX nodes. WebGPU compiles procedural graphs; both backends render image graphs.
+- **MaterialX import**: [`parseMaterialX`](./docs/materialx.md) from `@meimu/mutracer/materialx`.
+  The viewer ships 55 procedural samples and browses the GPUOpen MaterialX Library.
+- **Instant material edits** with [`shaderPrefetch: 'editing'`](./docs/updates.md#editing-prefetch).
+- [`UdimTexture`](./docs/materials.md#udim-textures), [`DiskLight` and `CylinderLight`](./docs/getting-started.md#lights),
+  pixel-center [AOVs](./docs/api.md#surface-outputs), [`mesh.visible`](./docs/updates.md#visibility)
+  and incremental geometry uploads.
+- **Breaking:** import the Three.js adapter from `@meimu/mutracer/three`.
+
+See the [changelog](./CHANGELOG.md) for the full list.
 
 ## Gallery
 
@@ -77,26 +110,10 @@ is a heavy scene that path traces interactively in the viewer:
 Measured on an Apple M4 Max: rendering in Chrome with WebGPU at the viewer's
 default settings (6 bounces), BVH builds on CPU threads excluding worker startup.
 
-## Install
+## More ways to start
 
-```bash
-npm install @meimu/mutracer
-```
-
-For the Three.js example, install `three` and import `THREESync` from
-`@meimu/mutracer/three`. TypeScript users of the adapter also need matching
-`@types/three` declarations. The MuTracer scene example uses `gl-matrix` for matrix math.
-
-The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
-with a `MuTracer` global is at `dist/mutracer.umd.js`; deploy its `dist/assets/`
-alongside it. See [loading and deployment](./docs/getting-started.md#loading-and-deployment).
-
-## Quick start
-
-### With Three.js
-
-Build or load a Three.js scene as usual and let `THREESync` keep MuTracer in
-sync with it. `RenderLoop` renders progressively and calls the sync each frame.
+<details>
+<summary><b>Load a glTF with Three.js</b></summary>
 
 ```ts
 import * as THREE from 'three';
@@ -123,9 +140,10 @@ loop.start();
 Custom Three.js materials and lights can use `convertMaterial` / `convertLight`
 in the same sync options; see [Three.js integration](./docs/threejs.md).
 
-### With MuTracer scene classes
+</details>
 
-Describe meshes, materials, lights and the camera directly with MuTracer.
+<details>
+<summary><b>Describe a scene with MuTracer classes</b></summary>
 
 ```ts
 import { mat4 } from 'gl-matrix';
@@ -170,64 +188,84 @@ loop.start();
 ```
 
 For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
-with shared materials and a Float32 matrix array. `THREESync` converts Three.js
-instancing into the same batches automatically. See the [instancing example](./examples/instancing.ts).
+with shared materials and a Float32 matrix array. See the [instancing example](./examples/instancing.ts).
 
-### Rendering options
+</details>
 
-Enable denoising on an individual result:
+<details>
+<summary><b>Import a MaterialX material</b></summary>
 
 ```ts
-loop.final.setDenoiser({ type: 'jnlm' }); // required type; call again to change it
-loop.final.setDenoiser({ type: 'oidn', model: 'standard' }); // WebGPU; custom weightsUrl also supported
-// Third-party WebGPU filters: { type: 'custom', denoiser: yourCallerOwnedDenoiser }.
+import { OpenPBRMaterial } from '@meimu/mutracer';
+import { parseMaterialX } from '@meimu/mutracer/materialx';
+
+const { values, graph } = parseMaterialX(await (await fetch('marble.mtlx')).text());
+mesh.material = new OpenPBRMaterial({ ...values, graph });
+engine.update();
 ```
 
-Borrow WebGPU output with `render.getOutputTexture('hdr')` or `render.getOutputTexture('display')`, or add
-a display overlay through `engine.display.addPostProcess(pass)`. Passes also
-run during PNG export; see the [overlay example and texture lifetime](./docs/post-processing.md).
+Image-based documents also need their textures loaded; see
+[parsing MaterialX documents](./docs/materialx.md).
 
-Batch quality or display edits use `Object.assign(loop.final, settings)` or
-`Object.assign(engine.display, settings)`, typed with `RenderSettings` or
-`DisplaySettings`; see the [setting defaults](./docs/api.md).
+</details>
 
-RenderLoop provides preview and final results. For custom frame control, use
-Engine / Render / Display directly with a fallback, or a fixed-size
-invisible render for export. See [independent render results](./docs/progressive-rendering.md).
+<details>
+<summary><b>Control rendering and output</b></summary>
+
+```ts
+loop.final.setDenoiser({ type: 'jnlm' }); // both backends
+Object.assign(loop.final, { bounces: 12, maxSamples: 1024 });
+Object.assign(engine.display, { toneMapping: 'agx', toneMappingExposure: 1.2 });
+
+const image = await engine.display.toBlob(loop.final); // PNG
+```
+
+Settings are typed by `RenderSettings` and `DisplaySettings`; see the
+[API reference](./docs/api.md). For custom frame control, use Engine, Render and
+Display directly; see [independent render results](./docs/progressive-rendering.md).
+
+</details>
+
+## Packages
+
+| Import | Contents |
+| --- | --- |
+| `@meimu/mutracer` | Engine, renders, display, scene classes, material graphs |
+| `@meimu/mutracer/three` | `THREESync` and Three.js scene conversion; needs `three` (and `@types/three` for TypeScript) |
+| `@meimu/mutracer/materialx` | `parseMaterialX` |
+| `@meimu/mutracer/oidn` | OIDN weight helpers |
+
+The package is ESM with TypeScript declarations. A UMD build with a `MuTracer`
+global is at `dist/mutracer.umd.js`; deploy its `dist/assets/` alongside it. See
+[loading and deployment](./docs/getting-started.md#loading-and-deployment).
+
+**Browsers:** WebGPU (current Chrome, Edge and Safari) is recommended and required
+for OIDN, caustics, HDR output and options marked WebGPU in the
+[API reference](./docs/api.md). The WebGL 2 fallback needs `EXT_color_buffer_float`.
+The first frame compiles large shaders, which can take several seconds.
 
 ## Documentation
 
 | Guide | Contents |
 | --- | --- |
-| [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export |
-| [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, update costs |
+| [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export, workers, your own `GPUDevice` |
+| [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, visibility, update costs |
 | [API reference](./docs/api.md) | Engine, Display and Render options, methods and scene types |
-| [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
+| [Materials](./docs/materials.md) | OpenPBR inputs, textures, UDIM, alpha, bevel, displacement |
+| [Material graphs](./docs/material-graphs.md) | Procedural and image node graphs on OpenPBR |
+| [MaterialX](./docs/materialx.md) | Parsing `.mtlx` documents |
 | [Three.js](./docs/threejs.md) | `THREESync`, supported materials and lights, `userData` keys |
-| [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting, denoising while converging |
+| [Progressive rendering](./docs/progressive-rendering.md) | Independent renders, sample batching, fallbacks |
+| [Caustics](./docs/caustics.md) | Light tracing and photon mapping (WebGPU) |
+| [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting |
+| [Post-processing](./docs/post-processing.md) | Display passes, GPU output textures, upscaling |
 | [Sampling](./docs/sampling.md) | Patterns, dimensions and progressive budgets |
 | [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker preparation |
 | [Performance](./docs/performance.md) | Tuning checklist |
+| [Viewer](./docs/viewer.md) | Using the online viewer, MaterialX import, shareable links |
 | [`llms.txt`](./llms.txt) | Compact usage guide for coding agents |
 
-The [examples](./examples) cover a procedural scene, a Three.js/glTF scene and
-an OpenPBR gallery with denoising and PNG export. Run them with:
-
-```bash
-npm install
-npm run dev
-```
-
-## Browser support
-
-- **WebGPU** (recommended): any browser with WebGPU, such as current Chrome,
-  Edge and Safari. Required for OIDN denoising, HDR output and
-  the options marked WebGPU in the [API reference](./docs/api.md).
-- **WebGL 2** fallback: requires `EXT_color_buffer_float`. Pass
-  `backend: 'webgl'` to force it.
-
-The first frame compiles large shaders, which can take several seconds on some
-platforms; `refine()` reports the progress through its return status.
+Run the [examples](./examples) locally with `npm install` and `npm run dev`.
 
 ## Contributing
 
@@ -240,8 +278,5 @@ and GPU validation.
 
 MuTracer is released under the [MIT License](./LICENSE). It includes third-party
 code and data under MIT, Apache-2.0 and CC0 licenses; see
-[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
-
-For host WebGPU integration, [supply your own GPUDevice](docs/getting-started.md#using-your-own-gpudevice).
-
-Render on an OffscreenCanvas in a Worker with the [worker integration guide](docs/getting-started.md#running-in-a-worker).
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). Gallery models keep their
+own licenses, linked under each image.
