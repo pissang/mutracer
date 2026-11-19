@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "output": {"duration": 1, "fps": 24},
+  "environment": {"color": [0.025, 0.035, 0.05]},
+  "objects": [
+    {
+      "name": "sphere",
+      "shape": "sphere",
+      "position": [0, 0.5, 0],
+      "material": {
+        "color": [0.45, 0.21, 0.065],
+        "metalness": 0.9,
+        "roughness": {"keys": [[0, 0.12], [1, 0.66]], "ease": "inOutSine"}
+      }
+    },
+    {"name": "floor", "shape": "plane", "size": 8, "material": {"color": [0.23, 0.24, 0.28], "roughness": 0.65}}
+  ],
+  "lights": [
+    {"type": "rect", "size": [1.2, 1.6], "position": [1.5, 1.8, 1.7], "target": "sphere", "intensity": 14},
+    {"type": "disk", "radius": 0.5, "position": [-1.4, 1.5, -0.75], "target": "sphere", "intensity": 9, "color": [0.45, 0.68, 1]},
+    {"type": "cylinder", "radius": 0.04, "length": 1, "position": [0, 1.4, -1.4], "target": "sphere", "intensity": 8}
+  ],
+  "camera": {"fov": 35, "target": "sphere", "orbit": {"azimuth": 26, "elevation": 12, "distance": 1.13}}
+}

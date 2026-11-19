@@ -1,0 +1,2 @@
+material-sweep.json uses procedural geometry.
+turntable.json uses the repository's procedurally generated chess.glb (CC0 1.0).

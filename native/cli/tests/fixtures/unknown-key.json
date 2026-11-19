@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "output": {"duration": 1, "fpss": 24},
+  "objects": [{"name": "triangle", "shape": "plane"}],
+  "camera": {"position": [0, 1, 3], "target": [0, 0, 0]}
+}

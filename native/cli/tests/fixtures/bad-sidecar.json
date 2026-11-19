@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "output": {"duration": 1},
+  "objects": [{
+    "name": "broken",
+    "geometry": {
+      "positions": {"file": "triangle.bin", "dtype": "f32", "shape": [3, 3], "offset": 1},
+      "indices": [0, 1, 2]
+    }
+  }],
+  "camera": {"position": [0, 0, 3], "target": [0, 0, 0]}
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "output": {"duration": 0.125, "size": [64, 48], "fps": 24, "spp": 4, "seed": "frame", "denoise": "none"},
+  "assets": {"copies": {"instances": {"file": "triangle.bin", "dtype": "f32", "shape": [1, 16], "offset": 48}}},
+  "objects": [{
+    "name": "triangle",
+    "geometry": {
+      "positions": {"file": "triangle.bin", "dtype": "f32", "shape": [3, 3]},
+      "indices": {"file": "triangle.bin", "dtype": "u32", "shape": [3], "offset": 36}
+    },
+    "instances": "copies",
+    "material": {"emissionStrength": 1, "emissionColor": [0.9, 0.1, 0.4]}
+  }],
+  "camera": {"position": [0, 0, 3], "target": [0, 0, 0]}
+}

@@ -1,0 +1,834 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mutracer.meimu-studio.com/schemas/mutracer-shot-v1.json",
+  "title": "MuTracer shot v1",
+  "type": "object",
+  "properties": {
+    "version": {"const": 1},
+    "output": {"$ref": "#/$defs/output"},
+    "assets": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/asset"}
+    },
+    "environment": {"$ref": "#/$defs/environment"},
+    "objects": {"type": "array", "items": {"$ref": "#/$defs/object"}, "minItems": 1, "maxItems": 65536},
+    "lights": {"type": "array", "items": {"$ref": "#/$defs/light"}, "minItems": 0, "maxItems": 1024},
+    "camera": {"$ref": "#/$defs/camera"}
+  },
+  "required": ["version", "output", "objects", "camera"],
+  "additionalProperties": false,
+  "$defs": {
+    "name": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001f]+$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000]+$"},
+    "ease": {
+      "oneOf": [
+        {"enum": ["linear", "step", "inOutSine", "inOutQuad", "inOutCubic"]},
+        {
+          "type": "object",
+          "properties": {
+            "bezier": {
+              "type": "array",
+              "prefixItems": [
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1}
+              ],
+              "minItems": 4,
+              "items": false
+            }
+          },
+          "required": ["bezier"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "point": {
+      "type": "array",
+      "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}],
+      "minItems": 3,
+      "items": false
+    },
+    "color": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": 0},
+        {"type": "number", "minimum": 0},
+        {"type": "number", "minimum": 0}
+      ],
+      "minItems": 3,
+      "items": false
+    },
+    "scale": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "exclusiveMinimum": 0},
+        {"type": "number", "exclusiveMinimum": 0},
+        {"type": "number", "exclusiveMinimum": 0}
+      ],
+      "minItems": 3,
+      "items": false
+    },
+    "rotation": {
+      "oneOf": [
+        {"$ref": "#/$defs/point"},
+        {
+          "type": "array",
+          "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}, {"type": "number"}],
+          "minItems": 4,
+          "items": false
+        }
+      ]
+    },
+    "scalarChannel": {
+      "oneOf": [
+        {"type": "number"},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "nonnegativeChannel": {
+      "oneOf": [
+        {"type": "number", "minimum": 0},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "positiveChannel": {
+      "oneOf": [
+        {"type": "number", "exclusiveMinimum": 0},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "unitChannel": {
+      "oneOf": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0, "maximum": 1}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "iorChannel": {
+      "oneOf": [
+        {"type": "number", "minimum": 1},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 1}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "fovChannel": {
+      "oneOf": [
+        {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {"type": "number", "minimum": 0},
+                  {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180}
+                ],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "pointChannel": {
+      "oneOf": [
+        {"$ref": "#/$defs/point"},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"$ref": "#/$defs/point"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "colorChannel": {
+      "oneOf": [
+        {"$ref": "#/$defs/color"},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"$ref": "#/$defs/color"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "scaleChannel": {
+      "oneOf": [
+        {"$ref": "#/$defs/scale"},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"$ref": "#/$defs/scale"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "vec2PositiveChannel": {
+      "oneOf": [
+        {
+          "type": "array",
+          "prefixItems": [{"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
+          "minItems": 2,
+          "items": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {"type": "number", "minimum": 0},
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {"type": "number", "exclusiveMinimum": 0},
+                      {"type": "number", "exclusiveMinimum": 0}
+                    ],
+                    "minItems": 2,
+                    "items": false
+                  }
+                ],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "rotationChannel": {
+      "oneOf": [
+        {"$ref": "#/$defs/rotation"},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"$ref": "#/$defs/rotation"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "inputChannel": {
+      "oneOf": [
+        {
+          "oneOf": [
+            {"type": "number"},
+            {
+              "type": "array",
+              "prefixItems": [{"type": "number"}, {"type": "number"}],
+              "minItems": 2,
+              "items": false
+            },
+            {"$ref": "#/$defs/point"},
+            {
+              "type": "array",
+              "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}, {"type": "number"}],
+              "minItems": 4,
+              "items": false
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {"type": "number", "minimum": 0},
+                  {
+                    "oneOf": [
+                      {"type": "number"},
+                      {
+                        "type": "array",
+                        "prefixItems": [{"type": "number"}, {"type": "number"}],
+                        "minItems": 2,
+                        "items": false
+                      },
+                      {"$ref": "#/$defs/point"},
+                      {
+                        "type": "array",
+                        "prefixItems": [
+                          {"type": "number"},
+                          {"type": "number"},
+                          {"type": "number"},
+                          {"type": "number"}
+                        ],
+                        "minItems": 4,
+                        "items": false
+                      }
+                    ]
+                  }
+                ],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "target": {"oneOf": [{"$ref": "#/$defs/name"}, {"$ref": "#/$defs/pointChannel"}]},
+    "display": {
+      "type": "object",
+      "properties": {
+        "tonemap": {"enum": ["agx", "aces", "linear", "reinhard", "none"], "default": "agx"},
+        "exposure": {"$ref": "#/$defs/scalarChannel", "default": 0}
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1, "maximum": 8192},
+            {"type": "integer", "minimum": 1, "maximum": 8192}
+          ],
+          "minItems": 2,
+          "items": false,
+          "default": [1280, 720]
+        },
+        "fps": {"type": "integer", "minimum": 1, "maximum": 240, "default": 24},
+        "duration": {"type": "number", "exclusiveMinimum": 0},
+        "spp": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 32},
+        "seed": {"enum": ["fixed", "frame"], "default": "fixed"},
+        "seedValue": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 12345},
+        "sampleSequenceOffset": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 0},
+        "denoise": {"enum": ["oidn", "none"], "default": "oidn"},
+        "display": {"$ref": "#/$defs/display"}
+      },
+      "required": ["duration"],
+      "additionalProperties": false
+    },
+    "positionsSidecar": {
+      "type": "object",
+      "properties": {
+        "file": {"$ref": "#/$defs/path"},
+        "dtype": {"const": "f32"},
+        "shape": {
+          "type": "array",
+          "prefixItems": [{"type": "integer", "minimum": 1, "maximum": 4000000}, {"const": 3}],
+          "minItems": 2,
+          "items": false
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 4,
+          "default": 0
+        }
+      },
+      "required": ["file", "dtype", "shape"],
+      "additionalProperties": false
+    },
+    "uvSidecar": {
+      "type": "object",
+      "properties": {
+        "file": {"$ref": "#/$defs/path"},
+        "dtype": {"const": "f32"},
+        "shape": {
+          "type": "array",
+          "prefixItems": [{"type": "integer", "minimum": 1, "maximum": 4000000}, {"const": 2}],
+          "minItems": 2,
+          "items": false
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 4,
+          "default": 0
+        }
+      },
+      "required": ["file", "dtype", "shape"],
+      "additionalProperties": false
+    },
+    "indicesSidecar": {
+      "type": "object",
+      "properties": {
+        "file": {"$ref": "#/$defs/path"},
+        "dtype": {"const": "u32"},
+        "shape": {
+          "type": "array",
+          "prefixItems": [{"type": "integer", "minimum": 3, "maximum": 12000000, "multipleOf": 3}],
+          "minItems": 1,
+          "items": false
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 4,
+          "default": 0
+        }
+      },
+      "required": ["file", "dtype", "shape"],
+      "additionalProperties": false
+    },
+    "instancesSidecar": {
+      "type": "object",
+      "properties": {
+        "file": {"$ref": "#/$defs/path"},
+        "dtype": {"const": "f32"},
+        "shape": {
+          "type": "array",
+          "prefixItems": [{"type": "integer", "minimum": 1, "maximum": 16777216}, {"const": 16}],
+          "minItems": 2,
+          "items": false
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 4,
+          "default": 0
+        }
+      },
+      "required": ["file", "dtype", "shape"],
+      "additionalProperties": false
+    },
+    "geometry": {
+      "type": "object",
+      "properties": {
+        "positions": {
+          "oneOf": [
+            {"type": "array", "items": {"$ref": "#/$defs/point"}, "minItems": 3, "maxItems": 10000},
+            {"$ref": "#/$defs/positionsSidecar"}
+          ]
+        },
+        "indices": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0, "maximum": 9999},
+              "minItems": 3,
+              "maxItems": 30000
+            },
+            {"$ref": "#/$defs/indicesSidecar"}
+          ]
+        },
+        "normals": {
+          "oneOf": [
+            {"type": "array", "items": {"$ref": "#/$defs/point"}, "minItems": 3, "maxItems": 10000},
+            {"$ref": "#/$defs/positionsSidecar"}
+          ]
+        },
+        "uv": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 3,
+              "maxItems": 10000
+            },
+            {"$ref": "#/$defs/uvSidecar"}
+          ]
+        }
+      },
+      "required": ["positions", "indices"],
+      "additionalProperties": false
+    },
+    "asset": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"gltf": {"$ref": "#/$defs/path"}},
+          "required": ["gltf"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"hdr": {"$ref": "#/$defs/path"}},
+          "required": ["hdr"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"image": {"$ref": "#/$defs/path"}},
+          "required": ["image"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"materialx": {"$ref": "#/$defs/path"}},
+          "required": ["materialx"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "instances": {"$ref": "#/$defs/path"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 16777216}
+          },
+          "required": ["instances", "count"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"instances": {"$ref": "#/$defs/instancesSidecar"}},
+          "required": ["instances"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "material": {
+      "type": "object",
+      "properties": {
+        "asset": {"$ref": "#/$defs/name"},
+        "inputs": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/name"},
+          "additionalProperties": {"$ref": "#/$defs/inputChannel"}
+        },
+        "color": {"$ref": "#/$defs/colorChannel"},
+        "emissionColor": {"$ref": "#/$defs/colorChannel"},
+        "transmissionColor": {"$ref": "#/$defs/colorChannel"},
+        "coatColor": {"$ref": "#/$defs/colorChannel"},
+        "roughness": {"$ref": "#/$defs/unitChannel"},
+        "metalness": {"$ref": "#/$defs/unitChannel"},
+        "transmission": {"$ref": "#/$defs/unitChannel"},
+        "opacity": {"$ref": "#/$defs/unitChannel"},
+        "coat": {"$ref": "#/$defs/unitChannel"},
+        "coatRoughness": {"$ref": "#/$defs/unitChannel"},
+        "diffuseRoughness": {"$ref": "#/$defs/unitChannel"},
+        "ior": {"$ref": "#/$defs/iorChannel"},
+        "coatIor": {"$ref": "#/$defs/iorChannel"},
+        "emissionStrength": {"$ref": "#/$defs/nonnegativeChannel"},
+        "maps": {
+          "type": "object",
+          "properties": {
+            "color": {"$ref": "#/$defs/name"},
+            "roughness": {"$ref": "#/$defs/name"},
+            "metalness": {"$ref": "#/$defs/name"},
+            "normal": {"$ref": "#/$defs/name"},
+            "emission": {"$ref": "#/$defs/name"},
+            "transmission": {"$ref": "#/$defs/name"},
+            "opacity": {"$ref": "#/$defs/name"}
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "dependentRequired": {"inputs": ["asset"]}
+    },
+    "object": {
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "asset": {"$ref": "#/$defs/name"},
+        "shape": {"enum": ["plane", "box", "sphere"]},
+        "geometry": {"$ref": "#/$defs/geometry"},
+        "size": {"type": "number", "exclusiveMinimum": 0},
+        "fit": {
+          "type": "object",
+          "properties": {"height": {"type": "number", "exclusiveMinimum": 0}},
+          "required": ["height"],
+          "additionalProperties": false
+        },
+        "position": {"$ref": "#/$defs/pointChannel"},
+        "rotation": {"$ref": "#/$defs/rotationChannel"},
+        "scale": {"$ref": "#/$defs/scaleChannel"},
+        "material": {"$ref": "#/$defs/material"},
+        "instances": {"$ref": "#/$defs/name"},
+        "animation": {
+          "type": "object",
+          "properties": {"clip": {"$ref": "#/$defs/name"}, "time": {"$ref": "#/$defs/nonnegativeChannel"}},
+          "required": ["clip", "time"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false,
+      "dependentRequired": {"size": ["shape"], "fit": ["asset"], "animation": ["asset"]},
+      "oneOf": [{"required": ["asset"]}, {"required": ["shape"]}, {"required": ["geometry"]}]
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "map": {"$ref": "#/$defs/name"},
+        "color": {"$ref": "#/$defs/colorChannel"},
+        "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+        "rotation": {"$ref": "#/$defs/scalarChannel"}
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "fov": {"$ref": "#/$defs/fovChannel", "default": 45},
+        "target": {"$ref": "#/$defs/target"},
+        "position": {"$ref": "#/$defs/pointChannel"},
+        "orbit": {
+          "type": "object",
+          "properties": {
+            "azimuth": {"$ref": "#/$defs/scalarChannel", "default": 0},
+            "elevation": {"$ref": "#/$defs/scalarChannel", "default": 0},
+            "distance": {"$ref": "#/$defs/positiveChannel", "default": 1.15}
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": ["target"],
+      "additionalProperties": false,
+      "oneOf": [{"required": ["orbit"]}, {"required": ["position"]}]
+    },
+    "light": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "rect"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+            "size": {"$ref": "#/$defs/vec2PositiveChannel"}
+          },
+          "required": ["type", "position", "target", "size"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "disk"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+            "radius": {"$ref": "#/$defs/positiveChannel"}
+          },
+          "required": ["type", "position", "target", "radius"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "cylinder"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+            "radius": {"$ref": "#/$defs/positiveChannel"},
+            "length": {"$ref": "#/$defs/positiveChannel"}
+          },
+          "required": ["type", "position", "target", "radius", "length"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "sphere"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+            "radius": {"$ref": "#/$defs/positiveChannel"}
+          },
+          "required": ["type", "position", "target", "radius"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "directional"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"}
+          },
+          "required": ["type", "position", "target"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "spot"},
+            "position": {"$ref": "#/$defs/pointChannel"},
+            "target": {"$ref": "#/$defs/target"},
+            "color": {"$ref": "#/$defs/colorChannel"},
+            "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
+            "radius": {"$ref": "#/$defs/positiveChannel"},
+            "angle": {"$ref": "#/$defs/fovChannel"}
+          },
+          "required": ["type", "position", "target", "radius", "angle"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
