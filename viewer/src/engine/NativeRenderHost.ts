@@ -8,6 +8,7 @@ import type { DepthSampleArea } from '../../../src/renderer/depthQuery';
 import { SceneChangeDetector } from '../../../src/renderer/sceneChangeDetector';
 import {hostGeometries} from './nativeResources';
 import { NativeSceneEncoder, cameraWords } from './nativeScene';
+import { nativeSceneBrowserPixels } from './nativeSceneBrowserPixels';
 import { NativeTransport, type NativeReply, pointerPacket } from './nativeTransport';
 import type { PixelKind } from './ViewerEngine';
 import { Events } from '../../../src/util/events';
@@ -57,7 +58,7 @@ export class NativeRenderHost extends Engine {
             blob: string;
         }>('sky', source);
         return { width: source.width, height: source.height, data: new Float32Array(await this.download(result.blob)) };
-    });
+    }, nativeSceneBrowserPixels);
     private remoteInfo?: EngineInfo;
     private ready?: Promise<EngineInfo>;
     private updating?: Promise<void>;

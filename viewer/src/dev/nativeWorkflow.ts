@@ -6,6 +6,7 @@ import {setSettings,useViewer} from '../store';
 import type {TreeNode} from '../store';
 import {undo,redo} from '../history';
 import {NativeSceneEncoder} from '../engine/nativeScene';
+import { nativeSceneBrowserPixels } from '../engine/nativeSceneBrowserPixels';
 import {SceneChangeDetector} from '../../../src/renderer/sceneChangeDetector';
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 export async function run(engine:WebEngine){
@@ -37,7 +38,7 @@ export async function run(engine:WebEngine){
   if(benchmark?.captureScene){
    await settled();
    if(!host.scene||!host.camera)throw Error('Missing replay scene');
-   const encoder=new NativeSceneEncoder(async source=>{const result=await host.transport.request<{blob:string}>('sky',source);return {width:source.width,height:source.height,data:new Float32Array(await host.download(result.blob))};});
+   const encoder=new NativeSceneEncoder(async source=>{const result=await host.transport.request<{blob:string}>('sky',source);return {width:source.width,height:source.height,data:new Float32Array(await host.download(result.blob))};},nativeSceneBrowserPixels);
    const size:[number,number]=[host.display.canvas.width,host.display.canvas.height];
    const descriptor=await encoder.encode(host.scene,host.camera,size);
    const encoded=await encoder.prepare(host.scene,host.camera,size,new SceneChangeDetector().detect(host.scene));
