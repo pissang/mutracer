@@ -224,7 +224,7 @@ render.caustics = {lightTracing: {photonsPerSample: 32768}};
 render.caustics = undefined; // Disable every estimator.
 ```
 
-Changing any caustic option restarts accumulation. All estimators are experimental;
+Changing any caustic option restarts accumulation;
 see the [caustics guide](./caustics.md) for choosing estimators, supported paths,
 rendering cost and image-quality limitations.
 
