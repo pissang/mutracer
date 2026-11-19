@@ -3,8 +3,8 @@
 A browser app for trying MuTracer: drop a glTF/GLB (or a folder with a .gltf,
 its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
-export PNGs. If a glTF image fails to load, the model still opens with a warning;
-open the Lighting panel for import warnings.
+export PNG or OpenEXR images. If a glTF image fails to load, the model still
+opens with a warning in the Lighting panel.
 
 PBRT scenes can be opened from a `.pbrt` URL, by dropping a folder, or by
 selecting the scene together with its assets. Relative paths follow the main
@@ -48,10 +48,17 @@ flip an axis; zero samples a constant coordinate. Edits support undo/redo and
 are restored with the cached model.
 Uploaded images keep the UV transform and wrapping of the texture they replace.
 
-The Export dialog can download the current viewport PNG immediately, preserving
-its displayed appearance and pixel size without restarting the render. Render PNG
-instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square
-resolution using the selected sample count and background settings.
+In the Export dialog, choose PNG to save the displayed image or EXR for
+scene-linear HDR. **Download viewport** saves the current render at its
+existing resolution and sample count. For viewport EXR, select the Final
+output first. **Render** makes a new image at the selected size and sample
+count, with optional transparency. If the viewport is transparent, turning
+transparency off for the new render uses the environment as its background.
+
+EXR stores the beauty image as uncompressed 32-bit float RGBA, about 16 bytes
+per pixel. It preserves HDR values and uses premultiplied alpha for transparent
+backgrounds. Denoising, tone mapping, display effects and diagnostic outputs
+apply to PNG export.
 
 The Code button next to Export shows the least `@meimu/mutracer` + Three.js
 code that renders the current view: model, lighting, background, ground,
