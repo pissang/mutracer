@@ -42,18 +42,83 @@ APIs may change between minor releases.
 
 ## Gallery
 
-Rendered live in the browser. Click an image to open the scene in the viewer.
+Click a preview to path trace the scene in the browser.
+
+### MuTracer Collection
 
 <table>
   <tr>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=yamaha-mt-09"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/thumbnail.webp" alt="2025 Yamaha MT-09 SP V4" /></a><br /><sub>Yamaha MT-09 · metal and coat · <a href="https://sketchfab.com/3d-models/2025-yamaha-mt-09-sp-v4-cb5878baf5974167806eb8524d57f0b0">VTX</a>, CC-BY-NC-SA 4.0</sub></td>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=super-human"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/super-human/thumbnail.webp" alt="Super Human" /></a><br /><sub>Super Human · subsurface skin · <a href="https://sketchfab.com/3d-models/super-human-7aa58e978b9f4357b8e73d8e0440c896">Davyd Vidiger</a>, CC-BY 4.0</sub></td>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=gelatinous-cube"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/gelatinous-cube/thumbnail.webp" alt="Gelatinous Cube" /></a><br /><sub>Gelatinous Cube · transmission · <a href="https://sketchfab.com/3d-models/gelatinous-cube-e08385238f4d4b59b012233a9fbdca21">glenatron</a>, CC-BY-NC 4.0</sub></td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=porsche-992-gt3-r"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/porsche-992-gt3-r/thumbnail.webp" alt="Porsche 992 GT3 R" width="200" /></a><br />
+      Porsche 992 GT3 R<br />
+      <sub><a href="https://sketchfab.com/3d-models/2024-porsche-992-gt3-r-b76c9b2ae2d548c3869426eac4ab8a19">Dave</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=super-human"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/super-human/thumbnail.webp" alt="Super Human" width="200" /></a><br />
+      Super Human<br />
+      <sub><a href="https://sketchfab.com/3d-models/super-human-7aa58e978b9f4357b8e73d8e0440c896">Davyd Vidiger</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=fluted-crystal"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/fluted-crystal/thumbnail.webp" alt="Fluted Crystal" width="200" /></a><br />
+      Fluted Crystal<br />
+      <sub><a href="https://github.com/pissang/mutracer-assets">Yi Shen</a> · <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=blender-cover-remix"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/blender-cover-remix/thumbnail.webp" alt="Blender Cover Remix" width="200" /></a><br />
+      Blender Cover Remix<br />
+      <sub><a href="https://sketchfab.com/3d-models/blender-cover-remix-a38f11890ff141c88fcdac6b637fdaf8">bandinopla</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></sub>
+    </td>
+  </tr>
+</table>
+
+### glTF Research Scenes
+
+Reference previews and glTF conversions by [ErfanMo77](https://github.com/ErfanMo77/gltf-research-scenes).
+
+<table>
+  <tr>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-breakfast-room"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/breakfast-room/breakfast_room_thumbnail.png" alt="Breakfast Room" width="200" /></a><br />
+      Breakfast Room<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/breakfast-room">Wig42</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/breakfast-room/source/LICENSE.txt">CC BY 3.0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-bathroom2"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/bathroom2/bathroom2_thumbnail.png" alt="Bathroom 2" width="200" /></a><br />
+      Bathroom 2<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/bathroom2">nacimus</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/bathroom2/source/LICENSE.txt">CC BY 3.0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-classroom2"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/classroom2/classroom2_thumbnail.png" alt="Classroom 2" width="200" /></a><br />
+      Classroom 2<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/classroom2">Christophe Seux</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/classroom2/source/LICENSE.txt">CC0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-living-room"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/living-room/living_room_thumbnail.png" alt="Living Room" width="200" /></a><br />
+      Living Room<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/living-room">Wig42</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/living-room/source/LICENSE.txt">CC BY 3.0</a></sub>
+    </td>
   </tr>
   <tr>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=crystal-lens"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/thumbnail.webp" alt="Crystal Lens" /></a><br /><sub>Crystal Lens · dispersion · <a href="https://github.com/pissang/mutracer-assets">Yi Shen</a>, CC0</sub></td>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=blender-cover-remix"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/blender-cover-remix/thumbnail.webp" alt="Blender Cover Remix" /></a><br /><sub>Blender Cover Remix · characters · <a href="https://sketchfab.com/3d-models/blender-cover-remix-a38f11890ff141c88fcdac6b637fdaf8">bandinopla</a>, CC-BY 4.0</sub></td>
-    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=spheres"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/spheres/thumbnail.webp" alt="OpenPBR material spheres" /></a><br /><sub>Material spheres · OpenPBR layers · procedural, CC0</sub></td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-house"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/house/house_thumbnail.png" alt="House" width="200" /></a><br />
+      House<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/house">Benedikt Bitterli</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/house/source/LICENSE.txt">CC0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-glass-of-water"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/glass-of-water/glass_of_water_thumbnail.png" alt="Glass of Water" width="200" /></a><br />
+      Glass of Water<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/glass-of-water">aXel</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/glass-of-water/source/LICENSE.txt">CC0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-spaceship"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/spaceship/spaceship_thumbnail.png" alt="Spaceship" width="200" /></a><br />
+      Spaceship<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/spaceship">thecali</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/spaceship/source/LICENSE.txt">CC0</a></sub>
+    </td>
+    <td width="25%" valign="top">
+      <a href="https://mutracer.meimu-studio.com/viewer/#model=research-veach-mis"><img src="https://media.githubusercontent.com/media/ErfanMo77/gltf-research-scenes/ad46a7ecb3c8b0874d58aae93df69be5d51e960a/scenes/veach-mis/veach_mis_thumbnail.png" alt="Veach MIS" width="200" /></a><br />
+      Veach MIS<br />
+      <sub><a href="https://github.com/ErfanMo77/gltf-research-scenes/tree/main/scenes/veach-mis">Eric Veach / Benedikt Bitterli</a> · <a href="https://github.com/ErfanMo77/gltf-research-scenes/blob/main/scenes/veach-mis/source/LICENSE.txt">CC0</a></sub>
+    </td>
   </tr>
 </table>
 
