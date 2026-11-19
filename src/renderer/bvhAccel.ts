@@ -5,6 +5,7 @@ import { readMeshInstance, meshInstancesLength, type MeshInstances } from './pac
 
 import Geometry from '../scene/Geometry.js';
 import { mat4, vec3 } from '../math.js';
+import { set as setVec3 } from '../math/sceneVec3.js';
 import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 
 import { read, write } from '../math/access.js';
@@ -634,8 +635,8 @@ export function refitTLAS(
   function readNodeBounds(index: number) {
     const base = index * 4;
     const bounds = new Box3();
-    vec3.set(bounds.min, floats[base], floats[base + 1], floats[base + 2]);
-    vec3.set(
+    setVec3(bounds.min, floats[base], floats[base + 1], floats[base + 2]);
+    setVec3(
       bounds.max,
       floats[base + 4],
       floats[base + 5],

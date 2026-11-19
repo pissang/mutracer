@@ -1,15 +1,15 @@
 /** Query-point generation is independent of the host graphics API. Direct
  * callers keep function locals; resumable callers explicitly name the few
  * values that must survive a query. No generated source is inspected. */
-export function queryState<T extends Record<string, string>>(enabled: boolean, type: string, instance: string, fields: T, addressable = false) {
+export function queryState(enabled: boolean, type: string, instance: string, fields: Record<string, string>, addressable = false) {
   const owner = addressable ? `${instance}[(rtUniform.loopUnrollGuard - 4u) & 1u]` : instance;
-  const refs = Object.fromEntries(Object.keys(fields).map(name => [name, enabled ? `${owner}.${name}` : name])) as Record<keyof T, string>;
+  const refs = Object.fromEntries(Object.keys(fields).map(name => [name, enabled ? `${owner}.${name}` : name]));
   return {
     refs,
     declarations: enabled ? /* wgsl */ `struct ${type} { ${Object.entries(fields).map(([name, field]) => /* wgsl */ `${name}: ${field},`).join('\n')} };
 var<private> ${instance}: ${addressable ? `array<${type}, 2>` : type};
 ` : '',
-    init(name: keyof T, value: string, immutable = false, typed = false) {
+    init(name: string, value: string, immutable: boolean, typed: boolean) {
       return enabled ? /* wgsl */ `${refs[name]} = ${value};` : /* wgsl */ `${immutable ? 'let' : 'var'} ${refs[name]}${typed ? `: ${fields[name]}` : ''} = ${value};`;
     }
   };

@@ -6,7 +6,7 @@ import { INSTANCE_VEC4_STRIDE } from '../bvhAccel.js';
 import { terminalTypes, width } from './nodes.js';
 import {generateGraphIR} from './generate.js';
 import {graphCategories, graphTerminals, type GraphIR} from './ir.js';
-import {graphInterpreterHelpers, graphInterpreterShader, graphTerminalMask, type GraphOp} from './interpreter.js';
+import {graphInterpreterHelpers, graphInterpreterShader, graphTerminalMask, type GraphInterpreterRunner, type GraphOp} from './interpreter.js';
 function terminalNames(graph: GraphIR) {
     const names: string[]=[];
     for(let i=0;i<graph.terminal.length;i+=3) names.push(graphTerminals[graph.terminal[i]]);
@@ -65,10 +65,13 @@ export function materialGraphShaderIR(structures: GraphIR[], frames = true, inte
         return `fn mx_${inverse ? 'w2l' : 'l2w'}(index:i32) -> mat4x4f { if(index<0){return mat4x4f(vec4f(1,0,0,0),vec4f(0,1,0,0),vec4f(0,0,1,0),vec4f(0,0,0,1));} return mat4x4f(${columns.join(',')}); }\n`;
     };
     declarations += matrix(true) + matrix(false);
-    if (interpreter) declarations += graphInterpreterShader(used, interpreter.salt, interpreter.families, {
-        ...(interpreter.emission && !sharedSite ? {emission: {fields: emission.filter(field => used.includes(field)), families: interpreter.emission}} : {}),
-        ...(interpreter.opacity && used.includes('opacity') ? {opacity: {fields: ['opacity'], families: interpreter.opacity}} : {})
-    }, interpreter.operandLoop, sharedOpacity, indexedResults, interpreter.geometryRegisters);
+    if (interpreter) {
+        const runners: Record<string, GraphInterpreterRunner> = {};
+        if (interpreter.emission && !sharedSite) runners.emission = {fields: emission.filter(field => used.includes(field)), families: interpreter.emission};
+        if (interpreter.opacity && used.includes('opacity')) runners.opacity = {fields: ['opacity'], families: interpreter.opacity};
+        declarations += graphInterpreterShader(used, interpreter.salt, interpreter.families, runners,
+            interpreter.operandLoop, sharedOpacity, indexedResults, interpreter.geometryRegisters);
+    }
     const programHeader = (id: string) => `let mx_program = -${id}; let mx_header = vec4f(materialsBuffer[mx_program].color, materialsBuffer[mx_program].matType);`;
     const si = 'mx_si';
     const init = used.map(field => `    ${resultWrite('mx_result', field, field === 'normal' ? `${si}.normal` : field === 'emissionColor' ? 'mx_parameter(mx_base, 0).rgb' : field === 'emissionLuminance' ? 'mx_parameter(mx_base, 1).x' : field === 'thinFilmThickness' ? `${p(field)} * 0.001` : p(field))}`).join('\n');

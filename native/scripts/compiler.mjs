@@ -46,7 +46,7 @@ function narrowAccess(source, constructors, parameter = 'array', names) {
 }
 // Math source keeps the original direct indexing. Generate the compiler's
 // equivalent accesses without copying or maintaining another math implementation.
-function lowerMath(source, module) {
+function lowerMath(source) {
   const file = ts.createSourceFile('math.ts', source, ts.ScriptTarget.Latest, true);
   const f = ts.factory, used = new Set();
   let direct = new Set();
@@ -102,6 +102,16 @@ function compilerSource() {
     .replace('const terminalInputAliases = {', 'const terminalInputAliases: Readonly<Record<string, string>> = {')
     .replace(/(const terminalInputAliases:[^\n]+}) as const;/, '$1;')
     .replace('keyof typeof terminalInputTypes | keyof typeof terminalInputAliases', terminalNames.map(name => JSON.stringify(name)).join(' | ')));
+  // Graph category IDs are runtime indexes. Preserve the public literal
+  // union in the source while giving scriptc an indexable array.
+  const graphIr = resolve(staged, 'src/renderer/materialGraph/ir.ts');
+  writeFileSync(graphIr, readFileSync(graphIr, 'utf8')
+    .replace(/export const graphCategories = (\[[^\n]+\]) as const;/, 'export const graphCategories: readonly string[] = $1;'));
+  // Native MaterialState has no authored graph accessor. Its graph data is
+  // carried in the scene descriptor, outside the browser caster filter.
+  const caustics = resolve(staged, 'src/renderer/caustics.ts');
+  writeFileSync(caustics, readFileSync(caustics, 'utf8')
+    .replace('m => !graphAffectsCausticCaster(m as GraphMaterial) && isCausticSpecular(m)', 'isCausticSpecular'));
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), process.platform==='win32'?'junction':'dir');
   const mesh = resolve(staged, 'src/scene/MeshState.ts');
@@ -118,9 +128,9 @@ function compilerSource() {
     writeFileSync(path, narrowAccess(readFileSync(path, 'utf8'), types, 'data', names));
   }
 
-  for (const name of ['mat3', 'mat4', 'vec2', 'vec3']) {
+  for (const name of ['mat3', 'mat4', 'sceneMat4', 'sceneVec3', 'vec2', 'vec3']) {
     const file = `src/math/${name}.ts`;
-    writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(staged, file), 'utf8'), name));
+    writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(staged, file), 'utf8')));
   }
   snapshots.set(nativeMatrices, staged);
   return staged;

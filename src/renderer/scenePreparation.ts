@@ -5,6 +5,7 @@ import MaterialState from '../scene/MaterialState.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
 import { accumulateVertexNormals } from '../util/vertexNormals.js';
 import { mat4, vec3 } from '../math.js';
+import { set as setVec3 } from '../math/sceneVec3.js';
 import { meshInstanceCount, meshInstanceTransform, PackedMeshInstances, type MeshInstances } from './meshInstances.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { packMaterialIndexAndWeightToInt, writeMaterialIndices } from './materialIndices.js';
@@ -25,13 +26,13 @@ export function computeBounds(
 ) {
   const matrix = matrixStorage(m), lower = matrixStorage(bvhBounds[0]), upper = matrixStorage(bvhBounds[1]);
   const {min, max} = result;
-  vec3.set(min, Infinity, Infinity, Infinity);
-  vec3.set(max, -Infinity, -Infinity, -Infinity);
+  setVec3(min, Infinity, Infinity, Infinity);
+  setVec3(max, -Infinity, -Infinity, -Infinity);
   // Transforming the eight BLAS AABB corners is exact for an affine transform
   // and independent of mesh vertex count. The previous rotated path scanned
   // every vertex on every instance update.
   for (let corner = 0; corner < 8; corner++) {
-    vec3.set(
+    setVec3(
       p,
       (corner & 1 ? upper[0] : lower[0]),
       (corner & 2 ? upper[1] : lower[1]),

@@ -34,7 +34,7 @@ export function validateGraphIR(graph: GraphIR): IRDiagnostic[] {
         if(graph.nodes[at+1]!==1) {report('unsupported-node-implementation','Unsupported node implementation version',i,-1);continue;}
         if(!index(graph.nodes[at+2],graphTypes.length)) {report('unsupported-type','Unknown graph port type',i,-1);continue;}
         const category=graphCategories[graph.nodes[at]],type=graphTypes[graph.nodes[at+2]];
-        const inputs: Record<string,{type: GraphType}> = {};
+        const inputs: Record<string,{type?: GraphType}> = {};
         for(let j=first;j<first+length;j++) {
             const k=j*5, port=graph.inputs[k], inputType=graph.inputs[k+1];
             if(!index(port,graphPorts.length) || !index(inputType,graphTypes.length)) {report('unsupported-input','Unknown graph input or type',i,port);continue;}

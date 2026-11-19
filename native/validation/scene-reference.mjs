@@ -81,6 +81,8 @@ export async function referenceScene(bytes, sourceRoot) {
     const o = u[14], camera = u[o] === 0 ? new Camera({ projection: 'perspective', fov: f[o + 1], near: f[o + 2], far: f[o + 3] }) : new Camera({ projection: 'orthographic', left: f[o + 4], right: f[o + 5], bottom: f[o + 6], top: f[o + 7], near: f[o + 2], far: f[o + 3] });
     [camera.zoom, camera.fStop, camera.focusDistance, camera.sensorHeight, camera.metersPerUnit] = [f[o + 8], f[o + 9], f[o + 10], f[o + 11], f[o + 12]];
     camera.transform = f.slice(o + 16, o + 32);
+    const { initOpenPbrEnergyLut } = await load('renderer/openPbrEnergyLut.browser.js');
+    await initOpenPbrEnergyLut();
     installWebGPUConstants();
     const device = new CaptureDevice();
     device.limits.maxTextureDimension2D = 16384;
@@ -133,9 +135,22 @@ export async function referenceScene(bytes, sourceRoot) {
         packTriangleMaterials(g, prepared.geometryRegions.get(g).materialIndices, prepared.blases[i].bvh.buffer, attributes, vertexWords + record);
         record += prepared.blases[i].bvh.buffer.byteLength / 16;
     });
-    const trace = new Uint8Array(pass._rtUniform.buffer.slice(0, 320));
-    new DataView(trace.buffer).setInt32(88, nativeTlas.buffer.byteLength / 16, true);
-    const nativeResources = new Map([[1,bvh],[2,instances],[3,new Uint8Array(attributes.buffer)],[7,trace]]);
+    const {prepareSceneLightSampling, packSceneAnalyticLights, writeTraceLighting} = await load('renderer/sceneAssembly.js');
+    const {estimateEnvironmentPower} = await load('renderer/lightSampling.js');
+    const {makeRayTraceUniform} = await load('renderer/wgpuSceneUniform.js');
+    // The Web light table carries an extra texel per triangle for graph-emission
+    // instance IDs. Native uses the six-texel record and a 4096-pixel edge cap.
+    const lighting = prepareSceneLightSampling(pass._analyticLights, pass._emissiveTriangles,
+        estimateEnvironmentPower(pass._envImageSource), 4096);
+    const analytic = packSceneAnalyticLights(pass._analyticLights, pass._materialData.getLightTexturesIndices(),
+        lighting.analyticPmfs, i => lighting.profiles.offsets[i]);
+    const {buffer, views} = makeRayTraceUniform();
+    const trace = new Uint8Array(buffer);
+    trace.set(new Uint8Array(pass._rtUniform.buffer, 0, trace.length));
+    views.blasOffset[0] = nativeTlas.buffer.byteLength / 16;
+    writeTraceLighting(views, lighting);
+    const nativeResources = new Map([[1,bvh],[2,instances],[3,new Uint8Array(attributes.buffer)],[7,trace],
+        [8,new Uint8Array(analytic.buffer)],[24,new Uint8Array(lighting.lightData.buffer)]]);
     // Web keeps at least two physical array layers for its default view. Native
     // requests a D2Array view explicitly and only allocates the logical pages.
     // Compare all used bytes and verify that excluded browser padding is empty.
