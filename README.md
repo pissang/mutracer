@@ -44,9 +44,8 @@ loop.start();
 loop.final.setDenoiser({ type: 'oidn' }); // denoise the converged frame (WebGPU)
 ```
 
-More starting points are [below](#more-ways-to-start), and the
-[getting started guide](./docs/getting-started.md) covers the scene model,
-render loop, lights and export.
+The [getting started guide](./docs/getting-started.md) covers the scene model, render loop,
+lights and export; the [Three.js guide](./docs/threejs.md) covers loading glTF.
 
 ## Highlights
 
@@ -106,122 +105,6 @@ is a heavy scene that path traces interactively in the viewer:
 
 Measured on an Apple M4 Max: rendering in Chrome with WebGPU at the viewer's
 default settings (6 bounces), BVH builds on CPU threads excluding worker startup.
-
-## More ways to start
-
-<details>
-<summary><b>Load a glTF with Three.js</b></summary>
-
-```ts
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Engine, RenderLoop } from '@meimu/mutracer';
-import { THREESync } from '@meimu/mutracer/three';
-
-const canvas = document.querySelector('canvas')!;
-
-const scene = new THREE.Scene();
-scene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
-
-const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);
-camera.position.set(0, 2, 6);
-const controls = new OrbitControls(camera, canvas);
-
-const engine = new Engine({ canvas });
-const sync = new THREESync(engine, { scene, camera, controls });
-const loop = new RenderLoop(engine, { sync });
-loop.start();
-```
-
-Custom Three.js materials and lights can use `convertMaterial` / `convertLight`
-in the same sync options; see [Three.js integration](./docs/threejs.md).
-
-</details>
-
-<details>
-<summary><b>Describe a scene with MuTracer classes</b></summary>
-
-```ts
-import { mat4 } from 'gl-matrix';
-import {
-  Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, RenderLoop,
-  Texture, createPlaneGeometry, createSphereGeometry, type Scene
-} from '@meimu/mutracer';
-
-const canvas = document.querySelector('canvas')!;
-
-const red = new OpenPBRMaterial({ baseColor: [0.8, 0.1, 0.1], specularRoughness: 0.3 });
-
-const ball = new Mesh(createSphereGeometry(64, 32), red);
-mat4.fromTranslation(ball.transform, [0, 1, 0]);
-
-const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial());
-mat4.fromScaling(floor.transform, [5, 1, 5]);
-
-// Rect lights emit along their local -Z axis.
-const light = new RectLight({ size: [2, 2], color: [1, 1, 1], intensity: 5 });
-mat4.fromTranslation(light.transform, [0, 4, 0]);
-mat4.rotateX(light.transform, light.transform, -Math.PI / 2);
-
-// A constant grey sky as a 1x1 float environment map.
-const sky = new Texture({ data: new Float32Array([0.3, 0.3, 0.3, 1]), width: 1, height: 1 });
-
-const scene: Scene = {
-  meshes: [ball, floor],
-  lights: [light, new EnvironmentLight({ map: sky })]
-};
-
-const camera = new Camera({ projection: 'perspective', fov: 40, near: .1, far: 100 });
-camera.position = [0, 2, 6];
-camera.lookAt([0, 1, 0]);
-
-const engine = new Engine({ canvas });
-engine.on('error', error => console.error(error));
-engine.scene = scene;
-engine.camera = camera;
-const loop = new RenderLoop(engine);
-loop.start();
-```
-
-For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
-with shared materials and a Float32 matrix array. See the [instancing example](./examples/instancing.ts).
-
-</details>
-
-<details>
-<summary><b>Import a MaterialX material</b></summary>
-
-```ts
-import { OpenPBRMaterial } from '@meimu/mutracer';
-import { parseMaterialX } from '@meimu/mutracer/materialx';
-
-const { values, graph } = parseMaterialX(await (await fetch('marble.mtlx')).text());
-mesh.material = new OpenPBRMaterial({ ...values, graph });
-engine.update();
-```
-
-Image-based documents also need their textures loaded; see
-[parsing MaterialX documents](./docs/materialx.md).
-
-</details>
-
-<details>
-<summary><b>Control rendering and output</b></summary>
-
-```ts
-loop.final.setDenoiser({ type: 'jnlm' }); // both backends
-Object.assign(loop.final, { bounces: 12, maxSamples: 1024 });
-Object.assign(engine.display, { toneMapping: 'agx', toneMappingExposure: 1.2 });
-
-const image = await engine.display.toBlob(loop.final); // PNG
-```
-
-Settings are typed by `RenderSettings` and `DisplaySettings`; see the
-[API reference](./docs/api.md). For custom frame control, use Engine, Render and
-Display directly; see [independent render results](./docs/progressive-rendering.md).
-
-</details>
 
 ## Packages
 
