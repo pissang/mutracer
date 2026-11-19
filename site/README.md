@@ -4,7 +4,7 @@ The static site at <https://mutracer.meimu-studio.com>:
 
 | Path | Source |
 | --- | --- |
-| `/` | Home page (`site/`): drop zone and example model cards |
+| `/` | Home page (`site/`): features, gallery, MaterialX samples and example scenes |
 | `/viewer/` | [Viewer](../viewer/README.md) |
 | `/examples/` | [Examples](../examples/README.md) |
 | `/oidn/weights/` | OIDN weights shared by the viewer and the examples |
@@ -15,7 +15,10 @@ npm run build:site      # everything in dist-site/
 npm run typecheck:site
 ```
 
-The home page has no Three.js or renderer code. Example cards link to
+The home page has no Three.js or renderer code. Gallery tiles and
+example cards use the viewer's preset thumbnails; the MaterialX swatches reuse
+the viewer's sample thumbnails.
+Example cards link to
 `viewer/#model=<id>` and use the viewer's presets and thumbnails. Dropped or
 picked files are stored in IndexedDB (same origin) and the viewer opens with
 `#open=files`, loads them and clears the store.

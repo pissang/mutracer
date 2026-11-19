@@ -84,9 +84,85 @@ for (const id of ['pick-files', 'pick-folder']) {
   });
 }
 
+// The 55 procedural MaterialX samples bundled with the viewer, as a swatch wall.
+const SWATCHES = import.meta.glob<string>('../../viewer/src/assets/thumbnails/materialx-*.webp', { eager: true, query: '?url', import: 'default' });
+const swatches = document.getElementById('swatches')!;
+for (const [path, url] of Object.entries(SWATCHES)) {
+  const id = path.slice(path.lastIndexOf('/materialx-') + 11, -'.webp'.length);
+  const label = id.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  const li = document.createElement('li');
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = label;
+  img.title = label;
+  img.width = img.height = 128;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  li.append(img);
+  swatches.append(li);
+}
+
+// Gallery tiles: which preset to show and the feature it demonstrates.
+const GALLERY: { id: string; feature: string; size?: 'wide' | 'big' }[] = [
+  { id: 'porsche-992-gt3-r', feature: 'Car paint and clear coat', size: 'big' },
+  { id: 'super-human', feature: 'Subsurface skin' },
+  { id: 'crystal-lens', feature: 'Spectral dispersion' },
+  { id: 'gelatinous-cube', feature: 'Transmission and volume', size: 'wide' },
+  { id: 'bugatti-chiron', feature: '4.6 M triangles, interactive' },
+  { id: 'yamaha-mt-09', feature: 'Metals and coat' },
+  { id: 'blender-cover-remix', feature: 'Full scene, characters', size: 'wide' },
+  { id: 'meet-mat', feature: 'Layered materials' },
+  { id: 'fluted-crystal', feature: 'Volume absorption' },
+  { id: 'sheenchair', feature: 'Fuzz' },
+  { id: 'toycar', feature: 'Coat and transmission' }
+];
+const bento = document.getElementById('bento')!;
+for (const item of GALLERY) {
+  const preset = MODEL_PRESETS.find((p) => p.id === item.id);
+  if (!preset?.thumbnail) continue;
+  const li = document.createElement('li');
+  li.className = 'tile' + (item.size ? ` tile--${item.size}` : '');
+  const a = document.createElement('a');
+  a.className = 'tile__link';
+  a.href = `./viewer/#model=${encodeURIComponent(preset.id)}`;
+  const img = document.createElement('img');
+  img.src = preset.thumbnail;
+  img.alt = `${preset.name} rendered in MuTracer`;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  const caption = document.createElement('span');
+  caption.className = 'tile__caption';
+  const feature = document.createElement('strong');
+  feature.textContent = item.feature;
+  const name = document.createElement('span');
+  name.textContent = preset.name;
+  caption.append(feature, name);
+  a.append(img, caption);
+  const credit = document.createElement('small');
+  credit.className = 'tile__credit';
+  const author = document.createElement('a');
+  author.href = preset.sourceUrl;
+  author.textContent = preset.credit;
+  credit.append(author);
+  if (preset.licenseUrl) {
+    const terms = document.createElement('a');
+    terms.href = preset.licenseUrl;
+    terms.textContent = preset.license;
+    credit.append(' · ', terms);
+  } else {
+    credit.append(` · ${preset.license}`);
+  }
+  for (const link of credit.querySelectorAll('a')) {
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+  }
+  li.append(a, credit);
+  bento.append(li);
+}
+
 const cards = document.getElementById('cards')!;
 const researchCards = document.getElementById('research-cards')!;
-const examples = document.querySelector<HTMLElement>('.examples')!;
+const examples = document.getElementById('scenes')!;
 const collectionTabs = Array.from(examples.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
 for (const tab of collectionTabs) {
   tab.addEventListener('click', () => {
@@ -114,7 +190,8 @@ for (const tab of collectionTabs) {
 }
 
 for (const preset of MODEL_PRESETS) {
-  if (preset.id === 'spheres') continue;
+  // Scenes built in code without a published thumbnail are reachable from the viewer.
+  if (preset.id === 'spheres' || !preset.thumbnail) continue;
   const li = document.createElement('li');
   const a = document.createElement('a');
   a.className = 'card';
