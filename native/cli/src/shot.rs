@@ -101,6 +101,41 @@ impl<const N: usize> Interpolate for [f32; N] {
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(untagged)]
+pub enum MaterialValue {
+    Scalar(f32),
+    Pair([f32; 2]),
+    Triple([f32; 3]),
+    Quad([f32; 4]),
+}
+
+impl MaterialValue {
+    pub fn packed(self) -> ([f32; 4], usize) {
+        match self {
+            Self::Scalar(a) => ([a, 0., 0., 0.], 1),
+            Self::Pair([a, b]) => ([a, b, 0., 0.], 2),
+            Self::Triple([a, b, c]) => ([a, b, c, 0.], 3),
+            Self::Quad(v) => (v, 4),
+        }
+    }
+}
+
+impl Interpolate for MaterialValue {
+    fn mix(self, other: Self, t: f64) -> Self {
+        match (self, other) {
+            (Self::Scalar(a), Self::Scalar(b)) => Self::Scalar(a.mix(b, t)),
+            (Self::Pair(a), Self::Pair(b)) => Self::Pair(a.mix(b, t)),
+            (Self::Triple(a), Self::Triple(b)) => Self::Triple(a.mix(b, t)),
+            (Self::Quad(a), Self::Quad(b)) => Self::Quad(a.mix(b, t)),
+            _ => unreachable!("validated key shape"),
+        }
+    }
+    fn compatible(self, other: Self) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(untagged)]
 pub enum Rotation {
     Euler([f32; 3]),
     Quaternion([f32; 4]),
@@ -374,7 +409,7 @@ pub struct InstanceView {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Material {
     pub asset: Option<String>,
-    pub inputs: Option<BTreeMap<String, serde_json::Value>>,
+    pub inputs: Option<BTreeMap<String, Channel<MaterialValue>>>,
     pub color: Option<Channel<[f32; 3]>>,
     pub roughness: Option<Channel<f32>>,
     pub metalness: Option<Channel<f32>>,
@@ -842,6 +877,14 @@ impl Shot {
                     "IOR of at least 1",
                     ior
                 );
+                for (name, value) in m.inputs.iter().flatten() {
+                    value.check(
+                        &format!("{path}/inputs/{}", escape(name)),
+                        duration,
+                        "numeric values of one shape",
+                        |value| finite(value.packed().0),
+                    )?;
+                }
                 if m.inputs.is_some() && m.asset.is_none() {
                     return Err(Error::validation(
                         format!("{path}/inputs"),

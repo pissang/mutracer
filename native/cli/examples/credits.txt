@@ -1,2 +1,4 @@
 material-sweep.json uses procedural geometry.
 turntable.json uses the repository's procedurally generated chess.glb (CC0 1.0).
+gltf-animation.json uses a procedural animated card (CC0 1.0).
+materialx-growth.json uses a procedural MaterialX sample.

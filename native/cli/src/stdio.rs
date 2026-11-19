@@ -184,6 +184,8 @@ fn editable(pointer: &str) -> bool {
         | ["", "output", "display", "exposure"]
         | ["", "environment", "color" | "intensity" | "rotation"] => true,
         ["", "objects", n, "position" | "rotation" | "scale"]
+        | ["", "objects", n, "animation", "time"]
+        | ["", "objects", n, "material", "inputs", _]
         | [
             "",
             "lights",

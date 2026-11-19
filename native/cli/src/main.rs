@@ -1,6 +1,7 @@
 mod assets;
 mod encode;
 mod error;
+mod materialx;
 mod run;
 mod scene;
 mod shot;

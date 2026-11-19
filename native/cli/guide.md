@@ -28,6 +28,12 @@ fixed seed, OIDN and AgX. A preview takes a separate frame directory.
   disk with lower intensity for fill, and a narrow cylinder behind the object
   for a rim. Aim lights with object-name targets.
 
+- glTF clip. Set a glTF object's `animation.clip` to its name and keyframe
+  `animation.time` in seconds. See `gltf-animation.json` for a procedural
+  asset that ships in the CLI.
+- MaterialX growth. Use a MaterialX asset and keyframe a connected numeric
+  interface through `material.inputs`. See `materialx-growth.json`.
+
 Start with the `turntable.json` and `material-sweep.json` examples. Inline
 geometry is limited to 10,000 vertices and 30,000 indices. Put larger model and
 data payloads in glTF/GLB or binary sidecars. Resolutions may have up to 8,192

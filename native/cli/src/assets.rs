@@ -3,11 +3,14 @@ use crate::{
     shot::{self, Asset, Data, Dtype, Sidecar},
 };
 use glam::Mat4;
-use mutracer_native::scene_api::{Geometry, Scene, Texture, TexturePixels};
+use mutracer_native::scene_api::{
+    Geometry, Scene, Texture, TexturePixels,
+    viewer_support::{Model, scene_from_gltf_model},
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -47,10 +50,13 @@ pub fn decode_image_bytes(bytes: &[u8], hdr: bool) -> Result<image::DynamicImage
 }
 
 pub enum Loaded {
-    Gltf(Box<Scene>),
+    Gltf {
+        scene: Box<Scene>,
+        model: Box<Model>,
+    },
     Hdr(Texture),
     Image(Texture),
-    MaterialX,
+    MaterialX(PathBuf),
     Instances(Arc<[Mat4]>),
 }
 
@@ -58,6 +64,7 @@ pub struct Assets {
     base: PathBuf,
     fingerprints: BTreeMap<PathBuf, Fingerprint>,
     pub loaded: BTreeMap<String, Loaded>,
+    pub credits: BTreeSet<&'static str>,
     geometry_bytes: u64,
     texture_bytes: u64,
 }
@@ -65,9 +72,10 @@ pub struct Assets {
 impl Assets {
     pub fn load(shot: &shot::Shot, base: &Path) -> Result<Self> {
         let mut this = Self {
-            base: base.into(),
+            base: std::path::absolute(base).map_err(|error| Error::asset("", error.to_string()))?,
             fingerprints: BTreeMap::new(),
             loaded: BTreeMap::new(),
+            credits: BTreeSet::new(),
             geometry_bytes: 0,
             texture_bytes: 0,
         };
@@ -76,14 +84,56 @@ impl Assets {
             let loaded = match asset {
                 Asset::Gltf(a) => {
                     let p = format!("{pointer}/gltf");
-                    let file = this.file(&a.gltf, &p)?;
-                    this.gltf_dependencies(&file, &p)?;
-                    let imported =
-                        Scene::import_gltf(&file).map_err(|e| Error::asset(&p, e.to_string()))?;
+                    let (model, label) = if a
+                        .gltf
+                        .to_str()
+                        .is_some_and(|s| s.starts_with("catalog:"))
+                    {
+                        let resource = match a.gltf.to_str().unwrap() {
+                            "catalog:animated-card" => {
+                                &include_bytes!("../../../cli/examples/animated-triangle.gltf")[..]
+                            }
+                            id => {
+                                return Err(Error::asset(
+                                    &p,
+                                    format!(
+                                        "Unknown asset {id:?}. Available: catalog:animated-card."
+                                    ),
+                                ));
+                            }
+                        };
+                        this.fingerprints.insert(
+                            a.gltf.clone(),
+                            Fingerprint {
+                                file: a.gltf.clone(),
+                                bytes: resource.len() as u64,
+                                sha256: digest(resource),
+                            },
+                        );
+                        this.credits
+                            .insert("Animated card — procedural MuTracer sample, CC0 1.0.");
+                        (
+                            Model::load_bytes(resource, None)
+                                .map_err(|e| Error::asset(&p, e.to_string()))?,
+                            a.gltf.clone(),
+                        )
+                    } else {
+                        let file = this.file(&a.gltf, &p)?;
+                        this.gltf_dependencies(&file, &p)?;
+                        (
+                            Model::load(&file).map_err(|e| Error::asset(&p, e.to_string()))?,
+                            file,
+                        )
+                    };
+                    let imported = scene_from_gltf_model(&model)
+                        .map_err(|e| Error::asset(&p, e.to_string()))?;
                     for warning in imported.warnings {
-                        eprintln!("{}: {warning}", file.display());
+                        eprintln!("{}: {warning}", label.display());
                     }
-                    Loaded::Gltf(Box::new(imported.scene))
+                    Loaded::Gltf {
+                        scene: Box::new(imported.scene),
+                        model: Box::new(model),
+                    }
                 }
                 Asset::Hdr(a) => {
                     Loaded::Hdr(this.image(&a.hdr, &format!("{pointer}/hdr"), true)?)
@@ -92,8 +142,7 @@ impl Assets {
                     Loaded::Image(this.image(&a.image, &format!("{pointer}/image"), false)?)
                 }
                 Asset::MaterialX(a) => {
-                    this.file(&a.materialx, &format!("{pointer}/materialx"))?;
-                    Loaded::MaterialX
+                    Loaded::MaterialX(this.file(&a.materialx, &format!("{pointer}/materialx"))?)
                 }
                 Asset::InstanceFile(a) => Loaded::Instances(this.instances(
                     &Sidecar {
@@ -228,7 +277,7 @@ impl Assets {
         Ok(())
     }
 
-    fn image(&mut self, path: &Path, pointer: &str, hdr: bool) -> Result<Texture> {
+    pub fn image(&mut self, path: &Path, pointer: &str, hdr: bool) -> Result<Texture> {
         let file = self.file(path, pointer)?;
         let open = || image::ImageReader::open(&file)?.with_guessed_format();
         let (width, height) = open()

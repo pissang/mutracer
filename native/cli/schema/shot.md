@@ -66,8 +66,18 @@ relative to the glTF itself. Use local files. An object material overrides glTF
 materials when specified, otherwise imported materials are retained. Texture
 maps reference `image` assets. A material `asset` references a MaterialX
 document and `inputs` names its exposed numeric interfaces. A glTF animation
-channel selects a named clip and explicit clip time in seconds. A renderer
-reports unsupported declared features before rendering.
+channel selects a named clip and explicit clip time in seconds. Clip time clamps to the clip's range. A glTF clip and a separate instance
+sidecar cannot be combined on one object.
+
+The built-in `catalog:animated-card` glTF is a procedural CC0 sample. A
+render using it records its attribution in `credits.txt` alongside the frames.
+
+MaterialX accepts local UTF-8 `.mtlx` files with `open_pbr_surface`. It uses
+the first surface material and supports constants, mix, arithmetic, noise,
+image nodes with repeat and linear filtering, and connected numeric
+nodegraph interfaces. Use `graph/input` if a bare interface name is ambiguous.
+Unsupported shaders, nodes, inputs and sub-outputs are reported during
+validation. See the [patina growth example](../examples/materialx-growth.json).
 
 Inline positions, normals and UVs are arrays of triples or pairs. Indices
 are a flat list of zero-based triangle indices. Use inline geometry for up

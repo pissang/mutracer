@@ -193,6 +193,19 @@ impl Input {
         })
     }
 
+    fn write_credits(&self, path: &Path) -> Result<()> {
+        if self.assets.credits.is_empty() {
+            return Ok(());
+        }
+        encode::atomic_bytes(path, |file| {
+            for line in &self.assets.credits {
+                writeln!(file, "{line}")?;
+            }
+            Ok(())
+        })
+        .map_err(|error| encode::failure(error.to_string()))
+    }
+
     pub fn scene_identity(&self) -> serde_json::Value {
         json!({
             "build": env!("MUTRACER_CLI_BUILD_ID"),
@@ -384,6 +397,7 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
     }
     let frame = (args.t * f64::from(settings.fps)).floor() as u32;
     let image = Renderer::new(settings)?.shot_frame(&mut input, settings, frame, args.t)?;
+    input.write_credits(&args.output.with_extension("credits.txt"))?;
     encode::atomic_bytes(&args.output, |file| file.write_all(&image))
         .map_err(|e| encode::failure(e.to_string()))?;
     progress(
@@ -569,6 +583,7 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     fs::create_dir_all(&directory).map_err(|e| encode::failure(e.to_string()))?;
     let _lock = lock(&directory.join("supervisor.lock"))?;
     verify_manifest(&directory, &manifest, true)?;
+    input.write_credits(&directory.join("credits.txt"))?;
     progress(
         json!({"event":"plan","frames":directory,"cost":input.estimate(settings, indices.len() as u32)}),
     );

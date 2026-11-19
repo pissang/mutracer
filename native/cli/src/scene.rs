@@ -5,7 +5,7 @@ use crate::{
 };
 use glam::{Mat4, Vec3};
 use mutracer_native::{api, scene_api as sdk};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy)]
 struct Bounds {
@@ -53,9 +53,19 @@ impl Bounds {
 
 struct Object {
     meshes: Vec<(sdk::MeshId, Mat4)>,
-    material: Option<(sdk::MaterialId, sdk::OpenPbrMaterial)>,
+    material: Option<(
+        sdk::MaterialId,
+        sdk::OpenPbrMaterial,
+        Option<crate::materialx::MaterialBindings>,
+    )>,
+    animation: Option<Animation>,
     bounds: Bounds,
     fit: Mat4,
+}
+
+struct Animation {
+    model: sdk::viewer_support::Model,
+    time: Option<f32>,
 }
 
 pub struct Prepared {
@@ -106,25 +116,28 @@ impl Prepared {
         let mut images = BTreeMap::new();
         for (i, obj) in shot.objects.iter().enumerate() {
             let p = format!("/objects/{i}");
-            if obj.animation.is_some() {
-                return Err(Error::validation(
-                    format!("{p}/animation"),
-                    "glTF clip sampling is unavailable",
-                    "Use object keyframes with this build.",
-                ));
-            }
             let material = match (&obj.material, &obj.asset) {
                 (None, Some(_)) => None,
                 (description, _) => {
-                    let mut material = sdk::OpenPbrMaterial::default();
-                    if let Some(desc) = description {
-                        if desc.asset.is_some() {
+                    let (mut material, bindings) = if let Some(name) =
+                        description.as_ref().and_then(|d| d.asset.as_ref())
+                    {
+                        let pointer = format!("{p}/material/asset");
+                        let Some(Loaded::MaterialX(file)) = assets.loaded.get(name) else {
                             return Err(Error::validation(
-                                format!("{p}/material/asset"),
-                                "MaterialX import is unavailable",
-                                "Use OpenPBR fields with this build.",
+                                &pointer,
+                                format!("Expected a MaterialX document, got {name:?}"),
+                                "Use a name from assets with a materialx field.",
                             ));
-                        }
+                        };
+                        let file = file.clone();
+                        let (material, bindings) =
+                            crate::materialx::load(&file, &pointer, assets, &mut prepared.scene)?;
+                        (material, Some(bindings))
+                    } else {
+                        (sdk::OpenPbrMaterial::default(), None)
+                    };
+                    if let Some(desc) = description {
                         if let Some(maps) = &desc.maps {
                             for (key, name, property) in [
                                 ("color", &maps.color, 39),
@@ -166,17 +179,46 @@ impl Prepared {
                         .scene
                         .add_material(material.clone())
                         .map_err(|e| validation(&p, e))?;
-                    Some((id, material))
+                    Some((id, material, bindings))
                 }
             };
+            let mut animation = None;
             let ids = if let Some(name) = &obj.asset {
-                let Some(Loaded::Gltf(scene)) = assets.loaded.get(name) else {
+                let Some(Loaded::Gltf { scene, model }) = assets.loaded.get(name) else {
                     return Err(Error::validation(
                         format!("{p}/asset"),
                         format!("Expected a glTF asset, got {name:?}"),
                         "Use a name from assets with a gltf field.",
                     ));
                 };
+                if let Some(clip) = &obj.animation {
+                    if obj.instances.is_some() {
+                        return Err(Error::validation(
+                            format!("{p}/instances"),
+                            "A glTF clip and a separate instance sidecar cannot be combined",
+                            "Bake the instances or omit the sidecar.",
+                        ));
+                    }
+                    let mut model = (**model).clone();
+                    let pointer = format!("{p}/animation/clip");
+                    let state = model
+                        .animation
+                        .as_mut()
+                        .ok_or_else(|| Error::asset(&pointer, "The glTF has no animation clips"))?;
+                    let mut matches = state
+                        .clips()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| c.name == clip.clip);
+                    let index = matches.next().map(|(i, _)| i).ok_or_else(|| {
+                        Error::asset(&pointer, format!("No glTF clip named {:?}", clip.clip))
+                    })?;
+                    if matches.next().is_some() {
+                        return Err(Error::asset(&pointer, "The glTF clip name is ambiguous"));
+                    }
+                    state.select(index);
+                    animation = Some(Animation { model, time: None });
+                }
                 prepared
                     .scene
                     .append_meshes_from(scene)
@@ -228,7 +270,7 @@ impl Prepared {
                 let original = existing.transform;
                 let original_instances = existing.instances.clone();
                 let mesh = prepared.scene.mesh_mut(id).map_err(|e| validation(&p, e))?;
-                if let Some((material, _)) = &material {
+                if let Some((material, _, _)) = &material {
                     mesh.material = *material;
                     // Preserve the geometry's per-vertex table shape.
                     mesh.materials.fill(*material);
@@ -297,6 +339,7 @@ impl Prepared {
             prepared.objects.push(Object {
                 meshes,
                 material,
+                animation,
                 bounds,
                 fit,
             });
@@ -355,7 +398,7 @@ impl Prepared {
         t: f64,
         size: [u32; 2],
     ) -> Result<(api::Camera, api::DisplaySettings)> {
-        for (i, obj) in self.objects.iter().enumerate() {
+        for (i, obj) in self.objects.iter_mut().enumerate() {
             let desc = &shot.objects[i];
             let p = format!("/objects/{i}");
             let position = Vec3::from_array(at(&desc.position, [0.; 3], t));
@@ -368,6 +411,42 @@ impl Prepared {
                     "The evaluated transform is invalid",
                     "Reduce coordinates and keep scales above zero.",
                 ));
+            }
+            if let Some(animation) = &mut obj.animation {
+                let time = desc.animation.as_ref().unwrap().time.at(t);
+                if animation.time != Some(time) {
+                    animation.model.animation.as_mut().unwrap().seek(time);
+                    if animation.model.apply_animation().map_err(|error| {
+                        Error::asset(format!("{p}/animation/time"), error.to_string())
+                    })? {
+                        obj.bounds = Bounds::empty();
+                        for ((id, base), source) in
+                            obj.meshes.iter_mut().zip(&animation.model.meshes)
+                        {
+                            *base = source.transform;
+                            let mesh = self.scene.mesh(*id).map_err(|e| validation(&p, e))?;
+                            let id = mesh.geometry;
+                            let positions = &animation.model.geometries[source.geometry];
+                            let old = self.scene.geometry(id).map_err(|e| validation(&p, e))?;
+                            if !Arc::ptr_eq(&old.positions, &positions.positions)
+                                || !Arc::ptr_eq(&old.normals, &positions.normals)
+                                || !Arc::ptr_eq(&old.tangents, &positions.tangents)
+                            {
+                                *self.scene.geometry_mut(id).map_err(|e| validation(&p, e))? =
+                                    positions.clone();
+                            }
+                            let bounds = Bounds::of(positions);
+                            if let Some(instances) = &source.instances {
+                                for &instance in instances.transforms.iter() {
+                                    obj.bounds.append(bounds.transformed(*base * instance));
+                                }
+                            } else {
+                                obj.bounds.append(bounds.transformed(*base));
+                            }
+                        }
+                    }
+                    animation.time = Some(time);
+                }
             }
             self.bounds[i] = obj.bounds.transformed(matrix);
             for &(id, base) in &obj.meshes {
@@ -385,7 +464,7 @@ impl Prepared {
                         .transform = transform;
                 }
             }
-            if let (Some((id, defaults)), Some(m)) = (&obj.material, &desc.material) {
+            if let (Some((id, defaults, bindings)), Some(m)) = (&obj.material, &desc.material) {
                 let mut values = defaults.values.clone();
                 values.color = at(&m.color, values.color, t);
                 values.roughness = at(&m.roughness, values.roughness, t);
@@ -404,17 +483,31 @@ impl Prepared {
                 values.layers.coat_roughness =
                     at(&m.coat_roughness, values.layers.coat_roughness, t);
                 values.layers.coat_ior = at(&m.coat_ior, values.layers.coat_ior, t);
-                if self
-                    .scene
-                    .material(*id)
-                    .map_err(|e| validation(&p, e))?
-                    .values
-                    != values
-                {
-                    self.scene
+                let mut graph = defaults.graph.clone();
+                if let Some(inputs) = &m.inputs {
+                    if !inputs.is_empty() {
+                        let pointer = format!("{p}/material/inputs");
+                        let graph = graph.as_mut().ok_or_else(|| {
+                            Error::validation(
+                                &pointer,
+                                "MaterialX surface has no connected interface inputs",
+                                "Use inputs declared in a connected MaterialX nodegraph.",
+                            )
+                        })?;
+                        bindings
+                            .as_ref()
+                            .unwrap()
+                            .update(graph, inputs, t, &pointer)?;
+                    }
+                }
+                let old = self.scene.material(*id).map_err(|e| validation(&p, e))?;
+                if old.values != values || old.graph != graph {
+                    let target = self
+                        .scene
                         .material_mut(*id)
-                        .map_err(|e| validation(&p, e))?
-                        .values = values;
+                        .map_err(|e| validation(&p, e))?;
+                    target.values = values;
+                    target.graph = graph;
                 }
             }
         }
@@ -663,4 +756,70 @@ fn primitive(shape: shot::Shape, size: f32) -> sdk::Geometry {
     geometry.normals = normals.into();
     geometry.uv[0] = uvs.into();
     geometry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn sample(name: &str) -> crate::run::Input {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join(name);
+        crate::run::Input::load(&path).unwrap()
+    }
+
+    #[test]
+    fn materialx_fixture_animates_a_connected_parameter() {
+        let mut input = sample("materialx-growth.json");
+        let id = input.prepared.objects[0].material.as_ref().unwrap().0;
+        let graph = input
+            .prepared
+            .scene
+            .material(id)
+            .unwrap()
+            .graph
+            .clone()
+            .unwrap();
+        input
+            .prepared
+            .evaluate(&input.shot, 1., [1280, 720])
+            .unwrap();
+        let after = input
+            .prepared
+            .scene
+            .material(id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
+        assert_eq!(graph.nodes, after.nodes);
+        assert_eq!(graph.terminals, after.terminals);
+        let changed = graph
+            .parameters
+            .iter()
+            .zip(&after.parameters)
+            .filter(|(a, b)| a != b)
+            .collect::<Vec<_>>();
+        assert_eq!(changed, vec![(&[0., 0., 0., 0.], &[1., 0., 0., 0.])]);
+        sdk::Scene::validate_descriptor(&input.prepared.scene.descriptor().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn native_gltf_clip_updates_transforms_and_can_revisit_time() {
+        let mut input = sample("gltf-animation.json");
+        let id = input.prepared.objects[0].meshes[0].0;
+        let initial = input.prepared.scene.mesh(id).unwrap().transform;
+        input
+            .prepared
+            .evaluate(&input.shot, 1., [1280, 720])
+            .unwrap();
+        assert_ne!(input.prepared.scene.mesh(id).unwrap().transform, initial);
+        input
+            .prepared
+            .evaluate(&input.shot, 0., [1280, 720])
+            .unwrap();
+        assert_eq!(input.prepared.scene.mesh(id).unwrap().transform, initial);
+    }
 }
