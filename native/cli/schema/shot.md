@@ -52,9 +52,12 @@ must define a nonzero direction. The camera defaults to vertical FOV 45°.
 
 Light properties are in scene units. Rect sizes give full width and height,
 disk and sphere sizes use radius, and cylinders use radius and full length.
-Choose a positive intensity and linear RGB tint. Omitted intensity and color
-are 1 and white. The environment defaults to black without a map. Rotation
-and intensity affect lighting from the environment map.
+Spot lights take a full cone angle in degrees. Choose a nonnegative intensity
+and linear RGB tint. Omitted intensity and color
+are 1 and white. The environment defaults to black. A map lights the scene and supplies the
+background unless a solid color is specified. A color alone supplies both
+constant illumination and the background. Intensity scales ambient light and
+map backgrounds. Rotation affects environment maps.
 
 ## Assets and limits
 

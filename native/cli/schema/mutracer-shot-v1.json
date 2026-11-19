@@ -822,10 +822,9 @@
             "target": {"$ref": "#/$defs/target"},
             "color": {"$ref": "#/$defs/colorChannel"},
             "intensity": {"$ref": "#/$defs/nonnegativeChannel"},
-            "radius": {"$ref": "#/$defs/positiveChannel"},
             "angle": {"$ref": "#/$defs/fovChannel"}
           },
-          "required": ["type", "position", "target", "radius", "angle"],
+          "required": ["type", "position", "target", "angle"],
           "additionalProperties": false
         }
       ]
