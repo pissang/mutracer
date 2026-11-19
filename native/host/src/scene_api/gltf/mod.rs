@@ -62,7 +62,7 @@ impl Scene {
     /// Import failures return InvalidArgument with the complete cause chain.
     pub fn import_gltf(path: impl AsRef<Path>) -> api::Result<ImportedScene> {
         Model::load(path.as_ref())
-            .and_then(import)
+            .and_then(|model| import(&model))
             .context("Importing glTF scene")
             .map_err(import_error)
     }
@@ -74,12 +74,12 @@ impl Scene {
     ) -> api::Result<ImportedScene> {
         let base = base_directory.map(|p| p.join("memory.gltf"));
         Model::load_bytes(bytes, base.as_deref())
-            .and_then(import)
+            .and_then(|model| import(&model))
             .context("Importing glTF scene")
             .map_err(import_error)
     }
 }
-fn import(model: Model) -> anyhow::Result<ImportedScene> {
+pub(super) fn import(model: &Model) -> anyhow::Result<ImportedScene> {
     let env = encoder::Environment {
         enabled: false,
         width: 0,
@@ -129,7 +129,7 @@ fn import(model: Model) -> anyhow::Result<ImportedScene> {
     Ok(ImportedScene {
         scene,
         names,
-        warnings: model.warnings,
+        warnings: model.warnings.clone(),
     })
 }
 #[cfg(test)]
