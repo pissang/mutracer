@@ -38,28 +38,38 @@ impl Format {
 
 #[derive(Args, Debug)]
 pub struct Overrides {
-    #[arg(long, value_parser = parse_size)]
+    #[arg(long, value_name = "WxH", value_parser = parse_size)]
+    /// Frame size, 1–8192 per edge and at most 16,777,216 pixels. MP4 needs even edges. Defaults to shot size or 384x216 for preview.
     pub size: Option<[u32; 2]>,
     #[arg(long)]
+    /// Samples per pixel, 1–16,384 within the shot's sample sequence range. Defaults to shot spp or 8 for preview.
     pub spp: Option<u32>,
     #[arg(long, value_enum)]
+    /// Use the shot seed for every frame (fixed) or add the frame index (frame). Defaults to the shot's seed mode.
     pub seed: Option<Seed>,
     #[arg(long, value_enum)]
+    /// Use OIDN or no denoising. Defaults to the shot setting or none for preview.
     pub denoise: Option<Denoise>,
     #[arg(long, value_enum, default_value = "png")]
+    /// Write display PNG or linear HDR EXR frames. Sequences also keep display PNGs.
     pub format: Format,
-    #[arg(long, help = "Write surface guides for temporal EXR filtering")]
+    #[arg(long)]
+    /// Write temporal-filter surface guides with EXR frames. Disabled by default.
     pub aovs: bool,
     #[arg(long)]
+    /// Zero-based GPU adapter index. Omit for automatic selection.
     pub gpu: Option<usize>,
 }
 
 #[derive(Args, Debug)]
 pub struct Still {
+    /// Path to a v1 shot JSON file.
     pub file: PathBuf,
     #[arg(short, long)]
+    /// Required image path with the extension selected by --format.
     pub output: PathBuf,
-    #[arg(long, default_value_t = 0.)]
+    #[arg(long, value_name = "SECONDS", default_value_t = 0.)]
+    /// Time in seconds from 0 through the shot duration.
     pub t: f64,
     #[command(flatten)]
     pub options: Overrides,
@@ -67,18 +77,25 @@ pub struct Still {
 
 #[derive(Args, Debug)]
 pub struct Sequence {
+    /// Path to a v1 shot JSON file.
     pub file: PathBuf,
     #[arg(short, long)]
+    /// Required destination ending in .mp4.
     pub output: PathBuf,
     #[arg(long)]
+    /// Source rate from 1 to 240 fps. Defaults to shot fps. Preview plays at half this rate.
     pub fps: Option<u32>,
-    #[arg(long, value_parser = parse_range)]
+    #[arg(long, value_name = "A-B", value_parser = parse_range)]
+    /// Inclusive range of zero-based shot frames at the effective fps. Defaults to the whole shot.
     pub frames: Option<[u32; 2]>,
-    #[arg(long)]
+    #[arg(long, value_name = "DIR")]
+    /// Directory for completed and resumable frames. Defaults to <output>.frames.
     pub keep_frames: Option<PathBuf>,
     #[arg(long)]
+    /// Positive render time budget in minutes, before encoding. Default is unlimited.
     pub max_minutes: Option<f64>,
-    #[arg(long)]
+    #[arg(long, value_name = "FILE.png")]
+    /// Write a PNG contact sheet of up to 16 selected frames. Omit to skip.
     pub contact_sheet: Option<PathBuf>,
     #[command(flatten)]
     pub options: Overrides,

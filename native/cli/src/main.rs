@@ -22,7 +22,7 @@ use std::{
 #[command(
     name = "mutracer",
     version,
-    about = "Render MuTracer shots to PNG frames and MP4 on the native GPU."
+    about = "Render MuTracer shots to PNG or EXR frames and MP4 on the native GPU."
 )]
 struct Cli {
     #[arg(long, hide = true)]
@@ -36,54 +36,73 @@ struct Cli {
 #[derive(Subcommand)]
 enum Action {
     /// Check the shot and its assets without using a GPU.
-    Validate { file: PathBuf },
+    Validate {
+        /// Path to a v1 shot JSON file.
+        file: PathBuf,
+    },
     /// Render a single frame at time t.
     Still(run::Still),
-    /// Render a lower-resolution, half-rate review clip.
+    /// Render a review clip using every second frame, starting at the first selected frame.
     Preview(run::Sequence),
     /// Render a resumable numbered sequence and encode it to MP4.
     Render(run::Sequence),
     /// Turn a directory of numbered PNG files into an MP4.
     Encode {
+        /// Directory of PNGs with unique trailing frame numbers.
         directory: PathBuf,
         #[arg(short, long)]
+        /// Required destination MP4 path.
         output: PathBuf,
         #[arg(long)]
+        /// Required source rate in frames per second, from 1 to 240.
         fps: u32,
         #[arg(long, default_value_t = 1)]
+        /// Source frame interval, 1 or 2. Playback rate is fps divided by stride.
         stride: u32,
         #[arg(long)]
+        /// Write a PNG contact sheet of up to 16 frames. Omit to skip.
         contact_sheet: Option<PathBuf>,
     },
     /// Serve native frames over the versioned binary stdio protocol.
     Serve {
         #[arg(long, required = true)]
+        /// Use binary stdin and stdout. Required.
         stdio: bool,
     },
     /// Filter a single EXR shot using companion surface guides.
     Temporal {
+        /// Directory of numbered EXRs with companion .aov files.
         frames: PathBuf,
         #[arg(short, long)]
+        /// Required output directory for the filtered frames, separate from the input.
         output: PathBuf,
         #[arg(long, allow_hyphen_values = true)]
+        /// Also write sRGB PNGs with an exposure of -32 to 32 EV. Default is EXR only.
         png_exposure: Option<f32>,
     },
     /// Assemble ordered PNG shot ranges with optional captions.
     Assemble {
+        /// Path to the JSON cut list.
         cut: PathBuf,
         #[arg(short, long)]
+        /// Required destination MP4 path.
         output: PathBuf,
         #[arg(long)]
+        /// Local TrueType or OpenType caption font. Defaults to an available system font.
         font: Option<PathBuf>,
     },
     /// Convert and lint an OpenUSD scene with the optional Python adapter.
     ImportUsd {
+        /// Path to the OpenUSD scene.
         source: PathBuf,
         #[arg(short, long)]
+        /// Destination shot JSON path. Required except with --lint.
         output: Option<PathBuf>,
         #[arg(long)]
+        /// Absolute camera prim path. Defaults to the sole visible camera.
         camera: Option<String>,
         #[arg(long)]
+        /// Check the scene without writing files. By default, write the converted shot.
         lint: bool,
     },
     /// Print the JSON Schema for shot files.

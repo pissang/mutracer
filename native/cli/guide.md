@@ -12,10 +12,10 @@ mutracer preview shot.json -o preview.mp4 --contact-sheet review.png
 mutracer render shot.json -o final.mp4 --size 1280x720 --spp 32
 ```
 
-Preview uses 384 × 216, 8 spp, every second frame and raw samples. Check the
-still for framing and material response. Use a contact sheet to review motion
-before rendering the final clip. Final defaults are 1280 × 720, 24 fps, 32 spp,
-fixed seed, OIDN and AgX. A preview takes a separate frame directory.
+Check the still for framing and material response. Use a contact sheet to
+review motion before rendering the final clip. Use separate output paths for
+preview and final renders. Run `mutracer <command> --help` for accepted options
+and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
 
 ## Authoring
 
@@ -34,10 +34,8 @@ fixed seed, OIDN and AgX. A preview takes a separate frame directory.
 - MaterialX growth. Use a MaterialX asset and keyframe a connected numeric
   interface through `material.inputs`. See `materialx-growth.json`.
 
-Start with the `turntable.json` and `material-sweep.json` examples. Inline
-geometry is limited to 10,000 vertices and 30,000 indices. Put larger model and
-data payloads in glTF/GLB or binary sidecars. Resolutions may have up to 8,192
-pixels per edge and 16,777,216 pixels total, subject to available GPU memory.
+Start with the `turntable.json` and `material-sweep.json` examples. Use
+glTF/GLB or binary sidecars for meshes that exceed the inline geometry limits.
 
 ## Cost, progress and resume
 
@@ -50,15 +48,15 @@ complexity.
 | 1280 × 720, 32 spp | 29.5 million |
 | 1920 × 1080, 64 spp | 132.7 million |
 
-Use a smaller frame, fewer samples or `--frames A-B` (inclusive)
-to estimate runtime. `validate` reports the workload without a GPU. Render
-progress reports frame times and an estimate after the second rendered frame.
-`--max-minutes` stops the worker at the time budget and keeps completed frames.
+Use a smaller frame, fewer samples or a short frame range to estimate runtime.
+`validate` reports the workload without a GPU. Render progress reports frame
+times and an estimate after the second rendered frame.
 
-Frames stay in `FILE.mp4.frames` or the directory given by `--keep-frames`.
-Rerun with the same shot, assets and effective settings to reuse completed
-frames. The supervisor automatically restarts a failed GPU worker. Change to
-a separate frame directory after editing the shot, assets or settings.
+Rerun with the same shot, assets, effective settings and frame directory to
+reuse completed frames after an interruption, including a `--max-minutes`
+timeout. The CLI automatically retries GPU failures. Use `--keep-frames` or
+change the output path to start a separate render after editing the shot,
+assets or settings.
 
 The CLI renders with the native GPU driver. macOS and Windows use their system encoders.
 On Linux the CLI uses ffmpeg when available and leaves the PNG sequence
