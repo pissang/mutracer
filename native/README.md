@@ -287,7 +287,9 @@ the affected samples before returning the image. Recovery has a ten-second
 total deadline. Recoverable explicit GPU errors allow up to twelve retries.
 Automatic replay requires an SDK-observed Metal queue, such as the one used by
 an SDK-created device or `Engine::from_metal`. A detected miss on an unobserved
-host queue returns an error. Caustics rendering has no checkpoint replay.
+host queue returns an error. If a beauty shader is incompatible with the
+sampling checks, the SDK logs a warning and renders that shader without
+silent-miss protection. Caustics rendering has no checkpoint replay.
 
 Checkpointing can retain an extra copy of the four accumulation buffers.
 Budget about 2% additional render time for scenes on the scale of SanMiguel,

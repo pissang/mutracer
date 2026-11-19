@@ -378,6 +378,9 @@ struct PipelineKey {
 }
 #[derive(Clone)]
 struct CachedPipeline {
+    // Specializations share the beauty source and layout. A checkpoint can expire
+    // without discarding the PSOs already compiled for its target.
+    guard_pipelines: Option<query_guard::Pipelines>,
     aov_pipelines: aov::PipelineCache,
     _shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
@@ -609,7 +612,6 @@ fn compile_pipeline(
     hardware: bool,
     guard_sampling: bool,
 ) -> Result<(CachedPipeline, bool)> {
-    let device = &gpu.device;
     let protected = guard_sampling && query_guard::enabled(gpu, hardware, scene);
     let key = PipelineKey {
         source,
@@ -639,13 +641,59 @@ fn compile_pipeline(
         return Ok((cached.clone(), true));
     }
     let _compiling = gpu.compilation.begin();
+    #[cfg(test)]
+    let invalid_source = injected.then(|| format!("{}\ninvalid_material_graph_shader", key.source));
+    #[cfg(test)]
+    let source = invalid_source.as_deref().unwrap_or(&key.source);
+    #[cfg(not(test))]
+    let source = key.source.as_str();
+    let (compiled, warning) = if protected {
+        let guarded = query_guard::instrument(source).and_then(|wgsl| {
+            #[cfg(test)]
+            let wgsl = query_guard::inject_misses(wgsl, key.query_window);
+            build_pipeline(gpu, scene, &key, &wgsl, true)
+        });
+        match guarded {
+            Ok(compiled) => (compiled, None),
+            Err(error) => (
+                build_pipeline(gpu, scene, &key, source, false)?,
+                Some(error),
+            ),
+        }
+    } else {
+        (build_pipeline(gpu, scene, &key, source, false)?, None)
+    };
+    if cache.len() >= 32 {
+        cache.clear();
+    }
+    cache.insert(key, compiled.clone());
+    gpu.compilation
+        .cached
+        .store(cache.len(), std::sync::atomic::Ordering::Release);
+    drop(cache);
+    if let Some(error) = warning {
+        native_log!(
+            "Warning: Metal HWRT silent-miss protection is unavailable for this shader; rendering without protection: {error}"
+        );
+    }
+    Ok((compiled, false))
+}
+
+fn build_pipeline(
+    gpu: &GpuDevice,
+    scene: &Scene,
+    key: &PipelineKey,
+    shader_source: &str,
+    protected: bool,
+) -> Result<CachedPipeline> {
+    let device = &gpu.device;
     let layouts: Vec<_> = scene
         .bind_groups
         .iter()
         .enumerate()
         .map(|(index, group)| {
             let mut entries: Vec<_> = group.layout.clone();
-            if index == layout::group::SCENE && hardware {
+            if index == layout::group::SCENE && key.hardware {
                 entries.extend([
                     wgpu::BindGroupLayoutEntry {
                         binding: layout::hwrt_binding::ACCELERATION as u32,
@@ -684,31 +732,12 @@ fn compile_pipeline(
         bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
         ..Default::default()
     });
-    let compiled = with_error_scopes(
+    with_error_scopes(
         device,
         || {
-            #[cfg(test)]
-            let shader_source = if injected {
-                format!("{}\ninvalid_material_graph_shader", key.source)
-            } else {
-                key.source.clone()
-            };
-            #[cfg(not(test))]
-            let shader_source = key.source.clone();
-            // Display-resolution AOVs derive their entry points from the original
-            // scene template. Only the beauty pipeline needs the workgroup canary.
-            let shader_source = if protected {
-                query_guard::instrument(
-                    shader_source,
-                    #[cfg(test)]
-                    key.query_window,
-                )?
-            } else {
-                shader_source
-            };
             #[cfg(target_os = "macos")]
             let native_source = if protected {
-                query_guard::execution_barrier_source(&shader_source)
+                query_guard::execution_barrier_source(shader_source)
             } else {
                 None
             };
@@ -717,41 +746,41 @@ fn compile_pipeline(
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("MuTracer path tracer"),
                 source: native_source
-                    .unwrap_or_else(|| wgpu::ShaderSource::Wgsl(shader_source.as_str().into())),
+                    .unwrap_or_else(|| wgpu::ShaderSource::Wgsl(shader_source.into())),
             });
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("MuTracer native path tracer"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: Some(&scene.entry_point),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[],
-                    ..Default::default()
-                },
-                cache: gpu.pipeline_cache.as_ref(),
-            });
+            let pipeline = |label, constants: &[(&str, f64)]| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: Some(&scene.entry_point),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants,
+                        ..Default::default()
+                    },
+                    cache: gpu.pipeline_cache.as_ref(),
+                })
+            };
             Ok(CachedPipeline {
                 aov_pipelines: aov::pipeline_cache(&key.source),
+                pipeline: pipeline("MuTracer native path tracer", &[]),
+                guard_pipelines: protected.then(|| query_guard::Pipelines {
+                    replay: pipeline("Workgroup-checked replay", &[("MT_CHECK_REPLAY_START", 1.)]),
+                    #[cfg(test)]
+                    miss: pipeline("Injected RT miss", &[("MT_TEST_MISS", 1.)]),
+                }),
                 _shader: shader,
                 layouts,
-                pipeline,
             })
         },
         |error| format!("Shader pipeline compilation failed: {error}").into(),
-    )?;
-    if cache.len() >= 32 {
-        cache.clear();
-    }
-    cache.insert(key, compiled.clone());
-    gpu.compilation
-        .cached
-        .store(cache.len(), std::sync::atomic::Ordering::Release);
-    Ok((compiled, false))
+    )
 }
 /// One render's view of a shared scene (S2): its camera and trace uniforms,
 /// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 struct Target {
+    query_guard: Option<query_guard::Guard>,
     workgroup_size: u32,
     caustic_sequence_offset: u32,
     caustics: Option<caustics::State>,
@@ -918,7 +947,7 @@ struct GpuScene {
     textures: HashMap<usize, wgpu::Texture>,
     samplers: HashMap<usize, wgpu::Sampler>,
     hardware: Option<hardware::Resources>,
-    query_guard: Option<query_guard::Resources>,
+    query_guard: Option<query_guard::Guard>,
     compile_seconds: f64,
 }
 impl GpuScene {
@@ -1150,11 +1179,6 @@ impl GpuScene {
         } else {
             None
         };
-        let query_guard = if query_guard::enabled(&gpu, hardware.is_some(), &scene) {
-            Some(query_guard::Resources::new(&gpu)?)
-        } else {
-            None
-        };
         let source = String::from_utf8(
             read(if use_hwrt {
                 scene
@@ -1178,12 +1202,14 @@ impl GpuScene {
             scene.entry_point == "main",
         )?;
         let CachedPipeline {
+            guard_pipelines,
             aov_pipelines,
             layouts,
             pipeline,
             _shader: depth_shader,
         } = compiled;
         let compile_seconds = shader_started.elapsed().as_secs_f64();
+        let query_guard = guard_pipelines.map(|p| p.bind(&gpu, None)).transpose()?;
         if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
             native_log!(
                 "{}",
@@ -1244,7 +1270,7 @@ impl GpuScene {
                 }
                 if index == layout::group::OUTPUT && scene.entry_point == "main" {
                     if let Some(guard) = &query_guard {
-                        entries.extend(guard.entries(&guard.unused_flag));
+                        entries.extend(guard.resources.entries(&guard.resources.unused_flag));
                     }
                 }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1262,6 +1288,7 @@ impl GpuScene {
                 .filter_map(|id| buffers.remove(&id).map(|b| (id, b)))
                 .collect();
             Some(Target {
+                query_guard: query_guard.clone(),
                 workgroup_size: 8,
                 caustic_sequence_offset: 0,
                 caustics: None,
@@ -1327,7 +1354,7 @@ impl GpuScene {
         Ok(())
     }
     fn sampling_group_rows(&self, target: &Target) -> u32 {
-        let height = if self.query_guard.is_some() && target.caustics.is_none() {
+        let height = if target.query_guard.is_some() {
             4
         } else {
             target.workgroup_size
@@ -1463,7 +1490,7 @@ impl GpuScene {
             .as_ref()
             .map(|p| caustics::State::extend_scene(&self.scene, p))
             .unwrap_or_else(|| self.scene.clone());
-        let (pipeline, layouts, aov_shader, aov_pipelines) = match packet.shader {
+        let (pipeline, layouts, aov_shader, aov_pipelines, query_guard) = match packet.shader {
             Some(source) => {
                 let (compiled, _) = compile_pipeline(
                     &self.gpu,
@@ -1477,6 +1504,10 @@ impl GpuScene {
                     compiled.layouts,
                     compiled._shader,
                     compiled.aov_pipelines,
+                    compiled
+                        .guard_pipelines
+                        .map(|p| p.bind(&self.gpu, self.query_guard.as_ref()))
+                        .transpose()?,
                 )
             }
             None => (
@@ -1484,6 +1515,7 @@ impl GpuScene {
                 self.layouts.clone(),
                 self.depth_shader.clone(),
                 self.aov_pipelines.clone(),
+                self.query_guard.clone(),
             ),
         };
         let pixels = size[0] as u64 * size[1] as u64;
@@ -1559,12 +1591,9 @@ impl GpuScene {
                     resource: buffer.as_entire_binding(),
                 })
                 .collect();
-            if index == layout::group::OUTPUT
-                && caustics.is_none()
-                && self.scene.entry_point == "main"
-            {
-                if let Some(guard) = &self.query_guard {
-                    entries.extend(guard.entries(&guard.unused_flag));
+            if index == layout::group::OUTPUT {
+                if let Some(guard) = &query_guard {
+                    entries.extend(guard.resources.entries(&guard.resources.unused_flag));
                 }
             }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1615,6 +1644,7 @@ impl GpuScene {
             caustics.is_some(),
         );
         Ok(Target {
+            query_guard,
             workgroup_size,
             caustic_sequence_offset,
             caustics,
@@ -1650,7 +1680,7 @@ impl GpuScene {
             return Err("Total samples must be 1..16384".into());
         }
         if target.dispatches_per_buffer(additional) > 1
-            || (self.query_guard.is_some() && target.sampling_batch.is_some())
+            || (target.sampling_batch.is_some() && target.query_guard.is_some())
         {
             return self.dispatch_target_batched(target, start, additional, timer);
         }
@@ -1818,7 +1848,7 @@ impl GpuScene {
         Ok(bytemuck::pod_collect_to_vec(&bytes))
     }
     fn reset_target(&self, target: &mut Target) -> Result<()> {
-        let proof = self
+        let proof = target
             .query_guard
             .as_ref()
             .map(|_| native_completion::Recording::new());

@@ -396,8 +396,8 @@ impl Prepared {
     }
 }
 impl GpuScene {
-    pub(super) fn native_sampling_time(&self) -> bool {
-        self.query_guard.is_some() && self.gpu.queue.observed.available()
+    pub(super) fn native_sampling_time(&self, target: &Target) -> bool {
+        target.query_guard.is_some() && self.gpu.queue.observed.available()
     }
     pub(super) fn write_last_sample(&self, target: &Target, end: u32) {
         let last = &target.frames[(end - 1) as usize];
@@ -533,7 +533,7 @@ impl GpuScene {
             .shared
             .as_mut()?
             .fill_idle(&bindings.bytes[..count as usize * bindings.stride]);
-        let timer = if self.native_sampling_time() {
+        let timer = if self.native_sampling_time(target) {
             None
         } else {
             profiling::GpuTimer::realtime(&self.gpu.device, 1, false)
@@ -603,7 +603,7 @@ impl GpuScene {
         let started = std::time::Instant::now();
         let end = start + additional;
         let replay = checkpoint.is_some();
-        let refresh = if checkpoint.is_none() && self.query_guard.is_some() {
+        let refresh = if checkpoint.is_none() && target.query_guard.is_some() {
             target
                 .sampling_batch
                 .as_ref()
@@ -625,7 +625,7 @@ impl GpuScene {
         };
         let mut state = target.sampling_batch.as_ref().unwrap().lock().unwrap();
         let checkpoint = checkpoint.or_else(|| {
-            self.query_guard.as_ref().map(|_| {
+            target.query_guard.as_ref().map(|_| {
                 if refresh {
                     state.checkpoint = Some(std::sync::Arc::new(
                         crate::query_guard::Checkpoint::capture(self, target, start),
@@ -663,7 +663,7 @@ impl GpuScene {
                 .inspect(|_| hook.partial_sample = None)
         };
         let pipeline = if replay {
-            checkpoint.as_ref().unwrap().replay_pipeline(self, target)
+            &target.query_guard.as_ref().unwrap().pipelines.replay
         } else {
             target.pipeline.as_ref().unwrap_or(&self.pipeline)
         };
@@ -679,11 +679,12 @@ impl GpuScene {
             let output = checkpoint.as_ref().map_or(&target.groups[1], |c| &c.group);
             // Force every ray (including the canary) to miss during this physical batch.
             #[cfg(test)]
-            let fault = (checkpoint.is_some()
-                && crate::query_guard::injects(&self.gpu, first, until))
-            .then(|| crate::query_guard::Checkpoint::pipeline(self, target, ("MT_TEST_MISS", 1.)));
-            #[cfg(test)]
-            let pipeline = fault.as_ref().unwrap_or(pipeline);
+            let pipeline = match &target.query_guard {
+                Some(guard) if crate::query_guard::injects(&self.gpu, first, until) => {
+                    &guard.pipelines.miss
+                }
+                _ => pipeline,
+            };
             let encoder = self.encode_samples(
                 target,
                 pipeline,

@@ -302,12 +302,16 @@ fn coverage_graph() -> MaterialGraph {
 #[test]
 fn software_and_hwrt_material_graph_sources_validate_through_aot() {
     let (mut scene, material) = scene();
-    for graph in [graph(), coverage_graph()] {
+    for (graph, custom_coverage) in [(graph(), false), (coverage_graph(), true)] {
         scene.material_mut(material).unwrap().graph = Some(graph);
         let descriptor = scene.descriptor().unwrap();
         for hardware in [false, true] {
             let (scene, assets, _) = crate::scene::prepare_retained(&descriptor, hardware).unwrap();
             let source = std::str::from_utf8(&assets[&scene.shader]).unwrap();
+            if hardware && custom_coverage {
+                assert!(source.contains("fn mx_eval"));
+                crate::query_guard::template_tests::assert_instrumented(source);
+            }
             let module = naga::front::wgsl::parse_str(source)
                 .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
             naga::valid::Validator::new(

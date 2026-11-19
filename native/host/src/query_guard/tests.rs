@@ -178,6 +178,7 @@ fn guarded_replay_restores_all_accumulations_and_preserves_the_verified_prefix()
         .query_guard
         .as_ref()
         .unwrap()
+        .resources
         .window
         .as_ref()
         .unwrap();
@@ -212,4 +213,125 @@ fn guarded_replay_restores_all_accumulations_and_preserves_the_verified_prefix()
     assert_eq!(gpu.recovery_test.lock().unwrap().repairs, previous + 1);
     assert_eq!(read(&target), expected);
     assert_eq!(renderer.read_target(&target, 0).unwrap(), visible);
+}
+
+#[test]
+#[ignore = "requires a real Metal GPU"]
+fn incompatible_beauty_shaders_render_without_guard_and_targets_reselect_their_pipelines() {
+    let _test = crate::abi_test_lock();
+    let gpu = GpuDevice::with_backend(1).unwrap();
+    if gpu.info.backend != wgpu::Backend::Metal {
+        return;
+    }
+    let descriptor = scene::tests::translated_camera_input();
+    let (mut scene, mut assets, retained) = scene::prepare_retained(&descriptor, true).unwrap();
+    let source = String::from_utf8(assets[&scene.shader].clone()).unwrap();
+    // Equivalent WGSL with a spelling the guard does not recognize.
+    let incompatible = source.replace("@workgroup_size(8, 8, 1)", "@workgroup_size(8, 8)");
+    assert!(instrument(&incompatible).is_err());
+    assets.insert(scene.shader, incompatible.clone().into_bytes());
+    scene.hwrt = Some(
+        hardware::capture_from_resources(&mut assets, scene.native_layout.as_ref().unwrap())
+            .unwrap(),
+    );
+    let size = [scene.width, scene.height];
+    let offset = layout::header::CAMERA_OFFSET * 4;
+    let camera =
+        u32::from_le_bytes(descriptor[offset..offset + 4].try_into().unwrap()) as usize * 4;
+    // A native log callback receives one warning on the cache miss. Reusing
+    // that fallback for another target should not warn on each render.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static WARNINGS: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C" fn count_warning(_: *mut std::ffi::c_void, bytes: *const u8, len: usize) {
+        let line = unsafe { std::slice::from_raw_parts(bytes, len) };
+        if line.starts_with(b"Warning: Metal HWRT silent-miss protection") {
+            WARNINGS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    struct LogRegistration;
+    impl Drop for LogRegistration {
+        fn drop(&mut self) {
+            unsafe {
+                crate::logging::mt_set_log_callback(None, std::ptr::null_mut());
+            }
+        }
+    }
+    WARNINGS.store(0, Ordering::Relaxed);
+    unsafe {
+        crate::logging::mt_set_log_callback(Some(count_warning), std::ptr::null_mut());
+    }
+    let _registration = LogRegistration;
+    let (renderer, mut target) = GpuScene::new(
+        scene,
+        &RenderOptions {
+            flags: 4,
+            ..Default::default()
+        },
+        &assets,
+        gpu.clone(),
+    )
+    .unwrap();
+    let packet = || {
+        retained
+            .target(
+                &settings::RenderSettings::default(),
+                size,
+                0,
+                0,
+                true,
+                &descriptor[camera..camera + 128],
+                &gpu.loss,
+                false,
+            )
+            .unwrap()
+    };
+    let render = |target: &mut Target| {
+        renderer.add_samples(target, 4).unwrap();
+        renderer.read_target(target, 0).unwrap()
+    };
+    assert!(target.query_guard.is_none());
+    let reference = render(&mut target);
+    let mut previous_pipelines = None;
+    for (shader, guarded) in [(&source, true), (&incompatible, false), (&source, true)] {
+        let mut next = packet();
+        next.shader = Some(shader.clone());
+        target = renderer.target(next, size, Some(target)).unwrap();
+        assert_eq!(target.query_guard.is_some(), guarded);
+        if let Some(guard) = &target.query_guard {
+            let pipelines = (guard.pipelines.replay.clone(), guard.pipelines.miss.clone());
+            if let Some(previous) = previous_pipelines.replace(pipelines.clone()) {
+                assert_eq!(pipelines, previous);
+            }
+        }
+        assert_eq!(render(&mut target), reference);
+    }
+    // Compile an actual AOT target variant and use both of its warmed PSOs.
+    let next = retained
+        .target(
+            &settings::RenderSettings {
+                sampling_pattern: 2,
+                ..Default::default()
+            },
+            size,
+            0,
+            0,
+            true,
+            &descriptor[camera..camera + 128],
+            &gpu.loss,
+            false,
+        )
+        .unwrap();
+    assert!(next.shader.is_some());
+    target = renderer.target(next, size, Some(target)).unwrap();
+    let variant = &target.query_guard.as_ref().unwrap().pipelines;
+    let (base_replay, base_miss) = previous_pipelines.unwrap();
+    assert_ne!(variant.replay, base_replay);
+    assert_ne!(variant.miss, base_miss);
+    let expected = render(&mut target);
+    renderer.reset_target(&mut target).unwrap();
+    gpu.recovery_test.lock().unwrap().silent_sample = Some(0);
+    let before = gpu.recovery_test.lock().unwrap().repairs;
+    assert_eq!(render(&mut target), expected);
+    assert_eq!(gpu.recovery_test.lock().unwrap().repairs, before + 1);
+    assert_eq!(WARNINGS.load(Ordering::Relaxed), 1);
 }

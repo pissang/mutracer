@@ -2348,7 +2348,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         }) {
         next.commit(scene, t)
     } else {
-        let timer = if t.sampling_batch.is_some() && scene.native_sampling_time() {
+        let timer = if t.sampling_batch.is_some() && scene.native_sampling_time(t) {
             None
         } else {
             crate::profiling::GpuTimer::realtime(&gpu.device, t.timer_pairs(count), false)
@@ -2401,7 +2401,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     } else {
         job.following
     };
-    if next > 0 && t.sampling_batch.is_some() && scene.query_guard.is_some() {
+    if next > 0 && t.sampling_batch.is_some() && t.query_guard.is_some() {
         let count = t.sampling_flight_samples(budget.min(next));
         job.prepared = scene.prepare_next(
             t,

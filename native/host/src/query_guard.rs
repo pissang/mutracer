@@ -23,6 +23,30 @@ pub(crate) fn injects(gpu: &GpuDevice, start: u32, end: u32) -> bool {
         .silent_sample
         .is_some_and(|sample| (start..end).contains(&sample))
 }
+#[derive(Clone)]
+pub(super) struct Pipelines {
+    pub replay: wgpu::ComputePipeline,
+    #[cfg(test)]
+    pub miss: wgpu::ComputePipeline,
+}
+
+#[derive(Clone)]
+pub(super) struct Guard {
+    pub resources: Arc<Resources>,
+    pub pipelines: Pipelines,
+}
+impl Pipelines {
+    pub fn bind(self, gpu: &GpuDevice, scene: Option<&Guard>) -> Result<Guard> {
+        let resources = match scene {
+            Some(guard) => guard.resources.clone(),
+            None => Arc::new(Resources::new(gpu)?),
+        };
+        Ok(Guard {
+            resources,
+            pipelines: self,
+        })
+    }
+}
 pub struct Resources {
     tlas: wgpu::Tlas,
     pub unused_flag: wgpu::Buffer,
@@ -175,7 +199,7 @@ pub fn layout_entries(#[cfg(test)] window: bool) -> Vec<wgpu::BindGroupLayoutEnt
     }
     entries
 }
-pub fn instrument(source: String, #[cfg(test)] window: bool) -> Result<String> {
+pub fn instrument(source: &str) -> Result<String> {
     let entry = "@compute @workgroup_size(8, 8, 1)\nfn main(@builtin(global_invocation_id) globalId: vec3u)";
     if !source.contains(entry) {
         return Err("Unexpected HWRT beauty entry".into());
@@ -184,7 +208,7 @@ pub fn instrument(source: String, #[cfg(test)] window: bool) -> Result<String> {
     // one query initializer so ordinary rays and the private AS share traversal.
     let query = "rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u,";
     let committed = "let hit = rayQueryGetCommittedIntersection(&query);";
-    if !source.contains(query) || !source.contains(committed) {
+    if !source.contains("fn mtTrace(") || !source.contains(query) || !source.contains(committed) {
         return Err("Missing native HWRT intersection routine".into());
     }
     let mut source=source.replace(entry, "fn mtBeauty(globalId: vec3u)")
@@ -193,19 +217,22 @@ pub fn instrument(source: String, #[cfg(test)] window: bool) -> Result<String> {
         .replace(query, "rayQueryInitialize(&query, accel, RayDesc(select(flags, 5u, markerRay), 255u /* all instances */,")
         .replace(committed, "let hit = rayQueryGetCommittedIntersection(&query); if markerRay { var marker: MtHit; marker.kind = hit.kind; return marker; }");
     source.push_str(include_str!("workgroup_canary.wgsl"));
-    #[cfg(test)]
-    {
-        let mask = if window {
-            source.push_str(include_str!("query_guard/test_window.wgsl"));
-            "select(mtWindowMask(markerRay), 0u, MT_TEST_MISS)"
-        } else {
-            "select(255u, 0u, MT_TEST_MISS)"
-        };
-        source = source.replace("255u /* all instances */", mask);
-        source.push_str("\noverride MT_TEST_MISS: bool = false;\n");
-    }
     Ok(source)
 }
+
+#[cfg(test)]
+pub(super) fn inject_misses(mut source: String, window: bool) -> String {
+    let mask = if window {
+        source.push_str(include_str!("query_guard/test_window.wgsl"));
+        "select(mtWindowMask(markerRay), 0u, MT_TEST_MISS)"
+    } else {
+        "select(255u, 0u, MT_TEST_MISS)"
+    };
+    source = source.replace("255u /* all instances */", mask);
+    source.push_str("\noverride MT_TEST_MISS: bool = false;\n");
+    source
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn execution_barrier_source(source: &str) -> Option<wgpu::ShaderSource<'static>> {
     use wgpu::naga::{Barrier, Statement, front::wgsl};
@@ -395,7 +422,6 @@ pub struct Checkpoint {
     #[cfg(target_os = "macos")]
     pub(super) shared: Option<SharedFlag>,
     pub group: wgpu::BindGroup,
-    replay_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
 }
 impl Checkpoint {
     pub(super) fn direct_receipt(&self) -> Option<Receipt> {
@@ -409,38 +435,6 @@ impl Checkpoint {
         {
             None
         }
-    }
-
-    pub fn replay_pipeline(&self, scene: &GpuScene, target: &Target) -> &wgpu::ComputePipeline {
-        self.replay_pipeline
-            .get_or_init(|| Self::pipeline(scene, target, ("MT_CHECK_REPLAY_START", 1.)))
-    }
-    pub(super) fn pipeline(
-        scene: &GpuScene,
-        target: &Target,
-        constant: (&str, f64),
-    ) -> wgpu::ComputePipeline {
-        let device = &scene.gpu.device;
-        let ordinary = target.pipeline.as_ref().unwrap_or(&scene.pipeline);
-        let groups: Vec<_> = (0..4)
-            .map(|index| ordinary.get_bind_group_layout(index))
-            .collect();
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Workgroup-checked replay"),
-            bind_group_layouts: &groups.iter().map(Some).collect::<Vec<_>>(),
-            ..Default::default()
-        });
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Workgroup-checked replay"),
-            layout: Some(&layout),
-            module: &target.aov_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[constant],
-                ..Default::default()
-            },
-            cache: scene.gpu.pipeline_cache.as_ref(),
-        })
     }
 
     pub fn check(&self) -> Result<bool> {
@@ -463,7 +457,7 @@ impl Checkpoint {
     }
     pub fn capture(scene: &GpuScene, target: &Target, start: u32) -> Self {
         let device = &scene.gpu.device;
-        let resources = scene.query_guard.as_ref().unwrap();
+        let resources = &target.query_guard.as_ref().unwrap().resources;
         let descriptor = wgpu::BufferDescriptor {
             label: Some("Checkpoint query flag"),
             size: 4,
@@ -523,7 +517,6 @@ impl Checkpoint {
             native: Mutex::new(recording.finish()),
             complete: std::sync::atomic::AtomicBool::new(start == 0),
             copies,
-            replay_pipeline: Default::default(),
             flag,
             #[cfg(target_os = "macos")]
             shared,
@@ -805,5 +798,7 @@ pub(crate) fn assert_audit_attempts(gpu: &GpuDevice, start: u32, counts: &[u32])
     }
 }
 
+#[cfg(test)]
+pub(crate) mod template_tests;
 #[cfg(test)]
 mod tests;
