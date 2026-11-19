@@ -60,9 +60,9 @@ Rerun with the same shot, assets and effective settings to reuse completed
 frames. The supervisor automatically restarts a failed GPU worker. Change to
 a separate frame directory after editing the shot, assets or settings.
 
-The CLI renders with the native GPU driver. macOS uses its system encoder.
-On other platforms the CLI uses ffmpeg when available and leaves the PNG
-sequence when it is absent. To encode separately, run
+The CLI renders with the native GPU driver. macOS and Windows use their system encoders.
+On Linux the CLI uses ffmpeg when available and leaves the PNG sequence
+when it is absent. To encode separately, run
 `mutracer encode path/to/frames --fps 24 -o output.mp4`.
 
 For HDR, render with `--format exr`. Add `--aovs` to capture surface guides

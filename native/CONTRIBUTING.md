@@ -295,6 +295,23 @@ targets with Node, npm, scriptc and Rust tools removed from `PATH`. These CPU
 consumers check the ABI and scene creation/destruction. Rendering still requires
 `native:ci:gpu` validation.
 
+## Video CLI packages
+
+Build the SDK on the target platform and point `MUTRACER_AOT_ARCHIVE` to the
+core archive. Run the CLI tests and compile the Node wrapper before packaging.
+
+```sh
+cargo test --release --locked --manifest-path native/cli/Cargo.toml
+npm --prefix cli run build
+python3 native/cli/pack.py /absolute/path/to/mutracer -o /absolute/package-dir
+```
+
+The pack command reads the target from the executable and writes a standalone
+archive, a Python wheel and the npm wrapper and platform tarballs. Pass
+`mutracer.exe` on Windows. Build and smoke-test macOS arm64, Linux x64 and
+Windows x64 on their own hosts. Test the extracted CLI, the installed wheel
+and the installed npm wrapper with the executable override unset.
+
 ## Architecture
 
 ### Runtime, ownership and errors

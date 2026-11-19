@@ -11,6 +11,9 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = []
 
+[project.scripts]
+mutracer = "mutracer.runner:main"
+
 [project.optional-dependencies]
 numpy = ["numpy"]
 usd = ["usd-core"]

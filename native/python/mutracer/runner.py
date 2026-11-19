@@ -61,3 +61,16 @@ def invoke(command: str, shot: Path, output: Path | None = None,
             stderr.seek(0)
             raise RenderError(status, args, stderr=stderr.read())
     return events
+
+
+def main():
+    """Forward the console entry point to the platform executable."""
+    import sys
+
+    executable = binary()
+    if Path(executable).resolve() == Path(sys.argv[0]).resolve():
+        print("Native MuTracer binary missing. Set MUTRACER_BIN to a native executable.", file=sys.stderr)
+        return 3
+    environment = os.environ.copy()
+    environment.setdefault("MUTRACER_PYTHON", sys.executable)
+    return subprocess.call([executable, *sys.argv[1:]], env=environment)

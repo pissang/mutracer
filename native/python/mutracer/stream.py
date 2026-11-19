@@ -188,35 +188,41 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
 
             for frame in range(count):
                 t = frame / rate
-                changes = callback(t, frame)
-                if changes:
-                    session.edit(changes)
-                    state.update(changes)
+                changes = callback(t, frame) or {}
+                state.update(changes)
                 key = sha256(json.dumps(state, allow_nan=False, sort_keys=True,
                                         separators=(",", ":")).encode()).hexdigest()
-                path = directory / f"frame_{frame:06}.png"
+                path = directory / f"frame_{frame:06d}.png"
                 record = path.with_suffix(".json")
+                reusable = False
                 if path.exists() and record.exists():
                     old = json.loads(record.read_text(encoding="utf-8"))
                     if old["state"] != key:
                         raise ValueError(f"Callback settings changed at frame {frame}. Use a new frame directory.")
-                    if old["sha256"] == sha256(path.read_bytes()).hexdigest():
-                        emit({"event": "reused", "frame": frame, "path": str(path)})
-                        continue
+                    reusable = old["sha256"] == sha256(path.read_bytes()).hexdigest()
+                pending = changes
                 for attempt in range(3):
                     try:
-                        header, payload = session.render(frame, t, settings=settings)
+                        if session is None:
+                            session = Session()
+                            if session.scene(shot, base) != identity:
+                                raise ValueError("Assets changed while restarting the render worker.")
+                        if pending:
+                            session.edit(pending)
+                        if not reusable:
+                            header, payload = session.render(frame, t, settings=settings)
                         break
                     except RenderError as error:
                         if error.returncode != 5 or attempt == 2:
                             raise
                         emit({"event": "retry", "frame": frame, "attempt": attempt + 1})
-                        session.close()
-                        session = Session()
-                        if session.scene(shot, base) != identity:
-                            raise ValueError("Assets changed while restarting the render worker.")
-                        if state:
-                            session.edit(state)
+                        if session is not None:
+                            session.close()
+                        session = None
+                        pending = state
+                if reusable:
+                    emit({"event": "reused", "frame": frame, "path": str(path)})
+                    continue
                 _atomic_bytes(path, payload)
                 _atomic_bytes(record, json.dumps({"state": key, "sha256": sha256(payload).hexdigest()}).encode())
                 emit({"event": "frame", "frame": frame, "path": str(path), "elapsedMs": header["elapsedMs"]})

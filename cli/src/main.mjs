@@ -12,7 +12,7 @@ import {loaders} from './load.mjs';
 import {strictConversion} from './strict.mjs';
 import {NativeError, Worker, nativeCommand} from './worker.mjs';
 
-const emit = record => console.log(JSON.stringify(record));
+const emit = record => process.stdout.write(JSON.stringify(record) + '\n');
 const digest = data => createHash('sha256').update(data).digest('hex');
 const hashJson = object => digest(JSON.stringify(object));
 const number = (value, label, min, max) => {
@@ -173,6 +173,9 @@ async function main() {
     return;
   }
   const url = pathToFileURL(file);
+  // Keep authored diagnostics away from the CLI's JSON lines.
+  console.log = console.error.bind(console);
+  console.info = console.log;
   const module = await import(url.href);
   const opts = options(module.output,command,values);
   if (values.output && !values.output.toLowerCase().endsWith(command === 'still' ? '.png' : '.mp4')) {

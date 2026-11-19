@@ -1,5 +1,7 @@
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {createRequire} from 'node:module';
+import {dirname, join} from 'node:path';
 
 const maxHeader = 1024 ** 2;
 const maxPayload = 512 * 1024 ** 2;
@@ -54,7 +56,16 @@ class Reader {
 }
 
 export function binary() {
-  return process.env.MUTRACER_BIN ?? (process.platform === 'win32' ? 'mutracer.exe' : 'mutracer');
+  if (process.env.MUTRACER_BIN) return process.env.MUTRACER_BIN;
+  const name = process.platform === 'win32' ? 'mutracer.exe' : 'mutracer';
+  const pkg = `@meimu/mutracer-cli-${process.platform}-${process.arch}`;
+  try {
+    const require = createRequire(import.meta.url);
+    return join(dirname(require.resolve(pkg + '/package.json')), 'bin', name);
+  } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    return name;
+  }
 }
 
 export class Worker {

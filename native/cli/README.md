@@ -17,5 +17,16 @@ native/cli/target/release/mutracer validate native/cli/examples/material-sweep.j
 ```
 
 On Windows the binary is `mutracer.exe`. Rendering uses the GPU driver and
-bundled OIDN weights. On macOS encoding uses AVFoundation. On other platforms,
-install ffmpeg with H.264 encoding to produce MP4 or use the PNG sequence.
+bundled OIDN weights. Encoding uses AVFoundation on macOS and Media Foundation on Windows. On
+Linux, install ffmpeg with H.264 encoding to produce MP4 or use the PNG sequence.
+
+## Install a local package
+
+Install a platform wheel with `python -m pip install PATH.whl` to get the
+`mutracer` executable and Python API. Install both the Node wrapper tarball
+and its matching platform tarball with npm to use `mutracer-js`. The
+standalone archive contains the executable and sample shots. Use the archive
+that matches your system.
+
+For editors with agent skills, use [the MuTracer video skill](skills/mutracer-video/SKILL.md)
+to follow the validate, still, preview and render workflow.

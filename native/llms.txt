@@ -11,6 +11,8 @@
 - API reference: options, defaults, errors and lifetimes live on each C declaration in `include/*.h` and on the Rust items in `host/src/api/` and `host/src/scene_api/`; the guides cover workflows and behavior across calls.
 - C conventions: check every `mt_status`, initialize records with `*_default()`, query sizes with NULL/0, compare `mt_abi_version()`; engine images are top row first, context images bottom row first; [conventions](README.md#c-api-conventions).
 
+- Video CLI: JSON shots, previews, resumable sequences, Python and Node frontends. [Usage](cli/README.md), [agent guide](cli/guide.md).
+
 ## Scenes
 
 - Handles, defaults, ownership and threads: [build a scene](docs/scene.md#build-a-scene).

@@ -19,6 +19,7 @@ use std::{
 
 #[derive(Parser)]
 #[command(
+    name = "mutracer",
     version,
     about = "Render MuTracer shots to PNG frames and MP4 on the native GPU."
 )]

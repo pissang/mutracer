@@ -8,6 +8,9 @@ use std::{
 #[cfg(target_os = "macos")]
 #[path = "encode_macos.rs"]
 mod macos;
+#[cfg(target_os = "windows")]
+#[path = "encode_windows.rs"]
+mod windows;
 
 #[derive(Clone, Copy)]
 pub struct Rate {
@@ -112,11 +115,13 @@ pub fn encode(frames: &[PathBuf], dest: &Path, rate: Rate) -> Result<bool> {
 fn platform_encode(frames: &[PathBuf], path: &Path, size: [u32; 2], rate: Rate) -> Result<bool> {
     #[cfg(target_os = "macos")]
     return macos::encode(frames, path, size, rate).map(|()| true);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return windows::encode(frames, path, size, rate).map(|()| true);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     return ffmpeg(frames, path, size, rate);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn ffmpeg(frames: &[PathBuf], path: &Path, [width, height]: [u32; 2], rate: Rate) -> Result<bool> {
     use image::GenericImageView;
     use std::{
