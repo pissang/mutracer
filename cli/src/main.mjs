@@ -61,9 +61,12 @@ function options(input, command, values) {
   const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
   const offset = number(input.sampleSequenceOffset ?? 0, 'sampleSequenceOffset', 0, 0xffffffff);
   if (offset + spp > 0x100000000) throw new Error('Sequence range exceeds 32-bit sample indices.');
+  if (values.frames !== undefined && !/^\d+(?:-\d+)?$/.test(values.frames)) {
+    throw new Error('Expected --frames N or A-B (inclusive).');
+  }
   const range = values.frames?.split('-') ?? [0,count-1];
-  if (range.length !== 2) throw new Error('Expected --frames A-B.');
-  const [first,last] = range.map(frame => number(frame,'Frame',0,count-1));
+  const first = number(range[0],'Frame',0,count-1);
+  const last = number(range[1] ?? first,'Frame',0,count-1);
   if (first > last) throw new Error('Frame range starts after it ends.');
   const time = Number(values.t ?? 0);
   if (command === 'still' && (!Number.isFinite(time) || time < 0 || time > duration)) throw new Error('Still time must be within the shot.');
@@ -169,7 +172,8 @@ async function lock(directory) {
 async function main() {
   const {command,file,values} = args();
   if (!command) {
-    console.log('Usage: mutracer-js validate|still|preview|render SHOT.mjs [-o FILE] [--size WxH] [--spp N]');
+    console.log('Usage: mutracer-js validate|still|preview|render SHOT.mjs [-o FILE] [--size WxH] [--spp N] [--frames N|A-B]\n' +
+      'Frame indices are zero-based. Ranges are inclusive. By default, use the whole shot.');
     return;
   }
   const url = pathToFileURL(file);

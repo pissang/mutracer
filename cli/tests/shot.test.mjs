@@ -20,6 +20,15 @@ test('native-backed glTF loader decodes the texture and validates a repeatable p
   assert.equal(JSON.parse(stdout).event,'validated');
 });
 
+test('a single frame index selects the same work as an inclusive one-frame range', {skip: !native}, async () => {
+  const file = fileURLToPath(new URL('../examples/gltf-animation.js',import.meta.url));
+  const args = [binary,'validate',file,'--size','64x48','--spp','2','--frames'];
+  const single = JSON.parse((await run(process.execPath,[...args,'10'])).stdout);
+  const range = JSON.parse((await run(process.execPath,[...args,'10-10'])).stdout);
+  assert.equal(single.pixelSamples,64*48*2);
+  assert.equal(range.pixelSamples,single.pixelSamples);
+});
+
 test('unsupported materials report the originating object', {skip: !native}, async () => {
   const dir = await mkdtemp(join(tmpdir(),'mutracer-node-'));
   try {

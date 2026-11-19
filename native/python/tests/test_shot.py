@@ -5,7 +5,7 @@ import struct
 from tempfile import TemporaryDirectory
 import unittest
 
-from mutracer import Camera, Instances, Keys, Mesh, Output, Shot
+from mutracer import Camera, Instances, Keys, Mesh, Output, RenderError, Shot
 
 
 def shot(mesh):
@@ -13,6 +13,18 @@ def shot(mesh):
 
 
 class ShotTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("MUTRACER_BIN"), "requires the native CLI")
+    def test_render_accepts_a_single_frame_index(self):
+        with TemporaryDirectory() as path:
+            base = Path(path)
+            scene = shot(Mesh("tri", shape="box"))
+            scene.save(base / "shot.json")
+            events = []
+            with self.assertRaises(RenderError) as error:
+                scene.render(base / "result.mp4", frames=2, max_minutes=2e-11, progress=events.append)
+            self.assertEqual(error.exception.returncode, 4)
+            self.assertEqual(events[0]["cost"]["frames"], 1)
+
     def test_keys_bake_and_json(self):
         keys = Keys.bake(0.1, 24, lambda time: [time, 0, 0])
         self.assertEqual([k[0] for k in keys.keys], [0, 1 / 24, 2 / 24, 0.1])

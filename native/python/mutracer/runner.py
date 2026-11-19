@@ -45,7 +45,7 @@ def invoke(command: str, shot: Path, output: Path | None = None,
             continue
         if key == "size" and not isinstance(value, str):
             value = "x".join(map(str, value))
-        if key == "frames" and not isinstance(value, str):
+        if key == "frames" and not isinstance(value, (str, int)):
             value = "-".join(map(str, value))
         args.extend(("--" + key.replace("_", "-"), str(value)))
 

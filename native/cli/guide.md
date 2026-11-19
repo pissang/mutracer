@@ -48,7 +48,8 @@ complexity.
 | 1280 × 720, 32 spp | 29.5 million |
 | 1920 × 1080, 64 spp | 132.7 million |
 
-Use a smaller frame, fewer samples or a short frame range to estimate runtime.
+Use a smaller frame, fewer samples or a short range such as `--frames 10-12`
+to estimate runtime. Use `--frames 10` to render just frame 10.
 `validate` reports the workload without a GPU. Render progress reports frame
 times and an estimate after the second rendered frame.
 

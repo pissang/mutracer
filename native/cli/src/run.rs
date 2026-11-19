@@ -85,8 +85,8 @@ pub struct Sequence {
     #[arg(long)]
     /// Source rate from 1 to 240 fps. Defaults to shot fps. Preview plays at half this rate.
     pub fps: Option<u32>,
-    #[arg(long, value_name = "A-B", value_parser = parse_range)]
-    /// Inclusive range of zero-based shot frames at the effective fps. Defaults to the whole shot.
+    #[arg(long, value_name = "N|A-B", value_parser = parse_range)]
+    /// One zero-based frame index or an inclusive range at the effective fps. Defaults to the whole shot.
     pub frames: Option<[u32; 2]>,
     #[arg(long, value_name = "DIR")]
     /// Directory for completed and resumable frames. Defaults to <output>.frames.
@@ -173,7 +173,7 @@ fn parse_size(value: &str) -> std::result::Result<[u32; 2], String> {
     ])
 }
 fn parse_range(value: &str) -> std::result::Result<[u32; 2], String> {
-    let (a, b) = value.split_once('-').ok_or("expected A-B")?;
+    let (a, b) = value.split_once('-').unwrap_or((value, value));
     Ok([
         a.parse().map_err(|_| "invalid first frame")?,
         b.parse().map_err(|_| "invalid last frame")?,

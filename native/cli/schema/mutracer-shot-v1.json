@@ -454,7 +454,11 @@
           "default": [1280, 720]
         },
         "fps": {"type": "integer", "minimum": 1, "maximum": 240, "default": 24},
-        "duration": {"type": "number", "exclusiveMinimum": 0},
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Shot length in seconds, excluding the endpoint. The --frames CLI option selects one zero-based index or an inclusive index range at the effective fps."
+        },
         "spp": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 32},
         "seed": {"enum": ["fixed", "frame"], "default": "fixed"},
         "seedValue": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 12345},

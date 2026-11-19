@@ -54,6 +54,53 @@ fn example_shots_pass_native_cpu_preparation() {
 }
 
 #[test]
+fn frame_selection_accepts_one_index_and_inclusive_ranges() {
+    let temp = tempfile::tempdir().unwrap();
+    for (action, selection, count) in [
+        ("render", "10", 1),
+        ("render", "10-10", 1),
+        ("render", "10-12", 3),
+        ("preview", "10", 1),
+        ("preview", "10-12", 2),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_mutracer"))
+            .arg(action)
+            .arg(fixture("examples/turntable.json"))
+            // Let validation and planning run, but expire before starting a GPU worker.
+            .args([
+                "--frames",
+                selection,
+                "--max-minutes",
+                "0.00000000002",
+                "-o",
+            ])
+            .arg(temp.path().join(format!("{action}.mp4")))
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(4),
+            "{action} --frames {selection}"
+        );
+        let plan: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(plan["event"], "plan");
+        assert_eq!(plan["cost"]["frames"], count);
+    }
+
+    for selection in ["10-", "12-10", "24"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_mutracer"))
+            .arg("render")
+            .arg(fixture("examples/turntable.json"))
+            .args(["--frames", selection, "-o"])
+            .arg(temp.path().join("invalid.mp4"))
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2), "--frames {selection}");
+        assert!(result.stdout.is_empty());
+    }
+}
+
+#[test]
 #[ignore = "requires a native GPU"]
 fn killing_only_the_supervisor_stops_the_worker_and_reuses_frames() {
     let temp = tempfile::tempdir().unwrap();
