@@ -17,9 +17,9 @@ WebGPU first with a WebGL 2 fallback · OpenPBR 1.1 materials · MaterialX node 
 [Examples](https://mutracer.meimu-studio.com/examples/) ·
 [Changelog](./CHANGELOG.md)
 
-<a href="https://mutracer.meimu-studio.com/viewer/#model=crystal-lens"><img src="https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/crystal-lens/thumbnail.webp" alt="Crystal Lens path traced in MuTracer with dispersion and caustics" width="100%" /></a>
+<a href="https://mutracer.meimu-studio.com/"><img src="site/src/assets/kroken-background.webp" alt="Kroken interior scene path traced in MuTracer" width="100%" /></a>
 
-<sub>Crystal Lens, path traced with dispersion and caustics in a browser tab · <a href="https://github.com/pissang/mutracer-assets">Yi Shen</a>, CC0</sub>
+<sub><a href="https://github.com/mmp/pbrt-v4-scenes#kroken">Kroken</a> by Angelo Ferretti, <a href="https://creativecommons.org/licenses/by-nd/2.0/">CC BY-ND 2.0</a> · rendered in MuTracer</sub>
 
 </div>
 
@@ -50,14 +50,12 @@ render loop, lights and export.
 
 ## Highlights
 
-| | |
-| --- | --- |
-| **Light transport** | Progressive unidirectional path tracing with next-event estimation and MIS over rect, disk, cylinder, sphere, IES spot, directional and HDR environment lights. Continuous-wavelength dispersion. [Caustics](./docs/caustics.md) on WebGPU. |
-| **Materials** | The [OpenPBR 1.1](./docs/materials.md) surface: F82 metals, anisotropic specular and coat, fuzz, thin film, dispersive transmission with volume scattering, subsurface scattering and displacement. Drive any input from [material graphs](./docs/material-graphs.md) or [MaterialX documents](./docs/materialx.md). |
-| **Large scenes** | Two-level BVH with binned-SAH BLASes built in parallel Workers (JavaScript or TinyBVH WebAssembly). Moving instances only refits the TLAS; new meshes upload only their geometry. See [performance](#performance). |
-| **Clean images** | Owen-scrambled Sobol or blue-noise ZSobol samples, variance-driven adaptive sampling, and albedo- and normal-guided [denoising](./docs/denoising.md) with Intel OIDN (WebGPU) or JNLM (both backends). |
-| **Output** | Deterministic `converge()`, AgX, ACES and other tone mappers, bloom, thin-lens depth of field, shadow catchers, transparent backgrounds, AOVs, HDR output and PNG export. |
-| **Integration** | Incremental [Three.js sync](./docs/threejs.md), your own `GPUDevice`, OffscreenCanvas workers and display [post-processing passes](./docs/post-processing.md). Without WebGPU, the same code renders on WebGL 2. |
+- **Light transport.** Progressive unidirectional path tracing with next-event estimation and MIS over rect, disk, cylinder, sphere, IES spot, directional and HDR environment lights. Continuous-wavelength dispersion. [Caustics](./docs/caustics.md) on WebGPU.
+- **Materials.** The [OpenPBR 1.1](./docs/materials.md) surface: F82 metals, anisotropic specular and coat, fuzz, thin film, dispersive transmission with volume scattering, subsurface scattering and displacement. Drive any input from [material graphs](./docs/material-graphs.md) or [MaterialX documents](./docs/materialx.md).
+- **Large scenes.** Two-level BVH with binned-SAH BLASes built in parallel Workers (JavaScript or TinyBVH WebAssembly). Moving instances only refits the TLAS; new meshes upload only their geometry. See [performance](#performance).
+- **Clean images.** Owen-scrambled Sobol or blue-noise ZSobol samples, variance-driven adaptive sampling, and albedo- and normal-guided [denoising](./docs/denoising.md) with Intel OIDN (WebGPU) or JNLM (both backends).
+- **Output.** Deterministic `converge()`, AgX, ACES and other tone mappers, bloom, thin-lens depth of field, shadow catchers, transparent backgrounds, AOVs, HDR output and PNG export.
+- **Integration.** Incremental [Three.js sync](./docs/threejs.md), your own `GPUDevice`, OffscreenCanvas workers and display [post-processing passes](./docs/post-processing.md). Without WebGPU, the same code renders on WebGL 2.
 
 ## New in 0.4
 
@@ -99,7 +97,6 @@ The [LEGO Technic Bugatti Chiron](https://mutracer.meimu-studio.com/viewer/#mode
 is a heavy scene that path traces interactively in the viewer:
 
 | | Bugatti Chiron |
-| --- | --- |
 | Rendered triangles | 4.6 M (2.5 M unique, 341 geometries in 560 meshes) |
 | Materials | 35 |
 | Download | 12.8 MB `.glb` |
@@ -229,7 +226,6 @@ Display directly; see [independent render results](./docs/progressive-rendering.
 ## Packages
 
 | Import | Contents |
-| --- | --- |
 | `@meimu/mutracer` | Engine, renders, display, scene classes, material graphs |
 | `@meimu/mutracer/three` | `THREESync` and Three.js scene conversion; needs `three` (and `@types/three` for TypeScript) |
 | `@meimu/mutracer/materialx` | `parseMaterialX` |
@@ -247,7 +243,6 @@ The first frame compiles large shaders, which can take several seconds.
 ## Documentation
 
 | Guide | Contents |
-| --- | --- |
 | [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export, workers, your own `GPUDevice` |
 | [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, visibility, update costs |
 | [API reference](./docs/api.md) | Engine, Display and Render options, methods and scene types |
