@@ -4,7 +4,7 @@ use crate::{
     error::{Error, Result},
     lifetime, progress, quality,
     scene::Prepared,
-    shot::{self, Denoise, Seed, Shot},
+    shot::{self, Denoise, Seed, Shot, Tracer},
 };
 use clap::{Args, ValueEnum};
 use mutracer_native::api;
@@ -56,6 +56,9 @@ pub struct Overrides {
     #[arg(long)]
     /// Write temporal-filter surface guides with EXR frames. Disabled by default.
     pub aovs: bool,
+    #[arg(long, value_enum)]
+    /// Ray traversal: hardware ray queries when available, or software. Software can be slower but avoids an intermittent Metal hardware miss that can change single frames. Defaults to the shot setting.
+    pub tracer: Option<Tracer>,
     #[arg(long)]
     /// Zero-based GPU adapter index. Omit for automatic selection.
     pub gpu: Option<usize>,
@@ -113,6 +116,7 @@ pub struct Settings {
     pub denoise: Denoise,
     pub format: Format,
     pub aovs: bool,
+    pub tracer: Tracer,
     pub gpu: Option<usize>,
 }
 
@@ -140,6 +144,7 @@ impl Settings {
             denoise: overrides.denoise.unwrap_or(defaults.2),
             format: overrides.format,
             aovs: overrides.aovs,
+            tracer: overrides.tracer.unwrap_or(output.tracer),
             gpu: overrides.gpu,
         };
         this.validate(shot.output.duration)?;
@@ -286,6 +291,7 @@ pub fn validate(file: &Path) -> Result<()> {
             denoise: None,
             format: Format::Png,
             aovs: false,
+            tracer: None,
             gpu: None,
         },
         None,
@@ -305,6 +311,9 @@ pub struct Renderer {
 }
 impl Renderer {
     pub fn new(settings: Settings) -> Result<Self> {
+        let options = api::EngineOptions {
+            backend: settings.tracer.into(),
+        };
         let engine = if let Some(index) = settings.gpu {
             let adapters = api::Engine::adapters();
             let adapter = adapters.get(index).ok_or_else(|| {
@@ -318,9 +327,9 @@ impl Renderer {
                         .join(", ")
                 ))
             })?;
-            api::Engine::on_adapter(adapter, Default::default())
+            api::Engine::on_adapter(adapter, options)
         } else {
-            api::Engine::new(Default::default())
+            api::Engine::new(options)
         }
         .map_err(|e| Error::gpu(e.to_string()))?;
         let [width, height] = settings.size;
@@ -779,5 +788,51 @@ mod tests {
             original
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tracer_comes_from_the_shot_unless_overridden_and_keys_the_job() {
+        let shot = |output: &str| {
+            shot::parse(
+                format!(
+                    r#"{{"version":1,"output":{{"duration":1{output}}},
+                    "objects":[{{"name":"ball","shape":"sphere"}}],
+                    "camera":{{"position":[0,0,3],"target":[0,0,0]}}}}"#
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        let overrides = |tracer| Overrides {
+            size: None,
+            spp: None,
+            seed: None,
+            denoise: None,
+            format: Format::Png,
+            aovs: false,
+            tracer,
+            gpu: None,
+        };
+        let resolve = |shot: &Shot, tracer| {
+            Settings::resolve(shot, &overrides(tracer), None, false)
+                .unwrap()
+                .tracer
+        };
+        let default = shot("");
+        let software = shot(r#","tracer":"software""#);
+        assert_eq!(resolve(&default, None), Tracer::Hardware);
+        assert_eq!(resolve(&software, None), Tracer::Software);
+        assert_eq!(resolve(&software, Some(Tracer::Hardware)), Tracer::Hardware);
+        assert_eq!(resolve(&default, Some(Tracer::Software)), Tracer::Software);
+        let hardware = Settings::resolve(&default, &overrides(None), None, false).unwrap();
+        let switched =
+            Settings::resolve(&default, &overrides(Some(Tracer::Software)), None, false).unwrap();
+        assert_ne!(json!(hardware), json!(switched));
+        let invalid = shot::parse(
+            br#"{"version":1,"output":{"duration":1,"tracer":"rtx"},
+            "objects":[{"name":"ball","shape":"sphere"}],
+            "camera":{"position":[0,0,3],"target":[0,0,0]}}"#,
+        );
+        assert!(invalid.is_err());
     }
 }

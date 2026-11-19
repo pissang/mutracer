@@ -59,6 +59,14 @@ timeout. The CLI automatically retries GPU failures. Use `--keep-frames` or
 change the output path to start a separate render after editing the shot,
 assets or settings.
 
+The same shot, assets and settings render identical frames, with one
+exception: on Apple GPUs, hardware ray queries occasionally miss a whole
+sample without reporting an error, which changes a single frame. This happens
+mostly when other work shares the GPU. Use `--tracer software` (or
+`"tracer": "software"` in `output`) when every frame must match exactly;
+software traversal can be slower on large scenes. Frames rendered with different tracers are
+separate results and are not reused.
+
 The CLI renders with the native GPU driver. macOS and Windows use their system encoders.
 On Linux the CLI uses ffmpeg when available and leaves the PNG sequence
 when it is absent. To encode separately, run

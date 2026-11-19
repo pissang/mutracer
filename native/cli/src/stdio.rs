@@ -2,7 +2,7 @@ use crate::{
     error::{Error, Result},
     lifetime,
     run::{Format, Input, Renderer, Settings},
-    shot::{self, Denoise, Seed},
+    shot::{self, Denoise, Seed, Tracer},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -48,6 +48,7 @@ struct Overrides {
     seed_value: Option<u32>,
     sample_sequence_offset: Option<u32>,
     format: Option<Format>,
+    tracer: Option<Tracer>,
 }
 
 #[derive(Deserialize)]
@@ -480,6 +481,9 @@ impl Session {
                         .unwrap_or_else(|| defaults.map_or(0, |o| o.sample_sequence_offset)),
                     format: overrides.format.unwrap_or(Format::Png),
                     aovs: false,
+                    tracer: overrides
+                        .tracer
+                        .unwrap_or_else(|| defaults.map_or(Tracer::Hardware, |o| o.tracer)),
                     fps,
                     stride: 1,
                     gpu: None,
@@ -489,6 +493,7 @@ impl Session {
                     old.size != settings.size
                         || old.spp != settings.spp
                         || old.denoise != settings.denoise
+                        || old.tracer != settings.tracer
                 }) {
                     self.renderer = Some((settings, Renderer::new(settings)?));
                 }

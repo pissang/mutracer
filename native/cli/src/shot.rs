@@ -275,6 +275,27 @@ pub enum Denoise {
     None,
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, serde::Serialize, clap::ValueEnum, PartialEq, Eq,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Tracer {
+    /// Hardware ray queries when the GPU supports them, otherwise software traversal.
+    #[default]
+    Hardware,
+    /// Software BVH traversal on every GPU.
+    Software,
+}
+
+impl From<Tracer> for mutracer_native::api::Backend {
+    fn from(tracer: Tracer) -> Self {
+        match tracer {
+            Tracer::Hardware => Self::Hardware,
+            Tracer::Software => Self::Software,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tonemap {
@@ -312,6 +333,8 @@ pub struct Output {
     pub sample_sequence_offset: u32,
     #[serde(default)]
     pub denoise: Denoise,
+    #[serde(default)]
+    pub tracer: Tracer,
     #[serde(default)]
     pub display: Display,
 }

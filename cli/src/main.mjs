@@ -27,7 +27,7 @@ function args() {
     options: {
       output: {type: 'string', short: 'o'}, help: {type: 'boolean', short: 'h'},
       size: {type: 'string'}, spp: {type: 'string'}, fps: {type: 'string'}, frames: {type: 'string'},
-      t: {type: 'string'}, seed: {type: 'string'}, denoise: {type: 'string'},
+      t: {type: 'string'}, seed: {type: 'string'}, denoise: {type: 'string'}, tracer: {type: 'string'},
       'keep-frames': {type: 'string'}, 'contact-sheet': {type: 'string'},
     },
   });
@@ -58,6 +58,8 @@ function options(input, command, values) {
   if (!['fixed','frame'].includes(seed)) throw new Error('Use --seed fixed or frame.');
   const denoise = values.denoise ?? (preview ? 'none' : input.denoise ?? 'oidn');
   if (!['oidn','none'].includes(denoise)) throw new Error('Use --denoise oidn or none.');
+  const tracer = values.tracer ?? input.tracer ?? 'hardware';
+  if (!['hardware','software'].includes(tracer)) throw new Error('Use --tracer hardware or software.');
   const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
   const offset = number(input.sampleSequenceOffset ?? 0, 'sampleSequenceOffset', 0, 0xffffffff);
   if (offset + spp > 0x100000000) throw new Error('Sequence range exceeds 32-bit sample indices.');
@@ -71,7 +73,7 @@ function options(input, command, values) {
   const time = Number(values.t ?? 0);
   if (command === 'still' && (!Number.isFinite(time) || time < 0 || time > duration)) throw new Error('Still time must be within the shot.');
   return {duration, fps, first, last, time, stride: preview ? 2 : 1,
-    settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset}};
+    settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer}};
 }
 
 function rng(seed) {

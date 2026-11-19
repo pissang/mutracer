@@ -12,7 +12,7 @@ The [turntable](../examples/turntable.json) frames a glTF asset.
 ## Output and animation
 
 Output defaults are 1280 × 720, 24 fps, 32 samples per pixel, fixed seed
-12345, OIDN and AgX at 0 EV. Duration excludes its endpoint. Frame indices
+12345, OIDN, the hardware tracer and AgX at 0 EV. Duration excludes its endpoint. Frame indices
 start at 0 and frame `i` evaluates the shot at `i / fps` seconds. The frame
 count is `ceil(duration × fps)`. With `seed: "frame"`, the seed is
 `seedValue + i` modulo 2³². `sampleSequenceOffset` starts at 0. An explicit

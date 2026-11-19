@@ -464,6 +464,11 @@
         "seedValue": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 12345},
         "sampleSequenceOffset": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 0},
         "denoise": {"enum": ["oidn", "none"], "default": "oidn"},
+        "tracer": {
+          "enum": ["hardware", "software"],
+          "default": "hardware",
+          "description": "Ray traversal. hardware uses GPU ray queries when available and otherwise software. The CLI --tracer option overrides it."
+        },
         "display": {"$ref": "#/$defs/display"}
       },
       "required": ["duration"],

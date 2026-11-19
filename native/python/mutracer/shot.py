@@ -177,6 +177,7 @@ class Output:
     seed_value: int | None = None
     sample_sequence_offset: int | None = None
     denoise: str | None = None
+    tracer: str | None = None
     display: dict | None = None
 
 
