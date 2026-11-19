@@ -120,7 +120,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .pill:hover { border-color: rgb(255 255 255 / 0.35); }
 .pill__tag { padding: 2px 9px; border-radius: 999px; background: var(--accent-solid); color: #fff; font-weight: 650; font-size: 12px; }
 .hero h1 {
-  max-width: 14ch; margin: 22px 0 0; font-size: clamp(40px, 7vw, 76px); line-height: 1.02;
+  max-width: 18ch; margin: 22px 0 0; font-size: clamp(40px, 7vw, 76px); line-height: 1.02;
   font-weight: 700; letter-spacing: -0.035em; text-wrap: balance;
 }
 .hero__lede { max-width: 520px; margin: 22px 0 0; color: #cdd0d6; font-size: clamp(16px, 1.6vw, 18.5px); }
