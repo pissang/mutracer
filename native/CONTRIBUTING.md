@@ -14,7 +14,8 @@ Rust doc comments); workflows, behavior across calls, costs and limits belong in
   shaders.
 - `include/`: public C headers; `schemas/`: frozen wire-property IDs and error
   codes.
-- `docs/`: user guides and the scene format reference.
+- `docs/`: user guides and the scene format reference; `docs/technical/`: design
+  notes for contributors.
 - `scripts/`: compiler lowering, contract generators, CI and viewer packaging.
 - `examples/`: C consumers and validation hosts; `tests/`: AOT fixtures and the
   C module test harness.
@@ -640,16 +641,13 @@ suite, and run performance comparisons separately from builds and other checks.
 
 ## Metal HWRT sample miss
 
-A Metal HWRT sample can occasionally see an empty scene or fail to accumulate
-without an error. On an Apple M4 Max with macOS 27.0.1 it has been seen at 8×8
-and 96×64 while other GPU users, including ordinary background apps, are
-active; about 620,000 dispatches at 1920×1080 over three hours, mostly under
-extra GPU load, showed none, which does not rule it out elsewhere. It predates
-incremental commits and also reproduces in a standalone wgpu program with two
-live BLAS/TLAS pairs and alternating bindings. A persistent residency set and
-the BLAS wait before TLAS construction have not fixed it. Keep such probes
-outside the repository and distinguish resource lifetime changes from
-residency.
+Metal HWRT can return no intersection for every ray query during a window of
+time while the command buffer still completes without an error. The guard in
+`query_guard.rs` checks a known-hit ray at workgroup completion and replays
+from a verified checkpoint; see
+[Metal HWRT silent-miss guard](docs/technical/metal-silent-miss-guard.md) for
+the failure shape, design, costs, limits and how to evaluate changes. The
+diagnostics below remain useful for unguarded paths and new investigations.
 
 Run the interleaved geometry and full-commit diagnostic with the linked archive:
 
@@ -678,31 +676,25 @@ includes wgpu's upload/barrier buffers without changing encoding or queue
 ordering. Do not call `CommandEncoder::as_hal_mut` after wgpu encoding: wgpu 30
 rejects mixed encoding APIs even for a read-only inspection.
 
-Ordinary Metal HWRT targets encode up to four sampling dispatches per command
-buffer within the existing flight. Other backends and caustics keep one sample
-per buffer. Each dispatch reads a separate aligned uniform range; target-uniform
+Each sampling dispatch reads a separate aligned uniform range; target-uniform
 updates refresh the cached template, and buffers/bindings are reused between
-batches. This changes no sample order, flight budget or display scheduling and
-adds no ordinary polling wait. Timestamp pairs cover groups of dispatches while
-sample-time denominators retain the actual sample count.
+batches. Batching changes no sample order or display scheduling. Timestamp
+pairs cover groups of dispatches while sample-time denominators retain the
+actual sample count. Other backends and caustics keep one sample per buffer.
 
-Ordinary sampling flights automatically repair retryable Metal execution errors
-before crediting their samples. Missing pixels are replayed with the original
-sample records; a SubmissionsIgnored error replaces only the observed queue's
-underlying Metal queue on the same device. Repair blocks the polling/converge
-caller for up to a 10-second wait/backoff budget and allows at most 12 retries
-across the flight. A repaired flight contributes no GPU timing; previous valid
-flight timings are retained. `nativeFlightRecovery` log records include the
-flight range, retries, queue replacement, elapsed time and original error.
+Flights without a guard checkpoint repair retryable Metal execution errors
+before crediting their samples by replaying missing pixels with the original
+sample records, within the same 10-second, 12-retry bound. Repair blocks the
+polling/converge caller. A repaired flight contributes no GPU timing; previous
+valid flight timings are retained. `nativeFlightRecovery` log records include
+the flight range, checkpoint, retries, silent replays, queue replacement,
+elapsed time and original error.
 
-Caustics targets, device loss, unobserved host-owned queues and other Metal
-error codes retain the existing failure path. Failed repair marks the context
-failed without crediting the flight; create a new render or recommit to recover.
-Independent frame-input producers, surface AOV/depth/picking passes and hit
-diagnostics are outside sampling repair coverage. Pixel output stores are not
-atomic across buffers, so exact partial-invocation recovery after a real driver
-reset is not guaranteed; keep
-real-hang image comparisons separate from deterministic missing-row injection.
+Device loss and other Metal error codes retain the existing failure path.
+Failed repair marks the context failed without crediting the flight; create a
+new render or recommit to recover. Pixel output stores are not atomic across
+buffers, so missing-pixel repair after a real driver reset is not exact; keep
+real-hang image comparisons separate from deterministic injection.
 
 For `api::Render` command-buffer diagnostics, set
 `MUTRACER_NATIVE_DISPATCH_AUDIT=1` when running a `cfg(test)` GPU test. Each
