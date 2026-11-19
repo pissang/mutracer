@@ -9,7 +9,8 @@ import type { TextureResolution } from './polyHaven';
 
 export const MATERIALX_IMPORT = true;
 export const DEFAULT_F_STOP = 2.8;
-export interface ExportOptions { width: number; height: number; samples: number; transparent: boolean; }
+export type ExportFormat = 'png' | 'exr';
+export interface ExportOptions { width: number; height: number; samples: number; transparent: boolean; format?: ExportFormat; }
 export type PixelKind = 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind;
 export interface ViewerEngineEvents {
   sample: SampleEvent;
@@ -55,7 +56,7 @@ export interface ViewerEngine {
   resetMaterial(materialId: string): void;
   selectClip(index: number): void;
   setAnimation(patch: Partial<{playing: boolean; time: number; speed: number; loop: boolean}>): void;
-  downloadViewportImage(): Promise<void>;
+  downloadViewportImage(format?: ExportFormat): Promise<void>;
   exportImage(options: ExportOptions): Promise<void>;
   captureImage(type?: string, quality?: number): Promise<Blob>;
   renderImage(options: ExportOptions, type?: string, quality?: number): Promise<Blob>;

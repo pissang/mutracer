@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import { Download, X } from 'lucide-react';
 import { VIEWER_AOVS, setSettings, setUi, useViewer, showToast } from '../store';
-import { getEngine } from '../engine/ViewerEngine';
+import { getEngine, type ExportFormat } from '../engine/ViewerEngine';
 import { Field, Scrub, Segmented, Switch } from './ui/controls';
 
 type SizePreset = 'viewport' | '1080p' | '2k' | '4k' | 'square' | 'custom';
@@ -17,6 +17,7 @@ export function ExportDialog() {
   const output = useViewer((s) => s.settings.output);
   const denoise = useViewer((s) => s.settings.denoise);
   const background = useViewer((s) => s.settings.background);
+  const [format, setFormat] = useState<ExportFormat>('png');
   const [size, setSize] = useState<SizePreset>('viewport');
   const [customWidth, setCustomWidth] = useState('1920');
   const [customHeight, setCustomHeight] = useState('1080');
@@ -49,7 +50,10 @@ export function ExportDialog() {
   const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : size === 'custom' ? [Number(customWidth), Number(customHeight)] : [stats.width, stats.height];
   const maxDimension = getEngine()?.maxImageDimension ?? 8192;
   const validSize = size !== 'custom' || dims.every(value => validDimension(value, maxDimension));
-  const estimate = !VIEWER_AOVS.some(kind => kind === output) && stats.msPerSample > 0 && validSize ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
+  const exr = format === 'exr';
+  const formatLabel = exr ? 'EXR' : 'PNG';
+  const viewportExrUnavailable = exr && output !== 'final';
+  const estimate = (exr || !VIEWER_AOVS.some(kind => kind === output)) && stats.msPerSample > 0 && validSize ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
   const busy = progress !== null || downloading;
   const close = () => {
     if (progress) getEngine()?.cancelExport();
@@ -64,17 +68,24 @@ export function ExportDialog() {
             <button className="icon-btn icon-btn--bare sm" aria-label="Close" onClick={close}><X size={14} /></button>
           </Heading>
           <div className="preview" data-checker={transparent || undefined}><canvas ref={preview} /></div>
-          <button className="btn btn--wide" disabled={busy || stats.samples === 0} onClick={async () => {
+          <Field label="Format">
+            <Segmented label="Image format" value={format} disabled={busy} onChange={setFormat} options={[
+              { value: 'png', label: 'PNG' }, { value: 'exr', label: 'EXR' }
+            ]} />
+          </Field>
+          {exr && <p className="hint">EXR saves the 32-bit linear HDR beauty image before denoising, tone mapping and other display effects.</p>}
+          <button className="btn btn--wide" disabled={busy || stats.samples === 0 || viewportExrUnavailable} onClick={async () => {
             setDownloading(true);
             try {
-              await getEngine()?.downloadViewportImage();
+              await getEngine()?.downloadViewportImage(format);
             } finally {
               setDownloading(false);
             }
           }}>
-            <Download size={15} />{downloading ? 'Downloading…' : 'Download viewport PNG'}
+            <Download size={15} />{downloading ? 'Downloading…' : `Download viewport ${formatLabel}`}
           </button>
-          <p className="hint">Save the current {stats.width} × {stats.height} image as displayed, without re-rendering.</p>
+          <p className="hint">{viewportExrUnavailable ? 'Select Final output to download the viewport EXR.'
+            : `Save the current ${stats.width} × ${stats.height} ${exr ? 'render' : 'image as displayed'} without re-rendering.`}</p>
           <Field label="Size">
             <Segmented label="Image size" value={size} disabled={busy} onChange={setSize} options={[
               { value: 'viewport', label: 'Viewport' }, { value: '1080p', label: '1080p' },
@@ -93,9 +104,9 @@ export function ExportDialog() {
           </div>}
           {!validSize && <p className="hint hint--warn">Use whole numbers from 1 to {maxDimension}.</p>}
           <Scrub label="Samples" value={samples} min={16} max={16384} log disabled={busy} onChange={setSamples} />
-          <Switch label="Denoise" checked={denoise} disabled={busy} onChange={(v) => setSettings({ denoise: v })}>
+          {!exr && <Switch label="Denoise" checked={denoise} disabled={busy} onChange={(v) => setSettings({ denoise: v })}>
             <span className="field-label">Denoise</span>
-          </Switch>
+          </Switch>}
           <Switch label="Transparent background" checked={transparent} disabled={busy} onChange={setTransparent}>
             <span className="field-label">Transparent background</span>
           </Switch>
@@ -109,10 +120,10 @@ export function ExportDialog() {
             <span className="est mono">{validSize && `${dims[0]} × ${dims[1]}`}{estimate > 0 && !busy ? ` · ≈ ${Math.max(1, Math.round(estimate))} s` : ''}</span>
             <button className="btn" onClick={close}>{progress ? 'Cancel render' : 'Cancel'}</button>
             <button className="btn btn--primary" disabled={busy || !validSize} onClick={async () => {
-              await getEngine()?.exportImage({ width: dims[0], height: dims[1], samples, transparent });
+              await getEngine()?.exportImage({ width: dims[0], height: dims[1], samples, transparent, format });
               setUi({ exportOpen: false });
             }}>
-              <Download size={15} />{progress ? 'Rendering…' : 'Render PNG'}
+              <Download size={15} />{progress ? 'Rendering…' : `Render ${formatLabel}`}
             </button>
           </div>
         </Dialog>

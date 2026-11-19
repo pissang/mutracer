@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderFixture } from '../../tests/helpers/renderPipeline';
 import Render from '../../src/Render';
@@ -11,6 +12,7 @@ vi.hoisted(() => {
 });
 
 import { WebEngine } from '../src/engine/WebEngine';
+import { EXR_MIME } from '../src/engine/exrExport';
 import { DEFAULT_SETTINGS, useViewer } from '../src/store';
 
 beforeEach(() => {
@@ -64,6 +66,53 @@ describe('image export camera', () => {
       expect(source.parent).toBe(parent);
       expect(source.matrixWorld.elements).toEqual(expectedWorld);
       expect(source.projectionMatrix.elements).toEqual(expectedProjection);
+      expect(useViewer.getState().export).toBeNull();
+    } finally { engine.dispose(); }
+  });
+});
+
+describe('EXR export', () => {
+  it('exports the viewport HDR with associated alpha and the correct row order', async () => {
+    const viewer = Object.create(WebEngine.prototype) as WebEngine;
+    const readPixels = vi.fn().mockResolvedValue({
+      width: 1, height: 2, data: new Float32Array([8, 4, 2, 0.25, 3, 2, 1, 1])
+    });
+    Object.assign(viewer, { displayed: {readPixels}, settings: {...DEFAULT_SETTINGS, background: 'transparent'} });
+    const blob = await viewer.captureImage(EXR_MIME);
+    expect(readPixels.mock.calls).toEqual([['hdr']]);
+    expect(blob.type).toBe(EXR_MIME);
+    const image = new EXRLoader().setDataType(THREE.FloatType).parse(await blob.arrayBuffer());
+    expect([image.width, image.height]).toEqual([1, 2]);
+    // EXRLoader returns bottom-up rows for Three.js textures.
+    expect(Array.from(image.data)).toEqual([3, 2, 1, 1, 2, 1, 0.5, 0.25]);
+  });
+
+  it('renders an opaque beauty EXR with the requested dimensions while a diagnostic is selected', async () => {
+    const { engine, targets, canvas } = renderFixture();
+    const final = new Render(engine);
+    const compose = vi.spyOn(engine.display, 'toBlob');
+    const read = vi.spyOn(Render.prototype, 'readPixels').mockResolvedValue({
+      width: 3, height: 2, data: new Float32Array(24).fill(2)
+    });
+    const viewer = Object.create(WebEngine.prototype) as WebEngine;
+    const settings = {...useViewer.getState().settings, output: 'centerDepth' as const, background: 'transparent' as const};
+    useViewer.setState({settings});
+    const applyBackground = vi.fn(() => Reflect.get(viewer, 'settings').background);
+    Object.assign(viewer, {
+      engine, final, settings, modelCameras: [new THREE.PerspectiveCamera()],
+      upscalePass: Object.assign(vi.fn(), {dispose: vi.fn()}),
+      sync: {update: vi.fn()}, viewSync: {update: vi.fn()}, applyBackground
+    });
+    try {
+      const blob = await viewer.renderImage({width: 3, height: 2, samples: 2, transparent: false, format: 'exr'});
+      const image = new EXRLoader().setDataType(THREE.FloatType).parse(await blob.arrayBuffer());
+      expect([image.width, image.height]).toEqual([3, 2]);
+      expect(Array.from(image.data.slice(0, 4))).toEqual([2, 2, 2, 1]);
+      expect(read.mock.calls).toEqual([['hdr']]);
+      expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({aovs: []}));
+      expect(compose).not.toHaveBeenCalled();
+      expect(applyBackground.mock.results.map(result => result.value)).toEqual(['environment', 'transparent']);
+      expect([canvas.width, canvas.height]).toEqual([800, 600]);
       expect(useViewer.getState().export).toBeNull();
     } finally { engine.dispose(); }
   });

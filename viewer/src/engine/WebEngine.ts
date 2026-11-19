@@ -45,8 +45,9 @@ import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
 import { formatForAgent, generateCode } from './codeSnippet';
+import { EXR_MIME, exportExr } from './exrExport';
 
-import { DEFAULT_F_STOP, MATERIALX_IMPORT, type ExportOptions, type ViewerEngine, type ViewerEngineEvents, type PixelKind } from './ViewerEngine';
+import { DEFAULT_F_STOP, MATERIALX_IMPORT, type ExportFormat, type ExportOptions, type ViewerEngine, type ViewerEngineEvents, type PixelKind } from './ViewerEngine';
 
 // The weights live at the server root: development serves the repository's
 // copy there, `build:viewer` emits them at the root of dist-viewer/, and the
@@ -1726,12 +1727,13 @@ export class WebEngine implements ViewerEngine {
   // ----------------------------------------------------------------- export
 
   /** Downloads the displayed viewport at its current size without restarting accumulation. */
-  async downloadViewportImage() {
+  async downloadViewportImage(format: ExportFormat = 'png') {
     if (this.exporting) return;
     try {
-      const samples = this.displaySamples(this.displayed ?? this.final);
+      const render = this.displayed ?? this.final;
+      const samples = format === 'exr' ? render.samples : this.displaySamples(render);
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
-      const blob = await this.captureImage();
+      const blob = await this.captureImage(format === 'exr' ? EXR_MIME : 'image/png');
       this.downloadImage(blob, samples, 'viewport');
     } catch (error) {
       showToast(`Export failed: ${(error as Error).message}`, 'error');
@@ -1750,7 +1752,8 @@ export class WebEngine implements ViewerEngine {
 
   private downloadImage(blob: Blob, samples: number, suffix?: string) {
     const base = (get().model?.name ?? 'mutracer').replace(/\.[^.]+$/, '');
-    const name = `mutracer-${base}${suffix ? `-${suffix}` : ''}-${samples}spp.png`;
+    const extension = blob.type === EXR_MIME ? 'exr' : 'png';
+    const name = `mutracer-${base}${suffix ? `-${suffix}` : ''}-${samples}spp.${extension}`;
     if(this.engine instanceof NativeRenderHost){
       const host=this.engine;
       void blob.arrayBuffer().then(buffer=>host.upload(new Uint8Array(buffer))).then(payload=>host.transport.request<boolean>('save',{blob:payload,name})).then(saved=>{if(saved)showToast(`Saved ${name}`,'success');}).catch(error=>showToast(error.message,'error'));
@@ -1765,14 +1768,18 @@ export class WebEngine implements ViewerEngine {
   }
 
   captureImage(type = 'image/png', quality?: number): Promise<Blob> {
-    return this.engine.display.toBlob(this.displayed ?? this.final, {type, quality});
+    const render = this.displayed ?? this.final;
+    return type === EXR_MIME ? exportExr(render, this.settings.background === 'transparent')
+      : this.engine.display.toBlob(render, {type, quality});
   }
 
   /** Renders an independent fixed-size image without resizing the viewport. */
-  async renderImage(options: ExportOptions, type = 'image/png', quality?: number): Promise<Blob> {
+  async renderImage(options: ExportOptions, type = options.format === 'exr' ? EXR_MIME : 'image/png', quality?: number): Promise<Blob> {
     if (this.exporting) throw new Error('A render is already running');
+    const exr = type === EXR_MIME;
     this.exporting = true; this.removeUpscale?.(); this.removeUpscale = undefined; this.exportAbort = new AbortController();
     const background = this.settings.background;
+    const exportBackground = options.transparent ? 'transparent' : background === 'transparent' ? 'environment' : background;
     const source = this.activeCamera();
     source.updateWorldMatrix(true, false);
     const camera = source.clone();
@@ -1783,18 +1790,23 @@ export class WebEngine implements ViewerEngine {
     let image: Render | undefined;
     set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
-      if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
+      if (exportBackground !== background) { this.settings = {...this.settings, background: exportBackground}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = createRender(this.engine, {width: options.width, height: options.height,
-        aovs: VIEWER_AOVS.filter(kind => kind === this.settings.output), aovSamples: this.final.aovSamples,
+        aovs: exr ? [] : VIEWER_AOVS.filter(kind => kind === this.settings.output), aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping, caustics: this.final.caustics,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
         alphaBlendStrategy: this.final.alphaBlendStrategy, transmissiveOutputAlphaMin: this.final.transmissiveOutputAlphaMin,
-        denoiser: this.final.denoiser ? {...this.final.denoiser, schedule: 'converged'} : null});
+        denoiser: !exr && this.final.denoiser ? {...this.final.denoiser, schedule: 'converged'} : null});
       const clayCamera = this.lensCamera(camera, this.pull?.to ?? this.settings.focusDistance);
       await image.converge({samples: options.samples, camera: clayCamera, signal: this.exportAbort.signal, previewIntervalMs: 250,
         onProgress: ({stage, samples, targetSamples}) => set({export: {stage, samples, target: targetSamples}})});
+      if (exr) {
+        const blob = await exportExr(image, options.transparent);
+        this.exportAbort.signal.throwIfAborted();
+        return blob;
+      }
       return await this.engine.display.toBlob(image, {type, quality});
     } finally {
       image?.dispose(); this.settings = get().settings; this.applyBackground();
