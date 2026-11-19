@@ -120,11 +120,11 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .pill:hover { border-color: rgb(255 255 255 / 0.35); }
 .pill__tag { padding: 2px 9px; border-radius: 999px; background: var(--accent-solid); color: #fff; font-weight: 650; font-size: 12px; }
 .hero h1 {
-  max-width: 18ch; margin: 22px 0 0; font-size: clamp(40px, 7vw, 76px); line-height: 1.02;
-  font-weight: 700; letter-spacing: -0.035em; text-wrap: balance;
+  max-width: 20ch; margin: 22px 0 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.1;
+  font-weight: 680; letter-spacing: -0.025em; text-wrap: balance;
 }
-.hero__lede { max-width: 520px; margin: 22px 0 0; color: #cdd0d6; font-size: clamp(16px, 1.6vw, 18.5px); }
-.hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 32px; }
+.hero__lede { max-width: 540px; margin: 18px 0 0; color: #cdd0d6; font-size: clamp(16px, 1.6vw, 18.5px); }
+.hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 28px; }
 .install {
   position: relative; display: inline-flex; align-items: center; gap: 12px; max-width: 100%; height: 48px;
   padding: 0 7px 0 16px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px;
@@ -144,13 +144,21 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .install__check-icon, .install__copy[data-copied] .install__copy-icon { display: none; }
 .install__copy[data-copied] .install__check-icon { display: block; }
 .install__feedback { position: absolute; top: calc(100% + 6px); left: 0; color: #a8adb7; font-size: 12px; white-space: nowrap; }
-.hero__drop {
-  display: flex; align-items: flex-start; gap: 10px; max-width: 520px; margin-top: 40px;
-  color: #b9bdc5; font-size: 14px; line-height: 1.5;
+.drop {
+  display: flex; align-items: center; gap: 16px; max-width: 600px; margin-top: 36px; padding: 18px 20px;
+  border: 1.5px dashed rgb(255 255 255 / 0.38); border-radius: 14px; background: rgb(10 11 13 / 0.5);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: border-color 0.15s, background-color 0.15s;
 }
-.hero__drop svg { flex: none; margin-top: 1px; color: #f6b297; }
-.hero__drop b { color: #e8e9ed; font-weight: 600; }
-.hero__drop .link { color: #f6b297; }
+.drop__icon { flex: none; color: #f6b297; }
+.drop__text { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.drop__text strong { font-size: 16px; font-weight: 620; }
+.drop__text span { color: #b9bdc5; font-size: 13px; line-height: 1.45; }
+.drop__actions { display: flex; flex: none; gap: 8px; }
+.hero[data-dragging] .drop { border-style: solid; border-color: var(--accent); background: rgb(184 71 37 / 0.18); }
+.btn--glass { border-color: rgb(255 255 255 / 0.25); background: rgb(255 255 255 / 0.08); color: #fff; }
+.btn--glass:hover { border-color: rgb(255 255 255 / 0.5); background: rgb(255 255 255 / 0.14); }
+.btn:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hero__error { margin: 10px 0 0; color: var(--error); font-size: 14px; }
 .hero__credit {
   position: absolute; right: 16px; bottom: 12px; max-width: calc(100% - 32px);
@@ -165,22 +173,11 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .drag-veil[hidden] { display: none; }
 .drag-veil p { pointer-events: none; }
 
-/* ---------- Facts ---------- */
-.facts dl {
-  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0;
-  border-bottom: 1px solid var(--border);
-}
-.facts dl > div { padding: 26px 20px 26px 0; }
-.facts dl > div + div { padding-left: 20px; border-left: 1px solid var(--border); }
-.facts dt { font-size: 19px; font-weight: 680; letter-spacing: -0.01em; }
-.facts dd { margin: 2px 0 0; color: var(--text-3); font-size: 13.5px; }
-
 /* ---------- Sections ---------- */
 .section { padding-block: 96px 0; }
 .section__head { max-width: 680px; margin-bottom: 40px; }
-.eyebrow { margin: 0 0 10px; color: var(--accent); font-size: 13px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
-.section h2 { margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.1; font-weight: 700; letter-spacing: -0.03em; text-wrap: balance; }
-.section__head > p:not(.eyebrow) { margin: 16px 0 0; color: var(--text-2); font-size: 17px; }
+.section h2 { margin: 0; font-size: clamp(26px, 3.2vw, 34px); line-height: 1.15; font-weight: 680; letter-spacing: -0.02em; text-wrap: balance; }
+.section__head > p { margin: 16px 0 0; color: var(--text-2); font-size: 17px; }
 .section__head code { color: var(--text); }
 
 /* ---------- Materials ---------- */
@@ -204,13 +201,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .code .s { color: var(--code-s); }
 .code .c { color: var(--code-c); }
 .materials__side .code { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ticks { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; color: var(--text-2); font-size: 15px; }
-.ticks li { position: relative; padding-left: 26px; }
-.ticks li::before {
-  content: ''; position: absolute; left: 2px; top: 0.5em; width: 12px; height: 7px;
-  border: solid var(--accent); border-width: 0 0 2px 2px; transform: rotate(-45deg);
-}
-.ticks code { color: var(--text); }
+.materials__note { margin: 20px 0 0; color: var(--text-2); font-size: 15px; }
+.materials__note code { color: var(--text); }
 .materials__links { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 28px; }
 
 /* ---------- Gallery ---------- */
@@ -324,9 +316,6 @@ code { font-family: var(--mono); font-size: 0.9em; }
 /* ---------- Responsive ---------- */
 @media (max-width: 1000px) {
   .materials__layout, .start { grid-template-columns: minmax(0, 1fr); }
-  .facts dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .facts dl > div:nth-child(4) { padding-left: 0; border-left: 0; }
-  .facts dl > div:nth-child(n + 4) { padding-top: 0; }
   .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 190px; }
   .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -339,12 +328,10 @@ code { font-family: var(--mono); font-size: 0.9em; }
   .hero__body { padding-block: 56px 72px; }
   .hero__actions { flex-direction: column; align-items: stretch; }
   .install code { flex: 1; }
-  .hero__drop { margin-top: 32px; }
-  .facts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .facts dl > div, .facts dl > div + div { padding: 16px 12px 16px 0; border-left: 0; }
-  .facts dl > div:last-child { display: none; }
-  .facts dt { font-size: 16px; }
-  .facts dd { font-size: 12.5px; }
+  .drop { flex-wrap: wrap; margin-top: 28px; }
+  .drop__text { flex-basis: calc(100% - 44px); }
+  .drop__actions { width: 100%; }
+  .drop__actions .btn { flex: 1; }
   .section { padding-top: 72px; }
   .swatches { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .swatches li:nth-child(n + 50) { display: none; }
