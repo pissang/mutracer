@@ -1188,6 +1188,13 @@ impl Scene {
             .collect();
         Some((changes, geometries))
     }
+    /// Checks a scene descriptor's layout, references, values and input budgets
+    /// without opening a device. Invalid descriptors return InvalidArgument.
+    /// Adapter-specific limits are checked when preparing a render.
+    pub fn validate_descriptor(bytes: &[u8]) -> Result<()> {
+        crate::scene::validate(bytes).map_err(|error| invalid(&error.to_string()))
+    }
+
     /// Encodes an immutable snapshot. Repeated calls without edits share one buffer.
     pub fn descriptor(&self) -> Result<Arc<Vec<u8>>> {
         self.descriptor_with_delta().map(|(bytes, _)| bytes)
