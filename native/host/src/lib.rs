@@ -84,6 +84,7 @@ mod material_properties;
 mod native_completion;
 mod postprocess;
 mod profiling;
+mod query_guard;
 mod recovery;
 mod runtime;
 mod sampling_batch;
@@ -371,6 +372,9 @@ struct PipelineKey {
     entry: String,
     layout: Vec<Vec<wgpu::BindGroupLayoutEntry>>,
     hardware: bool,
+    guard_sampling: bool,
+    #[cfg(test)]
+    query_window: bool,
 }
 #[derive(Clone)]
 struct CachedPipeline {
@@ -383,6 +387,7 @@ struct CachedPipeline {
 struct GpuDevice {
     /// Clones share this identity; a recreated device never accepts old frames.
     frame_device: denoiser_inputs::DeviceKey,
+    sampling_admission: Arc<sampling_batch::Admission>,
     #[cfg(test)]
     recovery_test: Arc<Mutex<recovery::Injection>>,
     custom_snapshot_pipeline: Arc<std::sync::OnceLock<wgpu::ComputePipeline>>,
@@ -399,6 +404,20 @@ struct GpuDevice {
 const INDEPENDENT_TEXTURE_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
     .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 impl GpuDevice {
+    fn release_sampling(&self, done: &Arc<std::sync::atomic::AtomicBool>) {
+        if let Ok(mut pending) = self.sampling_admission.flight.try_lock() {
+            if pending.as_ref().is_some_and(|batch| batch.belongs_to(done)) {
+                pending.take();
+            }
+        }
+    }
+    fn retire_sampling(&self) {
+        if let Ok(mut pending) = self.sampling_admission.flight.try_lock() {
+            if pending.as_ref().is_some_and(|batch| batch.is_retired()) {
+                pending.take();
+            }
+        }
+    }
     fn texture_limits(&self) -> [u32; 2] {
         let limits = self.device.limits();
         let bindings = if self
@@ -437,6 +456,7 @@ impl GpuDevice {
     ) -> Self {
         Self {
             frame_device: denoiser_inputs::DeviceKey::new(),
+            sampling_admission: sampling_batch::Admission::for_device(device),
             #[cfg(test)]
             recovery_test: Default::default(),
             custom_snapshot_pipeline: Default::default(),
@@ -561,6 +581,7 @@ impl GpuDevice {
         });
         Ok(Self {
             frame_device: denoiser_inputs::DeviceKey::new(),
+            sampling_admission: sampling_batch::Admission::for_device(&device),
             #[cfg(test)]
             recovery_test: Default::default(),
             custom_snapshot_pipeline: Default::default(),
@@ -586,13 +607,18 @@ fn compile_pipeline(
     scene: &Scene,
     source: String,
     hardware: bool,
+    guard_sampling: bool,
 ) -> Result<(CachedPipeline, bool)> {
     let device = &gpu.device;
+    let protected = guard_sampling && query_guard::enabled(gpu, hardware, scene);
     let key = PipelineKey {
         source,
         entry: scene.entry_point.clone(),
         layout: scene.bind_groups.iter().map(|g| g.layout.clone()).collect(),
         hardware,
+        guard_sampling: protected,
+        #[cfg(test)]
+        query_window: protected && gpu.recovery_test.lock().unwrap().query_window,
     };
     #[cfg(test)]
     let injected = key.source.contains("fn mx_eval")
@@ -641,6 +667,12 @@ fn compile_pipeline(
                     },
                 ]);
             }
+            if protected && index == layout::group::OUTPUT {
+                entries.extend(query_guard::layout_entries(
+                    #[cfg(test)]
+                    key.query_window,
+                ));
+            }
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("MuTracer capture layout"),
                 entries: &entries,
@@ -663,16 +695,39 @@ fn compile_pipeline(
             };
             #[cfg(not(test))]
             let shader_source = key.source.clone();
+            // Display-resolution AOVs derive their entry points from the original
+            // scene template. Only the beauty pipeline needs the workgroup canary.
+            let shader_source = if protected {
+                query_guard::instrument(
+                    shader_source,
+                    #[cfg(test)]
+                    key.query_window,
+                )?
+            } else {
+                shader_source
+            };
+            #[cfg(target_os = "macos")]
+            let native_source = if protected {
+                query_guard::execution_barrier_source(&shader_source)
+            } else {
+                None
+            };
+            #[cfg(not(target_os = "macos"))]
+            let native_source = None;
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("MuTracer path tracer"),
-                source: wgpu::ShaderSource::Wgsl(shader_source.as_str().into()),
+                source: native_source
+                    .unwrap_or_else(|| wgpu::ShaderSource::Wgsl(shader_source.as_str().into())),
             });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("MuTracer native path tracer"),
                 layout: Some(&layout),
                 module: &shader,
                 entry_point: Some(&scene.entry_point),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[],
+                    ..Default::default()
+                },
                 cache: gpu.pipeline_cache.as_ref(),
             });
             Ok(CachedPipeline {
@@ -802,10 +857,21 @@ impl DispatchAudit {
 }
 impl Target {
     fn dispatches_per_buffer(&self, additional: u32) -> u32 {
-        if self.sampling_batch.is_some() && self.caustics.is_none() {
-            additional.clamp(1, sampling_batch::MAX_DISPATCHES)
+        if let Some(state) = self
+            .sampling_batch
+            .as_ref()
+            .filter(|_| self.caustics.is_none())
+        {
+            additional.clamp(1, state.lock().unwrap().limit())
         } else {
             1
+        }
+    }
+    fn sampling_flight_samples(&self, additional: u32) -> u32 {
+        if self.sampling_batch.is_some() && self.caustics.is_none() {
+            self.dispatches_per_buffer(additional)
+        } else {
+            additional
         }
     }
     fn timer_pairs(&self, additional: u32) -> u32 {
@@ -852,6 +918,7 @@ struct GpuScene {
     textures: HashMap<usize, wgpu::Texture>,
     samplers: HashMap<usize, wgpu::Sampler>,
     hardware: Option<hardware::Resources>,
+    query_guard: Option<query_guard::Resources>,
     compile_seconds: f64,
 }
 impl GpuScene {
@@ -1083,6 +1150,11 @@ impl GpuScene {
         } else {
             None
         };
+        let query_guard = if query_guard::enabled(&gpu, hardware.is_some(), &scene) {
+            Some(query_guard::Resources::new(&gpu)?)
+        } else {
+            None
+        };
         let source = String::from_utf8(
             read(if use_hwrt {
                 scene
@@ -1098,7 +1170,13 @@ impl GpuScene {
             .into_owned(),
         )?;
         let shader_started = Instant::now();
-        let (compiled, cache_hit) = compile_pipeline(&gpu, &scene, source, hardware.is_some())?;
+        let (compiled, cache_hit) = compile_pipeline(
+            &gpu,
+            &scene,
+            source,
+            hardware.is_some(),
+            scene.entry_point == "main",
+        )?;
         let CachedPipeline {
             aov_pipelines,
             layouts,
@@ -1164,6 +1242,11 @@ impl GpuScene {
                         ]);
                     }
                 }
+                if index == layout::group::OUTPUT && scene.entry_point == "main" {
+                    if let Some(guard) = &query_guard {
+                        entries.extend(guard.entries(&guard.unused_flag));
+                    }
+                }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("MuTracer capture resources"),
                     layout,
@@ -1222,16 +1305,85 @@ impl GpuScene {
                 textures,
                 samplers,
                 hardware,
+                query_guard,
                 compile_seconds,
             },
             target,
         ))
     }
     fn add_samples(&self, target: &mut Target, additional: u32) -> Result<()> {
+        let end = target
+            .samples
+            .checked_add(additional)
+            .ok_or("Sample count overflow")?;
+        if additional == 0 || end > 16384 {
+            return Err("Total samples must be 1..16384".into());
+        }
+        while target.samples < end {
+            let count = target.sampling_flight_samples(end - target.samples);
+            self.add_samples_flight(target, count)?;
+        }
+        self.verify_sampling_target(target, end)?;
+        Ok(())
+    }
+    fn sampling_group_rows(&self, target: &Target) -> u32 {
+        let height = if self.query_guard.is_some() && target.caustics.is_none() {
+            4
+        } else {
+            target.workgroup_size
+        };
+        target.height.div_ceil(height)
+    }
+    fn add_samples_flight(&self, target: &mut Target, additional: u32) -> Result<()> {
+        let mut admission = if target.sampling_batch.is_some() {
+            Some(
+                self.gpu
+                    .sampling_admission
+                    .flight
+                    .lock()
+                    .map_err(|_| "Metal sampling admission is poisoned")?,
+            )
+        } else {
+            None
+        };
+        if admission
+            .as_ref()
+            .and_then(|slot| slot.as_ref())
+            .is_some_and(|batch| !batch.is_retired())
+        {
+            admission
+                .as_ref()
+                .and_then(|slot| slot.as_ref())
+                .unwrap()
+                .check_deadline()?;
+            // This API already blocks. An asynchronous job on the same device
+            // may own the previous buffer even if its caller has not polled it.
+            GpuDevice::wait(&self.gpu.device)?;
+            self.gpu.loss.check()?;
+            if admission
+                .as_ref()
+                .and_then(|slot| slot.as_ref())
+                .is_some_and(|batch| !batch.is_retired())
+            {
+                return Err("Previous Metal sampling buffer did not retire after GPU wait".into());
+            }
+        }
         let timer =
             profiling::GpuTimer::new(&self.gpu.device, target.timer_pairs(additional), false);
         let completion =
             self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
+        let sampling_done = admission
+            .as_ref()
+            .map(|_| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        if let Some(slot) = admission.as_mut() {
+            let done = sampling_done.as_ref().unwrap().clone();
+            let signal = done.clone();
+            self.gpu.queue.on_submitted_work_done(move || {
+                signal.store(true, std::sync::atomic::Ordering::Release)
+            });
+            **slot = Some(sampling_batch::Pending::new(completion.clone(), done));
+        }
+        drop(admission);
         crate::GpuDevice::wait(&self.gpu.device)?;
         let repaired = match completion.require_success("blocking render") {
             Ok(()) => false,
@@ -1246,11 +1398,17 @@ impl GpuScene {
                 true
             }
         };
+        // A successful repair drains/renews the queue. Its original ignored
+        // buffers need not acquire a terminal Metal status to release admission.
+        if let Some(done) = &sampling_done {
+            self.gpu.release_sampling(done);
+        }
+        let gpu_ms = timer
+            .filter(|_| !repaired)
+            .as_ref()
+            .and_then(|t| t.optional_milliseconds(&self.gpu.device, &self.gpu.queue));
+        sampling_batch::completed(target, additional, gpu_ms, &completion, repaired);
         if profiling::gpu_enabled() {
-            let gpu_ms = timer
-                .filter(|_| !repaired)
-                .as_ref()
-                .and_then(|t| t.optional_milliseconds(&self.gpu.device, &self.gpu.queue));
             native_log!(
                 "{}",
                 json!({"nativeRenderProfile": {"firstSample": target.samples, "samples": additional, "kernelGpuMs": gpu_ms}})
@@ -1261,6 +1419,7 @@ impl GpuScene {
     }
     /// L1 coverage/background conversion; L0 remains a raw average.
     fn read_hdr(&self, target: &Target) -> Result<Vec<f32>> {
+        self.verify_sampling_target(target, target.samples)?;
         hdr::read(
             &self.gpu,
             [target.output(0)?, target.output(1)?, target.output(2)?],
@@ -1306,8 +1465,13 @@ impl GpuScene {
             .unwrap_or_else(|| self.scene.clone());
         let (pipeline, layouts, aov_shader, aov_pipelines) = match packet.shader {
             Some(source) => {
-                let (compiled, _) =
-                    compile_pipeline(&self.gpu, &target_scene, source, self.hardware.is_some())?;
+                let (compiled, _) = compile_pipeline(
+                    &self.gpu,
+                    &target_scene,
+                    source,
+                    self.hardware.is_some(),
+                    caustic_packet.is_none(),
+                )?;
                 (
                     Some(compiled.pipeline),
                     compiled.layouts,
@@ -1388,16 +1552,25 @@ impl GpuScene {
             })
             .transpose()?;
         let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
+            let mut entries: Vec<_> = entries
+                .iter()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: *binding as u32,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect();
+            if index == layout::group::OUTPUT
+                && caustics.is_none()
+                && self.scene.entry_point == "main"
+            {
+                if let Some(guard) = &self.query_guard {
+                    entries.extend(guard.entries(&guard.unused_flag));
+                }
+            }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("MuTracer render target resources"),
                 layout: &layouts[index],
-                entries: &entries
-                    .iter()
-                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                        binding: *binding as u32,
-                        resource: buffer.as_entire_binding(),
-                    })
-                    .collect::<Vec<_>>(),
+                entries: &entries,
             })
         };
         let frame = group(
@@ -1476,7 +1649,9 @@ impl GpuScene {
         if additional == 0 || end > 16384 {
             return Err("Total samples must be 1..16384".into());
         }
-        if target.dispatches_per_buffer(additional) > 1 {
+        if target.dispatches_per_buffer(additional) > 1
+            || (self.query_guard.is_some() && target.sampling_batch.is_some())
+        {
             return self.dispatch_target_batched(target, start, additional, timer);
         }
         let device = &self.gpu.device;
@@ -1556,7 +1731,7 @@ impl GpuScene {
                 pass.dispatch_workgroups(
                     target.width.div_ceil(target.workgroup_size),
                     {
-                        let rows = target.height.div_ceil(target.workgroup_size);
+                        let rows = self.sampling_group_rows(target);
                         #[cfg(test)]
                         let rows = if partial == Some(sample) {
                             rows / 2
@@ -1612,6 +1787,7 @@ impl GpuScene {
         if target.samples == 0 {
             return Err("No completed samples".into());
         }
+        self.verify_sampling_target(target, target.samples)?;
         read_average(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1642,6 +1818,10 @@ impl GpuScene {
         Ok(bytemuck::pod_collect_to_vec(&bytes))
     }
     fn reset_target(&self, target: &mut Target) -> Result<()> {
+        let proof = self
+            .query_guard
+            .as_ref()
+            .map(|_| native_completion::Recording::new());
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
             encoder.clear_buffer(&target.buffers[&id], 0, None);
@@ -1652,7 +1832,15 @@ impl GpuScene {
         }
         self.gpu.queue.submit([encoder.finish()]);
         crate::GpuDevice::wait(&self.gpu.device)?;
+        if let Some(proof) = proof {
+            proof
+                .finish()
+                .require_success("empty sampling checkpoint")?;
+        }
         target.samples = 0;
+        if let Some(state) = &target.sampling_batch {
+            state.lock().unwrap().reset_accumulation();
+        }
         Ok(())
     }
     fn validate_lighting(
@@ -1895,7 +2083,7 @@ impl GpuScene {
                         updates,
                         &self.buffers,
                     )?;
-                    let entries = [
+                    let entries = vec![
                         wgpu::BindGroupEntry {
                             binding: 0,
                             resource: self.buffers[&1].as_entire_binding(),

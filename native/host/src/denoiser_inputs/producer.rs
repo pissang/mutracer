@@ -47,7 +47,7 @@ impl FrameProducer {
             .gpu
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        let trace = compile_pipeline(&scene.gpu, &description, source, scene.hwrt_shader);
+        let trace = compile_pipeline(&scene.gpu, &description, source, scene.hwrt_shader, false);
         let shader = scene
             .gpu
             .device

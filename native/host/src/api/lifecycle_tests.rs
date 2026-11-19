@@ -38,6 +38,7 @@ fn partial_flight_recovery_matches_clean_converge_on_both_backends() {
         };
         let clean = Render::new(&engine, settings.clone()).unwrap();
         clean.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(clean.backend().unwrap().0, backend);
         let expected: Vec<_> = [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
             .into_iter()
             .map(|kind| {
@@ -64,11 +65,29 @@ fn partial_flight_recovery_matches_clean_converge_on_both_backends() {
             render.converge(options).unwrap();
             assert_eq!(render.samples(), 8);
             assert_eq!(render.status(), RenderStatus::Finished);
+            assert_eq!(render.backend().unwrap().0, backend);
+            // Software's entire job is replayed. Metal HWRT divides eight
+            // samples into two cap-four flights; the unaffected flight retains
+            // its timing and denominator, regardless of which flight failed.
+            let measured_samples =
+                crate::context::job_timing_sample_count(render.audit_context_id().unwrap())
+                    .unwrap();
             assert_eq!(
-                render.gpu_sample_time_ms(),
-                None,
-                "repaired-only job fabricated a timing"
+                measured_samples,
+                if backend == Backend::Hardware { 4 } else { 0 }
             );
+            if measured_samples == 0 {
+                assert_eq!(
+                    render.gpu_sample_time_ms(),
+                    None,
+                    "repaired-only job fabricated a timing"
+                );
+            } else if let Some(ms) = render.gpu_sample_time_ms() {
+                assert!(
+                    ms.is_finite() && ms > 0.,
+                    "invalid timing from an unaffected flight"
+                );
+            }
             for (i, kind) in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
                 .into_iter()
                 .enumerate()

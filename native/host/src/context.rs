@@ -86,6 +86,8 @@ struct Flight {
     )>,
 }
 struct RenderJob {
+    following: u32,
+    prepared: Option<crate::sampling_batch::Prepared>,
     id: u64,
     base: u32,
     requested: u32,
@@ -359,6 +361,7 @@ fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
         .filter(|c| c.link.as_ref().is_some_and(|l| l.scene == owner))
     {
         if let Some(job) = context.job.as_mut().filter(|j| j.active()) {
+            job.prepared = None;
             job.cancelled = true;
             while job_active(context) {
                 advance_job(context, None, 0)?;
@@ -630,7 +633,15 @@ pub(crate) fn denoise_buffers(handle: u64) -> crate::Result<([wgpu::Buffer; 3], 
     blocking(|| {
         with_registry(|registry| {
             let (state, linked) = with_scene(registry, handle)?;
+            if state
+                .target
+                .as_ref()
+                .is_some_and(|t| t.sampling_batch.is_some())
+            {
+                idle(state)?;
+            }
             let (scene, target) = render_parts(state, linked)?;
+            scene.verify_sampling_target(target, target.samples)?;
             let [color, albedo, normal] = [0, 2, 1].map(|kind| target.output(kind).cloned());
             let buffers = [color?, albedo?, normal?];
             let size = [target.width, target.height];
@@ -661,7 +672,16 @@ pub(crate) fn capture_display_filtered(
     // from an execution failure while preparation publishes on another thread.
     let result = with_registry(|registry| {
         let (state, linked) = with_scene(registry, handle)?;
+        if state
+            .target
+            .as_ref()
+            .is_some_and(|t| t.sampling_batch.is_some())
+            && job_active(state)
+        {
+            return Ok(false);
+        }
         let (scene, target) = render_parts(state, linked)?;
+        scene.verify_sampling_target(target, target.samples)?;
         let [color, normal, albedo, shadow] = [0, 1, 2, 3].map(|kind| target.output(kind).cloned());
         let outputs = [color?, normal?, albedo?, shadow?];
         let (samples, size) = (target.samples, [target.width, target.height]);
@@ -1245,6 +1265,7 @@ fn commit_inner(
         // A pending render batch owns the old scene until its fence completes.
         if let Some(job) = context.job.as_mut() {
             if job.active() {
+                job.prepared = None;
                 job.cancelled = true;
                 while job_active(context) {
                     advance_job(context, None, 0)?;
@@ -1307,6 +1328,7 @@ fn apply_incremental(
     // As with full publication, an unfinished job is cancelled and drained first.
     if let Some(job) = context.job.as_mut() {
         if job.active() {
+            job.prepared = None;
             job.cancelled = true;
             while job_active(context) {
                 advance_job(context, None, 0)?;
@@ -2000,12 +2022,28 @@ fn job_handle(registry: &mut Registry, id: u64) -> Result<u64> {
 }
 
 pub(crate) fn submit(handle: u64, additional: u32) -> Result<u64> {
+    submit_chunk(handle, additional, 0, false)
+}
+pub(crate) fn submit_chunk(
+    handle: u64,
+    additional: u32,
+    following: u32,
+    continuous: bool,
+) -> Result<u64> {
     with_registry(|registry| {
         let id = registry.next;
         let next = id.checked_add(1).ok_or("Native handles exhausted")?;
         let (context, linked) = with_scene(registry, handle)?;
         idle(context)?;
         let (_, target) = render_parts(context, linked)?;
+        let (additional, following) = if let Some(batch) = &target.sampling_batch {
+            let mut batch = batch.lock().unwrap();
+            batch.continuous(continuous);
+            let count = batch.logical_count(additional);
+            (count, following + additional - count)
+        } else {
+            (additional, following)
+        };
         let base = target.samples;
         if additional == 0 || additional > 16384 - base {
             return Err(fail(
@@ -2013,7 +2051,18 @@ pub(crate) fn submit(handle: u64, additional: u32) -> Result<u64> {
                 "Total samples must be 1..16384",
             ));
         }
+        let prepared = context
+            .job
+            .as_mut()
+            .filter(|previous| {
+                previous.following > 0
+                    && !previous.cancelled
+                    && previous.state == JobState::Complete
+            })
+            .and_then(|previous| previous.prepared.take());
         context.job = Some(RenderJob {
+            following,
+            prepared,
             id,
             base,
             requested: additional,
@@ -2053,6 +2102,11 @@ pub(crate) fn job_gpu_sample_time(handle: u64) -> Option<f64> {
         .then_some(job.gpu_ms?)
         .map(|ms| ms / f64::from(job.gpu_samples))
 }
+#[cfg(test)]
+pub(crate) fn job_timing_sample_count(handle: u64) -> Option<u32> {
+    let slot = REGISTRY.try_lock().ok()?;
+    Some(slot.contexts.get(&handle)?.job.as_ref()?.gpu_samples)
+}
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
     if let Err(error) = context.gpu.loss.check() {
@@ -2084,13 +2138,37 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         return Ok(());
     }
     gpu.device.poll(wgpu::PollType::Poll)?;
+    gpu.retire_sampling();
     gpu.loss.check()?;
+    if let Some(flight) = job
+        .flight
+        .as_ref()
+        .filter(|flight| !flight.done.load(Ordering::Acquire))
+    {
+        if let Err(error) = flight.native.check_deadline() {
+            if flight.native.is_retired() {
+                gpu.release_sampling(&flight.done);
+            }
+            *failed = true;
+            job.state = JobState::Failed;
+            return Err(error);
+        }
+    }
     if job
         .flight
         .as_ref()
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
-        let flight = job.flight.as_ref().unwrap();
+        let flight = job.flight.as_mut().unwrap();
+        if flight.native.health.is_none()
+            && (job.cancelled || (job.following == 0 && flight.end == job.base + job.requested))
+        {
+            flight.native.health = flight
+                .native
+                .checkpoint
+                .as_ref()
+                .and_then(|c| c.direct_receipt());
+        }
         let mut checked = flight.native.check(&format!(
             "context={context_id} job={} flight={}..{}",
             job.id, flight.start, flight.end
@@ -2126,12 +2204,39 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
             .and_then(|f| f.timer.as_ref())
             .is_some_and(|(_, rx)| matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)))
         {
+            if let Err(error) = job.flight.as_ref().unwrap().native.check_deadline() {
+                *failed = true;
+                job.state = JobState::Failed;
+                return Err(error);
+            }
             return Ok(());
         }
         let flight = job.flight.take().unwrap();
+        if flight.repaired || flight.native.repaired_prefix {
+            job.prepared = None;
+        }
+        gpu.release_sampling(&flight.done);
+        let native_ms = (!flight.repaired && flight.native.checkpoint.is_some())
+            .then(|| flight.native.sampling_gpu_ms())
+            .flatten();
         let measured = flight
             .timer
-            .and_then(|(timer, _)| timer.mapped_milliseconds(&gpu.queue));
+            .and_then(|(timer, _)| timer.mapped_milliseconds(&gpu.queue))
+            .or(native_ms);
+        if let Some(target) = target.as_ref() {
+            crate::sampling_batch::completed(
+                target,
+                flight.end - flight.start,
+                measured,
+                &flight.native,
+                flight.repaired,
+            );
+        }
+        if flight.native.repaired_prefix {
+            // Earlier timings in this job came from an unverified epoch.
+            job.gpu_samples = 0;
+            job.gpu_ms = Some(0.);
+        }
         if !flight.repaired {
             job.gpu_samples += flight.end - flight.start;
             job.gpu_ms = job.gpu_ms.zip(measured).map(|(sum, ms)| sum + ms);
@@ -2158,11 +2263,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
                             "gpuTailCounts": counts,
                         })
                     );
-                    assert_eq!(
-                        counts,
-                        vec![1; (flight.end - flight.start) as usize],
-                        "GPU did not execute exactly one tail marker per submitted dispatch"
-                    );
+                    crate::query_guard::assert_audit_attempts(gpu, flight.start, &counts);
                 }
             }
         }
@@ -2171,6 +2272,16 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     }
     if job.flight.is_some() {
         return Ok(());
+    }
+    if (job.following == 0 && job.completed == job.requested) || job.cancelled {
+        // Ownerless retirement discards a linked target; normal polling borrows
+        // its owner and verifies the epoch before publishing terminal output.
+        if let (Some(scene), Some(target)) = (owner.or(own.as_ref()), target.as_ref()) {
+            if scene.verify_sampling_target(target, target.samples)? {
+                job.gpu_samples = 0;
+                job.gpu_ms = None;
+            }
+        }
     }
     if job.completed == job.requested {
         job.state = JobState::Complete;
@@ -2183,26 +2294,89 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     if budget == 0 {
         return Ok(());
     }
+    // A Metal HWRT flight contains one native sampling buffer. Keep the next
+    // buffer unsubmitted until callback and native execution checks retire this
+    // one; normal polling never blocks to enforce that boundary.
     let count = budget.min(job.requested - job.submitted);
+    let count = target
+        .as_ref()
+        .map_or(count, |t| t.sampling_flight_samples(count));
+    let mut admission = if target.as_ref().is_some_and(|t| t.sampling_batch.is_some()) {
+        let slot = match gpu.sampling_admission.flight.try_lock() {
+            Ok(slot) => slot,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("Metal sampling admission is poisoned".into());
+            }
+        };
+        if let Some(batch) = slot.as_ref().filter(|batch| !batch.is_retired()) {
+            if let Err(error) = batch.check_deadline() {
+                *failed = true;
+                job.state = JobState::Failed;
+                return Err(error);
+            }
+            return Ok(());
+        }
+        Some(slot)
+    } else {
+        None
+    };
     let start = job.base + job.submitted;
-    let timer = crate::profiling::GpuTimer::realtime(
-        &gpu.device,
-        target.as_ref().map_or(count, |t| t.timer_pairs(count)),
-        false,
-    );
     let scene = owner
         .or(own.as_ref())
         .ok_or("Missing render target scene")?;
-    let native = scene.dispatch_target(
-        target.as_ref().ok_or("No render target")?,
-        start,
-        count,
-        timer.as_ref(),
-    )?;
-    let done = Arc::new(AtomicBool::new(false));
-    let signal = done.clone();
-    gpu.queue
-        .on_submitted_work_done(move || signal.store(true, Ordering::Release));
+    let t = target.as_ref().ok_or("No render target")?;
+    let (native, timer) = if let Some(next) = job
+        .prepared
+        .take()
+        .filter(|p| {
+            #[cfg(test)]
+            if gpu.recovery_test.lock().unwrap().partial_sample.is_some()
+                || crate::query_guard::injects(gpu, start, start + count)
+            {
+                return false;
+            }
+            p.matches(t, start, count)
+        })
+        .or_else(|| {
+            scene.prepare_next(
+                t,
+                start,
+                count,
+                job.following == 0 && job.submitted + count == job.requested,
+            )
+        }) {
+        next.commit(scene, t)
+    } else {
+        let timer = if t.sampling_batch.is_some() && scene.native_sampling_time() {
+            None
+        } else {
+            crate::profiling::GpuTimer::realtime(&gpu.device, t.timer_pairs(count), false)
+        };
+        (
+            scene.dispatch_target(t, start, count, timer.as_ref())?,
+            timer,
+        )
+    };
+    // The native callback wakes the owner. Batch::check still verifies every
+    // submitted command and the checkpoint before publishing samples.
+    let done = if native.checkpoint.is_some() && native.sampling_done.is_some() {
+        native.sampling_done.clone().unwrap()
+    } else {
+        let done = Arc::new(AtomicBool::new(false));
+        let signal = done.clone();
+        gpu.queue.on_submitted_work_done(move || {
+            signal.store(true, Ordering::Release);
+        });
+        done
+    };
+    if let Some(slot) = admission.as_mut() {
+        **slot = Some(crate::sampling_batch::Pending::new(
+            native.clone(),
+            done.clone(),
+        ));
+    }
+    drop(admission);
     job.submitted += count;
     job.flight = Some(Flight {
         start,
@@ -2215,6 +2389,27 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
             (timer, rx)
         }),
     });
+    let left = job.requested - job.submitted;
+    let next = if left > 0 {
+        left
+    } else if t
+        .sampling_batch
+        .as_ref()
+        .is_some_and(|s| s.lock().unwrap().long_flight())
+    {
+        0
+    } else {
+        job.following
+    };
+    if next > 0 && t.sampling_batch.is_some() && scene.query_guard.is_some() {
+        let count = t.sampling_flight_samples(budget.min(next));
+        job.prepared = scene.prepare_next(
+            t,
+            job.base + job.submitted,
+            count,
+            job.following == 0 && job.submitted + count == job.requested,
+        );
+    }
     job.state = JobState::Running;
     Ok(())
 }
@@ -2305,6 +2500,7 @@ pub(crate) fn cancel_job(id: u64) -> Result<()> {
         if !job.active() {
             return Ok(());
         }
+        job.prepared = None;
         job.cancelled = true;
         job.state = if job.flight.is_some() {
             JobState::Cancelling

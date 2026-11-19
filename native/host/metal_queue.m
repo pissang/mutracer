@@ -5,7 +5,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-typedef void (*MuTracerRecord)(void *buffer);
+typedef void (*MuTracerRecord)(void *buffer, bool sampling);
 
 // objc2 checks Objective-C method signatures in debug builds before dispatch.
 // Register forwarding signatures from the public Metal protocols on our own
@@ -30,6 +30,7 @@ static void registerForwarders(Class cls, Protocol *protocol) {
 @interface MuTracerObservedCommandBuffer : NSObject {
     id<MTLCommandBuffer> _buffer;
     MuTracerRecord _record;
+    BOOL _sampling;
 }
 - (instancetype)initWithBuffer:(id<MTLCommandBuffer>)buffer record:(MuTracerRecord)record;
 @end
@@ -47,7 +48,12 @@ static void registerForwarders(Class cls, Protocol *protocol) {
 - (BOOL)conformsToProtocol:(Protocol *)protocol {
     return [_buffer conformsToProtocol:protocol] || [super conformsToProtocol:protocol];
 }
-- (void)commit { _record((__bridge void *)_buffer); [_buffer commit]; }
+- (void)setLabel:(NSString *)label {
+    if ([label isEqualToString:@"MuTracer batched path trace"] || [label hasPrefix:@"MuTracer path trace"])
+        _sampling = YES;
+    _buffer.label = label;
+}
+- (void)commit { _record((__bridge void *)_buffer, _sampling != NO); [_buffer commit]; }
 @end
 
 @interface MuTracerObservedQueue : NSObject {
@@ -116,4 +122,13 @@ bool mt_native_is_observed_metal_queue(void *queue) {
 __attribute__((visibility("hidden")))
 bool mt_native_renew_metal_queue(void *queue) {
     return [(__bridge MuTracerObservedQueue *)queue renew];
+}
+
+// Called by the commit observer before Metal commit. The block owns the notice
+// until Metal invokes it, including error completion; Rust releases it there.
+__attribute__((visibility("hidden")))
+void mt_native_on_complete(void *buffer, void *notice, void (*finish)(void *)) {
+    [(__bridge id<MTLCommandBuffer>)buffer addCompletedHandler:^(__unused id<MTLCommandBuffer> completed) {
+        @autoreleasepool { finish(notice); }
+    }];
 }

@@ -1,18 +1,88 @@
 //! wgpu's queue callback also fires for failed Metal command buffers. Retain
 //! each buffer submitted while recording a batch, then check execution
 //! before credit. Metal queue forwarding avoids mixing wgpu and raw encoding.
-//! Successful polling adds no handlers, extra GPU work, or waits.
+/// Wake the blocking convergence loop at completion while ordinary SDK polls
+/// keep their nonblocking budget. A wake only requests another retirement check.
 #[derive(Default)]
+pub(crate) struct Wake {
+    state: std::sync::Mutex<WakeState>,
+    ready: std::sync::Condvar,
+}
+#[derive(Default)]
+struct WakeState {
+    signalled: bool,
+    submitted: Option<std::time::Instant>,
+}
+thread_local! {static WAKE:std::cell::RefCell<Option<std::sync::Arc<Wake>>>=const{std::cell::RefCell::new(None)};}
+impl Wake {
+    pub(crate) fn during<T>(self: &std::sync::Arc<Self>, f: impl FnOnce() -> T) -> T {
+        struct Reset(Option<std::sync::Arc<Wake>>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                WAKE.replace(self.0.take());
+            }
+        }
+        let _previous = Reset(WAKE.replace(Some(self.clone())));
+        f()
+    }
+    pub(crate) fn wait(&self, budget: std::time::Duration) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Short flights keep the original fallback. Once a native CB exceeds
+        // two 16 ms batch budgets, let its completion handler wake this caller.
+        // The bounded timeout still services loss, cancellation and deadlines.
+        let budget = if state
+            .submitted
+            .is_some_and(|t| t.elapsed() >= std::time::Duration::from_millis(32))
+        {
+            std::time::Duration::from_millis(8)
+        } else {
+            budget
+        };
+        let (mut state, _) = self
+            .ready
+            .wait_timeout_while(state, budget, |s| !s.signalled)
+            .unwrap_or_else(|e| e.into_inner());
+        state.signalled = false;
+    }
+}
+#[derive(Clone, Default)]
 pub(crate) struct Batch {
+    pub(crate) sampling_done: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    sampling: Vec<usize>,
     #[cfg(target_os = "macos")]
     buffers:
         Vec<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>>,
     #[cfg(test)]
     pub(crate) injected_error: Option<String>,
+    pub(crate) health: Option<crate::query_guard::Receipt>,
+    pub(crate) repaired_prefix: bool,
+    pub(crate) deadline: Option<std::time::Instant>,
+    pub(crate) sampling_started: Option<std::time::Instant>,
+    pub(crate) checkpoint: Option<std::sync::Arc<crate::query_guard::Checkpoint>>,
     #[cfg(test)]
     pub(crate) injected_kind: Option<FailureKind>,
 }
 
+impl Batch {
+    pub(crate) fn sampling_gpu_ms(&self) -> Option<f64> {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+            if self.sampling.len() != 1 {
+                return None;
+            }
+            let cb = &self.buffers[self.sampling[0]];
+            let start = cb.GPUStartTime();
+            let end = cb.GPUEndTime();
+            (cb.status() == MTLCommandBufferStatus::Completed && start > 0. && end > start)
+                .then_some((end - start) * 1000.)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+}
 // SAFETY: the retained Metal objects are never encoded or committed through
 // this type. After capture, only the thread-safe status/error getters and
 // retain/release are used. Registry ownership serializes access across polls.
@@ -66,14 +136,49 @@ pub(crate) fn observe_queue(queue: MetalQueue) -> MetalQueue {
     unsafe extern "C" {
         fn mt_native_observe_metal_queue(
             queue: *mut c_void,
-            record: extern "C" fn(*mut c_void),
+            record: extern "C" fn(*mut c_void, bool),
         ) -> *mut c_void;
     }
-    extern "C" fn record(buffer: *mut c_void) {
+    extern "C" fn record(buffer: *mut c_void, sampling: bool) {
         RECORDINGS.with_borrow_mut(|stack| {
             if let Some(batch) = stack.last_mut() {
-                // SAFETY: Metal returns a live autoreleased command buffer;
-                // retain it before returning to the queue's caller.
+                if sampling {
+                    type Signal = (
+                        std::sync::Arc<std::sync::atomic::AtomicBool>,
+                        Option<std::sync::Arc<Wake>>,
+                    );
+                    extern "C" fn finish(notice: *mut c_void) {
+                        let signal = unsafe { Box::from_raw(notice.cast::<Signal>()) };
+                        signal.0.store(true, std::sync::atomic::Ordering::Release);
+                        if let Some(wake) = signal.1 {
+                            let mut state = wake.state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.submitted = None;
+                            state.signalled = true;
+                            wake.ready.notify_one();
+                        }
+                    }
+                    unsafe extern "C" {
+                        fn mt_native_on_complete(
+                            buffer: *mut c_void,
+                            notice: *mut c_void,
+                            finish: extern "C" fn(*mut c_void),
+                        );
+                    }
+                    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let wake = WAKE.with_borrow(Clone::clone);
+                    if let Some(wake) = &wake {
+                        wake.state
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .submitted = Some(std::time::Instant::now());
+                    }
+                    let notification = Box::new((done.clone(), wake));
+                    unsafe {
+                        mt_native_on_complete(buffer, Box::into_raw(notification).cast(), finish);
+                    }
+                    batch.sampling_done = Some(done);
+                    batch.sampling.push(batch.buffers.len());
+                }
                 batch
                     .buffers
                     .push(unsafe { Retained::retain(buffer.cast()).unwrap() });
@@ -191,12 +296,56 @@ pub(crate) fn request_device(
 }
 
 impl Batch {
+    pub(crate) fn check_deadline(&self) -> crate::Result<()> {
+        if self
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(crate::status::fail(
+                crate::Status::ContextFailed,
+                "Metal sampling flight exceeded its 30 second completion deadline",
+            ));
+        }
+        Ok(())
+    }
+    /// Execution retirement, independent of whether the finished work succeeded.
+    /// Sampling admission must not depend on another render polling its job.
+    pub(crate) fn is_retired(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+            self.buffers.iter().all(|buffer| {
+                matches!(
+                    buffer.status(),
+                    MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
+                )
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        true
+    }
     /// NSError domain/code, independent of localized descriptions and logging.
     /// An unrelated failure in the same batch always prevents replay.
     pub(crate) fn failure_kind(&self) -> FailureKind {
         #[cfg(test)]
         if self.injected_error.is_some() {
             return self.injected_kind.unwrap_or(FailureKind::Unrecoverable);
+        }
+        if self
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.is_invalid())
+        {
+            return FailureKind::Unrecoverable;
+        }
+        #[cfg(target_os = "macos")]
+        if self.health.as_ref().is_some_and(|health| health.failed())
+            && !self.buffers.iter().any(|buffer| {
+                use objc2_metal::MTLCommandBuffer;
+                buffer.status() == objc2_metal::MTLCommandBufferStatus::Error
+            })
+        {
+            return FailureKind::Retry;
         }
         #[cfg(target_os = "macos")]
         {
@@ -284,6 +433,24 @@ impl Batch {
                     format!("GPU execution failed ({identity}): {error}"),
                 ));
             }
+            if complete {
+                if let Some(checkpoint) = &self.checkpoint {
+                    if !checkpoint.check()? {
+                        self.check_deadline()?;
+                        return Ok(false);
+                    }
+                }
+                if let Some(health) = &self.health {
+                    let checked = health.check()?;
+                    if !checked {
+                        self.check_deadline()?;
+                    }
+                    return Ok(checked);
+                }
+            }
+            if !complete {
+                self.check_deadline()?;
+            }
             return Ok(complete);
         }
         #[cfg(not(target_os = "macos"))]
@@ -322,6 +489,13 @@ mod tests {
         let batch = Batch {
             #[cfg(target_os = "macos")]
             buffers: Vec::new(),
+            sampling_done: None,
+            sampling: Vec::new(),
+            health: None,
+            repaired_prefix: false,
+            deadline: None,
+            sampling_started: None,
+            checkpoint: None,
             injected_error: Some("VK_ERROR_DEVICE_LOST".into()),
             injected_kind: None,
         };
@@ -396,6 +570,11 @@ mod tests {
             Retained::as_ptr(&other_after.buffers[0].commandQueue())
         );
         let failed = Batch {
+            health: None,
+            repaired_prefix: false,
+            deadline: None,
+            sampling_started: None,
+            checkpoint: None,
             injected_error: Some("post-renewal observed failure".into()),
             ..new
         };
@@ -406,6 +585,43 @@ mod tests {
                 .to_string()
                 .contains("post-renewal observed failure")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn retirement_keeps_an_uncommitted_native_buffer_pending() {
+        use objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
+        let gpu = crate::GpuDevice::with_backend(0).unwrap();
+        let hal = unsafe { gpu.queue.as_hal::<wgpu::hal::api::Metal>() }.unwrap();
+        let buffer = hal.as_raw().commandBuffer().unwrap();
+        let batch = Batch {
+            buffers: vec![buffer.clone()],
+            ..Default::default()
+        };
+        assert!(!batch.is_retired());
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        *gpu.sampling_admission.flight.lock().unwrap() = Some(crate::sampling_batch::Pending::new(
+            batch.clone(),
+            done.clone(),
+        ));
+        gpu.retire_sampling();
+        assert!(gpu.sampling_admission.flight.lock().unwrap().is_some());
+        let other = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        gpu.release_sampling(&other);
+        assert!(gpu.sampling_admission.flight.lock().unwrap().is_some());
+        // Successful repair may abandon a buffer that the native queue ignored.
+        // Only the owner of that repaired flight may clear its admission slot.
+        gpu.release_sampling(&done);
+        assert!(gpu.sampling_admission.flight.lock().unwrap().is_none());
+        // Empty raw buffer solely controls status; no rendering or wgpu-owned
+        // resource is encoded through this test's native object.
+        buffer.commit();
+        buffer.waitUntilCompleted();
+        assert!(batch.is_retired());
+        batch
+            .require_success("retired empty native buffer")
+            .unwrap();
     }
 
     #[cfg(target_os = "macos")]

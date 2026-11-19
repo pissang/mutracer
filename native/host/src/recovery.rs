@@ -1,6 +1,6 @@
-//! Replay only missing whole-pixel invocations, using the megakernel's existing
-//! adaptive target and per-pixel random sequence. Separate output stores are not
-//! a transaction: real driver resets still require image-statistics validation.
+//! Retry Metal sampling before credit. Guarded flights restore a verified
+//! checkpoint and replay the batch; other eligible paths fill missing pixels
+//! using the existing adaptive target and per-pixel random sequence.
 use crate::{
     GpuScene, Result, Target, layout,
     native_completion::{Batch, FailureKind},
@@ -8,14 +8,18 @@ use crate::{
 use std::time::{Duration, Instant};
 
 const ADAPTIVE_TARGETS: usize = 26;
-const TIME_LIMIT: Duration = Duration::from_secs(10);
-const MAX_RETRIES: u32 = 12;
+pub(super) const TIME_LIMIT: Duration = Duration::from_secs(10);
+pub(super) const MAX_RETRIES: u32 = 12;
 
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Injection {
     pub partial_sample: Option<u32>,
+    pub silent_sample: Option<u32>,
+    pub query_window: bool,
     pub repair_failures: u32,
+    pub restore_failures: u32,
+    pub replayed_ranges: Vec<std::ops::Range<u32>>,
     pub submissions: u32,
     pub repairs: u32,
 }
@@ -37,6 +41,9 @@ impl GpuScene {
             || failed.failure_kind() == FailureKind::Unrecoverable
         {
             return Err(original);
+        }
+        if failed.checkpoint.is_some() {
+            return crate::query_guard::repair(self, target, start, end, failed, original);
         }
         let texture = self.textures.get(&ADAPTIVE_TARGETS).filter(|t| {
             t.width() == 1

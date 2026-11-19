@@ -280,12 +280,22 @@ Acceleration structures add build time and memory; any speedup depends on the
 scene and hardware. Coplanar or overlapping surfaces can resolve to different
 triangles in the two backends.
 
-Known issue: with Metal HWRT, a sample can occasionally see an empty scene or
-fail to accumulate without reporting an error. It has been observed at small
-render sizes while other applications use the GPU. It can cause an abnormal
-preview frame, a small bias in offline images and byte-level differences between
-runs; it is not detected or retried. For reproducible output, render twice and
-compare. Software rendering can also lose samples during GPU recovery.
+During standard Metal HWRT path tracing, a temporary run of missed intersections can
+corrupt an image even when the GPU reports success. When a sampling check
+detects a miss, the renderer restores the last verified checkpoint and replays
+the affected samples before returning the image. Recovery has a ten-second
+total deadline. Recoverable explicit GPU errors allow up to twelve retries.
+Automatic replay requires an SDK-observed Metal queue, such as the one used by
+an SDK-created device or `Engine::from_metal`. A detected miss on an unobserved
+host queue returns an error. Caustics rendering has no checkpoint replay.
+
+Checkpointing can retain an extra copy of the four accumulation buffers.
+Budget about 2% additional render time for scenes on the scale of SanMiguel,
+based on a 64-sample render on an M4 Max. The cost varies with the scene and GPU.
+A fault can require replaying roughly a second of work, or more if a batch takes
+longer. A short run of misses between checks can still affect the output.
+For work that needs independent verification, render twice and compare the
+images. Software rendering can also lose samples during GPU recovery.
 
 ## Limitations
 

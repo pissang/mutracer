@@ -1765,9 +1765,9 @@ fn capture(render: &mut RenderState) -> Result<bool> {
         Err(error) => Err(error),
     }
 }
-fn submit(render: &mut RenderState, count: u32) -> Result<()> {
+fn submit(render: &mut RenderState, count: u32, following: u32, continuous: bool) -> Result<()> {
     let context = render.context;
-    let job = match context_result(context::submit(context, count)) {
+    let job = match context_result(context::submit_chunk(context, count, following, continuous)) {
         Ok(job) => job,
         Err(e) if e.status == Status::Busy => return Ok(()),
         Err(e) => return Err(e),
@@ -1833,7 +1833,7 @@ fn collect(state: &mut State, id: u64) -> Result<bool> {
 fn submit_toward(render: &mut RenderState, limit: u32) -> Result<()> {
     if render.samples < limit {
         let count = batch_size(render, limit - render.samples);
-        submit(render, count)?;
+        submit(render, count, limit - render.samples - count, false)?;
     }
     Ok(())
 }
@@ -3074,35 +3074,43 @@ impl Render {
             }
             Ok(())
         })?;
+        let wake = std::sync::Arc::new(crate::native_completion::Wake::default());
         let mut reported = 0;
         let mut captured_at = Instant::now();
         loop {
-            let (samples, done) = self.with(|state, id| {
-                check(state)?;
-                let render = state.renders.get_mut(&id).unwrap();
-                if let Some(event) = observe(render)? {
-                    state.sample_events.push((id, event));
-                }
-                let render = state.renders.get_mut(&id).unwrap();
-                if options
-                    .preview_interval_ms
-                    .is_some_and(|ms| captured_at.elapsed().as_secs_f64() * 1e3 >= ms)
-                    && render.samples > 0
-                    && render.job.is_none()
-                {
-                    capture(render)?;
-                    captured_at = Instant::now();
-                }
-                if render.job.is_none() && render.samples < target {
-                    let count = if let Some(budget) = options.target_batch_time_ms {
-                        batch_count(true, render.gpu_sample_ms, budget, target - render.samples)
-                            .min(batch)
-                    } else {
-                        batch.min(target - render.samples)
-                    };
-                    submit(render, count)?;
-                }
-                Ok((render.samples, render.samples >= target))
+            let (samples, done) = wake.during(|| {
+                self.with(|state, id| {
+                    check(state)?;
+                    let render = state.renders.get_mut(&id).unwrap();
+                    if let Some(event) = observe(render)? {
+                        state.sample_events.push((id, event));
+                    }
+                    let render = state.renders.get_mut(&id).unwrap();
+                    if options
+                        .preview_interval_ms
+                        .is_some_and(|ms| captured_at.elapsed().as_secs_f64() * 1e3 >= ms)
+                        && render.samples > 0
+                        && render.job.is_none()
+                    {
+                        capture(render)?;
+                        captured_at = Instant::now();
+                    }
+                    if render.job.is_none() && render.samples < target {
+                        let count = if let Some(budget) = options.target_batch_time_ms {
+                            batch_count(true, render.gpu_sample_ms, budget, target - render.samples)
+                                .min(batch)
+                        } else {
+                            batch.min(target - render.samples)
+                        };
+                        submit(
+                            render,
+                            count,
+                            target - render.samples - count,
+                            options.target_batch_time_ms.is_none() && batch > 32,
+                        )?;
+                    }
+                    Ok((render.samples, render.samples >= target))
+                })
             })?;
             if samples != reported {
                 reported = samples;
@@ -3117,7 +3125,7 @@ impl Render {
             if done {
                 break;
             }
-            std::thread::sleep(Duration::from_micros(100));
+            wake.wait(Duration::from_micros(100));
         }
         loop {
             let captured = self.with(|state, id| {
