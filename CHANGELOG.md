@@ -3,7 +3,7 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.4.0 - Unreleased
+## 0.4.0 - 2026-11-18
 
 Material graphs, UDIM textures, disk and cylinder lights, and a separate Three.js entry point.
 
