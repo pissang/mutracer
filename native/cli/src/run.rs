@@ -2,7 +2,7 @@ use crate::{
     assets::{self, Assets},
     encode::{self, Rate},
     error::{Error, Result},
-    progress,
+    progress, quality,
     scene::Prepared,
     shot::{self, Denoise, Seed, Shot},
 };
@@ -27,6 +27,15 @@ pub enum Format {
     Exr,
 }
 
+impl Format {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Exr => "exr",
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct Overrides {
     #[arg(long, value_parser = parse_size)]
@@ -39,6 +48,8 @@ pub struct Overrides {
     pub denoise: Option<Denoise>,
     #[arg(long, value_enum, default_value = "png")]
     pub format: Format,
+    #[arg(long, help = "Write surface guides for temporal EXR filtering")]
+    pub aovs: bool,
     #[arg(long)]
     pub gpu: Option<usize>,
 }
@@ -84,6 +95,7 @@ pub struct Settings {
     pub sample_sequence_offset: u32,
     pub denoise: Denoise,
     pub format: Format,
+    pub aovs: bool,
     pub gpu: Option<usize>,
 }
 
@@ -110,6 +122,7 @@ impl Settings {
             sample_sequence_offset: output.sample_sequence_offset,
             denoise: overrides.denoise.unwrap_or(defaults.2),
             format: overrides.format,
+            aovs: overrides.aovs,
             gpu: overrides.gpu,
         };
         this.validate(shot.output.duration)?;
@@ -119,11 +132,11 @@ impl Settings {
         shot::check_size(self.size)?;
         shot::check_samples(self.spp, self.sample_sequence_offset)?;
         shot::frame_count(duration, self.fps)?;
-        if self.format == Format::Exr {
+        if self.aovs && self.format != Format::Exr {
             return Err(Error::validation(
-                "/format",
-                "EXR output is unavailable",
-                "Use PNG with this build.",
+                "/aovs",
+                "Surface guides require EXR frames",
+                "Use --format exr --aovs.",
             ));
         }
         Ok(())
@@ -255,6 +268,7 @@ pub fn validate(file: &Path) -> Result<()> {
             seed: None,
             denoise: None,
             format: Format::Png,
+            aovs: false,
             gpu: None,
         },
         None,
@@ -299,6 +313,7 @@ impl Renderer {
                 size: api::RenderSize::Fixed { width, height },
                 max_samples: settings.spp,
                 bounces: 6,
+                aovs: if settings.aovs { quality::AOV_MASK } else { 0 },
                 seed: settings.seed_value,
                 ..Default::default()
             },
@@ -374,6 +389,13 @@ impl Renderer {
                 None => return Err(Error::gpu("OIDN did not return a result")),
             }
         }
+        match settings.format {
+            Format::Exr => quality::hdr(&self.render),
+            Format::Png => self.png(),
+        }
+    }
+
+    fn png(&self) -> Result<Vec<u8>> {
         self.engine
             .display()
             .encode_png(&self.render)
@@ -396,7 +418,22 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
         ));
     }
     let frame = (args.t * f64::from(settings.fps)).floor() as u32;
-    let image = Renderer::new(settings)?.shot_frame(&mut input, settings, frame, args.t)?;
+    if args
+        .output
+        .extension()
+        .is_none_or(|ext| !ext.eq_ignore_ascii_case(settings.format.extension()))
+    {
+        return Err(Error::validation(
+            "/output",
+            format!("Expected a .{} output path", settings.format.extension()),
+            "Match the file extension to --format.",
+        ));
+    }
+    let mut renderer = Renderer::new(settings)?;
+    let image = renderer.shot_frame(&mut input, settings, frame, args.t)?;
+    if settings.aovs {
+        quality::write_guide(&renderer.render, &args.output.with_extension("aov"))?;
+    }
     input.write_credits(&args.output.with_extension("credits.txt"))?;
     encode::atomic_bytes(&args.output, |file| file.write_all(&image))
         .map_err(|e| encode::failure(e.to_string()))?;
@@ -549,7 +586,12 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
         let mut render_ms = 0.;
         for (&frame, path) in indices.iter().zip(&files) {
             let t = f64::from(frame) / f64::from(settings.fps);
-            if reusable(path, settings.size) {
+            let exr = path.with_extension("exr");
+            let guide = path.with_extension("aov");
+            if reusable(path, settings.size)
+                && (settings.format != Format::Exr || reusable(&exr, settings.size))
+                && (!settings.aovs || quality::guide_valid(&guide, settings.size))
+            {
                 progress(json!({"event":"reused","frame":frame,"t":t,"path":path}));
                 continue;
             }
@@ -558,10 +600,16 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
                 renderer = Some(Renderer::new(settings)?);
             }
             let tick = Instant::now();
-            let image = renderer
-                .as_mut()
-                .unwrap()
-                .shot_frame(&mut input, settings, frame, t)?;
+            let renderer = renderer.as_mut().unwrap();
+            let mut image = renderer.shot_frame(&mut input, settings, frame, t)?;
+            if settings.format == Format::Exr {
+                if settings.aovs {
+                    quality::write_guide(&renderer.render, &guide)?;
+                }
+                encode::atomic_bytes(&exr, |file| file.write_all(&image))
+                    .map_err(|e| encode::failure(e.to_string()))?;
+                image = renderer.png()?;
+            }
             encode::atomic_bytes(path, |file| file.write_all(&image))
                 .map_err(|e| encode::failure(e.to_string()))?;
             let elapsed = ms(tick);

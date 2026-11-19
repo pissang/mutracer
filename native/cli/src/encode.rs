@@ -38,13 +38,17 @@ pub fn failure(message: impl Into<String>) -> Error {
 }
 
 pub fn sequence(directory: &Path) -> Result<Vec<PathBuf>> {
+    numbered_images(directory, "png")
+}
+
+pub fn numbered_images(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
     let mut frames = Vec::new();
     for entry in fs::read_dir(directory).map_err(|e| failure(e.to_string()))? {
         let path = entry.map_err(|e| failure(e.to_string()))?.path();
         if path
             .extension()
             .and_then(|s| s.to_str())
-            .is_none_or(|s| !s.eq_ignore_ascii_case("png"))
+            .is_none_or(|s| !s.eq_ignore_ascii_case(extension))
         {
             continue;
         }
@@ -58,7 +62,9 @@ pub fn sequence(directory: &Path) -> Result<Vec<PathBuf>> {
     }
     frames.sort_unstable_by_key(|(index, _)| *index);
     if frames.is_empty() || frames.windows(2).any(|a| a[0].0 == a[1].0) {
-        return Err(failure("Expected numbered PNGs with unique indices"));
+        return Err(failure(format!(
+            "Expected numbered {extension} images with unique indices"
+        )));
     }
     Ok(frames.into_iter().map(|(_, p)| p).collect())
 }

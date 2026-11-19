@@ -245,7 +245,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -344,9 +344,6 @@ impl Session {
                         "Expected a nonempty asset name of at most 128 bytes",
                     ));
                 }
-                if matches!(format, AssetFormat::Exr) {
-                    return Err(invalid("/format", "EXR import is unavailable"));
-                }
                 let registered = match (path, bytes) {
                     (Some(path), None) => {
                         let path = path
@@ -368,6 +365,7 @@ impl Session {
                             AssetFormat::Gltf if payload.starts_with(b"glTF") => ".glb",
                             AssetFormat::Gltf => ".gltf",
                             AssetFormat::Hdr => ".hdr",
+                            AssetFormat::Exr => ".exr",
                             _ => ".image",
                         };
                         let mut file = tempfile::Builder::new()
@@ -391,8 +389,12 @@ impl Session {
                 reply(writer, json!({"type":"ok","id":id}), None)
             }
             Request::Decode { id, format, bytes } => {
-                let hdr = matches!(format, AssetFormat::Hdr);
-                if !matches!(format, AssetFormat::Image | AssetFormat::Hdr) || bytes == 0 {
+                let hdr = matches!(format, AssetFormat::Hdr | AssetFormat::Exr);
+                if !matches!(
+                    format,
+                    AssetFormat::Image | AssetFormat::Hdr | AssetFormat::Exr
+                ) || bytes == 0
+                {
                     return Err(invalid("/format", "Decode requires image or HDR bytes"));
                 }
                 let image = crate::assets::decode_image_bytes(&payload, hdr)?;
@@ -475,6 +477,7 @@ impl Session {
                         .sample_sequence_offset
                         .unwrap_or_else(|| defaults.map_or(0, |o| o.sample_sequence_offset)),
                     format: overrides.format.unwrap_or(Format::Png),
+                    aovs: false,
                     fps,
                     stride: 1,
                     gpu: None,

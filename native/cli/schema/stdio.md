@@ -21,8 +21,12 @@ there is no length prefix or payload. Read from one buffered stream throughout.
 | `hello` | `protocol: 1` | `ok` with `protocol`, `shotVersion`, `descriptorVersions`, `capabilities`, `maxHeaderBytes` and `maxPayloadBytes` |
 | `scene` | `format: "shot-json" \| "descriptor-v8"`, `bytes`; optional `baseDir` for shot JSON | `ok`; with `sceneHash`; replaces the current scene and clears prior edits |
 | `asset` | `name`, `format: "gltf" \| "image" \| "hdr" \| "exr"`, and either `path` or `bytes` | `ok`; registers a resource for later scene input |
+| `decode` | `format: "image" \| "hdr" \| "exr"`, `bytes` | `ok` with dimensions and an image payload |
 | `edit` | `changes`, an array of replacements with `path` (JSON pointer) and `value`; paths identify existing animatable properties in a shot JSON scene | `ok`; validates and applies the whole batch |
 | `render` | `frame` (zero-based), optional `t` (seconds), optional `settings` (size, spp, denoise, seed, seedValue, sampleSequenceOffset, format) | `frame` with `frame`, `format`, `width`, `height`, `elapsedMs` and image `bytes` |
+
+`decode` returns row-major RGBA8 for `image` and little-endian RGBA float32
+for `hdr` and `exr`.
 
 A render can emit `progress` with `frame`, `samples` and `targetSamples`
 before its final reply. A `frame` payload is an encoded PNG or EXR image.

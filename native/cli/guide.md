@@ -42,7 +42,15 @@ pixels per edge and 16,777,216 pixels total, subject to available GPU memory.
 ## Cost, progress and resume
 
 Work scales with pixels × samples × frames and varies with material and light
-complexity. Use a smaller frame, fewer samples or `--frames A-B` (inclusive)
+complexity.
+
+| Settings | Pixel samples per rendered frame |
+| --- | ---: |
+| 384 × 216, 8 spp | 0.66 million |
+| 1280 × 720, 32 spp | 29.5 million |
+| 1920 × 1080, 64 spp | 132.7 million |
+
+Use a smaller frame, fewer samples or `--frames A-B` (inclusive)
 to estimate runtime. `validate` reports the workload without a GPU. Render
 progress reports frame times and an estimate after the second rendered frame.
 `--max-minutes` stops the worker at the time budget and keeps completed frames.
@@ -56,6 +64,10 @@ The CLI renders with the native GPU driver. macOS uses its system encoder.
 On other platforms the CLI uses ffmpeg when available and leaves the PNG
 sequence when it is absent. To encode separately, run
 `mutracer encode path/to/frames --fps 24 -o output.mp4`.
+
+For HDR, render with `--format exr`. Add `--aovs` to capture surface guides
+for `mutracer temporal`. Use `mutracer assemble` to join PNG sequences with
+optional captions.
 
 Progress is JSON lines on stdout. Errors go to stderr. Exit codes are 0 for
 success, 2 for invalid input, 3 for asset or output failure, 4 for a budget

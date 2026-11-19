@@ -2,6 +2,7 @@ mod assets;
 mod encode;
 mod error;
 mod materialx;
+mod quality;
 mod run;
 mod scene;
 mod shot;
@@ -55,6 +56,22 @@ enum Action {
         #[arg(long, required = true)]
         stdio: bool,
     },
+    /// Filter a single EXR shot using companion surface guides.
+    Temporal {
+        frames: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, allow_hyphen_values = true)]
+        png_exposure: Option<f32>,
+    },
+    /// Assemble ordered PNG shot ranges with optional captions.
+    Assemble {
+        cut: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        font: Option<PathBuf>,
+    },
     /// Convert and lint an OpenUSD scene with the optional Python adapter.
     ImportUsd {
         source: PathBuf,
@@ -105,6 +122,12 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Action::Serve { stdio: _ } => stdio::serve(),
+        Action::Temporal {
+            frames,
+            output,
+            png_exposure,
+        } => quality::temporal(&frames, &output, png_exposure),
+        Action::Assemble { cut, output, font } => quality::assemble(&cut, &output, font.as_deref()),
         Action::ImportUsd {
             source,
             output,
