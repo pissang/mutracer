@@ -25,6 +25,27 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+pub fn decode_image_bytes(bytes: &[u8], hdr: bool) -> Result<image::DynamicImage> {
+    use std::io::Cursor;
+    let open = || image::ImageReader::new(Cursor::new(bytes)).with_guessed_format();
+    let (w, h) = open()
+        .map_err(|e| Error::asset("/bytes", e.to_string()))?
+        .into_dimensions()
+        .map_err(|e| Error::asset("/bytes", e.to_string()))?;
+    let pixel_limit = if hdr {
+        4_194_304
+    } else {
+        512 * 1024 * 1024 / 4
+    };
+    if w > 16384 || h > 16384 || u64::from(w) * u64::from(h) > pixel_limit {
+        return Err(Error::budget("Image exceeds stream texture limits"));
+    }
+    open()
+        .map_err(|e| Error::asset("/bytes", e.to_string()))?
+        .decode()
+        .map_err(|e| Error::asset("/bytes", e.to_string()))
+}
+
 pub enum Loaded {
     Gltf(Box<Scene>),
     Hdr(Texture),

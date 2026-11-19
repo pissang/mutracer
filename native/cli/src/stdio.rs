@@ -76,6 +76,11 @@ enum Request {
         path: Option<PathBuf>,
         bytes: Option<u32>,
     },
+    Decode {
+        id: u32,
+        format: AssetFormat,
+        bytes: u32,
+    },
     Edit {
         id: u32,
         changes: Vec<Edit>,
@@ -238,8 +243,8 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn"],
-                    "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD}),
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode"],
+                    "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
             }
@@ -310,10 +315,14 @@ impl Session {
                     }
                     Scene::Descriptor(bytes) => crate::assets::digest(bytes),
                 };
+                if !matches!(
+                    (&self.scene, &scene),
+                    (Some(Scene::Descriptor(_)), Scene::Descriptor(_))
+                ) {
+                    // Avoid carrying a shot camera override into a descriptor.
+                    self.renderer = None;
+                }
                 self.scene = Some(scene);
-                // Reset renderer state on scene replacement, including a
-                // camera override from the previous scene format.
-                self.renderer = None;
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"sceneHash":scene_hash}),
@@ -378,6 +387,33 @@ impl Session {
                 };
                 self.registered.insert(name, registered);
                 reply(writer, json!({"type":"ok","id":id}), None)
+            }
+            Request::Decode { id, format, bytes } => {
+                let hdr = matches!(format, AssetFormat::Hdr);
+                if !matches!(format, AssetFormat::Image | AssetFormat::Hdr) || bytes == 0 {
+                    return Err(invalid("/format", "Decode requires image or HDR bytes"));
+                }
+                let image = crate::assets::decode_image_bytes(&payload, hdr)?;
+                let w = image.width();
+                let h = image.height();
+                let pixels: Vec<u8> = if hdr {
+                    image
+                        .into_rgba32f()
+                        .into_raw()
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect()
+                } else {
+                    image.into_rgba8().into_raw()
+                };
+                if pixels.len() > MAX_PAYLOAD {
+                    return Err(Error::budget("Decoded image exceeds stream payload limit"));
+                }
+                reply(
+                    writer,
+                    json!({"type":"ok","id":id,"width":w,"height":h,"bytes":pixels.len()}),
+                    Some(&pixels),
+                )
             }
             Request::Edit { id, changes } => {
                 let Some(Scene::Shot { input, raw }) = self.scene.as_mut() else {

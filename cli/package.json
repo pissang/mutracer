@@ -1,0 +1,16 @@
+{
+  "name": "@meimu/mutracer-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Render Three.js shot modules through MuTracer's native video CLI",
+  "engines": {"node": ">=22"},
+  "bin": {"mutracer-js": "./dist/main.mjs"},
+  "files": ["dist/main.mjs", "examples", "README.md"],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {"three": "~0.185.0"},
+  "devDependencies": {"esbuild": "^0.18.17"}
+}

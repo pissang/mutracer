@@ -44,6 +44,10 @@ enum Action {
         output: PathBuf,
         #[arg(long)]
         fps: u32,
+        #[arg(long, default_value_t = 1)]
+        stride: u32,
+        #[arg(long)]
+        contact_sheet: Option<PathBuf>,
     },
     /// Serve native frames over the versioned binary stdio protocol.
     Serve {
@@ -72,9 +76,15 @@ fn run(cli: Cli) -> Result<()> {
             directory,
             output,
             fps,
+            stride,
+            contact_sheet,
         } => {
             let frames = encode::sequence(&directory)?;
-            if encode::encode(&frames, &output, encode::Rate { fps, stride: 1 })? {
+            if let Some(path) = contact_sheet {
+                encode::contact_sheet(&frames, &path)?;
+                progress(json!({"event":"contactSheet","path":path}));
+            }
+            if encode::encode(&frames, &output, encode::Rate { fps, stride })? {
                 progress(json!({"event":"encoded","path":output,"frames":frames.len()}));
             } else {
                 let message = "ffmpeg was unavailable. PNG frames are ready to encode.";
