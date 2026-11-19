@@ -9,6 +9,9 @@ import tempfile
 from typing import Callable
 
 
+_RENDER_COMMANDS = {"still", "preview", "render"}
+
+
 class RenderError(subprocess.CalledProcessError):
     """A failed CLI call with its exit code and stderr."""
 
@@ -32,6 +35,9 @@ def binary() -> str:
 def invoke(command: str, shot: Path, output: Path | None = None,
            progress: Callable[[dict], None] | None = None, **options) -> list[dict]:
     args = [binary(), command, str(shot)]
+    managed = command in _RENDER_COMMANDS
+    if managed:
+        args.insert(1, "--parent-stdin")
     if output is not None:
         args.extend(("-o", str(output)))
     for key, value in options.items():
@@ -46,7 +52,8 @@ def invoke(command: str, shot: Path, output: Path | None = None,
     events = []
     # A file keeps stderr draining even while stdout is read line by line.
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr:
-        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=stderr, text=True, encoding="utf-8") as proc:
+        with subprocess.Popen(args, stdin=subprocess.PIPE if managed else None,
+                              stdout=subprocess.PIPE, stderr=stderr, text=True, encoding="utf-8") as proc:
             try:
                 for line in proc.stdout:
                     event = json.loads(line)
@@ -54,7 +61,10 @@ def invoke(command: str, shot: Path, output: Path | None = None,
                     if progress:
                         progress(event)
             except BaseException:
-                proc.terminate()
+                if managed:
+                    proc.stdin.close()
+                else:
+                    proc.terminate()
                 raise
             status = proc.wait()
         if status:
@@ -73,4 +83,10 @@ def main():
         return 3
     environment = os.environ.copy()
     environment.setdefault("MUTRACER_PYTHON", sys.executable)
-    return subprocess.call([executable, *sys.argv[1:]], env=environment)
+    args = [executable, *sys.argv[1:]]
+    if os.name != "nt":
+        os.execvpe(executable, args, environment)
+    if len(args) > 1 and args[1] in _RENDER_COMMANDS:
+        args.insert(1, "--parent-stdin")
+        return subprocess.call(args, stdin=subprocess.PIPE, env=environment)
+    return subprocess.call(args, env=environment)

@@ -39,7 +39,8 @@ An `error` reply has `code` and `message`, with `pointer` and `hint` when
 available. Codes match file mode (2 validation, 3 asset, 4 budget, 5 GPU).
 Feature-dependent operations require the capability advertised by `hello`.
 A rejected scene or edit preserves the current scene. Framing errors and
-truncated payloads terminate the stream. EOF between requests ends the session.
+truncated payloads terminate the stream. Keep stdin open until the final render
+reply. Closing it ends the session and stops an active render.
 
 ## Restarting a worker
 

@@ -58,7 +58,7 @@ pub fn guide_valid(path: &Path, size: [u32; 2]) -> bool {
     })
 }
 
-pub fn write_guide(render: &api::Render, path: &Path) -> Result<()> {
+pub fn capture_guide(render: &api::Render) -> Result<impl FnOnce(&Path) -> Result<()> + use<>> {
     let read = |kind| {
         render
             .read_pixels(kind)
@@ -76,29 +76,31 @@ pub fn write_guide(render: &api::Render, path: &Path) -> Result<()> {
     {
         return Err(Error::gpu("AOV guide dimensions differ"));
     }
-    encode::atomic_bytes(path, |file| {
-        let mut out = io::BufWriter::new(file);
-        out.write_all(GUIDE_MAGIC)?;
-        for value in size {
-            out.write_all(&value.to_le_bytes())?;
-        }
-        for ((normal, depth), id) in normal
-            .data
-            .chunks_exact(4)
-            .zip(depth.data.chunks_exact(4))
-            .zip(ids.chunks_exact(4))
-        {
-            for &n in &normal[..3] {
-                out.write_all(&n.to_le_bytes())?;
+    Ok(move |path: &Path| {
+        encode::atomic_bytes(path, |file| {
+            let mut out = io::BufWriter::new(file);
+            out.write_all(GUIDE_MAGIC)?;
+            for value in size {
+                out.write_all(&value.to_le_bytes())?;
             }
-            out.write_all(&depth[0].to_le_bytes())?;
-            for &index in &id[..3] {
-                out.write_all(&index.to_le_bytes())?;
+            for ((normal, depth), id) in normal
+                .data
+                .chunks_exact(4)
+                .zip(depth.data.chunks_exact(4))
+                .zip(ids.chunks_exact(4))
+            {
+                for &n in &normal[..3] {
+                    out.write_all(&n.to_le_bytes())?;
+                }
+                out.write_all(&depth[0].to_le_bytes())?;
+                for &index in &id[..3] {
+                    out.write_all(&index.to_le_bytes())?;
+                }
             }
-        }
-        out.flush()
+            out.flush()
+        })
+        .map_err(issue)
     })
-    .map_err(issue)
 }
 
 #[derive(Clone, Copy)]

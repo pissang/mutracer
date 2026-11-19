@@ -1,6 +1,7 @@
 mod assets;
 mod encode;
 mod error;
+mod lifetime;
 mod materialx;
 mod quality;
 mod run;
@@ -26,6 +27,8 @@ use std::{
 struct Cli {
     #[arg(long, hide = true)]
     worker: bool,
+    #[arg(long, hide = true)]
+    parent_stdin: bool,
     #[command(subcommand)]
     command: Action,
 }
@@ -96,6 +99,14 @@ fn progress(record: Value) {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if (cli.worker || cli.parent_stdin)
+        && matches!(
+            cli.command,
+            Action::Still(_) | Action::Preview(_) | Action::Render(_)
+        )
+    {
+        lifetime::watch_stdin();
+    }
     match cli.command {
         Action::Validate { file } => run::validate(&file),
         Action::Still(args) => run::still(args, cli.worker),

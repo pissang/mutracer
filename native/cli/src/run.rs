@@ -2,7 +2,7 @@ use crate::{
     assets::{self, Assets},
     encode::{self, Rate},
     error::{Error, Result},
-    progress, quality,
+    lifetime, progress, quality,
     scene::Prepared,
     shot::{self, Denoise, Seed, Shot},
 };
@@ -431,12 +431,18 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
     }
     let mut renderer = Renderer::new(settings)?;
     let image = renderer.shot_frame(&mut input, settings, frame, args.t)?;
-    if settings.aovs {
-        quality::write_guide(&renderer.render, &args.output.with_extension("aov"))?;
-    }
-    input.write_credits(&args.output.with_extension("credits.txt"))?;
-    encode::atomic_bytes(&args.output, |file| file.write_all(&image))
-        .map_err(|e| encode::failure(e.to_string()))?;
+    let guide = settings
+        .aovs
+        .then(|| quality::capture_guide(&renderer.render))
+        .transpose()?;
+    lifetime::publish(|| {
+        if let Some(write_guide) = guide {
+            write_guide(&args.output.with_extension("aov"))?;
+        }
+        input.write_credits(&args.output.with_extension("credits.txt"))?;
+        encode::atomic_bytes(&args.output, |file| file.write_all(&image))
+            .map_err(|e| encode::failure(e.to_string()))
+    })?;
     progress(
         json!({"event":"frame","frame":frame,"t":args.t,"path":args.output,"samples":settings.spp,"elapsedMs":ms(started)}),
     );
@@ -451,7 +457,7 @@ fn cache_dir(args: &Sequence) -> PathBuf {
     })
 }
 
-fn lock(path: &Path) -> Result<File> {
+fn lock(path: &Path, wait: bool) -> Result<File> {
     let file = File::options()
         .read(true)
         .write(true)
@@ -459,8 +465,12 @@ fn lock(path: &Path) -> Result<File> {
         .truncate(false)
         .open(path)
         .map_err(|e| encode::failure(e.to_string()))?;
-    file.try_lock()
-        .map_err(|e| encode::failure(format!("Cannot lock {}: {e}", path.display())))?;
+    let locked = if wait {
+        file.lock()
+    } else {
+        file.try_lock().map_err(io::Error::from)
+    };
+    locked.map_err(|e| encode::failure(format!("Cannot lock {}: {e}", path.display())))?;
     Ok(file)
 }
 
@@ -579,7 +589,9 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     let manifest = input.manifest(settings);
 
     if worker {
-        let _worker_lock = lock(&directory.join("worker.lock"))?;
+        // A replaced supervisor can start before the previous worker has
+        // finished publishing its last frame and released this lock.
+        let _worker_lock = lock(&directory.join("worker.lock"), true)?;
         verify_manifest(&directory, &manifest, false)?;
         let mut renderer = None;
         let mut seen = 0u32;
@@ -601,17 +613,27 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
             }
             let tick = Instant::now();
             let renderer = renderer.as_mut().unwrap();
-            let mut image = renderer.shot_frame(&mut input, settings, frame, t)?;
-            if settings.format == Format::Exr {
-                if settings.aovs {
-                    quality::write_guide(&renderer.render, &guide)?;
+            let image = renderer.shot_frame(&mut input, settings, frame, t)?;
+            let write_guide = settings
+                .aovs
+                .then(|| quality::capture_guide(&renderer.render))
+                .transpose()?;
+            let display = (settings.format == Format::Exr)
+                .then(|| renderer.png())
+                .transpose()?;
+            lifetime::publish(|| {
+                if let Some(write_guide) = write_guide {
+                    write_guide(&guide)?;
                 }
-                encode::atomic_bytes(&exr, |file| file.write_all(&image))
-                    .map_err(|e| encode::failure(e.to_string()))?;
-                image = renderer.png()?;
-            }
-            encode::atomic_bytes(path, |file| file.write_all(&image))
-                .map_err(|e| encode::failure(e.to_string()))?;
+                if display.is_some() {
+                    encode::atomic_bytes(&exr, |file| file.write_all(&image))
+                        .map_err(|e| encode::failure(e.to_string()))?;
+                }
+                encode::atomic_bytes(path, |file| {
+                    file.write_all(display.as_deref().unwrap_or(&image))
+                })
+                .map_err(|e| encode::failure(e.to_string()))
+            })?;
             let elapsed = ms(tick);
             seen += 1;
             render_ms += elapsed;
@@ -629,9 +651,11 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     }
 
     fs::create_dir_all(&directory).map_err(|e| encode::failure(e.to_string()))?;
-    let _lock = lock(&directory.join("supervisor.lock"))?;
-    verify_manifest(&directory, &manifest, true)?;
-    input.write_credits(&directory.join("credits.txt"))?;
+    let _lock = lock(&directory.join("supervisor.lock"), false)?;
+    lifetime::publish(|| {
+        verify_manifest(&directory, &manifest, true)?;
+        input.write_credits(&directory.join("credits.txt"))
+    })?;
     progress(
         json!({"event":"plan","frames":directory,"cost":input.estimate(settings, indices.len() as u32)}),
     );
@@ -675,15 +699,16 @@ fn run_worker(deadline: Option<Instant>) -> Result<()> {
         let mut child = Command::new(&exe)
             .arg("--worker")
             .args(&args)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .spawn()
             .map_err(|e| Error::gpu(format!("Cannot start render worker: {e}")))?;
+        let parent_pipe = child.stdin.take();
         let status = loop {
             if let Some(status) = child.try_wait().map_err(|e| Error::gpu(e.to_string()))? {
                 break status;
             }
             if deadline.is_some_and(|d| Instant::now() >= d) {
-                let _ = child.kill();
+                drop(parent_pipe);
                 let _ = child.wait();
                 return Err(Error::budget(
                     "Render time budget reached. Completed frames were saved.",

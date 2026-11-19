@@ -1,5 +1,6 @@
 use crate::{
     error::{Error, Result},
+    lifetime,
     run::{Format, Input, Renderer, Settings},
     shot::{self, Denoise, Seed},
 };
@@ -9,7 +10,8 @@ use std::{
     collections::BTreeMap,
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, mpsc},
+    thread,
     time::Instant,
 };
 
@@ -522,9 +524,9 @@ impl Session {
     }
 }
 
-fn run(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<()> {
+fn run(mut next: impl FnMut() -> Result<Option<Packet>>, writer: &mut impl Write) -> Result<()> {
     let mut session = Session::default();
-    while let Some(Packet { header, bytes }) = read_packet(reader)? {
+    while let Some(Packet { header, bytes }) = next()? {
         let id = header
             .get("id")
             .and_then(Value::as_u64)
@@ -547,7 +549,30 @@ fn run(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<()> {
 }
 
 pub fn serve() -> Result<()> {
-    run(&mut io::stdin().lock(), &mut io::stdout().lock())
+    // Clients keep stdin open until the final render reply. Read ahead so
+    // EOF stops a render even while the main thread is in the GPU.
+    let (send, receive) = mpsc::sync_channel(0);
+    thread::spawn(move || {
+        let mut stdin = io::stdin().lock();
+        let mut last_was_render = false;
+        loop {
+            match read_packet(&mut stdin) {
+                Ok(None) if last_was_render => lifetime::parent_closed(),
+                Ok(None) => break,
+                Ok(Some(packet)) => {
+                    last_was_render = packet.header["type"] == "render";
+                    if send.send(Ok(Some(packet))).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = send.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    run(|| receive.recv().unwrap_or(Ok(None)), &mut io::stdout())
 }
 
 #[cfg(test)]
@@ -589,7 +614,7 @@ mod tests {
     fn hello_and_recoverable_errors_keep_the_session_in_sync() {
         let mut bytes = Cursor::new(b"{\"id\":1,\"type\":\"hello\",\"protocol\":1}\n{\"id\":2,\"type\":\"render\",\"frame\":0}\n");
         let mut output = Vec::new();
-        run(&mut bytes, &mut output).unwrap();
+        run(|| read_packet(&mut bytes), &mut output).unwrap();
         let mut output = Cursor::new(output);
         let hello = read_packet(&mut output).unwrap().unwrap().header;
         assert_eq!(hello["protocol"], 1);
