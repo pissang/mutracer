@@ -61,8 +61,8 @@
           <a class="pill" href="#materials"><span class="pill__tag">0.4</span> Material graphs and MaterialX <span aria-hidden="true">→</span></a>
           <h1 id="hero-title">Offline-quality path tracing,<br />at interactive speed</h1>
           <p class="hero__lede">
-            A physically based renderer for the web. WebGPU first with a WebGL 2 fallback,
-            OpenPBR materials, millions of triangles and denoising built in.
+            MuTracer is an open-source path tracer with OpenPBR materials, MaterialX graphs and
+            OIDN denoising. In the browser it runs on WebGPU and falls back to WebGL 2.
           </p>
           <div class="hero__actions">
             <a class="btn btn--primary btn--lg" href="./viewer/">Open the viewer</a>
@@ -79,14 +79,18 @@
               <span class="install__feedback" id="copy-install-status" role="status"></span>
             </div>
           </div>
-          <div class="hero__drop">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <div class="drop">
+            <svg class="drop__icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 3v12" /><path d="m7 8 5-5 5 5" /><path d="M5 15v3a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-3" />
             </svg>
-            <span>Drop a <b>.glb</b>, <b>.gltf</b> folder or <b>.hdr</b> anywhere, or
-              <label class="link">choose files<input id="pick-files" type="file" multiple accept=".glb,.gltf,.bin,.hdr,.png,.jpg,.jpeg,.webp,.ktx2" hidden /></label> /
-              <label class="link">a folder<input id="pick-folder" type="file" webkitdirectory hidden /></label>.
-              Files stay on your device.</span>
+            <div class="drop__text">
+              <strong>Drop a model here to render it</strong>
+              <span>.glb · .gltf with its files · a folder · .hdr environment. Nothing is uploaded.</span>
+            </div>
+            <div class="drop__actions">
+              <label class="btn btn--glass btn--sm">Choose files<input id="pick-files" type="file" multiple accept=".glb,.gltf,.bin,.hdr,.png,.jpg,.jpeg,.webp,.ktx2" hidden /></label>
+              <label class="btn btn--glass btn--sm">Folder<input id="pick-folder" type="file" webkitdirectory hidden /></label>
+            </div>
           </div>
           <p class="hero__error" id="drop-error" role="alert" hidden></p>
         </div>
@@ -97,19 +101,9 @@
         </small>
       </section>
 
-      <section class="facts wrap" aria-label="At a glance">
-        <dl>
-          <div><dt>WebGPU · WebGL 2</dt><dd>one API, two backends</dd></div>
-          <div><dt>OpenPBR 1.1</dt><dd>layered surface model</dd></div>
-          <div><dt>4.6 M triangles</dt><dd>path traced interactively</dd></div>
-          <div><dt>0.28 s</dt><dd>BVH build for 2.5 M triangles</dd></div>
-          <div><dt>MIT</dt><dd>open source</dd></div>
-        </dl>
-      </section>
 
       <section class="section materials wrap" id="materials" aria-labelledby="materials-title">
         <div class="section__head">
-          <p class="eyebrow">New in 0.4</p>
           <h2 id="materials-title">Procedural materials from node graphs</h2>
           <p>
             <code>MaterialGraph</code> drives every OpenPBR input from a network of MaterialX nodes:
@@ -125,12 +119,10 @@
 <span class="k">const</span> { values, graph } = parseMaterialX(mtlxText);
 mesh.material = <span class="k">new</span> OpenPBRMaterial({ ...values, graph });
 engine.update();</code></pre>
-            <ul class="ticks">
-              <li>55 node-only samples ship with the viewer</li>
-              <li>Browse and import the GPUOpen MaterialX Library</li>
-              <li>Edit graphs live with <code>shaderPrefetch: 'editing'</code></li>
-              <li>UDIM textures, disk and cylinder lights</li>
-            </ul>
+            <p class="materials__note">
+              The viewer ships 55 node-only samples and can import materials from the GPUOpen MaterialX Library.
+              Set <code>shaderPrefetch: 'editing'</code> to keep recompiles short while you edit a graph.
+            </p>
             <div class="materials__links">
               <a class="btn" href="./viewer/#model=shader-ball">Try them in the viewer</a>
               <a class="link" href="https://github.com/pissang/mutracer/blob/main/docs/material-graphs.md" target="_blank" rel="noopener noreferrer">Material graph guide →</a>
@@ -141,22 +133,20 @@ engine.update();</code></pre>
 
       <section class="section wrap" id="gallery" aria-labelledby="gallery-title">
         <div class="section__head">
-          <p class="eyebrow">Gallery</p>
-          <h2 id="gallery-title">Rendered live, in a browser tab</h2>
-          <p>Every image is a MuTracer render. Click one to open the scene in the viewer.</p>
+          <h2 id="gallery-title">Gallery</h2>
+          <p>All images are rendered with MuTracer. Click one to open the scene in the viewer.</p>
         </div>
         <ul class="bento" id="bento"></ul>
       </section>
 
       <section class="section wrap" aria-labelledby="features-title">
         <div class="section__head">
-          <p class="eyebrow">Engine</p>
-          <h2 id="features-title">Offline-quality light transport</h2>
+          <h2 id="features-title">What the renderer does</h2>
         </div>
         <ul class="features">
           <li>
-            <h3>Light transport</h3>
-            <p>Unidirectional path tracing with next-event estimation and MIS over rect, disk, cylinder, sphere, IES spot, directional and HDR environment lights. Continuous-wavelength dispersion.</p>
+            <h3>Lights</h3>
+            <p>Path tracing with next-event estimation and MIS. Rect, disk, cylinder, sphere, IES spot, directional and HDR environment lights. Dispersion is traced per wavelength.</p>
           </li>
           <li>
             <h3>OpenPBR 1.1 surface</h3>
@@ -167,25 +157,24 @@ engine.update();</code></pre>
             <p>Light tracing for directly visible receivers and photon mapping for caustics seen through glass or water.</p>
           </li>
           <li>
-            <h3>Millions of triangles</h3>
-            <p>Two-level BVH with binned-SAH BLASes built in parallel Workers, in JavaScript or TinyBVH WebAssembly. Moving instances only refits the TLAS; new meshes upload only their geometry.</p>
+            <h3>Large scenes</h3>
+            <p>The 4.6 M-triangle Bugatti Chiron stays interactive, and 2.5 M triangles build their BVH in 0.28 s. BLASes build in parallel Workers; moving an instance only refits the TLAS.</p>
           </li>
           <li>
-            <h3>Low noise, then denoised</h3>
-            <p>Owen-scrambled Sobol or blue-noise ZSobol samples, variance-driven adaptive sampling, and albedo- and normal-guided Intel OIDN or JNLM denoising.</p>
+            <h3>Sampling and denoising</h3>
+            <p>Owen-scrambled Sobol or blue-noise ZSobol samples, adaptive sampling, and Intel OIDN or JNLM denoising guided by albedo and normals.</p>
           </li>
           <li>
-            <h3>Fits your app</h3>
-            <p>Incremental <code>THREESync</code> for Three.js scenes, your own <code>GPUDevice</code>, OffscreenCanvas workers, AOVs, post-process passes, HDR output and PNG export.</p>
+            <h3>Integration</h3>
+            <p><code>THREESync</code> for Three.js scenes, your own <code>GPUDevice</code>, OffscreenCanvas workers, AOVs, post-process passes, HDR output and PNG export.</p>
           </li>
         </ul>
       </section>
 
       <section class="section start wrap" id="start" aria-labelledby="start-title">
         <div class="section__head">
-          <p class="eyebrow">Get started</p>
           <h2 id="start-title">Path trace a Three.js scene</h2>
-          <p>Keep building with Three.js. <code>THREESync</code> converts the scene once and follows transform, material and light edits on every frame.</p>
+          <p><code>THREESync</code> converts the scene once, then picks up transform, material and light changes each frame.</p>
           <div class="start__links">
             <a class="link" href="https://github.com/pissang/mutracer/blob/main/docs/getting-started.md" target="_blank" rel="noopener noreferrer">Getting started →</a>
             <a class="link" href="https://github.com/pissang/mutracer/blob/main/docs/threejs.md" target="_blank" rel="noopener noreferrer">Three.js integration →</a>
