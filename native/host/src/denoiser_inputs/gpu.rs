@@ -11,7 +11,8 @@ use std::sync::{
 pub enum Guide {
     /// Linear HDR radiance, alpha 1, before display exposure.
     NoisyColor,
-    /// Oriented world shading normal xyz (not encoded), specular roughness w.
+    /// Oriented world shading normal xyz and perceptual specular roughness w.
+    /// Supported clearcoat weights the base and coat roughness by their reflectance.
     NormalRoughness,
     /// Directional diffuse reflectance RGB; validity is in the validity texture.
     DiffuseAlbedo,

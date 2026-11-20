@@ -289,7 +289,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const variant=!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
       (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
-        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs?.key??'');
+        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks(Boolean(frameFeatures.hasCoatNormals))),state.shader.graphs?.key??'');
     const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
       features: frameFeatures,
       constants: targetConstants}) : new Uint8Array(0);
@@ -783,9 +783,9 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   }
   if (configuration.variants & 16) {
     shader(RESOURCE.SOFTWARE_FRAME_SHADER, () => wgpuShaderSource(constants, features, true,
-      '', false, nativeFrameInputHooks()));
+      '', false, nativeFrameInputHooks(Boolean(features.hasCoatNormals))));
     shader(RESOURCE.HWRT_FRAME_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-      nativeIntersections(features, capacity === 0, false, false, !!hardware, opaqueClosest), false, nativeFrameInputHooks()));
+      nativeIntersections(features, capacity === 0, false, false, !!hardware, opaqueClosest), false, nativeFrameInputHooks(Boolean(features.hasCoatNormals))));
   }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.

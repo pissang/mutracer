@@ -41,6 +41,7 @@ export interface RayTraceInputHooks {
   unclampedColor: string;
   end: string;
   uniformJitter: boolean;
+  layeredReflectance?: boolean;
 }
 
 export interface RayTraceShaderOptions {
@@ -1266,7 +1267,7 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(options.displayAovStorage)
+  let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(options.displayAovStorage || inputHooks?.layeredReflectance)
     + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, hasCoatNormals) : createAovTraceWgsl(materialHooks));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,

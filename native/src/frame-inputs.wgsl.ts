@@ -1,13 +1,15 @@
 import {framePixelStruct} from './layout.js';
 import type {RayTraceInputHooks} from '../../src/renderer/wgsl/rayTrace.compute.js';
 import {GROUP} from './layout.js';
+import {unsupportedCoatReflectanceWgsl} from '../../src/renderer/wgsl/aovReflectance.wgsl.js';
 
 // Internal diagnostic record. It contains resolved first-surface data rather
 // than reusing OIDN's possibly downstream guides. BaseColor and directional
 // reflectance are distinct fields; optical path branches remain separate.
-export function nativeFrameInputHooks(): RayTraceInputHooks {
+export function nativeFrameInputHooks(hasCoatNormals: boolean): RayTraceInputHooks {
   return {
     uniformJitter: true,
+    layeredReflectance: true,
     begin: '  mtFrameBegin(idx);\n',
     primarySurface: '  mtFrameSurface(si, ma, ray);\n',
     unclampedColor: '  mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0);\n',
@@ -46,10 +48,11 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   let outside = (cosine > 0.0) | material.thinWalled;
   let eta = openpbr_apply_specular_weight_to_ior(material.specularIor, material.specularWeight);
   var flags = 1u;
+  var guideRoughness = material.specularRoughness;
   // Surface data can be inspected even when complete temporal/RR inputs have
   // not been validated. Do not silently reinterpret these material layers.
   if ((material.materialType != STANDARD) | (material.alpha < 1.0) |
-      (material.coatWeight > 0.0) | (material.fuzzWeight > 0.0) |
+      (${unsupportedCoatReflectanceWgsl(hasCoatNormals)}) | (material.fuzzWeight > 0.0) |
       (material.specularAnisotropy > 0.0) | (material.subsurfaceWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
@@ -63,10 +66,18 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
     let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, oriented);
     let reflectance = mtFrameReflectance(prepared);
     mtFramePixels[mtFrameIndex].diffuseAlbedo = vec4f(reflectance.diffuse, 0.0);
-    mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(reflectance.specular, 0.0);
+    mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(reflectance.specular + reflectance.coat, 0.0);
+    if (material.coatWeight > 0.0) {
+      let baseWeight = openpbr_luminance(reflectance.specular);
+      let coatWeight = openpbr_luminance(reflectance.coat);
+      let totalWeight = baseWeight + coatWeight;
+      if (totalWeight > 1e-6) {
+        guideRoughness = (baseWeight * guideRoughness + coatWeight * material.coatRoughness) / totalWeight;
+      }
+    }
     flags |= 128u;
   }
-  mtFramePixels[mtFrameIndex].normalRoughness = vec4f(oriented, material.specularRoughness);
+  mtFramePixels[mtFrameIndex].normalRoughness = vec4f(oriented, guideRoughness);
   mtFramePixels[mtFrameIndex].positionDepth = vec4f(si.position, depth);
   // Keep the original geometric normal, not the face-forward shading normal.
   mtFramePixels[mtFrameIndex].geometricNormal = vec4f(si.faceNormal, 0.0);

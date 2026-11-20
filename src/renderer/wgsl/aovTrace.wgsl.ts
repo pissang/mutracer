@@ -1,12 +1,12 @@
 import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
+import {unsupportedCoatReflectanceWgsl} from './aovReflectance.wgsl.js';
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
-export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasCoatNormals?: boolean) {
+export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasCoatNormals?: boolean, displayMasks = false) {
   // The native AOT caller omits the web clearcoat capability until its
   // temporal producer and coverage policy have been validated.
   const unsupportedCoat = hasCoatNormals === undefined ? 'material.coatWeight > 0.0'
-    : 'material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0'
-      + (hasCoatNormals ? ' || material.coatNormalEnabled)' : ')');
+    : unsupportedCoatReflectanceWgsl(hasCoatNormals);
   return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;
@@ -85,10 +85,10 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
     material.relativeIor=select(material.specularIor,1.0/material.specularIor,cosine>0.0);
     let prepared=openpbr_prepare(si.tangent,material,-ray.d,normal);
     let reflectance=mtFrameReflectanceComponents(prepared, (aovParameters.w & 8u) != 0u, (aovParameters.w & 16u) != 0u);
-${hasCoatNormals === undefined ? /* wgsl */ `    aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0);
+${hasCoatNormals === undefined && !displayMasks ? /* wgsl */ `    aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0);
     aovAccum[index].specular+=vec4f(reflectance.specular,1.0);
 ` : /* wgsl */ `    if ((aovParameters.w & 8u) != 0u) { aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0); }
-    if ((aovParameters.w & 16u) != 0u) { aovAccum[index].specular+=vec4f(reflectance.specular + reflectance.coat,1.0); }
+    if ((aovParameters.w & 16u) != 0u) { aovAccum[index].specular+=vec4f(reflectance.specular${hasCoatNormals === undefined ? '' : ' + reflectance.coat'},1.0); }
 `}  }
   aovAccum[index].position += vec4f(si.position, 1.0);
 }

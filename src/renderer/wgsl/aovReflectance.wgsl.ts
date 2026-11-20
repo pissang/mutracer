@@ -3,6 +3,10 @@ import proposals from './aovReflectanceSamples.wgsl.js';
 // Directional-hemispherical quadrature of the supported OpenPBR
 // reflection lobes. Keep the original 256 cosine/VNDF proposals and weights;
 // integrate the substrate and the narrower coat with their own proposals.
+export function unsupportedCoatReflectanceWgsl(hasCoatNormals: boolean) {
+  return `material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0${hasCoatNormals ? ' || material.coatNormalEnabled' : ''})`;
+}
+
 export function createAovReflectanceWgsl(layered = false) {
   return proposals + /* wgsl */ `
 struct MtReflectance {
