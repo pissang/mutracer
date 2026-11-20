@@ -99,6 +99,7 @@ function DebugControls() {
   const s = useViewer((state) => state.settings);
   const webgl = useViewer((state) => state.backend.name === 'WebGL 2');
   const jnlm = webgl || s.denoiseModel === 'jnlm';
+  const dlss = useViewer(state => state.nativeCapabilities?.dlssRR && state.nativeRayReconstruction) && s.fStop <= 0;
   return (
     <div className="debug-overlay__body">
       <Field label="Output">
@@ -126,7 +127,7 @@ function DebugControls() {
       {s.previewEnabled && (
         <Scrub label="Max preview scale" title="Preview scale relative to the full viewport, independent of final resolution" value={s.previewMaxResolutionScale} min={0.25} max={1} onChange={(v) => setSettings({ previewMaxResolutionScale: v })} />
       )}
-      {s.denoise && s.denoiseWhileConverging && <Hint>Live denoise also runs while interacting{jnlm ? '.' : ', using the small preview model.'}</Hint>}
+      {s.denoise && s.denoiseWhileConverging && <Hint>{dlss ? 'Live denoise enables DLSS in the interactive preview.' : `Live denoise also runs while interacting${jnlm ? '.' : ', using the small preview model.'}`}</Hint>}
       <Diagnostics />
     </div>
   );

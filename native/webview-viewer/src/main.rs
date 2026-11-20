@@ -54,6 +54,8 @@ struct Host {
     restart: Option<Value>,
     closing: bool,
     workflow: bool,
+    dlss_workflow: bool,
+    dlss_sequence: bool,
     #[cfg(target_os = "linux")]
     cursor: [f32; 2],
     #[cfg(target_os = "linux")]
@@ -103,6 +105,8 @@ struct Host {
     evidence: Option<PathBuf>,
     started: Instant,
     last_surface: Option<(u64, [u32; 4], [u32; 2], bool)>,
+    surface_dirty: bool,
+    surface_ray_reconstruction: Option<Value>,
 }
 impl Host {
     #[cfg(target_os = "linux")]
@@ -143,28 +147,47 @@ impl Host {
         evidence: Option<PathBuf>,
         workflow: bool,
     ) -> Result<Self> {
-        let window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("MuTracer")
-                    .with_inner_size(LogicalSize::new(1280., 800.)),
-            )?,
-        );
-        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
-        let dlss = if std::env::var("MUTRACER_VIEWER_DLSS").as_deref() == Ok("1") {
-            let dir = std::env::current_exe()?
-                .parent()
-                .context("App directory")?
-                .to_path_buf();
-            Some(dlss::Dlss::new(&dir, 0)?)
-        } else {
-            None
+        let attributes = Window::default_attributes()
+            .with_title("MuTracer")
+            .with_inner_size(LogicalSize::new(1280., 800.));
+        #[cfg(target_os = "windows")]
+        let attributes = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            // Present into the parent underneath the transparent WebView child.
+            attributes.with_clip_children(false)
         };
+        let window = Arc::new(event_loop.create_window(attributes)?);
         #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
-        let gpu = if let Some(filter) = &dlss {
-            gpu::Gpu::from_device(&window, filter.device())?
-        } else {
-            gpu::Gpu::new(event_loop, &window)?
+        let (gpu, dlss) = {
+            let mode = std::env::var_os("MUTRACER_VIEWER_DLSS");
+            let required = mode.as_deref() == Some(std::ffi::OsStr::new("1"));
+            let exe = std::env::current_exe()?;
+            let dir = exe.parent().context("App directory")?;
+            let automatic = mode.is_none()
+                && std::env::var_os("MUTRACER_VIEWER_GPU").is_none()
+                && dir.join("mutracer_ngx.dll").is_file()
+                && dir.join("nvngx_dlssd.dll").is_file();
+            let prepared = if required || automatic {
+                // NGX must register its extensions before creating the Vulkan device.
+                let start = dlss::Dlss::new(dir, 0).and_then(|filter| {
+                    let gpu = gpu::Gpu::from_device(&window, filter.device())?;
+                    Ok((gpu, Some(filter)))
+                });
+                match start {
+                    Ok(gpu) => Some(gpu),
+                    Err(error) if required => return Err(error),
+                    Err(error) => {
+                        eprintln!("DLSS Ray Reconstruction unavailable: {error:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            match prepared {
+                Some(gpu) => gpu,
+                None => (gpu::Gpu::new(event_loop, &window)?, None),
+            }
         };
         #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
         let gpu = gpu::Gpu::new(event_loop, &window)?;
@@ -274,8 +297,12 @@ impl Host {
         };
         let native_profile = std::env::var("MUTRACER_NATIVE_PROFILE").as_deref() == Ok("1");
         let js_import = std::env::var_os("MUTRACER_VIEWER_JS_IMPORT").is_some();
+        let dlss_workflow =
+            workflow && std::env::var("MUTRACER_NATIVE_DLSS_EVIDENCE").as_deref() == Ok("1");
+        let dlss_sequence =
+            dlss_workflow && std::env::var("MUTRACER_NATIVE_DLSS_SEQUENCE").as_deref() == Ok("1");
         let init = format!(
-            "window.mutracerBenchmark={benchmark};window.mutracerNativeProfile={native_profile};window.mutracerJSImport={js_import};window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
+            "window.mutracerBenchmark={benchmark};window.mutracerNativeProfile={native_profile};window.mutracerJSImport={js_import};window.mutracerImportOnly={import_only};window.mutracerWorkflow={workflow};window.mutracerEvidence={};window.mutracerDlssWorkflow={dlss_workflow};window.mutracerDlssSequence={dlss_sequence};window.mutracerInitialModel={initial_model};window.addEventListener('error',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:e.message}}}})));window.addEventListener('unhandledrejection',e=>window.ipc.postMessage(JSON.stringify({{version:1,id:0,command:'frontendError',args:{{message:String(e.reason)}}}})));",
             evidence.is_some()
         );
         #[cfg(target_os = "linux")]
@@ -386,6 +413,8 @@ impl Host {
             restart: None,
             closing: false,
             workflow,
+            dlss_workflow,
+            dlss_sequence,
             #[cfg(target_os = "linux")]
             cursor: [0., 0.],
             #[cfg(target_os = "linux")]
@@ -435,6 +464,8 @@ impl Host {
             evidence,
             started: Instant::now(),
             last_surface: None,
+            surface_dirty: false,
+            surface_ray_reconstruction: None,
         })
     }
     fn send(&self, value: Value) -> Result<()> {
@@ -687,14 +718,14 @@ impl Host {
                     None
                 };
                 if args["settings"].is_object() {
-                    self.last_surface = None;
+                    self.surface_dirty = true;
                     self.settings(&args["settings"])?;
                 }
                 if let Some(next) = next {
                     self.commit_started = Some(Instant::now());
                     self.sample_started = None;
                     self.sample_milestones.clear();
-                    self.last_surface = None;
+                    self.surface_dirty = true;
                     let retained = args["refs"]["geometries"]
                         .as_array()
                         .is_some_and(|a| !a.is_empty())
@@ -722,7 +753,7 @@ impl Host {
                     self.descriptor = Some(next);
                 }
                 if args["clear"] == true {
-                    self.last_surface = None;
+                    self.surface_dirty = true;
                     self.engine.clear_scene()?;
                     self.descriptor = None;
                     self.active_models.clear();
@@ -1025,6 +1056,8 @@ impl Host {
             self.orbit = input::Orbit::default();
             self.phase = "preparing".into();
             self.render_loop = None;
+            self.last_surface = None;
+            self.surface_ray_reconstruction = None;
             self.export = None;
             self.sample_subscriptions.clear();
             self.targets.clear();
@@ -1126,6 +1159,63 @@ impl Host {
         }
         Ok(false)
     }
+    fn presented_denoiser(&self) -> Option<(&str, &str, Option<api::DenoiseReport>)> {
+        let loop_ = self.render_loop.as_ref()?;
+        let render = loop_.presented_render()?;
+        let view = if Arc::ptr_eq(render, loop_.final_render()) {
+            "final"
+        } else {
+            "preview"
+        };
+        let (id, _) = self
+            .targets
+            .iter()
+            .find(|(_, target)| Arc::ptr_eq(target, render))?;
+        let configured = self.target_configs.get(id)?["denoiser"]["type"]
+            .as_str()
+            .unwrap_or("off");
+        Some((view, configured, render.denoise_report()))
+    }
+    fn report_surface_denoiser(&mut self, index: u64, final_channel: bool) {
+        self.surface_ray_reconstruction = self.presented_denoiser().and_then(|(view, configured, report)| {
+            if self.dlss_workflow {
+                #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+                let dlss = self.dlss.as_ref().map(|filter| filter.counts());
+                #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
+                let dlss: Option<(u64, u64)> = None;
+                eprintln!(
+                    "{}",
+                    json!({"dlssPresentation":{"index":index,"phase":self.phase,"view":view,"configured":configured,"backend":report.as_ref().filter(|r|r.error.is_none()).map(|r|&r.backend),"error":report.as_ref().and_then(|r|r.error.as_ref()),"evaluations":dlss.map(|v|v.0),"resets":dlss.map(|v|v.1)}})
+                );
+            }
+            report.filter(|r| final_channel && configured == "dlss" && r.backend == "custom")
+                .map(|r| json!({"view":view,"samples":r.samples,"error":r.error}))
+        });
+    }
+    fn capture_dlss_frame(&self) -> Result<()> {
+        let Some(report) = self.surface_ray_reconstruction.as_ref() else {
+            return Ok(());
+        };
+        if report["view"] != "final" || !report["error"].is_null() {
+            return Ok(());
+        }
+        let samples = report["samples"].as_u64().context("DLSS sample count")?;
+        let directory = self.evidence.as_ref().context("DLSS evidence directory")?;
+        let path = directory.join(format!("rr-{samples:03}.rgba8"));
+        if !path.exists() {
+            std::fs::create_dir_all(directory)?;
+            let render = self.render_loop.as_ref().unwrap().final_render();
+            let (width, height, rgba) = self.engine.display().read_rgba8(render)?;
+            std::fs::write(path, rgba)?;
+            if !directory.join("rr-size.json").exists() {
+                std::fs::write(
+                    directory.join("rr-size.json"),
+                    serde_json::to_vec(&json!({"width":width,"height":height}))?,
+                )?;
+            }
+        }
+        Ok(())
+    }
     fn frame(&mut self) -> Result<()> {
         if self.render_failure.is_some() {
             return Ok(());
@@ -1165,9 +1255,9 @@ impl Host {
         for event in events {
             self.send(event)?;
         }
-        let hdr = self
-            .gpu
-            .set_hdr(self.engine.display().settings().hdr_output_enabled);
+        let display = self.engine.display().settings();
+        let hdr = self.gpu.set_hdr(display.hdr_output_enabled);
+        let final_channel = display.channel == api::Channel::Final;
         let surface_key = (
             self.render_loop.as_ref().map_or(0, |l| l.presentations()),
             self.rect,
@@ -1176,7 +1266,25 @@ impl Host {
         );
         // Acquiring a FIFO frame can block. Poll GPU completion without
         // acquiring another surface frame until the composed output changes.
-        if self.last_surface != Some(surface_key) {
+        // A DLSS target can compose a raw frame during a preview-to-final
+        // handoff. Keep the current window image until reconstruction is ready.
+        if (self.surface_dirty || self.last_surface != Some(surface_key))
+            && !(final_channel
+                && !self.paused
+                && self.export.is_none()
+                && self.last_surface.is_some_and(|(_, rect, size, hdr)| {
+                    (rect, size, hdr) == (surface_key.1, surface_key.2, surface_key.3)
+                })
+                && matches!(
+                    self.phase.as_str(),
+                    "previewing" | "converging" | "denoising"
+                )
+                && self
+                    .presented_denoiser()
+                    .is_some_and(|(_, configured, report)| {
+                        configured == "dlss" && report.is_none()
+                    }))
+        {
             let image = if hdr {
                 if let Some(loop_) = &self.render_loop {
                     if let Some(render) = loop_.presented_render() {
@@ -1190,10 +1298,14 @@ impl Host {
             } else {
                 self.engine.display().texture()
             };
-            self.last_surface = self
-                .gpu
-                .present(&self.window, image, self.rect)?
-                .then_some(surface_key);
+            self.surface_dirty = !self.gpu.present(&self.window, image, self.rect)?;
+            if !self.surface_dirty {
+                self.last_surface = Some(surface_key);
+                self.report_surface_denoiser(surface_key.0, final_channel);
+                if self.dlss_sequence {
+                    self.capture_dlss_frame()?;
+                }
+            }
         }
         let first_sample = self.publish_first_sample
             && self.render_loop.as_ref().is_some_and(|l| {
@@ -1213,7 +1325,8 @@ impl Host {
             let states=self.targets.iter().map(|(id,r)|(id.to_string(),json!({"samples":r.samples(),"aovSamples":r.aov_samples_rendered(),"width":r.width(),"height":r.height(),"status":format!("{:?}",r.status()).to_lowercase(),"denoising":r.denoising(),"frameTimeMs":r.gpu_sample_time_ms()}))).collect::<serde_json::Map<_,_>>();
             let d = self.engine.diagnostics();
             let graphs = json!({"revision":d.scene_revision,"installedRevision":d.scene_revision,"status":if d.compiling||d.preparing{"compiling"}else if d.material_graphs.is_empty(){"ready"}else{"failed"},"diagnostics":d.material_graphs,"topologyCount":d.cached_pipelines});
-            self.event("state",json!({"phase":if self.paused{"paused"}else{&self.phase},"targets":states,"viewportSize":self.engine.display().size(),"diagnostics":{"backend":"webgpu","adapterName":d.info.adapter_name,"width":self.engine.display().size()[0],"height":self.engine.display().size()[1],"lastError":d.last_error,"materialGraphs":graphs}}))?;
+            let ray_reconstruction = &self.surface_ray_reconstruction;
+            self.event("state",json!({"phase":if self.paused{"paused"}else{&self.phase},"targets":states,"rayReconstruction":ray_reconstruction,"viewportSize":self.engine.display().size(),"diagnostics":{"backend":"webgpu","adapterName":d.info.adapter_name,"width":self.engine.display().size()[0],"height":self.engine.display().size()[1],"lastError":d.last_error,"materialGraphs":graphs}}))?;
             self.last_publish = Instant::now();
             if first_sample {
                 self.publish_first_sample = false;
@@ -1239,10 +1352,20 @@ impl Host {
                     dir.join("final.png"),
                     self.engine.display().encode_png(render)?,
                 )?;
+                let denoiser = render.denoise_report().map(|r| {
+                    json!({"backend":r.backend,"samples":r.samples,"milliseconds":r.milliseconds,"error":r.error})
+                });
+                #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+                let dlss = self.dlss.as_ref().map(|filter| {
+                    let (evaluations, resets) = filter.counts();
+                    json!({"evaluations":evaluations,"resets":resets})
+                });
+                #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
+                let dlss = Value::Null;
                 std::fs::write(
                     dir.join("run.json"),
                     serde_json::to_vec_pretty(
-                        &json!({"width":image.width,"height":image.height,"samples":render.samples(),"seed":render.settings()?.seed,"presentations":self.gpu.presentations}),
+                        &json!({"width":image.width,"height":image.height,"samples":render.samples(),"seed":render.settings()?.seed,"presentations":self.gpu.presentations,"denoiser":denoiser,"dlss":dlss}),
                     )?,
                 )?;
             }
@@ -1276,6 +1399,7 @@ impl Host {
             return false;
         }
         self.dirty
+            || self.surface_dirty
             || self.last_surface.is_none()
             || self.export.as_ref().is_some_and(|job| !job.completed)
             || !self.paused
@@ -1430,7 +1554,7 @@ impl ApplicationHandler<Message> for App {
             | WindowEvent::Occluded(false)
             | WindowEvent::Moved(_)
             | WindowEvent::ScaleFactorChanged { .. } => {
-                host.last_surface = None;
+                host.surface_dirty = true;
                 host.dirty = true;
                 host.window.request_redraw();
                 Ok(())

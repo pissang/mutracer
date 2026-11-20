@@ -8,7 +8,9 @@ import {HEADER as H} from '../../native/src/layout';
 import { cameraWords,NativeSceneEncoder } from '../src/engine/nativeScene';
 import { NativeRenderHost, NativeRender } from '../src/engine/NativeRenderHost';
 import { changeNativeDevice } from '../src/engine/nativeCapabilities';
-vi.mock('../src/store', () => ({ useViewer: { subscribe: () => () => { }, setState: () => { }, getState: () => ({ nativeRayReconstruction: false }) } }));
+import type { ViewerState } from '../src/store';
+const viewer = vi.hoisted(() => ({ nativeRayReconstruction: false, nativeRayReconstructionReport: undefined as ViewerState['nativeRayReconstructionReport'] }));
+vi.mock('../src/store', () => ({ useViewer: { subscribe: () => () => { }, setState: (patch: object) => Object.assign(viewer, patch), getState: () => viewer } }));
 const hosts: NativeRenderHost[] = [];
 afterEach(() => { hosts.splice(0).forEach(h => h.dispose()); vi.unstubAllGlobals(); });
 function setup(responses:Record<string,unknown>={}) {
@@ -38,6 +40,18 @@ function setup(responses:Record<string,unknown>={}) {
     return { host, commands, uploads, gpu, setFailure: (fail: boolean) => { failCommit = fail; } };
 }
 describe('native Engine boundary', () => {
+    it('reports accepted Ray Reconstruction output and clears it when the viewport switches filters', async () => {
+        const { host } = setup();
+        await host.init();
+        const report = { view: 'preview', samples: 1, error: null };
+        window.mutracerNativeReceive?.({ event: 'state', value: { phase: 'finished', targets: {}, rayReconstruction: report } });
+        expect(viewer.nativeRayReconstructionReport).toEqual(report);
+        const final = { ...report, view: 'final' };
+        window.mutracerNativeReceive?.({ event: 'state', value: { phase: 'converging', targets: {}, rayReconstruction: final } });
+        expect(viewer.nativeRayReconstructionReport).toEqual(final);
+        window.mutracerNativeReceive?.({ event: 'state', value: { phase: 'finished', targets: {}, rayReconstruction: null } });
+        expect(viewer.nativeRayReconstructionReport).toBeUndefined();
+    });
     it('keeps context failure, sample counters and restart available through the native bridge', async () => {
         const {host, commands} = setup();
         const render = new NativeRender(host, {maxSamples: 256});

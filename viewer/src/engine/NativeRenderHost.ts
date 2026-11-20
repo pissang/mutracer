@@ -12,7 +12,7 @@ import { nativeSceneBrowserPixels } from './nativeSceneBrowserPixels';
 import { NativeTransport, type NativeReply, pointerPacket } from './nativeTransport';
 import type { PixelKind } from './ViewerEngine';
 import { Events } from '../../../src/util/events';
-import { useViewer } from '../store';
+import { useViewer, type ViewerState } from '../store';
 declare global {
     interface Window {
         ipc?: {
@@ -148,6 +148,7 @@ export class NativeRenderHost extends Engine {
             const state = value as {
                 phase: RenderLoopStatus;
                 targets: Record<string, TargetState>;
+                rayReconstruction?: ViewerState['nativeRayReconstructionReport'] | null;
                 diagnostics?: EngineDiagnostics;
                 viewportSize?: [
                     number,
@@ -155,6 +156,10 @@ export class NativeRenderHost extends Engine {
                 ];
             };
             this.phase = state.phase;
+            const report = state.rayReconstruction ?? undefined;
+            const previous = useViewer.getState().nativeRayReconstructionReport;
+            if (report?.view !== previous?.view || report?.samples !== previous?.samples || report?.error !== previous?.error)
+                useViewer.setState({ nativeRayReconstructionReport: report });
             if (this.capabilities?.layout === 'split' && state.viewportSize && (state.viewportSize[0] !== this.nativeSize?.[0] || state.viewportSize[1] !== this.nativeSize?.[1])) {
                 this.nativeSize = state.viewportSize;
                 this.onResize?.();
@@ -206,7 +211,7 @@ export class NativeRenderHost extends Engine {
     override init() {
         return this.ready ??= this.transport.request<NativeCapabilities>('ready').then(capabilities => {
             this.capabilities = capabilities;
-            useViewer.setState({ nativeCapabilities: capabilities });
+            useViewer.setState({ nativeCapabilities: capabilities, nativeRayReconstructionReport: undefined });
             document.documentElement.dataset.nativeLayout = capabilities.layout;
             bindNativeDeviceChange(options => this.transport.request('device', options));
             this.remoteInfo = { backend: 'webgpu', adapterName: capabilities.adapterName, limits: { maxTextureDimension2D: capabilities.maxImageDimension, maxTextureArrayLayers: 256 } };

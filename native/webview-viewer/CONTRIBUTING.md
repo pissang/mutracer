@@ -71,6 +71,17 @@ studio, OIDN and independent-export workflow through WebEngine's public actions.
 It writes `workflow.json` and per-stage captures, then exits. It is opt-in and
 uses an ephemeral WebView session; it does not alter the normal app cache.
 
+Set `MUTRACER_NATIVE_DLSS_EVIDENCE=1` with the Windows DLSS build to run the
+Ray Reconstruction workflow instead. Omit `MODEL.glb` to use the built-in
+Spheres example. The workflow captures raw, OIDN, Ray Reconstruction enabled
+after convergence, and OIDN restored at 16 samples, then captures a raw
+128-sample reference. It also checks the reported Ray Reconstruction result.
+The camera-motion stage verifies a reconstructed preview and records the
+presented view, denoiser report and NGX reset counts in stderr.
+Set `MUTRACER_NATIVE_DLSS_SEQUENCE=1` with this workflow to capture 64 stationary
+sample presentations as RGBA8 plus their dimensions and reset counts. This
+capture reads each accepted frame back from the GPU for comparison.
+
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
 material-edit first-sample timing and `captureScene` for compact scene, resource
 reference and camera/settings replay artifacts. Rehydrate native references and

@@ -293,6 +293,7 @@ export type ToastTone = 'info' | 'success' | 'warning' | 'error';
 export interface ViewerState {
   nativeCapabilities?:NativeCapabilities;
   nativeRayReconstruction?:boolean;
+  nativeRayReconstructionReport?: { view: 'preview' | 'final'; samples: number; error: string | null };
   settings: Settings;
   stats: Stats;
   backend: { name: 'WebGPU' | 'WebGL 2' | 'Native' | null; adapter: string };

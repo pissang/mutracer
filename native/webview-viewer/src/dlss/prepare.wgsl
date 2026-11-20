@@ -4,7 +4,7 @@ struct Camera {
     inverseView: mat4x4f,
     previousViewProjection: mat4x4f,
     jitter: vec4f,
-    history: vec4u,
+    history: vec4u, // has history, orthographic, stationary, padding
 }
 @group(0) @binding(0) var sourceDepth: texture_2d<f32>;
 @group(0) @binding(1) var sourceMotion: texture_2d<f32>;
@@ -26,6 +26,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if ((flags & 1u) != 0u) {
         z = textureLoad(sourceDepth, p, 0).x;
         if ((flags & 2u) != 0u) { mv = textureLoad(sourceMotion, p, 0).xy; }
+        else if (camera.history.z != 0u) {
+            // Jitter can invalidate the previous sample match at a stationary
+            // surface. Its unjittered screen motion is still zero. Let RR use
+            // depth and normals to reject different surfaces at edges.
+            mv = vec2f(0.0);
+        }
     } else if (camera.history.x != 0u && camera.history.y == 0u) {
         // Point at infinity: translation cancels, rotation moves the sky.
         let uv = (vec2f(id.xy) + 0.5 + camera.jitter.xy) / vec2f(size);

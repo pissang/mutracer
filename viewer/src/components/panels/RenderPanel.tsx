@@ -4,6 +4,7 @@ import { MAX_PATH_EVENTS_WEBGL, MAX_PATH_EVENTS_WGPU } from '../../../../src/ren
 import type { OIDNModel } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { ResolutionSelect } from '../ResolutionSelect';
+import { DenoiserSelect } from '../DenoiserSelect';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
 
@@ -11,7 +12,8 @@ export function RenderPanel() {
   const s = useViewer((state) => state.settings);
   const backend = useViewer((state) => state.backend.name);
   const native=useViewer(state=>state.nativeCapabilities);
-  const rr=useViewer(state=>state.nativeRayReconstruction);
+  const rr = useViewer(state => !!state.nativeCapabilities?.dlssRR && !!state.nativeRayReconstruction);
+  const rrReport = useViewer(state => state.nativeRayReconstructionReport);
   const imageWidth = useViewer(state => state.stats.width);
   const imageHeight = useViewer(state => state.stats.height);
   const pixelHeight = Math.max(1, s.resolutionHeight ?? imageHeight);
@@ -21,10 +23,15 @@ export function RenderPanel() {
   const jnlm = webgl || s.denoiseModel === 'jnlm';
   const [open, setOpen] = useState({ effects: false, jnlm: false });
   const update = (patch: Partial<Settings>) => setSettings(patch);
+  const rrStatus = s.fStop > 0 ? `Depth of field is on. Using ${jnlm ? 'JNLM' : 'OIDN'}.`
+    : s.output !== 'final' ? 'Ray Reconstruction applies to the Final channel.'
+    : rrReport?.error ? `Ray Reconstruction failed. ${rrReport.error}`
+    : rrReport ? `Active in ${rrReport.view === 'preview' ? 'Preview' : 'Final'}`
+    : !s.denoiseWhileConverging && s.previewEnabled ? 'Interactive preview is unfiltered with Live denoise off.'
+    : 'Waiting for a reconstructed frame…';
 
   return (
     <>
-      {native?.dlssRR&&<Section title="Native"><Switch label="DLSS Ray Reconstruction" checked={!!rr} onChange={value=>useViewer.setState({nativeRayReconstruction:value})}><span className="field-label">DLSS Ray Reconstruction</span></Switch></Section>}
       <Section title="Quality" icon={<Aperture size={14} />}>
         <Scrub label="Max samples" value={s.maxSamples} min={4} max={16384} log onChange={(v) => update({ maxSamples: v })} />
         <Scrub label="Bounces" value={s.bounces} min={1} max={webgl ? MAX_PATH_EVENTS_WEBGL : MAX_PATH_EVENTS_WGPU} step={1} onChange={(v) => update({ bounces: v })} />
@@ -73,7 +80,7 @@ export function RenderPanel() {
         title="Denoiser"
         icon={<Sparkles size={14} />}
         actions={<>
-          {s.denoise && <button className="icon-btn sm" title="Reset selected denoiser parameters" aria-label={`Reset ${jnlm ? 'JNLM' : 'OIDN'} settings`} onClick={() => update(jnlm ? {
+          {s.denoise && !rr && <button className="icon-btn sm" title="Reset selected denoiser parameters" aria-label={`Reset ${jnlm ? 'JNLM' : 'OIDN'} settings`} onClick={() => update(jnlm ? {
             jnlmStrength: DEFAULT_SETTINGS.jnlmStrength,
             jnlmSearchRadius: DEFAULT_SETTINGS.jnlmSearchRadius,
             jnlmPatchRadius: DEFAULT_SETTINGS.jnlmPatchRadius,
@@ -87,12 +94,13 @@ export function RenderPanel() {
         </>}
       >
         {s.denoise && <>
-          <Segmented
+          {native?.dlssRR ? <DenoiserSelect /> : <Segmented
             label="Denoiser type"
             value={jnlm ? 'jnlm' : 'oidn'}
             options={[{ value: 'jnlm', label: 'JNLM' }, { value: 'oidn', label: 'OIDN', disabled: webgl }]}
             onChange={(v) => update({ denoiseModel: v === 'jnlm' ? 'jnlm' : s.oidnModel })}
-          />
+          />}
+          {rr ? <Hint warn={!!rrReport?.error}>{rrStatus}</Hint> : <>
           {webgl && <Hint>OIDN requires WebGPU.</Hint>}
           {jnlm && <Scrub label="Strength" title="Higher values remove more lighting noise" value={s.jnlmStrength} min={0.1} max={3} step={0.1} onChange={(v) => update({ jnlmStrength: v })} />}
           {jnlm ? <Section
@@ -124,6 +132,7 @@ export function RenderPanel() {
               options={[{ value: '0', label: 'Auto' }, ...[256, 512, 1024, 2048].map((v) => ({ value: String(v), label: `${v} px` }))]}
               onChange={(v) => update({ oidnMaxTileSize: Number(v) })}
             />
+          </>}
           </>}
         </>}
       </Section>

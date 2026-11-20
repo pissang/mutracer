@@ -35,6 +35,55 @@ export async function run(engine:WebEngine){
   }
   const warnings=useViewer.getState().modelLighting?.warnings??[];
   if(warnings.length)throw Error(`Incomplete model import: ${warnings.join(' ')}`);
+  if ((window as Window & { mutracerDlssWorkflow?: boolean }).mutracerDlssWorkflow) {
+   if (!host.capabilities?.dlssRR) throw Error('Ray Reconstruction runtime is unavailable');
+   if ((window as Window & { mutracerDlssSequence?: boolean }).mutracerDlssSequence) {
+    useViewer.setState({ nativeRayReconstruction: true });
+    setSettings({ denoise: true, maxSamples: 64, fStop: 0 });
+    await capture('sequence-final');
+    const report = useViewer.getState().nativeRayReconstructionReport;
+    if (!report || report.error || report.view !== 'final' || report.samples !== 64)
+     throw Error(`Incomplete Ray Reconstruction sequence: ${JSON.stringify(report)}`);
+    await host.transport.request('workflowDone', { passed: true, cases: results, rayReconstruction: report });
+    return;
+   }
+   setSettings({ fStop: 0 });
+   await capture('raw');
+   setSettings({ denoise: true, denoiseModel: 'standard' });
+   await capture('oidn');
+   useViewer.setState({ nativeRayReconstruction: true });
+   await capture('ray-reconstruction');
+   const report = useViewer.getState().nativeRayReconstructionReport;
+   if (!report || report.error || report.view !== 'final' || report.samples !== engine.final.samples)
+    throw Error(`Ray Reconstruction did not process the converged frame: ${JSON.stringify(report)}`);
+   useViewer.setState({ nativeRayReconstruction: false });
+   await capture('oidn-restored');
+   if (useViewer.getState().nativeRayReconstructionReport) throw Error('Ray Reconstruction still reported after switching off');
+   setSettings({ denoise: false, maxSamples: 128 });
+   await capture('reference');
+   setSettings({ denoise: true, denoiseWhileConverging: true, previewEnabled: true, maxSamples: 16 });
+   useViewer.setState({ nativeRayReconstruction: true });
+   let previewReconstructed = false;
+   const unsubscribe = useViewer.subscribe(state => {
+    const frame = state.nativeRayReconstructionReport;
+    if (frame?.view === 'preview' && !frame.error) previewReconstructed = true;
+   });
+   try {
+    setSettings({ autoRotate: true });
+    for (let i = 0; i < 100 && !previewReconstructed; i++) await pause(50);
+    if (!previewReconstructed) throw Error('No reconstructed preview during camera motion');
+    await pause(1000);
+   } finally {
+    setSettings({ autoRotate: false });
+    unsubscribe();
+   }
+   await capture('ray-reconstruction-after-motion');
+   const finalFrame = useViewer.getState().nativeRayReconstructionReport;
+   if (!finalFrame || finalFrame.error || finalFrame.view !== 'final' || finalFrame.samples !== engine.final.samples)
+    throw Error(`Ray Reconstruction did not return to Final: ${JSON.stringify(finalFrame)}`);
+   await host.transport.request('workflowDone', { passed: true, cases: results, rayReconstruction: report, afterMotion: finalFrame });
+   return;
+  }
   if(benchmark?.captureScene){
    await settled();
    if(!host.scene||!host.camera)throw Error('Missing replay scene');

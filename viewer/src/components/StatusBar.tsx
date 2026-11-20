@@ -4,6 +4,7 @@ import { changeNativeDevice } from '../engine/nativeCapabilities';
 import { VIEWER_AOVS, setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
 import { ResolutionSelect } from './ResolutionSelect';
+import { DenoiserSelect } from './DenoiserSelect';
 
 const LABELS: Record<RenderPhase, string> = {
   starting: 'Starting',
@@ -131,21 +132,6 @@ function SampleSelect() {
     value={String(maxSamples)}
     options={options.map((v) => ({ value: String(v), label: String(v) }))}
     onChange={(v) => setSettings({ maxSamples: Number(v) })}
-  />;
-}
-
-function DenoiserSelect({ disabled = false }: { disabled?: boolean }) {
-  const settings = useViewer((s) => s.settings);
-  const webgl = useViewer((s) => s.backend.name === 'WebGL 2');
-  return <Select
-    label="Denoiser type"
-    disabled={disabled}
-    value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
-    options={[
-      { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
-      { value: 'jnlm', label: 'JNLM' }
-    ]}
-    onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
   />;
 }
 

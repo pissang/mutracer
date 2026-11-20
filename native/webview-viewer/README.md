@@ -28,8 +28,15 @@ dialog. Code export produces a JavaScript scene setup.
   the app. Unsupported HWRT scenes can fall back to software.
 - HDR output is available when the window surface supports extended linear
   sRGB. Unsupported surfaces stay SDR; PNG exports stay SDR.
-- JNLM and OIDN run on the native renderer. The optional Windows DLSS RR package
-  exposes Ray Reconstruction when its NVIDIA runtime is active. Independent exports use OIDN when Ray Reconstruction is selected.
+- JNLM and OIDN run on the native renderer. Open `mutracer-viewer.exe` from the
+  optional Windows DLSS package, turn on **Denoise**, and choose **DLSS RR**
+  from the denoiser menu. The option appears when the included runtime
+  initializes on an NVIDIA Vulkan device. With depth of field off, it
+  reconstructs the Final channel at the current render resolution. **Live
+  denoise** also enables reconstruction in the interactive preview. The Render
+  panel shows which view has a reconstructed frame. The window can retain the
+  previous image while the next reconstruction is pending. Depth of field and
+  independent exports use the last selected OIDN or JNLM settings.
 - `--build-only` on the build script creates the app without opening it.
 
 ## Requirements and limits

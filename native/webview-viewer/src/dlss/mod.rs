@@ -288,6 +288,9 @@ impl Dlss {
             .each_ref()
             .map(|t| t.create_view(&Default::default()));
         let previous = temporal.previous_metadata().unwrap_or(meta);
+        let stationary = !reset
+            && meta.scene_revision == previous.scene_revision
+            && meta.camera_revision == previous.camera_revision;
         let previous_vp = glam::Mat4::from_cols_array(&previous.camera.projection)
             * glam::Mat4::from_cols_array(&previous.camera.view);
         let mut uniforms = Vec::new();
@@ -307,7 +310,7 @@ impl Dlss {
             [
                 u32::from(!reset),
                 u32::from(meta.camera.kind == api::TemporalProjection::Orthographic),
-                0,
+                u32::from(stationary),
                 0,
             ]
             .iter()

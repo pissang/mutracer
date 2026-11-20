@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use mutracer_native::api;
 use std::{
     sync::{Arc, Mutex},
@@ -48,15 +48,11 @@ impl Default for Orbit {
 }
 impl Orbit {
     pub fn camera(&self) -> api::Camera {
-        let offset = Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            self.yaw.cos() * self.pitch.cos(),
-        ) * self.radius;
+        let rotation = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(-self.pitch);
+        let position = self.target + (rotation * Vec3::Z) * self.radius;
         api::Camera {
-            world_matrix: Mat4::look_at_rh(self.target + offset, self.target, Vec3::Y)
-                .inverse()
-                .to_cols_array(),
+            // Build the world pose directly so the affine row stays exact.
+            world_matrix: Mat4::from_rotation_translation(rotation, position).to_cols_array(),
             ..self.camera
         }
     }
@@ -178,6 +174,25 @@ mod tests {
         orbit.packet(&packet([2., 30., 20., 0., 0.]), 400.).unwrap();
         assert!(!orbit.activity.lock().unwrap().active());
         assert!(!orbit.packet(&packet([1., 50., 20., 0., 0.]), 400.).unwrap());
+    }
+    #[test]
+    fn orbit_drag_produces_affine_cameras_facing_the_target() {
+        let mut orbit = Orbit::default();
+        orbit.look_at(Vec3::new(3., 1., 4.), Vec3::new(0., 1.5, 0.));
+        orbit.input([0., 10., 20., 0., 0.], 400.).unwrap();
+        for x in [11., 30., 60., 120., 260., 540.] {
+            assert!(orbit.input([1., x, 21., 0., 0.], 400.).unwrap());
+            let world = Mat4::from_cols_array(&orbit.camera().world_matrix);
+            assert_eq!(world.row(3), glam::Vec4::W);
+            let offset = world.w_axis.truncate() - orbit.target;
+            assert!((offset.length() - orbit.radius).abs() < 1e-5);
+            assert!(
+                world
+                    .z_axis
+                    .truncate()
+                    .abs_diff_eq(offset.normalize(), 1e-5)
+            );
+        }
     }
     #[test]
     fn delayed_camera_echo_cannot_rewind_a_drag_but_lens_edits_apply() {
