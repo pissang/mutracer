@@ -547,17 +547,24 @@ stability.
    - Scene 3: no pixel uses history across a boundary (verified through the
      window's accepted-tap counters).
 2. **Stability.** Low-frequency drift (σ = 6) and flicker on static and rigidly
-   moving surfaces: at most 0.5× per-frame OIDN drift on scenes 1 and 2. The
-   dining-table drift stays within run-to-run spread of 0.127.
+   moving surfaces: at most 0.5× per-frame OIDN drift on scenes 1 and 2.
+   On the dining-table archive, compare each frame pair's drift with B2
+   using a one-sided paired sign test (35 sideboard pairs and 23 defocus
+   pairs). A region regresses when the mean paired difference is positive
+   and p < 0.05. Identical deterministic replays measure repeatability and
+   give no estimate of the noise floor. Report both modes. The B3 post
+   correction applies to the symmetric mode.
 3. **Sharpness.**
    - Full and edge PSNR against 1024 spp: not below per-frame OIDN on full,
      edge loss at most 0.3 dB.
-   - Dining table: 39.52 dB full PSNR within 0.05 dB.
+   - Dining table: symmetric full-image PSNR at least 39.47 dB (B2: 39.520 dB).
+     Sideboard and defocus PSNR may each fall by at most 0.1 dB relative to
+     B2.
    - Glints: the reference-confirmed highlights at f150 retained within one
      code.
 
-Thresholds are proposals. Phase 1 calibrates them against the dining-table
-reproduction and the per-frame OIDN baseline before they become pass/fail.
+Calibrate the proposed procedural-scene thresholds against the per-frame OIDN
+baseline before using them as gates.
 
 ### Tests to add
 
