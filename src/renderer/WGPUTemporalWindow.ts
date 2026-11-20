@@ -235,7 +235,7 @@ struct Overflow { index: atomic<u32>, color: vec4f }
 @group(0) @binding(5) var<storage,read> identity: array<vec4u>;
 @group(0) @binding(6) var<storage,read> albedo: array<vec4f>;
 @group(0) @binding(7) var surfaceOut: texture_storage_2d_array<rgba16float,write>;
-@group(0) @binding(8) var idOut: texture_storage_2d_array<rgba16uint,write>;
+@group(0) @binding(8) var idOut: texture_storage_2d_array<rgba32uint,write>;
 @group(0) @binding(9) var<storage,read> color: array<vec4f>;
 @group(0) @binding(10) var hdrOut: texture_storage_2d_array<rgba16float,write>;
 @group(0) @binding(11) var<storage,read_write> overflowOut: array<Overflow>;
@@ -255,7 +255,7 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   textureStore(surfaceOut,vec2i(g.xy),i32(p.slot*2u+1u),nearestHalf4(vec4f(normal[i].xyz,select(0.,cap,valid))));
   let peak=max(albedo[i].x,max(albedo[i].y,albedo[i].z));
   let guide=u32(floor(255.*sqrt(clamp(peak,0.,1.))+.5)); let coverage=u32(floor(255.*clamp(r.w,0.,1.)+.5));
-  textureStore(idOut,vec2i(g.xy),i32(p.slot),vec4u(identity[i].xyz&vec3u(65535u),(guide<<8u)|coverage));
+  textureStore(idOut,vec2i(g.xy),i32(p.slot),vec4u(identity[i].xyz,(guide<<8u)|coverage));
   let rgba=color[i];let exceeds=any(!(abs(rgba.rgb)<=vec3f(65504.)));
   textureStore(hdrOut,vec2i(g.xy),i32(p.slot),select(nearestHalf4(vec4f(rgba.rgb,1.)),vec4f(0.,0.,0.,-1.),exceeds));
   if(exceeds){let key=i+1u;for(var probe=0u;probe<4096u;probe++){
@@ -295,7 +295,7 @@ export class DirectWindowGPU {
   async init() {
     const d=this.device;
     this.surface=this.texture('Direct window surface',this.capacity*2,'rgba16float');
-    this.ids=this.texture('Direct window packed IDs',this.capacity,'rgba16uint');
+    this.ids=this.texture('Direct window packed IDs',this.capacity,'rgba32uint');
     this.hdr=this.texture('Direct window HDR',this.capacity,'rgba16float');
     this.total=this.buffer('Direct window weighted sum',this.bytes);
     this.output=this.buffer('Direct window normalized output',this.bytes);
@@ -355,8 +355,8 @@ export class DirectWindowGPU {
     }
     d.queue.writeTexture({texture:this.surface,origin:[0,0,s*2]},new Float16Array(surfaces.subarray(0,n*4)),{bytesPerRow:this.width*8},[this.width,this.height,1]);
     d.queue.writeTexture({texture:this.surface,origin:[0,0,s*2+1]},new Float16Array(surfaces.subarray(n*4)),{bytesPerRow:this.width*8},[this.width,this.height,1]);
-    const ids16=new Uint16Array(n*4);
-    for(let i=0;i<n;i++)for(let c=0;c<3;c++)ids16[i*4+c]=idView[i*components+c];
+    const ids=new Uint32Array(n*4);
+    for(let i=0;i<n;i++)for(let c=0;c<3;c++)ids[i*4+c]=idView[i*components+c];
     if(this.preserveGlints){
       const albedo=arrays.albedo && new Float32Array(arrays.albedo);
       const albedoComponents=albedo?.length===n*3?3:4;
@@ -365,10 +365,10 @@ export class DirectWindowGPU {
         const peak=albedo?Math.max(albedo[at],albedo[at+1],albedo[at+2]):0;
         const guide=Math.round(255*Math.sqrt(Math.max(0,Math.min(1,peak))));
         const coverage=roughnessComponents===4?roughness[i*4+3]:1;
-        ids16[i*4+3]=(guide<<8) | Math.round(255*coverage);
+        ids[i*4+3]=(guide<<8) | Math.round(255*coverage);
       }
     }
-    d.queue.writeTexture({texture:this.ids,origin:[0,0,s]},ids16,{bytesPerRow:this.width*8},[this.width,this.height,1]);
+    d.queue.writeTexture({texture:this.ids,origin:[0,0,s]},ids,{bytesPerRow:this.width*16},[this.width,this.height,1]);
     const sourceHdr=new Float32Array(arrays.hdr), hdr=new Float16Array(n*4);
     const overflow=new ArrayBuffer(4096*32), keys=new Uint32Array(overflow), values=new Float32Array(overflow);
     const hdrComponents=sourceHdr.length===n*3?3:4;
@@ -428,9 +428,9 @@ export class DirectWindowGPU {
   }
   memory(){
     const pixels=this.width*this.height;
-    const history=this.capacity*pixels*(2*8+8+8)+this.capacity*80+this.capacity*4096*32;
+    const history=this.capacity*pixels*(2*8+16+8)+this.capacity*80+this.capacity*4096*32;
     const scratch=this.bytes*2+32;
-    return {slots:this.capacity,history,scratch,total:history+scratch,bytesPerPixel:32};
+    return {slots:this.capacity,history,scratch,total:history+scratch,bytesPerPixel:40};
   }
   dispose(){this.query?.destroy();for(const r of this.resources)r.destroy();this.resources=[];}
 }
