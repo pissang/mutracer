@@ -700,9 +700,10 @@ impl Display {
         Ok(Some(composed.presented))
     }
 
-    /// The render's complete image composed with these settings at its own size,
-    /// or at the final size of sized display passes: straight-alpha RGBA8, top row
-    /// first. Leaves the presentation texture unchanged.
+    /// The render's complete image composed with these settings. Uses the
+    /// published temporal reconstruction size when available, then applies any
+    /// sized display passes. Returns straight-alpha RGBA8, top row first.
+    /// Leaves the presentation texture unchanged.
     pub fn read_rgba8(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
         let result = (|| {
             let composed = self.compose(render, false)?.unwrap();

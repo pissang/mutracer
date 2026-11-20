@@ -105,6 +105,7 @@ pub trait CustomDenoiser: Send + Sync + 'static {
     }
     /// Linear output scale for a resident temporal result. Default 1. Scale 2
     /// doubles both axes while keeping trace and raw exports at the input size.
+    /// When the doubled capture exceeds device limits, the output scale is 1.
     /// Called during registration outside the engine lock, only in TemporalGpu.
     fn temporal_output_scale(&self) -> u32 {
         1

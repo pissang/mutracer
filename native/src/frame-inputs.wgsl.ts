@@ -6,7 +6,7 @@ import {unsupportedCoatReflectanceWgsl} from '../../src/renderer/wgsl/aovReflect
 // Internal diagnostic record. It contains resolved first-surface data rather
 // than reusing OIDN's possibly downstream guides. BaseColor and directional
 // reflectance are distinct fields; optical path branches remain separate.
-export function nativeFrameInputHooks(hasCoatNormals: boolean): RayTraceInputHooks {
+export function nativeFrameInputHooks(hasCoatNormals: boolean, hasAnisotropyDirections: boolean): RayTraceInputHooks {
   return {
     uniformJitter: true,
     layeredReflectance: true,
@@ -145,11 +145,13 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   let eta = openpbr_apply_specular_weight_to_ior(material.specularIor, material.specularWeight);
   var flags = 1u;
   var guideRoughness = material.specularRoughness;
+  let unsupportedAnisotropy = material.specularAnisotropy > 0.0 &&
+    (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
   // Surface data can be inspected even when complete temporal/RR inputs have
   // not been validated. Do not silently reinterpret these material layers.
   if ((material.materialType != STANDARD) | (material.alpha < 1.0) |
       (${unsupportedCoatReflectanceWgsl(hasCoatNormals)}) | (material.fuzzWeight > 0.0) |
-      (material.specularAnisotropy > 0.0) | (material.subsurfaceWeight > 0.0) |
+      unsupportedAnisotropy | (material.subsurfaceWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
       (material.transmissionDispersionScale > 0.0)) { flags |= 32u; }
@@ -159,10 +161,19 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
     // modify the production material or add draws to its random stream.
     resolved.inside = (cosine <= 0.0) & !material.thinWalled;
     resolved.relativeIor = select(material.specularIor, 1.0 / material.specularIor, cosine > 0.0);
-    let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, oriented);
+${hasAnisotropyDirections || hasCoatNormals ? /* wgsl */ `    resolved.directionTangent = si.directionTangent;
+    resolved.directionBitangent = si.directionBitangent;
+    resolved.geometryTangent = si.geometryTangent;
+    resolved.geometryBitangent = si.geometryBitangent;
+` : ''}    let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, oriented);
     let reflectance = mtFrameReflectance(prepared);
     mtFramePixels[mtFrameIndex].diffuseAlbedo = vec4f(reflectance.diffuse, 0.0);
     mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(reflectance.specular + reflectance.coat, 0.0);
+    if (material.specularAnisotropy > 0.0) {
+      // The tracer keeps both GGX axes. RR's scalar perceptual roughness
+      // is the square root of their geometric-mean alpha.
+      guideRoughness = sqrt(sqrt(prepared.material.alphaX * prepared.material.alphaY));
+    }
     if (material.coatWeight > 0.0) {
       let baseWeight = openpbr_luminance(reflectance.specular);
       let coatWeight = openpbr_luminance(reflectance.coat);
