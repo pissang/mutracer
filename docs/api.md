@@ -2,6 +2,7 @@
 
 Import the core API, including `MaterialGraph`, from `@meimu/mutracer`.
 The Three.js adapter uses `@meimu/mutracer/three` and OIDN weight helpers use `@meimu/mutracer/oidn`.
+The [temporal denoiser](./temporal-denoising.md) uses `@meimu/mutracer/temporal`.
 To read a `.mtlx` document, import `parseMaterialX` from `@meimu/mutracer/materialx`. See [MaterialX parsing](materialx.md).
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 

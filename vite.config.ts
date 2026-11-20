@@ -24,6 +24,7 @@ export default defineConfig(({ command }) => ({
       { find: /^@meimu\/mutracer\/materialx$/, replacement: path.resolve(__dirname, 'src/materialx.ts') },
       { find: /^@meimu\/mutracer\/three$/, replacement: path.resolve(__dirname, 'src/three.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
+      { find: /^@meimu\/mutracer\/temporal$/, replacement: path.resolve(__dirname, 'src/temporal.ts') },
       { find: /^@meimu\/mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
     ]
   },

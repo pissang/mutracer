@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Compare offline and interactive temporal denoising on a procedural WebGPU animation." />
+    <title>MuTracer · Temporal denoising</title>
+    <link rel="stylesheet" href="./shared/style.css" />
+  </head>
+  <body>
+    <canvas id="main" aria-label="Rendered scene"></canvas>
+    <div class="panel">
+      <label>Mode
+        <select id="mode">
+          <option value="offline">Offline</option>
+          <option value="interactive">Interactive</option>
+        </select>
+      </label>
+      <button id="start" type="button">Render shot</button>
+      <span id="status" role="status"></span>
+    </div>
+    <script type="module" src="./temporal-denoising.ts"></script>
+  </body>
+</html>

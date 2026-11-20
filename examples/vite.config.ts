@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import { shaderFormattingPlugin } from '../scripts/shader-formatting.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
-const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing', 'caustics', 'product-caustics'];
+const pages = ['index', 'basic', 'three', 'animation', 'temporal-denoising', 'advanced', 'instancing', 'caustics', 'product-caustics'];
 
 /**
  * Static build of the examples for the site (`npm run build:site`). During
@@ -20,6 +20,7 @@ export default defineConfig({
       { find: /^@meimu\/mutracer\/materialx$/, replacement: path.join(repoRoot, 'src/materialx.ts') },
       { find: /^@meimu\/mutracer\/three$/, replacement: path.join(repoRoot, 'src/three.ts') },
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
+      { find: /^@meimu\/mutracer\/temporal$/, replacement: path.join(repoRoot, 'src/temporal.ts') },
       { find: /^@meimu\/mutracer$/, replacement: path.join(repoRoot, 'src/main.ts') }
     ]
   },

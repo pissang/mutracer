@@ -76,6 +76,8 @@ network prewarm results are discarded.
 | `auxiliaryModelUrls` | Both prefilter URLs; defaults to packaged cleanAuxLarge filters, otherwise none |
 | `engine`, `precision`, `dynamicTile` | Defaults `'auto'`, `'auto'`, true; see custom networks below |
 
+For WebGPU animation sequences, use [temporal denoising](./temporal-denoising.md).
+
 ## OIDN models
 
 | `model` | Weights | Use |
