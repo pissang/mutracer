@@ -34,7 +34,7 @@ export function estimateTemporalMemory(width: number, height: number, options: N
 
   // DirectWindowGPU holds a 56-byte-per-pixel frame across its ring, two
   // per-frame sums, packed HDR overflow entries, camera records and uniforms.
-  const window = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 32 + 112;
+  const window = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 32 + 128;
 
   const pyramidBytes = scales.reduce((sum, scale) => sum + ceilDiv(width, scale) * ceilDiv(height, scale) * 8, 0);
   const grids = gridScratchBytes(width, height);
@@ -76,19 +76,20 @@ function candidates(options: NormalizedTemporalOptions) {
     const key = `${historyRadius.min}:${historyRadius.max}:${postRadius}`;
     if (seen.has(key)) return;
     seen.add(key);
-    result.push({...options, historyRadius: Object.freeze({...historyRadius}), postRadius,
-      stabilizeSparkle: options.stabilizeSparkle && postRadius > 0});
+    result.push({...options, historyRadius: Object.freeze({...historyRadius}), postRadius});
   };
   let radius = options.historyRadius;
   add(radius, options.postRadius);
-  for (const maximum of [8, 4, 2, 1]) {
+  for (const maximum of [8, 4, 2]) {
     if (radius.max <= maximum) continue;
     const min = Math.min(radius.min, maximum);
     radius = {min, max: maximum}; add(radius, options.postRadius);
   }
   for (const postRadius of [2, 1]) if (options.postRadius > postRadius) add(radius, postRadius);
-  if (radius.max > 1) { radius = {min: 1, max: 1}; add(radius, Math.min(options.postRadius, 1)); }
-  if (options.postRadius > 0) add(radius, 0);
+  if (radius.max > 1 || options.postRadius > 0) {
+    const minimumHistory = Math.min(1, radius.max);
+    add({min: minimumHistory, max: minimumHistory}, 0);
+  }
   return result;
 }
 

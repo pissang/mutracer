@@ -385,8 +385,9 @@ export class TemporalDenoiser {
     const device = this.engine.device!;
     const historySlots = this.activeOptions.mode === 'offline' ? this.activeOptions.historyRadius.max * 2 + 1 : this.activeOptions.historyRadius.max + 1;
     this.history = await TemporalGPU.create(device, width, height, 'pre', historySlots);
+    // The selected mixed window stays enabled when the post sparkle pass is disabled.
     this.window = await DirectWindowGPU.create(device, width, height, historySlots,
-      this.activeOptions.historyRadius.min !== this.activeOptions.historyRadius.max, this.activeOptions.stabilizeSparkle, 'veto');
+      this.activeOptions.historyRadius.min !== this.activeOptions.historyRadius.max, true, 'veto');
     this.window.useHistory(this.history);
     this.post = await TemporalGPU.create(device, width, height, 'post', this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1);
     if (this.activeOptions.stabilizeSparkle && this.activeOptions.postRadius > 0) this.sparkle = await createSparklePost(device);
@@ -452,7 +453,8 @@ export class TemporalDenoiser {
       readback.unmap();
       if (surfaces === 0) return true;
       this.engine.device!.queue.writeBuffer(this.window.rejects, 0, new Uint32Array(16));
-      await this.window.dispatch(frame, frame - 1, this.activeOptions.mode === 'offline', 1);
+      await this.window.dispatch(frame, frame - 1, this.activeOptions.mode === 'offline', 1,
+        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max);
       const validation = new Uint32Array(await this.window.read(this.window.rejects, 64));
       const accepted = validation[0];
       return isTemporalCameraCut(surfaces, accepted);
@@ -483,13 +485,14 @@ export class TemporalDenoiser {
 
   private async process(flush: boolean) {
     if (!this.history) return;
-    const historyReady = readyThrough(this.frames, {...this.options, postRadius: 0}, flush);
+    const historyReady = readyThrough(this.frames, {...this.activeOptions, postRadius: 0}, flush);
     while (this.nextWindow <= historyReady) {
       if (flush && this.finished.length >= TEMPORAL_MAX_FINISHED) return;
       const i = this.nextWindow++;
       const radius = this.activeOptions.historyRadius.max;
-      const neighbors = historyNeighbors(i, this.frames, this.options, radius).filter(j => this.epochs[j] === this.epochs[i]);
-      await this.window.filter(i, neighbors, this.activeOptions.mode === 'offline');
+      const neighbors = historyNeighbors(i, this.frames, this.activeOptions, radius).filter(j => this.epochs[j] === this.epochs[i]);
+      await this.window.filter(i, neighbors, this.activeOptions.mode === 'offline',
+        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max);
       await this.history.filter(i, [], false);
       const device = this.engine.device!;
       const mergeGroup = device.createBindGroup({layout: this.mergeWindowPipeline!.getBindGroupLayout(0), entries: [
@@ -516,7 +519,7 @@ export class TemporalDenoiser {
         throw new Error('Too many finished temporal frames are waiting; drain output before pushing.');
       }
       const i = this.nextOutput++;
-      const neighbors = historyNeighbors(i, this.nextWindow, {...this.options, historyRadius: {min: this.activeOptions.postRadius, max: this.activeOptions.postRadius}}, this.activeOptions.postRadius)
+      const neighbors = historyNeighbors(i, this.nextWindow, {...this.activeOptions, historyRadius: {min: this.activeOptions.postRadius, max: this.activeOptions.postRadius}}, this.activeOptions.postRadius)
         .filter(j => this.epochs[j] === this.epochs[i]);
       const bytes = this.history.bytes, device = this.engine.device!;
       let denoised: GPUBuffer;

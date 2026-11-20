@@ -62,7 +62,7 @@ fn coc(depth:f32, frame:u32)->f32 {
 
 // Direct temporal window. Each neighbor is projected once into the current frame.
 const windowBindingsAndGeometry = /* wgsl */ `
-struct Params { size: vec2u, current: u32, source: u32, delta: i32, symmetric: u32, stage: u32, mode: u32 }
+struct Params { size: vec2u, current: u32, source: u32, delta: i32, symmetric: u32, stage: u32, mode: u32, radiusMin: u32, radiusMax: u32 }
 struct Camera { vp: mat4x4f, lens: vec4f }
 const OVERFLOW_BUCKETS=4096u;
 struct Overflow { index: atomic<u32>, color: vec4f }
@@ -243,8 +243,8 @@ const startWindowWGSL = /* wgsl */ `
   let q=path.xyz;
   if(path.w<=.5){return;}
   let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
-  var radius=select(17.0,8.0,p.symmetric==1u);
-  if((p.mode & 1u)!=0u){radius=clamp(8.0+8.0*max(coc(pos.w,p.current)-2.0,0.0),8.0,16.0);}
+  var radius=f32(p.radiusMax);
+  if((p.mode & 1u)!=0u){radius=clamp(f32(p.radiusMin)+f32(p.radiusMax-p.radiusMin)*max(coc(pos.w,p.current)-2.0,0.0),f32(p.radiusMin),f32(p.radiusMax));}
   if(abs(f32(p.delta))>radius){return;}
   let partial=(p.mode & 2u)!=0u;
   let reason=rejection(x,q,nearest,partial);
@@ -358,7 +358,7 @@ export class DirectWindowGPU {
     this.camera=this.buffer('Direct window cameras',this.capacity*80);
     this.overflow=this.buffer('Direct window HDR overflow',this.capacity*4096*32);
     this.rejects=this.buffer('Direct window validation counts',64);
-    this.params=this.buffer('Direct window parameters',32,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);
+    this.params=this.buffer('Direct window parameters',48,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);
     const code=this.preserveGlints?mixedWindowWGSL:directWindowWGSL;
     const module=d.createShaderModule({code});
     const errors=(await module.getCompilationInfo()).messages.filter((row:GPUCompilationMessage)=>row.type==='error');
@@ -462,8 +462,8 @@ export class DirectWindowGPU {
       this.height*projection[5]*0.5,meta.apertureRadius??0,meta.focusDistance??1,0]));
     this.frames.set(s,frame);
   }
-  async dispatch(current:number,source:number,symmetric:boolean,stage:number) {
-    const d=this.device,p=new Uint32Array([this.width,this.height,this.slot(current),this.slot(source),source-current,symmetric?1:0,stage,Number(this.adaptiveRadius) | (Number(this.stabilizeSparkle)<<1)]);
+  async dispatch(current:number,source:number,symmetric:boolean,stage:number,radiusMin=symmetric?8:17,radiusMax=this.adaptiveRadius?16:radiusMin) {
+    const d=this.device,p=new Uint32Array([this.width,this.height,this.slot(current),this.slot(source),source-current,symmetric?1:0,stage,Number(this.adaptiveRadius) | (Number(this.stabilizeSparkle)<<1),radiusMin,radiusMax]);
     d.queue.writeBuffer(this.params,0,p);
     const h=this.history;
     const group=d.createBindGroup({layout:this.layout,entries:[this.params,this.surface,this.ids,this.hdr,h?.meta??this.camera,this.total,this.output,this.overflow,this.rejects,this.motion].map((resource,binding)=>({binding,resource:resource instanceof GPUBuffer?{buffer:resource}:resource.createView({dimension:'2d-array'})}))});
@@ -473,14 +473,14 @@ export class DirectWindowGPU {
     if(this.query){encoder.resolveQuerySet(this.query,0,2,this.resolve,0);encoder.copyBufferToBuffer(this.resolve,0,this.timestamps,0,16);}
     d.queue.submit([encoder.finish()]);
   }
-  async filter(current:number,neighbors:number[],symmetric:boolean) {
+  async filter(current:number,neighbors:number[],symmetric:boolean,radiusMin=symmetric?8:17,radiusMax=this.adaptiveRadius?16:radiusMin) {
     const frames=this.frames;
     if(frames.get(this.slot(current))!==current)throw Error('Current frame is missing.');
     for(const source of neighbors)if(frames.get(this.slot(source))!==source)throw Error('Neighbor frame is missing: '+source);
     this.device.queue.writeBuffer(this.rejects,0,new Uint32Array(16));
-    await this.dispatch(current,current,symmetric,0);
-    for(const source of neighbors)await this.dispatch(current,source,symmetric,1);
-    await this.dispatch(current,current,symmetric,2);
+    await this.dispatch(current,current,symmetric,0,radiusMin,radiusMax);
+    for(const source of neighbors)await this.dispatch(current,source,symmetric,1,radiusMin,radiusMax);
+    await this.dispatch(current,current,symmetric,2,radiusMin,radiusMax);
     return this.output;
   }
   async read(buffer:GPUBuffer=this.output,size:number=this.bytes){
@@ -495,9 +495,9 @@ export class DirectWindowGPU {
   }
   memory(){
     const pixels=this.width*this.height;
-    const history=this.capacity*pixels*(2*8+16+8)+this.capacity*80+this.capacity*4096*32;
-    const scratch=this.bytes*2+32;
-    return {slots:this.capacity,history,scratch,total:history+scratch,bytesPerPixel:40};
+    const history=this.capacity*pixels*(2*8+16+16+8)+this.capacity*80+this.capacity*4096*32;
+    const scratch=this.bytes*2+128;
+    return {slots:this.capacity,history,scratch,total:history+scratch,bytesPerPixel:56};
   }
   dispose(){this.query?.destroy();for(const r of this.resources)r.destroy();this.resources=[];}
 }

@@ -14,6 +14,29 @@ describe('temporal memory planner', () => {
     expect(plan.bytes).toBe(estimateTemporalMemory(32, 24, options));
   });
 
+  it('degrades history before post, then reaches the minimum history-one post-zero plan', () => {
+    const options = normalizeTemporalOptions();
+    expect(temporalMemoryTiers(options)).toEqual([
+      {historyRadius: {min: 8, max: 16}, postRadius: 3},
+      {historyRadius: {min: 8, max: 8}, postRadius: 3},
+      {historyRadius: {min: 4, max: 4}, postRadius: 3},
+      {historyRadius: {min: 2, max: 2}, postRadius: 3},
+      {historyRadius: {min: 2, max: 2}, postRadius: 2},
+      {historyRadius: {min: 2, max: 2}, postRadius: 1},
+      {historyRadius: {min: 1, max: 1}, postRadius: 0},
+    ]);
+  });
+
+  it('preserves zero requested history when post processing is degraded away', () => {
+    const options = normalizeTemporalOptions({historyRadius: 0, postRadius: 3});
+    expect(temporalMemoryTiers(options)).toEqual([
+      {historyRadius: {min: 0, max: 0}, postRadius: 3},
+      {historyRadius: {min: 0, max: 0}, postRadius: 2},
+      {historyRadius: {min: 0, max: 0}, postRadius: 1},
+      {historyRadius: {min: 0, max: 0}, postRadius: 0},
+    ]);
+  });
+
   it('chooses the first quality tier within the budget', () => {
     const base = normalizeTemporalOptions();
     const tiers = temporalMemoryTiers(base);
@@ -35,7 +58,7 @@ describe('temporal memory planner', () => {
     const options = normalizeTemporalOptions({mode: 'interactive', historyRadius: 8, postRadius: 1});
     const plan = planTemporalMemory(32, 24, options, {...limits, maxTextureArrayLayers: 9});
     expect(plan.historyRadius).toEqual({min: 1, max: 1});
-    expect(plan.postRadius).toBe(1);
+    expect(plan.postRadius).toBe(0);
   });
 
   it('budgets retained custom AOV copies for the offline look-ahead', () => {

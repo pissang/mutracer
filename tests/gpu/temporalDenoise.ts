@@ -1,6 +1,8 @@
 import {Engine, Render, getRecommendedDeviceDescriptor} from '../../src/main';
 import {TemporalDenoiser} from '../../src/temporal';
 import Camera from '../../src/scene/Camera';
+import {estimateTemporalMemory, temporalMemoryTiers} from '../../src/temporal/memoryPlan';
+import {normalizeTemporalOptions} from '../../src/temporal/options';
 import {DirectWindowGPU} from '../../src/renderer/WGPUTemporalWindow';
 import {TemporalGPU} from '../../src/renderer/WGPUTemporalHistory';
 import {THREESync, fromTHREECamera} from '../../src/three';
@@ -73,6 +75,25 @@ async function run() {
     await resized.converge({samples: 1, camera: cutCamera}); await sequence.push(resized);
     for await (const frame of sequence.flush()) { check((frame.index === 11 || frame.index === 12) && frame.width === 31 && frame.height === 16, 'Flush did not cut invalid motion, reallocate for new dimensions, or preserve the denoiser index'); await frame.readPixels(); }
     sequence.dispose(); resized.dispose();
+    const budgetBase = normalizeTemporalOptions({denoiser: null, stabilizeSparkle: false});
+    const reducedTier = temporalMemoryTiers(budgetBase)[2];
+    const reducedBudget = estimateTemporalMemory(64, 64, {...budgetBase, ...reducedTier});
+    const reduced = new TemporalDenoiser(engine, {denoiser: null, stabilizeSparkle: false, memoryBudget: reducedBudget});
+    reduced.attach(render); let reducedOutputs = 0;
+    for (let i = 0; i < 12; i++) {
+      await render.converge({samples: 1, sampleSequenceOffset: 200 + i}); await reduced.push(render);
+      for await (const frame of reduced.drain()) { check(frame.index === reducedOutputs, 'Reduced history changed output order'); reducedOutputs++; }
+    }
+    check(reduced.plan?.historyRadius.max === 4 && reduced.latency === 7, 'Budget plan did not update the active window radius and latency');
+    const reducedInternal = reduced as any;
+    const liveBase = reducedInternal.history.memory().total + reducedInternal.window.memory().total + reducedInternal.post.memory().total +
+      reducedInternal.motionCoverageCounts.size + reducedInternal.composeParams.size +
+      Object.values(reducedInternal.composeBuffers as Record<string, GPUBuffer>).reduce((sum, buffer) => sum + buffer.size, 0);
+    const exactReducedPeak = liveBase + 64 * 64 * (4 * 80 + (3 + 2) * 16);
+    check(reduced.plan!.bytes === exactReducedPeak, `Temporal plan did not match live allocations and bounded queue: ${reduced.plan!.bytes} vs ${exactReducedPeak} (base ${liveBase}, pre ${reducedInternal.history.memory().total}, window ${reducedInternal.window.memory().total}, post ${reducedInternal.post.memory().total}, expected ${estimateTemporalMemory(64, 64, {...budgetBase, ...reduced.plan})})`);
+    for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
+    check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
+    reduced.dispose();
     const oidnRender = new Render(engine, {width: 64, height: 64, maxSamples: 3,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
     const oidnTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false,
