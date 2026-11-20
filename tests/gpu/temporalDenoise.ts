@@ -40,6 +40,7 @@ async function run() {
   temporal.attach(render);
   try {
     await render.converge({samples: 1}); const source = (await render.readPixels('hdr')).data; await temporal.push(render);
+    check(!(temporal as any).post, 'The zero post radius allocated a post history');
     const frames = []; let accumulated: Float32Array | undefined;
     for await (const frame of temporal.flush()) { check(engine.display.present(frame) === frame, 'Temporal frame was not presented'); await engine.display.toBlob(frame); frames.push(await frame.readPixels()); accumulated = (await frame.readPixels('accumulated')).data; }
     check(frames.length === 1, 'Flush did not yield one frame');

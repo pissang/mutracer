@@ -425,8 +425,11 @@ export class TemporalDenoiser {
     this.window = await DirectWindowGPU.create(device, width, height, historySlots,
       this.activeOptions.historyRadius.min !== this.activeOptions.historyRadius.max, true, 'veto');
     this.window.useHistory(this.history);
-    this.post = await TemporalGPU.create(device, width, height, 'post', this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1, materialCount);
-    if (this.activeOptions.stabilizeSparkle && this.activeOptions.postRadius > 0) this.sparkle = await createSparklePost(device);
+    if (this.activeOptions.postRadius > 0) {
+      const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
+      this.post = await TemporalGPU.create(device, width, height, 'post', postSlots, materialCount);
+      if (this.activeOptions.stabilizeSparkle) this.sparkle = await createSparklePost(device);
+    }
     if (this.activeOptions.denoiser?.type === 'oidn') {
       const {type: _type, ...oidnOptions} = this.activeOptions.denoiser;
       this.oidn = await createOIDNFilter(this.engine, oidnOptions as OIDNFilterOptions);
