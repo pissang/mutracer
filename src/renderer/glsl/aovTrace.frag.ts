@@ -14,6 +14,7 @@ const surface = /* glsl */ `
 uint aovWord(int index) { ivec2 size = textureSize(aovScene,0); uvec4 v = texelFetch(aovScene, ivec2((index/4)%size.x, (index/4)/size.x),0); return v[index%4]; }
 vec3 aovVector(int offset){return vec3(uintBitsToFloat(aovWord(offset)),uintBitsToFloat(aovWord(offset+1)),uintBitsToFloat(aovWord(offset+2)));}
 mat4 aovMatrix(int offset) { mat4 m; for (int i=0;i<4;i++) for(int j=0;j<4;j++) m[i][j]=uintBitsToFloat(aovWord(offset+i*4+j)); return m; }
+vec3 aovSnapshotVertex(uint offset,uint vertex) { uint word=offset+vertex*3u; return vec3(uintBitsToFloat(aovWord(int(word))),uintBitsToFloat(aovWord(int(word+1u))),uintBitsToFloat(aovWord(int(word+2u)))); }
 // Previous-frame pixel, 1/w and view depth/w of a current world point. Both
 // reciprocal terms are affine in screen space for any projective camera.
 vec4 aovPreviousProjection(vec3 world, mat4 transform, mat4 previousViewProjection, vec2 size) {
@@ -54,7 +55,7 @@ bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMate
 export function aovTraceFragment(center: boolean, primary = false) {
   const shader = new FragmentShader({name: center ? 'AOV center' : 'AOV accumulation',
     outputs: center ? (primary ? ['id','motion','normalDepth','centerPosition'] : ['id','motion']) : ['geometry','position','diffuse','specular'],
-    outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true},
+    outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true, AOV_TRACE: true},
     includes: [core,materials,intersect,random],
     uniforms: {viewProjectionInv: Shader.uniform('mat4'), projectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
       cameraApertureRadius: Shader.uniform('float',0), cameraFocusDistance: Shader.uniform('float',10),
@@ -89,16 +90,24 @@ void main() {
   // Keep current depth in z for next-frame visibility; w carries previous depth when valid.
   out_motion.z=dot(si.position-aovVector(36),aovVector(40));
   if(aovWord(offset+2)==0u)return;
-  mat4 transform=aovMatrix(offset+4), previousViewProjection=aovMatrix(0);
-  vec4 oldWorld=transform*vec4(si.position,1.0);
+  mat4 transform=aovMatrix(offset+4), projectionTransform=transform,previousViewProjection=aovMatrix(0);
+  vec4 oldWorld=transform*vec4(si.position,1.0);vec3 projectionPoint=si.position,oldFace=si.faceNormal;
+  if(aovWord(offset+3)!=0u) {
+    ivec3 indices=floatBitsToInt(fetchBVH(si.triangleIndex).xyz);
+    vec3 p0=aovSnapshotVertex(aovWord(offset+3),uint(indices.x)),p1=aovSnapshotVertex(aovWord(offset+3),uint(indices.y)),p2=aovSnapshotVertex(aovWord(offset+3),uint(indices.z));
+    vec3 bary=vec3(si.barycentrics,1.0-si.barycentrics.x-si.barycentrics.y);
+    vec3 oldP0=(transform*vec4(p0,1.0)).xyz,oldP1=(transform*vec4(p1,1.0)).xyz,oldP2=(transform*vec4(p2,1.0)).xyz;
+    oldWorld=vec4(oldP0*bary.x+oldP1*bary.y+oldP2*bary.z,1.0);projectionPoint=oldWorld.xyz;oldFace=normalize(cross(oldP1-oldP0,oldP2-oldP0));
+    projectionTransform=mat4(1.0);
+  }
   vec4 oldClip=previousViewProjection*oldWorld;
   if(oldClip.w<=0.0)return;
   vec3 oldNdc=oldClip.xyz/oldClip.w;vec2 oldPixel=(oldNdc.xy*0.5+0.5)*viewportSize;
   if(any(lessThan(oldPixel,vec2(0.0)))||any(greaterThanEqual(oldPixel,viewportSize))||abs(oldNdc.z)>1.0)return;
   uvec4 identity=texelFetch(previousId,ivec2(oldPixel),0);float oldDepth=texelFetch(previousMotion,ivec2(oldPixel),0).z;
   if(any(notEqual(identity.xy,out_id.xy)))return;
-  vec4 origin=aovPreviousProjection(si.position,transform,previousViewProjection,viewportSize);
-  float planeDepth=aovPlaneDepthAtPreviousCenter(si.position,si.faceNormal,transform,previousViewProjection,viewportSize,max(out_motion.z,1e-3)*1e-2,origin);
+  vec4 origin=aovPreviousProjection(projectionPoint,projectionTransform,previousViewProjection,viewportSize);
+  float planeDepth=aovPlaneDepthAtPreviousCenter(projectionPoint,oldFace,projectionTransform,previousViewProjection,viewportSize,max(out_motion.z,1e-3)*1e-2,origin);
   if(planeDepth<=0.0||abs(oldDepth-planeDepth)>max(1e-4,planeDepth*1e-3))return;
   float previousDepth=dot(oldWorld.xyz-aovVector(44),aovVector(48));
   out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,previousDepth);

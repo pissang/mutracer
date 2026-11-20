@@ -1201,6 +1201,7 @@ class WebGLRayTracePass {
 
   prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
     if (!kinds.length) return true;
+    state.history.captureDeformation = kinds.includes('motion');
     // An AOV channel may be the first thing to render a new scene.
     if (!this.prepare()) return false;
     if (!this._preparedMeshData || !this._tlas) return true;

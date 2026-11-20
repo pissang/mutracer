@@ -70,6 +70,9 @@ struct SurfaceInteraction {
   int triangleIndex;
   int instanceIndex;
   int materialIndex;
+#ifdef AOV_TRACE
+  vec2 barycentrics;
+#endif
 
   int mediumType;
   vec3 mediumExtinction;

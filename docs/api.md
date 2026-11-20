@@ -416,12 +416,14 @@ triangle order. A ray exactly on a shared edge can select either adjacent
 triangle; host/GPU rounding can choose different IDs at that boundary.
 
 Motion history belongs to each render and advances when it produces an AOV
-frame. Camera pose, projection changes and rigid object transforms can
-reproject across updates. The first frame, changed dimensions, missing
-identities, changed topology or vertex positions, and failed visibility
-correspondence invalidate motion. Device recovery also clears history.
-Deformed vertices have no motion estimate; validity 0 must not be treated as a
-stationary surface.
+frame. Camera pose, projection changes, rigid object transforms and geometry
+vertex updates with unchanged topology can reproject across frames; report
+vertex-only edits with `Geometry.markVerticesUpdated()`. The first frame,
+changed dimensions, missing identities, topology changes, and failed visibility
+correspondence invalidate motion. Device recovery also clears history. Motion
+validity 0 must not be treated as a stationary surface. Requesting motion keeps
+a previous CPU copy of each geometry's positions (about 12 bytes per vertex);
+deformed geometry adds about 12 GPU bytes per vertex to that frame's scene data.
 
 Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,

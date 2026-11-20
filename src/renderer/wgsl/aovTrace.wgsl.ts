@@ -24,6 +24,10 @@ fn aovMatrix(offset: u32) -> mat4x4f {
     bitcast<vec4f>(vec4u(aovScene[offset+12u], aovScene[offset+13u], aovScene[offset+14u], aovScene[offset+15u])));
 }
 fn aovVector(offset:u32)->vec3f {return bitcast<vec3f>(vec3u(aovScene[offset],aovScene[offset+1u],aovScene[offset+2u]));}
+fn aovSnapshotVertex(offset:u32, vertex:u32)->vec3f {
+  let word=offset+vertex*3u;
+  return bitcast<vec3f>(vec3u(aovScene[word],aovScene[word+1u],aovScene[word+2u]));
+}
 // Previous-frame pixel, 1/w and view depth/w of a current world point. Both
 // reciprocal terms are affine in screen space for any projective camera.
 fn aovPreviousProjection(world: vec3f, transform: mat4x4f, size: vec2f) -> vec4f {
@@ -136,8 +140,21 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   // Keep current depth in z for next-frame visibility; w carries previous depth when valid.
   aovCenter[index].motion.z = dot(si.position-aovVector(36u),aovVector(40u));
   if (aovScene[offset+2u] == 0u) { return; }
-  let transform = aovMatrix(offset+4u);
-  let oldWorld = transform * vec4f(si.position,1.0);
+  var transform = aovMatrix(offset+4u); var projectionTransform=transform;
+  var oldWorld=transform*vec4f(si.position,1.0); var projectionPoint=si.position; var oldFace=si.faceNormal;
+  if (aovScene[offset+3u] != 0u) {
+    let record=bvhBuffer[u32(si.triangleIndex)];
+    let indices=bitcast<vec3u>(record.xyz);
+    let p0=aovSnapshotVertex(aovScene[offset+3u],indices.x);
+    let p1=aovSnapshotVertex(aovScene[offset+3u],indices.y);
+    let p2=aovSnapshotVertex(aovScene[offset+3u],indices.z);
+    let bary=vec3f(si.barycentrics,1.0-si.barycentrics.x-si.barycentrics.y);
+    let oldP0=(transform*vec4f(p0,1.0)).xyz; let oldP1=(transform*vec4f(p1,1.0)).xyz; let oldP2=(transform*vec4f(p2,1.0)).xyz;
+    oldWorld=vec4f(oldP0*bary.x+oldP1*bary.y+oldP2*bary.z,1.0);
+    projectionPoint=oldWorld.xyz;
+    oldFace=normalize(cross(oldP1-oldP0,oldP2-oldP0));
+    projectionTransform=mat4x4f(vec4f(1,0,0,0),vec4f(0,1,0,0),vec4f(0,0,1,0),vec4f(0,0,0,1));
+  }
   let oldClip = aovMatrix(0u) * oldWorld;
   if (oldClip.w <= 0.0) { return; }
   let oldNdc=oldClip.xyz/oldClip.w;
@@ -145,8 +162,8 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   if (any(oldPixel < vec2f(0.0)) || any(oldPixel >= vec2f(size)) || abs(oldNdc.z)>1.0) { return; }
   let previous=aovPrevious[u32(oldPixel.x)+u32(oldPixel.y)*size.x];
   if (any(previous.identity.xy != aovCenter[index].identity.xy)) { return; }
-  let origin = aovPreviousProjection(si.position, transform, vec2f(size));
-  let planeDepth = aovPlaneDepthAtPreviousCenter(si.position, si.faceNormal, transform, vec2f(size),
+  let origin = aovPreviousProjection(projectionPoint, projectionTransform, vec2f(size));
+  let planeDepth = aovPlaneDepthAtPreviousCenter(projectionPoint, oldFace, projectionTransform, vec2f(size),
     max(aovCenter[index].motion.z, 1e-3) * 1e-2, origin);
   if (planeDepth <= 0.0 || abs(previous.motion.z-planeDepth)>max(1e-4,planeDepth*1e-3)) { return; }
   let motion=(oldPixel-(vec2f(id.xy)+0.5))*vec2f(1.0,-1.0);

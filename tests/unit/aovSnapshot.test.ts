@@ -147,6 +147,7 @@ describe('GPU AOV snapshots', () => {
   it('keeps immutable primitive metadata resident across camera edits and resets', () => {
     const {state, write} = fixture();
     const prefix = new Uint32Array(80), primitives = new Uint32Array(1000);
+    prefix[17] = prefix.length;
     state.setScene(prefix, primitives);
     expect(write).toHaveBeenCalledTimes(2);
     expect(state.scene!.size).toBe(prefix.byteLength + primitives.byteLength);
@@ -159,7 +160,7 @@ describe('GPU AOV snapshots', () => {
     expect(write).toHaveBeenCalledTimes(2);
     expect(write.mock.calls[1][1]).toBe(prefix.byteLength);
     write.mockClear();
-    const smaller = prefix.slice(0, 60); state.setScene(smaller, primitives);
+    const smaller = prefix.slice(0, 60); smaller[17] = smaller.length; state.setScene(smaller, primitives);
     expect(write).toHaveBeenCalledTimes(2);
     expect(write.mock.calls[1][1]).toBe(smaller.byteLength);
     write.mockClear();
