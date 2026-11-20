@@ -1,6 +1,7 @@
 import {Engine, Render, getRecommendedDeviceDescriptor} from '../../src/main';
 import {TemporalDenoiser} from '../../src/temporal';
 import {DirectWindowGPU} from '../../src/renderer/WGPUTemporalWindow';
+import {TemporalGPU} from '../../src/renderer/WGPUTemporalHistory';
 import {THREESync, fromTHREECamera} from '../../src/three';
 import * as THREE from 'three';
 
@@ -86,9 +87,10 @@ async function run() {
     for await(const frame of narrowTemporal.flush()){await frame.readPixels();}narrowTemporal.dispose();narrowRender.dispose();
     const fullIdResult = await exerciseFullWidthIds(device);
     const overflowResult = await exerciseFullOverflow(device);
+    const floatingPostResult = await exerciseFloatingPostCodes(device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -144,6 +146,22 @@ async function exerciseFullOverflow(device: GPUDevice) {
     check(fallbackPixels===pixels-4096,`Expected ${pixels-4096} current-only overflow pixels, got ${fallbackPixels}`);
     return {pixels,tableEntries:4096,fallbackPixels};
   }finally{window.dispose();}
+}
+
+async function exerciseFloatingPostCodes(device: GPUDevice) {
+  const width=8,height=8,pixels=width*height,linear=.5;
+  const input=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)input.set([linear,linear,linear,1],i*4);
+  const buffer=device.createBuffer({size:input.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(buffer,0,input);
+  const post=await TemporalGPU.create(device,width,height,'post',1);
+  try{
+    await post.setDisplayBuffer(0,buffer);await post.filter(0,[]);
+    const output=new Float32Array(await post.read());
+    const expected=(1.055*Math.pow(linear,1/2.4)-.055)*255;
+    check(Math.abs(output[0]-expected)<.1,`Post code lost float precision: ${output[0]} vs ${expected}`);
+    check(output[0]!==Math.round(output[0]),'Post code was rounded to an integer');
+    return {linear,expected,stored:output[0]};
+  }finally{post.dispose();buffer.destroy();}
 }
 
 async function blobPixels(blob:Blob){const image=await createImageBitmap(blob);const canvas=new OffscreenCanvas(image.width,image.height);const context=canvas.getContext('2d')!;context.drawImage(image,0,0);return context.getImageData(0,0,image.width,image.height).data;}

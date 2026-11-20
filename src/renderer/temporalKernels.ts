@@ -187,7 +187,7 @@ struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, 
   if (p.stage==4u) {
     let linear=max(color.rgb,vec3f(0));
     let encoded=select(1.055*pow(linear,vec3f(1.0/2.4))-0.055,12.92*linear,linear<=vec3f(0.0031308));
-    color=vec4f(floor(clamp(encoded,vec3f(0),vec3f(1))*255.0+0.5),255);
+    color=vec4f(clamp(encoded,vec3f(0),vec3f(1))*255.0,255);
   }
   textureStore(dst,vec2i(g.xy),i32(p.a),color);
 }

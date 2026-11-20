@@ -1,5 +1,5 @@
-// The OIDN snapshots in the post ring hold sRGB codes (0–255). Read only the
-// original snapshots so that one impulsive frame cannot propagate recursively.
+// The OIDN snapshots in the post ring hold floating-point sRGB codes (0–255).
+// Read only the original snapshots so that one impulsive frame cannot propagate recursively.
 const postBindings = /* wgsl */ `
 struct Params { size: vec2u, slot: u32, capacity: u32, past: i32, future: i32 }
 struct Camera { vp: mat4x4f, lens: vec4f }
