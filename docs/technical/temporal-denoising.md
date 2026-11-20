@@ -318,9 +318,26 @@ from `dev`.
      plus three AOV storage buffers; if a new binding does not fit, pack the
      snapshot into the existing AOV scene buffer. On WebGL, use a texture like
      `aovScene`.
-2. **Previous depth.** Write the previous-frame camera-forward depth of the
-   point into `motion.z`. It is already computed for the visibility test.
-   Document it in the `motion` row.
+2. **Previous depth.**
+   - **Today.** Internally, `AovCenter.motion.z` holds the current
+     camera-forward depth. It is history for the next frame's visibility test,
+     which reads `previous.motion.z`. Every public reader writes 0:
+     - `WGPUAov.ts` readback;
+     - `aovResolve.wgsl.ts`, which feeds custom-denoiser snapshots;
+     - `WebGLAov.ts` readback;
+     - the native borrow shaders.
+   - **Change.** Public `motion.z` becomes the camera-forward depth of the same
+     surface point in the previous frame, in `centerDepth` units. Valid pixels
+     carry that depth; invalid pixels are 0. Take the point at its previous
+     position (the current-to-previous transform, and later the deformation
+     snapshot) and measure it with the previous camera's position and forward
+     axis, so that orthographic cameras are also correct.
+   - **Storage.** Keep the current depth available as history. Prefer storing
+     the previous depth without growing `AovCenter`, which the native host
+     mirrors. If a new lane is cleaner, extend the struct together with its
+     mirrors and contract tests.
+   - **Readers.** Display mapping ignores `z`. Update the `motion` row in
+     `docs/api.md`.
 3. **Projection changes.**
    - Focal-length animation and dolly-zoom must not invalidate `motion`. The
      previous view-projection already projects the point, so invalidate only
