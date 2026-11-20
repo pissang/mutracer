@@ -72,9 +72,9 @@ describe('temporal memory planner', () => {
     const base = estimateTemporalMemory(32, 24, options);
     const withMaterials = estimateTemporalMemory(32, 24, options, 3);
     const postSlots = options.postRadius + 1;
-    expect(withMaterials - base).toBe(3 * 8 + postSlots * ((3 + 1) * 4 - 8));
-    const withoutPost = normalizeTemporalOptions({historyRadius: 1, postRadius: 0, mode: 'interactive'});
-    expect(estimateTemporalMemory(32, 24, withoutPost, 3) - estimateTemporalMemory(32, 24, withoutPost)).toBe(3 * 8);
+    expect(withMaterials - base).toBe(3 * 8 - 8 + postSlots * ((3 + 1) * 4 - 8));
+    const withoutPost = normalizeTemporalOptions({historyRadius: 1, postRadius: 0, mode: 'interactive', stabilizeSparkle: false});
+    expect(estimateTemporalMemory(32, 24, withoutPost, 3) - estimateTemporalMemory(32, 24, withoutPost)).toBe(3 * 8 - 8);
   });
 
   it('offers only the next eligible tier for a single OOM retry', () => {

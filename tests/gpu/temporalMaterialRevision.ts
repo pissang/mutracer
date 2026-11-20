@@ -65,6 +65,8 @@ async function run(){
     check(Math.abs(weights[leftAt+3]-1)<1e-5,`Changed material received post history weight ${weights[leftAt+3]}.`);
     check(weights[rightAt+3]>1.01,`Unchanged material lost post history weight ${weights[rightAt+3]}.`);
     for await(const frame of temporal.flush())await frame.readPixels();
+    check(internal.materialRevisionFrames.size<=internal.activeOptions.postRadius,
+      `Post revision snapshots were not bounded: ${internal.materialRevisionFrames.size}`);
     check(errors.length===0,`Uncaptured GPU errors: ${errors.join('; ')}`);
     return {leftMaterialId:leftMaterial.aovId,rightMaterialId:rightMaterial.aovId,leftRevision,rightRevision,
       changedMaterialWeight:weights[leftAt+3],unchangedMaterialWeight:weights[rightAt+3],globalRevision:engine._temporalRevision,uncapturedErrors:errors.length};

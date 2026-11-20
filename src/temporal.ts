@@ -190,7 +190,7 @@ export class TemporalDenoiser {
   private spatialOutputs = new Map<number, GPUBuffer>();
   private epoch = 0;
   private epochs: number[] = [];
-  private materialRevisionFrames: Map<number,number>[] = [];
+  private materialRevisionFrames = new Map<number,Map<number,number>>();
   private globalIndices: number[] = [];
   private sampleCounts: number[] = [];
   private displaySettings: Required<DisplaySettings>[] = [];
@@ -306,7 +306,7 @@ export class TemporalDenoiser {
           this.engine.device!.queue.submit([encoder.finish()]); this.customAovs.set(frame, copies);
         }
       });
-      this.materialRevisionFrames[frame]=new Map(revisionEntries);
+      if(this.activeOptions.postRadius>0)this.materialRevisionFrames.set(frame,new Map(revisionEntries));
       this.frames++;
       this.globalIndices[frame] = this.pushIndex;
       this.pushIndex++;
@@ -561,12 +561,12 @@ export class TemporalDenoiser {
       let denoised: GPUBuffer;
       if (this.activeOptions.postRadius === 0) { denoised = this.spatialOutputs.get(i)!; this.spatialOutputs.delete(i); }
       else {
-        const currentRevisions=this.materialRevisionFrames[i]??new Map<number,number>();
+        const currentRevisions=this.materialRevisionFrames.get(i)??new Map<number,number>();
         const changedByFrame=new Map<number,readonly number[]>();
         for(const j of neighbors){
-          const previous=this.materialRevisionFrames[j]??new Map<number,number>();
+          const previous=this.materialRevisionFrames.get(j)??new Map<number,number>();
           const changed=[...currentRevisions].filter(([id,revision])=>previous.get(id)!==revision).map(([id])=>id);
-          changedByFrame.set(j,[...new Set(changed)].sort((a,b)=>a-b));
+          changedByFrame.set(j,changed);
         }
         await this.post.filter(i, neighbors, false, undefined, changedByFrame); this.sparkle?.filter(this.post, i, neighbors);
         denoised = copyBuffer(device, this.post.output, bytes, 'Temporal finished output');
@@ -586,11 +586,12 @@ export class TemporalDenoiser {
         accumulated: this.accumulated.get(i)!
       },source,this.activeOptions.denoiser?.type === 'oidn',this.activeOptions.postRadius > 0));
       this.accumulated.delete(i);
+      this.materialRevisionFrames.delete(i-this.activeOptions.postRadius);
     }
   }
 
   private resetShot() {
-    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.materialRevisionFrames.length=0; this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
+    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.materialRevisionFrames.clear(); this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
     for (const buffer of this.accumulated.values()) buffer.destroy(); this.accumulated.clear();
     for (const buffer of this.spatialOutputs.values()) buffer.destroy(); this.spatialOutputs.clear();
     for (const aovs of this.customAovs.values()) for (const buffer of Object.values(aovs)) buffer?.destroy(); this.customAovs.clear();
