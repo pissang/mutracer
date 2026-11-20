@@ -4,7 +4,7 @@ import {aovCompactStorage} from './aovCompact.wgsl.js';
 
 // Web-only storage specialization. The default shader (also used by native)
 // remains byte-identical; geometry/material evaluation comes from that source.
-export function createAovTraceDisplayWgsl(materialHooks: MaterialShaderHooks = {}) { return aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + createAovTraceWgsl(materialHooks)
+export function createAovTraceDisplayWgsl(materialHooks: MaterialShaderHooks = {}, hasCoatNormals = false) { return aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + createAovTraceWgsl(materialHooks, hasCoatNormals)
   .replace(`var<storage, read_write> aovAccum: array<AovAccumulation>;`, `var<storage, read_write> aovAccum: array<u32>;`)
   .replace(`fn aovMatrix(`, /* wgsl */ `fn aovLoad(index: u32) -> AovAccumulation {
   if(AOV_COMPACT){
@@ -52,8 +52,6 @@ fn aovMatrix(`)
       if ((colorMask & 2u) != 0u) { pixel.specular += vec4f(layer * (metal * base + (1.0 - metal) * material.specularWeight * material.specularColor * f * f), 1.0); }
     }
   }
-  if (!AOV_DISPLAY && AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {`)
-  .replace(`pixel.diffuse+=vec4f(reflectance.diffuse,1.0);`, `if ((aovParameters.w & 8u) != 0u) { pixel.diffuse+=vec4f(reflectance.diffuse,1.0); }`)
-  .replace(`pixel.specular+=vec4f(reflectance.specular,1.0);`, `if ((aovParameters.w & 16u) != 0u) { pixel.specular+=vec4f(reflectance.specular,1.0); }`);
+  if (!AOV_DISPLAY && AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {`);
 }
 export default createAovTraceDisplayWgsl();

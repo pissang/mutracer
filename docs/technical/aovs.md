@@ -11,9 +11,11 @@ why both pairs exist, how they are named and how they are stored.
 The albedo kinds are directional-hemispherical reflectance: the fraction of
 uniform incident light that the prepared OpenPBR BSDF reflects toward the view
 direction. They integrate the BSDF by quadrature (`aovReflectance*.wgsl.ts` and
-`.glsl.ts`), so they cost more than the other outputs and support only materials
-the quadrature models. Coat, fuzz, anisotropy and similar hits are marked
-unsupported.
+`.glsl.ts`), so they cost more than the other outputs. The WebGPU and WebGL
+quadratures integrate the clearcoat and substrate with separate GGX proposals.
+The result adds the coat to the substrate's specular reflectance and applies
+the BSDF's coat attenuation to both substrate terms. See
+[surface outputs](../api.md#surface-outputs) for material coverage.
 
 The color kinds read resolved material inputs without integration:
 

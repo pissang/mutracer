@@ -2,11 +2,33 @@ import proposals from './aovReflectanceSamples.glsl.js';
 
 // GLSL mirror of the shared 256-proposal, fused OpenPBR reflection quadrature.
 export default proposals + /* glsl */ `
-void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpecular, out vec3 diffuse, out vec3 specular) {
+vec3 aovCoatReflectance(OpenPbrPreparedBsdf prepared) {
+  OpenPbrResolvedMaterial material = prepared.material;
+  vec3 view = prepared.viewLocal;
+  vec2 alpha = openpbr_roughness_to_alpha(material.coatRoughness, 0.0);
+  material.alphaX = alpha.x;
+  material.alphaY = alpha.y;
+  vec3 sum = vec3(0.0);
+  for (uint i = 0u; i < uint(NO_UNROLL(128)); i++) {
+    vec2 u = vec2((float(i) + 0.5) / 128.0,
+      fract(float(reverseBits(i)) * 2.3283064365386963e-10 + 0.37));
+    vec3 halfVector = sampling_ggx_visible_normal(view, alpha, u);
+    vec3 light = reflect(-view, halfVector);
+    if (light.z <= 0.0) { continue; }
+    vec3 fresnel = vec3(openpbr_dielectric_fresnel(abs(dot(view, halfVector)), 1.0 / material.coatIor));
+    float pdf = 0.0;
+    vec3 response = openpbr_eval_microfacet_reflection(material, view, light, halfVector, fresnel, pdf);
+    if (pdf > 0.0) { sum += response * (light.z / pdf); }
+  }
+  return (prepared.weights[OPENPBR_LOBE_COAT] / 128.0) * sum;
+}
+void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpecular, out vec3 diffuse, out vec3 specular, out vec3 coat) {
   diffuse=vec3(0.0); specular=vec3(0.0);
+  coat = vec3(0.0);
   vec3 view = prepared.viewLocal;
   if (view.z <= 1e-6) { return; }
   OpenPbrResolvedMaterial material = prepared.material;
+  bool coated = material.coatWeight > 0.0;
   vec2 alpha = vec2(material.alphaX, material.alphaY);
   float viewMasking = sampling_ggx_smith_g1(view, alpha);
   float diffuseWeight = prepared.weights[OPENPBR_LOBE_DIFFUSE];
@@ -46,19 +68,21 @@ void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpe
     vec3 evaluatedLight = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.basis, light));
     if (evaluatedLight.z <= 0.0) { continue; }
     float scale = abs(evaluatedLight.z) / (pdf * float(count));
+    vec3 substrateScale = vec3(1.0);
+    if (coated) { substrateScale = openpbr_coat_base_scale(prepared, evaluatedLight.z); }
     if (wantDiffuse && diffuseWeight > 0.0) {
       float compensation = prepared.diffuseSpecularEnergyCompensation * openpbr_opaque_energy_complement(
         prepared.specularEtaTOverEtaI, prepared.specularAlpha, abs(evaluatedLight.z));
       float unusedPdf = 0.0;
       diffuse += diffuseWeight * openpbr_eval_diffuse(material, prepared.diffuseColor,
-        view, evaluatedLight, compensation, unusedPdf) * scale;
+        view, evaluatedLight, compensation, unusedPdf) * scale * substrateScale;
     }
     if (wantSpecular) {
       vec3 evaluatedHalf = normalize(view + evaluatedLight);
       float viewHalf = abs(dot(view, evaluatedHalf));
       vec3 fresnel = vec3(0.0);
       if (specularWeight > 0.0) {
-        vec3 dielectric = vec3(openpbr_dielectric_fresnel(viewHalf, material.relativeIor));
+        vec3 dielectric = vec3(openpbr_substrate_fresnel(prepared, viewHalf, true));
         if (material.thinWalled) { dielectric = openpbr_thin_wall_reflection_coefficient(dielectric, material.transmissionWeight); }
         fresnel += specularWeight * material.specularColor * dielectric;
       }
@@ -79,9 +103,11 @@ void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpe
         float factor = min(factors * prepared.dielectricMsReflectionRatio, 1.0 / abs(evaluatedLight.z));
         reflection += prepared.dielectricMsReflectionScale * factor * INVPI;
       }
-      specular += reflection * scale;
+      specular += reflection * scale * substrateScale;
     }
   }
-  return;
+  if (wantSpecular && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+    coat = aovCoatReflectance(prepared);
+  }
 }
 `;
