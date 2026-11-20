@@ -42,6 +42,12 @@ fn stableMatrix(offset:u32)->mat4x4f {
     bitcast<vec4f>(vec4u(stableMetadata[offset+8u],stableMetadata[offset+9u],stableMetadata[offset+10u],stableMetadata[offset+11u])),
     bitcast<vec4f>(vec4u(stableMetadata[offset+12u],stableMetadata[offset+13u],stableMetadata[offset+14u],stableMetadata[offset+15u])));
 }
+fn reprojectNormal(transform: mat4x4f, normal: vec3f) -> vec3f {
+  let a = transform[0].xyz;
+  let b = transform[1].xyz;
+  let c = transform[2].xyz;
+  return normalize(mat3x3f(cross(b,c), cross(c,a), cross(a,b)) * normal / dot(a, cross(b,c)));
+}
 fn stableIdentity(pixel:FramePixel)->vec4u {
   if(correspondence.enabled.y==0u || (pixel.identity.w&1u)==0u){return vec4u(0xffffffffu);}
   let o=52u+pixel.identity.x*24u;
@@ -59,8 +65,7 @@ fn cameraMotion(pixel: FramePixel, size: vec2u) -> vec3f {
       let offset=52u+pixel.identity.x*24u;
       if(stableMetadata[offset+2u]==0u){return vec3f(0.0);}
       let transform=stableMatrix(offset+4u);oldPosition=transform*position;
-      let a=transform[0].xyz;let b=transform[1].xyz;let c=transform[2].xyz;
-      oldNormal=normalize(mat3x3f(cross(b,c),cross(c,a),cross(a,b))*oldNormal/dot(a,cross(b,c)));
+      oldNormal=reprojectNormal(transform,oldNormal);
     }
     let b = correspondence.previousViewProjection * oldPosition;
     if (a.w <= 0.0 || b.w <= 0.0 || !all(abs(a) < vec4f(3.402823e38))
@@ -89,6 +94,9 @@ fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u
     let normal = bitcast<vec3f>(reflection.normalInstance.xyz);
     let point = pixel.positionDepth.xyz;
     let endpoint = reflection.endpointDistance.xyz;
+    var previousPoint = point;
+    var previousNormal = normal;
+    var previousGeometricNormal = pixel.geometricNormal.xyz;
     var previousEndpoint = endpoint;
     if (correspondence.enabled.z == 0u) {
         if (correspondence.enabled.y == 0u || reflection.normalInstance.w == 0x07ffffffu) { return vec3f(0.0); }
@@ -96,13 +104,13 @@ fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u
         let endpointOffset = 52u + reflection.normalInstance.w * 24u;
         if (stableMetadata[surfaceOffset + 2u] == 0u || stableMetadata[endpointOffset + 2u] == 0u) { return vec3f(0.0); }
         let surfaceTransform = stableMatrix(surfaceOffset + 4u);
-        let oldNormal = normalize((surfaceTransform * vec4f(normal, 0.0)).xyz);
-        if (dot(oldNormal, normal) < 0.9999 ||
-            distance((surfaceTransform * vec4f(point, 1.0)).xyz, point) > 1e-3) { return vec3f(0.0); }
+        previousPoint = (surfaceTransform * vec4f(point, 1.0)).xyz;
+        previousNormal = reprojectNormal(surfaceTransform, normal);
+        previousGeometricNormal = reprojectNormal(surfaceTransform, previousGeometricNormal);
         previousEndpoint = (stableMatrix(endpointOffset + 4u) * vec4f(endpoint, 1.0)).xyz;
     }
     let now = opticalReflectionImage(point, normal, endpoint);
-    let old = opticalReflectionImage(point, normal, previousEndpoint);
+    let old = opticalReflectionImage(previousPoint, previousNormal, previousEndpoint);
     let motion = opticalImageMotion(now, old, correspondence.currentViewProjection,
         correspondence.previousViewProjection, vec2f(size));
     if (motion.z == 0.0) { return vec3f(0.0); }
@@ -113,7 +121,9 @@ fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u
     let p = vec2u(floor(lookup));
     let index = p.x + (size.y - 1u - p.y) * size.x;
     let previous = previousPixels[index];
-    if ((previous.identity.w & 161u) != 129u || dot(previous.geometricNormal.xyz, pixel.geometricNormal.xyz) < 0.999) {
+    if ((previous.identity.w & 161u) != 129u ||
+        dot(previous.geometricNormal.xyz, previousGeometricNormal) < 0.999 ||
+        abs(dot(previous.positionDepth.xyz - previousPoint, previousGeometricNormal)) > 1e-3) {
         return vec3f(0.0);
     }
     if (correspondence.enabled.y != 0u) {
@@ -132,26 +142,26 @@ fn transmissionMotion(pixel: FramePixel, optical: ReflectionRecord, size: vec2u)
     let endpoint = optical.endpointDistance.xyz;
     let ior = pixel.roughnessIor.w / pixel.roughnessIor.z;
     let exit = bitcast<vec3f>(optical.normalInstance.xyz);
-    let thickness = max(0.0, dot(point - exit, normal));
     let surfaceOffset = 52u + pixel.identity.x * 24u;
     let endpointInstance = optical.normalInstance.w & OPT_INSTANCE_INDEX;
     let endpointOffset = 52u + endpointInstance * 24u;
     var previousEndpoint = endpoint;
+    var previousPoint = point;
+    var previousNormal = normal;
+    var previousExit = exit;
     if (correspondence.enabled.z == 0u) {
         if (correspondence.enabled.y == 0u || endpointInstance == OPT_INSTANCE_INDEX ||
             stableMetadata[surfaceOffset + 2u] == 0u || stableMetadata[endpointOffset + 2u] == 0u) {
             return vec3f(0.0);
         }
         let transform = stableMatrix(surfaceOffset + 4u);
-        if (distance((transform * vec4f(point, 1.0)).xyz, point) > 1e-4 ||
-            any(abs(transform[0].xyz - vec3f(1, 0, 0)) > vec3f(1e-4)) ||
-            any(abs(transform[1].xyz - vec3f(0, 1, 0)) > vec3f(1e-4)) ||
-            any(abs(transform[2].xyz - vec3f(0, 0, 1)) > vec3f(1e-4))) {
-            return vec3f(0.0);
-        }
+        previousPoint = (transform * vec4f(point, 1.0)).xyz;
+        previousNormal = reprojectNormal(transform, normal);
+        previousExit = (transform * vec4f(exit, 1.0)).xyz;
         previousEndpoint = (stableMatrix(endpointOffset + 4u) * vec4f(endpoint, 1.0)).xyz;
     }
-    let oldEntrance = opticalSlabEntrance(point, normal, thickness, ior,
+    let thickness = max(0.0, dot(previousPoint - previousExit, previousNormal));
+    let oldEntrance = opticalSlabEntrance(previousPoint, previousNormal, thickness, ior,
         correspondence.previousEye.xyz, previousEndpoint);
     if (oldEntrance.w == 0.0) { return vec3f(0.0); }
     let motion = opticalImageMotion(point, oldEntrance.xyz, correspondence.currentViewProjection,
@@ -167,8 +177,10 @@ fn transmissionMotion(pixel: FramePixel, optical: ReflectionRecord, size: vec2u)
     let previousOptical = previousOptics[index];
     let pathMask = OPT_TRANSMITTED_ENDPOINT | OPT_SOLID_SLAB;
     if ((previousOptical.normalInstance.w & pathMask) != (optical.normalInstance.w & pathMask) ||
-        dot(previous.geometricNormal.xyz, normal) < 0.9999 ||
-        abs(dot(previous.positionDepth.xyz - point, normal)) > 1e-4 ||
+        dot(previous.geometricNormal.xyz, previousNormal) < 0.9999 ||
+        abs(dot(previous.positionDepth.xyz - previousPoint, previousNormal)) > 1e-4 ||
+        abs(dot(previous.positionDepth.xyz - bitcast<vec3f>(previousOptical.normalInstance.xyz),
+            previousNormal) - thickness) > 1e-4 ||
         abs(previous.roughnessIor.w / previous.roughnessIor.z - ior) > 1e-4) { return vec3f(0.0); }
     let previousTerminal = previousOptical.normalInstance.w & OPT_INSTANCE_INDEX;
     if (correspondence.enabled.y != 0u) {

@@ -1124,20 +1124,44 @@ fn temporal_mirror_records_real_segment_and_reprojects_its_virtual_image() {
             let frame = input.resident.take().unwrap();
             let temporal = frame.temporal.as_ref().unwrap();
             let source = temporal.guide(TemporalGuide::SpecularReflection).unwrap();
-            let data = crate::test_support::read_texture(&self.engine.inner.gpu, source);
+            let gpu = &self.engine.inner.gpu;
+            let data = crate::test_support::read_texture(gpu, source);
             let pixels = bytemuck::pod_collect_to_vec::<u8, f32>(&data);
-            let expected_motion = match temporal.metadata().sample_index {
+            let sample = temporal.metadata().sample_index;
+            let static_motion = match sample {
                 1 => 2.,
                 2 => -1.,
                 _ => 0.,
             };
+            let moving = (sample == 3).then(|| {
+                (
+                    crate::hit_diagnostics::read_raw(gpu, temporal.optical_path_records()).unwrap(),
+                    crate::hit_diagnostics::read_raw(gpu, temporal.pixel_records()).unwrap(),
+                )
+            });
             let mut motion_count = 0;
             let mut distance_error = 0f32;
             let mut motion_error = 0f32;
-            for pixel in pixels.chunks_exact(4) {
-                distance_error = distance_error.max((pixel[3] - 6.).abs());
+            for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+                if sample < 3 {
+                    distance_error = distance_error.max((pixel[3] - 6.).abs());
+                }
                 if pixel[2] != 0. {
                     motion_count += 1;
+                    let expected_motion = if let Some((paths, primary)) = &moving {
+                        let pixel_index = index % 16 + (15 - index / 16) * 16;
+                        let scalar = |buffer: &[u8], offset: usize| {
+                            f32::from_le_bytes(buffer[offset..offset + 4].try_into().unwrap())
+                        };
+                        // The old mirror was z=0, so its virtual image kept X.
+                        // An orthographic camera projects the new entrance X
+                        // directly even when the surface rotates.
+                        let endpoint_x = scalar(paths, pixel_index * 32);
+                        let entrance_x = scalar(primary, pixel_index * 240 + 32);
+                        (endpoint_x - entrance_x) * 8.
+                    } else {
+                        static_motion
+                    };
                     motion_error = motion_error.max((pixel[0] - expected_motion).hypot(pixel[1]));
                 }
             }
@@ -1152,7 +1176,7 @@ fn temporal_mirror_records_real_segment_and_reprojects_its_virtual_image() {
     let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 16).unwrap();
-    let (mut scene, _, mirror) = full_plane_scene();
+    let (mut scene, mirror_surface, mirror) = full_plane_scene();
     let mut material = OpenPbrMaterial::default();
     material.values.metalness = 1.;
     material.values.roughness = 0.;
@@ -1204,8 +1228,12 @@ fn temporal_mirror_records_real_segment_and_reprojects_its_virtual_image() {
     engine.set_scene_object(&scene).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(1)).unwrap();
+    scene.mesh_mut(mirror_surface).unwrap().transform = glam::Mat4::from_rotation_y(0.05);
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
     let rows = measurements.lock().unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].0, 0);
     assert!(rows[1..].iter().all(|row| row.0 >= 192), "{rows:?}");
     assert!(rows.iter().all(|r| r.1 < 1e-3 && r.2 < 0.1), "{rows:?}");
@@ -1274,7 +1302,8 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                 let end_x = scalar(path, 0);
                 assert!((scalar(path, 8) + 3.).abs() < 1e-4);
                 let thickness = if self.thin { 0. } else { 0.5 };
-                assert!((scalar(path, 24) + thickness).abs() < 1e-4);
+                let entrance_z = scalar(surface, 40);
+                assert!((scalar(path, 24) + thickness - entrance_z).abs() < 1e-4);
                 if meta.camera.kind == TemporalProjection::Orthographic {
                     assert_eq!(scalar(motion, 8), 0.);
                     error = error.max((exit_x - entry_x - slope_glass * thickness).abs());
@@ -1283,12 +1312,7 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                     if scalar(motion, 8) == 0. {
                         continue;
                     }
-                    let old_target_x = end_x
-                        - if meta.scene_revision == previous.scene_revision {
-                            0.
-                        } else {
-                            0.125
-                        };
+                    let old_target_x = end_x - if meta.sample_index == 3 { 0.125 } else { 0. };
                     let eye = glam::DVec3::new(
                         previous.camera.view_inverse[12].into(),
                         previous.camera.view_inverse[13].into(),
@@ -1314,7 +1338,11 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                     let expected = project(&previous.camera, old_entry.extend(0.))
                         - project(
                             &meta.camera,
-                            glam::DVec3::new(entry_x.into(), scalar(surface, 36).into(), 0.),
+                            glam::DVec3::new(
+                                entry_x.into(),
+                                scalar(surface, 36).into(),
+                                entrance_z.into(),
+                            ),
                         );
                     let actual =
                         glam::DVec2::new(scalar(motion, 0).into(), scalar(motion, 4).into());
@@ -1351,7 +1379,7 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
         glass.values.transmission = 1.;
         glass.values.roughness = 0.;
         let material = scene.add_material(glass).unwrap();
-        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        let glass_surface = scene.add_mesh(Mesh::new(geometry, material)).unwrap();
         let receiver_geometry = scene
             .add_geometry(Geometry::new(plane(-3.), vec![0, 2, 1, 2, 3, 1]))
             .unwrap();
@@ -1410,8 +1438,13 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
         engine.set_scene_object(&scene).unwrap();
         engine.update().unwrap();
         render.converge(ConvergeOptions::new(1)).unwrap();
+        scene.mesh_mut(glass_surface).unwrap().transform =
+            glam::Mat4::from_translation(glam::Vec3::new(0., 0., 0.2));
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
         let rows = report.lock().unwrap();
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         assert_eq!(rows[1].0, 0, "{rows:?}");
         assert!(
             rows[2..]
@@ -1420,7 +1453,7 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
             "{rows:?}"
         );
         println!(
-            "Snell inverse oracle: thin={thin}, moving eye and object (coverage, pixel error) = {:?}",
+            "Snell inverse oracle: thin={thin}, moving eye, object and pane (coverage, pixel error) = {:?}",
             &rows[2..]
         );
     }
