@@ -390,7 +390,7 @@ Custom denoiser AOV inputs require `'render'` resolution.
 | `diffuseColor` | Diffuse texture color: base weight × base color × (1 − metalness), tinted by coat color; valid coverage |
 | `specularColor` | Specular texture color: metal base color plus dielectric specular color × F0, tinted by coat color; valid coverage |
 | `id` | Object, local instance (0 for ordinary meshes), material, source triangle index; background is `0xFFFFFFFF` in all channels |
-| `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
+| `motion` | Previous position minus current position in pixels, x right and y down; z = the same point's previous-frame camera-forward depth in scene units, or 0 when invalid; alpha = 3 for valid history or 0 otherwise |
 
 Depth, position, roughness, reflectance and color average independent jittered primary
 rays, including depth of field. RGB values use hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance

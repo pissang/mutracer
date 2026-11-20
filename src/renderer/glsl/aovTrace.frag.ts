@@ -14,6 +14,29 @@ const surface = /* glsl */ `
 uint aovWord(int index) { ivec2 size = textureSize(aovScene,0); uvec4 v = texelFetch(aovScene, ivec2((index/4)%size.x, (index/4)/size.x),0); return v[index%4]; }
 vec3 aovVector(int offset){return vec3(uintBitsToFloat(aovWord(offset)),uintBitsToFloat(aovWord(offset+1)),uintBitsToFloat(aovWord(offset+2)));}
 mat4 aovMatrix(int offset) { mat4 m; for (int i=0;i<4;i++) for(int j=0;j<4;j++) m[i][j]=uintBitsToFloat(aovWord(offset+i*4+j)); return m; }
+// Previous-frame pixel, 1/w and view depth/w of a current world point. Both
+// reciprocal terms are affine in screen space for any projective camera.
+vec4 aovPreviousProjection(vec3 world, mat4 transform, mat4 previousViewProjection, vec2 size) {
+  vec4 oldWorld=transform*vec4(world,1.0);
+  vec4 clip=previousViewProjection*oldWorld;
+  float w=1.0/clip.w;
+  return vec4((clip.xy*w*0.5+0.5)*size,w,dot(oldWorld.xyz-aovVector(44),aovVector(48))*w);
+}
+// View depth of the current surface's tangent plane at the previous pixel
+// centre; exact on grazing planes. Negative for edge-on planes.
+float aovPlaneDepthAtPreviousCenter(vec3 world, vec3 normal, mat4 transform, mat4 previousViewProjection, vec2 size, float scale, vec4 origin) {
+  vec3 helper=abs(normal.x)>0.9 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+  vec3 t1=normalize(cross(normal,helper)); vec3 t2=cross(normal,t1);
+  vec4 a=aovPreviousProjection(world+t1*scale,transform,previousViewProjection,size)-origin;
+  vec4 b=aovPreviousProjection(world+t2*scale,transform,previousViewProjection,size)-origin;
+  float det=a.x*b.y-a.y*b.x;
+  if(abs(det)<1e-6) return -1.0;
+  vec2 d=floor(origin.xy)+0.5-origin.xy;
+  float s=(d.x*b.y-d.y*b.x)/det, t=(a.x*d.y-a.y*d.x)/det;
+  vec2 reciprocal=origin.zw+s*a.zw+t*b.zw;
+  if(reciprocal.x<=0.0) return -1.0;
+  return reciprocal.y/reciprocal.x;
+}
 Ray aovRay(vec2 uv) {
   return initCameraRay(uv);
 }
@@ -63,16 +86,22 @@ void main() {
   out_centerPosition=vec4(si.position,1.0);` : ''}
   int offset=52+si.instanceIndex*24;
   out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
+  // Keep current depth in z for next-frame visibility; w carries previous depth when valid.
   out_motion.z=dot(si.position-aovVector(36),aovVector(40));
   if(aovWord(offset+2)==0u)return;
-  vec4 oldWorld=aovMatrix(offset+4)*vec4(si.position,1.0);
-  vec4 oldClip=aovMatrix(0)*oldWorld;
+  mat4 transform=aovMatrix(offset+4), previousViewProjection=aovMatrix(0);
+  vec4 oldWorld=transform*vec4(si.position,1.0);
+  vec4 oldClip=previousViewProjection*oldWorld;
   if(oldClip.w<=0.0)return;
   vec3 oldNdc=oldClip.xyz/oldClip.w;vec2 oldPixel=(oldNdc.xy*0.5+0.5)*viewportSize;
   if(any(lessThan(oldPixel,vec2(0.0)))||any(greaterThanEqual(oldPixel,viewportSize))||abs(oldNdc.z)>1.0)return;
   uvec4 identity=texelFetch(previousId,ivec2(oldPixel),0);float oldDepth=texelFetch(previousMotion,ivec2(oldPixel),0).z;
-  if(any(notEqual(identity.xy,out_id.xy))||abs(oldDepth-dot(oldWorld.xyz-aovVector(44),aovVector(48)))>max(1e-4,abs(oldDepth)*1e-3))return;
-  out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,3.0);
+  if(any(notEqual(identity.xy,out_id.xy)))return;
+  vec4 origin=aovPreviousProjection(si.position,transform,previousViewProjection,viewportSize);
+  float planeDepth=aovPlaneDepthAtPreviousCenter(si.position,si.faceNormal,transform,previousViewProjection,viewportSize,max(out_motion.z,1e-3)*1e-2,origin);
+  if(planeDepth<=0.0||abs(oldDepth-planeDepth)>max(1e-4,planeDepth*1e-3))return;
+  float previousDepth=dot(oldWorld.xyz-aovVector(44),aovVector(48));
+  out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,previousDepth);
   ` : /* glsl */ `
   ivec2 coord=ivec2(gl_FragCoord.xy);
   out_geometry=aovSample==0 ? vec4(0.0) : texelFetch(previousGeometry,coord,0);

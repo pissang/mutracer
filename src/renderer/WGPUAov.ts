@@ -224,7 +224,7 @@ export class WGPUAov {
         // Tracing uses OpenGL camera coordinates; API images are top row first.
         const pixel = ((this.height-1-y)*this.width+x), o = pixel * (center ? 8 : 16);
         if (kind === 'id') data.set(u.subarray(o, o+4), target);
-        else if (kind === 'motion') data.set([f[o+4],f[o+5],0,f[o+7]], target);
+        else if (kind === 'motion') data.set([f[o+4],f[o+5],f[o+7],f[o+7]!==0?3:0], target);
         else if (center) {
           const tail = o + this.width*this.height*8, alpha = f[tail+7];
           if (kind === 'centerDepth') data.set([f[tail+3],0,0,alpha], target);

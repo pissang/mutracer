@@ -74,7 +74,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     else { color = clamp(primary.motion.xyz / params.mapping.z * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
   } else {
     let m = center[index].motion;
-    alpha = select(0.0, 1.0, m.w == 3.0);
+    alpha = select(0.0, 1.0, m.w != 0.0);
     let magnitude = length(m.xy);
     var hue = 0.0;
     if (magnitude > 0.0) { hue = fract(atan2(m.y, m.x) / 6.28318530718 + 1.0); }
