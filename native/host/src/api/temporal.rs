@@ -1,4 +1,4 @@
-//! Separate one-sample frames for resident temporal filters.
+//! Independently sampled frames for resident temporal filters.
 use super::*;
 use crate::denoiser_inputs as frame;
 pub use crate::denoiser_inputs::{
@@ -11,7 +11,7 @@ pub use crate::denoiser_inputs::{
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Immutable separate 1-spp frame. Guide textures are top row first; raw pixel
+/// Immutable independently sampled frame. Guide textures are top row first; raw pixel
 /// records and stable RGBA32UI IDs are bottom row first. Keep this object alive
 /// until submitted work completes; never destroy or write its borrowed resources.
 #[derive(Clone)]
@@ -44,6 +44,17 @@ impl TemporalFrame {
     pub fn pixel_records(&self) -> &wgpu::Buffer {
         &self.frame.current.resources.producer_buffers[6]
     }
+    /// Bytes of current and previous owned temporal frame resources, including
+    /// guides and trace buffers. Does not measure total driver VRAM usage.
+    pub fn resident_frame_bytes(&self) -> [u64; 2] {
+        [
+            self.frame.current.resources.gpu_bytes,
+            self.frame
+                .previous
+                .as_ref()
+                .map_or(0, |p| p.resources.gpu_bytes),
+        ]
+    }
     /// Diagnostic first optical path, bottom row first, 32 bytes per pixel.
     /// Lane 0 contains endpoint xyz and geometric length, with zero length
     /// until a finite endpoint is sampled. Lane 1 stores a bitcast vec3 and
@@ -66,6 +77,7 @@ pub(crate) struct Request<'a> {
     pub alpha: u32,
     pub scene_revision: u64,
     pub camera_revision: u64,
+    pub sample_count: u32,
 }
 pub(crate) struct State {
     history: frame::GpuFrameHistory,
@@ -73,6 +85,7 @@ pub(crate) struct State {
     producer: Option<frame::FrameProducer>,
     source: String,
     sequence: u32,
+    sample_cursor: u32,
     last: Option<Instant>,
     projection: Option<(Camera, [u32; 2], glam::Mat4)>,
 }
@@ -84,6 +97,7 @@ impl State {
             producer: None,
             source: String::new(),
             sequence: 0,
+            sample_cursor: 0,
             last: None,
             projection: None,
         }
@@ -159,16 +173,21 @@ impl State {
             },
             aperture_radius: camera_values[32],
         };
+        let next_frame = self
+            .sequence
+            .checked_add(1)
+            .ok_or("Temporal frame sequence exhausted")?;
+        let next_sample = self
+            .sample_cursor
+            .checked_add(request.sample_count)
+            .ok_or("Temporal sample sequence exhausted")?;
         let metadata = frame::FrameMetadata {
             scene_revision: request.scene_revision,
             camera_revision: request.camera_revision,
             seed: request.settings.seed,
-            sample_index: self.sequence,
-            sample_count: 1,
-            jitter_pixels: [
-                halton(self.sequence + 1, 2) - 0.5,
-                halton(self.sequence + 1, 3) - 0.5,
-            ],
+            sample_index: self.sample_cursor,
+            sample_count: request.sample_count,
+            jitter_pixels: [halton(next_frame, 2) - 0.5, halton(next_frame, 3) - 0.5],
             input_extent: request.size,
             output_extent: request.size,
             camera,
@@ -216,10 +235,8 @@ impl State {
                 })
             })?;
         self.pending = Some(receipt);
-        self.sequence = self
-            .sequence
-            .checked_add(1)
-            .ok_or("Temporal sample sequence exhausted")?;
+        self.sample_cursor = next_sample;
+        self.sequence = next_frame;
         self.last = Some(Instant::now());
         Ok(TemporalFrame { frame })
     }

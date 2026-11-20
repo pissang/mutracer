@@ -742,6 +742,7 @@ struct Denoise {
     custom: super::custom_denoise::Filter,
     custom_aovs: u32,
     custom_mode: super::DenoiseInputMode,
+    temporal_sample_count: u32,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
@@ -2088,6 +2089,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         alpha: key.alpha_blend_strategy as u32,
                         scene_revision: key.scene,
                         camera_revision: key.camera,
+                        sample_count: render.denoise.temporal_sample_count,
                     })
                     .map_err(|e| error(Status::Error, e.to_string()))?,
             );
@@ -2707,15 +2709,18 @@ impl Render {
         schedule: DenoiseSchedule,
     ) -> Result<()> {
         let filter = super::custom_denoise::Filter(filter);
-        let (requested_aovs, input_mode) =
+        let (requested_aovs, input_mode, temporal_sample_count) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                (
-                    filter.0.as_ref().map_or(0, |f| f.aovs()),
-                    filter
-                        .0
-                        .as_ref()
-                        .map_or(super::DenoiseInputMode::Cpu, |f| f.input_mode()),
-                )
+                let Some(filter) = filter.0.as_ref() else {
+                    return (0, super::DenoiseInputMode::Cpu, 1);
+                };
+                let input_mode = filter.input_mode();
+                let samples = if input_mode == super::DenoiseInputMode::TemporalGpu {
+                    filter.temporal_sample_count()
+                } else {
+                    1
+                };
+                (filter.aovs(), input_mode, samples)
             }))
             .map_err(|_| {
                 error(
@@ -2725,6 +2730,12 @@ impl Render {
             })?;
         if requested_aovs & !127 != 0 {
             return Err(error(Status::InvalidArgument, "Unknown custom AOV mask"));
+        }
+        if !matches!(temporal_sample_count, 1 | 2 | 4) {
+            return Err(error(
+                Status::InvalidArgument,
+                "TemporalGpu frame samples must be 1, 2 or 4",
+            ));
         }
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
@@ -2747,6 +2758,7 @@ impl Render {
                 custom: filter,
                 custom_aovs: requested_aovs,
                 custom_mode: input_mode,
+                temporal_sample_count,
                 ..Default::default()
             };
             Ok(())

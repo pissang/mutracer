@@ -94,7 +94,7 @@ fn invalid_frames_do_not_consume_ids_or_replace_previous() {
         |m: &mut FrameMetadata| m.pre_exposure = 2.0,
         |m: &mut FrameMetadata| m.delta_seconds = 0.0,
         |m: &mut FrameMetadata| m.jitter_pixels[0] = 0.6,
-        |m: &mut FrameMetadata| m.sample_count = 2,
+        |m: &mut FrameMetadata| m.sample_count = 3,
     ] {
         let mut m = metadata();
         mutate(&mut m);

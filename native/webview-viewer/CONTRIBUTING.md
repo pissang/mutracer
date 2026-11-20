@@ -86,6 +86,11 @@ With `MUTRACER_DLSS_TRACE=1`, the adapter logs evaluated frame and sequence
 IDs, the previous accepted sequence, reset causes, and whether it submitted
 the command buffers. Run the same fixture with `MUTRACER_DLSS_SPECULAR` set to
 `off` (default), `motion`, or `distance` to compare the optical guide variants.
+Set `MUTRACER_DLSS_INPUT_SPP` to `1` (default), `2`, or `4` to compare
+independently sampled input frames with one shared jitter per frame. The
+progressive sample budget is separate. Set
+`MUTRACER_NATIVE_GPU_TIMESTAMPS=1` in a separate run to log GPU trace and guide
+resolve timings. Timestamp readback can affect frame pacing.
 
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
 material-edit first-sample timing and `captureScene` for compact scene, resource

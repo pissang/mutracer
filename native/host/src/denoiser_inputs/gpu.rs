@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// Separate one-sample guide textures, top row first. Use the validity texture
+/// Independent frame guide textures, top row first. Use the validity texture
 /// before consuming surface data; missing guides return None.
 pub enum Guide {
     /// Linear HDR radiance, alpha 1, before display exposure.

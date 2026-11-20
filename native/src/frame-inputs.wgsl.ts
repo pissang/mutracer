@@ -13,8 +13,8 @@ export function nativeFrameInputHooks(hasCoatNormals: boolean): RayTraceInputHoo
     recordReflection: true,
     begin: '  mtFrameBegin(idx);\n',
     primarySurface: '  mtFrameSurface(si, ma, ray);\n',
-    unclampedColor: '  mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0);\n',
-    end: '  mtFramePixels[mtFrameIndex].noisyColor = vec4f(liAndAlpha.rgb, 1.0);\n  mtFramePixels[mtFrameIndex].rngState = s0;\n  mtFramePixels[mtFrameIndex].rngDimensions = vec4u(hashedCounter, samplingBounce, pixelSampleIndex, rtUniform.sequenceSeed);\n',
+    unclampedColor: '  if (mtLeadingSample) { mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0); }\n',
+    end: '  mtFrameFinish(liAndAlpha.rgb);\n',
     declarations: /* wgsl */ `
 ${framePixelStruct('MtFramePixel')}
 @group(${GROUP.OUTPUT}) @binding(4) var<storage, read_write> mtFramePixels: array<MtFramePixel>;
@@ -25,6 +25,7 @@ struct MtReflection {
 @group(${GROUP.OUTPUT}) @binding(10) var<storage, read_write> mtReflections: array<MtReflection>;
 var<private> mtReflectionPending: bool;
 var<private> mtRefractionStage: u32;
+var<private> mtLeadingSample: bool;
 const OPT_TRANSMISSION = 0x80000000u;
 const OPT_SOLID = 0x40000000u;
 const OPT_TERMINAL = 0x20000000u;
@@ -36,20 +37,35 @@ var<private> mtFrameCaptured: bool;
 
 fn mtFrameBegin(index: u32) {
   mtFrameIndex = index;
-  mtFrameCaptured = false;
-  mtFramePixels[index] = MtFramePixel();
-  mtReflections[index] = MtReflection();
+  mtLeadingSample = outNormal[index].a == 0.0;
+  mtFrameCaptured = !mtLeadingSample;
   mtReflectionPending = false;
   mtRefractionStage = 0u;
-  mtFramePixels[index].normalRoughness.w = 1.0;
+  if (mtLeadingSample) {
+    mtFramePixels[index] = MtFramePixel();
+    mtReflections[index] = MtReflection();
+    mtFramePixels[index].normalRoughness.w = 1.0;
+  }
+}
+fn mtFrameFinish(radiance: vec3f) {
+  if (mtLeadingSample) {
+    mtFramePixels[mtFrameIndex].noisyColor = vec4f(radiance, 1.0);
+    mtFramePixels[mtFrameIndex].rngState = s0;
+    mtFramePixels[mtFrameIndex].rngDimensions = vec4u(hashedCounter, samplingBounce, pixelSampleIndex, rtUniform.sequenceSeed);
+  } else {
+    let count = outNormal[mtFrameIndex].a;
+    let previous = mtFramePixels[mtFrameIndex].noisyColor.rgb;
+    mtFramePixels[mtFrameIndex].noisyColor = vec4f(previous + (radiance - previous) / count, 1.0);
+  }
 }
 fn mtReflectionExit(normal: vec3f) {
-  if ((mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u ||
+  if (!mtLeadingSample || (mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u ||
       (SPECTRAL && rtUniform.dispersionWavelengths > 1)) { return; }
   mtReflectionPending = true;
   mtReflections[mtFrameIndex].normalInstance = vec4u(bitcast<vec3u>(normal), OPT_INSTANCE_MASK);
 }
 fn mtRefractionEntry(thin: bool) {
+  if (!mtLeadingSample) { return; }
   let primary = mtFramePixels[mtFrameIndex];
   if ((primary.identity.w & 161u) != 129u || primary.transmission.w <= 0.0 ||
       primary.barycentricsFace.z < 0.5 || primary.roughnessIor.y > 0.06) { return; }

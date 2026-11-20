@@ -67,7 +67,8 @@ async function run() {
     if (slabTargetError >= 1e-5 || values[23] !== 1) throw new Error(`Snell target error ${slabTargetError}`);
     verify(6, [1, 0, 0, 1]);
     verify(7, [0, 0, 0, 0]);
-    return {backend:'webgpu', adapter:adapter.info.description || adapter.info.vendor, values, slabTargetError, passed:true};
+    const adapterInfo = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
+    return {backend:'webgpu', adapter:adapterInfo?.description || adapterInfo?.vendor || 'WebGPU', values, slabTargetError, passed:true};
   } finally {
     if (staging.mapState === 'mapped') staging.unmap();
     staging.destroy();

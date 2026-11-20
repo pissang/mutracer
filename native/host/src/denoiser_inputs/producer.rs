@@ -1,5 +1,4 @@
-//! Initial real 1-spp producer. Directional reflectance uses an opt-in numerical
-//! baseline; optical branch records remain unverified.
+//! Independently sampled color, directional reflectance and optical guides.
 use super::*;
 use crate::{CachedPipeline, GpuScene, Result, compile_pipeline, layout, storage_layout};
 use std::sync::Arc;
@@ -254,9 +253,17 @@ impl FrameProducer {
             ],
         );
         let output_group = bind_buffers(layout::group::OUTPUT, &outputs.iter().collect::<Vec<_>>());
+        let trace_timer =
+            crate::profiling::GpuTimer::new(&gpu.device, metadata.sample_count, false);
+        let resolve_timer = crate::profiling::GpuTimer::new(&gpu.device, 1, false);
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
+        for sample in 0..metadata.sample_count {
+            // Separate dispatches make each pixel's preceding mean and sample
+            // index visible. All samples in this frame share camera jitter.
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Independent temporal sample"),
+                timestamp_writes: trace_timer.as_ref().map(|timer| timer.pass(sample)),
+            });
             pass.set_pipeline(&self.trace.pipeline);
             for (i, group) in [
                 &scene.groups[0],
@@ -270,6 +277,9 @@ impl FrameProducer {
                 pass.set_bind_group(i as u32, *group, &[]);
             }
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+        }
+        if let Some(timer) = &trace_timer {
+            timer.resolve(&mut encoder);
         }
         let stable = !geometry.aov_words.is_empty();
         let previous = history.previous_snapshot().filter(|previous| {
@@ -390,10 +400,16 @@ impl FrameProducer {
         });
         let mut resolve = gpu.device.create_command_encoder(&Default::default());
         {
-            let mut pass = resolve.begin_compute_pass(&Default::default());
+            let mut pass = resolve.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Resolve temporal guides"),
+                timestamp_writes: resolve_timer.as_ref().map(|timer| timer.pass(0)),
+            });
             pass.set_pipeline(&self.resolve);
             pass.set_bind_group(0, &resolve_group, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+        }
+        if let Some(timer) = &resolve_timer {
+            timer.resolve(&mut resolve);
         }
         resources.gpu_bytes += outputs.iter().map(|b| b.size()).sum::<u64>()
             + camera.size()
@@ -424,6 +440,20 @@ impl FrameProducer {
                 return Err(error);
             }
         };
+        if let Some(timer) = trace_timer {
+            let trace_ms = timer.optional_milliseconds(&gpu.device, &gpu.queue);
+            let resolve_ms =
+                resolve_timer.and_then(|t| t.optional_milliseconds(&gpu.device, &gpu.queue));
+            eprintln!(
+                "{}",
+                serde_json::json!({"temporalGpuProfile": {
+                  "sampleIndex": frame.current.metadata.sample_index,
+                  "sampleCount": frame.current.metadata.sample_count,
+                  "traceMs": trace_ms, "resolveMs": resolve_ms,
+                  "frameBytes": frame.current.resources.gpu_bytes,
+                }})
+            );
+        }
         Ok((frame, dependency))
     }
 }

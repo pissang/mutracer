@@ -139,6 +139,82 @@ pub(super) fn camera_metadata(camera: &[u8], ortho: bool) -> CameraSnapshot {
 pub(super) use crate::test_support::read_texture;
 
 #[test]
+#[ignore = "requires real GPU"]
+fn multisample_temporal_frame_means_independent_samples_at_shared_jitter() {
+    let _lock = crate::abi_test_lock();
+    let Some(gpu) = test_gpu(if cfg!(target_os = "macos") {
+        wgpu::Backends::METAL
+    } else {
+        wgpu::Backends::VULKAN
+    }) else {
+        return;
+    };
+    let input = plane(false, false, false);
+    let (description, assets) =
+        scene::prepare_frame_inputs(&input, &settings::RenderSettings::default()).unwrap();
+    let source = String::from_utf8(
+        assets[&AssetId::Packet(layout::resource::SOFTWARE_FRAME_SHADER)].clone(),
+    )
+    .unwrap();
+    let camera = &assets[&AssetId::Packet(layout::resource::CAMERA)];
+    let trace = &assets[&AssetId::Packet(layout::resource::TRACE_UNIFORM)];
+    let (scene, _) =
+        GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone()).unwrap();
+    let producer = FrameProducer::new(&scene, source).unwrap();
+    let run = |index, count| {
+        let mut m = super::tests::metadata();
+        m.camera = camera_metadata(camera, false);
+        m.sample_index = index;
+        m.sample_count = count;
+        m.jitter_pixels = [0.125, -0.25];
+        let mut history = GpuFrameHistory::new(gpu.frame_device, [8, 8]);
+        let (frame, _) = producer
+            .produce(
+                &scene,
+                &mut history,
+                m,
+                GeometrySnapshot::default(),
+                camera,
+                trace,
+            )
+            .unwrap();
+        let read = |kind| {
+            values(&read_texture(
+                &gpu,
+                &frame.current.resources.guide(kind).unwrap().texture,
+            ))
+        };
+        (
+            read(Guide::NoisyColor),
+            read(Guide::NormalRoughness),
+            read(Guide::DiffuseAlbedo),
+        )
+    };
+    let independent = (17..21).map(|index| run(index, 1)).collect::<Vec<_>>();
+    assert!(
+        independent[0].0 != independent[1].0,
+        "fixture must contain sample variance"
+    );
+    for count in [2, 4] {
+        let batch = run(17, count);
+        for (index, value) in batch.0.iter().enumerate() {
+            let n = count as usize;
+            let expected = independent[..n]
+                .iter()
+                .map(|sample| sample.0[index])
+                .sum::<f32>()
+                / count as f32;
+            assert!(
+                (value - expected).abs() <= 2e-6 * expected.abs().max(1.),
+                "{count} samples at channel {index}: {value} vs {expected}"
+            );
+        }
+        assert_eq!(batch.1, independent[0].1);
+        assert_eq!(batch.2, independent[0].2);
+    }
+}
+
+#[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
     let _lock = crate::abi_test_lock();

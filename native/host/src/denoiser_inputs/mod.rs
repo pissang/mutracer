@@ -119,13 +119,17 @@ impl CameraSnapshot {
     }
 }
 
-/// This describes a separate 1-spp frame, never a difference of accumulations.
+/// This describes an independently traced frame with one camera jitter,
+/// never a difference of accumulations.
 #[derive(Clone, Debug)]
 pub struct FrameMetadata {
     pub scene_revision: u64,
     pub camera_revision: u64,
     pub seed: u32,
+    /// First sampling index of the frame.
     pub sample_index: u32,
+    /// Independent samples in this frame. Defaults to 1, supports 2 and 4
+    /// for pinhole cameras. Geometry guides come from the first sample.
     pub sample_count: u32,
     /// Offset from pixel centers, input pixels, x right and y down.
     pub jitter_pixels: [f32; 2],
@@ -143,8 +147,10 @@ impl FrameMetadata {
         if self.input_extent.contains(&0) || self.output_extent != self.input_extent {
             return Err("Initial frame inputs require nonempty DLAA extents".into());
         }
-        if self.sample_count != 1 {
-            return Err("Initial frame inputs require exactly one sample".into());
+        if !matches!(self.sample_count, 1 | 2 | 4)
+            || (self.sample_count > 1 && self.camera.aperture_radius > 0.)
+        {
+            return Err("Temporal frames require 1, 2 or 4 samples and a pinhole camera for multiple samples".into());
         }
         if self.pre_exposure != 1.0
             || !self.delta_seconds.is_finite()

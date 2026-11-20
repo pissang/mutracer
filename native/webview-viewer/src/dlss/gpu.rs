@@ -65,6 +65,12 @@ pub fn bootstrap(ngx: &ffi::Ngx) -> Result<Gpu> {
             "Missing NGX Vulkan extension: {name:?}"
         );
     }
+    let timing_features =
+        if std::env::var_os("MUTRACER_NATIVE_GPU_TIMESTAMPS").is_some_and(|v| v == "1") {
+            wgpu::Features::TIMESTAMP_QUERY
+        } else {
+            wgpu::Features::empty()
+        };
     let descriptor = wgpu::DeviceDescriptor {
         label: Some("MuTracer DLSS RR and WebView"),
         required_limits: adapter.limits(),
@@ -72,7 +78,8 @@ pub fn bootstrap(ngx: &ffi::Ngx) -> Result<Gpu> {
             & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
                 | wgpu::Features::SHADER_F16
                 | wgpu::Features::SUBGROUP
-                | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX),
+                | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX
+                | timing_features),
         experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
         ..Default::default()
     };

@@ -125,7 +125,7 @@ impl DenoiseFrameStatus {
 /// immutable after publication; do not destroy or write through their handles.
 /// This mode has no camera jitter/depth/motion or optical-path claims.
 pub struct GpuDenoiseInput {
-    /// Present only in TemporalGpu mode. Guides describe a separate one-sample frame.
+    /// Present only in TemporalGpu mode. Guides describe an independently sampled frame.
     pub temporal: Option<super::TemporalFrame>,
     /// Declared normalized AOV snapshots; empty unless requested by the filter.
     pub aovs: Vec<super::GpuAov>,

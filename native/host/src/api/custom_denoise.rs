@@ -92,10 +92,16 @@ pub trait CustomDenoiser: Send + Sync + 'static {
     }
 
     /// Default Cpu. ResidentGpu supplies accumulation averages; TemporalGpu also
-    /// supplies an independent one-sample frame through `GpuDenoiseInput::temporal`.
+    /// supplies an independently sampled frame through `GpuDenoiseInput::temporal`.
     /// Called during registration, outside the engine lock; re-register to change mode.
     fn input_mode(&self) -> super::DenoiseInputMode {
         super::DenoiseInputMode::Cpu
+    }
+    /// Samples in each independent TemporalGpu frame. Default 1. Pinhole
+    /// cameras can also use 2 or 4, sharing one jitter and first-sample guides.
+    /// Called during registration outside the engine lock, only in TemporalGpu mode.
+    fn temporal_sample_count(&self) -> u32 {
+        1
     }
     /// Default false. True additionally uploads CPU inputs as GPU storage buffers
     /// on the worker. This is a readback+upload path, with extra memory/copy cost.

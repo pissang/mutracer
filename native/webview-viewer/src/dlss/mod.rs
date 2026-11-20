@@ -82,6 +82,7 @@ pub struct Dlss {
     resolve: wgpu::ComputePipeline,
     runtime: Arc<Runtime>,
     trace_preset: Option<u32>,
+    input_samples: u32,
     optical: Option<OpticalInput>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
@@ -137,6 +138,12 @@ impl Dlss {
             "DLSS runtime already created in this process"
         );
         let guide = SpecularGuide::from_environment()?;
+        let input_samples = match std::env::var("MUTRACER_DLSS_INPUT_SPP").as_deref() {
+            Ok("1") | Err(std::env::VarError::NotPresent) => 1,
+            Ok("2") => 2,
+            Ok("4") => 4,
+            _ => return Err(anyhow::anyhow!("MUTRACER_DLSS_INPUT_SPP accepts 1, 2 or 4")),
+        };
         let logs = std::env::temp_dir().join("mutracer-ngx");
         std::fs::create_dir_all(&logs)?;
         let ngx = unsafe {
@@ -192,6 +199,7 @@ impl Dlss {
                 include_str!("resolve.wgsl"),
             ),
             runtime,
+            input_samples,
             optical,
             state: Mutex::new(State::default()),
             trace_preset: (std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"))
@@ -544,7 +552,7 @@ impl Dlss {
                     "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
                     "size": meta.input_extent, "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
                     "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
-                    "specularGuide": format!("{guide:?}"),
+                    "specularGuide": format!("{guide:?}"), "temporalBytes": temporal.resident_frame_bytes(),
                 }
             })
         });
@@ -583,6 +591,9 @@ impl Dlss {
 impl CustomDenoiser for Dlss {
     fn input_mode(&self) -> api::DenoiseInputMode {
         api::DenoiseInputMode::TemporalGpu
+    }
+    fn temporal_sample_count(&self) -> u32 {
+        self.input_samples
     }
     fn denoise(
         &self,
