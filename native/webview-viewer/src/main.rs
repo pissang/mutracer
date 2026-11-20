@@ -169,7 +169,7 @@ impl Host {
                 && dir.join("nvngx_dlssd.dll").is_file();
             let prepared = if required || automatic {
                 // NGX must register its extensions before creating the Vulkan device.
-                let start = dlss::Dlss::new(dir, 0).and_then(|filter| {
+                let start = dlss::Dlss::new(dir).and_then(|filter| {
                     let gpu = gpu::Gpu::from_device(&window, filter.device())?;
                     Ok((gpu, Some(filter)))
                 });
@@ -484,13 +484,16 @@ impl Host {
     fn settings(&mut self, v: &Value) -> Result<()> {
         // Parse all settings before mutating the engine. SDK validation guards values.
         let configs = v["targets"].as_array().context("Expected targets")?;
+        let fixed_dlss_preview = self.dlss_available()
+            && std::env::var_os("MUTRACER_DLSS_FIXED_PREVIEW").is_some_and(|v| v == "1");
         let parsed = configs
             .iter()
             .map(|c| {
-                Ok((
-                    c["id"].as_u64().context("Target ID")?,
-                    wire::render(&c["settings"], &c["fixedSize"])?,
-                ))
+                let mut settings = wire::render(&c["settings"], &c["fixedSize"])?;
+                if fixed_dlss_preview && c["denoiser"]["type"] == "dlss" {
+                    settings.adaptive_resolution = None;
+                }
+                Ok((c["id"].as_u64().context("Target ID")?, settings))
             })
             .collect::<Result<Vec<_>>>()?;
         let display = wire::display(&v["display"])?;
@@ -554,7 +557,10 @@ impl Host {
             .unwrap_or(0.);
         #[cfg(target_os = "linux")]
         self.native_bounds()?;
-        let upscale = v["upscale"].as_bool().unwrap_or(false);
+        let workflow_without_upscale = self.dlss_workflow
+            && std::env::var_os("MUTRACER_NATIVE_DLSS_SKIP_DISPLAY_UPSCALE")
+                .is_some_and(|v| v == "1");
+        let upscale = v["upscale"].as_bool().unwrap_or(false) && !workflow_without_upscale;
         if upscale && self.upscale.is_none() {
             self.upscale = Some(self.engine.display().add_upscale(api::EasuOptions {
                 albedo_detail: true,
@@ -1214,6 +1220,21 @@ impl Host {
             let render = self.render_loop.as_ref().unwrap().final_render();
             let (width, height, rgba) = self.engine.display().read_rgba8(render)?;
             std::fs::write(path, rgba)?;
+            if samples == 64 {
+                let image = render.read_pixels(api::PixelKind::Denoised)?;
+                std::fs::write(
+                    directory.join("rr-final-linear.f32"),
+                    image
+                        .data
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                )?;
+                std::fs::write(
+                    directory.join("rr-final-linear.json"),
+                    serde_json::to_vec(&json!({"width":image.width,"height":image.height}))?,
+                )?;
+            }
             if !directory.join("rr-size.json").exists() {
                 std::fs::write(
                     directory.join("rr-size.json"),

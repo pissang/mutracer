@@ -162,7 +162,7 @@ fn group(
     })
 }
 impl Dlss {
-    pub fn new(directory: &Path, preset: u32) -> Result<Arc<Self>> {
+    pub fn new(directory: &Path) -> Result<Arc<Self>> {
         // NGX configuration is process-wide. Only the startup path creates an
         // adapter; share the returned Arc between all renders and windows.
         static CREATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -172,6 +172,13 @@ impl Dlss {
         );
         let guide = SpecularGuide::from_environment()?;
         let guide_mapping = MaterialGuideMapping::from_environment()?;
+        let preset = match std::env::var("MUTRACER_DLSS_PRESET").as_deref() {
+            Ok("default") | Err(std::env::VarError::NotPresent) => 0,
+            Ok("D") => 4,
+            Ok("E") => 5,
+            Ok("F") => 6,
+            _ => anyhow::bail!("MUTRACER_DLSS_PRESET accepts default, D, E or F"),
+        };
         let input_samples = match std::env::var("MUTRACER_DLSS_INPUT_SPP").as_deref() {
             Ok("1") | Err(std::env::VarError::NotPresent) => 1,
             Ok("2") => 2,
@@ -290,7 +297,7 @@ impl Dlss {
         };
         ffi::check(
             result,
-            "DLSS RR create (try --dlss-preset D on older drivers)",
+            "DLSS RR create (try MUTRACER_DLSS_PRESET=D on older drivers)",
         )?;
         let image = |format, size: [u32; 2]| {
             device.create_texture(&wgpu::TextureDescriptor {

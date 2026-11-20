@@ -93,7 +93,7 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     let exe = std::env::current_exe()?;
-    let filter = Dlss::new(exe.parent().context("App directory")?, 0)?;
+    let filter = Dlss::new(exe.parent().context("App directory")?)?;
     let (_, adapter, device, queue) = filter.device();
     let engine = api::Engine::on_device(
         &adapter,

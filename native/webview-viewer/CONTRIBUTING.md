@@ -93,6 +93,10 @@ progressive sample budget is separate. Set
 resolve timings. Timestamp readback can affect frame pacing.
 Set `MUTRACER_DLSS_MATERIAL_GUIDE` to `physical` (default), `diffuse-reinhard`,
 or `camera-normal` to compare one material guide conversion at a time.
+`MUTRACER_DLSS_PRESET` accepts `default`, `D`, `E`, or `F`. The trace
+includes the requested preset for each evaluation.
+`MUTRACER_DLSS_FIXED_PREVIEW=1` uses the configured maximum preview scale
+during DLSS instead of adapting it while the camera moves.
 Set `MUTRACER_DLSS_OUTPUT_SCALE=2` to test native 2× Ray Reconstruction
 output. Use a render scale of 0.5 to obtain one reconstructed pixel per
 display pixel. Raw HDR stays at the input size and still uses progressive
@@ -101,7 +105,8 @@ samples. The default scale is 1. An output beyond device limits uses scale 1.
 `mutracer-viewer.exe --profile-dlss-1080p MODEL OUTPUT [CAMERA.bin]` exercises
 the real SDK offscreen for 24 samples and writes an image and history summary.
 The glTF must load with the native scene importer. A camera file uses the
-128-byte native camera record. With GPU timestamps enabled the log separates
+128-byte native camera record. Set `MUTRACER_DLSS_PROFILE_SIZE` to
+`WIDTHxHEIGHT` to test a different extent. With GPU timestamps enabled the log separates
 independent sampling, guide resolve, adapter prepare, NGX and output resolve.
 
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
