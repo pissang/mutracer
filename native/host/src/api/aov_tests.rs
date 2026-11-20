@@ -852,6 +852,63 @@ impl CustomDenoiser for HeldTemporal {
 
 #[test]
 #[ignore = "requires real GPU"]
+fn temporal_warmup_reuses_history_without_resampling_beauty() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+    let _guard = crate::abi_test_lock();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    let original = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    assert!(render.warm_temporal_denoiser(4).is_err());
+
+    let (entered, receive) = mpsc::channel();
+    let (_release, released) = mpsc::channel();
+    render
+        .set_custom_denoiser(
+            Some(Arc::new(HeldTemporal {
+                entered,
+                released: Mutex::new(released),
+                mode: Default::default(),
+            })),
+            DenoiseSchedule::EverySample,
+        )
+        .unwrap();
+    render.warm_temporal_denoiser(4).unwrap();
+    let until = Instant::now() + Duration::from_secs(90);
+    while render.refine().unwrap() != RenderStatus::Finished {
+        assert!(Instant::now() < until, "temporal warm-up never finished");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let frames = receive.try_iter().collect::<Vec<_>>();
+    assert_eq!(frames.len(), 4);
+    for (i, (sequence, previous, status)) in frames.into_iter().enumerate() {
+        assert_eq!(sequence, i as u32);
+        assert_eq!(previous, sequence.checked_sub(1));
+        assert_eq!(status.acceptance(), DenoiseAcceptance::Accepted);
+    }
+    assert_eq!(render.samples(), 2);
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap().data, original);
+    render.warm_temporal_denoiser(4).unwrap();
+    render
+        .set_custom_denoiser(None, DenoiseSchedule::EverySample)
+        .unwrap();
+    assert_eq!(render.refine().unwrap(), RenderStatus::Finished);
+    assert_eq!(receive.try_iter().count(), 0);
+}
+
+#[test]
+#[ignore = "requires real GPU"]
 fn temporal_cancel_replace_and_failure_keep_the_last_accepted_history() {
     use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
     use std::time::Duration;

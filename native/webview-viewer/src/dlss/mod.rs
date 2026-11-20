@@ -56,6 +56,7 @@ pub struct Dlss {
     prepare: wgpu::ComputePipeline,
     resolve: wgpu::ComputePipeline,
     runtime: Arc<Runtime>,
+    trace_preset: Option<u32>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -137,6 +138,8 @@ impl Dlss {
             ),
             runtime,
             state: Mutex::new(State::default()),
+            trace_preset: (std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"))
+                .then_some(preset),
         }))
     }
     pub fn device(&self) -> (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue) {
@@ -229,15 +232,16 @@ impl Dlss {
             .retired
             .retain(|t| t.flights.iter().any(|s| !s.is_retired()));
         let mut commands = Vec::new();
-        if state
+        let resized = state
             .targets
             .get(&key)
-            .is_some_and(|t| t.size != frame.size)
-        {
+            .is_some_and(|t| t.size != frame.size);
+        if resized {
             let old = state.targets.remove(&key).unwrap();
             state.retired.push(old);
         }
-        if !state.targets.contains_key(&key) {
+        let created = !state.targets.contains_key(&key);
+        if created {
             // Backend switches can leave obsolete render identities behind.
             // Evict only fully retired features; active GPU work owns its SDK
             // history independently of whether its result was accepted.
@@ -258,14 +262,17 @@ impl Dlss {
             commands.push(command);
         }
         let target = state.targets.get_mut(&key).unwrap();
-        target.last_frame = frame.id.frame;
+        let frame_id = frame.id.frame;
+        let previous_submission = target.last.as_ref().map(|_| target.last_frame);
+        target.last_frame = frame_id;
         target.flights.retain(|s| !s.is_retired());
+        let previous_accepted = target
+            .last
+            .as_ref()
+            .is_some_and(|last| last.acceptance() == api::DenoiseAcceptance::Accepted);
         let reset = !temporal.reset_reasons().is_empty()
             || temporal.previous_metadata().is_none()
-            || target
-                .last
-                .as_ref()
-                .is_none_or(|s| s.acceptance() != api::DenoiseAcceptance::Accepted);
+            || !previous_accepted;
         let device = &frame.device;
         let inputs = [
             Guide::NoisyColor,
@@ -426,6 +433,18 @@ impl Dlss {
         target.last = Some(frame.status());
         target.flights.push(frame.status());
         let reset_reasons = temporal.reset_reasons().to_vec();
+        let trace = self.trace_preset.map(|preset| {
+            let reasons = reset_reasons.iter().map(|reason| format!("{reason:?}")).collect::<Vec<_>>();
+            serde_json::json!({
+                "dlssEvaluation": {
+                    "target": key.1, "frame": frame_id, "previousSubmission": previous_submission,
+                    "previousAccepted": previous_accepted, "previousSequence": temporal.previous_metadata().map(|m| m.sample_index),
+                    "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
+                    "size": meta.input_extent, "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
+                    "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
+                }
+            })
+        });
         // The headless lifecycle check can cancel precisely after SDK encoding.
         before_submit();
         // This path uses the public frame submission and publication contract.
@@ -434,6 +453,10 @@ impl Dlss {
             .submit(commands, output)
             .map(api::DenoiseOutput::Resident)
             .map_err(anyhow::Error::msg);
+        if let Some(mut trace) = trace {
+            trace["dlssEvaluation"]["submitted"] = serde_json::Value::Bool(output.is_ok());
+            eprintln!("{trace}");
+        }
         if output.is_ok() {
             state.evaluations += 1;
             state.resets += u64::from(reset);

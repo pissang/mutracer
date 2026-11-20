@@ -753,6 +753,7 @@ struct Denoise {
     /// Samples of the denoised image and its pixels, bottom row first like L0.
     denoised: Option<(u32, DenoisedImage)>,
     failed: bool,
+    temporal_warmup: u32,
 }
 
 pub(super) struct RenderState {
@@ -973,6 +974,7 @@ fn cancel_denoise(render: &mut RenderState) {
     render.denoise.worker = None;
     render.denoise.denoised = None;
     render.denoise.report = None;
+    render.denoise.temporal_warmup = 0;
     if let Some(capture) = render.capture.as_mut() {
         capture.original();
     }
@@ -1933,12 +1935,14 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
                 render.denoise.last = Some(Instant::now());
+                render.denoise.temporal_warmup = render.denoise.temporal_warmup.saturating_sub(1);
             }
             Err(message) => {
                 if let Some(temporal) = &mut render.temporal {
                     temporal.reject();
                 }
                 render.denoise.failed = true;
+                render.denoise.temporal_warmup = 0;
                 state.report(message);
             }
         }
@@ -1955,7 +1959,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
         || render.samples == 0
         || render.job.is_some()
         || render.needs_capture
-        || denoised_samples(render) == render.samples
+        || (render.denoise.temporal_warmup == 0 && denoised_samples(render) == render.samples)
     {
         return Ok(());
     }
@@ -3357,7 +3361,40 @@ impl Render {
             }
             denoise(state, id, true)?;
             let render = &state.renders[&id];
-            Ok(render.samples > 0 && denoised_samples(render) == render.samples)
+            Ok(render.samples > 0
+                && render.denoise.temporal_warmup == 0
+                && denoised_samples(render) == render.samples)
+        })
+    }
+    /// Requests up to 64 independent temporal frames for the current converged
+    /// image. The next refine calls process them one at a time while keeping the
+    /// accumulated beauty and sample count. Zero cancels the remaining request.
+    /// Requires a TemporalGpu custom denoiser. Changing inputs or removing the
+    /// filter discards the pending warm-up. The default is zero.
+    pub fn warm_temporal_denoiser(&self, frames: u32) -> Result<()> {
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if frames > 64 {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Temporal warm-up accepts up to 64 frames",
+                ));
+            }
+            if render.denoise.custom_mode != super::DenoiseInputMode::TemporalGpu
+                || !render.current(state.scene_revision, state.camera_revision)
+                || render.samples == 0
+                || render.samples < render.settings.max_samples
+            {
+                return Err(error(
+                    Status::InvalidState,
+                    "Temporal warm-up requires a converged TemporalGpu render",
+                ));
+            }
+            render.denoise.temporal_warmup = frames;
+            if frames > 0 {
+                render.denoiser_revision += 1;
+            }
+            Ok(())
         })
     }
     /// Discards this render's auxiliary samples without changing beauty or

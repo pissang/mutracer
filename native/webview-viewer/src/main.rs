@@ -513,20 +513,27 @@ impl Host {
                 let target = &self.targets[&id];
                 let fallback = c["fallback"].as_u64().and_then(|id| self.targets.get(&id));
                 target.set_fallback(fallback.map(Arc::as_ref))?;
-                #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
-                if c["denoiser"]["type"] == "dlss" {
-                    let filter = self
-                        .dlss
-                        .as_ref()
-                        .context("DLSS runtime is unavailable")?
-                        .clone();
-                    target.set_jnlm_display_filter(None)?;
-                    target.set_custom_denoiser(Some(filter), api::DenoiseSchedule::EverySample)?;
-                } else {
+                let previous = self.target_configs.get(&id);
+                if previous.map(|config| &config["denoiser"]) != Some(&c["denoiser"]) {
+                    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+                    if c["denoiser"]["type"] == "dlss" {
+                        let filter = self
+                            .dlss
+                            .as_ref()
+                            .context("DLSS runtime is unavailable")?
+                            .clone();
+                        target.set_jnlm_display_filter(None)?;
+                        target
+                            .set_custom_denoiser(Some(filter), api::DenoiseSchedule::EverySample)?;
+                        if target.converged() {
+                            target.warm_temporal_denoiser(8)?;
+                        }
+                    } else {
+                        wire::denoiser(target, &c["denoiser"])?;
+                    }
+                    #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
                     wire::denoiser(target, &c["denoiser"])?;
                 }
-                #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
-                wire::denoiser(target, &c["denoiser"])?;
                 self.target_configs.insert(id, c.clone());
             }
         }
