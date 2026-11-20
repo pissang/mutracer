@@ -1,4 +1,4 @@
-import {accumulate, blur, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
+import {accumulate, blur, idSnapshot, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
 import {combine, match, pyramid} from './temporalFlow.js';
 
 const overflowBuckets = 4096, entryBytes = 32;
@@ -73,6 +73,7 @@ export class TemporalGPU {
       reproject: [reproject, [uniform,tex,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read,storage,storage]],
       accumulate: [accumulate, [uniform,tex,tex,read,storage,storage,storage]],
       snapshot: [snapshot, [uniform,read,target]],
+      idSnapshot: [idSnapshot, [uniform,read,{storageTexture:{access:'write-only',format:'rgba32uint',viewDimension:'2d-array'}}]],
       ...(post ? {
         combine: [combine,[uniform,tex,tex,read,read,read,storage,storage,read]],
         match: [match,[uniform,tex,read,read,storage]],
@@ -250,11 +251,11 @@ export class TemporalGPU {
     const encoder = d.createCommandEncoder();
     encoder.clearBuffer(this.overflow,slot*overflowBuckets*entryBytes,overflowBuckets*entryBytes);
     encoder.clearBuffer(this.missed);
-    encoder.copyBufferToTexture({buffer:buffers.id,bytesPerRow:this.width*16},
-      {texture:this.id,origin:[0,0,slot]},[this.width,this.height,1]);
     encoder.copyBufferToBuffer(buffers.albedo,0,this.guideBuffers[slot].albedo,0,this.bytes);
     encoder.copyBufferToBuffer(buffers.normal,0,this.guideBuffers[slot].normal,0,this.bytes);
     d.queue.submit([encoder.finish()]);
+
+    await this.dispatch('idSnapshot',[this.params,buffers.id,this.id],this.paramsFor(frame,frame),'capture-ids');
 
     await this.dispatch('rawSnapshot',[this.params,buffers.color,this.raw,this.overflow,this.missed],
       this.paramsFor(frame,frame),'capture-radiance');

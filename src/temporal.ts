@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" preserve="true" />
 
 import Engine from './Engine.js';
-import type {DisplaySettings, PostProcess} from './Display.js';
+import type {DisplaySettings} from './Display.js';
 import Render, {type Denoiser} from './Render.js';
 import type {OIDNFilterOptions} from './oidnOptions.js';
 import {mat4} from './math.js';
@@ -79,14 +79,17 @@ export class TemporalFrame {
   readonly height!: number;
   /** @internal */ readonly _temporalFrame = true;
   private buffers!: Record<TemporalPixelKind, GPUBuffer>;
+  private source!: {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer; baseline?: GPUBuffer; samples: number; settings: Required<DisplaySettings>};
+  private displayLinear!: boolean;
+  private encodedCodes!: boolean;
   private device!: GPUDevice;
   private presentation!: Render;
-  private presentationPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
   private valid = true;
 
   /** @internal */
-  constructor(device: GPUDevice, presentation: Render, index: number, width: number, height: number, buffers: Record<TemporalPixelKind, GPUBuffer>) {
-    Object.assign(this, {device, presentation, index, width, height, buffers});
+  constructor(device: GPUDevice, presentation: Render, index: number, width: number, height: number,
+    buffers: Record<TemporalPixelKind, GPUBuffer>, source: TemporalFrame['source'], displayLinear: boolean, encodedCodes: boolean) {
+    Object.assign(this, {device, presentation, index, width, height, buffers, source, displayLinear, encodedCodes});
   }
 
   /** Reads RGBA float32 pixels. Default `'denoised'`. */
@@ -110,27 +113,19 @@ export class TemporalFrame {
   }
   /** @internal */ _withPresentation<T>(callback: (render: Render) => T): T {
     if (!this.valid) throw new Error('This temporal frame is no longer borrowed.');
-    const pass: PostProcess = ({device, encoder, output}) => {
-      let pipeline = this.presentationPipelines.get(output.format);
-      if (!pipeline) {
-        const vertex = device.createShaderModule({code:'@vertex fn main(@builtin(vertex_index) i:u32)->@builtin(position) vec4f {let x=f32((i<<1u)&2u);let y=f32(i&2u);return vec4f(x*2.-1.,y*2.-1.,0.,1.);}'});
-        const fragment = device.createShaderModule({code:`@group(0) @binding(0) var<storage,read> pixels:array<vec4f>;
-          @fragment fn main(@builtin(position) p:vec4f)->@location(0) vec4f {let i=u32(p.y)*${this.width}u+u32(p.x);return vec4f(floor(clamp(pixels[i].rgb,vec3f(0),vec3f(255))+.5)/255.,1.);}`});
-        pipeline = device.createRenderPipeline({layout:'auto',vertex:{module:vertex,entryPoint:'main'},fragment:{module:fragment,entryPoint:'main',targets:[{format:output.format}]},primitive:{topology:'triangle-list'}});
-        this.presentationPipelines.set(output.format,pipeline);
-      }
-      const group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:this.buffers.denoised}}]});
-      const renderPass=encoder.beginRenderPass({colorAttachments:[{view:output.createView(),loadOp:'clear',storeOp:'store'}]});
-      renderPass.setPipeline(pipeline);renderPass.setBindGroup(0,group);renderPass.draw(3);renderPass.end();
-    };
-    const remove=this.presentation.engine.display.addPostProcess(pass);
-    try { const result=callback(this.presentation); if (result instanceof Promise) return result.finally(remove) as T; remove(); return result; }
-    catch (error) { remove(); throw error; }
+    this.presentation.engine.display._withSettings(this.source.settings, () =>
+      this.presentation._composeExternalDenoiseInput({width:this.width,height:this.height,samples:this.source.samples,
+        color:this.source.color,albedo:this.source.albedo,normal:this.source.normal}));
+    this.presentation.engine.display._configure(this.presentation);
+    this.presentation._setExternalDenoisedOutput(this.buffers.denoised,this.displayLinear,this.encodedCodes,this.source.baseline);
+    return callback(this.presentation);
   }
   /** @internal */ _release() {
     if (!this.valid) return;
     this.valid = false;
     this.buffers.denoised.destroy(); this.buffers.accumulated.destroy();
+    this.source.color.destroy(); this.source.albedo.destroy(); this.source.normal.destroy();
+    this.source.baseline?.destroy();
   }
 }
 
@@ -332,7 +327,7 @@ export class TemporalDenoiser {
     return output;
   }
 
-  private composeForOIDN(frame: number, accumulated: GPUBuffer) {
+  private packExternal(frame: number, accumulated: GPUBuffer) {
     const device = this.engine.device!, buffers = this.composeBuffers!;
     const samples = this.sampleCounts[frame];
     device.queue.writeBuffer(this.composeParams!, 0, new Uint32Array([this.history.width, this.history.height, this.history.slot(frame), samples]));
@@ -344,6 +339,12 @@ export class TemporalDenoiser {
     pass.setPipeline(this.composePipeline!); pass.setBindGroup(0, group);
     pass.dispatchWorkgroups(Math.ceil(this.history.width / 8), Math.ceil(this.history.height / 8)); pass.end();
     device.queue.submit([encoder.finish()]);
+    return buffers;
+  }
+
+  private composeForOIDN(frame: number, accumulated: GPUBuffer) {
+    const buffers = this.packExternal(frame, accumulated);
+    const samples = this.sampleCounts[frame];
     return this.engine.display._withSettings(this.displaySettings[frame], () =>
       this.replay!._composeExternalDenoiseInput({width: this.history.width, height: this.history.height, samples, ...buffers}));
   }
@@ -390,10 +391,20 @@ export class TemporalDenoiser {
       if (this.options.postRadius === 0) { denoised = this.spatialOutputs.get(i)!; this.spatialOutputs.delete(i); }
       else { await this.post.filter(i, neighbors); this.sparkle?.filter(this.post, i, neighbors);
         denoised = copyBuffer(device, this.post.output, bytes, 'Temporal finished output'); }
+      const packed=this.packExternal(i,this.accumulated.get(i)!);
+      const source={color:copyBuffer(device,packed.color,bytes,'Temporal presentation color'),
+        albedo:copyBuffer(device,packed.albedo,bytes,'Temporal presentation albedo'),
+        normal:copyBuffer(device,packed.normal,bytes,'Temporal presentation normal'),
+        samples:this.sampleCounts[i],settings:this.displaySettings[i],baseline:undefined as GPUBuffer|undefined};
+      if (this.options.denoiser?.type === 'oidn') {
+        const composed=this.engine.display._withSettings(source.settings,()=>this.replay!._composeExternalDenoiseInput({
+          width:this.history.width,height:this.history.height,samples:source.samples,color:source.color,albedo:source.albedo,normal:source.normal}));
+        source.baseline=copyBuffer(device,composed.color,bytes,'Temporal captured presentation baseline');
+      }
       this.finished.push(new TemporalFrame(device, this.replay!, i, this.history.width, this.history.height, {
         denoised,
         accumulated: this.accumulated.get(i)!
-      }));
+      },source,this.options.denoiser?.type === 'oidn',this.options.postRadius > 0));
       this.accumulated.delete(i);
     }
   }

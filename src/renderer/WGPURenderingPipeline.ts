@@ -1262,6 +1262,79 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       normal: copyGuide('Temporal composed normal', getFrameInput('normal'), true)};
   }
 
+  let temporalDecodePipeline: GPUComputePipeline | undefined;
+  let temporalAdjustPipeline: GPUComputePipeline | undefined;
+  let temporalFilteredBuffer: GPUBuffer | undefined;
+  function setExternalDenoisedOutput(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer) {
+    if (disposed) throw new Error('Render target is disposed.');
+    let currentBaseline: GPUBuffer | undefined;
+    if (displayLinear && capturedBaseline) {
+      // Temporal OIDN output already contains the capture-time display
+      // composition. Apply only the change to current display effects so an
+      // unchanged presentation stays byte-identical to the spatial result.
+      displayTrace?.push('CapturedCompose:DisplayLinear');
+      denoiseValid=false;
+      drawPostProcess(device.createCommandEncoder(),false);
+      currentBaseline=copyGuide('Temporal current presentation baseline',composePass.getOutput('denoiseColor'),true);
+    }
+    const encoder = device.createCommandEncoder({label: 'Temporal denoiser-slot output'});
+    let filteredBuffer=denoisedBuffer;
+    if (currentBaseline) {
+      if (!temporalFilteredBuffer || temporalFilteredBuffer.size!==renderWidth*renderHeight*16) {
+        temporalFilteredBuffer?.destroy(); temporalFilteredBuffer=device.createBuffer({label:'Temporal filtered presentation input',
+          size:renderWidth*renderHeight*16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+      }
+      filteredBuffer=temporalFilteredBuffer;
+    }
+    if (!encodedCodes) {
+      filteredBuffer = copyDenoisedOutput(encoder, {data: input, width: renderWidth, height: renderHeight}, filteredBuffer);
+      if (!currentBaseline) denoisedBuffer=filteredBuffer;
+    } else {
+      if (!filteredBuffer || filteredBuffer.size !== renderWidth * renderHeight * 16) {
+        filteredBuffer?.destroy();
+        filteredBuffer = device.createBuffer({label:'Persistent temporal output',size:renderWidth*renderHeight*16,
+          usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+        if (currentBaseline) temporalFilteredBuffer=filteredBuffer; else denoisedBuffer=filteredBuffer;
+      }
+      temporalDecodePipeline ??= device.createComputePipeline({layout:'auto',compute:{module:device.createShaderModule({label:'Temporal display-code decode',code:`
+        @group(0) @binding(0) var<storage,read> source:array<vec4f>;
+        @group(0) @binding(1) var<storage,read_write> destination:array<vec4f>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3u) {
+          if (id.x >= ${renderWidth * renderHeight}u) { return; }
+          let encoded=clamp(source[id.x].rgb/255.0,vec3f(0),vec3f(1));
+          let linear=select(pow((encoded+0.055)/1.055,vec3f(2.4)),encoded/12.92,encoded<=vec3f(0.04045));
+          destination[id.x]=vec4f(linear,1);
+        }`}),entryPoint:'main'}});
+      const group=device.createBindGroup({layout:temporalDecodePipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:{buffer:input}},{binding:1,resource:{buffer:filteredBuffer}}]});
+      const pass=encoder.beginComputePass();pass.setPipeline(temporalDecodePipeline);pass.setBindGroup(0,group);
+      pass.dispatchWorkgroups(Math.ceil(renderWidth*renderHeight/64));pass.end();
+    }
+    if (currentBaseline && capturedBaseline) {
+      if (!denoisedBuffer || denoisedBuffer.size!==renderWidth*renderHeight*16) {
+        denoisedBuffer?.destroy(); denoisedBuffer=device.createBuffer({label:'Temporal adjusted display-linear output',size:renderWidth*renderHeight*16,
+          usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+      }
+      temporalAdjustPipeline ??= device.createComputePipeline({layout:'auto',compute:{module:device.createShaderModule({label:'Temporal presentation effects',code:`
+        @group(0) @binding(0) var<storage,read> filtered:array<vec4f>;
+        @group(0) @binding(1) var<storage,read> captured:array<vec4f>;
+        @group(0) @binding(2) var<storage,read> current:array<vec4f>;
+        @group(0) @binding(3) var<storage,read_write> output:array<vec4f>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3u) {
+          if(id.x>=${renderWidth*renderHeight}u){return;}
+          output[id.x]=vec4f(max(filtered[id.x].rgb+current[id.x].rgb-captured[id.x].rgb,vec3f(0)),filtered[id.x].a);
+        }`}),entryPoint:'main'}});
+      const group=device.createBindGroup({layout:temporalAdjustPipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:{buffer:filteredBuffer!}},{binding:1,resource:{buffer:capturedBaseline}},
+        {binding:2,resource:{buffer:currentBaseline}},{binding:3,resource:{buffer:denoisedBuffer}}]});
+      const pass=encoder.beginComputePass();pass.setPipeline(temporalAdjustPipeline);pass.setBindGroup(0,group);
+      pass.dispatchWorkgroups(Math.ceil(renderWidth*renderHeight/64));pass.end();
+    }
+    denoisedDisplayLinear=displayLinear; denoisedHDR=!displayLinear; denoiseValid=true;
+    displayTrace?.push(displayLinear?'TemporalDenoise:DisplayLinear':'TemporalDenoise:SceneLinear');
+    drawPostProcess(encoder,false);
+  }
+
   function performDenoise(
     attachedDenoiser: DenoiserHandle,
     alphaDenoiser: OIDNWeb | undefined,
@@ -1522,6 +1595,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       rayTracePass.releaseTarget(targetKey);
       aov.dispose();
       denoisedBuffer?.destroy();
+      temporalFilteredBuffer?.destroy();
       presentationTexture?.destroy();
       displayPostProcess.dispose();
       rayTraceOutputPass.dispose();
@@ -1569,6 +1643,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   return {
     captureTemporalInput,
     composeExternalDenoiseInput,
+    setExternalDenoisedOutput,
     invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {

@@ -191,3 +191,14 @@ struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, 
   textureStore(dst,vec2i(g.xy),i32(p.a),color);
 }
 `;
+
+export const idSnapshot = /* wgsl */ `
+struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var<storage,read> input: array<vec4u>;
+@group(0) @binding(2) var dst: texture_storage_2d_array<rgba32uint,write>;
+@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
+  if (any(g.xy>=p.size)) { return; }
+  textureStore(dst,vec2i(g.xy),i32(p.a),input[g.y*p.size.x+g.x]);
+}
+`;

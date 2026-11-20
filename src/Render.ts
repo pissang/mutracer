@@ -330,6 +330,11 @@ export default class Render {
     this._target.activate(); this._engine.display._configure(this);
     return this._target.composeExternalDenoiseInput(input);
   }
+  /** @internal Install a temporal result at the renderer's denoiser slot. */
+  _setExternalDenoisedOutput(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer) {
+    if (!this._target?.setExternalDenoisedOutput) throw new Error('External denoised output requires WebGPU.');
+    this._target.setExternalDenoisedOutput(input, displayLinear, encodedCodes, capturedBaseline);
+  }
   /** @internal Register hidden AOV inputs without changing Render.aovs. */
   _attachTemporal(aovs: readonly AovKind[]) {
     if (this._temporalAovs) throw new Error('This render is already attached to a temporal denoiser.');

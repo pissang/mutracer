@@ -2,6 +2,10 @@
   "version": 1,
   "photonResolvePasses": ["PT+photons+guides:RGBA32", "CatcherMask:RGBA16"],
   "causticResolvePasses": ["PT+guides+catcher:RGBA16", "CausticColor:RGBA32"],
+  "temporalPresentation": {
+    "backend": "webgpu",
+    "trace": ["CapturedCompose:DisplayLinear", "Compose:DisplayLinear+DisplayEncoded", "TemporalDenoise:DisplayLinear", "Compose:DisplayLinear+DisplayEncoded", "Encode:DisplayEncoded"]
+  },
   "cases": [
     {
       "name": "sdr-transfer",

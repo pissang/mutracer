@@ -6,6 +6,7 @@ import type { RenderPasses } from './RenderingPipeline.js';
 export interface TargetPipeline extends RenderPasses {
   captureTemporalInput?(aovs: readonly import('./aov.js').AovKind[], capture: (input: import('../Render.js').DenoiseInput) => Promise<void>): Promise<void>;
   composeExternalDenoiseInput?(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}): {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer};
+  setExternalDenoisedOutput?(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer): void;
   activate(): void;
   invalidateDenoisedOutput(): void;
   /** Refreshes backend timing after structural scene changes; optional without GPU timestamps. */
