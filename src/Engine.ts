@@ -169,6 +169,7 @@ export default class Engine {
   private _committedCamera?: Camera;
   private _cameraFields: unknown[] = [];
   private _sceneRevision = 0;
+  private _temporalGlobalRevision = 0;
   private _cameraRevision = 0;
   private _uploadedRevision = -1;
   private _pendingMeshes: 'none' | 'incremental' | 'full' = 'full';
@@ -251,6 +252,7 @@ export default class Engine {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
+      if (changes.lights || changes.background || changes.visibility.length || changes.membershipOnly || this.scene !== this._sourceScene) this._temporalGlobalRevision++;
       const appendOnly = changes.membershipOnly && changes.added.length > 0 && changes.geometries.length === 0 && changes.materials.length === 0 &&
         changes.added.every(mesh => mesh.materials.length === 1 && !mesh.geometry.materialIndex && !mesh.materials[0].displacementMap);
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
@@ -271,7 +273,7 @@ export default class Engine {
         this._sceneRevision++; changed = true;
       }
       this._sceneChangeDetector.commit();
-    } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; changed = true; }
+    } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; this._temporalGlobalRevision++; changed = true; }
     this._sourceScene = this.scene; this._lastBvhSettings = bvhSettings; this._lastBudget = textureBudget(this);
     if (!this._pipeline) void this.init().catch(() => {});
     if (changed) for (const render of this._renders) render._inputsChanged(resetTiming);
@@ -657,6 +659,7 @@ export default class Engine {
   }
   /** @internal */ get _initializationError() { return this._pipelineInitError; }
   /** @internal */ get _ready() { return !!this._pipeline && this._uploadedRevision === this._sceneRevision && !!this._committedScene && !!this._committedCamera && !this._disposed; }
+  /** @internal */ get _temporalRevision() { return this._temporalGlobalRevision; }
   /** @internal */ get _inputs() { return {scene: this._sceneRevision, camera: this._cameraRevision, value: this._committedCamera}; }
   /** @internal */ _register(render: Render) { if (this._disposed) throw new Error('Engine is disposed.'); this._renders.add(render); }
   /** @internal */ _unregister(render: Render) { this._renders.delete(render); }

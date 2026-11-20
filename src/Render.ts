@@ -280,6 +280,7 @@ export default class Render {
   private _temporalAovs?: readonly AovKind[];
   private _lastConvergeCamera?: Camera;
   private _lastSequenceOffset?: number;
+  private _temporalFrameSequence = 0;
   private _denoiseRevision = 0;
   private _denoisePending?: Promise<void>;
   private _denoisedSamples = 0;
@@ -342,7 +343,9 @@ export default class Render {
     this.restart();
     return () => { if (this._temporalAovs !== request) return; this._temporalAovs = undefined; this.restart(); };
   }
-  /** @internal */ get _temporalMetadata() { return {camera: this._lastConvergeCamera, sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples}; }
+  /** @internal */ get _temporalMetadata() { return {camera: this._lastConvergeCamera, sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
+    frameSequence: this._temporalFrameSequence, scene: this._engine.scene, cameraSource: this._engine.camera,
+    sceneRevision: this._engine._temporalRevision}; }
   /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
   /** @internal Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
@@ -882,6 +885,7 @@ export default class Render {
       }
       this._lastConvergeCamera = camera;
       this._lastSequenceOffset = sequenceOffset;
+      this._temporalFrameSequence++;
       this._status = 'finished'; return result;
     } catch (error) { if (this._engine._deviceGeneration === deviceGeneration) this._status = 'error'; throw error; }
     finally {

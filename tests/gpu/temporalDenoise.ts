@@ -1,5 +1,6 @@
 import {Engine, Render, getRecommendedDeviceDescriptor} from '../../src/main';
 import {TemporalDenoiser} from '../../src/temporal';
+import Camera from '../../src/scene/Camera';
 import {DirectWindowGPU} from '../../src/renderer/WGPUTemporalWindow';
 import {TemporalGPU} from '../../src/renderer/WGPUTemporalHistory';
 import {THREESync, fromTHREECamera} from '../../src/three';
@@ -44,14 +45,34 @@ async function run() {
     let max = 0; for (let i = 0; i < source.length; i++) max = Math.max(max, Math.abs(source[i] - accumulated![i]));
     check(max <= 1e-3, `Radius-zero accumulated identity failed: ${max}`);
     temporal.dispose();
+    const transactional = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false, denoiser: null});
+    transactional.attach(render); await render.converge({samples: 1});
+    const captureTemporal = render._captureTemporal.bind(render); (render as any)._captureTemporal = async () => { throw new Error('synthetic capture failure'); };
+    await rejects(transactional.push(render), /synthetic capture failure/); (render as any)._captureTemporal = captureTemporal;
+    await transactional.push(render);
+    for await (const frame of transactional.flush()) check(frame.index === 0, 'Failed capture consumed a public frame index');
+    transactional.dispose();
     const sequence = new TemporalDenoiser(engine, {historyRadius: 2, postRadius: 1, stabilizeSparkle: true, denoiser: null});
-    sequence.attach(render); let outputs = 0;
+    const detachSequence = sequence.attach(render); let outputs = 0;
     for (let i = 0; i < 8; i++) {
       await render.converge({samples: 1, sampleSequenceOffset: i}); await sequence.push(render);
       for await (const frame of sequence.drain()) { check(frame.index === outputs, 'Drain order changed');check(engine.display.present(frame)===frame,'Post temporal frame was not presented');await engine.display.toBlob(frame);outputs++; }
     }
     for await (const frame of sequence.flush()) { check(frame.index === outputs, 'Flush order changed');check(engine.display.present(frame)===frame,'Flushed post temporal frame was not presented');await engine.display.toBlob(frame);outputs++; }
-    check(outputs === 8, 'Sequence did not flush every frame'); sequence.dispose();
+    check(outputs === 8, 'Sequence did not flush every frame');
+    await render.converge({samples: 1, sampleSequenceOffset: 8}); await sequence.push(render);
+    for await (const frame of sequence.flush()) { check(frame.index === 8, 'Push index reset after flush'); await frame.readPixels(); }
+    await render.converge({samples: 1, sampleSequenceOffset: 9}); await sequence.push(render);
+    await render.converge({samples: 1, sampleSequenceOffset: 10}); // An unpushed preview must break motion history.
+    await render.converge({samples: 1, sampleSequenceOffset: 11}); await sequence.push(render);
+    for await (const frame of sequence.flush()) { check(frame.index === 9 || frame.index === 10, 'AOV frame gap lost or reordered output'); await frame.readPixels(); }
+    detachSequence();
+    const resized = new Render(engine, {width: 31, height: 16, maxSamples: 1});
+    sequence.attach(resized); await resized.converge({samples: 1}); await sequence.push(resized);
+    const cutCamera = new Camera({projection: 'perspective'}); cutCamera.position = [10, 10, 10]; cutCamera.lookAt([10, 10, 11]);
+    await resized.converge({samples: 1, camera: cutCamera}); await sequence.push(resized);
+    for await (const frame of sequence.flush()) { check((frame.index === 11 || frame.index === 12) && frame.width === 31 && frame.height === 16, 'Flush did not cut invalid motion, reallocate for new dimensions, or preserve the denoiser index'); await frame.readPixels(); }
+    sequence.dispose(); resized.dispose();
     const oidnRender = new Render(engine, {width: 64, height: 64, maxSamples: 3,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
     const oidnTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false,

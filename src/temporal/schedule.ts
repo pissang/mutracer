@@ -10,6 +10,14 @@ export function temporalLatency(options: TemporalScheduleOptions) {
   return options.mode === 'offline' ? options.historyRadius.max + options.postRadius : 0;
 }
 
+export function hasTemporalFrameGap(previous: number | undefined, current: number) {
+  return previous !== undefined && current !== previous + 1;
+}
+
+export function isTemporalCameraCut(surfacePixels: number, acceptedPixels: number) {
+  return surfacePixels === 0 || acceptedPixels / surfacePixels < 0.1;
+}
+
 export function readyThrough(pushed: number, options: TemporalScheduleOptions, flushing = false) {
   if (pushed < 1) return -1;
   return flushing || options.mode === 'interactive'
