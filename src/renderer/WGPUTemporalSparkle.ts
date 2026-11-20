@@ -1,7 +1,7 @@
 // The OIDN snapshots in the post ring hold floating-point sRGB codes (0–255).
 // Read only the original snapshots so that one impulsive frame cannot propagate recursively.
 const postBindings = /* wgsl */ `
-struct Params { size: vec2u, slot: u32, capacity: u32, past: i32, future: i32 }
+struct Params { size: vec2u, slot: u32, capacity: u32, past: i32, future: i32, revisionStride:u32, pad:u32 }
 struct Camera { vp: mat4x4f, lens: vec4f }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var surfaces: texture_2d_array<f32>;
@@ -11,6 +11,7 @@ struct Camera { vp: mat4x4f, lens: vec4f }
 @group(0) @binding(5) var<storage,read> cameras: array<Camera>;
 @group(0) @binding(6) var<storage,read_write> output: array<vec4f>;
 @group(0) @binding(7) var motions: texture_2d_array<f32>;
+@group(0) @binding(8) var<storage,read> changedMaterials: array<u32>;
 
 fn guide(x: vec2i, slot: u32, field: i32) -> vec4f {
   return textureLoad(surfaces, x, 3*i32(slot)+field, 0);
@@ -18,30 +19,39 @@ fn guide(x: vec2i, slot: u32, field: i32) -> vec4f {
 fn luminance(rgb: vec3f) -> f32 { return dot(rgb, vec3f(.2126,.7152,.0722)); }
 fn inside(q:vec2f)->bool{return all(q>=vec2f(0))&&all(q<=vec2f(p.size)-1.0);}
 fn nearestPixel(q:vec2f)->vec2i{return clamp(vec2i(floor(q+.5)),vec2i(0),vec2i(p.size)-1);}
-fn motionAt(q:vec2f,slot:u32,id:vec3u)->vec4f{
+fn materialChanged(id:u32,slot:u32)->bool{
+  let row=slot*p.revisionStride;let count=changedMaterials[row];var low=0u;var high=count;
+  if(count==0xffffffffu){return true;}
+  for(var iteration=0u;iteration<32u && low<high;iteration++){
+    let mid=low+(high-low)/2u;let value=changedMaterials[row+1u+mid];
+    if(value==id){return true;}if(value<id){low=mid+1u;}else{high=mid;}
+  }
+  return false;
+}
+fn motionAt(q:vec2f,slot:u32,id:vec3u,revision:u32)->vec4f{
   if(!inside(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
-    let at=origin+vec2i(dx,dy);if(any(at>=vec2i(p.size))||any(textureLoad(ids,at,i32(slot),0).xyz!=id)){continue;}
+    let at=origin+vec2i(dx,dy);let identity=textureLoad(ids,at,i32(slot),0);if(any(at>=vec2i(p.size))||any(identity.xyz!=id)||identity.w!=revision){continue;}
     let m=textureLoad(motions,at,i32(slot),0);if(m.w!=3.){continue;}
     let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=m*w;total+=w;
   }}if(total<=0.){return vec4f(0);}return vec4f(value.xyz/total,3.);
 }
-fn trace(dt:i32,x:vec2f,id:vec3u)->vec4f{
+fn trace(dt:i32,x:vec2f,id:vec3u,revision:u32)->vec4f{
   var q=x;var depth=guide(nearestPixel(q),p.slot,1).x;var normal=guide(nearestPixel(q),p.slot,2).xyz;
   for(var step=0;step<abs(dt);step++){
     let laterI=i32(p.slot)+select(-step,step+1,dt>0);let cap=i32(p.capacity);let later=u32((laterI%cap+cap)%cap);
     let prior=(later+p.capacity-1u)%p.capacity;let src=select(prior,later,dt<0);let dst=select(later,prior,dt<0);
-    let srcAt=nearestPixel(q);if(any(textureLoad(ids,srcAt,i32(src),0).xyz!=id)||dot(normal,guide(srcAt,src,2).xyz)<.95){return vec4f(q,depth,0);}
-    var m=motionAt(q,later,id);if(m.w!=3.){return vec4f(q,depth,0);}var next=q;
+    let srcAt=nearestPixel(q);let srcId=textureLoad(ids,srcAt,i32(src),0);if(any(srcId.xyz!=id)||srcId.w!=revision||dot(normal,guide(srcAt,src,2).xyz)<.95){return vec4f(q,depth,0);}
+    var m=motionAt(q,later,id,revision);if(m.w!=3.){return vec4f(q,depth,0);}var next=q;
     if(dt<0){next=q+m.xy;depth=m.z;}else{
       next=q-m.xy;var found=true;
-      for(var iteration=0;iteration<4;iteration++){let edge=motionAt(next,later,id);if(edge.w!=3.){found=false;break;}next=q-edge.xy;m=edge;}
-      if(!found){return vec4f(q,depth,0);}let edge=motionAt(next,later,id);
+      for(var iteration=0;iteration<4;iteration++){let edge=motionAt(next,later,id,revision);if(edge.w!=3.){found=false;break;}next=q-edge.xy;m=edge;}
+      if(!found){return vec4f(q,depth,0);}let edge=motionAt(next,later,id,revision);
       if(edge.w!=3.||length(next+edge.xy-q)>=.05){return vec4f(q,depth,0);}
       depth+=guide(nearestPixel(next),later,1).x-edge.z;
     }
     if(!inside(next)){return vec4f(q,depth,0);}let dstAt=nearestPixel(next);
-    if(any(textureLoad(ids,dstAt,i32(dst),0).xyz!=id)||dot(normal,guide(dstAt,dst,2).xyz)<.95){return vec4f(q,depth,0);}
+    let dstId=textureLoad(ids,dstAt,i32(dst),0);if(any(dstId.xyz!=id)||dstId.w!=revision||dot(normal,guide(dstAt,dst,2).xyz)<.95){return vec4f(q,depth,0);}
     q=next;normal=guide(dstAt,dst,2).xyz;
   }return vec4f(q,depth,1);
 }
@@ -57,7 +67,7 @@ const startPostWGSL = /* wgsl */ `
   let depth=guide(x,p.slot,1);
   let normal=guide(x,p.slot,2);
   if (pos.w<=.5 || depth.w<=.5 || normal.w<=.5) { return; }
-  let id=textureLoad(ids,x,i32(p.slot),0).xyz;
+  let identity=textureLoad(ids,x,i32(p.slot),0);let id=identity.xyz;let revision=identity.w;
   let low=textureLoad(blurred,x,i32(p.slot),0).rgb;
 `;
 
@@ -97,7 +107,8 @@ ${startPostWGSL}
   for (var dt=-p.past; dt<=p.future; dt++) {
     if (dt==0) { continue; }
     let slot=u32((i32(p.slot)+dt+i32(p.capacity))%i32(p.capacity));
-    let path=trace(dt,vec2f(x),id);if(path.w<=.5){continue;}
+    if(materialChanged(id.z,slot)){continue;}
+    let path=trace(dt,vec2f(x),id,revision);if(path.w<=.5){continue;}
     let q=path.xy;
     let endpointNormal=guide(nearestPixel(q),slot,2).xyz;
     if (any(q<vec2f(0)) || any(q>vec2f(p.size-1u))) { continue; }
@@ -120,7 +131,7 @@ ${startPostWGSL}
     for (var dy=0; dy<2; dy++) {
       for (var dx=0; dx<2; dx++) {
         let y=min(origin+vec2i(dx,dy),vec2i(p.size)-1);
-        if (any(textureLoad(ids,y,i32(slot),0).xyz!=id)) { continue; }
+        let otherId=textureLoad(ids,y,i32(slot),0);if (any(otherId.xyz!=id)||otherId.w!=revision) { continue; }
         let otherPos=guide(y,slot,0);
         let otherDepth=guide(y,slot,1);
         let otherNormal=guide(y,slot,2);
@@ -190,8 +201,8 @@ export async function createSparklePost(device:GPUDevice) {
     filter(post:any,frame:number,neighbors:number[]) {
       const past=frame-Math.min(frame,...neighbors);
       const future=Math.max(frame,...neighbors)-frame;
-      device.queue.writeBuffer(params,0,new Uint32Array([post.width,post.height,post.slot(frame),post.capacity,past,future]));
-      const resources=[params,post.surface,post.id,post.display,post.blurred,post.meta,post.output,post.motion];
+      device.queue.writeBuffer(params,0,new Uint32Array([post.width,post.height,post.slot(frame),post.capacity,past,future,post.materialCapacity+1,0]));
+      const resources=[params,post.surface,post.id,post.display,post.blurred,post.meta,post.output,post.motion,post.changedMaterials];
       const group=device.createBindGroup({
         layout:pipeline.getBindGroupLayout(0),
         entries:resources.map((value,binding)=>({

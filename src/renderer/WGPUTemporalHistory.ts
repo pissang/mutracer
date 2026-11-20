@@ -1,5 +1,6 @@
 import {accumulate, blur, idSnapshot, motionSnapshot, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
 import {combine, match, pyramid} from './temporalFlow.js';
+import {TemporalRevisionTable} from './temporalRevisionTable.js';
 
 const overflowBuckets = 4096, entryBytes = 32;
 const fields = ['centerPosition', 'centerDepth', 'centerNormal', 'roughness', 'motion'];
@@ -7,19 +8,20 @@ const scales = [2, 4, 8];
 
 export class TemporalGPU {
   [key: string]: any;
-  static async create(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', slots: number) {
-    const ring = new TemporalGPU(device, width, height, stage, slots);
+  static async create(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', slots: number, materialCount=0) {
+    const ring = new TemporalGPU(device, width, height, stage, slots, materialCount);
     try { await ring.init(); return ring; }
     catch (error) { ring.dispose(); throw error; }
   }
 
-  constructor(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', capacity: number) {
-    Object.assign(this, {device, width, height, stage, capacity});
+  constructor(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', capacity: number, materialCount=0) {
+    Object.assign(this, {device, width, height, stage, capacity, materialCapacity:Math.max(1,materialCount)});
     this.bytes = width * height * 16;
     this.fields = fields.slice(0, stage === 'pre' ? 4 : 3);
     this.frames = new Map();
     this.timings = [];
     this.resources = new Map();
+    if (stage === 'pre') this.revisionTable = new TemporalRevisionTable(device, 'Temporal material revision table');
   }
 
   texture(name:string, layers:number, format:GPUTextureFormat = 'rgba16float', width:number = this.width, height:number = this.height) {
@@ -49,6 +51,7 @@ export class TemporalGPU {
     this.params = this.buffer(32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.overflow = this.buffer(post ? entryBytes : count * overflowBuckets * entryBytes);
     if (post) {
+      this.changedMaterials=this.buffer(count*(this.materialCapacity+1)*4);
       this.display = this.texture('OIDN display history', count);
       this.blurTemp = this.texture('Horizontal blur scratch', 1);
       this.blurred = this.texture('Blurred display history', count);
@@ -76,9 +79,9 @@ export class TemporalGPU {
       accumulate: [accumulate, [uniform,tex,tex,read,storage,storage,storage]],
       snapshot: [snapshot, [uniform,read,target]],
       motionSnapshot: [motionSnapshot, [uniform,read,motionTarget]],
-      idSnapshot: [idSnapshot, [uniform,read,{storageTexture:{access:'write-only',format:'rgba32uint',viewDimension:'2d-array'}}]],
+      ...(!post ? {idSnapshot: [idSnapshot, [uniform,read,read,{storageTexture:{access:'write-only',format:'rgba32uint',viewDimension:'2d-array'}}]] as [string,any[]]} : {}),
       ...(post ? {
-        combine: [combine,[uniform,tex,tex,read,read,read,storage,storage,read]],
+        combine: [combine,[uniform,tex,tex,read,read,read,storage,storage,read,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read]],
         match: [match,[uniform,tex,read,read,storage]],
         pyramid: [pyramid,[uniform,tex,target]],
         blur: [blur,[uniform,tex,target]]
@@ -108,8 +111,31 @@ export class TemporalGPU {
       radianceOverflow: overflowBuckets * entryBytes
     };
     const history = this.capacity * Object.values(fields).reduce((sum, bytes) => sum + bytes, 0);
-    const total = [...this.resources.values()].reduce((sum, bytes) => sum + bytes, 0);
+    const total = [...this.resources.values()].reduce((sum, bytes) => sum + bytes, 0) + (this.revisionTable?.buffer.size ?? 0);
     return {slots:this.capacity, fields, history, scratch:total-history, total};
+  }
+
+  async ensureMaterialCapacity(count:number) {
+    if(this.stage!=='post')return;
+    const capacity=Math.max(1,count);if(capacity<=this.materialCapacity)return;
+    await this.device.queue.onSubmittedWorkDone();
+    const old=this.changedMaterials;this.resources.delete(old);
+    this.materialCapacity=capacity;this.changedMaterials=this.buffer(this.capacity*(capacity+1)*4);
+    old.destroy();
+  }
+
+  writeMaterialChanges(frame:number,ids:readonly number[]) {
+    if(!this.changedMaterials)return;
+    const values=new Uint32Array(ids.length+1);values[0]=ids.length;values.set(ids,1);
+    const stride=(this.materialCapacity+1)*4;
+    this.device.queue.writeBuffer(this.changedMaterials,this.slot(frame)*stride,values);
+  }
+
+  clearMaterialChanges() {
+    if(!this.changedMaterials)return;
+    const words=this.materialCapacity+1,values=new Uint32Array(this.capacity*words);
+    for(let slot=0;slot<this.capacity;slot++)values[slot*words]=0xffffffff;
+    this.device.queue.writeBuffer(this.changedMaterials,0,values);
   }
 
   slot(frame:number) { return ((frame % this.capacity) + this.capacity) % this.capacity; }
@@ -133,7 +159,9 @@ export class TemporalGPU {
     this.fields.forEach((name:string,index:number) => this.writeTexture(this.surface,
       new Float16Array(new Float32Array(arrays[name])),slot*this.fields.length+index,8));
     this.writeTexture(this.motion, new Float32Array(arrays.motion), slot, 16);
-    this.writeTexture(this.id, arrays.id, slot, 16);
+    const identity = new Uint32Array(arrays.id);
+    if (identity.length===this.width*this.height*4) for (let i=3;i<identity.length;i+=4) identity[i]=0;
+    this.writeTexture(this.id, identity, slot, 16);
     if (this.raw) {
       const source = new Float32Array(arrays.hdr), half = new Float16Array(source);
       const table = new ArrayBuffer(overflowBuckets * entryBytes);
@@ -207,9 +235,10 @@ export class TemporalGPU {
       this.paramsFor(i,j,5,scale),'match-propagate',Math.ceil(this.width/(3*scale)),Math.ceil(this.height/(3*scale)));
   }
 
-  async filter(i:number, neighbors:number[], stats = false, onPath?:any) {
+  async filter(i:number, neighbors:number[], stats = false, onPath?:any, changedByFrame:ReadonlyMap<number,readonly number[]>=new Map()) {
     const post = this.stage === 'post', source = post ? this.display : this.raw;
     const label = post ? 'post' : 'pre';
+    if(post)this.clearMaterialChanges();
     const init = [this.params,source,this.blurred??source,this.map,this.total,this.output,this.overflow];
     await this.dispatch('accumulate',init,this.paramsFor(i,i),label+'-init');
     const counts: Record<number, number[]> = {};
@@ -217,11 +246,13 @@ export class TemporalGPU {
       await this.mapping(i,j,stats);
       if (stats) counts[j-i] = Array.from(new Uint32Array(await this.read(this.counts,80)));
       if (post) {
+        this.writeMaterialChanges(j,changedByFrame.get(j)??[]);
         await this.mapping(j,i,false,this.reverseMap);
         await this.match(i,j,this.forward,this.map,this.forwardRefined);
         await this.match(j,i,this.backward,this.reverseMap,this.backwardRefined);
+        const combineParams=this.paramsFor(i,j,4);combineParams[7]=this.materialCapacity+1;
         await this.dispatch('combine',[this.params,this.display,this.blurred,this.map,this.forwardRefined,
-          this.backwardRefined,this.total,this.paths,this.reverseMap],this.paramsFor(i,j,4),'combine');
+          this.backwardRefined,this.total,this.paths,this.reverseMap,this.id,this.changedMaterials],combineParams,'combine');
         if (onPath) await onPath(j,new Uint32Array(await this.read(this.paths,this.bytes/4)));
       } else {
         await this.dispatch('accumulate',init,this.paramsFor(i,j,1),'accumulate');
@@ -251,7 +282,7 @@ export class TemporalGPU {
     await this.prepareDisplay(frame);
   }
 
-  async uploadBuffers(frame:number, meta:any, buffers:Record<string,GPUBuffer>) {
+  async uploadBuffers(frame:number, meta:any, buffers:Record<string,GPUBuffer>, revisionEntries:readonly (readonly [number,number])[] = []) {
     const d = this.device, slot = this.slot(frame);
     const encoder = d.createCommandEncoder();
     encoder.clearBuffer(this.overflow,slot*overflowBuckets*entryBytes,overflowBuckets*entryBytes);
@@ -260,7 +291,9 @@ export class TemporalGPU {
     encoder.copyBufferToBuffer(buffers.normal,0,this.guideBuffers[slot].normal,0,this.bytes);
     d.queue.submit([encoder.finish()]);
 
-    await this.dispatch('idSnapshot',[this.params,buffers.id,this.id],this.paramsFor(frame,frame),'capture-ids');
+    const revisions = await this.revisionTable.write(revisionEntries);
+    const idParams=this.paramsFor(frame,frame); idParams[7]=revisionEntries.length;
+    await this.dispatch('idSnapshot',[this.params,buffers.id,revisions,this.id],idParams,'capture-ids');
 
     await this.dispatch('rawSnapshot',[this.params,buffers.color,this.raw,this.overflow,this.missed],
       this.paramsFor(frame,frame),'capture-radiance');
@@ -321,6 +354,7 @@ export class TemporalGPU {
   }
 
   dispose() {
+    this.revisionTable?.dispose();
     for (const resource of this.resources.keys()) resource.destroy();
     this.resources.clear();
   }

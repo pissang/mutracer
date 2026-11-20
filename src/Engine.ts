@@ -11,6 +11,7 @@ import { cameraSnapshot } from './renderer/cameraSnapshot.js';
 import type { Scene } from './scene/Scene.js';
 import type Mesh from './scene/Mesh.js';
 import type Geometry from './scene/Geometry.js';
+import type OpenPBRMaterial from './scene/OpenPBRMaterial.js';
 import Display from './Display.js';
 import type Render from './Render.js';
 import { Events } from './util/events.js';
@@ -170,6 +171,10 @@ export default class Engine {
   private _cameraFields: unknown[] = [];
   private _sceneRevision = 0;
   private _temporalGlobalRevision = 0;
+  private _temporalMaterialRevisionVersion = 0;
+  private _temporalMaterialRevisions = new Map<number, number>();
+  private _temporalMembershipScene?: Scene;
+  private _temporalMeshOrder: Mesh[] = [];
   private _cameraRevision = 0;
   private _uploadedRevision = -1;
   private _pendingMeshes: 'none' | 'incremental' | 'full' = 'full';
@@ -252,7 +257,16 @@ export default class Engine {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
-      if (changes.lights || changes.background || changes.visibility.length || changes.membershipOnly || this.scene !== this._sourceScene) this._temporalGlobalRevision++;
+      const membershipChanged=this._temporalMembershipScene!==this.scene || this._temporalMeshOrder.length!==this.scene.meshes.length ||
+        this._temporalMeshOrder.some((mesh,index)=>mesh!==this.scene!.meshes[index]);
+      if (changes.lights || changes.background || changes.visibility.length || membershipChanged) this._temporalGlobalRevision++;
+      if (changes.materials.length) {
+        this._temporalMaterialRevisionVersion++;
+        for (const material of changes.materials) {
+          const previous=this._temporalMaterialRevisions.get(material.aovId);
+          this._temporalMaterialRevisions.set(material.aovId, previous===undefined?0:previous+1);
+        }
+      }
       const appendOnly = changes.membershipOnly && changes.added.length > 0 && changes.geometries.length === 0 && changes.materials.length === 0 &&
         changes.added.every(mesh => mesh.materials.length === 1 && !mesh.geometry.materialIndex && !mesh.materials[0].displacementMap);
       resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
@@ -273,7 +287,8 @@ export default class Engine {
         this._sceneRevision++; changed = true;
       }
       this._sceneChangeDetector.commit();
-    } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; this._temporalGlobalRevision++; changed = true; }
+      this._temporalMembershipScene=this.scene; this._temporalMeshOrder=this.scene.meshes.slice();
+    } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; this._temporalGlobalRevision++; this._temporalMembershipScene=undefined; this._temporalMeshOrder=[]; changed = true; }
     this._sourceScene = this.scene; this._lastBvhSettings = bvhSettings; this._lastBudget = textureBudget(this);
     if (!this._pipeline) void this.init().catch(() => {});
     if (changed) for (const render of this._renders) render._inputsChanged(resetTiming);
@@ -660,6 +675,14 @@ export default class Engine {
   /** @internal */ get _initializationError() { return this._pipelineInitError; }
   /** @internal */ get _ready() { return !!this._pipeline && this._uploadedRevision === this._sceneRevision && !!this._committedScene && !!this._committedCamera && !this._disposed; }
   /** @internal */ get _temporalRevision() { return this._temporalGlobalRevision; }
+  /** @internal */ get _temporalMaterialRevisionVersionValue() { return this._temporalMaterialRevisionVersion; }
+  /** @internal */ get _temporalMaterialRevisionEntries(): readonly (readonly [number, number])[] {
+    const entries = new Map<number, number>();
+    for (const mesh of this._committedScene?.meshes ?? []) for (const material of mesh.materials as OpenPBRMaterial[]) {
+      entries.set(material.aovId, this._temporalMaterialRevisions.get(material.aovId) ?? 0);
+    }
+    return [...entries].sort((a, b) => a[0] - b[0]);
+  }
   /** @internal */ get _inputs() { return {scene: this._sceneRevision, camera: this._cameraRevision, value: this._committedCamera}; }
   /** @internal */ _register(render: Render) { if (this._disposed) throw new Error('Engine is disposed.'); this._renders.add(render); }
   /** @internal */ _unregister(render: Render) { this._renders.delete(render); }
