@@ -1,360 +1,208 @@
-import {accumulate, blur, idSnapshot, motionSnapshot, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
-import {combine, match, pyramid} from './temporalFlow.js';
 import {TemporalRevisionTable} from './temporalRevisionTable.js';
+import {idSnapshot, snapshot, temporalFlagsWGSL, temporalOverflowWGSL, temporalOverflowBuckets, temporalOverflowEntryBytes} from './temporalKernels.js';
 
-const overflowBuckets = 4096, entryBytes = 32;
-const fields = ['centerPosition', 'centerDepth', 'centerNormal', 'roughness', 'motion'];
-const scales = [2, 4, 8];
+const captureWGSL = /* wgsl */ `
+struct Params { size: vec2u, slot: u32, revisionCount: u32 }
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var<storage, read> depth: array<vec4f>;
+@group(0) @binding(2) var<storage, read> normal: array<vec4f>;
+@group(0) @binding(3) var<storage, read> roughness: array<vec4f>;
+@group(0) @binding(4) var<storage, read> albedo: array<vec4f>;
+@group(0) @binding(5) var<storage, read> color: array<vec4f>;
+@group(0) @binding(6) var<storage, read> motion: array<vec4f>;
+@group(0) @binding(7) var surfaceOut: texture_storage_2d_array<rgba16float, write>;
+@group(0) @binding(8) var hdrOut: texture_storage_2d_array<rgba16float, write>;
+@group(0) @binding(9) var motionOut: texture_storage_2d_array<rgba32float, write>;
+${temporalOverflowWGSL}
+@group(0) @binding(10) var<storage, read_write> overflow: array<Overflow>;
+${temporalFlagsWGSL}
+fn nearestHalf(value:f32)->f32{
+  let magnitude=abs(value);if(magnitude==0. || magnitude>65504.){return value;}
+  let step=select(exp2(floor(log2(magnitude))-10.),exp2(-24.),magnitude<exp2(-14.));
+  let scaled=magnitude/step;let lower=floor(scaled);let fraction=scaled-lower;
+  let increment=select(0.,1.,fraction>.5 || (fraction==.5 && (u32(lower)&1u)==1u));
+  return sign(value)*(lower+increment)*step;
+}
+fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHalf(value.y),nearestHalf(value.z),nearestHalf(value.w));}
+@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
+  if (any(g.xy >= p.size)) { return; }
+  let i = g.y * p.size.x + g.x;
+  let at = vec2i(g.xy);
+  let layer = i32(p.slot);
+  let hit = depth[i].w > .5;
+  let surface = vec4f(normal[i].xyz, depth[i].x);
+  textureStore(surfaceOut, at, layer * 2, nearestHalf4(surface));
+  textureStore(surfaceOut, at, layer * 2 + 1, surface);
 
-export class TemporalGPU {
-  [key: string]: any;
-  static async create(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', slots: number, materialCount=0) {
-    const ring = new TemporalGPU(device, width, height, stage, slots, materialCount);
-    try { await ring.init(); return ring; }
-    catch (error) { ring.dispose(); throw error; }
+  let r = roughness[i];
+  let capped = !(abs(r.x) <= 3.402823e38) || (r.x < .25 && r.y > .10);
+  let peak = max(albedo[i].x, max(albedo[i].y, albedo[i].z));
+  let guide = u32(floor(255. * sqrt(clamp(peak, 0., 1.)) + .5));
+  let coverage = u32(floor(255. * clamp(r.w, 0., 1.) + .5));
+  let m = motion[i];
+  var flags = u32(m.w) | (guide << 10u) | (coverage << 2u) |
+    select(0u, CENTER_HIT, hit) | select(0u, SURFACE_CAPPED, capped);
+
+  let rgba = color[i];
+  let stored = vec4f(nearestHalf4(vec4f(clamp(rgba.rgb, vec3f(-65504), vec3f(65504)), 0.)).rgb, rgba.a);
+  if (any(!(abs(rgba) <= vec4f(65504)))) {
+    flags |= HDR_MISSING;
+    let key = i + 1u;
+    for (var probe = 0u; probe < OVERFLOW_BUCKETS; probe++) {
+      let address = bucket(key, probe, p.slot);
+      loop {
+        let claim = atomicCompareExchangeWeak(&overflow[address].index, 0u, key);
+        if (claim.exchanged) {
+          overflow[address].color = vec4f(rgba.rgb, select(nearestHalf(rgba.a), rgba.a, abs(rgba.a) > 65504.));
+          flags = (flags & ~HDR_MISSING) | HDR_OVERFLOW;
+          break;
+        }
+        if (claim.old_value != 0u) { break; }
+      }
+      if ((flags & HDR_OVERFLOW) != 0u) { break; }
+    }
+  }
+  textureStore(hdrOut, at, layer, stored);
+  // All packed flags fit in the exactly representable integer range of float32.
+  textureStore(motionOut, at, layer, vec4f(m.xyz, f32(flags)));
+}
+`;
+
+interface CaptureMetadata {
+  viewProjection: ArrayLike<number>;
+  projection: ArrayLike<number>;
+  apertureRadius: number;
+  focusDistance: number;
+}
+
+export class TemporalHistoryGPU {
+  readonly bytes: number;
+  readonly frames = new Map<number, number>();
+  private readonly resources = new Map<GPUBuffer | GPUTexture, number>();
+  private readonly guideFrames = new Map<number, number>();
+  private revisions!: TemporalRevisionTable;
+  private capturePipeline!: GPUComputePipeline;
+  private guidePipeline!: GPUComputePipeline;
+  private idPipeline!: GPUComputePipeline;
+  private params!: GPUBuffer;
+  surface!: GPUTexture;
+  motion!: GPUTexture;
+  id!: GPUTexture;
+  raw!: GPUTexture;
+  guides!: GPUTexture;
+  meta!: GPUBuffer;
+  overflow!: GPUBuffer;
+  private customGuides?: {albedo: GPUBuffer; normal: GPUBuffer}[];
+
+  static async create(device: GPUDevice, width: number, height: number, capacity: number,
+    guideCapacity: number, custom: boolean) {
+    const history = new TemporalHistoryGPU(device, width, height, capacity, guideCapacity);
+    try { await history.init(custom); return history; }
+    catch (error) { history.dispose(); throw error; }
   }
 
-  constructor(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', capacity: number, materialCount=0) {
-    Object.assign(this, {device, width, height, stage, capacity, materialCapacity:Math.max(1,materialCount)});
+  private constructor(readonly device: GPUDevice, readonly width: number, readonly height: number,
+    readonly capacity: number, readonly guideCapacity: number) {
     this.bytes = width * height * 16;
-    this.fields = fields.slice(0, stage === 'pre' ? 4 : 3);
-    this.frames = new Map();
-    this.timings = [];
-    this.resources = new Map();
-    if (stage === 'pre') this.revisionTable = new TemporalRevisionTable(device, 'Temporal material revision table');
   }
 
-  texture(name:string, layers:number, format:GPUTextureFormat = 'rgba16float', width:number = this.width, height:number = this.height) {
-    const texture = this.device.createTexture({label:name, size:[width,height,layers], format,
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING});
-    this.resources.set(texture, width * height * layers * (format === 'rgba16float' ? 8 : 16));
+  private texture(label: string, layers: number, format: GPUTextureFormat = 'rgba16float') {
+    const texture = this.device.createTexture({label, size: [this.width, this.height, layers], format,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC});
+    this.resources.set(texture, this.width * this.height * layers * (format === 'rgba16float' ? 8 : 16));
     return texture;
   }
 
-  buffer(size:number, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC) {
-    const buffer = this.device.createBuffer({size, usage});
+  private buffer(label: string, size: number,
+    usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC) {
+    const buffer = this.device.createBuffer({label, size, usage});
     this.resources.set(buffer, size);
     return buffer;
   }
 
-  async init() {
-    const d = this.device, count = this.capacity, post = this.stage === 'post';
-    this.surface = this.texture('Temporal surface', count * this.fields.length);
-    this.motion = this.texture('Temporal motion history', count, 'rgba32float');
-    this.id = this.texture('Temporal IDs', count, 'rgba32uint');
-    this.meta = this.buffer(count * 80);
-    this.map = this.buffer(this.bytes);
-    this.counts = this.buffer(80);
-    this.total = this.buffer(this.bytes);
-    this.output = this.buffer(this.bytes);
-    this.params = this.buffer(32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    this.overflow = this.buffer(post ? entryBytes : count * overflowBuckets * entryBytes);
-    if (post) {
-      this.changedMaterials=this.buffer(count*(this.materialCapacity+1)*4);
-      this.display = this.texture('OIDN display history', count);
-      this.blurTemp = this.texture('Horizontal blur scratch', 1);
-      this.blurred = this.texture('Blurred display history', count);
-      this.pyramid = scales.map(scale => this.texture('Image match pyramid', count,
-        'rgba16float', Math.ceil(this.width/scale), Math.ceil(this.height/scale)));
-      this.reverseMap = this.buffer(this.bytes);
-      this.paths = this.buffer(this.bytes / 4);
-      this.forward = scales.map(scale => this.flowGrid(scale));
-      this.backward = scales.map(scale => this.flowGrid(scale));
-      this.empty = this.buffer(8);
-      this.forwardRefined = this.flowGrid(scales[0]);
-      this.backwardRefined = this.flowGrid(scales[0]);
-    } else {
-      this.raw = this.texture('Raw radiance history', count);
-      this.guides = this.texture('Raw guide history', count * 2);
-      this.guideBuffers = Array.from({length: count}, () => ({albedo: this.buffer(this.bytes), normal: this.buffer(this.bytes)}));
-      this.missed = this.buffer(4);
+  private async init(custom: boolean) {
+    const d = this.device;
+    this.surface = this.texture('Temporal surface history', this.capacity * 2);
+    this.motion = this.texture('Temporal motion and surface flags', this.capacity, 'rgba32float');
+    this.id = this.texture('Temporal IDs and material revisions', this.capacity, 'rgba32uint');
+    this.raw = this.texture('Temporal HDR history', this.capacity);
+    this.guides = this.texture('Temporal spatial guides', this.guideCapacity * 2);
+    this.meta = this.buffer('Temporal cameras', this.capacity * 80);
+    this.overflow = this.buffer('Temporal HDR overflow', this.capacity * temporalOverflowBuckets * temporalOverflowEntryBytes);
+    this.params = this.buffer('Temporal capture parameters', 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.revisions = new TemporalRevisionTable(d, 'Temporal material revision table');
+    if (custom) {
+      this.customGuides = Array.from({length: this.guideCapacity}, () => ({
+        albedo: this.buffer('Temporal custom albedo guide', this.bytes),
+        normal: this.buffer('Temporal custom normal guide', this.bytes),
+      }));
     }
-    const uniform = {buffer:{type:'uniform'}}, storage = {buffer:{type:'storage'}}, read = {buffer:{type:'read-only-storage'}};
-    const tex = {texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}};
-    const target = {storageTexture:{access:'write-only',format:'rgba16float',viewDimension:'2d-array'}};
-    const motionTarget = {storageTexture:{access:'write-only',format:'rgba32float',viewDimension:'2d-array'}};
-    const shaders: Record<string, [string, any[]]> = {
-      reproject: [reproject, [uniform,tex,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read,storage,storage,tex]],
-      accumulate: [accumulate, [uniform,tex,tex,read,storage,storage,storage]],
-      snapshot: [snapshot, [uniform,read,target]],
-      motionSnapshot: [motionSnapshot, [uniform,read,motionTarget]],
-      ...(!post ? {idSnapshot: [idSnapshot, [uniform,read,read,{storageTexture:{access:'write-only',format:'rgba32uint',viewDimension:'2d-array'}}]] as [string,any[]]} : {}),
-      ...(post ? {
-        combine: [combine,[uniform,tex,tex,read,read,read,storage,storage,read,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read]],
-        match: [match,[uniform,tex,read,read,storage]],
-        pyramid: [pyramid,[uniform,tex,target]],
-        blur: [blur,[uniform,tex,target]]
-      } : {rawSnapshot: [rawSnapshot,[uniform,read,target,storage,storage]]})
+    const createPipeline = async (label: string, code: string) => {
+      const module = d.createShaderModule({label, code});
+      return d.createComputePipelineAsync({label, layout: 'auto', compute: {module, entryPoint: 'main'}});
     };
-    this.pipelines = {};
-    for (const [name, [code, entries]] of Object.entries(shaders)) {
-      const module = d.createShaderModule({label:name, code});
-      const errors = (await module.getCompilationInfo()).messages.filter((row:GPUCompilationMessage) => row.type === 'error');
-      if (errors.length) throw Error(name + ': ' + errors.map((error:GPUCompilationMessage) => error.message).join('\n'));
-      const layout = d.createBindGroupLayout({entries: entries.map((entry,binding) => ({
-        binding, visibility:GPUShaderStage.COMPUTE, ...entry
-      }))});
-      this.pipelines[name] = await d.createComputePipelineAsync({
-        layout:d.createPipelineLayout({bindGroupLayouts:[layout]}), compute:{module,entryPoint:'main'}
-      });
+    this.capturePipeline = await createPipeline('Temporal history capture', captureWGSL);
+    this.guidePipeline = await createPipeline('Temporal guide capture', snapshot);
+    this.idPipeline = await createPipeline('Temporal ID capture', idSnapshot);
+  }
+
+  slot(frame: number) { return frame % this.capacity; }
+  guideSlot(frame: number) { return frame % this.guideCapacity; }
+
+  async capture(frame: number, meta: CaptureMetadata, buffers: Record<string, GPUBuffer>,
+    revisionEntries: readonly (readonly [number, number])[] = []) {
+    const d = this.device;
+    const slot = this.slot(frame), guideSlot = this.guideSlot(frame);
+    const encoder = d.createCommandEncoder({label: 'Clear temporal overflow and copy custom guides'});
+    const overflowBytes = temporalOverflowBuckets * temporalOverflowEntryBytes;
+    encoder.clearBuffer(this.overflow, slot * overflowBytes, overflowBytes);
+    const custom = this.customGuides?.[guideSlot];
+    if (custom) {
+      encoder.copyBufferToBuffer(buffers.albedo, 0, custom.albedo, 0, this.bytes);
+      encoder.copyBufferToBuffer(buffers.normal, 0, custom.normal, 0, this.bytes);
     }
-  }
+    d.queue.submit([encoder.finish()]);
 
-  memory() {
-    const post = this.stage === 'post', pixels = this.width * this.height;
-    const fields = post ? {
-      surface: 24*pixels, motion: 16*pixels, id: 16*pixels, display: 8*pixels, blurred: 8*pixels,
-      pyramid: this.pyramid.reduce((sum:number, tex:GPUTexture) => sum + tex.width * tex.height * 8, 0), camera: 80
-    } : {
-      surface: 32*pixels, motion: 16*pixels, id: 16*pixels, radiance: 8*pixels, guides: 16*pixels, camera: 80,
-      radianceOverflow: overflowBuckets * entryBytes
-    };
-    const history = this.capacity * Object.values(fields).reduce((sum, bytes) => sum + bytes, 0);
-    const total = [...this.resources.values()].reduce((sum, bytes) => sum + bytes, 0) + (this.revisionTable?.buffer.size ?? 0);
-    return {slots:this.capacity, fields, history, scratch:total-history, total};
-  }
-
-  async ensureMaterialCapacity(count:number) {
-    if(this.stage!=='post')return;
-    const capacity=Math.max(1,count);if(capacity<=this.materialCapacity)return;
-    await this.device.queue.onSubmittedWorkDone();
-    const old=this.changedMaterials;this.resources.delete(old);
-    this.materialCapacity=capacity;this.changedMaterials=this.buffer(this.capacity*(capacity+1)*4);
-    old.destroy();
-  }
-
-  writeMaterialChanges(frame:number,ids:readonly number[]) {
-    if(!this.changedMaterials)return;
-    const values=new Uint32Array(ids.length+1);values[0]=ids.length;values.set(ids,1);
-    const stride=(this.materialCapacity+1)*4;
-    this.device.queue.writeBuffer(this.changedMaterials,this.slot(frame)*stride,values);
-  }
-
-  clearMaterialChanges() {
-    if(!this.changedMaterials)return;
-    const words=this.materialCapacity+1,values=new Uint32Array(this.capacity*words);
-    for(let slot=0;slot<this.capacity;slot++)values[slot*words]=0xffffffff;
-    this.device.queue.writeBuffer(this.changedMaterials,0,values);
-  }
-
-  slot(frame:number) { return ((frame % this.capacity) + this.capacity) % this.capacity; }
-
-  writeTexture(texture:GPUTexture, data:AllowSharedBufferSource, layer:number, bytesPerPixel:number) {
-    this.device.queue.writeTexture({texture,origin:[0,0,layer]},data,
-      {bytesPerRow:this.width*bytesPerPixel},[this.width,this.height,1]);
-  }
-
-  metadata(frame:number, meta:any) {
-    const slot = this.slot(frame);
-    this.device.queue.writeBuffer(this.meta,slot*80,new Float32Array([
-      ...meta.viewProjection, this.height*meta.projection[5]*0.5, meta.apertureRadius, meta.focusDistance, 0
+    this.dispatch(this.capturePipeline, [slot, 0],
+      [buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
+        buffers.motion, this.surface, this.raw, this.motion, this.overflow]);
+    const revisionTable = await this.revisions.write(revisionEntries);
+    this.dispatch(this.idPipeline, [slot, 0, 0, 0, 0, revisionEntries.length], [buffers.id, revisionTable, this.id]);
+    this.dispatch(this.guidePipeline, [guideSlot * 2, 0, 0, 0], [buffers.albedo, this.guides]);
+    this.dispatch(this.guidePipeline, [guideSlot * 2 + 1, 0, 0, 0], [buffers.normal, this.guides]);
+    d.queue.writeBuffer(this.meta, slot * 80, new Float32Array([
+      ...Array.from(meta.viewProjection), this.height * meta.projection[5] * 0.5, meta.apertureRadius, meta.focusDistance, 0,
     ]));
     this.frames.set(slot, frame);
+    this.guideFrames.set(guideSlot, frame);
   }
 
-  upload(frame:number, meta:any, arrays:any, exactHDR:number[] = []) {
-    const slot = this.slot(frame);
-    const exactHDRPixels = new Set(exactHDR);
-    this.fields.forEach((name:string,index:number) => this.writeTexture(this.surface,
-      new Float16Array(new Float32Array(arrays[name])),slot*this.fields.length+index,8));
-    this.writeTexture(this.motion, new Float32Array(arrays.motion), slot, 16);
-    const identity = new Uint32Array(arrays.id);
-    if (identity.length===this.width*this.height*4) for (let i=3;i<identity.length;i+=4) identity[i]=0;
-    this.writeTexture(this.id, identity, slot, 16);
-    if (this.raw) {
-      const source = new Float32Array(arrays.hdr), half = new Float16Array(source);
-      const table = new ArrayBuffer(overflowBuckets * entryBytes);
-      const keys = new Uint32Array(table), values = new Float32Array(table);
-      for (let offset=0; offset<half.length; offset+=4) {
-        const forceExact = exactHDRPixels.has(offset/4);
-        if (!forceExact && Number.isFinite(half[offset]) && Number.isFinite(half[offset+1]) &&
-            Number.isFinite(half[offset+2]) && Number.isFinite(half[offset+3])) continue;
-        const key = offset/4+1;
-        let bucket = Math.imul(key, 2654435761) & (overflowBuckets-1);
-        for (let probe=0; keys[bucket*8]; probe++) {
-          if (probe === overflowBuckets) { bucket = -1; break; }
-          bucket = (bucket+1) & (overflowBuckets-1);
-        }
-        if (bucket < 0) continue;
-        keys[bucket*8] = key;
-        values.set(source.subarray(offset,offset+4),bucket*8+4);
-        half[offset+3] = -1;
-      }
-      this.device.queue.writeBuffer(this.overflow,slot*table.byteLength,table);
-      this.writeTexture(this.raw, half, slot, 8);
-      this.writeTexture(this.guides,new Float16Array(new Float32Array(arrays.albedo)),slot*2,8);
-      this.writeTexture(this.guides,new Float16Array(new Float32Array(arrays.normal)),slot*2+1,8);
-    }
-    this.metadata(frame, meta);
+  getCustomGuides(frame: number) {
+    const slot = this.guideSlot(frame);
+    if (!this.customGuides || this.guideFrames.get(slot) !== frame) throw new Error('Missing custom guides for frame ' + frame);
+    return this.customGuides[slot];
   }
 
-  paramsFor(i:number, j:number, stage = 0, axis = 0) {
-    return [this.width,this.height,this.slot(i),this.slot(j),j-i,stage,axis,this.capacity];
-  }
-
-  flowGrid(scale:number) {
-    return this.buffer(Math.ceil(this.width/(scale*3))*Math.ceil(this.height/(scale*3))*8);
-  }
-
-  async dispatch(name:string, resources:any[], params:any, label:string, width:number = this.width, height:number = this.height) {
+  private dispatch(pipeline: GPUComputePipeline, params: number[], resources: (GPUBuffer | GPUTexture)[]) {
     const d = this.device;
-    d.queue.writeBuffer(this.params,0,new Uint32Array(params));
-    const pipeline = this.pipelines[name];
-    const group = d.createBindGroup({layout:pipeline.getBindGroupLayout(0),
-      entries:resources.map((resource,binding) => ({
-        binding, resource:resource instanceof GPUBuffer ? {buffer:resource} : resource.createView({dimension:'2d-array'})
-      }))});
+    d.queue.writeBuffer(this.params, 0, new Uint32Array([this.width, this.height, ...params]));
+    const group = d.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [this.params, ...resources]
+      .map((value, binding) => ({binding, resource: value instanceof GPUBuffer ? {buffer: value} : value.createView({dimension: '2d-array'})}))});
     const encoder = d.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(pipeline);
-    pass.setBindGroup(0,group);
-    pass.dispatchWorkgroups(Math.ceil(width/8), Math.ceil(height/8));
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8));
     pass.end();
     d.queue.submit([encoder.finish()]);
   }
 
-  async mapping(i:number, j:number, stats = false, output:any = this.map) {
-    for (let k=Math.min(i,j); k<=Math.max(i,j); k++) {
-      if (this.frames.get(this.slot(k)) !== k) throw Error('Missing history '+k);
-    }
-    const post = this.stage === 'post';
-    if (stats) this.device.queue.writeBuffer(this.counts,0,new Uint32Array(20));
-    await this.dispatch('reproject',[this.params,this.surface,this.id,this.meta,output,this.counts,this.motion],
-      this.paramsFor(i,j,post?4:0,Number(stats)),post?'post-geometry':'reproject');
-  }
-
-  async match(i:number, j:number, outputs:any[], mapping:any, refined:any) {
-    for (let level=scales.length-1; level>=0; level--) {
-      const scale = scales[level];
-      await this.dispatch('match',[this.params,this.pyramid[level],outputs[level+1]??this.empty,mapping,outputs[level]],
-        this.paramsFor(i,j,4,scale),'match-1/'+scale,Math.ceil(this.width/(3*scale)),Math.ceil(this.height/(3*scale)));
-    }
-    const scale = scales[0];
-    await this.dispatch('match',[this.params,this.pyramid[0],outputs[0],mapping,refined],
-      this.paramsFor(i,j,5,scale),'match-propagate',Math.ceil(this.width/(3*scale)),Math.ceil(this.height/(3*scale)));
-  }
-
-  async filter(i:number, neighbors:number[], stats = false, onPath?:any, changedByFrame:ReadonlyMap<number,readonly number[]>=new Map()) {
-    const post = this.stage === 'post', source = post ? this.display : this.raw;
-    const label = post ? 'post' : 'pre';
-    if(post)this.clearMaterialChanges();
-    const init = [this.params,source,this.blurred??source,this.map,this.total,this.output,this.overflow];
-    await this.dispatch('accumulate',init,this.paramsFor(i,i),label+'-init');
-    const counts: Record<number, number[]> = {};
-    for (const j of neighbors) {
-      await this.mapping(i,j,stats);
-      if (stats) counts[j-i] = Array.from(new Uint32Array(await this.read(this.counts,80)));
-      if (post) {
-        this.writeMaterialChanges(j,changedByFrame.get(j)??[]);
-        await this.mapping(j,i,false,this.reverseMap);
-        await this.match(i,j,this.forward,this.map,this.forwardRefined);
-        await this.match(j,i,this.backward,this.reverseMap,this.backwardRefined);
-        const combineParams=this.paramsFor(i,j,4);combineParams[7]=this.materialCapacity+1;
-        await this.dispatch('combine',[this.params,this.display,this.blurred,this.map,this.forwardRefined,
-          this.backwardRefined,this.total,this.paths,this.reverseMap,this.id,this.changedMaterials],combineParams,'combine');
-        if (onPath) await onPath(j,new Uint32Array(await this.read(this.paths,this.bytes/4)));
-      } else {
-        await this.dispatch('accumulate',init,this.paramsFor(i,j,1),'accumulate');
-      }
-    }
-    await this.dispatch('accumulate',init,this.paramsFor(i,i,2),label+'-resolve');
-    return counts;
-  }
-
-  async prepareDisplay(frame:number) {
-    await this.dispatch('blur',[this.params,this.display,this.blurTemp],this.paramsFor(frame,frame,0,0),'blur-x');
-    await this.dispatch('blur',[this.params,this.blurTemp,this.blurred],this.paramsFor(frame,frame,0,1),'blur-y');
-    for (let level=0; level<scales.length; level++) {
-      const dst=this.pyramid[level];
-      await this.dispatch('pyramid',[this.params,level?this.pyramid[level-1]:this.display,dst],
-        this.paramsFor(frame,frame),'pyramid-1/'+scales[level],dst.width,dst.height);
-    }
-  }
-
-  async setDisplay(frame:number, rgba:any) {
-    this.writeTexture(this.display, new Float16Array(rgba), this.slot(frame), 8);
-    await this.prepareDisplay(frame);
-  }
-
-  async setDisplayBuffer(frame:number, buffer:GPUBuffer) {
-    await this.dispatch('snapshot',[this.params,buffer,this.display],this.paramsFor(frame,frame,4),'display-snapshot');
-    await this.prepareDisplay(frame);
-  }
-
-  async uploadBuffers(frame:number, meta:any, buffers:Record<string,GPUBuffer>, revisionEntries:readonly (readonly [number,number])[] = []) {
-    const d = this.device, slot = this.slot(frame);
-    const encoder = d.createCommandEncoder();
-    encoder.clearBuffer(this.overflow,slot*overflowBuckets*entryBytes,overflowBuckets*entryBytes);
-    encoder.clearBuffer(this.missed);
-    encoder.copyBufferToBuffer(buffers.albedo,0,this.guideBuffers[slot].albedo,0,this.bytes);
-    encoder.copyBufferToBuffer(buffers.normal,0,this.guideBuffers[slot].normal,0,this.bytes);
-    d.queue.submit([encoder.finish()]);
-
-    const revisions = await this.revisionTable.write(revisionEntries);
-    const idParams=this.paramsFor(frame,frame); idParams[7]=revisionEntries.length;
-    await this.dispatch('idSnapshot',[this.params,buffers.id,revisions,this.id],idParams,'capture-ids');
-
-    await this.dispatch('rawSnapshot',[this.params,buffers.color,this.raw,this.overflow,this.missed],
-      this.paramsFor(frame,frame),'capture-radiance');
-    const images = [...this.fields.map((name:string,index:number) => [buffers[name],this.surface,slot*this.fields.length+index]),
-      [buffers.albedo,this.guides,slot*2],[buffers.normal,this.guides,slot*2+1]];
-    for (const [input,texture,layer] of images) {
-      const params = this.paramsFor(frame,frame);
-      params[2] = layer;
-      await this.dispatch('snapshot',[this.params,input,texture],params,'capture-guides');
-    }
-    await this.dispatch('motionSnapshot',[this.params,buffers.motion,this.motion],this.paramsFor(frame,frame),'capture-motion');
-    this.metadata(frame,meta);
-  }
-
-  getGuides(frame:number) {
-    if(this.frames.get(this.slot(frame))!==frame) throw Error('Guide frame is missing: '+frame);
-    return this.guideBuffers[this.slot(frame)];
-  }
-
-  copySurfaces(frame:number, post:TemporalGPU) {
-    const d = this.device, a = this.slot(frame), b = post.slot(frame);
-    const encoder = d.createCommandEncoder(), size = [this.width,this.height,1];
-    for (let field=0; field<post.fields.length; field++) {
-      encoder.copyTextureToTexture({texture:this.surface,origin:[0,0,a*this.fields.length+field]},
-        {texture:post.surface,origin:[0,0,b*post.fields.length+field]},size);
-    }
-    encoder.copyTextureToTexture({texture:this.id,origin:[0,0,a]},{texture:post.id,origin:[0,0,b]},size);
-    encoder.copyTextureToTexture({texture:this.motion,origin:[0,0,a]},{texture:post.motion,origin:[0,0,b]},size);
-    encoder.copyBufferToBuffer(this.meta,a*80,post.meta,b*80,80);
-    d.queue.submit([encoder.finish()]);
-    post.frames.set(b,frame);
-  }
-
-  // Readback used only by the former hand-off in the comparison harness.
-  async readGuide(frame:number, normal:boolean) {
-    const d = this.device, size = this.bytes/2;
-    const staging = d.createBuffer({size,usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
-    try {
-      const encoder = d.createCommandEncoder();
-      encoder.copyTextureToBuffer({texture:this.guides,origin:[0,0,this.slot(frame)*2+Number(normal)]},
-        {buffer:staging,bytesPerRow:this.width*8},[this.width,this.height,1]);
-      d.queue.submit([encoder.finish()]);
-      await staging.mapAsync(GPUMapMode.READ);
-      return Float32Array.from(new Float16Array(staging.getMappedRange()));
-    } finally { staging.destroy(); }
-  }
-
-  async read(buffer:GPUBuffer = this.output, size:number = this.bytes) {
-    const d = this.device;
-    const staging = d.createBuffer({size,usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
-    try {
-      const encoder = d.createCommandEncoder();
-      encoder.copyBufferToBuffer(buffer,0,staging,0,size);
-      d.queue.submit([encoder.finish()]);
-      await staging.mapAsync(GPUMapMode.READ);
-      return staging.getMappedRange().slice(0);
-    } finally { staging.destroy(); }
+  memory() {
+    return {total: [...this.resources.values()].reduce((sum, bytes) => sum + bytes, 0) + this.revisions.buffer.size};
   }
 
   dispose() {
-    this.revisionTable?.dispose();
+    this.revisions?.dispose();
     for (const resource of this.resources.keys()) resource.destroy();
     this.resources.clear();
   }

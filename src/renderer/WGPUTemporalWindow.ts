@@ -1,26 +1,28 @@
+import type {TemporalHistoryGPU} from './WGPUTemporalHistory.js';
+import {temporalMetadataWGSL, temporalOverflowWGSL, temporalRadianceWGSL} from './temporalKernels.js';
+
 export const directGeometryWGSL = /* wgsl */ `
 fn surface(x: vec2i, frame: u32, field: u32) -> vec4f {
-  return textureLoad(surfaces, x, i32(frame*2u+field), 0);
+  let data = textureLoad(surfaces, x, i32(frame*2u), 0);
+  let flags = frameFlags(x, frame);
+  let hit = (flags & CENTER_HIT) != 0u;
+  if (field == 0u) { return vec4f(0, 0, 0, select(0., data.w, hit)); }
+  let cap = select(255., 1., (flags & SURFACE_CAPPED) != 0u);
+  return vec4f(data.xyz, select(0., cap, hit));
 }
 fn ident(x: vec2i, frame: u32) -> vec3u {
   return textureLoad(ids, x, i32(frame), 0).xyz;
 }
-fn project(world: vec3f, frame: u32) -> vec3f {
-  let m=cameras[frame].vp;
-  let q=((world.x*m[0]+world.y*m[1])+world.z*m[2])+m[3];
-  return vec3f((q.x/max(q.w,1e-4)+1.0)*f32(p.size.x)*0.5-0.5,
-    (1.0-q.y/max(q.w,1e-4))*f32(p.size.y)*0.5-0.5,q.w);
-}
 @group(0) @binding(9) var motions: texture_2d_array<f32>;
-@group(0) @binding(10) var historyIdentities: texture_2d_array<u32>;
+${temporalMetadataWGSL}
 fn inFrame(q:vec2f)->bool{return all(q>=vec2f(0))&&all(q<=vec2f(p.size)-1.0);}
-fn revisionAt(x:vec2i,frame:u32)->u32{return select(0u,textureLoad(historyIdentities,x,i32(frame),0).w,(p.mode&4u)!=0u);}
+fn revisionAt(x:vec2i,frame:u32)->u32{return select(0u,textureLoad(ids,x,i32(frame),0).w,(p.mode&4u)!=0u);}
 fn sameMaterial(x:vec2i,frame:u32,id:vec3u,revision:u32)->bool{return all(ident(x,frame)==id)&&revisionAt(x,frame)==revision;}
 fn motionAt(q:vec2f,frame:u32,id:vec3u,revision:u32)->vec4f{
   if(!inFrame(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
     let at=origin+vec2i(dx,dy);if(any(at>=vec2i(p.size))||!sameMaterial(at,frame,id,revision)){continue;}
-    let m=textureLoad(motions,at,i32(frame),0);if(m.w!=3.){continue;}
+    let m=motionSample(at, frame);if(m.w!=3.){continue;}
     let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=m*w;total+=w;
   }}
   if(total<=0.){return vec4f(0);}return vec4f(value.xyz/total,3.);
@@ -45,7 +47,7 @@ fn predictForwardSeed(q: vec2f, later: u32, prior: u32, id: vec3u, revision:u32)
       if (any(at < vec2i(0)) || any(at >= vec2i(p.size)) || !sameMaterial(at, later, id, revision)) {
         continue;
       }
-      let motion = textureLoad(motions, at, i32(later), 0);
+      let motion = motionSample(at, later);
       if (motion.w != 3.0) { continue; }
       let residual = vec2f(at) + motion.xy - q;
       let error = dot(residual, residual);
@@ -122,8 +124,7 @@ fn coc(depth:f32, frame:u32)->f32 {
 const windowBindingsAndGeometry = /* wgsl */ `
 struct Params { size: vec2u, current: u32, source: u32, delta: i32, symmetric: u32, stage: u32, mode: u32, radiusMin: u32, radiusMax: u32 }
 struct Camera { vp: mat4x4f, lens: vec4f }
-const OVERFLOW_BUCKETS=4096u;
-struct Overflow { index: atomic<u32>, color: vec4f }
+${temporalOverflowWGSL}
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var surfaces: texture_2d_array<f32>;
 @group(0) @binding(2) var ids: texture_2d_array<u32>;
@@ -135,20 +136,10 @@ struct Overflow { index: atomic<u32>, color: vec4f }
 @group(0) @binding(8) var<storage, read_write> rejects: array<atomic<u32>>;
 
 ${directGeometryWGSL}
-fn radiance(x:vec2i,frame:u32)->vec3f {
-  let color=textureLoad(hdr,x,i32(frame),0);
-  if(color.a!=-1.0){return color.rgb;}
-  let index=u32(x.y)*p.size.x+u32(x.x)+1u;
-  for(var probe=0u;probe<OVERFLOW_BUCKETS;probe++){
-    let address=frame*OVERFLOW_BUCKETS+((index*2654435761u+probe)&(OVERFLOW_BUCKETS-1u));
-    let key=atomicLoad(&overflow[address].index);
-    if(key==index){return overflow[address].color.rgb;}
-    if(key==0u){break;}
-  }
-  return vec3f(0);
-}
+${temporalRadianceWGSL}
+fn radiance(x:vec2i,frame:u32)->vec3f { return loadRadiance(x, frame, p.size.x).rgb; }
 fn overflowMissing(x:vec2i,frame:u32)->bool {
-  return textureLoad(hdr,x,i32(frame),0).a==-2.0;
+  return (frameFlags(x, frame) & HDR_MISSING) != 0u;
 }
 fn landingNormal(q: vec2f, id: vec3u, revision:u32) -> vec3f {
   // Follow the same surface as the trace when the nearest texel belongs to
@@ -208,10 +199,10 @@ fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
 `;
 
 const recoverHistoryWGSL = /* wgsl */ `
-// Jittered hit coverage and square-root albedo share the unused ID lane.
+// Jittered hit coverage and square-root albedo share the motion flag lane.
 // The center-ray identity remains the only authority for accepting a surface.
 fn packedGuide(x: vec2i, frame: u32) -> u32 {
-  return textureLoad(ids,x,i32(frame),0).w;
+  return (frameFlags(x, frame) >> 2u) & GUIDE_MASK;
 }
 fn hitCoverage(x: vec2i, frame: u32) -> f32 {
   return f32(packedGuide(x,frame)&255u)/255.;
@@ -303,7 +294,7 @@ const startWindowWGSL = /* wgsl */ `
     total[index]=vec4f(radiance(x,p.current),1.0);
     return;
   }
-  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,total[index].a); return; }
+  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a); return; }
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
@@ -346,227 +337,87 @@ ${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
 }
 `;
 
-const captureWGSL = /* wgsl */ `
-struct Params { size: vec2u, slot: u32, pad: u32 }
-struct Overflow { index: atomic<u32>, color: vec4f }
-@group(0) @binding(0) var<uniform> p: Params;
-@group(0) @binding(1) var<storage,read> position: array<vec4f>;
-@group(0) @binding(2) var<storage,read> depth: array<vec4f>;
-@group(0) @binding(3) var<storage,read> normal: array<vec4f>;
-@group(0) @binding(4) var<storage,read> roughness: array<vec4f>;
-@group(0) @binding(5) var<storage,read> identity: array<vec4u>;
-@group(0) @binding(6) var<storage,read> albedo: array<vec4f>;
-@group(0) @binding(7) var surfaceOut: texture_storage_2d_array<rgba16float,write>;
-@group(0) @binding(8) var idOut: texture_storage_2d_array<rgba32uint,write>;
-@group(0) @binding(9) var<storage,read> color: array<vec4f>;
-@group(0) @binding(10) var hdrOut: texture_storage_2d_array<rgba16float,write>;
-@group(0) @binding(11) var<storage,read_write> overflowOut: array<Overflow>;
-fn nearestHalf(value:f32)->f32{
-  let magnitude=abs(value);if(magnitude==0. || magnitude>65504.){return value;}
-  let step=select(exp2(floor(log2(magnitude))-10.),exp2(-24.),magnitude<exp2(-14.));
-  let scaled=magnitude/step;let lower=floor(scaled);let fraction=scaled-lower;
-  let increment=select(0.,1.,fraction>.5 || (fraction==.5 && (u32(lower)&1u)==1u));
-  return sign(value)*(lower+increment)*step;
-}
-fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHalf(value.y),nearestHalf(value.z),nearestHalf(value.w));}
-@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u){
-  if(any(g.xy>=p.size)){return;}
-  let i=g.y*p.size.x+g.x;let identityAt=identity[i]; let valid=position[i].w>.5 && depth[i].w>.5;
-  textureStore(surfaceOut,vec2i(g.xy),i32(p.slot*2u),nearestHalf4(vec4f(position[i].xyz,select(0.,depth[i].x,valid))));
-  let r=roughness[i]; let cap=select(255.,1.,!(abs(r.x)<=3.402823e38) || (r.x<.25 && r.y>.10));
-  textureStore(surfaceOut,vec2i(g.xy),i32(p.slot*2u+1u),nearestHalf4(vec4f(normal[i].xyz,select(0.,cap,valid))));
-  let peak=max(albedo[i].x,max(albedo[i].y,albedo[i].z));
-  let guide=u32(floor(255.*sqrt(clamp(peak,0.,1.))+.5)); let coverage=u32(floor(255.*clamp(r.w,0.,1.)+.5));
-  textureStore(idOut,vec2i(g.xy),i32(p.slot),vec4u(identityAt.xyz,(guide<<8u)|coverage));
-  let rgba=color[i];let exceeds=any(!(abs(rgba.rgb)<=vec3f(65504.)));
-  if(!exceeds){textureStore(hdrOut,vec2i(g.xy),i32(p.slot),nearestHalf4(vec4f(rgba.rgb,1.)));return;}
-  let key=i+1u;for(var probe=0u;probe<4096u;probe++){
-    let address=p.slot*4096u+((key*2654435761u+probe)&4095u);
-    let claim=atomicCompareExchangeWeak(&overflowOut[address].index,0u,key);
-    if(claim.exchanged || claim.old_value==key){overflowOut[address].color=vec4f(rgba.rgb,0.);textureStore(hdrOut,vec2i(g.xy),i32(p.slot),vec4f(0.,0.,0.,-1.));return;}
-  }
-  textureStore(hdrOut,vec2i(g.xy),i32(p.slot),vec4f(nearestHalf4(vec4f(clamp(rgba.rgb,vec3f(-65504),vec3f(65504)),0.)).rgb,-2.));
-}`;
-
 export class DirectWindowGPU {
-  [key: string]: any;
-  static async create(device:GPUDevice,width:number,height:number,capacity=17,adaptiveRadius=false,stabilizeSparkle=false,sparkleVariant:'veto'|'round1'='veto') {
-    const gpu=new DirectWindowGPU(device,width,height,capacity,adaptiveRadius,stabilizeSparkle,sparkleVariant);
+  readonly rejects: GPUBuffer;
+  readonly total: GPUBuffer;
+  readonly output: GPUBuffer;
+  private readonly params: GPUBuffer;
+  private pipeline!: GPUComputePipeline;
+
+  private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean) {
+    const d = history.device;
+    const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+    this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
+    this.output = d.createBuffer({label: 'Direct window normalized output', size: history.bytes, usage});
+    this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
+    this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+  }
+
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false) {
+    const window = new DirectWindowGPU(history, adaptiveRadius);
+    const device = history.device;
     try {
-      await gpu.init();
-      return gpu;
-    } catch (error) {
-      gpu.dispose();
-      throw error;
-    }
+      const module = device.createShaderModule({label: 'Direct temporal window', code: mixedWindowWGSL});
+      window.pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
+      return window;
+    } catch (error) { window.dispose(); throw error; }
   }
-  constructor(device:GPUDevice,width:number,height:number,capacity:number,adaptiveRadius=false,stabilizeSparkle=false,sparkleVariant:'veto'|'round1'='veto') {
-    Object.assign(this,{device,width,height,capacity,adaptiveRadius,stabilizeSparkle});
-    this.preserveGlints=stabilizeSparkle && sparkleVariant==='veto';
-    this.frames=new Map(); this.timings=[];
-    this.resources=[];
-    this.bytes=width*height*16;
-  }
-  texture(label:string,layers:number,format:GPUTextureFormat) {
-    const t=this.device.createTexture({label,size:[this.width,this.height,layers],format,
-      usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.COPY_SRC});
-    this.resources.push(t); return t;
-  }
-  buffer(label:string,size:number,usage=GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC) {
-    const b=this.device.createBuffer({label,size,usage}); this.resources.push(b); return b;
-  }
-  async init() {
-    const d=this.device;
-    this.surface=this.texture('Direct window surface',this.capacity*2,'rgba16float');
-    this.motion=this.texture('Direct window motion',this.capacity,'rgba32float');
-    this.ids=this.texture('Direct window packed IDs',this.capacity,'rgba32uint');
-    this.hdr=this.texture('Direct window HDR',this.capacity,'rgba16float');
-    this.total=this.buffer('Direct window weighted sum',this.bytes);
-    this.output=this.buffer('Direct window normalized output',this.bytes);
-    this.camera=this.buffer('Direct window cameras',this.capacity*80);
-    this.overflow=this.buffer('Direct window HDR overflow',this.capacity*4096*32);
-    this.rejects=this.buffer('Direct window validation counts',64);
-    this.params=this.buffer('Direct window parameters',48,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);
-    const code=this.preserveGlints?mixedWindowWGSL:directWindowWGSL;
-    const module=d.createShaderModule({code});
-    const errors=(await module.getCompilationInfo()).messages.filter((row:GPUCompilationMessage)=>row.type==='error');
-    if(errors.length)throw Error(errors.map((row:GPUCompilationMessage)=>row.message).join('\n'));
-    const entries=[{buffer:{type:'uniform'}},
-      {texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}},
-      {texture:{sampleType:'uint',viewDimension:'2d-array'}},
-      {texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}},
-      {buffer:{type:'read-only-storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}}];
-    entries.push({texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}});
-    entries.push({texture:{sampleType:'uint',viewDimension:'2d-array'}});
-    const layout=d.createBindGroupLayout({entries:entries.map((entry,binding)=>({binding,visibility:GPUShaderStage.COMPUTE,...entry}))});
-    this.pipeline=await d.createComputePipelineAsync({layout:d.createPipelineLayout({bindGroupLayouts:[layout]}),compute:{module,entryPoint:'main'}});
-    this.layout=layout;
-    const captureModule=d.createShaderModule({label:'Direct window capture',code:captureWGSL});
-    const captureErrors=(await captureModule.getCompilationInfo()).messages.filter((row:GPUCompilationMessage)=>row.type==='error');
-    if(captureErrors.length)throw Error(captureErrors.map((row:GPUCompilationMessage)=>row.message).join('\n'));
-    this.capturePipeline=await d.createComputePipelineAsync({layout:'auto',compute:{module:captureModule,entryPoint:'main'}});
-    this.captureParams=this.buffer('Direct window capture parameters',16,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);
-  }
-  slot(frame:number){return ((frame%this.capacity)+this.capacity)%this.capacity;}
-  useHistory(history:any){this.history=history;}
-  capture(frame:number,buffers:Record<string,GPUBuffer>){
-    const slot=this.slot(frame),d=this.device;
-    d.queue.writeBuffer(this.captureParams,0,new Uint32Array([this.width,this.height,slot,0]));
-    const clear=d.createCommandEncoder({label:'Direct window overflow clear'});clear.clearBuffer(this.overflow,slot*4096*32,4096*32);d.queue.submit([clear.finish()]);
-    const values=[this.captureParams,buffers.centerPosition,buffers.centerDepth,buffers.centerNormal,buffers.roughness,buffers.id,buffers.albedo,this.surface,this.ids,buffers.color,this.hdr,this.overflow];
-    const group=d.createBindGroup({layout:this.capturePipeline.getBindGroupLayout(0),entries:values.map((value,binding)=>({binding,resource:value instanceof GPUBuffer?{buffer:value}:value.createView({dimension:'2d-array'})}))});
-    const encoder=d.createCommandEncoder({label:'Direct window GPU capture'}),pass=encoder.beginComputePass();
-    pass.setPipeline(this.capturePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
-    d.queue.submit([encoder.finish()]);this.frames.set(slot,frame);
-  }
-  copyMotion(frame:number){
-    const source=this.history?.motion;if(!source)throw Error('Motion history is not available.');
-    const slot=this.slot(frame),encoder=this.device.createCommandEncoder({label:'Direct window motion history copy'});
-    encoder.copyTextureToTexture({texture:source,origin:[0,0,slot]},{texture:this.motion,origin:[0,0,slot]},[this.width,this.height,1]);
-    this.device.queue.submit([encoder.finish()]);
-  }
-  async upload(frame:number,meta:any,arrays:any,capMap:Record<number,number>={}) {
-    const s=this.slot(frame), d=this.device, n=this.width*this.height;
-    d.queue.writeTexture({texture:this.motion,origin:[0,0,s]},new Float32Array(arrays.motion),{bytesPerRow:this.width*16},[this.width,this.height,1]);
-    const position=new Float32Array(arrays.centerPosition), depth=new Float32Array(arrays.centerDepth), normal=new Float32Array(arrays.centerNormal);
-    const roughness=new Float32Array(arrays.roughness), ids32=new Uint32Array(arrays.id);
-    const surfaces=new Float32Array(n*8);
-    surfaces.set(position,0); surfaces.set(normal,n*4);
-    const idView=ids32.length===n*4?ids32:Uint32Array.from(ids32);
-    const components=idView.length===n*3?3:4;
-    const roughnessComponents=roughness.length===n*2?2:4;
-    const cap=new Float32Array(n*4);
-    // The roughness AOV stores roughness in x and metalness in y. Smooth metals get only the current frame.
-    for(let i=0;i<n;i++){
-      const material=idView[i*components+2];
-      const value=roughness[i*roughnessComponents];
-      cap[i*4]=!Number.isFinite(value)||(value<0.25&&roughness[i*roughnessComponents+1]>0.10)?1:(capMap[material]??255);
-    }
-    for(let i=0;i<n;i++){
-      surfaces[i*4+3]=position[i*4+3]>0.5&&depth[i*4+3]>0.5?depth[i*4]:0;
-      surfaces[n*4+i*4+3]=position[i*4+3]>0.5&&depth[i*4+3]>0.5?cap[i*4]:0;
-    }
-    d.queue.writeTexture({texture:this.surface,origin:[0,0,s*2]},new Float16Array(surfaces.subarray(0,n*4)),{bytesPerRow:this.width*8},[this.width,this.height,1]);
-    d.queue.writeTexture({texture:this.surface,origin:[0,0,s*2+1]},new Float16Array(surfaces.subarray(n*4)),{bytesPerRow:this.width*8},[this.width,this.height,1]);
-    const ids=new Uint32Array(n*4);
-    for(let i=0;i<n;i++)for(let c=0;c<3;c++)ids[i*4+c]=idView[i*components+c];
-    if(this.preserveGlints){
-      const albedo=arrays.albedo && new Float32Array(arrays.albedo);
-      const albedoComponents=albedo?.length===n*3?3:4;
-      for(let i=0;i<n;i++){
-        const at=i*albedoComponents;
-        const peak=albedo?Math.max(albedo[at],albedo[at+1],albedo[at+2]):0;
-        const guide=Math.round(255*Math.sqrt(Math.max(0,Math.min(1,peak))));
-        const coverage=roughnessComponents===4?roughness[i*4+3]:1;
-        ids[i*4+3]=(guide<<8) | Math.round(255*coverage);
-      }
-    }
-    d.queue.writeTexture({texture:this.ids,origin:[0,0,s]},ids,{bytesPerRow:this.width*16},[this.width,this.height,1]);
-    const sourceHdr=new Float32Array(arrays.hdr), hdr=new Float16Array(n*4);
-    const overflow=new ArrayBuffer(4096*32), keys=new Uint32Array(overflow), values=new Float32Array(overflow);
-    const hdrComponents=sourceHdr.length===n*3?3:4;
-    for(let i=0;i<n;i++){
-      const base=i*4; let exceeds=false;
-      for(let c=0;c<3;c++){
-        const value=sourceHdr[i*hdrComponents+c]; hdr[base+c]=value;
-        exceeds ||= !Number.isFinite(value)||Math.abs(value)>65504;
-      }
-      hdr[base+3]=exceeds?-1:1;
-      if(exceeds){
-        const key=i+1; let bucket=Math.imul(key,2654435761)&4095;
-        for(let probe=0;keys[bucket*8];probe++){
-          if(probe===4095){
-            for(let c=0;c<3;c++)hdr[base+c]=Math.max(-65504,Math.min(65504,sourceHdr[i*hdrComponents+c]));
-            hdr[base+3]=-2;bucket=-1;break;
-          }
-          bucket=(bucket+1)&4095;
-        }
-        if(bucket>=0){keys[bucket*8]=key; values.set(sourceHdr.subarray(i*hdrComponents,i*hdrComponents+3),bucket*8+4);}
-      }
-    }
-    d.queue.writeBuffer(this.overflow,s*overflow.byteLength,overflow);
-    d.queue.writeTexture({texture:this.hdr,origin:[0,0,s]},hdr,{bytesPerRow:this.width*8},[this.width,this.height,1]);
-    const vp=new Float32Array(meta.viewProjection), projection=meta.projection??[];
-    d.queue.writeBuffer(this.camera,s*80,new Float32Array([...vp,
-      this.height*projection[5]*0.5,meta.apertureRadius??0,meta.focusDistance??1,0]));
-    this.frames.set(s,frame);
-  }
-  async dispatch(current:number,source:number,symmetric:boolean,stage:number,radiusMin=symmetric?8:17,radiusMax=this.adaptiveRadius?16:radiusMin,includeMaterialRevisions=true) {
-    const d=this.device,p=new Uint32Array([this.width,this.height,this.slot(current),this.slot(source),source-current,symmetric?1:0,stage,Number(this.adaptiveRadius) | (Number(this.stabilizeSparkle)<<1) | (Number(includeMaterialRevisions && !!this.history)<<2),radiusMin,radiusMax]);
-    d.queue.writeBuffer(this.params,0,p);
-    const h=this.history;
-    const group=d.createBindGroup({layout:this.layout,entries:[this.params,this.surface,this.ids,this.hdr,h?.meta??this.camera,this.total,this.output,this.overflow,this.rejects,this.motion,h?.id??this.ids].map((resource,binding)=>({binding,resource:resource instanceof GPUBuffer?{buffer:resource}:resource.createView({dimension:'2d-array'})}))});
-    const encoder=d.createCommandEncoder();
-    const pass=encoder.beginComputePass(this.query?{timestampWrites:{querySet:this.query,beginningOfPassWriteIndex:0,endOfPassWriteIndex:1}}:{});
-    pass.setPipeline(this.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
-    if(this.query){encoder.resolveQuerySet(this.query,0,2,this.resolve,0);encoder.copyBufferToBuffer(this.resolve,0,this.timestamps,0,16);}
+
+  get capacity() { return this.history.capacity; }
+
+  async dispatch(current: number, source: number, symmetric: boolean, stage: number,
+    radiusMin: number, radiusMax: number, includeMaterialRevisions = true) {
+    const h = this.history, d = h.device;
+    const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2);
+    d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
+      source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
+    const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion];
+    const group = d.createBindGroup({layout: this.pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
+      binding, resource: resource instanceof GPUBuffer ? {buffer: resource} : resource.createView({dimension: '2d-array'}),
+    }))});
+    const encoder = d.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(Math.ceil(h.width / 8), Math.ceil(h.height / 8));
+    pass.end();
     d.queue.submit([encoder.finish()]);
   }
-  async filter(current:number,neighbors:number[],symmetric:boolean,radiusMin=symmetric?8:17,radiusMax=this.adaptiveRadius?16:radiusMin) {
-    const frames=this.frames;
-    if(frames.get(this.slot(current))!==current)throw Error('Current frame is missing.');
-    for(const source of neighbors)if(frames.get(this.slot(source))!==source)throw Error('Neighbor frame is missing: '+source);
-    this.device.queue.writeBuffer(this.rejects,0,new Uint32Array(16));
-    await this.dispatch(current,current,symmetric,0,radiusMin,radiusMax);
-    for(const source of neighbors)await this.dispatch(current,source,symmetric,1,radiusMin,radiusMax);
-    await this.dispatch(current,current,symmetric,2,radiusMin,radiusMax);
+
+  async filter(current: number, neighbors: number[], symmetric: boolean,
+    radiusMin = symmetric ? 8 : 17, radiusMax = this.adaptiveRadius ? 16 : radiusMin) {
+    const frames = this.history.frames;
+    if (frames.get(this.history.slot(current)) !== current) throw Error('Current frame is missing.');
+    for (const source of neighbors) {
+      if (frames.get(this.history.slot(source)) !== source) throw Error('Neighbor frame is missing: ' + source);
+    }
+    this.history.device.queue.writeBuffer(this.rejects, 0, new Uint32Array(16));
+    await this.dispatch(current, current, symmetric, 0, radiusMin, radiusMax);
+    for (const source of neighbors) await this.dispatch(current, source, symmetric, 1, radiusMin, radiusMax);
+    await this.dispatch(current, current, symmetric, 2, radiusMin, radiusMax);
     return this.output;
   }
-  async read(buffer:GPUBuffer=this.output,size:number=this.bytes){
-    const d=this.device, staging=d.createBuffer({size,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
-    try{const encoder=d.createCommandEncoder();encoder.copyBufferToBuffer(buffer,0,staging,0,size);d.queue.submit([encoder.finish()]);await staging.mapAsync(GPUMapMode.READ);return staging.getMappedRange().slice(0);}
-    finally{staging.destroy();}
+
+  async read(buffer = this.output, size = buffer.size) {
+    const d = this.history.device;
+    const staging = d.createBuffer({size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+    try {
+      const encoder = d.createCommandEncoder();
+      encoder.copyBufferToBuffer(buffer, 0, staging, 0, size);
+      d.queue.submit([encoder.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      return staging.getMappedRange().slice(0);
+    } finally { staging.destroy(); }
   }
-  async readSurface(frame:number,field=1){
-    const d=this.device,size=this.width*this.height*8,staging=d.createBuffer({size,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
-    try{const encoder=d.createCommandEncoder();encoder.copyTextureToBuffer({texture:this.surface,origin:[0,0,this.slot(frame)*2+field]},{buffer:staging,bytesPerRow:this.width*8},[this.width,this.height,1]);d.queue.submit([encoder.finish()]);await staging.mapAsync(GPUMapMode.READ);return staging.getMappedRange().slice(0);}
-    finally{staging.destroy();}
+
+  memory() {
+    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size};
   }
-  memory(){
-    const pixels=this.width*this.height;
-    const history=this.capacity*pixels*(2*8+16+16+8)+this.capacity*80+this.capacity*4096*32;
-    const scratch=this.bytes*2+128;
-    return {slots:this.capacity,history,scratch,total:history+scratch,bytesPerPixel:56};
+
+  dispose() {
+    this.total.destroy();
+    this.output.destroy();
+    this.rejects.destroy();
+    this.params.destroy();
   }
-  dispose(){this.query?.destroy();for(const r of this.resources)r.destroy();this.resources=[];}
 }

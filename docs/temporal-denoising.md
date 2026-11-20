@@ -60,8 +60,9 @@ independent noise. The example advances by its samples-per-frame count.
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
-In the measured configurations, the default offline plan uses about 6.46 GB
-at 720p and 14.63 GB at 1080p. Renderer and OIDN allocations are additional.
+The default offline plan budgets about 2.74 GB at 720p and 6.20 GB at
+1080p. The measured peak with four finished frames queued was 2.71 GB
+and 6.14 GB, respectively. Renderer and OIDN allocations are additional.
 
 ## Limits and workflows
 

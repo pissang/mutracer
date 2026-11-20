@@ -57,8 +57,8 @@ describe('temporal memory planner', () => {
   it('degrades until all texture-array layers fit device limits', () => {
     const options = normalizeTemporalOptions({mode: 'interactive', historyRadius: 8, postRadius: 1});
     const plan = planTemporalMemory(32, 24, options, {...limits, maxTextureArrayLayers: 9});
-    expect(plan.historyRadius).toEqual({min: 1, max: 1});
-    expect(plan.postRadius).toBe(0);
+    expect(plan.historyRadius).toEqual({min: 2, max: 2});
+    expect(plan.postRadius).toBe(1);
   });
 
   it('budgets retained custom AOV copies for the offline look-ahead', () => {

@@ -18,36 +18,38 @@ const overflowEntryBytes = 32;
 export const TEMPORAL_MAX_FINISHED = 4;
 const ceilDiv = (value: number, divisor: number) => Math.ceil(value / divisor);
 
-function slots(mode: NormalizedTemporalOptions['mode'], radius: number, offlineDiameter: boolean) {
-  return mode === 'offline' && offlineDiameter ? radius * 2 + 1 : radius + 1;
+function postHistorySlots(options: NormalizedTemporalOptions) {
+  if (!options.postRadius) return 0;
+  return (options.mode === 'offline' ? 2 : 1) * options.postRadius + 1;
+}
+
+export function temporalHistorySlots(options: NormalizedTemporalOptions) {
+  const history = options.historyRadius.max, post = options.postRadius;
+  // At an offline push, the window center is R frames old. Its earliest
+  // post dependency is another 2P frames back (output lag plus past tap).
+  return options.mode === 'offline' ? Math.max(2 * history, history + 2 * post) + 1 : Math.max(history, post) + 1;
 }
 
 /** Exact allocation estimate for the GPU resources owned by temporal history, window and post stages. */
 export function estimateTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions, materialCount=0) {
   const pixels = width * height;
-  const historySlots = options.mode === 'offline' ? options.historyRadius.max * 2 + 1 : options.historyRadius.max + 1;
-  const postSlots = options.postRadius > 0 ? slots(options.mode, options.postRadius, true) : 0;
-
-  // TemporalGPU pre ring: 120 bytes per pixel per slot, camera and overflow
-  // table per slot, plus per-frame working buffers and small counters.
-  const pre = historySlots * (pixels * 120 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 48 + 116;
-
-  // DirectWindowGPU holds a 56-byte-per-pixel frame across its ring, two
-  // per-frame sums, packed HDR overflow entries, camera records and uniforms.
-  const window = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 32 + 128;
+  const historySlots = temporalHistorySlots(options);
+  const guideSlots = options.mode === 'offline' ? options.historyRadius.max + 1 : 1;
+  const postSlots = postHistorySlots(options);
+  const history = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + guideSlots * pixels * 16 + 32;
+  const window = pixels * 32 + 112;
 
   const pyramidBytes = scales.reduce((sum, scale) => sum + ceilDiv(width, scale) * ceilDiv(height, scale) * 8, 0);
   const grids = gridScratchBytes(width, height);
-  const post = postSlots ? postSlots * (pixels * 72 + pyramidBytes + 80) + pixels * 76 + grids + 152 : 0;
-  const composition = pixels * 48 + ceilDiv(pixels, 64) * 4 + 16 + (options.stabilizeSparkle && options.postRadius > 0 ? 32 : 0);
+  const post = postSlots ? postSlots * (pixels * 16 + pyramidBytes) + pixels * 76 + grids + 120 : 0;
+  const composition = ceilDiv(pixels, 64) * 4 + 16 + (options.stabilizeSparkle && options.postRadius > 0 ? 32 : 0);
   const queuedFrames = TEMPORAL_MAX_FINISHED * pixels * (options.denoiser?.type === 'oidn' ? 96 : 80);
   const postPending = options.mode === 'offline' ? options.postRadius : 0;
-  const pendingAndTransient = pixels * (postPending + 2) * 16;
-  const customAovs = options.denoiser?.type === 'custom' ? (options.mode === 'offline' ? options.historyRadius.max + 1 : 1) *
-    (options.denoiser.aovs?.length ?? 0) * pixels * 16 : 0;
+  const pendingAndTransient = pixels * (postPending * 64 + 32);
+  const customAovs = options.denoiser?.type === 'custom' ? guideSlots * ((options.denoiser.aovs?.length ?? 0) + 2) * pixels * 16 : 0;
   const materialRevisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? postSlots * Math.max(8, (materialCount + 1) * 4) : 0;
-  return pre + window + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
+  return history + window + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
 }
 
 const scales = [2, 4, 8] as const;
@@ -58,10 +60,9 @@ function gridScratchBytes(width: number, height: number) {
 
 function layerLimits(width: number, height: number, options: NormalizedTemporalOptions, limits: TemporalMemoryLimits, materialCount: number) {
   if (width > limits.maxTextureDimension2D || height > limits.maxTextureDimension2D) return false;
-  const history = options.mode === 'offline' ? options.historyRadius.max * 2 + 1 : options.historyRadius.max + 1;
-  const post = options.postRadius > 0 ? slots(options.mode, options.postRadius, true) : 0;
-  if (history * 4 > limits.maxTextureArrayLayers || history * 2 > limits.maxTextureArrayLayers ||
-      history > limits.maxTextureArrayLayers || post * 3 > limits.maxTextureArrayLayers || post > limits.maxTextureArrayLayers) return false;
+  const history = temporalHistorySlots(options);
+  const post = postHistorySlots(options);
+  if (history * 2 > limits.maxTextureArrayLayers || post > limits.maxTextureArrayLayers) return false;
 
   const pixels = width * height, image = pixels * 16;
   const overflow = history * overflowBuckets * overflowEntryBytes;
@@ -69,7 +70,7 @@ function layerLimits(width: number, height: number, options: NormalizedTemporalO
     ceilDiv(width, scale * 3) * ceilDiv(height, scale * 3) * 8);
   const revisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? post * Math.max(8, (materialCount + 1) * 4) : 0;
-  const buffers = [image, overflow, history * 80, post * 80, image / 4, ceilDiv(pixels, 64) * 4, revisionTable, changedMaterialIds,
+  const buffers = [image, overflow, history * 80, image / 4, ceilDiv(pixels, 64) * 4, revisionTable, changedMaterialIds,
     ...(post ? grids : [])];
   return buffers.every(size => Number.isSafeInteger(size) &&
     size <= Math.min(limits.maxBufferSize, limits.maxStorageBufferBindingSize));

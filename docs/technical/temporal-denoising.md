@@ -63,11 +63,21 @@ temporal blur.
 ## Memory and latency
 
 The planner accounts for the physical renderer extent, history and scratch
-resources, and the bounded four-frame finished queue. Renderer and OIDN
-allocations add to the temporal estimate. Separate capture, window and post
-rings make the current footprint larger than the original merged-ring
-estimate. Offline latency is the effective maximum history radius plus the
-post radius. Interactive latency is zero.
+resources, presentation inputs pending post stabilization, and the bounded
+four-frame finished queue. Renderer and OIDN allocations add to the temporal
+estimate.
+
+The window and post stages share HDR, motion, surface and ID slots. Offline,
+the ring covers at least `max(2R, R + 2P) + 1` frames for window radius `R` and
+post radius `P`. The `R + 2P` span keeps the earliest post tap available while
+the window waits for future frames. The window and post stages use separate
+half-float conversions of depth and normal within each slot to preserve their
+correspondence behavior. Spatial guides expire after the window runs, when the
+denoiser packs the presentation input. The post ring keeps the display image,
+its blur and the matching pyramid.
+
+Offline latency is the effective maximum history radius plus the post radius.
+Interactive latency is zero.
 
 When the budget or device limits require a reduction, the default offline
 history drops 16→8→4→2, then post drops 3→2→1, then the final tier uses history

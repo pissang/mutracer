@@ -30,14 +30,15 @@ async function run() {
     await device.queue.onSubmittedWorkDone();
     const internal = temporal as any;
     const baseTemporalBuffers = internal.history.memory().total + internal.window.memory().total + internal.post.memory().total +
-      internal.motionCoverageCounts.size + internal.composeParams.size +
-      Object.values(internal.composeBuffers as Record<string, GPUBuffer>).reduce((sum, buffer) => sum + buffer.size, 0) + 32;
+      internal.motionCoverageCounts.size + internal.composeParams.size + 32;
     const queuedBytes = internal.finished.reduce((sum: number, frame: any) => sum + frame._buffer('denoised').size + frame._buffer('accumulated').size +
       frame.source.color.size + frame.source.albedo.size + frame.source.normal.size + (frame.source.baseline?.size ?? 0), 0);
     const pendingAccumulatedBytes = [...internal.accumulated.values()].reduce((sum: number, buffer: GPUBuffer) => sum + buffer.size, 0);
+    const pendingPresentationBytes = [...internal.presentationInputs.values() as Iterable<Record<string, GPUBuffer>>]
+      .reduce((sum, row) => sum + Object.values(row).reduce((bytes, buffer) => bytes + buffer.size, 0), 0);
     if (internal.finished.length !== 4) throw new Error(`Expected four queued OIDN outputs, got ${internal.finished.length}.`);
     return {width, height, submittedFrames: 23, queuedFrames: internal.finished.length, plan: temporal.plan,
-      baseTemporalBuffers, queuedBytes, pendingAccumulatedBytes, trackedPeakTemporalBytes: baseTemporalBuffers + queuedBytes + pendingAccumulatedBytes,
+      baseTemporalBuffers, queuedBytes, pendingAccumulatedBytes, pendingPresentationBytes, trackedPeakTemporalBytes: baseTemporalBuffers + queuedBytes + pendingAccumulatedBytes + pendingPresentationBytes,
       rendererTargetBytes: (render as any)._output.getMemory().bytes,
       limits: {maxTextureDimension2D: device.limits.maxTextureDimension2D, maxTextureArrayLayers: device.limits.maxTextureArrayLayers,
         maxBufferSize: device.limits.maxBufferSize, maxStorageBufferBindingSize: device.limits.maxStorageBufferBindingSize}};

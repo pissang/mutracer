@@ -162,7 +162,7 @@ fn sample(image: texture_2d_array<f32>, x: vec2f, frame: u32) -> vec3f {
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (any(g.xy>=p.size)) { return; }
   let i=g.y*p.size.x+g.x;
-  let row=p.b*p.pad;let changedCount=changedMaterials[row];let material=textureLoad(identities,vec2i(g.xy),i32(p.a),0).z;
+  let row=p.b*p.pad;let changedCount=changedMaterials[row];let material=textureLoad(identities,vec2i(g.xy),i32(p.axis),0).z;
   if(changedCount==0xffffffffu){paths[i]=0u;return;}
   var low=0u;var high=changedCount;var changed=false;
   for(var iteration=0u;iteration<32u && low<high;iteration++){

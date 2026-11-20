@@ -1,15 +1,72 @@
-export const common = /* wgsl */`
+export const temporalOverflowBuckets = 4096;
+export const temporalOverflowEntryBytes = 32;
+
+export const temporalFlagsWGSL = /* wgsl */ `
+const GUIDE_MASK = 65535u;
+const CENTER_HIT = 1u << 18u;
+const SURFACE_CAPPED = 1u << 19u;
+const HDR_OVERFLOW = 1u << 20u;
+const HDR_MISSING = 1u << 21u;
+`;
+
+export const temporalMetadataWGSL = /* wgsl */ `${temporalFlagsWGSL}
+fn frameFlags(at: vec2i, slot: u32) -> u32 {
+  return u32(textureLoad(motions, at, i32(slot), 0).w);
+}
+fn motionSample(at: vec2i, slot: u32) -> vec4f {
+  let sample = textureLoad(motions, at, i32(slot), 0);
+  return vec4f(sample.xyz, f32(u32(sample.w) & 3u));
+}
+`;
+
+export const temporalOverflowWGSL = /* wgsl */ `
+const OVERFLOW_BUCKETS=${temporalOverflowBuckets}u;
+struct Overflow { index: atomic<u32>, color: vec4f }
+fn bucket(index: u32, probe: u32, slot: u32) -> u32 {
+  return slot*OVERFLOW_BUCKETS+((index*2654435761u+probe)&(OVERFLOW_BUCKETS-1u));
+}
+`;
+
+export const temporalRadianceWGSL = /* wgsl */ `
+fn loadRadiance(at: vec2i, slot: u32, width: u32) -> vec4f {
+  let value = textureLoad(hdr, at, i32(slot), 0);
+  if ((frameFlags(at, slot) & HDR_OVERFLOW) == 0u) { return value; }
+  let key = u32(at.y) * width + u32(at.x) + 1u;
+  for (var probe = 0u; probe < OVERFLOW_BUCKETS; probe++) {
+    let address = bucket(key, probe, slot);
+    let found = atomicLoad(&overflow[address].index);
+    if (found == key) { return overflow[address].color; }
+    if (found == 0u) { break; }
+  }
+  return vec4f(0);
+}
+`;
+
+// The window capture explicitly rounded to nearest half. Post used native
+// texture stores. Keep both representations to preserve correspondence tests.
+export const temporalPostSurfaceWGSL = /* wgsl */ `
+fn postSurface(at: vec2i, slot: u32, field: u32) -> vec4f {
+  let surface = textureLoad(surfaces, at, i32(slot * 2u + 1u), 0);
+  let hit = f32((frameFlags(at, slot) & CENTER_HIT) != 0u);
+  if (field == 1u) { return vec4f(surface.w, 0, 0, hit); }
+  return vec4f(surface.xyz, hit);
+}
+`;
+
+const common = /* wgsl */`
 struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
 struct Camera { vp: mat4x4f, lens: vec4f }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var surfaces: texture_2d_array<f32>;
 @group(0) @binding(2) var ids: texture_2d_array<u32>;
 @group(0) @binding(3) var<storage, read> cameras: array<Camera>;
-fn surf(x: vec2i, frame: u32, field: u32) -> vec4f { return textureLoad(surfaces, x, i32(frame*select(4u,3u,p.stage==4u)+field), 0); }
+
 fn ident(x: vec2i, frame: u32) -> vec3u { return textureLoad(ids, x, i32(frame), 0).xyz; }
 fn materialRevision(x:vec2i,frame:u32)->u32{return textureLoad(ids,x,i32(frame),0).w;}
 fn sameMaterial(x:vec2i,frame:u32,id:vec3u,revision:u32)->bool{return all(ident(x,frame)==id)&&materialRevision(x,frame)==revision;}
 @group(0) @binding(6) var motions: texture_2d_array<f32>;
+${temporalMetadataWGSL}
+${temporalPostSurfaceWGSL}
 fn inside(q: vec2f) -> bool { return all(q>=vec2f(0)) && all(q<=vec2f(p.size)-1.0); }
 fn nearest(q: vec2f) -> vec2i { return clamp(vec2i(floor(q+0.5)),vec2i(0),vec2i(p.size)-1); }
 fn motionAt(q: vec2f, frame: u32, id: vec3u, revision:u32) -> vec4f {
@@ -17,7 +74,7 @@ fn motionAt(q: vec2f, frame: u32, id: vec3u, revision:u32) -> vec4f {
   let origin=vec2i(floor(q)); let phase=fract(q); var value=vec4f(0); var weightSum=0.0;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
     let at=origin+vec2i(dx,dy); if(any(at>=vec2i(p.size))){continue;}
-    let sample=textureLoad(motions,at,i32(frame),0);
+    let sample=motionSample(at, frame);
     if(sample.w!=3.0 || !sameMaterial(at,frame,id,revision)){continue;}
     let weight=select(1.0-phase.x,phase.x,dx==1)*select(1.0-phase.y,phase.y,dy==1);
     value+=sample*weight; weightSum+=weight;
@@ -30,7 +87,7 @@ fn guideAt(q: vec2f, frame: u32, field: u32, id: vec3u, revision:u32) -> vec4f {
   let origin=vec2i(floor(q)); let phase=fract(q); var value=vec4f(0); var weightSum=0.0;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
     let at=origin+vec2i(dx,dy); if(any(at>=vec2i(p.size)) || !sameMaterial(at,frame,id,revision)){continue;}
-    let sample=surf(at,frame,field); if(sample.w<=0.0){continue;}
+    let sample=postSurface(at,frame,field); if(sample.w<=0.0){continue;}
     let weight=select(1.0-phase.x,phase.x,dx==1)*select(1.0-phase.y,phase.y,dy==1);
     value+=sample*weight; weightSum+=weight;
   }}
@@ -74,44 +131,20 @@ fn trace(q0: vec2f, id: vec3u, delta: i32, first: u32, capacity: u32) -> vec4f {
   }
   return vec4f(q,depth,1);
 }
-fn project(world: vec3f, frame: u32) -> vec3f {
-  // Match the CPU's left-to-right float32 additions, rather than a matrix dot product.
-  let m = cameras[frame].vp;
-  let q = ((world.x*m[0] + world.y*m[1]) + world.z*m[2]) + m[3];
-  let xy = vec2f((q.x/max(q.w, 1e-4)+1.0)*f32(p.size.x)/2.0-0.5,
-    (1.0-q.y/max(q.w,1e-4))*f32(p.size.y)/2.0-0.5);
-  return vec3f(xy,q.w);
-}
-fn materialOK(x: vec2i, frame: u32) -> bool {
-  let r = surf(x,frame,3u);
-  return (abs(r.x)<=3.402823e38) && !(r.x<0.25 && r.y>0.10);
-}
-fn coc(depth: f32, frame: u32) -> f32 {
-  let lens = cameras[frame].lens;
-  return lens.x*lens.y*abs(1.0/max(depth,1e-4)-1.0/lens.z);
-}
 `;
 export const reproject = common + /* wgsl */`
 @group(0) @binding(4) var<storage, read_write> mapping: array<vec4f>;
 @group(0) @binding(5) var<storage, read_write> counts: array<atomic<u32>>;
 fn reject(x: vec2i, q: vec4f, y: vec2i) -> u32 {
-  let pos=surf(x,p.a,0u); let id=ident(x,p.a);
+  let pos=postSurface(x,p.a,0u); let id=ident(x,p.a);
   let revision=materialRevision(x,p.a);
   if (!(pos.w>0.5)) { return 0u; }
   if (!(q.w>0.5 && inside(q.xy) && q.z>0.0)) { return 1u; }
   if (!sameMaterial(y,p.b,id,revision)) { return 2u; }
-  let depth=surf(y,p.b,1u);
+  let depth=postSurface(y,p.b,1u);
   if (!(depth.w>0.5 && abs(depth.x-q.z)<=0.015*max(q.z,depth.x))) { return 3u; }
-  let n=surf(x,p.a,2u); let o=surf(y,p.b,2u);
+  let n=postSurface(x,p.a,2u); let o=postSurface(y,p.b,2u);
   if (!(n.w>0.5 && o.w>0.5)) { return 4u; }
-  if (p.stage==4u) { return 9u; }
-  if (!(materialOK(x,p.a) && materialOK(y,p.b))) { return 6u; }
-  let origin=vec2i(floor(q.xy));
-  for (var dy=-1; dy<=2; dy++) { for (var dx=-1; dx<=2; dx++) {
-    let at=clamp(origin+vec2i(dx,dy),vec2i(0),vec2i(p.size)-1);
-    if (!sameMaterial(at,p.b,id,revision)) { return 7u; }
-  }}
-  if (!(abs(coc(surf(x,p.a,1u).x,p.a)-coc(q.z,p.b))<=0.5)) { return 8u; }
   return 9u;
 }
 var<workgroup> localCounts: array<atomic<u32>,20>;
@@ -120,8 +153,7 @@ var<workgroup> localCounts: array<atomic<u32>,20>;
     let x=vec2i(g.xy); let path=trace(vec2f(x),ident(x,p.a),p.delta,p.a,p.pad);
     let q=vec4f(path.xy,path.z,path.w); let y=nearest(q.xy);
     let reason=reject(x,q,y);
-    var at=vec2f(y);
-    if (p.stage==4u) { at=select(vec2f(-1),q.xy,reason>=2u); }
+    let at=select(vec2f(-1),q.xy,reason>=2u);
     mapping[g.y*p.size.x+g.x]=vec4f(at,select(0.0,1.0,reason==9u),f32(reason));
     if (p.axis==1u) {
       atomicAdd(&localCounts[reason],1u);
@@ -135,48 +167,18 @@ var<workgroup> localCounts: array<atomic<u32>,20>;
   }
 }
 `;
-const overflowTable = /* wgsl */ `
-const OVERFLOW_BUCKETS=4096u;
-struct Overflow { index: atomic<u32>, color: vec4f }
-fn bucket(index: u32, probe: u32, slot: u32) -> u32 {
-  return slot*OVERFLOW_BUCKETS+((index*2654435761u+probe)&(OVERFLOW_BUCKETS-1u));
-}
-`;
-
-export const accumulate = overflowTable + /* wgsl */`
+export const accumulate = /* wgsl */ `
 struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var images: texture_2d_array<f32>;
-@group(0) @binding(2) var blurred: texture_2d_array<f32>;
-@group(0) @binding(3) var<storage, read> mapping: array<vec4f>;
-@group(0) @binding(4) var<storage, read_write> total: array<vec4f>;
-@group(0) @binding(5) var<storage, read_write> output: array<vec4f>;
-@group(0) @binding(6) var<storage, read_write> overflow: array<Overflow>;
-fn image(at: vec2i, slot: u32) -> vec4f {
-  let color=textureLoad(images,at,i32(slot),0);
-  if (color.a!=-1.0) { return color; }
-  let index=u32(at.y)*p.size.x+u32(at.x)+1u;
-  for (var probe=0u; probe<OVERFLOW_BUCKETS; probe++) {
-    let address=bucket(index,probe,slot);
-    let key=atomicLoad(&overflow[address].index);
-    if (key==index) { return overflow[address].color; }
-    if (key==0u) { break; }
-  }
-  return vec4f(0);
-}
+@group(0) @binding(2) var<storage, read_write> total: array<vec4f>;
+@group(0) @binding(3) var<storage, read_write> output: array<vec4f>;
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (any(g.xy>=p.size)) { return; }
-  let x=vec2i(g.xy); let idx=g.y*p.size.x+g.x;
-  if (p.stage==0u) { total[idx]=vec4f(image(x,p.a).xyz,1.0); return; }
-  if (p.stage==2u) { output[idx]=vec4f(total[idx].xyz/total[idx].w,image(x,p.a).w); return; }
-  let m=mapping[idx]; if (m.z==0.0) { return; }
-  var weight=exp(-0.5*pow(abs(f32(p.delta))/1.5,2.0));
-  if (p.stage==3u) {
-    let diff=abs(textureLoad(blurred,vec2i(m.xy),i32(p.b),0).xyz-textureLoad(blurred,x,i32(p.a),0).xyz);
-    let mean=(diff.x+diff.y+diff.z)/3.0;
-    weight=exp(-pow(abs(f32(p.delta))/2.25,2.0))*exp(-pow(mean/8.0,2.0));
-  }
-  total[idx]+=vec4f(image(vec2i(m.xy),p.b).xyz*weight,weight);
+  let color=textureLoad(images,vec2i(g.xy),i32(p.a),0);
+  let idx=g.y*p.size.x+g.x;
+  if (p.stage==0u) { total[idx]=vec4f(color.rgb,1.0); return; }
+  output[idx]=vec4f(total[idx].rgb/total[idx].w,color.w);
 }
 `;
 export const blur = /* wgsl */`
@@ -198,42 +200,6 @@ fn reflect(x: i32, n: i32) -> i32 { return select(select(x,2*n-x-2,x>=n),-x,x<0)
 }
 `;
 
-export const rawSnapshot = overflowTable + /* wgsl */ `
-struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
-@group(0) @binding(0) var<uniform> p: Params;
-@group(0) @binding(1) var<storage,read> input: array<vec4f>;
-@group(0) @binding(2) var dst: texture_storage_2d_array<rgba16float,write>;
-@group(0) @binding(3) var<storage,read_write> overflow: array<Overflow>;
-@group(0) @binding(4) var<storage,read_write> missed: atomic<u32>;
-fn half(value: vec2f) -> vec2f {
-  let bounded=clamp(value,vec2f(-65504),vec2f(65504));
-  return select(unpack2x16float(pack2x16float(bounded)),value,abs(value)>vec2f(65504));
-}
-@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
-  if (any(g.xy>=p.size)) { return; }
-  let index=g.y*p.size.x+g.x;
-  let color=input[index];
-  if (all(abs(color)<=vec4f(65504))) {
-    textureStore(dst,vec2i(g.xy),i32(p.a),color);
-    return;
-  }
-  for (var probe=0u; probe<OVERFLOW_BUCKETS; probe++) {
-    let address=bucket(index+1u,probe,p.a);
-    loop {
-      let claim=atomicCompareExchangeWeak(&overflow[address].index,0u,index+1u);
-      if (claim.exchanged) {
-        overflow[address].color=vec4f(half(color.xy),half(color.zw));
-        textureStore(dst,vec2i(g.xy),i32(p.a),vec4f(0,0,0,-1));
-        return;
-      }
-      if (claim.old_value!=0u) { break; }
-    }
-  }
-  atomicAdd(&missed,1u);
-  textureStore(dst,vec2i(g.xy),i32(p.a),vec4f(half(color.xy),half(color.zw)));
-}
-`;
-
 export const snapshot = /* wgsl */ `
 struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
@@ -251,17 +217,6 @@ struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, 
 }
 `;
 
-export const motionSnapshot = /* wgsl */ `
-struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
-@group(0) @binding(0) var<uniform> p: Params;
-@group(0) @binding(1) var<storage,read> input: array<vec4f>;
-@group(0) @binding(2) var dst: texture_storage_2d_array<rgba32float,write>;
-@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
-  if(any(g.xy>=p.size)){return;}
-  textureStore(dst,vec2i(g.xy),i32(p.a),input[g.y*p.size.x+g.x]);
-}
-`;
-
 export const idSnapshot = /* wgsl */ `
 struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
@@ -269,7 +224,7 @@ struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, 
 @group(0) @binding(2) var<storage,read> revisions: array<vec2u>;
 @group(0) @binding(3) var dst: texture_storage_2d_array<rgba32uint,write>;
 fn materialRevision(id:u32)->u32 {
-  var low=0u; var high=arrayLength(&revisions);
+  var low=0u; var high=p.pad;
   for(var iteration=0u;iteration<32u && low<high;iteration++){
     let mid=low+(high-low)/2u; let entry=revisions[mid];
     if(entry.x==id){return entry.y;}
