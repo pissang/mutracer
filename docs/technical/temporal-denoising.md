@@ -273,6 +273,66 @@ If deformation support in the renderer is not feasible, the fallback above
 (current frame only for deformed objects) ships, and the deforming test scene
 checks that those pixels show no ghosting.
 
+### `motion` AOV work
+
+`motion` already handles camera motion and rigid object transforms. Each
+instance stores a current-to-previous world matrix in the AOV scene table, read
+in `aovTraceCenter` (`src/renderer/wgsl/aovTrace.wgsl.ts`) and in
+`aovTrace.frag.ts`.
+
+**Done: grazing-angle visibility.** Commit `6300996d` on `codex/motion-aov`,
+from `dev`.
+- The visibility test compared the reprojected depth with the depth at the
+  nearest previous pixel centre, at a fixed 0.1% tolerance. It rejected most
+  tilted surfaces; 68% of the dining-table marble was invalid.
+- It now compares against the depth of the current tangent plane at that pixel
+  centre. Two tangent offsets are projected, and `1/w` and `depth/w` are
+  interpolated affinely, which is exact for planes under any projective camera.
+- A GPU regression in `tests/gpu/aov.ts` covers a grazing ground plane:
+  912/912 valid on both backends, against 0/912 before; error ≤ 0.002 px.
+- Native imports the same WGSL. Native checks have not been run.
+
+**Remaining.** In order, each on `codex/motion-aov` with both backends:
+
+1. **Deformed geometry.**
+   - When a mesh's vertex positions change with unchanged topology
+     (`Geometry.markVerticesUpdated()`, skinning, morph targets), keep the
+     previous frame's object-space positions for that mesh. Store them as a
+     snapshot buffer referenced from the AOV scene table, only for meshes that
+     changed.
+   - In the centre pass, interpolate the previous positions at the hit's
+     `si.barycentrics` on `si.triangleIndex`, apply the instance's previous
+     world matrix, and project.
+   - Keep the plane visibility test. Use the previous triangle's plane, from
+     the three snapshot vertices, for the depth check.
+   - Topology changes still invalidate.
+   - Respect the storage-binding budget. The shader comment states four scene
+     plus three AOV storage buffers; if a new binding does not fit, pack the
+     snapshot into the existing AOV scene buffer. On WebGL, use a texture like
+     `aovScene`.
+   - Expose the barycentrics as an internal centre-AOV lane for the temporal
+     denoiser, not as a public kind.
+2. **Projection changes.**
+   - Focal-length animation and dolly-zoom must not invalidate `motion`. The
+     previous view-projection already projects the point, so invalidate only
+     when the dimensions change.
+   - Check that the orthographic-to-perspective switch still behaves: the
+     current GPU test expects that a projection change invalidates. Change the
+     contract and the docs together.
+3. **Agreement test.** For adjacent frames, `project_{t−1}(point) − x` equals
+   `motion.xy` within 1e-3 px wherever `motion` is valid. Cover rigid,
+   deformed and zooming cases, as a GPU test on both backends.
+4. **Docs.** Update the `motion` row and the "Motion history" paragraph in
+   `docs/api.md`: deformation supported, projection changes keep history,
+   the remaining invalidations.
+5. **Native.** After web review: run the focused native checks
+   (`native/CONTRIBUTING.md`), and port any host-side snapshot plumbing in
+   `native/host/src/aov.rs`.
+
+Gate: the existing `tests/gpu/aov.ts` contract plus the new cases pass on WebGPU
+and WebGL; four typechecks; `npm test`. Beauty must be unchanged when `motion`
+is requested; the GPU test already asserts this.
+
 ### History invalidation
 
 Geometric validation handles visibility. It cannot see radiance changes on a
