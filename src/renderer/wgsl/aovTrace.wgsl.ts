@@ -2,11 +2,13 @@ import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 import {unsupportedCoatReflectanceWgsl} from './aovReflectance.wgsl.js';
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
-export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasCoatNormals?: boolean, displayMasks = false) {
+export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasCoatNormals?: boolean, displayMasks = false, hasAnisotropyDirections = false) {
   // The native AOT caller omits the web clearcoat capability until its
   // temporal producer and coverage policy have been validated.
   const unsupportedCoat = hasCoatNormals === undefined ? 'material.coatWeight > 0.0'
     : unsupportedCoatReflectanceWgsl(hasCoatNormals);
+  const unsupportedAnisotropy = hasCoatNormals === undefined ? 'material.specularAnisotropy > 0.0'
+    : 'material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0)';
   return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;
@@ -67,7 +69,7 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
   let unsupported = (material.materialType != STANDARD) | (material.alpha < 1.0) |
       (${unsupportedCoat}) | (material.fuzzWeight > 0.0) |
-      (material.specularAnisotropy > 0.0) | (material.subsurfaceWeight > 0.0) |
+      (${unsupportedAnisotropy}) | (material.subsurfaceWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
       (material.transmissionDispersionScale > 0.0);
@@ -83,7 +85,11 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
     normal=select(-normal,normal,cosine>=0.0);
     material.inside=(cosine<=0.0) && !material.thinWalled;
     material.relativeIor=select(material.specularIor,1.0/material.specularIor,cosine>0.0);
-    let prepared=openpbr_prepare(si.tangent,material,-ray.d,normal);
+${hasAnisotropyDirections ? /* wgsl */ `    material.directionTangent = si.directionTangent;
+    material.directionBitangent = si.directionBitangent;
+    material.geometryTangent = si.geometryTangent;
+    material.geometryBitangent = si.geometryBitangent;
+` : ''}    let prepared=openpbr_prepare(si.tangent,material,-ray.d,normal);
     let reflectance=mtFrameReflectanceComponents(prepared, (aovParameters.w & 8u) != 0u, (aovParameters.w & 16u) != 0u);
 ${hasCoatNormals === undefined && !displayMasks ? /* wgsl */ `    aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0);
     aovAccum[index].specular+=vec4f(reflectance.specular,1.0);

@@ -75,6 +75,9 @@ async function run() {
       {name: 'zero-roughness coat', coat: 1, roughness: 0, metal: 0, cosine, coatOnly: true},
       {name: 'textured weight and roughness', coat: 1, roughness: .4, metal: 0, cosine: 1, mapped: true},
       {name: 'equivalent constant coat', coat: 128 / 255, roughness: .4 * 64 / 255, metal: 0, cosine: 1},
+      {name: 'brushed metal tangent', coat: 0, roughness: 0, metal: 1, cosine, anisotropy: .8, rotation: 0},
+      {name: 'brushed metal bitangent', coat: 0, roughness: 0, metal: 1, cosine, anisotropy: .8, rotation: Math.PI / 2},
+      {name: 'anisotropic dielectric', coat: 0, roughness: 0, metal: 0, cosine: .4, anisotropy: .7},
     ];
 
     for (const fixture of cases) {
@@ -86,6 +89,8 @@ async function run() {
       material.coatWeightMap = fixture.mapped ? coatMap : undefined;
       material.coatRoughnessMap = fixture.mapped ? coatMap : undefined;
       material.baseMetalness = fixture.metal;
+      material.specularAnisotropy = fixture.anisotropy ?? 0;
+      material.specularAnisotropyRotation = fixture.rotation ?? 0;
       material.baseWeight = fixture.coatOnly ? 0 : 1;
       material.specularWeight = fixture.coatOnly ? 0 : 1;
       engine.update();
@@ -119,6 +124,8 @@ async function run() {
     const mapped = rows[4], constant = rows[5];
     check(channelError(mapped.diffuse, constant.diffuse) < .002 && channelError(mapped.specular, constant.specular) < .002,
       'Clearcoat texture slots must resolve to the equivalent constant values');
+    check(channelError(rows[6].specular, rows[7].specular) > .01,
+      'Rotating the brushed-metal tangent must affect its grazing-angle reflectance');
     return {backend, adapter: info.adapterName, samples: fixtureSamples, sequenceOffset, passed: true, rows};
   } finally {
     render.dispose();
