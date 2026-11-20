@@ -113,8 +113,33 @@ async function captureAovs() {
       }
     }
     check(disoccluded>0,'Far occlusion fixture did not cover disocclusion');
+    // A ground plane seen at grazing angles must keep exact, valid motion.
+    // Half a pixel of depth slope there exceeds a fixed relative tolerance.
+    mesh.geometry=new THREE.PlaneGeometry(400,400);mesh.rotation.set(-Math.PI/2,0,0);mesh.position.set(0,0,0);
+    sync.update();engine.scene=sync.scene;
+    camera.position.set(0,.3,4);camera.lookAt(0,0,0);camera.updateMatrixWorld();
+    engine.camera=fromTHREECamera(camera);engine.update();await render.converge({samples:4});
+    const previousCamera=camera.clone();
+    camera.position.x+=.03;camera.position.z-=.05;camera.updateMatrixWorld();
+    engine.camera=fromTHREECamera(camera);engine.update();await render.converge({samples:4});
+    const grazingMotion=await render.readPixels('motion');
+    let grazingSurface=0,grazingValid=0,grazingError=0;
+    const ray=new THREE.Vector3(),hit=new THREE.Vector3();
+    for(let y=0;y<32;y++)for(let x=0;x<48;x++){
+      ray.set((x+.5)/48*2-1,1-(y+.5)/32*2,.5).unproject(camera).sub(camera.position).normalize();
+      if(ray.y>=-1e-4)continue;
+      hit.copy(camera.position).addScaledVector(ray,-camera.position.y/ray.y);
+      const old=hit.clone().project(previousCamera),px=(old.x+1)/2*48,py=(1-old.y)/2*32;
+      if(px<.5||px>47.5||py<.5||py>31.5)continue;
+      grazingSurface++;const o=(y*48+x)*4;
+      if(grazingMotion.data[o+3]!==3)continue;grazingValid++;
+      grazingError=Math.max(grazingError,Math.abs(grazingMotion.data[o]-(px-x-.5)),Math.abs(grazingMotion.data[o+1]-(py-y-.5)));
+    }
+    check(grazingSurface>200,'Grazing fixture covers too few pixels');
+    check(grazingValid>=grazingSurface*.98,`Grazing motion lost history: ${grazingValid}/${grazingSurface}`);
+    check(grazingError<.01,`Grazing motion mismatch: ${grazingError}`);
     if (errors.length) throw new Error(errors.join('\n'));
-    return {customCalls,disoccluded,rotationValid,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {customCalls,disoccluded,rotationValid,grazing:{surface:grazingSurface,valid:grazingValid,maxError:grazingError},motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

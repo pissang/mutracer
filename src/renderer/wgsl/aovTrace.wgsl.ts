@@ -24,6 +24,33 @@ fn aovMatrix(offset: u32) -> mat4x4f {
     bitcast<vec4f>(vec4u(aovScene[offset+12u], aovScene[offset+13u], aovScene[offset+14u], aovScene[offset+15u])));
 }
 fn aovVector(offset:u32)->vec3f {return bitcast<vec3f>(vec3u(aovScene[offset],aovScene[offset+1u],aovScene[offset+2u]));}
+// Previous-frame pixel, 1/w and view depth/w of a current world point. Both
+// reciprocal terms are affine in screen space for any projective camera.
+fn aovPreviousProjection(world: vec3f, transform: mat4x4f, size: vec2f) -> vec4f {
+  let oldWorld = transform * vec4f(world, 1.0);
+  let clip = aovMatrix(0u) * oldWorld;
+  let w = 1.0 / clip.w;
+  return vec4f((clip.xy * w * 0.5 + 0.5) * size, w, dot(oldWorld.xyz - aovVector(44u), aovVector(48u)) * w);
+}
+// View depth of the current surface's tangent plane at the previous pixel
+// centre. Comparing it with the depth traced there stays exact on grazing
+// planes, where half a pixel of depth slope exceeds any fixed relative
+// tolerance. Returns a negative value for edge-on planes.
+fn aovPlaneDepthAtPreviousCenter(world: vec3f, normal: vec3f, transform: mat4x4f, size: vec2f, scale: f32, origin: vec4f) -> f32 {
+  let helper = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(normal.x) > 0.9);
+  let t1 = normalize(cross(normal, helper));
+  let t2 = cross(normal, t1);
+  let a = aovPreviousProjection(world + t1 * scale, transform, size) - origin;
+  let b = aovPreviousProjection(world + t2 * scale, transform, size) - origin;
+  let det = a.x * b.y - a.y * b.x;
+  if (abs(det) < 1e-6) { return -1.0; }
+  let d = floor(origin.xy) + 0.5 - origin.xy;
+  let s = (d.x * b.y - d.y * b.x) / det;
+  let t = (a.x * d.y - a.y * d.x) / det;
+  let reciprocal = origin.zw + s * a.zw + t * b.zw;
+  if (reciprocal.x <= 0.0) { return -1.0; }
+  return reciprocal.y / reciprocal.x;
+}
 fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: ptr<function, OpenPbrResolvedMaterial>) -> bool {
   var ray = rayInput;
   (*si).triangleIndex = -1;
@@ -108,15 +135,19 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
     aovScene[materialOffset + u32(si.materialIndex)], aovScene[primitiveOffset + u32(si.triangleIndex)]);
   aovCenter[index].motion.z = dot(si.position-aovVector(36u),aovVector(40u));
   if (aovScene[offset+2u] == 0u) { return; }
-  let oldWorld = aovMatrix(offset+4u) * vec4f(si.position,1.0);
+  let transform = aovMatrix(offset+4u);
+  let oldWorld = transform * vec4f(si.position,1.0);
   let oldClip = aovMatrix(0u) * oldWorld;
   if (oldClip.w <= 0.0) { return; }
   let oldNdc=oldClip.xyz/oldClip.w;
   let oldPixel=(oldNdc.xy*0.5+0.5)*vec2f(size);
   if (any(oldPixel < vec2f(0.0)) || any(oldPixel >= vec2f(size)) || abs(oldNdc.z)>1.0) { return; }
   let previous=aovPrevious[u32(oldPixel.x)+u32(oldPixel.y)*size.x];
-  let oldDepth=dot(oldWorld.xyz-aovVector(44u),aovVector(48u));
-  if (any(previous.identity.xy != aovCenter[index].identity.xy) || abs(previous.motion.z-oldDepth)>max(1e-4,abs(oldDepth)*1e-3)) { return; }
+  if (any(previous.identity.xy != aovCenter[index].identity.xy)) { return; }
+  let origin = aovPreviousProjection(si.position, transform, vec2f(size));
+  let planeDepth = aovPlaneDepthAtPreviousCenter(si.position, si.faceNormal, transform, vec2f(size),
+    max(aovCenter[index].motion.z, 1e-3) * 1e-2, origin);
+  if (planeDepth <= 0.0 || abs(previous.motion.z-planeDepth)>max(1e-4,planeDepth*1e-3)) { return; }
   let motion=(oldPixel-(vec2f(id.xy)+0.5))*vec2f(1.0,-1.0);
   aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,3.0);
 }
