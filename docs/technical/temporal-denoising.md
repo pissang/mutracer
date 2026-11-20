@@ -22,6 +22,8 @@ and steel-cutlery quality. The split AOVs stay unmerged on
 
 The prototype assumes a static scene. It reprojects by world position and
 camera matrices only. Dynamic scenes are a requirement of the library feature.
+The library reprojects by chaining the `motion` AOV (see
+[dynamic scenes](#dynamic-scenes)).
 
 ## Algorithm kept from the prototype
 
@@ -29,9 +31,11 @@ Per output frame *t*:
 
 1. **Direct window in linear HDR.** Every neighbor frame *s* in the window is
    reprojected once, nearest texel, into *t*. No recursive history.
-   - Validation of a tap: same object, instance and material ID; normals within
-     `dot ≥ 0.95`; tangent-plane distance ≤ 1.5% of depth; circle-of-confusion
-     difference ≤ 0.5 px; on screen and in front of the camera.
+   - Validation of a tap in the prototype: same object, instance and material
+     ID; normals within `dot ≥ 0.95`; tangent-plane distance ≤ 1.5% of depth;
+     circle-of-confusion difference ≤ 0.5 px; on screen and in front of the
+     camera. The library moves the ID and normal tests onto every chain step
+     and keeps depth and CoC at the landing texel.
    - Tent weights `(R + 1 − |s − t|) / (R + 1)`.
    - Offline (symmetric) radius adapts to defocus:
      `R = clamp(8 + 8·max(CoC − 2, 0), 8, 16)` px of CoC. Interactive (causal)
@@ -105,20 +109,18 @@ of the object; create a new one to change them.
 | `cut()` | History boundary before the next push (camera cut, scene switch). Pending frames still finish |
 | `latency` | Frames between `push` and the frame becoming drainable: `Rmax + postRadius` offline, 0 interactive |
 | `plan` | After the first push: effective `{historyRadius, postRadius, bytes}` after the memory budget |
-| `temporal` | `false` when running the WebGL per-frame fallback |
 | `dispose()` | Release GPU resources and the OIDN lease. Safe to repeat |
 
 `attach(render)`:
 
 - Registers an internal AOV request on the render, in the same way as custom
   denoiser `aovs`: the passes run, but `render.aovs` is unchanged.
-- Warns once if the render has its own denoiser on WebGPU: its result is
-  ignored and the inference is wasted.
-- On WebGL it applies `fallbackDenoiser` with `render.setDenoiser`. Detaching
-  restores the previous configuration.
+- Warns once if the render has its own denoiser: its result is ignored and the
+  inference is wasted.
 
 `push(render)` rejects when:
 
+- the engine runs on WebGL (see [WebGL](#webgl));
 - the render is not attached or not converged;
 - its dimensions differ from earlier pushes in this shot;
 - the device was lost (the history is gone; create a new denoiser).
@@ -164,7 +166,6 @@ Every option gets TSDoc with its default.
 | `denoiser` | `{type: 'oidn', model: 'cleanAuxLarge'}` | Spatial denoiser applied once to the accumulated image. Accepts `OIDNDenoiserOptions` without `schedule`, `CustomDenoiserOptions` without `schedule`, or `null`. JNLM is rejected: its variance estimate does not describe a windowed mean |
 | `historyInvalidation` | `'auto'` | `'auto'` cuts history when light, environment, material or visibility revisions change; `'manual'` cuts only on `cut()` |
 | `memoryBudget` | `undefined` | GPU bytes for temporal history and scratch; undefined allocates the full plan. See [memory](#memory) |
-| `fallbackDenoiser` | `{type: 'jnlm'}` | Per-frame denoiser for the WebGL fallback; `null` leaves frames unfiltered |
 
 The following stay internal constants in v1:
 
@@ -203,75 +204,82 @@ These are tuning values with evidence behind them, not user decisions.
 
 ## Dynamic scenes
 
-### What reprojection needs
+### Reprojection by chained `motion`
 
-The window needs, for each pixel *x* of frame *t* and each neighbor *s* in
-`[t − R, t + R]`, where the pixel-center surface point of *x* lies in *s*. Three
-properties matter:
+The window reprojects through the `motion` AOV, as other temporal denoisers do.
+It does not compute its own correspondence. Every kind of movement that
+`motion` handles is therefore supported, with no extra work in the temporal
+module:
 
-1. **Arbitrary frame distance, both directions.** The symmetric window reaches
-   16 frames into the future.
-2. **No resampling drift.** The accepted result depends on exact reprojection.
-3. **Sub-pixel precision.** Nearest-texel selection and bilinear coverage use
-   the fractional position.
+- camera motion;
+- rigid object and instance transforms;
+- deformation, once `motion` supports it.
 
-The public `motion` AOV gives previous-minus-current pixels for one step back.
-Chaining it 16 times resamples the motion field at every step. It cannot give
-forward correspondence without inverting a scatter. So the temporal feature
-does not reproject by chaining `motion`. It uses the per-pixel surface
-correspondence that a correct `motion` AOV is itself computed from.
+Where `motion` is invalid, the chain stops and the pixel uses fewer frames.
 
-### Surface correspondence contract
+Each ring slot stores the frame's `motion` (previous minus current position,
+in pixels). For pixel *x* of frame *t*:
 
-From the renderer, per pixel-center hit of frame *t* (the same unjittered ray
-as `centerPosition`, `id` and `motion`):
+- **Past neighbors** (*s < t*). Start at `p_t = x` and step back one frame at a
+  time: `p_{k−1} = p_k + motion_k(p_k)`.
+  - `motion_k` is sampled bilinearly from only those texels whose `id`
+    matches the chain's surface. Nearest sampling would add up to half a pixel
+    of motion-gradient error per step. Unrestricted bilinear sampling would mix
+    in another object's motion at a silhouette.
+- **Future neighbors** (*s > t*). `motion` points backwards, so each forward
+  step inverts it by fixed-point iteration:
+  - Find *y* in frame *k + 1* with `y + motion_{k+1}(y) = p_k`, starting from
+    `y₀ = p_k − motion_{k+1}(p_k)`, for at most four iterations.
+  - Accept the step only when the residual is below 0.05 px and the `id`
+    matches. Otherwise the chain ends.
+- **Chain validity.** Every step needs:
+  - valid `motion` (alpha 3), which includes the renderer's grazing-angle
+    plane visibility test;
+  - the same object, instance and material ID;
+  - adjacent-step normals with `dot ≥ 0.95`.
 
-| Field | Purpose |
-| --- | --- |
-| object, instance, primitive (`id`) | Find the surface in any frame |
-| barycentric `(u, v)` on the source triangle | Re-evaluate the point on deformed geometry |
-| world position (f32, camera-relative in storage) | Rigid fast path and plane test |
+  A chain that breaks at step *k* stops there, and frames beyond it are not
+  used for that pixel. The tests are per step, so a rotating or deforming
+  surface keeps its history even after its normal has turned far over the
+  window.
+- **Landing validation.** At the final texel in *s*, two tests stay from the
+  prototype: the depth test (1.5%) and the CoC test (≤ 0.5 px). Bilinear
+  coverage and the mixed-window 3×3 search also stay. The depth they compare
+  against is the chained previous depth (see the `motion.z` request below),
+  not a world position. A moving object has a different world position in
+  every frame.
 
-The temporal denoiser also keeps, per captured frame:
+The prototype's world-position reprojection is not shipped. Phase 1 keeps it
+only to reproduce the archived static results. Phase 3 replaces it, and the
+GPU tests keep it as an oracle for static scenes.
 
-- the camera (view-projection, CoC parameters);
-- a table of object and instance world transforms, keyed by AOV object ID;
-- for meshes whose vertex revision changed inside the window, a snapshot of
-  their deformed vertex positions.
+**Accuracy gate.** On the static dining-table archive the exact projection is
+known. Gate on the chained landing positions against that projection: p99
+error ≤ 0.05 px at |Δ| = 16 in both directions, and chain acceptance at least
+that of the prototype's validation. If the gate fails, record the error
+distribution and report to the maintainer before tuning further. Replacing
+the chain is the maintainer's decision.
 
-The point in frame *s* is then:
+### What the temporal feature needs from `motion`
 
-- **Rigid** (vertex revision unchanged between *s* and *t*):
-  `M_s · M_t⁻¹ · p_t`, projected with the camera of *s*. For static objects this
-  is exactly the prototype's reprojection, so the static results are preserved.
-- **Deformed:** interpolate the snapshotted triangle vertices of *s* at
-  `(u, v)`, transform with `M_s` and project.
-- **Topology changed, or deformation snapshots over budget:** current frame
-  only for that object.
-
-Validation in *s* is unchanged: ID, normal, plane distance, CoC and on-screen
-tests at the projected texel. This also catches occlusion in *s*.
-
-What the temporal feature needs from the parallel `motion` work:
-
-- **Shared correspondence.** `motion` must be computed from this same
-  correspondence (rigid transforms plus deformed vertex positions, with the
-  grazing-angle visibility test), so that both outputs agree. Test: for
-  adjacent frames, `project_{t−1}(point) − x` equals `motion.xy` within
-  1e-3 px wherever `motion` is valid.
-- **Barycentrics.** An internal center-AOV lane, not a public kind.
-- **Projection changes.** A change of projection (focal-length animation,
-  dolly-zoom) must not invalidate correspondence; today it invalidates
-  `motion`. The temporal path uses each frame's own camera, so it does not
-  depend on this, but the `motion` agreement test does.
-- **Frame identity.** `motion` history advances per AOV frame. The temporal
-  denoiser records which AOV frame each push captured. It treats a push whose
-  AOV history did not advance by exactly one frame as a cut for the `motion`
-  agreement check only.
-
-If deformation support in the renderer is not feasible, the fallback above
-(current frame only for deformed objects) ships, and the deforming test scene
-checks that those pixels show no ghosting.
+- **Previous depth in `motion.z`.** Today the `z` lane is documented as 0. The
+  request: the camera-forward depth of the same surface point in the previous
+  frame, which the visibility test already computes. Chaining it gives the
+  landing depth for the depth and CoC tests. This is a public contract change
+  to the `motion` row in `docs/api.md`.
+- **Float32 precision.** Sub-pixel accuracy matters, because errors add up
+  over 16 steps. The output is already rgba32f.
+- **Projection changes keep history.** Focal-length animation and dolly-zoom
+  must not invalidate `motion` (remaining item 2 below). Until then, a zooming
+  camera ends every chain and the window falls back to the current frame.
+- **One AOV frame per push.** `motion` history advances per AOV frame. Push
+  checks that the render's AOV history advanced by exactly one frame since the
+  previous push. Otherwise, for example after previews were rendered in
+  between, it treats the push as a cut.
+- **Deformation.** Needed for vertex animation (remaining item 1). The
+  temporal feature does not need the barycentric lane. Until deformation lands,
+  deformed pixels have invalid `motion`, so their chains end immediately and
+  they use only the current frame: noisier, but without ghosting.
 
 ### `motion` AOV work
 
@@ -310,22 +318,25 @@ from `dev`.
      plus three AOV storage buffers; if a new binding does not fit, pack the
      snapshot into the existing AOV scene buffer. On WebGL, use a texture like
      `aovScene`.
-   - Expose the barycentrics as an internal centre-AOV lane for the temporal
-     denoiser, not as a public kind.
-2. **Projection changes.**
+2. **Previous depth.** Write the previous-frame camera-forward depth of the
+   point into `motion.z`. It is already computed for the visibility test.
+   Document it in the `motion` row.
+3. **Projection changes.**
    - Focal-length animation and dolly-zoom must not invalidate `motion`. The
      previous view-projection already projects the point, so invalidate only
      when the dimensions change.
    - Check that the orthographic-to-perspective switch still behaves: the
      current GPU test expects that a projection change invalidates. Change the
      contract and the docs together.
-3. **Agreement test.** For adjacent frames, `project_{t−1}(point) − x` equals
-   `motion.xy` within 1e-3 px wherever `motion` is valid. Cover rigid,
-   deformed and zooming cases, as a GPU test on both backends.
-4. **Docs.** Update the `motion` row and the "Motion history" paragraph in
+4. **Accuracy test.** For adjacent frames, `motion.xy` equals the analytic
+   projection of the surface point within 1e-3 px wherever `motion` is valid,
+   and `motion.z` equals its previous depth within 1e-4 relative. Cover rigid,
+   deformed and zooming cases in a GPU test on both backends. The temporal
+   chain relies on this contract.
+5. **Docs.** Update the `motion` row and the "Motion history" paragraph in
    `docs/api.md`: deformation supported, projection changes keep history,
    the remaining invalidations.
-5. **Native.** After web review: run the focused native checks
+6. **Native.** After web review: run the focused native checks
    (`native/CONTRIBUTING.md`), and port any host-side snapshot plumbing in
    `native/host/src/aov.rs`.
 
@@ -362,38 +373,41 @@ A radiance-consistency test, described below, is a separate later phase
 
 ## WebGL
 
-The temporal path is WebGPU only. On WebGL:
+Temporal denoising is WebGPU only, and WebGL has no fallback.
 
-- the constructor warns once per engine;
-- `temporal` is false;
-- `attach` applies `fallbackDenoiser` to the render;
-- `push` captures the render's final per-frame result;
-- `drain` yields it immediately (`latency` 0) in both modes.
+- `push` rejects with an error that names the requirement, so a missing
+  feature never looks like a stream of unfiltered frames.
+- `attach` and the constructor do not throw, so an application can construct
+  the denoiser before the backend is known.
+- Applications check `engine.backend === 'webgpu'` after `await engine.init()`,
+  and on WebGL use a per-frame denoiser on the render.
 
-The push/drain/flush contract is identical, so application code needs no
-branch.
+This is a deliberate exception to the `AGENTS.md` rule that WebGPU-only
+features fail soft on WebGL. The maintainer chose an explicit error over a
+silent per-frame fallback.
 
 ## Memory
 
-The prototype allocates two rings per mode (a pre ring plus the window ring)
-and holds 16-bit IDs, f16 world positions and 8-bit post history. The library
-merges the rings and fixes the precision issues. Estimated bytes per pixel per
-slot:
+The prototype allocates two rings per mode (a pre ring plus the window ring),
+and its post ring keeps its own surfaces. It holds 16-bit IDs, f16 world
+positions and 8-bit post history. The library merges these into one ring. The
+post stage reads `motion`, IDs and normals for *t ± 3* from the window ring,
+which still holds them when post runs. Estimated bytes per pixel per slot:
 
 | Data | Format | Bytes/px | Slots (offline default) |
 | --- | --- | ---: | --- |
 | HDR radiance | rgba16f + overflow table | 8 | `2·Rmax + 1` = 33 |
-| Surface: camera-relative position, depth, normal, CoC/cap lane | rgba32f + rgba16f | 24 | 33 |
+| `motion` (xy, previous depth, validity) | rgba32f | 16 | 33 |
+| Surface: octahedral normal, depth, cap lane | rgba16f | 8 | 33 |
 | IDs + packed coverage/albedo guide | rgba32uint | 16 | 33 |
-| Barycentrics (dynamic scenes) | rg16unorm | 4 | 33 |
 | OIDN guides (albedo, normal) | rgba16f ×2 | 16 | `Rmax + 1` = 17 |
-| Post history: display, blurred, pyramid, surfaces, IDs | mixed | ≈ 60 | `2·postRadius + 1` = 7 |
+| Post history: display, blurred, pyramid | rgba16f | ≈ 40 | `2·postRadius + 1` = 7 |
 | Scratch: sums, outputs, OIDN buffers, flow grids | f32 | ≈ 100 | 1 |
 
-That is about 2,510 B/px for the default offline plan:
-`33·52 + 17·16 + 7·60 + 100`.
+That is about 2,240 B/px for the default offline plan:
+`33·48 + 17·16 + 7·40 + 100`.
 
-The interactive plan is about 1,290 B/px:
+The interactive plan is about 1,140 B/px:
 
 - 18 history slots;
 - current-frame guides only;
@@ -401,18 +415,17 @@ The interactive plan is about 1,290 B/px:
 
 | Resolution | Offline default | Interactive (17 past + 3 post) |
 | --- | ---: | ---: |
-| 1280×720 | ≈ 2.3 GB | ≈ 1.2 GB |
-| 1920×1080 | ≈ 5.2 GB | ≈ 2.7 GB |
-| 3840×2160 | ≈ 21 GB | ≈ 10.7 GB |
+| 1280×720 | ≈ 2.1 GB | ≈ 1.1 GB |
+| 1920×1080 | ≈ 4.6 GB | ≈ 2.4 GB |
+| 3840×2160 | ≈ 18.5 GB | ≈ 9.5 GB |
 
 The prototype measured 1.70 GiB at 720p for its A2 replay buffers. The
-estimate is higher because it uses 32-bit IDs and f32 positions and adds
-barycentrics. If phase 2 shows that camera-relative f16 positions are exact
-enough, the surface lane drops to 16 B/px (about −0.25 GB at 720p).
+estimate is higher mainly because of the f32 `motion` and the 32-bit IDs.
+World positions are no longer stored.
 
 The renderer, the AOV passes and the OIDN network come on top of this.
-Deformed-vertex snapshots add 12 bytes per vertex per slot, for deformed meshes
-only.
+Deformation costs the temporal feature nothing extra: `motion` keeps one
+previous vertex snapshot inside the renderer.
 
 `memoryBudget` covers the temporal allocations. When the full plan does not fit,
 the plan degrades in this order:
@@ -438,7 +451,8 @@ an A/B on the dining-table archive.
   only, not fail.
 - **Object IDs.** The prototype truncates them to 16 bits. Use full 32-bit IDs.
 - **World positions.** The prototype stores them in f16 (0.5-unit steps at
-  1000 units). Store camera-relative f32 positions.
+  1000 units). The chained-`motion` reprojection no longer stores them; depth
+  tests are relative and use f16 depth.
 - **Post-history quantization.** The prototype rounds post history to 8-bit
   sRGB codes. Its thresholds are in code units, so keep the code scale but
   store floats. A/B this change separately.
@@ -466,8 +480,9 @@ references stay affordable:
      thin geometry, defocus.
 2. **Deforming mesh.** A procedural cloth plane with a travelling sine wave
    (`markVerticesUpdated`), plus a sphere morphing into a cube by vertex lerp,
-   over a textured floor. Run with deformation support and with the
-   current-frame fallback.
+   over a textured floor. Run it with `motion` deformation support. Before that
+   support lands, run it to check that deformed pixels fall back to the
+   current frame without ghosting.
 3. **Lighting changes.** The scene 1 room with a light switched on at a known
    frame, an emissive material colour change, a mesh visibility toggle and a
    slowly moving spot light. Exercises auto-invalidation and documents the
@@ -518,24 +533,28 @@ Unit tests (Vitest, no GPU):
 - revision-vector invalidation;
 - uniform and struct layout contracts between TypeScript packing and WGSL;
 - generated shader validity;
-- the WebGL fallback warning and the attach/detach denoiser restore.
+- forward-inversion convergence on synthetic motion fields (a CPU reference of
+  the WGSL iteration);
+- the WebGL rejection.
 
-GPU tests (`tests/gpu/temporalDenoise.{html,ts}`, headless Chrome, WebGPU and
-`?webgl`):
+GPU tests (`tests/gpu/temporalDenoise.{html,ts}`, headless Chrome, WebGPU, plus
+a `?webgl` rejection case):
 
 - **Identity.** Window radius 0 and post 0 equal the render's built-in
   `cleanAuxLarge` output.
-- **Static reprojection.** Projected positions match `centerPosition` in the
-  target frame within 1e-4 relative.
-- **Motion agreement.** Adjacent-frame correspondence equals `motion` where
-  valid.
-- **Moving and deformed correspondence.** Correspondence on scenes 1 and 2 at
-  low resolution.
+- **Chain accuracy.**
+  - Static scene with a camera move: chained landing positions in both
+    directions, up to |Δ| = 16, match the exact camera projection (oracle)
+    within 0.05 px p99.
+  - Moving and deformed scenes at low resolution: the same check against
+    analytic positions.
+- **Chain breaks.** Disocclusion, an ID change and invalid `motion` end the
+  chain. No tap is accepted beyond the break.
+- **AOV frame skip.** A preview rendered between two pushes acts as a cut.
 - **Epoch cuts.** No accepted taps across a light change.
 - **Forced small budget.** The plan and output size follow the degradation
   order.
 - **Device loss.** `push` rejects.
-- **WebGL.** Per-frame fallback output equals the render's JNLM result.
 
 If any display composition code moves, run `npm run test:parity` as well.
 
@@ -547,36 +566,38 @@ If any display composition code moves, run `npm run test:parity` as well.
 | `src/temporal/schedule.ts` | Pure window/epoch/readiness logic |
 | `src/temporal/memoryPlan.ts` | Pure budget planner |
 | `src/temporal/invalidation.ts` | Revision vectors |
-| `src/renderer/WGPUTemporalHistory.ts` | Ring allocation, GPU capture, transform/vertex tables |
-| `src/renderer/WGPUTemporalWindow.ts` | Direct window dispatch |
+| `src/renderer/WGPUTemporalHistory.ts` | Ring allocation, GPU capture |
+| `src/renderer/WGPUTemporalWindow.ts` | Motion chains and direct window dispatch |
 | `src/renderer/WGPUTemporalPost.ts` | Post stabilisation, flow and sparkle filter |
-| `src/renderer/wgsl/temporal*.wgsl.ts` | Window, correspondence, post, flow, sparkle shaders |
+| `src/renderer/wgsl/temporal*.wgsl.ts` | Chain, window, post, flow, sparkle shaders |
 | `src/Render.ts`, `src/Display.ts`, `src/renderer/WGPURenderingPipeline.ts` | Internal capture hook, external-HDR composition for denoising, `TemporalFrame` presentation |
 | `package.json` `exports["./temporal"]`, library build entries | Sub-path |
 | `docs/temporal-denoising.md`, `docs/api.md`, `docs/denoising.md`, `llms.txt`, `README.md` | Usage guide, API table, links, one `llms.txt` line |
 
-There is no GLSL counterpart: WebGL falls back by design. Native ports follow
+There is no GLSL counterpart: WebGL is not supported. Native ports follow
 only after the web feature is merged and reviewed.
 
 ## Implementation phases
 
 | Phase | Work | Gate |
 | --- | --- | --- |
-| 0. Base | Branch from `dev`; bring in `62f94409` and `0ceab9eb` (`createOIDNFilter`); agree the correspondence contract with the `motion` work | Their unit and GPU tests pass on the branch |
-| 1. Static port | Sub-path, API, scheduling, GPU-only capture, merged rings, internal composition path, window, OIDN, post, sparkle, WebGL fallback. Static reprojection, prototype storage formats | The dining-table archive, replayed through the library API, matches the archived adopted frames on ≥ 99.9% of pixels within one code (differences explained); unit tests; identity GPU test; four typechecks, `npm test` |
-| 2. Robustness | The fixes above, each as a separate A/B | No dining-table regression beyond spread; large-coordinate and many-ID GPU tests |
-| 3. Dynamic scenes | Transform-table rigid correspondence, deformation via barycentrics (or the current-frame fallback), auto-invalidation, `cut`, auto cut detection; scenes 1 and 2 | Ghosting, then stability, then sharpness gates on scenes 1, 2 and the dining table |
+| 0. Base | Branch from `dev`; bring in `62f94409` and `0ceab9eb` (`createOIDNFilter`); merge the reviewed `codex/motion-aov` work, including `motion.z` | Their unit and GPU tests pass on the branch |
+| 1. Static port | Sub-path, API, scheduling, GPU-only capture, merged rings, internal composition path, window, OIDN, post, sparkle, WebGL rejection. Prototype world-position reprojection and storage formats | The dining-table archive, replayed through the library API, matches the archived adopted frames on ≥ 99.9% of pixels within one code (differences explained); unit tests; identity GPU test; four typechecks, `npm test` |
+| 2. Robustness | The fixes above, each as a separate A/B | No dining-table regression beyond spread; many-ID GPU test |
+| 3. Dynamic scenes | Replace the reprojection with chained `motion` in the window and the post stage; auto-invalidation, `cut`, auto cut detection; scenes 1 and 2 | Chain accuracy gate on the dining table (p99 ≤ 0.05 px at \|Δ\| = 16), then ghosting, stability and sharpness gates on scenes 1, 2 and the dining table |
 | 4. Memory | Budget planner, degradation, OOM retry, `plan` | Unit plan tests; forced-budget GPU test; peak measured with renderer and OIDN live at 720p and 1080p |
 | 5. Lighting | Scene 3; optional radiance-consistency test behind an internal switch | Scene 3 gates; unchanged results on static scenes |
 | 6. Docs and examples | Guide, API, `llms.txt`, a small example; trim this note to algorithm and reasons | Doc review; full checks; `test:parity` if display code moved |
 
-## Open questions
+## Maintainer decisions
 
-- Reprojection source: surface correspondence plus transform tables, with
-  `motion` as a cross-check, rather than chained `motion` vectors.
-- Sub-path entry `@meimu/mutracer/temporal` versus the main entry.
-- `stabilizeSparkle` default `true` (the adopted final) versus `false` (the
-  prototype default).
-- `attach` mutating the render's denoiser on WebGL.
-- No stabilised HDR export in v1.
-- Continuous light animation without a radiance test.
+- **Reprojection.** Chained `motion`. The temporal module computes no
+  correspondence of its own, and deformation support comes from `motion`.
+- **Entry point.** The sub-path `@meimu/mutracer/temporal`.
+- **WebGL.** Not supported. `push` rejects, with no per-frame fallback.
+- **`stabilizeSparkle`.** Defaults to `true`, the adopted final.
+- **HDR export.** v1 has no stabilised HDR export;
+  `readPixels('accumulated')` is the HDR output.
+- **Continuous light animation.** Documented with
+  `historyInvalidation: 'manual'`. The radiance-consistency test waits for
+  phase 5.
