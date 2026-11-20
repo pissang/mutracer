@@ -88,9 +88,10 @@ async function run() {
     const fullIdResult = await exerciseFullWidthIds(device);
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);
+    const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -162,6 +163,29 @@ async function exerciseFloatingPostCodes(device: GPUDevice) {
     check(output[0]!==Math.round(output[0]),'Post code was rounded to an integer');
     return {linear,expected,stored:output[0]};
   }finally{post.dispose();buffer.destroy();}
+}
+
+async function exerciseMaterialAcceptance(device: GPUDevice) {
+  const width=8,height=8,pixels=width*height;
+  const centerPosition=new Float32Array(pixels*4),centerDepth=new Float32Array(pixels*4),centerNormal=new Float32Array(pixels*4),motion=new Float32Array(pixels*4),id=new Uint32Array(pixels*4),hdr=new Float32Array(pixels*4),albedo=new Float32Array(pixels*4),normal=new Float32Array(pixels*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+    const i=(y*width+x)*4;centerPosition.set([(2*(x+.5)/width)-1,1-(2*(y+.5)/height),0,1],i);
+    centerDepth.set([1,0,0,1],i);centerNormal.set([0,0,1,1],i);motion.set([0,0,0,3],i);id.set([1,2,212,0],i);hdr.set([1,1,1,1],i);albedo.set([.5,.5,.5,1],i);normal.set([.5,.5,1,1],i);
+  }
+  const identity=new Float32Array(16);identity[0]=identity[5]=identity[10]=identity[15]=1;
+  const meta={viewProjection:identity,projection:identity,apertureRadius:0,focusDistance:1};
+  const history=await TemporalGPU.create(device,width,height,'pre',2);
+  try{
+    const upload=async(frame:number,rough:number,metal:number)=>{
+      const roughness=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)roughness.set([rough,metal,0,1],i*4);
+      history.upload(frame,meta,{centerPosition,centerDepth,centerNormal,roughness,motion,id,hdr,albedo,normal});
+    };
+    await upload(0,.5,0);await upload(1,.5,0);const diffuse=await history.mapping(1,0,true).then(()=>history.read(history.counts,80)).then(x=>new Uint32Array(x));
+    await upload(0,.1,.5);await upload(1,.1,.5);const smoothMetal=await history.mapping(1,0,true).then(()=>history.read(history.counts,80)).then(x=>new Uint32Array(x));
+    check(diffuse[9]===pixels&&diffuse[6]===0,`Material 212 was scene-specifically rejected: ${diffuse[6]}`);
+    check(smoothMetal[6]===pixels,`Smooth-metal roughness rule was lost: ${smoothMetal[6]}`);
+    return {materialId:212,diffuseAccepted:diffuse[9],smoothMetalRejected:smoothMetal[6]};
+  }finally{history.dispose();}
 }
 
 async function blobPixels(blob:Blob){const image=await createImageBitmap(blob);const canvas=new OffscreenCanvas(image.width,image.height);const context=canvas.getContext('2d')!;context.drawImage(image,0,0);return context.getImageData(0,0,image.width,image.height).data;}

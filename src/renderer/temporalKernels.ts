@@ -17,10 +17,8 @@ fn project(world: vec3f, frame: u32) -> vec3f {
 }
 fn nearest(x: vec2f) -> vec2i { return clamp(vec2i(floor(x+0.5)), vec2i(0),vec2i(p.size)-1); }
 fn materialOK(x: vec2i, frame: u32) -> bool {
-  let id = ident(x, frame).z;
   let r = surf(x,frame,3u);
-  if (!(abs(r.x)<=3.402823e38) || (r.x<0.25 && r.y>0.10)) { return false; }
-  return !(id==212u || id==233u || id==263u || id==265u || id==269u || id==273u || id==275u || id==277u || id==279u || id==281u);
+  return (abs(r.x)<=3.402823e38) && !(r.x<0.25 && r.y>0.10);
 }
 fn coc(depth: f32, frame: u32) -> f32 {
   let lens = cameras[frame].lens;
