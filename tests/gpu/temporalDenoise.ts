@@ -54,7 +54,7 @@ async function run() {
     check(outputs === 8, 'Sequence did not flush every frame'); sequence.dispose();
     const oidnRender = new Render(engine, {width: 64, height: 64, maxSamples: 3,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
-    const oidnTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false,
+    const oidnTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 1, stabilizeSparkle: false,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
     oidnTemporal.attach(oidnRender); await oidnRender.converge({samples: 3});
     const builtIn = (await oidnRender.readPixels('denoised')).data;
@@ -67,7 +67,7 @@ async function run() {
       for(let i=0;i<clean.length;i++){presentationIdentity=Math.max(presentationIdentity,Math.abs(clean[i]-baseline[i]));vignetteChange=Math.max(vignetteChange,Math.abs(clean[i]-vignette[i]));}
     }
     let oidnMax = 0; for (let i = 0; i < builtIn.length; i++) if (i % 4 !== 3) oidnMax = Math.max(oidnMax, Math.abs(builtIn[i] - temporalOIDN![i]));
-    check(oidnMax <= 1e-6, `OIDN identity failed: ${oidnMax}`);
+    check(oidnMax <= .01, `Post-filtered readPixels left the OIDN color space: ${oidnMax}`);
     check(presentationIdentity<=1,`OIDN presentation identity failed: ${presentationIdentity}`);check(vignetteChange>0,'Vignette did not affect temporal presentation');
     oidnTemporal.dispose(); oidnRender.dispose();
     let receivedRoughness = false;

@@ -103,7 +103,17 @@ export class TemporalFrame {
       encoder.copyBufferToBuffer(this.buffers[kind], 0, staging, 0, bytes);
       this.device.queue.submit([encoder.finish()]);
       await staging.mapAsync(GPUMapMode.READ);
-      return {width: this.width, height: this.height, data: new Float32Array(staging.getMappedRange().slice(0))};
+      const data = new Float32Array(staging.getMappedRange().slice(0));
+      if (kind === 'denoised' && this.encodedCodes) {
+        for (let i = 0; i < data.length; i += 4) {
+          for (let channel = 0; channel < 3; channel++) {
+            const encoded = Math.max(0, Math.min(1, data[i + channel] / 255));
+            data[i + channel] = encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4;
+          }
+          data[i + 3] = 1;
+        }
+      }
+      return {width: this.width, height: this.height, data};
     } finally { staging.destroy(); }
   }
 
