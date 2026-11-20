@@ -94,6 +94,29 @@ async function run() {
     for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
     reduced.dispose();
+    const oom = new TemporalDenoiser(engine, {denoiser: null});
+    oom.attach(render);
+    await render.converge({samples: 1, sampleSequenceOffset: 250});
+    const pushErrorScope = device.pushErrorScope, popErrorScope = device.popErrorScope;
+    const filters: GPUErrorFilter[] = [];
+    let attempts = 0;
+    device.pushErrorScope = filter => { pushErrorScope.call(device, filter); filters.push(filter); };
+    device.popErrorScope = async () => {
+      const filter = filters.pop();
+      const error = await popErrorScope.call(device);
+      if (filter !== 'out-of-memory' || error) return error;
+      attempts++;
+      return attempts === 1 ? new GPUOutOfMemoryError('Simulated allocation failure') : null;
+    };
+    try {
+      await oom.push(render);
+      check(attempts === 2 && oom.plan?.historyRadius.max === 8 && oom.latency === 11,
+        'An out-of-memory scope error did not retry the next plan exactly once');
+    } finally {
+      device.pushErrorScope = pushErrorScope;
+      device.popErrorScope = popErrorScope;
+      oom.dispose();
+    }
     // Both axes exercise the padded target stride and the exact public crop.
     const oidnRender = new Render(engine, {width: 57, height: 51, maxSamples: 3,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});

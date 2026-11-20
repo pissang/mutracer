@@ -73,6 +73,7 @@ function copyBuffer(device: GPUDevice, source: GPUBuffer, bytes: number, label: 
 }
 
 function isOutOfMemory(error: unknown): boolean {
+  if (typeof GPUOutOfMemoryError !== 'undefined' && error instanceof GPUOutOfMemoryError) return true;
   return typeof error === 'object' && error !== null &&
     ('name' in error && (error as {name?: string}).name === 'GPUOutOfMemoryError' ||
       'message' in error && /out of memory/i.test(String((error as {message?: unknown}).message)));
@@ -390,7 +391,7 @@ export class TemporalDenoiser {
         return;
       }
       this.releaseResources();
-      if (!isOutOfMemory(error) || retried) { this.activeOptions = this.options; throw error; }
+      if ((!scopedError && !isOutOfMemory(error)) || retried) { this.activeOptions = this.options; throw error; }
       const next = nextTemporalMemoryPlan(width, height, this.options, candidate, device.limits);
       if (!next) { this.activeOptions = this.options; throw error; }
       retried = true; candidate = next;
