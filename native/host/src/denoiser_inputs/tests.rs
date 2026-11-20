@@ -90,7 +90,7 @@ fn invalid_frames_do_not_consume_ids_or_replace_previous() {
         |m: &mut FrameMetadata| m.camera.aperture_radius = 0.1,
         |m: &mut FrameMetadata| m.camera.view[0] = f32::NAN,
         |m: &mut FrameMetadata| m.camera.projection = [0.0; 16],
-        |m: &mut FrameMetadata| m.output_extent = [16, 16],
+        |m: &mut FrameMetadata| m.output_extent = [16, 8],
         |m: &mut FrameMetadata| m.pre_exposure = 2.0,
         |m: &mut FrameMetadata| m.delta_seconds = 0.0,
         |m: &mut FrameMetadata| m.jitter_pixels[0] = 0.6,

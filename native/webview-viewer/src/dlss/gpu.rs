@@ -67,7 +67,7 @@ pub fn bootstrap(ngx: &ffi::Ngx) -> Result<Gpu> {
     }
     let timing_features =
         if std::env::var_os("MUTRACER_NATIVE_GPU_TIMESTAMPS").is_some_and(|v| v == "1") {
-            wgpu::Features::TIMESTAMP_QUERY
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
         } else {
             wgpu::Features::empty()
         };

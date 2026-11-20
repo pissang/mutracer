@@ -144,8 +144,11 @@ pub struct FrameMetadata {
 impl FrameMetadata {
     fn validate(&self) -> crate::Result<()> {
         self.camera.validate()?;
-        if self.input_extent.contains(&0) || self.output_extent != self.input_extent {
-            return Err("Initial frame inputs require nonempty DLAA extents".into());
+        if self.input_extent.contains(&0)
+            || (self.output_extent != self.input_extent
+                && self.output_extent != self.input_extent.map(|n| n.saturating_mul(2)))
+        {
+            return Err("Temporal outputs require nonempty equal or doubled input dimensions".into());
         }
         if !matches!(self.sample_count, 1 | 2 | 4)
             || (self.sample_count > 1 && self.camera.aperture_radius > 0.)

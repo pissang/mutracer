@@ -876,6 +876,7 @@ pub(crate) fn reproject_metadata(current: &[u32], previous: Option<&[u32]>) -> V
                             words[offset + 4 + i] = value.to_bits();
                         }
                         words[offset + 2] = 1;
+                        words[offset + 3] = (prior as u32 - 52) / 24;
                     }
                 }
             }

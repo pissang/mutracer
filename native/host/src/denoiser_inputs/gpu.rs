@@ -54,6 +54,7 @@ pub(crate) struct GpuFrameResources {
     device: DeviceKey,
     pub extent: [u32; 2],
     pub stable_ids: Option<wgpu::Buffer>,
+    pub transmission_motion: Option<wgpu::Buffer>,
     pub guides: Vec<GuideTexture>,
     /// Only allocated for explicitly requested optical records.
     pub glass: Option<wgpu::Buffer>,
@@ -145,6 +146,7 @@ impl GpuFrameResources {
         Ok(Self {
             device: gpu.frame_device,
             stable_ids: None,
+            transmission_motion: None,
             extent,
             guides,
             glass: buffer(glass_bytes),

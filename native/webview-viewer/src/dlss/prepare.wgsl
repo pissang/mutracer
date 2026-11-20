@@ -47,5 +47,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     textureStore(motion, p, vec4f(mv,0.0,0.0));
     // Initialize through wgpu before external writes so its initialization
     // tracker cannot clear the NGX result when the consumer first reads it.
-    textureStore(output, p, vec4f(-99.0));
+    let scale = textureDimensions(output) / size;
+    for (var y = 0u; y < scale.y; y++) {
+        for (var x = 0u; x < scale.x; x++) {
+            textureStore(output, vec2i(id.xy * scale + vec2u(x, y)), vec4f(-99.0));
+        }
+    }
 }

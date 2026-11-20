@@ -17,6 +17,77 @@ fn channel_range(pixels: &[u8]) -> [[u8; 2]; 4] {
     })
 }
 
+#[test]
+#[ignore = "requires a real GPU"]
+fn temporal_reconstruction_scale_preserves_raw_and_publishes_sdr_and_hdr() {
+    use wgpu::util::DeviceExt;
+    struct DoubleOutput;
+    impl CustomDenoiser for DoubleOutput {
+        fn input_mode(&self) -> DenoiseInputMode {
+            DenoiseInputMode::TemporalGpu
+        }
+        fn temporal_output_scale(&self) -> u32 {
+            2
+        }
+        fn denoise(
+            &self,
+            mut input: DenoiseInput,
+            _: CancelToken,
+        ) -> std::result::Result<DenoiseOutput, String> {
+            let frame = input.resident.take().unwrap();
+            assert_eq!(frame.size, [16, 12]);
+            let [w, h] = frame.output_size();
+            assert_eq!([w, h], [32, 24]);
+            let metadata = frame.temporal.as_ref().unwrap().metadata();
+            assert_eq!(metadata.input_extent, frame.size);
+            assert_eq!(metadata.output_extent, [w, h]);
+            let pixel = |i: u32| [i as f32 / (w * h) as f32, 0.5, 0.25, 1.0];
+            let values: Vec<_> = (0..w * h).map(pixel).collect();
+            let output = frame
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&values),
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                });
+            frame.submit([], output).map(DenoiseOutput::Resident)
+        }
+    }
+    let _lock = crate::abi_test_lock();
+    let engine = engine(Backend::Software, [32, 24]);
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            size: RenderSize::Scale(0.5),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let raw = render.read_pixels(PixelKind::Hdr).unwrap();
+    assert_eq!([raw.width, raw.height], [16, 12]);
+    render
+        .set_custom_denoiser(Some(Arc::new(DoubleOutput)), DenoiseSchedule::EverySample)
+        .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let filtered = render.read_pixels(PixelKind::Denoised).unwrap();
+    assert_eq!([filtered.width, filtered.height], [32, 24]);
+    assert_eq!(filtered.data[0], 23. / 24.);
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), raw);
+    let display = engine.display();
+    let (w, h, rgba) = display.read_rgba8(&render).unwrap();
+    assert_eq!([w, h], [32, 24]);
+    assert!(rgba.chunks_exact(4).any(|pixel| pixel[0] > 0));
+    let (w, h, _) = display.read_rgba16f(&render).unwrap();
+    assert_eq!([w, h], [32, 24]);
+    render
+        .set_custom_denoiser(None, DenoiseSchedule::EverySample)
+        .unwrap();
+    let (w, h, _) = display.read_rgba8(&render).unwrap();
+    assert_eq!([w, h], [16, 12]);
+}
+
 fn display_aovs_and_upscale(backend: Backend) {
     let _lock = crate::abi_test_lock();
     let engine = engine(backend, [48, 32]);

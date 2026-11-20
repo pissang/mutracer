@@ -8,14 +8,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let size = textureDimensions(reconstructed);
     if (any(id.xy >= size)) { return; }
     let index = id.x + (size.y-1u-id.y)*size.x;
-    let raw = original[index];
-    let flags = textureLoad(validity, vec2i(id.xy), 0).x;
+    let inputSize = textureDimensions(validity);
+    let inputPixel = id.xy / (size / inputSize);
+    let inputIndex = inputPixel.x + (inputSize.y-1u-inputPixel.y)*inputSize.x;
+    let raw = original[inputIndex];
+    let flags = textureLoad(validity, vec2i(inputPixel), 0).x;
     let filtered = textureLoad(reconstructed, vec2i(id.xy), 0).rgb;
     // Preserve raw coverage/background and material layers whose reflectance
     // contract has not been validated. Basic transmission remains enabled.
     let supported = (flags & 161u) == 129u;
     // NGX reconstructs conditional surface radiance. MuTracer's custom result
     // is averaged raw radiance; Display divides by primary coverage once.
-    let coverage = clamp(albedo[index].a, 0.0, 1.0);
+    let coverage = clamp(albedo[inputIndex].a, 0.0, 1.0);
     output[index] = vec4f(select(raw.rgb, filtered * coverage, supported), raw.a);
 }

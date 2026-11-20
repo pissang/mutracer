@@ -51,7 +51,7 @@ type Configure = unsafe extern "C" fn(*const c_char, *const u16, *const u16) -> 
 type Extensions = unsafe extern "C" fn(u32, u64, u64, *mut c_char, u32, *mut u32) -> u32;
 type QuerySupport = unsafe extern "C" fn(u64, u64, *mut Support) -> u32;
 type Init = unsafe extern "C" fn(u64, u64, u64, *const c_void, *const c_void, *mut Caps) -> u32;
-type Create = unsafe extern "C" fn(u64, u32, u32, *mut Target) -> u32;
+type Create = unsafe extern "C" fn(u64, u32, u32, u32, u32, *mut Target) -> u32;
 type Eval = unsafe extern "C" fn(
     Target,
     u64,
@@ -92,7 +92,7 @@ impl Ngx {
     pub unsafe fn load(path: &Path, runtime: &Path, logs: &Path, id: &str) -> Result<Self> {
         let lib = unsafe { libloading::Library::new(path) }?;
         let abi = unsafe { lib.get::<unsafe extern "C" fn() -> u32>(b"rr_abi\0") }?;
-        ensure!(unsafe { abi() } == 3, "shim ABI mismatch");
+        ensure!(unsafe { abi() } == 4, "shim ABI mismatch");
         let configure = *unsafe { lib.get::<Configure>(b"rr_configure\0") }?;
         let ngx = Self {
             extensions: *unsafe { lib.get(b"rr_extensions\0") }?,

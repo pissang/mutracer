@@ -103,14 +103,25 @@ pub trait CustomDenoiser: Send + Sync + 'static {
     fn temporal_sample_count(&self) -> u32 {
         1
     }
+    /// Linear output scale for a resident temporal result. Default 1. Scale 2
+    /// doubles both axes while keeping trace and raw exports at the input size.
+    /// Called during registration outside the engine lock, only in TemporalGpu.
+    fn temporal_output_scale(&self) -> u32 {
+        1
+    }
+    /// Request the diagnostic thin-pane and parallel-slab correspondence
+    /// buffer. Default false. Applies only to pinhole perspective TemporalGpu.
+    fn temporal_transmission_motion(&self) -> bool {
+        false
+    }
     /// Default false. True additionally uploads CPU inputs as GPU storage buffers
     /// on the worker. This is a readback+upload path, with extra memory/copy cost.
     /// Applies only to Cpu mode; ResidentGpu already supplies GPU snapshots.
     fn gpu_inputs(&self) -> bool {
         false
     }
-    /// Filters one image on a library thread and returns the same size and
-    /// layout, or an error message. Poll `cancel` to stop early; results of
+    /// Filters on a library thread. Resident temporal results use the declared
+    /// output size; other modes use the input size. Poll `cancel` to stop early; results of
     /// cancelled calls are discarded.
     fn denoise(
         &self,

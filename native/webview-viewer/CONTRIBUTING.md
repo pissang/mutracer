@@ -91,6 +91,18 @@ independently sampled input frames with one shared jitter per frame. The
 progressive sample budget is separate. Set
 `MUTRACER_NATIVE_GPU_TIMESTAMPS=1` in a separate run to log GPU trace and guide
 resolve timings. Timestamp readback can affect frame pacing.
+Set `MUTRACER_DLSS_MATERIAL_GUIDE` to `physical` (default), `diffuse-reinhard`,
+or `camera-normal` to compare one material guide conversion at a time.
+Set `MUTRACER_DLSS_OUTPUT_SCALE=2` to test native 2× Ray Reconstruction
+output. Use a render scale of 0.5 to obtain one reconstructed pixel per
+display pixel. Raw HDR stays at the input size and still uses progressive
+samples. The default scale is 1. An output beyond device limits uses scale 1.
+
+`mutracer-viewer.exe --profile-dlss-1080p MODEL OUTPUT [CAMERA.bin]` exercises
+the real SDK offscreen for 24 samples and writes an image and history summary.
+The glTF must load with the native scene importer. A camera file uses the
+128-byte native camera record. With GPU timestamps enabled the log separates
+independent sampling, guide resolve, adapter prepare, NGX and output resolve.
 
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
 material-edit first-sample timing and `captureScene` for compact scene, resource

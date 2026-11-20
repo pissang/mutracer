@@ -1221,11 +1221,14 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
     struct InspectGlass {
         engine: Engine,
         thin: bool,
-        result: Arc<Mutex<Option<(usize, f32)>>>,
+        results: Arc<Mutex<Vec<(usize, f32)>>>,
     }
     impl CustomDenoiser for InspectGlass {
         fn input_mode(&self) -> DenoiseInputMode {
             DenoiseInputMode::TemporalGpu
+        }
+        fn temporal_transmission_motion(&self) -> bool {
+            true
         }
         fn denoise(
             &self,
@@ -1238,15 +1241,31 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
             let paths =
                 crate::hit_diagnostics::read_raw(gpu, temporal.optical_path_records()).unwrap();
             let primary = crate::hit_diagnostics::read_raw(gpu, temporal.pixel_records()).unwrap();
+            let motions = temporal.transmission_motion().map_or_else(
+                || vec![0; paths.len() / 2],
+                |buffer| crate::hit_diagnostics::read_raw(gpu, buffer).unwrap(),
+            );
             let scalar =
                 |bytes: &[u8], i: usize| f32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
             let slope_air = -0.35f32.tan();
             let slope_glass = -(0.35f32.sin() / 1.5).asin().tan();
             let mut count = 0;
             let mut error = 0f32;
-            for (path, surface) in paths.chunks_exact(32).zip(primary.chunks_exact(240)) {
+            let meta = temporal.metadata();
+            let project = |camera: &TemporalCamera, point: glam::DVec3| {
+                let matrix =
+                    |values: [f32; 16]| glam::DMat4::from_cols_array(&values.map(f64::from));
+                let clip = matrix(camera.projection) * matrix(camera.view) * point.extend(1.);
+                clip.truncate().truncate() / clip.w * glam::DVec2::new(8., -8.)
+            };
+            for ((path, surface), motion) in paths
+                .chunks_exact(32)
+                .zip(primary.chunks_exact(240))
+                .zip(motions.chunks_exact(16))
+            {
                 let flags = u32::from_le_bytes(path[28..32].try_into().unwrap());
                 if flags & 0xa8000000 != 0xa8000000 {
+                    assert_eq!(scalar(motion, 8), 0.);
                     continue;
                 }
                 assert_eq!(flags & 0x40000000 == 0, self.thin);
@@ -1256,11 +1275,57 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                 assert!((scalar(path, 8) + 3.).abs() < 1e-4);
                 let thickness = if self.thin { 0. } else { 0.5 };
                 assert!((scalar(path, 24) + thickness).abs() < 1e-4);
-                error = error.max((exit_x - entry_x - slope_glass * thickness).abs());
-                error = error.max((end_x - exit_x - slope_air * (3. - thickness)).abs());
+                if meta.camera.kind == TemporalProjection::Orthographic {
+                    assert_eq!(scalar(motion, 8), 0.);
+                    error = error.max((exit_x - entry_x - slope_glass * thickness).abs());
+                    error = error.max((end_x - exit_x - slope_air * (3. - thickness)).abs());
+                } else if let Some(previous) = temporal.previous_metadata() {
+                    if scalar(motion, 8) == 0. {
+                        continue;
+                    }
+                    let old_target_x = end_x
+                        - if meta.scene_revision == previous.scene_revision {
+                            0.
+                        } else {
+                            0.125
+                        };
+                    let eye = glam::DVec3::new(
+                        previous.camera.view_inverse[12].into(),
+                        previous.camera.view_inverse[13].into(),
+                        previous.camera.view_inverse[14].into(),
+                    );
+                    let lateral = glam::DVec2::new(old_target_x.into(), scalar(path, 4).into())
+                        - eye.truncate();
+                    let mut low = 0.;
+                    let mut high = std::f64::consts::FRAC_PI_2;
+                    for _ in 0..48 {
+                        let theta = (low + high) / 2.;
+                        let refraction = (theta.sin() / 1.5).asin();
+                        let total = (eye.z + 3. - thickness as f64) * theta.tan()
+                            + thickness as f64 * refraction.tan();
+                        if total < lateral.length() {
+                            low = theta;
+                        } else {
+                            high = theta;
+                        }
+                    }
+                    let old_entry = eye.truncate()
+                        + lateral.normalize_or_zero() * (eye.z * ((low + high) / 2.).tan());
+                    let expected = project(&previous.camera, old_entry.extend(0.))
+                        - project(
+                            &meta.camera,
+                            glam::DVec3::new(entry_x.into(), scalar(surface, 36).into(), 0.),
+                        );
+                    let actual =
+                        glam::DVec2::new(scalar(motion, 0).into(), scalar(motion, 4).into());
+                    error = error.max((actual - expected).length() as f32);
+                } else {
+                    assert_eq!(scalar(motion, 8), 0.);
+                    continue;
+                }
                 count += 1;
             }
-            *self.result.lock().unwrap() = Some((count, error));
+            self.results.lock().unwrap().push((count, error));
             let output = frame.buffers.color.clone();
             frame.submit([], output).map(DenoiseOutput::Resident)
         }
@@ -1269,6 +1334,7 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 16).unwrap();
     for thin in [true, false] {
+        engine.set_camera(None).unwrap();
         let mut scene = Scene::new();
         let plane = |z: f32| vec![-10., 10., z, 10., 10., z, -10., -10., z, 10., -10., z];
         let mut positions = plane(0.);
@@ -1290,10 +1356,10 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
             .add_geometry(Geometry::new(plane(-3.), vec![0, 2, 1, 2, 3, 1]))
             .unwrap();
         let receiver = scene.add_material(OpenPbrMaterial::default()).unwrap();
-        scene
+        let receiver = scene
             .add_mesh(Mesh::new(receiver_geometry, receiver))
             .unwrap();
-        let camera = Camera {
+        let mut camera = Camera {
             projection: 1,
             world_matrix: glam::Mat4::from_rotation_translation(
                 glam::Quat::from_rotation_y(0.35),
@@ -1311,25 +1377,51 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
             ..Default::default()
         };
         let render = Render::new(&engine, settings).unwrap();
-        let report = Arc::new(Mutex::new(None));
+        let report = Arc::new(Mutex::new(Vec::new()));
         render
             .set_custom_denoiser(
                 Some(Arc::new(InspectGlass {
                     engine: engine.clone(),
                     thin,
-                    result: report.clone(),
+                    results: report.clone(),
                 })),
                 DenoiseSchedule::EverySample,
             )
             .unwrap();
         render.converge(ConvergeOptions::new(1)).unwrap();
-        let (covered, maximum_error) = report.lock().unwrap().unwrap();
+        let (covered, maximum_error) = report.lock().unwrap()[0];
         assert!(
             covered >= 192 && maximum_error < 0.002,
             "thin={thin}, coverage={covered}, error={maximum_error}"
         );
         println!(
             "Snell forward oracle: thin={thin}, valid pixels={covered}, max endpoint error={maximum_error}"
+        );
+        camera.projection = 0;
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        camera.world_matrix[12] += 0.2;
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        scene.mesh_mut(receiver).unwrap().transform =
+            glam::Mat4::from_translation(glam::Vec3::new(0.125, 0., 0.));
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let rows = report.lock().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[1].0, 0, "{rows:?}");
+        assert!(
+            rows[2..]
+                .iter()
+                .all(|&(count, error)| count >= 160 && error < 0.1),
+            "{rows:?}"
+        );
+        println!(
+            "Snell inverse oracle: thin={thin}, moving eye and object (coverage, pixel error) = {:?}",
+            &rows[2..]
         );
     }
 }

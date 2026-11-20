@@ -16,7 +16,7 @@ pub enum DenoiseInputMode {
     /// guides, bottom row first. These are not 1-spp temporal/RR guides.
     ResidentGpu,
     /// Separate 1-spp guides and frame records in `GpuDenoiseInput::temporal`.
-    /// Requires a pinhole camera and equal input/output dimensions.
+    /// Requires a pinhole camera. Output is the input size by default.
     TemporalGpu,
 }
 
@@ -131,6 +131,7 @@ pub struct GpuDenoiseInput {
     pub aovs: Vec<super::GpuAov>,
     pub id: DenoiseFrameId,
     pub size: [u32; 2],
+    pub(super) output_size: [u32; 2],
     pub samples: u32,
     pub buffers: DenoiseBuffers,
     pub device: wgpu::Device,
@@ -170,6 +171,7 @@ impl GpuDenoiseInput {
                 frame: crate::denoiser_inputs::identity(),
             },
             size,
+            output_size: size,
             samples,
             buffers,
             device: gpu.device.clone(),
@@ -181,6 +183,10 @@ impl GpuDenoiseInput {
     }
     pub fn status(&self) -> DenoiseFrameStatus {
         self.status.clone()
+    }
+    /// Required width and height of the sealed resident result.
+    pub fn output_size(&self) -> [u32; 2] {
+        self.output_size
     }
     pub(super) fn retain_buffers(&self) {
         let mut buffers = super::custom_gpu_submission::SubmissionLease::copies(&self.buffers);
@@ -209,7 +215,7 @@ impl GpuDenoiseInput {
             return Err("Custom GPU frame was cancelled".into());
         }
         self.loss.check().map_err(|e| e.to_string())?;
-        let bytes = self.size[0] as u64 * self.size[1] as u64 * 16;
+        let bytes = self.output_size[0] as u64 * self.output_size[1] as u64 * 16;
         if output.size() < bytes || !output.usage().contains(wgpu::BufferUsages::COPY_SRC) {
             self.status.reject();
             return Err("Invalid resident custom denoiser output buffer".into());
@@ -231,7 +237,7 @@ impl GpuDenoiseInput {
         let validation = pollster::block_on(scope.pop());
         let status = self.status.clone();
         let id = self.id;
-        let size = self.size;
+        let size = self.output_size;
         let held_result = frozen.clone();
         gpu.on_submitted_work_done(move || {
             // Foreign SDK/Drop code never runs inside a wgpu poll callback.

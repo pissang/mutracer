@@ -112,6 +112,7 @@ pub struct Display {
     pub using_denoised: bool,
     /// The last uploaded denoised image, kept on the GPU until `original`.
     denoised: Option<Denoised>,
+    resample2x: Option<wgpu::ComputePipeline>,
     /// Uploads from CPU pixels, for tests.
     pub(crate) uploads: u32,
     params: wgpu::Buffer,
@@ -235,6 +236,7 @@ impl Display {
             original_samples: 0,
             using_denoised: false,
             denoised: None,
+            resample2x: None,
             uploads: 0,
             params,
             pipeline,
@@ -295,6 +297,83 @@ impl Display {
             self.jnlm_options = options;
             *self.jnlm.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
+    }
+    /// Resize the raw composition inputs for a separately reconstructed color
+    /// result. The original capture and its HDR exporter stay at trace size.
+    pub(crate) fn upsample2x(&self, previous: Option<Self>) -> Result<Self> {
+        use wgpu::util::DeviceExt;
+        self.gpu.loss.check()?;
+        let size = self.size.map(|v| v * 2);
+        let mut result = previous
+            .filter(|display| display.size == size)
+            .unwrap_or_else(|| Self::new(self.gpu.clone(), size));
+        let device = &self.gpu.device;
+        let pipeline = result.resample2x.get_or_insert_with(|| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Resample temporal composition inputs"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("display/resample2x.wgsl").into()),
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: None,
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        });
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Unscaled temporal composition extent"),
+            contents: bytemuck::cast_slice(&self.size),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let mut buffers = vec![
+            (&self.raw, &result.raw),
+            (&self.normal, &result.normal),
+            (&self.albedo, &result.albedo),
+        ];
+        if let Some(shadow) = self.shadow.as_ref().filter(|_| self.metadata.has_catcher) {
+            let target = result.shadow.get_or_insert_with(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Resampled catcher accumulation"),
+                    size: result.raw.size(),
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            buffers.push((shadow, target));
+        }
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for (source, target) in buffers {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: source.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: target.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        result.metadata = self.metadata;
+        result.original_samples = self.original_samples;
+        Ok(result)
     }
     /// Replace the preview with a caller-owned linear denoised result. The image
     /// stays on the GPU, so [`Display::show_denoised`] can show it again after a capture.

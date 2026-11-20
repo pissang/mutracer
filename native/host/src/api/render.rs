@@ -743,6 +743,9 @@ struct Denoise {
     custom_aovs: u32,
     custom_mode: super::DenoiseInputMode,
     temporal_sample_count: u32,
+    temporal_output_scale: u32,
+    temporal_transmission_motion: bool,
+    scaled_capture: Option<Capture>,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
@@ -799,6 +802,18 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    pub(super) fn presentation_capture(&self) -> Option<&Capture> {
+        self.denoise
+            .scaled_capture
+            .as_ref()
+            .or(self.capture.as_ref())
+    }
+    pub(super) fn presentation_capture_mut(&mut self) -> Option<&mut Capture> {
+        self.denoise
+            .scaled_capture
+            .as_mut()
+            .or(self.capture.as_mut())
+    }
     pub(super) fn aov_samples_for_display(&self) -> u32 {
         self.aov.as_ref().map_or(0, |a| a.samples)
     }
@@ -861,6 +876,7 @@ impl RenderState {
         }
         self.denoise.worker = None;
         self.denoise.denoised = None;
+        self.denoise.scaled_capture = None;
         self.denoise.gpu_filter = None;
         self.denoise.failed = true;
     }
@@ -974,6 +990,7 @@ fn cancel_denoise(render: &mut RenderState) {
     }
     render.denoise.worker = None;
     render.denoise.denoised = None;
+    render.denoise.scaled_capture = None;
     render.denoise.report = None;
     render.denoise.temporal_warmup = 0;
     if let Some(capture) = render.capture.as_mut() {
@@ -1915,6 +1932,14 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     match &pixels {
                         DenoisedImage::Cpu(pixels, _) => capture.upload(pixels),
                         DenoisedImage::Gpu { preview, .. } => capture.upload_gpu(preview),
+                        DenoisedImage::Resident(output) if output.size != capture.size => {
+                            let scaled = capture.upsample2x(render.denoise.scaled_capture.take());
+                            scaled.and_then(|mut scaled| {
+                                scaled.upload_gpu(&output.buffer)?;
+                                render.denoise.scaled_capture = Some(scaled);
+                                Ok(())
+                            })
+                        }
                         DenoisedImage::Resident(output) => capture.upload_gpu(&output.buffer),
                         DenoisedImage::DisplayGpu { pixels, settings } => {
                             capture.upload_display_oidn(pixels, *settings)
@@ -2038,6 +2063,19 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     let cancel = CancelToken::new();
     render.denoise.cancel = cancel.clone();
     let size = context_size(render.context)?;
+    let scaled_size = size.map(|n| n * 2);
+    let limits = gpu.device.limits();
+    let output_size = if render.denoise.temporal_output_scale == 2
+        && scaled_size
+            .iter()
+            .all(|&n| n <= limits.max_texture_dimension_2d)
+        && u64::from(scaled_size[0]) * u64::from(scaled_size[1]) * 16
+            <= u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size)
+    {
+        scaled_size
+    } else {
+        size
+    };
     // Freeze before releasing the engine lock: a cancelled callback may overlap
     // a new render or scene publication. Only explicit custom filtering pays for
     // these copies. OIDN retains its CPU path.
@@ -2061,6 +2099,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             custom.clone(),
             cancel.clone(),
         );
+        input.output_size = output_size;
         if render.denoise.custom_aovs != 0 {
             input.aovs = render
                 .aov
@@ -2083,6 +2122,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     .produce(super::temporal::Request {
                         context: render.context,
                         size,
+                        output_size,
                         camera: &render.aov_camera,
                         settings: &key.settings,
                         quality: key.quality,
@@ -2090,6 +2130,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         scene_revision: key.scene,
                         camera_revision: key.camera,
                         sample_count: render.denoise.temporal_sample_count,
+                        transmission_motion: render.denoise.temporal_transmission_motion,
                     })
                     .map_err(|e| error(Status::Error, e.to_string()))?,
             );
@@ -2211,7 +2252,8 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     let pixels = match custom.denoise(input, cancel.clone())? {
                         super::DenoiseOutput::Cpu(pixels) => pixels,
                         super::DenoiseOutput::Resident(output) => {
-                            if !resident_mode || output.id != expected || output.size != size {
+                            if !resident_mode || output.id != expected || output.size != output_size
+                            {
                                 return Err(
                                     "Custom GPU result belongs to another invocation".into()
                                 );
@@ -2709,25 +2751,35 @@ impl Render {
         schedule: DenoiseSchedule,
     ) -> Result<()> {
         let filter = super::custom_denoise::Filter(filter);
-        let (requested_aovs, input_mode, temporal_sample_count) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let Some(filter) = filter.0.as_ref() else {
-                    return (0, super::DenoiseInputMode::Cpu, 1);
-                };
-                let input_mode = filter.input_mode();
-                let samples = if input_mode == super::DenoiseInputMode::TemporalGpu {
-                    filter.temporal_sample_count()
+        let (
+            requested_aovs,
+            input_mode,
+            temporal_sample_count,
+            temporal_output_scale,
+            temporal_transmission_motion,
+        ) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Some(filter) = filter.0.as_ref() else {
+                return (0, super::DenoiseInputMode::Cpu, 1, 1, false);
+            };
+            let input_mode = filter.input_mode();
+            let (samples, scale, transmission) =
+                if input_mode == super::DenoiseInputMode::TemporalGpu {
+                    (
+                        filter.temporal_sample_count(),
+                        filter.temporal_output_scale(),
+                        filter.temporal_transmission_motion(),
+                    )
                 } else {
-                    1
+                    (1, 1, false)
                 };
-                (filter.aovs(), input_mode, samples)
-            }))
-            .map_err(|_| {
-                error(
-                    Status::InvalidArgument,
-                    "Custom denoiser input declaration panicked",
-                )
-            })?;
+            (filter.aovs(), input_mode, samples, scale, transmission)
+        }))
+        .map_err(|_| {
+            error(
+                Status::InvalidArgument,
+                "Custom denoiser input declaration panicked",
+            )
+        })?;
         if requested_aovs & !127 != 0 {
             return Err(error(Status::InvalidArgument, "Unknown custom AOV mask"));
         }
@@ -2735,6 +2787,12 @@ impl Render {
             return Err(error(
                 Status::InvalidArgument,
                 "TemporalGpu frame samples must be 1, 2 or 4",
+            ));
+        }
+        if !matches!(temporal_output_scale, 1 | 2) {
+            return Err(error(
+                Status::InvalidArgument,
+                "TemporalGpu output scale must be 1 or 2",
             ));
         }
         self.with(|state, id| {
@@ -2759,6 +2817,8 @@ impl Render {
                 custom_aovs: requested_aovs,
                 custom_mode: input_mode,
                 temporal_sample_count,
+                temporal_output_scale,
+                temporal_transmission_motion,
                 ..Default::default()
             };
             Ok(())
@@ -3239,16 +3299,16 @@ impl Render {
                 return Ok(None);
             }
             let render = state.renders.get_mut(&id).unwrap();
-            let capture = render.capture.as_mut().unwrap();
             match kind {
-                super::OutputKind::Hdr => Ok(Some(capture.hdr_texture())),
-                super::OutputKind::Display => match &render.output.latest {
+                super::OutputKind::Hdr => Ok(Some(render.capture.as_mut().unwrap().hdr_texture())),
+                super::OutputKind::Display => match render.output.latest.clone() {
                     None => Ok(None),
-                    Some((settings, image)) => {
-                        Ok(Some(image.clone().unwrap_or_else(|| {
-                            capture.compose_straight(&settings.composition())
-                        })))
-                    }
+                    Some((settings, image)) => Ok(Some(image.unwrap_or_else(|| {
+                        render
+                            .presentation_capture_mut()
+                            .unwrap()
+                            .compose_straight(&settings.composition())
+                    }))),
                 },
             }
         })
@@ -3292,7 +3352,10 @@ impl Render {
             if kind == PixelKind::Denoised {
                 if let Some((_, pixels)) = &render.denoise.denoised {
                     {
-                        let [width, height] = context_size(render.context)?;
+                        let [width, height] = match pixels {
+                            DenoisedImage::Resident(output) => output.size,
+                            _ => context_size(render.context)?,
+                        };
                         let pixels = match pixels {
                             DenoisedImage::Cpu(pixels, _) => pixels.clone(),
                             DenoisedImage::DisplayGpu { pixels: buffer, .. }

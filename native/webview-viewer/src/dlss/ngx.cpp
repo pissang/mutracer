@@ -50,7 +50,7 @@ static NVSDK_NGX_FeatureDiscoveryInfo discovery() {
     d.ApplicationDataPath=log_path.c_str(); d.FeatureInfo=&common;
     return d;
 }
-API uint32_t rr_abi() { return 3; }
+API uint32_t rr_abi() { return 4; }
 API void rr_set_preset(uint32_t preset) {std::lock_guard guard(api_mutex);requested_preset=preset;}
 API uint32_t rr_loaded_path(wchar_t* path,uint32_t capacity) {
     auto module=GetModuleHandleW(L"nvngx_dlssd.dll");
@@ -105,7 +105,7 @@ API uint32_t rr_init(uint64_t instance,uint64_t physical,uint64_t device,void* g
     }
     return output->result;
 }
-API uint32_t rr_create(uint64_t cmd,uint32_t width,uint32_t height,void** target) {
+API uint32_t rr_create(uint64_t cmd,uint32_t width,uint32_t height,uint32_t target_width,uint32_t target_height,void** target) {
     std::lock_guard guard(api_mutex);
     auto t=new Target{}; t->width=width; t->height=height; *target=t;
     auto r=NVSDK_NGX_VULKAN_AllocateParameters(&t->params);
@@ -115,8 +115,9 @@ API uint32_t rr_create(uint64_t cmd,uint32_t width,uint32_t height,void** target
     const char* preset_keys[]={NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA,NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced,NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance,NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality};
     for(auto key:preset_keys) t->params->Set(key,requested_preset);
     NVSDK_NGX_DLSSD_Create_Params p{};
-    p.InWidth=width;p.InHeight=height;p.InTargetWidth=width;p.InTargetHeight=height;
-    p.InPerfQualityValue=NVSDK_NGX_PerfQuality_Value_DLAA;
+    p.InWidth=width;p.InHeight=height;p.InTargetWidth=target_width;p.InTargetHeight=target_height;
+    p.InPerfQualityValue=(width==target_width && height==target_height) ?
+        NVSDK_NGX_PerfQuality_Value_DLAA : NVSDK_NGX_PerfQuality_Value_MaxPerf;
     p.InDenoiseMode=NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
     p.InRoughnessMode=NVSDK_NGX_DLSS_Roughness_Mode_Packed;
     p.InUseHWDepth=NVSDK_NGX_DLSS_Depth_Type_Linear;

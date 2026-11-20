@@ -257,7 +257,7 @@ impl Display {
         let size = if aov_kind.is_some() {
             r.published_size()
         } else {
-            r.capture.as_ref().unwrap().size
+            r.presentation_capture().unwrap().size
         };
         let original = if let Some(kind) = aov_kind {
             match r.visualize_aov(kind, &settings.aov, hdr) {
@@ -272,7 +272,7 @@ impl Display {
                 Err(e) => return Err(e),
             }
         } else {
-            let capture = r.capture.as_mut().unwrap();
+            let capture = r.presentation_capture_mut().unwrap();
             if hdr {
                 capture.compose_hdr(&settings.composition())
             } else if passes.is_empty() {
@@ -409,7 +409,7 @@ impl Display {
         if failure.is_some() && !hdr && aov_kind.is_none() {
             // Keep native presentation bit-identical to the unfiltered path,
             // including premultiplication before RGBA8 quantization.
-            let capture = r.capture.as_mut().unwrap();
+            let capture = r.presentation_capture_mut().unwrap();
             capture.compose_with(&settings.composition());
             image = capture.texture.clone();
         }

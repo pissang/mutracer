@@ -1,9 +1,11 @@
 //! Optional application adapter. The native SDK has no NVIDIA dependency.
 mod ffi;
 mod gpu;
+mod profile;
 use anyhow::{Context, Result, ensure};
 use ash::vk::Handle;
 use mutracer_native::api::{self, CustomDenoiser, TemporalGuide as Guide};
+pub use profile::run as profile_1080p;
 use std::{
     collections::HashMap,
     path::Path,
@@ -59,11 +61,40 @@ struct OpticalInput {
     pipeline: wgpu::ComputePipeline,
     format: wgpu::TextureFormat,
 }
+#[derive(Clone, Copy, Debug)]
+enum MaterialGuideMapping {
+    DiffuseReinhard,
+    CameraNormal,
+}
+impl MaterialGuideMapping {
+    fn from_environment() -> Result<Option<Self>> {
+        match std::env::var("MUTRACER_DLSS_MATERIAL_GUIDE").as_deref() {
+            Ok("diffuse-reinhard") => Ok(Some(Self::DiffuseReinhard)),
+            Ok("camera-normal") => Ok(Some(Self::CameraNormal)),
+            Ok("physical") | Err(std::env::VarError::NotPresent) => Ok(None),
+            _ => anyhow::bail!(
+                "MUTRACER_DLSS_MATERIAL_GUIDE accepts physical, diffuse-reinhard or camera-normal"
+            ),
+        }
+    }
+    fn input_index(self) -> usize {
+        match self {
+            Self::DiffuseReinhard => 1,
+            Self::CameraNormal => 3,
+        }
+    }
+}
+struct MaterialGuideInput {
+    mapping: MaterialGuideMapping,
+    pipeline: wgpu::ComputePipeline,
+}
 struct Target {
     feature: Feature,
     size: [u32; 2],
+    output_size: [u32; 2],
     textures: [wgpu::Texture; 3], // converted depth, motion, SDK output
     optical: Option<wgpu::Texture>,
+    mapped_guide: Option<wgpu::Texture>,
     last: Option<api::DenoiseFrameStatus>,
     flights: Vec<api::DenoiseFrameStatus>,
     last_frame: u64,
@@ -83,7 +114,9 @@ pub struct Dlss {
     runtime: Arc<Runtime>,
     trace_preset: Option<u32>,
     input_samples: u32,
+    output_scale: u32,
     optical: Option<OpticalInput>,
+    material_guide: Option<MaterialGuideInput>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -138,11 +171,17 @@ impl Dlss {
             "DLSS runtime already created in this process"
         );
         let guide = SpecularGuide::from_environment()?;
+        let guide_mapping = MaterialGuideMapping::from_environment()?;
         let input_samples = match std::env::var("MUTRACER_DLSS_INPUT_SPP").as_deref() {
             Ok("1") | Err(std::env::VarError::NotPresent) => 1,
             Ok("2") => 2,
             Ok("4") => 4,
             _ => return Err(anyhow::anyhow!("MUTRACER_DLSS_INPUT_SPP accepts 1, 2 or 4")),
+        };
+        let output_scale = match std::env::var("MUTRACER_DLSS_OUTPUT_SCALE").as_deref() {
+            Ok("1") | Err(std::env::VarError::NotPresent) => 1,
+            Ok("2") => 2,
+            _ => anyhow::bail!("MUTRACER_DLSS_OUTPUT_SCALE accepts 1 or 2"),
         };
         let logs = std::env::temp_dir().join("mutracer-ngx");
         std::fs::create_dir_all(&logs)?;
@@ -159,6 +198,14 @@ impl Dlss {
         }
         let gpu = gpu::bootstrap(&ngx)?;
         let runtime = Arc::new(Runtime { ngx, gpu });
+        let material_guide = guide_mapping.map(|mapping| MaterialGuideInput {
+            mapping,
+            pipeline: pipeline(
+                &runtime.gpu.device,
+                "NGX material guide mapping",
+                include_str!("material-guide.wgsl"),
+            ),
+        });
         let optical = match guide {
             SpecularGuide::Off => None,
             kind => {
@@ -200,7 +247,9 @@ impl Dlss {
             ),
             runtime,
             input_samples,
+            output_scale,
             optical,
+            material_guide,
             state: Mutex::new(State::default()),
             trace_preset: (std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"))
                 .then_some(preset),
@@ -217,6 +266,7 @@ impl Dlss {
     }
     fn target(&self, frame: &api::GpuDenoiseInput) -> Result<(Target, wgpu::CommandBuffer)> {
         let device = &frame.device;
+        let output_size = frame.output_size();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("NGX feature creation"),
         });
@@ -228,6 +278,8 @@ impl Dlss {
                     e.unwrap().raw_handle().as_raw(),
                     frame.size[0],
                     frame.size[1],
+                    output_size[0],
+                    output_size[1],
                     &mut handle,
                 );
             });
@@ -240,17 +292,12 @@ impl Dlss {
             result,
             "DLSS RR create (try --dlss-preset D on older drivers)",
         )?;
-        let textures = [
-            wgpu::TextureFormat::R32Float,
-            wgpu::TextureFormat::Rg32Float,
-            wgpu::TextureFormat::Rgba32Float,
-        ]
-        .map(|format| {
+        let image = |format, size: [u32; 2]| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("NGX owned image"),
                 size: wgpu::Extent3d {
-                    width: frame.size[0],
-                    height: frame.size[1],
+                    width: size[0],
+                    height: size[1],
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -260,29 +307,26 @@ impl Dlss {
                 usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
-        });
+        };
+        let textures = [
+            image(wgpu::TextureFormat::R32Float, frame.size),
+            image(wgpu::TextureFormat::Rg32Float, frame.size),
+            image(wgpu::TextureFormat::Rgba32Float, output_size),
+        ];
         Ok((
             Target {
                 feature,
                 textures,
-                optical: self.optical.as_ref().map(|input| {
-                    device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("NGX optical guide"),
-                        size: wgpu::Extent3d {
-                            width: frame.size[0],
-                            height: frame.size[1],
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: input.format,
-                        usage: wgpu::TextureUsages::STORAGE_BINDING
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    })
-                }),
+                optical: self
+                    .optical
+                    .as_ref()
+                    .map(|input| image(input.format, frame.size)),
+                mapped_guide: self
+                    .material_guide
+                    .as_ref()
+                    .map(|_| image(wgpu::TextureFormat::Rgba32Float, frame.size)),
                 size: frame.size,
+                output_size,
                 last: None,
                 flights: Vec::new(),
                 last_frame: frame.id.frame,
@@ -307,6 +351,7 @@ impl Dlss {
         ensure!(!cancel.is_cancelled(), "DLSS frame cancelled");
         let temporal = frame.temporal.as_ref().context("Missing temporal guides")?;
         let meta = temporal.metadata();
+        let output_size = frame.output_size();
         let key = (frame.id.device, frame.id.target);
         let mut state = self.state.lock().unwrap();
         state
@@ -316,7 +361,7 @@ impl Dlss {
         let resized = state
             .targets
             .get(&key)
-            .is_some_and(|t| t.size != frame.size);
+            .is_some_and(|t| t.size != frame.size || t.output_size != output_size);
         if resized {
             let old = state.targets.remove(&key).unwrap();
             state.retired.push(old);
@@ -424,8 +469,12 @@ impl Dlss {
             ],
         );
         let mut producer = device.create_command_encoder(&Default::default());
+        let timer = profile::Stages::new(device, &self.runtime.gpu.queue);
+        if let Some(timer) = &timer {
+            timer.stamp(&mut producer, 0);
+        }
         dispatch(&mut producer, &self.prepare, &prepare, frame.size);
-        let sdk_inputs = [
+        let mut sdk_inputs = [
             inputs[0],
             inputs[1],
             inputs[2],
@@ -433,6 +482,47 @@ impl Dlss {
             &target.textures[0],
             &target.textures[1],
         ];
+        let mut sdk_views = [
+            &views[0],
+            &views[1],
+            &views[2],
+            &views[3],
+            &converted[0],
+            &converted[1],
+        ];
+        let mapped_view = target
+            .mapped_guide
+            .as_ref()
+            .map(|t| t.create_view(&Default::default()));
+        if let (Some(convert), Some(texture), Some(view)) =
+            (&self.material_guide, &target.mapped_guide, &mapped_view)
+        {
+            let index = convert.mapping.input_index();
+            let mut options: Vec<_> = meta
+                .camera
+                .view
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            options.extend(
+                [u32::from(index == 3), 0, 0, 0]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes()),
+            );
+            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: &options,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let mapping = group(
+                device,
+                &convert.pipeline,
+                &[tex(&views[index]), tex(view), uniform.as_entire_binding()],
+            );
+            dispatch(&mut producer, &convert.pipeline, &mapping, frame.size);
+            sdk_inputs[index] = texture;
+            sdk_views[index] = view;
+        }
         producer.transition_resources(
             std::iter::empty(),
             sdk_inputs.iter().map(|texture| wgpu::TextureTransition {
@@ -443,8 +533,8 @@ impl Dlss {
         );
         let mut descriptors = [ffi::Texture::default(); 8];
         for (i, texture) in sdk_inputs.iter().enumerate() {
-            let view = if i < 4 { &views[i] } else { &converted[i - 4] };
-            descriptors[i] = gpu::descriptor(&self.runtime.gpu.adapter, texture, view, false);
+            descriptors[i] =
+                gpu::descriptor(&self.runtime.gpu.adapter, texture, sdk_views[i], false);
         }
         let mut guide = SpecularGuide::Off;
         if let (Some(convert), Some(texture), Some(input)) = (
@@ -481,6 +571,9 @@ impl Dlss {
             &converted[2],
             true,
         );
+        if let Some(timer) = &timer {
+            timer.stamp(&mut producer, 1);
+        }
         let mut native = device.create_command_encoder(&Default::default());
         let mut result = 0;
         // Native Vulkan clip coordinates have down-positive Y and Z in [0,1].
@@ -522,7 +615,7 @@ impl Dlss {
         }
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("NGX MuTracer result"),
-            size: frame.size[0] as u64 * frame.size[1] as u64 * 16,
+            size: u64::from(output_size[0]) * u64::from(output_size[1]) * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -538,11 +631,19 @@ impl Dlss {
             ],
         );
         let mut consumer = device.create_command_encoder(&Default::default());
-        dispatch(&mut consumer, &self.resolve, &resolve, frame.size);
+        if let Some(timer) = &timer {
+            timer.stamp(&mut consumer, 2);
+        }
+        dispatch(&mut consumer, &self.resolve, &resolve, output_size);
+        if let Some(timer) = &timer {
+            timer.stamp(&mut consumer, 3);
+            timer.resolve(&mut consumer);
+        }
         commands.extend([producer.finish(), native.finish(), consumer.finish()]);
         target.last = Some(frame.status());
         target.flights.push(frame.status());
         let reset_reasons = temporal.reset_reasons().to_vec();
+        let sample_index = meta.sample_index;
         let trace = self.trace_preset.map(|preset| {
             let reasons = reset_reasons.iter().map(|reason| format!("{reason:?}")).collect::<Vec<_>>();
             serde_json::json!({
@@ -550,9 +651,11 @@ impl Dlss {
                     "target": key.1, "frame": frame_id, "previousSubmission": previous_submission,
                     "previousAccepted": previous_accepted, "previousSequence": temporal.previous_metadata().map(|m| m.sample_index),
                     "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
-                    "size": meta.input_extent, "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
+                    "size": meta.input_extent, "outputSize": meta.output_extent,
+                    "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
                     "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
                     "specularGuide": format!("{guide:?}"), "temporalBytes": temporal.resident_frame_bytes(),
+                    "materialGuide": self.material_guide.as_ref().map(|g| format!("{:?}", g.mapping)),
                 }
             })
         });
@@ -569,6 +672,9 @@ impl Dlss {
             eprintln!("{trace}");
         }
         if output.is_ok() {
+            if let Some(timer) = timer {
+                timer.log(frame_id, sample_index);
+            }
             state.evaluations += 1;
             state.resets += u64::from(reset);
             if reset {
@@ -595,6 +701,9 @@ impl CustomDenoiser for Dlss {
     fn temporal_sample_count(&self) -> u32 {
         self.input_samples
     }
+    fn temporal_output_scale(&self) -> u32 {
+        self.output_scale
+    }
     fn denoise(
         &self,
         input: api::DenoiseInput,
@@ -609,7 +718,11 @@ impl CustomDenoiser for Dlss {
 mod tests {
     #[test]
     fn sdk_conversion_shaders_validate_and_emit_spirv() {
-        for source in [include_str!("prepare.wgsl"), include_str!("resolve.wgsl")] {
+        for source in [
+            include_str!("prepare.wgsl"),
+            include_str!("resolve.wgsl"),
+            include_str!("material-guide.wgsl"),
+        ] {
             let module = naga::front::wgsl::parse_str(source).unwrap();
             let info = naga::valid::Validator::new(
                 naga::valid::ValidationFlags::all(),

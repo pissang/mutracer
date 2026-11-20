@@ -19,6 +19,14 @@ pub struct TemporalFrame {
     pub(crate) frame: Arc<frame::GpuFrame>,
 }
 impl TemporalFrame {
+    /// Perspective correspondence through a stationary thin pane or parallel slab.
+    /// Bottom-row-first RGBA32F. XY is previous minus current in input pixels,
+    /// Z is 1 if a compatible previous sampled path is present, and W is reserved.
+    /// Present only on request via `CustomDenoiser::temporal_transmission_motion`
+    /// for perspective frames. The NVIDIA reflection input describes reflected paths.
+    pub fn transmission_motion(&self) -> Option<&wgpu::Buffer> {
+        self.frame.current.resources.transmission_motion.as_ref()
+    }
     /// Current unjittered camera, jitter, sequence and capability declarations.
     pub fn metadata(&self) -> &TemporalMetadata {
         &self.frame.current.metadata
@@ -71,6 +79,7 @@ impl TemporalFrame {
 pub(crate) struct Request<'a> {
     pub context: u64,
     pub size: [u32; 2],
+    pub output_size: [u32; 2],
     pub camera: &'a [u8],
     pub settings: &'a crate::settings::RenderSettings,
     pub quality: u32,
@@ -78,6 +87,7 @@ pub(crate) struct Request<'a> {
     pub scene_revision: u64,
     pub camera_revision: u64,
     pub sample_count: u32,
+    pub transmission_motion: bool,
 }
 pub(crate) struct State {
     history: frame::GpuFrameHistory,
@@ -189,7 +199,7 @@ impl State {
             sample_count: request.sample_count,
             jitter_pixels: [halton(next_frame, 2) - 0.5, halton(next_frame, 3) - 0.5],
             input_extent: request.size,
-            output_extent: request.size,
+            output_extent: request.output_size,
             camera,
             delta_seconds: self
                 .last
@@ -225,6 +235,7 @@ impl State {
             geometry,
             &packet.camera,
             &packet.trace,
+            request.transmission_motion,
         )?;
         let receipt = self
             .history

@@ -98,6 +98,13 @@ impl<R> FrameHistory<R> {
         if self
             .previous
             .as_ref()
+            .is_some_and(|p| p.metadata.output_extent != metadata.output_extent)
+        {
+            self.invalidate(ResetReason::ExtentChanged);
+        }
+        if self
+            .previous
+            .as_ref()
             .is_some_and(|p| !p.metadata.camera.same_projection(&metadata.camera))
         {
             self.invalidate(ResetReason::ProjectionChanged);

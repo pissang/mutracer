@@ -1648,6 +1648,13 @@ fn main() -> Result<()> {
     let mut workflow = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
+        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+        if arg == "--profile-dlss-1080p" {
+            let model = PathBuf::from(args.next().context("glTF model path")?);
+            let output = PathBuf::from(args.next().context("Profile output directory")?);
+            let camera = args.next().map(PathBuf::from);
+            return dlss::profile_1080p(&model, &output, camera.as_deref());
+        }
         if arg == "--package-smoke" {
             return smoke::run(&PathBuf::from(
                 args.next().context("Package output directory")?,

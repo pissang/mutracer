@@ -782,6 +782,6 @@ impl Display {
         if !readiness(state, id).complete {
             return Err(error(Status::InvalidState, "Render has no complete image"));
         }
-        Ok(state.renders[&id].capture.as_ref().unwrap())
+        Ok(state.renders[&id].presentation_capture().unwrap())
     }
 }

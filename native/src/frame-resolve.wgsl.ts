@@ -29,6 +29,12 @@ struct ReflectionRecord {
 }
 @group(0) @binding(13) var<storage, read> reflections: array<ReflectionRecord>;
 @group(0) @binding(14) var reflectionGuide: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(15) var<storage, read> previousOptics: array<ReflectionRecord>;
+@group(0) @binding(16) var<storage, read_write> transmissionGuide: array<vec4f>;
+
+const OPT_TRANSMITTED_ENDPOINT = 0xa8000000u;
+const OPT_SOLID_SLAB = 0x40000000u;
+const OPT_INSTANCE_INDEX = 0x07ffffffu;
 
 fn stableMatrix(offset:u32)->mat4x4f {
   return mat4x4f(bitcast<vec4f>(vec4u(stableMetadata[offset],stableMetadata[offset+1u],stableMetadata[offset+2u],stableMetadata[offset+3u])),
@@ -115,14 +121,74 @@ fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u
     } else if (previous.identity.x != pixel.identity.x) { return vec3f(0.0); }
     return motion;
 }
+fn transmissionMotion(pixel: FramePixel, optical: ReflectionRecord, size: vec2u) -> vec3f {
+    if (correspondence.enabled.x == 0u || correspondence.enabled.w == 0u ||
+        (optical.normalInstance.w & OPT_TRANSMITTED_ENDPOINT) != OPT_TRANSMITTED_ENDPOINT) {
+        return vec3f(0.0);
+    }
+    let point = pixel.positionDepth.xyz;
+    let normal = pixel.geometricNormal.xyz;
+    if (dot(pixel.normalRoughness.xyz, normal) < 0.9999) { return vec3f(0.0); }
+    let endpoint = optical.endpointDistance.xyz;
+    let ior = pixel.roughnessIor.w / pixel.roughnessIor.z;
+    let exit = bitcast<vec3f>(optical.normalInstance.xyz);
+    let thickness = max(0.0, dot(point - exit, normal));
+    let surfaceOffset = 52u + pixel.identity.x * 24u;
+    let endpointInstance = optical.normalInstance.w & OPT_INSTANCE_INDEX;
+    let endpointOffset = 52u + endpointInstance * 24u;
+    var previousEndpoint = endpoint;
+    if (correspondence.enabled.z == 0u) {
+        if (correspondence.enabled.y == 0u || endpointInstance == OPT_INSTANCE_INDEX ||
+            stableMetadata[surfaceOffset + 2u] == 0u || stableMetadata[endpointOffset + 2u] == 0u) {
+            return vec3f(0.0);
+        }
+        let transform = stableMatrix(surfaceOffset + 4u);
+        if (distance((transform * vec4f(point, 1.0)).xyz, point) > 1e-4 ||
+            any(abs(transform[0].xyz - vec3f(1, 0, 0)) > vec3f(1e-4)) ||
+            any(abs(transform[1].xyz - vec3f(0, 1, 0)) > vec3f(1e-4)) ||
+            any(abs(transform[2].xyz - vec3f(0, 0, 1)) > vec3f(1e-4))) {
+            return vec3f(0.0);
+        }
+        previousEndpoint = (stableMatrix(endpointOffset + 4u) * vec4f(endpoint, 1.0)).xyz;
+    }
+    let oldEntrance = opticalSlabEntrance(point, normal, thickness, ior,
+        correspondence.previousEye.xyz, previousEndpoint);
+    if (oldEntrance.w == 0.0) { return vec3f(0.0); }
+    let motion = opticalImageMotion(point, oldEntrance.xyz, correspondence.currentViewProjection,
+        correspondence.previousViewProjection, vec2f(size));
+    if (motion.z == 0.0) { return vec3f(0.0); }
+    let oldClip = correspondence.previousViewProjection * vec4f(oldEntrance.xyz, 1.0);
+    let lookup = (oldClip.xy / oldClip.w * vec2f(0.5, -0.5) + vec2f(0.5)) *
+        vec2f(size) - correspondence.previousJitter.xy;
+    if (any(lookup < vec2f(0.0)) || any(lookup >= vec2f(size))) { return vec3f(0.0); }
+    let p = vec2u(floor(lookup));
+    let index = p.x + (size.y - 1u - p.y) * size.x;
+    let previous = previousPixels[index];
+    let previousOptical = previousOptics[index];
+    let pathMask = OPT_TRANSMITTED_ENDPOINT | OPT_SOLID_SLAB;
+    if ((previousOptical.normalInstance.w & pathMask) != (optical.normalInstance.w & pathMask) ||
+        dot(previous.geometricNormal.xyz, normal) < 0.9999 ||
+        abs(dot(previous.positionDepth.xyz - point, normal)) > 1e-4 ||
+        abs(previous.roughnessIor.w / previous.roughnessIor.z - ior) > 1e-4) { return vec3f(0.0); }
+    let previousTerminal = previousOptical.normalInstance.w & OPT_INSTANCE_INDEX;
+    if (correspondence.enabled.y != 0u) {
+        if (any(previousIds[index].xyz != stableIdentity(pixel).xyz) ||
+            stableMetadata[endpointOffset + 2u] == 0u ||
+            stableMetadata[endpointOffset + 3u] != previousTerminal) { return vec3f(0.0); }
+    } else if (previous.identity.x != pixel.identity.x || endpointInstance != previousTerminal) {
+        return vec3f(0.0);
+    }
+    return motion;
+}
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) p: vec3u) {
     let size = textureDimensions(color);
     if (any(p.xy >= size)) { return; }
     // The integrator stores bottom-row-first; all frame textures are top-row-first.
-    let pixel = pixels[p.x + (size.y - 1u - p.y) * size.x];
-    stableIds[p.x+(size.y-1u-p.y)*size.x]=stableIdentity(pixel);
+    let index = p.x + (size.y - 1u - p.y) * size.x;
+    let pixel = pixels[index];
+    stableIds[index]=stableIdentity(pixel);
     textureStore(color, vec2i(p.xy), pixel.noisyColor);
     textureStore(normal, vec2i(p.xy), pixel.normalRoughness);
     textureStore(depth, vec2i(p.xy), vec4f(pixel.positionDepth.w));
@@ -132,7 +198,7 @@ fn main(@builtin(global_invocation_id) p: vec3u) {
         flags |= select(64u, 2u, correspondenceMotion.z > 0.0);
     }
     textureStore(motion, vec2i(p.xy), vec4f(correspondenceMotion.xy, 0.0, 0.0));
-    let reflection = reflections[p.x + (size.y-1u-p.y)*size.x];
+    let reflection = reflections[index];
     var opticalGuide = vec4f(0.0);
     if ((reflection.normalInstance.w & 0x80000000u) == 0u) {
         let opticalMotion = reflectionMotion(pixel, reflection, size);
@@ -140,6 +206,9 @@ fn main(@builtin(global_invocation_id) p: vec3u) {
         if (reflection.endpointDistance.w < 0.0) { flags |= 8u; }
         if (opticalMotion.z > 0.0) { flags |= 256u; }
         opticalGuide = vec4f(opticalMotion, max(0.0, reflection.endpointDistance.w));
+    }
+    if (correspondence.enabled.w != 0u) {
+        transmissionGuide[index] = vec4f(transmissionMotion(pixel, reflection, size), 0.0);
     }
     textureStore(reflectionGuide, vec2i(p.xy), opticalGuide);
     textureStore(validity, vec2i(p.xy), vec4u(flags));

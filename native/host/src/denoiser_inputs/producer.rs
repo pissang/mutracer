@@ -105,6 +105,7 @@ impl FrameProducer {
             geometry,
             camera,
             trace,
+            false,
         )
     }
     pub fn produce_snapshot(
@@ -115,6 +116,7 @@ impl FrameProducer {
         geometry: GeometrySnapshot,
         camera: &[u8],
         trace: &[u8],
+        transmission_motion: bool,
     ) -> Result<(Arc<GpuFrame>, ProducerDependency)> {
         metadata.validate()?;
         scene.gpu.loss.check()?;
@@ -333,6 +335,8 @@ impl FrameProducer {
             ])
             .chain([previous_jitter[0], previous_jitter[1], 0., 0.])
             .collect();
+        let transmission_motion =
+            transmission_motion && metadata.camera.kind == Projection::Perspective;
         let mut resolve_parameters = bytemuck::cast_slice(&resolve_values).to_vec();
         resolve_parameters.extend_from_slice(bytemuck::cast_slice(&[
             u32::from(previous.is_some()),
@@ -340,10 +344,12 @@ impl FrameProducer {
             u32::from(
                 previous.is_some_and(|p| p.metadata.scene_revision == metadata.scene_revision),
             ),
-            0,
+            u32::from(transmission_motion),
         ]));
         let resolve_parameters = uniform("Frame correspondence parameters", &resolve_parameters);
         let previous_pixels = previous.map_or(&outputs[4], |p| &p.resources.producer_buffers[6]);
+        let previous_optics = previous.map_or(&outputs[5], |p| &p.resources.producer_buffers[7]);
+        let transmission = allocate(if transmission_motion { pixels * 16 } else { 16 });
         let mut resolve_entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: outputs[4].as_entire_binding(),
@@ -393,6 +399,12 @@ impl FrameProducer {
                 &resources.guide(Guide::SpecularReflection).unwrap().view,
             ),
         });
+        for (binding, buffer) in [(15, previous_optics), (16, &transmission)] {
+            resolve_entries.push(wgpu::BindGroupEntry {
+                binding,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         let resolve_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.resolve.get_bind_group_layout(0),
@@ -417,12 +429,14 @@ impl FrameProducer {
             + resolve_parameters.size()
             + motion_metadata.size()
             + stable_ids.size()
-            + empty_ids.size();
+            + empty_ids.size()
+            + transmission.size();
         resources.producer_buffers.extend([camera, trace]);
         resources.producer_buffers.extend(outputs);
         resources.producer_buffers.push(resolve_parameters);
         resources.producer_buffers.push(motion_metadata);
         resources.producer_buffers.push(empty_ids);
+        resources.transmission_motion = transmission_motion.then_some(transmission);
         resources.stable_ids = Some(stable_ids);
         let frame = history.prepare(metadata, geometry, resources)?;
         let dependency = ProducerDependency::Commands {
