@@ -1,4 +1,4 @@
-import {accumulate, blur, idSnapshot, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
+import {accumulate, blur, idSnapshot, motionSnapshot, rawSnapshot, reproject, snapshot} from './temporalKernels.js';
 import {combine, match, pyramid} from './temporalFlow.js';
 
 const overflowBuckets = 4096, entryBytes = 32;
@@ -16,7 +16,7 @@ export class TemporalGPU {
   constructor(device: GPUDevice, width: number, height: number, stage: 'pre'|'post', capacity: number) {
     Object.assign(this, {device, width, height, stage, capacity});
     this.bytes = width * height * 16;
-    this.fields = fields.slice(0, stage === 'pre' ? 5 : 3);
+    this.fields = fields.slice(0, stage === 'pre' ? 4 : 3);
     this.frames = new Map();
     this.timings = [];
     this.resources = new Map();
@@ -39,6 +39,7 @@ export class TemporalGPU {
   async init() {
     const d = this.device, count = this.capacity, post = this.stage === 'post';
     this.surface = this.texture('Temporal surface', count * this.fields.length);
+    this.motion = this.texture('Temporal motion history', count, 'rgba32float');
     this.id = this.texture('Temporal IDs', count, 'rgba32uint');
     this.meta = this.buffer(count * 80);
     this.map = this.buffer(this.bytes);
@@ -69,10 +70,12 @@ export class TemporalGPU {
     const uniform = {buffer:{type:'uniform'}}, storage = {buffer:{type:'storage'}}, read = {buffer:{type:'read-only-storage'}};
     const tex = {texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}};
     const target = {storageTexture:{access:'write-only',format:'rgba16float',viewDimension:'2d-array'}};
+    const motionTarget = {storageTexture:{access:'write-only',format:'rgba32float',viewDimension:'2d-array'}};
     const shaders: Record<string, [string, any[]]> = {
-      reproject: [reproject, [uniform,tex,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read,storage,storage]],
+      reproject: [reproject, [uniform,tex,{texture:{sampleType:'uint',viewDimension:'2d-array'}},read,storage,storage,tex]],
       accumulate: [accumulate, [uniform,tex,tex,read,storage,storage,storage]],
       snapshot: [snapshot, [uniform,read,target]],
+      motionSnapshot: [motionSnapshot, [uniform,read,motionTarget]],
       idSnapshot: [idSnapshot, [uniform,read,{storageTexture:{access:'write-only',format:'rgba32uint',viewDimension:'2d-array'}}]],
       ...(post ? {
         combine: [combine,[uniform,tex,tex,read,read,read,storage,storage,read]],
@@ -98,10 +101,10 @@ export class TemporalGPU {
   memory() {
     const post = this.stage === 'post', pixels = this.width * this.height;
     const fields = post ? {
-      surface: 24*pixels, id: 16*pixels, display: 8*pixels, blurred: 8*pixels,
+      surface: 24*pixels, motion: 16*pixels, id: 16*pixels, display: 8*pixels, blurred: 8*pixels,
       pyramid: this.pyramid.reduce((sum:number, tex:GPUTexture) => sum + tex.width * tex.height * 8, 0), camera: 80
     } : {
-      surface: 40*pixels, id: 16*pixels, radiance: 8*pixels, guides: 16*pixels, camera: 80,
+      surface: 32*pixels, motion: 16*pixels, id: 16*pixels, radiance: 8*pixels, guides: 16*pixels, camera: 80,
       radianceOverflow: overflowBuckets * entryBytes
     };
     const history = this.capacity * Object.values(fields).reduce((sum, bytes) => sum + bytes, 0);
@@ -129,6 +132,7 @@ export class TemporalGPU {
     const exactHDRPixels = new Set(exactHDR);
     this.fields.forEach((name:string,index:number) => this.writeTexture(this.surface,
       new Float16Array(new Float32Array(arrays[name])),slot*this.fields.length+index,8));
+    this.writeTexture(this.motion, new Float32Array(arrays.motion), slot, 16);
     this.writeTexture(this.id, arrays.id, slot, 16);
     if (this.raw) {
       const source = new Float32Array(arrays.hdr), half = new Float16Array(source);
@@ -188,7 +192,7 @@ export class TemporalGPU {
     }
     const post = this.stage === 'post';
     if (stats) this.device.queue.writeBuffer(this.counts,0,new Uint32Array(20));
-    await this.dispatch('reproject',[this.params,this.surface,this.id,this.meta,output,this.counts],
+    await this.dispatch('reproject',[this.params,this.surface,this.id,this.meta,output,this.counts,this.motion],
       this.paramsFor(i,j,post?4:0,Number(stats)),post?'post-geometry':'reproject');
   }
 
@@ -267,6 +271,7 @@ export class TemporalGPU {
       params[2] = layer;
       await this.dispatch('snapshot',[this.params,input,texture],params,'capture-guides');
     }
+    await this.dispatch('motionSnapshot',[this.params,buffers.motion,this.motion],this.paramsFor(frame,frame),'capture-motion');
     this.metadata(frame,meta);
   }
 
@@ -283,6 +288,7 @@ export class TemporalGPU {
         {texture:post.surface,origin:[0,0,b*post.fields.length+field]},size);
     }
     encoder.copyTextureToTexture({texture:this.id,origin:[0,0,a]},{texture:post.id,origin:[0,0,b]},size);
+    encoder.copyTextureToTexture({texture:this.motion,origin:[0,0,a]},{texture:post.motion,origin:[0,0,b]},size);
     encoder.copyBufferToBuffer(this.meta,a*80,post.meta,b*80,80);
     d.queue.submit([encoder.finish()]);
     post.frames.set(b,frame);

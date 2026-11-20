@@ -5,8 +5,72 @@ struct Camera { vp: mat4x4f, lens: vec4f }
 @group(0) @binding(1) var surfaces: texture_2d_array<f32>;
 @group(0) @binding(2) var ids: texture_2d_array<u32>;
 @group(0) @binding(3) var<storage, read> cameras: array<Camera>;
-fn surf(x: vec2i, frame: u32, field: u32) -> vec4f { return textureLoad(surfaces, x, i32(frame*select(5u,3u,p.stage==4u)+field), 0); }
+fn surf(x: vec2i, frame: u32, field: u32) -> vec4f { return textureLoad(surfaces, x, i32(frame*select(4u,3u,p.stage==4u)+field), 0); }
 fn ident(x: vec2i, frame: u32) -> vec3u { return textureLoad(ids, x, i32(frame), 0).xyz; }
+@group(0) @binding(6) var motions: texture_2d_array<f32>;
+fn inside(q: vec2f) -> bool { return all(q>=vec2f(0)) && all(q<=vec2f(p.size)-1.0); }
+fn nearest(q: vec2f) -> vec2i { return clamp(vec2i(floor(q+0.5)),vec2i(0),vec2i(p.size)-1); }
+fn motionAt(q: vec2f, frame: u32, id: vec3u) -> vec4f {
+  if (!inside(q)) { return vec4f(0); }
+  let origin=vec2i(floor(q)); let phase=fract(q); var value=vec4f(0); var weightSum=0.0;
+  for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
+    let at=origin+vec2i(dx,dy); if(any(at>=vec2i(p.size))){continue;}
+    let sample=textureLoad(motions,at,i32(frame),0);
+    if(sample.w!=3.0 || any(ident(at,frame)!=id)){continue;}
+    let weight=select(1.0-phase.x,phase.x,dx==1)*select(1.0-phase.y,phase.y,dy==1);
+    value+=sample*weight; weightSum+=weight;
+  }}
+  if(weightSum<=0.0){return vec4f(0);}
+  return vec4f(value.xyz/weightSum,3.0);
+}
+fn guideAt(q: vec2f, frame: u32, field: u32, id: vec3u) -> vec4f {
+  if (!inside(q)) { return vec4f(0); }
+  let origin=vec2i(floor(q)); let phase=fract(q); var value=vec4f(0); var weightSum=0.0;
+  for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
+    let at=origin+vec2i(dx,dy); if(any(at>=vec2i(p.size)) || any(ident(at,frame)!=id)){continue;}
+    let sample=surf(at,frame,field); if(sample.w<=0.0){continue;}
+    let weight=select(1.0-phase.x,phase.x,dx==1)*select(1.0-phase.y,phase.y,dy==1);
+    value+=sample*weight; weightSum+=weight;
+  }}
+  if(weightSum<=0.0){return vec4f(0);}
+  value/=weightSum;
+  if(field==2u){value=vec4f(normalize(value.xyz),1.0);}
+  return value;
+}
+fn trace(q0: vec2f, id: vec3u, delta: i32, first: u32, capacity: u32) -> vec4f {
+  var q=q0; var depth=guideAt(q,first,1u,id).x; var n=guideAt(q,first,2u,id).xyz;
+  for(var step=0;step<abs(delta);step++){
+    let later=i32(first)+select(-step,step+1,delta>0);
+    let laterSlot=u32((later+i32(capacity))%i32(capacity));
+    let previousSlot=u32((later-1+i32(capacity))%i32(capacity));
+    let sourceN=guideAt(q,select(previousSlot,laterSlot,delta<0),2u,id);
+    if(sourceN.w<=0.0 || dot(n,sourceN.xyz)<0.95){return vec4f(q,depth,0);}
+    var next=q; var motion=vec4f(0);
+    if(delta<0){
+      motion=motionAt(q,laterSlot,id); if(motion.w!=3.0){return vec4f(q,depth,0);}
+      next=q+motion.xy; depth=motion.z;
+    }else{
+      motion=motionAt(q,laterSlot,id); if(motion.w!=3.0){return vec4f(q,depth,0);}
+      next=q-motion.xy;
+      var found=true;
+      for(var iteration=0;iteration<4;iteration++){
+        let edge=motionAt(next,laterSlot,id); if(edge.w!=3.0){found=false;break;}
+        next=q-edge.xy; motion=edge;
+      }
+      if(!found){return vec4f(q,depth,0);}
+      let edge=motionAt(next,laterSlot,id);
+      if(edge.w!=3.0 || length(next+edge.xy-q)>=0.05){return vec4f(q,depth,0);}
+      let currentDepth=guideAt(next,laterSlot,1u,id);
+      if(currentDepth.w<=0.0){return vec4f(q,depth,0);}
+      depth+=currentDepth.x-motion.z;
+    }
+    if(!inside(next)){return vec4f(q,depth,0);}
+    let destN=guideAt(next,select(laterSlot,previousSlot,delta<0),2u,id);
+    if(destN.w<=0.0 || dot(n,destN.xyz)<0.95){return vec4f(q,depth,0);}
+    q=next; n=destN.xyz;
+  }
+  return vec4f(q,depth,1);
+}
 fn project(world: vec3f, frame: u32) -> vec3f {
   // Match the CPU's left-to-right float32 additions, rather than a matrix dot product.
   let m = cameras[frame].vp;
@@ -15,7 +79,6 @@ fn project(world: vec3f, frame: u32) -> vec3f {
     (1.0-q.y/max(q.w,1e-4))*f32(p.size.y)/2.0-0.5);
   return vec3f(xy,q.w);
 }
-fn nearest(x: vec2f) -> vec2i { return clamp(vec2i(floor(x+0.5)), vec2i(0),vec2i(p.size)-1); }
 fn materialOK(x: vec2i, frame: u32) -> bool {
   let r = surf(x,frame,3u);
   return (abs(r.x)<=3.402823e38) && !(r.x<0.25 && r.y>0.10);
@@ -28,24 +91,16 @@ fn coc(depth: f32, frame: u32) -> f32 {
 export const reproject = common + /* wgsl */`
 @group(0) @binding(4) var<storage, read_write> mapping: array<vec4f>;
 @group(0) @binding(5) var<storage, read_write> counts: array<atomic<u32>>;
-fn reject(x: vec2i, q: vec3f, y: vec2i) -> u32 {
+fn reject(x: vec2i, q: vec4f, y: vec2i) -> u32 {
   let pos=surf(x,p.a,0u); let id=ident(x,p.a);
   if (!(pos.w>0.5)) { return 0u; }
-  if (!(all(q.xy>=vec2f(0)) && all(q.xy<=vec2f(p.size)-1.0) && q.z>0.0)) { return 1u; }
+  if (!(q.w>0.5 && inside(q.xy) && q.z>0.0)) { return 1u; }
   if (any(id!=ident(y,p.b))) { return 2u; }
   let depth=surf(y,p.b,1u);
   if (!(depth.w>0.5 && abs(depth.x-q.z)<=0.015*max(q.z,depth.x))) { return 3u; }
   let n=surf(x,p.a,2u); let o=surf(y,p.b,2u);
-  if (!(n.w>0.5 && o.w>0.5 && dot(n.xyz,o.xyz)>=0.95)) { return 4u; }
+  if (!(n.w>0.5 && o.w>0.5)) { return 4u; }
   if (p.stage==4u) { return 9u; }
-  let direction=select(-1,1,p.delta>0);
-  for (var step=1; step<=abs(p.delta); step++) {
-    // Frame slots are a modulo ring; motion belongs to the later frame.
-    let offset=select(step-1,step,p.delta>0);
-    let frame=u32((i32(p.a)+direction*offset+i32(p.pad))%i32(p.pad));
-    let at=nearest(project(pos.xyz,frame).xy);
-    if (surf(at,frame,4u).w!=3.0 || any(id!=ident(at,frame))) { return 5u; }
-  }
   if (!(materialOK(x,p.a) && materialOK(y,p.b))) { return 6u; }
   let origin=vec2i(floor(q.xy));
   for (var dy=-1; dy<=2; dy++) { for (var dx=-1; dx<=2; dx++) {
@@ -58,7 +113,8 @@ fn reject(x: vec2i, q: vec3f, y: vec2i) -> u32 {
 var<workgroup> localCounts: array<atomic<u32>,20>;
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u, @builtin(local_invocation_index) local: u32) {
   if (all(g.xy<p.size)) {
-    let x=vec2i(g.xy); let q=project(surf(x,p.a,0u).xyz,p.b); let y=nearest(q.xy);
+    let x=vec2i(g.xy); let path=trace(vec2f(x),ident(x,p.a),p.delta,p.a,p.pad);
+    let q=vec4f(path.xy,path.z,path.w); let y=nearest(q.xy);
     let reason=reject(x,q,y);
     var at=vec2f(y);
     if (p.stage==4u) { at=select(vec2f(-1),q.xy,reason>=2u); }
@@ -188,6 +244,17 @@ struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, 
     color=vec4f(clamp(encoded,vec3f(0),vec3f(1))*255.0,255);
   }
   textureStore(dst,vec2i(g.xy),i32(p.a),color);
+}
+`;
+
+export const motionSnapshot = /* wgsl */ `
+struct Params { size: vec2u, a: u32, b: u32, delta: i32, stage: u32, axis: u32, pad: u32 }
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var<storage,read> input: array<vec4f>;
+@group(0) @binding(2) var dst: texture_storage_2d_array<rgba32float,write>;
+@compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
+  if(any(g.xy>=p.size)){return;}
+  textureStore(dst,vec2i(g.xy),i32(p.a),input[g.y*p.size.x+g.x]);
 }
 `;
 

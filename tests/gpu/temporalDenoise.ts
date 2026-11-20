@@ -104,10 +104,11 @@ async function exerciseFullWidthIds(device: GPUDevice) {
   }
   const identity=new Float32Array(16);identity[0]=identity[5]=identity[10]=identity[15]=1;
   const metadata={viewProjection:identity,projection:identity,apertureRadius:0,focusDistance:1};
+  const motion=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)motion.set([0,0,1,3],i*4);
   const arrays=(objectId:number,color:[number,number,number])=>{
     const id=new Uint32Array(pixels*4),hdr=new Float32Array(pixels*4);
     for(let i=0;i<pixels;i++){id.set([objectId,2,3,0],i*4);hdr.set([...color,1],i*4);}
-    return {centerPosition:position,centerDepth:depth,centerNormal:normal,roughness,albedo,id,hdr};
+    return {centerPosition:position,centerDepth:depth,centerNormal:normal,motion,roughness,albedo,id,hdr};
   };
   const window=await DirectWindowGPU.create(device,width,height,2,false,true,'veto');
   try{
@@ -130,9 +131,10 @@ async function exerciseFullOverflow(device: GPUDevice) {
   }
   const identity=new Float32Array(16);identity[0]=identity[5]=identity[10]=identity[15]=1;
   const metadata={viewProjection:identity,projection:identity,apertureRadius:0,focusDistance:1};
+  const motion=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)motion.set([0,0,1,3],i*4);
   const arrays=(color:[number,number,number])=>{
     const hdr=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)hdr.set([...color,1],i*4);
-    return {centerPosition:position,centerDepth:depth,centerNormal:normal,roughness,albedo,id,hdr};
+    return {centerPosition:position,centerDepth:depth,centerNormal:normal,motion,roughness,albedo,id,hdr};
   };
   const window=await DirectWindowGPU.create(device,width,height,2,false,true,'veto');
   try{
@@ -170,7 +172,7 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
   const centerPosition=new Float32Array(pixels*4),centerDepth=new Float32Array(pixels*4),centerNormal=new Float32Array(pixels*4),motion=new Float32Array(pixels*4),id=new Uint32Array(pixels*4),hdr=new Float32Array(pixels*4),albedo=new Float32Array(pixels*4),normal=new Float32Array(pixels*4);
   for(let y=0;y<height;y++)for(let x=0;x<width;x++){
     const i=(y*width+x)*4;centerPosition.set([(2*(x+.5)/width)-1,1-(2*(y+.5)/height),0,1],i);
-    centerDepth.set([1,0,0,1],i);centerNormal.set([0,0,1,1],i);motion.set([0,0,0,3],i);id.set([1,2,212,0],i);hdr.set([1,1,1,1],i);albedo.set([.5,.5,.5,1],i);normal.set([.5,.5,1,1],i);
+    centerDepth.set([1,0,0,1],i);centerNormal.set([0,0,1,1],i);motion.set([0,0,1,3],i);id.set([1,2,212,0],i);hdr.set([1,1,1,1],i);albedo.set([.5,.5,.5,1],i);normal.set([.5,.5,1,1],i);
   }
   const identity=new Float32Array(16);identity[0]=identity[5]=identity[10]=identity[15]=1;
   const meta={viewProjection:identity,projection:identity,apertureRadius:0,focusDistance:1};

@@ -221,6 +221,7 @@ export class TemporalDenoiser {
         viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(metadata.camera!),
         focusDistance: direct.focusDistance ?? metadata.camera!.focusDistance
       }, {...input, ...aovs});
+      this.window.copyMotion(frame);
       if (this.options.denoiser?.type === 'custom' && this.options.denoiser.aovs?.length) {
         const copies: Partial<Record<import('./renderer/aov.js').AovKind, GPUBuffer>> = {};
         const encoder = this.engine.device!.createCommandEncoder({label: 'Temporal custom denoiser AOV capture'});

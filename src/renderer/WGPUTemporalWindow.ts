@@ -11,6 +11,49 @@ fn project(world: vec3f, frame: u32) -> vec3f {
   return vec3f((q.x/max(q.w,1e-4)+1.0)*f32(p.size.x)*0.5-0.5,
     (1.0-q.y/max(q.w,1e-4))*f32(p.size.y)*0.5-0.5,q.w);
 }
+@group(0) @binding(9) var motions: texture_2d_array<f32>;
+fn inFrame(q:vec2f)->bool{return all(q>=vec2f(0))&&all(q<=vec2f(p.size)-1.0);}
+fn motionAt(q:vec2f,frame:u32,id:vec3u)->vec4f{
+  if(!inFrame(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
+  for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
+    let at=origin+vec2i(dx,dy);if(any(at>=vec2i(p.size))||any(id!=ident(at,frame))){continue;}
+    let m=textureLoad(motions,at,i32(frame),0);if(m.w!=3.){continue;}
+    let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=m*w;total+=w;
+  }}
+  if(total<=0.){return vec4f(0);}return vec4f(value.xyz/total,3.);
+}
+fn guideAt(q:vec2f,frame:u32,field:u32,id:vec3u)->vec4f{
+  if(!inFrame(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
+  for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
+    let at=origin+vec2i(dx,dy);if(any(at>=vec2i(p.size))||any(id!=ident(at,frame))){continue;}
+    let s=surface(at,frame,field);if(s.w<=0.){continue;}
+    let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=s*w;total+=w;
+  }}if(total<=0.){return vec4f(0);}value/=total;
+  if(field==1u){value=vec4f(normalize(value.xyz),1.);}return value;
+}
+fn traceMotionFrom(x:vec2f,id:vec3u,first:u32,delta:i32)->vec4f{
+  var q=x;var depth=guideAt(x,first,0u,id).w;var normal=guideAt(x,first,1u,id).xyz;
+  let capacity=i32(arrayLength(&cameras));
+  for(var step=0;step<abs(delta);step++){
+    let laterI=i32(first)+select(-step,step+1,delta>0);let later=u32((laterI%capacity+capacity)%capacity);
+    let prior=(later+u32(capacity)-1u)%u32(capacity);let src=select(prior,later,delta<0);let dst=select(later,prior,delta<0);
+    let sourceNormal=guideAt(q,src,1u,id);
+    if(sourceNormal.w<=0.||dot(normal,sourceNormal.xyz)<.95){return vec4f(q,depth,0);}
+    var next=q;var m=motionAt(q,later,id);if(m.w!=3.){return vec4f(q,depth,0);}
+    if(delta<0){next=q+m.xy;depth=m.z;}else{
+      next=q-m.xy;var found=true;
+      for(var iteration=0;iteration<4;iteration++){let edge=motionAt(next,later,id);if(edge.w!=3.){found=false;break;}next=q-edge.xy;m=edge;}
+      if(!found){return vec4f(q,depth,0);}let edge=motionAt(next,later,id);
+      if(edge.w!=3.||length(next+edge.xy-q)>=.05){return vec4f(q,depth,0);}
+      let currentDepth=guideAt(next,later,0u,id);if(currentDepth.w<=0.){return vec4f(q,depth,0);}depth+=currentDepth.w-edge.z;
+    }
+    if(!inFrame(next)){return vec4f(q,depth,0);}let destNormal=guideAt(next,dst,1u,id);
+    if(destNormal.w<=0.||dot(normal,destNormal.xyz)<.95){return vec4f(q,depth,0);}
+    q=next;normal=destNormal.xyz;
+  }
+  return vec4f(q,depth,1.);
+}
+fn traceMotion(x:vec2f,id:vec3u)->vec4f{return traceMotionFrom(x,id,p.current,p.delta);}
 fn coc(depth:f32, frame:u32)->f32 {
   let lens=cameras[frame].lens;
   return lens.x*lens.y*abs(1.0/max(depth,1e-4)-1.0/lens.z);
@@ -49,14 +92,14 @@ fn radiance(x:vec2i,frame:u32)->vec3f {
 fn overflowMissing(x:vec2i,frame:u32)->bool {
   return textureLoad(hdr,x,i32(frame),0).a==-2.0;
 }
-fn tapRejection(at:vec2i, pos:vec4f, normal:vec4f, id:vec3u)->u32 {
+fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u)->u32 {
   let oldPos=surface(at,p.source,0u);
   let oldNormal=surface(at,p.source,1u);
   if (!(oldPos.w>0.0001 && oldNormal.w>0.0)) { return 5u; }
   if (!(oldNormal.w>1.0)) { return 6u; }
   if (any(id!=ident(at,p.source))) { return 7u; }
-  if (abs(dot(oldPos.xyz-pos.xyz,normal.xyz))>0.015*pos.w) { return 8u; }
-  if (dot(oldNormal.xyz,normal.xyz)<0.95) { return 9u; }
+  if (abs(oldPos.w-targetDepth)>0.015*targetDepth) { return 8u; }
+  if (dot(oldNormal.xyz,targetNormal)<0.95) { return 9u; }
   return 0u;
 }
 fn rejection(x:vec2i, q:vec3f, nearest:vec2i, partial:bool)->u32 {
@@ -67,25 +110,27 @@ fn rejection(x:vec2i, q:vec3f, nearest:vec2i, partial:bool)->u32 {
   if (!(all(q.xy>=vec2f(0)) && all(q.xy<=vec2f(p.size)-1.0) && q.z>0.0)) { return 3u; }
   if (!(abs(coc(pos.w,p.current)-coc(q.z,p.source))<=0.5)) { return 4u; }
   let id=ident(x,p.current);
-  if (partial) { return tapRejection(nearest,pos,normal,id); }
+  let endpointNormal=surface(clamp(vec2i(floor(q.xy+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
+  if (partial) { return tapRejection(nearest,q.z,endpointNormal,id); }
   let origin=vec2i(floor(q.xy));
   for (var dy=0;dy<=1;dy++) { for (var dx=0;dx<=1;dx++) {
     let at=min(origin+vec2i(dx,dy),vec2i(p.size)-1);
-    let reason=tapRejection(at,pos,normal,id);
+    let reason=tapRejection(at,q.z,endpointNormal,id);
     if (reason!=0u) { return reason; }
   }}
   return 0u;
 }
-fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i)->f32 {
+fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
   let origin=vec2i(floor(q));
   let phase=fract(q);
   let pos=surface(x,p.current,0u);
   let normal=surface(x,p.current,1u);
   let id=ident(x,p.current);
+  let endpointNormal=surface(clamp(vec2i(floor(q+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
   var coverage=0.0;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
     let at=min(origin+vec2i(dx,dy),vec2i(p.size)-1);
-    if(tapRejection(at,pos,normal,id)==0u){
+    if(tapRejection(at,targetDepth,endpointNormal,id)==0u){
       coverage+=select(1-phase.x,phase.x,dx==1)*select(1-phase.y,phase.y,dy==1);
     }
   }}
@@ -150,13 +195,16 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
     for(var dx=-1;dx<=1;dx++){
       let tap=original.at+vec2i(dx,dy);
       if(any(tap<vec2i(0)) || any(tap>=vec2i(p.size))){continue;}
-      let why=tapRejection(tap,pos,normal,id);
+      let endpointNormal=surface(clamp(vec2i(floor(q.xy+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
+      let why=tapRejection(tap,q.z,endpointNormal,id);
       if(why!=0u && why!=9u){continue;}
       let source=surface(tap,p.source,0u);
-      let alignment=dot(normal.xyz,surface(tap,p.source,1u).xyz);
+      let alignment=dot(endpointNormal,surface(tap,p.source,1u).xyz);
       if(alignment<.80 || abs(source.w-q.z)>.015*q.z){continue;}
       let forward=vec2f(tap)-q.xy;
-      let reverse=project(source.xyz,p.current).xy-vec2f(x);
+      let reversePath=traceMotionFrom(vec2f(tap),id,p.source,-p.delta);
+      if(reversePath.w<=.5){continue;}
+      let reverse=reversePath.xy-vec2f(x);
       let distance2=max(dot(forward,forward),dot(reverse,reverse));
       if(distance2>2.25){continue;}
       let coverageDelta=coverage-hitCoverage(tap,p.source);
@@ -191,7 +239,9 @@ const startWindowWGSL = /* wgsl */ `
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
-  let q=project(pos.xyz,p.source);
+  let path=traceMotion(vec2f(x),ident(x,p.current));
+  let q=path.xyz;
+  if(path.w<=.5){return;}
   let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   var radius=select(17.0,8.0,p.symmetric==1u);
   if((p.mode & 1u)!=0u){radius=clamp(8.0+8.0*max(coc(pos.w,p.current)-2.0,0.0),8.0,16.0);}
@@ -205,7 +255,7 @@ export const directWindowWGSL = /* wgsl */ `${windowBindingsAndGeometry}
 ${startWindowWGSL}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   var weight=(radius+1.0-abs(f32(p.delta)))/(radius+1.0);
-  if(partial){weight*=footprintWeight(x,q.xy,nearest);}
+  if(partial){weight*=footprintWeight(x,q.xy,nearest,q.z);}
   total[index]+=vec4f(radiance(nearest,p.source)*weight,weight);
 }
 `;
@@ -215,7 +265,7 @@ ${recoverHistoryWGSL}
 ${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
-    if(partial){tap.support=footprintWeight(x,q.xy,nearest);}
+    if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
   }
   if(partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
     tap=recoverTap(x,pos,q,tap);
@@ -300,6 +350,7 @@ export class DirectWindowGPU {
   async init() {
     const d=this.device;
     this.surface=this.texture('Direct window surface',this.capacity*2,'rgba16float');
+    this.motion=this.texture('Direct window motion',this.capacity,'rgba32float');
     this.ids=this.texture('Direct window packed IDs',this.capacity,'rgba32uint');
     this.hdr=this.texture('Direct window HDR',this.capacity,'rgba16float');
     this.total=this.buffer('Direct window weighted sum',this.bytes);
@@ -317,6 +368,7 @@ export class DirectWindowGPU {
       {texture:{sampleType:'uint',viewDimension:'2d-array'}},
       {texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}},
       {buffer:{type:'read-only-storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}},{buffer:{type:'storage'}}];
+    entries.push({texture:{sampleType:'unfilterable-float',viewDimension:'2d-array'}});
     const layout=d.createBindGroupLayout({entries:entries.map((entry,binding)=>({binding,visibility:GPUShaderStage.COMPUTE,...entry}))});
     this.pipeline=await d.createComputePipelineAsync({layout:d.createPipelineLayout({bindGroupLayouts:[layout]}),compute:{module,entryPoint:'main'}});
     this.layout=layout;
@@ -338,8 +390,15 @@ export class DirectWindowGPU {
     pass.setPipeline(this.capturePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
     d.queue.submit([encoder.finish()]);this.frames.set(slot,frame);
   }
+  copyMotion(frame:number){
+    const source=this.history?.motion;if(!source)throw Error('Motion history is not available.');
+    const slot=this.slot(frame),encoder=this.device.createCommandEncoder({label:'Direct window motion history copy'});
+    encoder.copyTextureToTexture({texture:source,origin:[0,0,slot]},{texture:this.motion,origin:[0,0,slot]},[this.width,this.height,1]);
+    this.device.queue.submit([encoder.finish()]);
+  }
   async upload(frame:number,meta:any,arrays:any,capMap:Record<number,number>={}) {
     const s=this.slot(frame), d=this.device, n=this.width*this.height;
+    d.queue.writeTexture({texture:this.motion,origin:[0,0,s]},new Float32Array(arrays.motion),{bytesPerRow:this.width*16},[this.width,this.height,1]);
     const position=new Float32Array(arrays.centerPosition), depth=new Float32Array(arrays.centerDepth), normal=new Float32Array(arrays.centerNormal);
     const roughness=new Float32Array(arrays.roughness), ids32=new Uint32Array(arrays.id);
     const surfaces=new Float32Array(n*8);
@@ -407,7 +466,7 @@ export class DirectWindowGPU {
     const d=this.device,p=new Uint32Array([this.width,this.height,this.slot(current),this.slot(source),source-current,symmetric?1:0,stage,Number(this.adaptiveRadius) | (Number(this.stabilizeSparkle)<<1)]);
     d.queue.writeBuffer(this.params,0,p);
     const h=this.history;
-    const group=d.createBindGroup({layout:this.layout,entries:[this.params,this.surface,this.ids,this.hdr,h?.meta??this.camera,this.total,this.output,this.overflow,this.rejects].map((resource,binding)=>({binding,resource:resource instanceof GPUBuffer?{buffer:resource}:resource.createView({dimension:'2d-array'})}))});
+    const group=d.createBindGroup({layout:this.layout,entries:[this.params,this.surface,this.ids,this.hdr,h?.meta??this.camera,this.total,this.output,this.overflow,this.rejects,this.motion].map((resource,binding)=>({binding,resource:resource instanceof GPUBuffer?{buffer:resource}:resource.createView({dimension:'2d-array'})}))});
     const encoder=d.createCommandEncoder();
     const pass=encoder.beginComputePass(this.query?{timestampWrites:{querySet:this.query,beginningOfPassWriteIndex:0,endOfPassWriteIndex:1}}:{});
     pass.setPipeline(this.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();
