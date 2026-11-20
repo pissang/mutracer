@@ -249,9 +249,8 @@ in pixels). For pixel *x* of frame *t*:
 - **Landing validation.** At the final texel in *s*, two tests stay from the
   prototype: the depth test (1.5%) and the CoC test (≤ 0.5 px). Bilinear
   coverage and the mixed-window 3×3 search also stay. The depth they compare
-  against is the chained previous depth (see the `motion.z` request below),
-  not a world position. A moving object has a different world position in
-  every frame.
+  against is the chained depth from `motion.z`. The symmetric window samples
+  the endpoint normal from the same-ID footprint as the motion trace.
 
 The prototype's world-position reprojection is not shipped. Phase 1 keeps it
 only to reproduce the archived static results. Phase 3 replaces it, and the
@@ -268,9 +267,9 @@ known, so the chain is gated against it.
   - p99 of 0.22–0.45 px;
   - a maximum of 0.84 px.
 
-  The adopted image quality was reached with this error. An earlier 0.05 px
-  threshold had no such basis and was withdrawn. The chain measured p50
-  ≈ 0.0004 px and per-pair p99 ≤ 0.066 px.
+  The adopted image quality was measured with this rounding. Report the
+  fraction of pixels above 0.25 px for each pair. The GPU regression applies
+  a separate 0.1 px tolerance against exact projection.
 - **Acceptance.**
   - Chaining rejects a surface that is hidden in an intermediate frame, even
     when it is visible at both ends. The prototype projected directly to the
