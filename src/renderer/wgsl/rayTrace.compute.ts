@@ -1269,7 +1269,7 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
   let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(options.displayAovStorage || inputHooks?.layeredReflectance)
-    + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, hasCoatNormals) : createAovTraceWgsl(materialHooks));
+    + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, hasCoatNormals, hasAnisotropyDirections) : createAovTraceWgsl(materialHooks));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,
