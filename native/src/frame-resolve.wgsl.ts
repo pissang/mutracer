@@ -1,5 +1,7 @@
 import {framePixelStruct} from './layout.js';
+import optics from '../../src/renderer/wgsl/opticalReprojection.wgsl.js';
 export default `${framePixelStruct('FramePixel')}
+${optics}
 @group(0) @binding(0) var<storage, read> pixels: array<FramePixel>;
 @group(0) @binding(1) var color: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var normal: texture_storage_2d<rgba32float, write>;
@@ -21,6 +23,13 @@ struct Correspondence {
 @group(0) @binding(10) var<storage,read> stableMetadata: array<u32>;
 @group(0) @binding(11) var<storage,read> previousIds: array<vec4u>;
 @group(0) @binding(12) var<storage,read_write> stableIds: array<vec4u>;
+struct ReflectionRecord {
+  endpointDistance: vec4f,
+  normalInstance: vec4u,
+}
+@group(0) @binding(13) var<storage, read> reflections: array<ReflectionRecord>;
+@group(0) @binding(14) var reflectionGuide: texture_storage_2d<rgba32float, write>;
+
 fn stableMatrix(offset:u32)->mat4x4f {
   return mat4x4f(bitcast<vec4f>(vec4u(stableMetadata[offset],stableMetadata[offset+1u],stableMetadata[offset+2u],stableMetadata[offset+3u])),
     bitcast<vec4f>(vec4u(stableMetadata[offset+4u],stableMetadata[offset+5u],stableMetadata[offset+6u],stableMetadata[offset+7u])),
@@ -69,6 +78,44 @@ fn cameraMotion(pixel: FramePixel, size: vec2u) -> vec3f {
         || dot(sample.geometricNormal.xyz, oldNormal) < 0.9) { return vec3f(0.0); }
     return vec3f(previousPixel - currentPixel, 1.0);
 }
+fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u) -> vec3f {
+    if (correspondence.enabled.x == 0u || reflection.endpointDistance.w <= 0.0) { return vec3f(0.0); }
+    let normal = bitcast<vec3f>(reflection.normalInstance.xyz);
+    let point = pixel.positionDepth.xyz;
+    let endpoint = reflection.endpointDistance.xyz;
+    var previousEndpoint = endpoint;
+    if (correspondence.enabled.z == 0u) {
+        if (correspondence.enabled.y == 0u || reflection.normalInstance.w == 0xffffffffu) { return vec3f(0.0); }
+        let surfaceOffset = 52u + pixel.identity.x * 24u;
+        let endpointOffset = 52u + reflection.normalInstance.w * 24u;
+        if (stableMetadata[surfaceOffset + 2u] == 0u || stableMetadata[endpointOffset + 2u] == 0u) { return vec3f(0.0); }
+        let surfaceTransform = stableMatrix(surfaceOffset + 4u);
+        let oldNormal = normalize((surfaceTransform * vec4f(normal, 0.0)).xyz);
+        if (dot(oldNormal, normal) < 0.9999 ||
+            distance((surfaceTransform * vec4f(point, 1.0)).xyz, point) > 1e-3) { return vec3f(0.0); }
+        previousEndpoint = (stableMatrix(endpointOffset + 4u) * vec4f(endpoint, 1.0)).xyz;
+    }
+    let now = opticalReflectionImage(point, normal, endpoint);
+    let old = opticalReflectionImage(point, normal, previousEndpoint);
+    let motion = opticalImageMotion(now, old, correspondence.currentViewProjection,
+        correspondence.previousViewProjection, vec2f(size));
+    if (motion.z == 0.0) { return vec3f(0.0); }
+    let oldClip = correspondence.previousViewProjection * vec4f(old, 1.0);
+    let oldNdc = oldClip.xy / oldClip.w;
+    let lookup = (oldNdc * vec2f(0.5, -0.5) + vec2f(0.5)) * vec2f(size) - correspondence.previousJitter.xy;
+    if (any(lookup < vec2f(0.0)) || any(lookup >= vec2f(size))) { return vec3f(0.0); }
+    let p = vec2u(floor(lookup));
+    let index = p.x + (size.y - 1u - p.y) * size.x;
+    let previous = previousPixels[index];
+    if ((previous.identity.w & 161u) != 129u || dot(previous.geometricNormal.xyz, pixel.geometricNormal.xyz) < 0.999) {
+        return vec3f(0.0);
+    }
+    if (correspondence.enabled.y != 0u) {
+        if (any(previousIds[index].xyz != stableIdentity(pixel).xyz)) { return vec3f(0.0); }
+    } else if (previous.identity.x != pixel.identity.x) { return vec3f(0.0); }
+    return motion;
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) p: vec3u) {
     let size = textureDimensions(color);
@@ -85,6 +132,12 @@ fn main(@builtin(global_invocation_id) p: vec3u) {
         flags |= select(64u, 2u, correspondenceMotion.z > 0.0);
     }
     textureStore(motion, vec2i(p.xy), vec4f(correspondenceMotion.xy, 0.0, 0.0));
+    let reflection = reflections[p.x + (size.y-1u-p.y)*size.x];
+    let opticalMotion = reflectionMotion(pixel, reflection, size);
+    if (reflection.endpointDistance.w > 0.0) { flags |= 4u; }
+    if (reflection.endpointDistance.w < 0.0) { flags |= 8u; }
+    if (opticalMotion.z > 0.0) { flags |= 256u; }
+    textureStore(reflectionGuide, vec2i(p.xy), vec4f(opticalMotion, max(0.0, reflection.endpointDistance.w)));
     textureStore(validity, vec2i(p.xy), vec4u(flags));
     textureStore(diffuse, vec2i(p.xy), pixel.diffuseAlbedo);
     textureStore(specular, vec2i(p.xy), pixel.specularAlbedo);

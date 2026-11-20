@@ -50,7 +50,7 @@ static NVSDK_NGX_FeatureDiscoveryInfo discovery() {
     d.ApplicationDataPath=log_path.c_str(); d.FeatureInfo=&common;
     return d;
 }
-API uint32_t rr_abi() { return 2; }
+API uint32_t rr_abi() { return 3; }
 API void rr_set_preset(uint32_t preset) {std::lock_guard guard(api_mutex);requested_preset=preset;}
 API uint32_t rr_loaded_path(wchar_t* path,uint32_t capacity) {
     auto module=GetModuleHandleW(L"nvngx_dlssd.dll");
@@ -124,7 +124,7 @@ API uint32_t rr_create(uint64_t cmd,uint32_t width,uint32_t height,void** target
     r=NGX_VULKAN_CREATE_DLSSD_EXT1(active_device,reinterpret_cast<VkCommandBuffer>(cmd),1,1,&t->feature,t->params,&p);
     return static_cast<uint32_t>(r);
 }
-API uint32_t rr_eval(void* target,uint64_t cmd,const Texture* images,uint32_t count,uint32_t reset,float jitter_x,float jitter_y,const float* view,const float* proj,float delta_ms) {
+API uint32_t rr_eval(void* target,uint64_t cmd,const Texture* images,uint32_t count,uint32_t reset,uint32_t specular_mode,float jitter_x,float jitter_y,const float* view,const float* proj,float delta_ms) {
     std::lock_guard guard(api_mutex);
     if(count!=8 || !target) return 0xbad00004;
     auto t=static_cast<Target*>(target);
@@ -137,7 +137,9 @@ API uint32_t rr_eval(void* target,uint64_t cmd,const Texture* images,uint32_t co
     NVSDK_NGX_VK_DLSSD_Eval_Params p{};
     p.pInColor=&resources[0];p.pInDiffuseAlbedo=&resources[1];p.pInSpecularAlbedo=&resources[2];
     p.pInNormals=&resources[3];p.pInDepth=&resources[4];p.pInMotionVectors=&resources[5];
-    p.pInSpecularHitDistance=images[6].image ? &resources[6] : nullptr;p.pInOutput=&resources[7];
+    if (images[6].image && specular_mode == 1) p.pInMotionVectorsReflections = &resources[6];
+    if (images[6].image && specular_mode == 2) p.pInSpecularHitDistance = &resources[6];
+    p.pInOutput=&resources[7];
     p.InRenderSubrectDimensions={t->width,t->height}; p.InReset=reset;
     p.InJitterOffsetX=jitter_x;p.InJitterOffsetY=jitter_y;p.InMVScaleX=1;p.InMVScaleY=1;
     p.InPreExposure=1;p.InExposureScale=1;p.InFrameTimeDeltaInMsec=delta_ms;

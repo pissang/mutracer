@@ -82,6 +82,11 @@ Set `MUTRACER_NATIVE_DLSS_SEQUENCE=1` with this workflow to capture 64 stationar
 sample presentations as RGBA8 plus their dimensions and reset counts. This
 capture reads each accepted frame back from the GPU for comparison.
 
+With `MUTRACER_DLSS_TRACE=1`, the adapter logs evaluated frame and sequence
+IDs, the previous accepted sequence, reset causes, and whether it submitted
+the command buffers. Run the same fixture with `MUTRACER_DLSS_SPECULAR` set to
+`off` (default), `motion`, or `distance` to compare the optical guide variants.
+
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
 material-edit first-sample timing and `captureScene` for compact scene, resource
 reference and camera/settings replay artifacts. Rehydrate native references and

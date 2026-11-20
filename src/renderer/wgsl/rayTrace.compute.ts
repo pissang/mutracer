@@ -42,6 +42,7 @@ export interface RayTraceInputHooks {
   end: string;
   uniformJitter: boolean;
   layeredReflectance?: boolean;
+  recordReflection?: boolean;
 }
 
 export interface RayTraceShaderOptions {
@@ -288,7 +289,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering, inputHooks?.recordReflection)}
 ${createSampleShadowCatcherWgsl(queryPoints, earlyScattering)}
 ${queryPoints ? createQueryPointsWgsl(earlyScattering) + '\n' : ''}
 // Output
@@ -513,7 +514,7 @@ ${queryPoints ? /* wgsl */ `  }
 }
 
 fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, sampleIgnored: bool) {
-  if (SPECTRAL) {
+${inputHooks?.recordReflection ? '  mtReflectionHit(*si);\n' : ''}  if (SPECTRAL) {
     // Is glass
     if ((*ma).transmissionWeight > 0.001) {
       (*ma).specularIor = sampling_cauchy_ior(

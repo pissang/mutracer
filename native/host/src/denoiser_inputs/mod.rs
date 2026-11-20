@@ -179,6 +179,8 @@ pub struct InputCapabilities {
     pub rigid_motion: Support,
     pub deformation_motion: Support,
     pub specular_distance: Support,
+    /// Packed reflection motion and first-segment distance availability.
+    pub specular_reflection: Support,
     pub glass: GlassCapabilities,
 }
 impl Default for InputCapabilities {
@@ -194,6 +196,7 @@ impl Default for InputCapabilities {
             rigid_motion: Support::Unverified,
             deformation_motion: Support::Unverified,
             specular_distance: Support::Unverified,
+            specular_reflection: Support::Unverified,
             glass: GlassCapabilities::default(),
         }
     }
@@ -216,6 +219,8 @@ pub mod validity {
     pub const UNSUPPORTED_SURFACE: u32 = 1 << 5;
     pub const NO_HISTORY_COVERAGE: u32 = 1 << 6;
     pub const REFLECTANCE: u32 = 1 << 7;
+    /// Virtual-image correspondence for the sampled reflection.
+    pub const SPECULAR_MOTION: u32 = 1 << 8;
 }
 
 #[cfg(test)]

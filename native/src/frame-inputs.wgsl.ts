@@ -10,6 +10,7 @@ export function nativeFrameInputHooks(hasCoatNormals: boolean): RayTraceInputHoo
   return {
     uniformJitter: true,
     layeredReflectance: true,
+    recordReflection: true,
     begin: '  mtFrameBegin(idx);\n',
     primarySurface: '  mtFrameSurface(si, ma, ray);\n',
     unclampedColor: '  mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0);\n',
@@ -17,6 +18,12 @@ export function nativeFrameInputHooks(hasCoatNormals: boolean): RayTraceInputHoo
     declarations: /* wgsl */ `
 ${framePixelStruct('MtFramePixel')}
 @group(${GROUP.OUTPUT}) @binding(4) var<storage, read_write> mtFramePixels: array<MtFramePixel>;
+struct MtReflection {
+  endpointDistance: vec4f,
+  normalInstance: vec4u,
+}
+@group(${GROUP.OUTPUT}) @binding(10) var<storage, read_write> mtReflections: array<MtReflection>;
+var<private> mtReflectionPending: bool;
 var<private> mtFrameIndex: u32;
 var<private> mtFrameCaptured: bool;
 
@@ -24,7 +31,28 @@ fn mtFrameBegin(index: u32) {
   mtFrameIndex = index;
   mtFrameCaptured = false;
   mtFramePixels[index] = MtFramePixel();
+  mtReflections[index] = MtReflection();
+  mtReflectionPending = false;
   mtFramePixels[index].normalRoughness.w = 1.0;
+}
+fn mtReflectionExit(normal: vec3f) {
+  if ((mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u ||
+      (SPECTRAL && rtUniform.dispersionWavelengths > 1)) { return; }
+  mtReflectionPending = true;
+  mtReflections[mtFrameIndex].normalInstance = vec4u(bitcast<vec3u>(normal), 0xffffffffu);
+}
+fn mtReflectionHit(si: SurfaceInteraction) {
+  if (!mtReflectionPending) { return; }
+  mtReflectionPending = false;
+  if (!si.hit) {
+    mtReflections[mtFrameIndex].endpointDistance.w = -1.0;
+    return;
+  }
+  let distanceFromSurface = distance(mtFramePixels[mtFrameIndex].positionDepth.xyz, si.position);
+  if (distanceFromSurface > 0.0 && distanceFromSurface < 3.402823e38) {
+    mtReflections[mtFrameIndex].endpointDistance = vec4f(si.position, distanceFromSurface);
+    mtReflections[mtFrameIndex].normalInstance.w = bitcast<u32>(si.instanceIndex);
+  }
 }
 fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray: Ray) {
   if (mtFrameCaptured) { return; }

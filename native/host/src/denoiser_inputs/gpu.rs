@@ -24,6 +24,9 @@ pub enum Guide {
     Motion,
     /// Not currently produced; consult capabilities before requesting it.
     SpecularHitDistance,
+    /// Virtual-image motion xy in input pixels, validity z and first reflected
+    /// segment length w. Consult the per-pixel validity flags.
+    SpecularReflection,
     /// `temporal_validity` bit flags, not an SDK-specific validity encoding.
     Validity,
 }
@@ -34,7 +37,8 @@ impl Guide {
             Self::NoisyColor
             | Self::NormalRoughness
             | Self::DiffuseAlbedo
-            | Self::SpecularAlbedo => Rgba32Float,
+            | Self::SpecularAlbedo
+            | Self::SpecularReflection => Rgba32Float,
             Self::LinearDepth | Self::SpecularHitDistance => R32Float,
             Self::Motion => Rg32Float,
             Self::Validity => R32Uint,

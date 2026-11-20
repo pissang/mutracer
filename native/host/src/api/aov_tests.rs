@@ -1104,6 +1104,115 @@ fn full_plane_scene() -> (
 }
 
 #[test]
+#[ignore = "requires real GPU"]
+fn temporal_mirror_records_real_segment_and_reprojects_its_virtual_image() {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial};
+    use std::sync::{Arc, Mutex};
+    struct InspectReflection {
+        engine: Engine,
+        measurements: Arc<Mutex<Vec<(usize, f32, f32)>>>,
+    }
+    impl CustomDenoiser for InspectReflection {
+        fn input_mode(&self) -> DenoiseInputMode {
+            DenoiseInputMode::TemporalGpu
+        }
+        fn denoise(
+            &self,
+            mut input: DenoiseInput,
+            _: CancelToken,
+        ) -> std::result::Result<DenoiseOutput, String> {
+            let frame = input.resident.take().unwrap();
+            let temporal = frame.temporal.as_ref().unwrap();
+            let source = temporal.guide(TemporalGuide::SpecularReflection).unwrap();
+            let data = crate::test_support::read_texture(&self.engine.inner.gpu, source);
+            let pixels = bytemuck::pod_collect_to_vec::<u8, f32>(&data);
+            let expected_motion = match temporal.metadata().sample_index {
+                1 => 2.,
+                2 => -1.,
+                _ => 0.,
+            };
+            let mut motion_count = 0;
+            let mut distance_error = 0f32;
+            let mut motion_error = 0f32;
+            for pixel in pixels.chunks_exact(4) {
+                distance_error = distance_error.max((pixel[3] - 6.).abs());
+                if pixel[2] != 0. {
+                    motion_count += 1;
+                    motion_error = motion_error.max((pixel[0] - expected_motion).hypot(pixel[1]));
+                }
+            }
+            self.measurements
+                .lock()
+                .unwrap()
+                .push((motion_count, distance_error, motion_error));
+            let output = frame.buffers.color.clone();
+            frame.submit([], output).map(DenoiseOutput::Resident)
+        }
+    }
+    let _guard = crate::abi_test_lock();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(16, 16).unwrap();
+    let (mut scene, _, mirror) = full_plane_scene();
+    let mut material = OpenPbrMaterial::default();
+    material.values.metalness = 1.;
+    material.values.roughness = 0.;
+    *scene.material_mut(mirror).unwrap() = material;
+    let receiver = scene.add_material(OpenPbrMaterial::default()).unwrap();
+    let receiver_geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-10., 10., 6., 10., 10., 6., -10., -10., 6., 10., -10., 6.],
+            vec![0, 1, 2, 2, 1, 3],
+        ))
+        .unwrap();
+    let reflected = scene
+        .add_mesh(Mesh::new(receiver_geometry, receiver))
+        .unwrap();
+    let mut camera = Camera {
+        projection: 1,
+        ..Default::default()
+    };
+    camera.world_matrix[14] = 4.;
+    scene.set_default_camera(Some(camera));
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            bounces: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let measurements = Arc::new(Mutex::new(Vec::new()));
+    render
+        .set_custom_denoiser(
+            Some(Arc::new(InspectReflection {
+                engine: engine.clone(),
+                measurements: measurements.clone(),
+            })),
+            DenoiseSchedule::EverySample,
+        )
+        .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    camera.world_matrix[12] = 0.25;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    scene.mesh_mut(reflected).unwrap().transform =
+        glam::Mat4::from_translation(glam::Vec3::new(0.125, 0., 0.));
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let rows = measurements.lock().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].0, 0);
+    assert!(rows[1..].iter().all(|row| row.0 >= 192), "{rows:?}");
+    assert!(rows.iter().all(|r| r.1 < 1e-3 && r.2 < 0.1), "{rows:?}");
+    println!("Analytic mirror (coverage, distance error, motion error): {rows:?}");
+}
+
+#[test]
 #[ignore = "requires real GPU with a 256 MiB storage binding"]
 fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
     let _guard = crate::abi_test_lock();

@@ -2,7 +2,7 @@ import {queryState, pendingSceneQueryRef} from './queryPoints.wgsl.js';
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false, recordReflection=false) {
   earlyScattering &&= queryPoints;
   const pendingQuery = pendingSceneQueryRef(earlyScattering);
   const continuation: Record<string, string> = {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool'};
@@ -155,7 +155,7 @@ struct ScatteringWork {
   response: vec3f,
   pdf: f32,
   transmission: bool,
-}
+${recordReflection ? '  specularReflection: bool,\n' : ''}}
 
 fn sampleScattering(
   si: ptr<function, SurfaceInteraction>,
@@ -232,7 +232,7 @@ ${caustics?`        var connection=*path;
         if (!openpbr_sample_direction(prepared, matRnd, &lightDir, &transmission,
             &roughness, &specular, &diffuse, &lobe)) { return result; }
         result.transmission = transmission;
-      }
+${recordReflection ? '        result.specularReflection = specular && !transmission;\n' : ''}      }
     } else {
       let lightRnd = ${sharedGraphEmission ? 'mx_nee_random(event)' : 'vec3f(sample2D(lightDim(event, 1u)), sample1D(lightDim(event, 0u)))'};
       sampleLightForNEECandidate((*si).position, lightRnd, event, candidateCount, &lightSample);
@@ -468,7 +468,10 @@ ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
     // Zero throughput cannot contribute at subsequent vertices or light connections.
     if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
 
-    crossedBoundary = isNextRefraction & !(*ma).thinWalled;
+${recordReflection ? `    if ((*path).fromEye && scattered.specularReflection) {
+      mtReflectionExit(${ffnormal});
+    }
+` : ''}    crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;
     // TODO prefer the opaque surface when transmission surface and opaque surface are overlapped.
     // Or the ray go out from transmission material will miss the opque surface.

@@ -42,7 +42,7 @@ impl FrameProducer {
         let mut description = scene.scene.clone();
         description.bind_groups[layout::group::OUTPUT]
             .layout
-            .push(storage_layout(4, false));
+            .extend([storage_layout(4, false), storage_layout(10, false)]);
         let scope = scene
             .gpu
             .device
@@ -156,6 +156,7 @@ impl FrameProducer {
         };
         metadata.capabilities.deformation_motion = Support::Unverified;
         metadata.capabilities.specular_distance = Support::Unverified;
+        metadata.capabilities.specular_reflection = Support::Ready;
         metadata.capabilities.glass = GlassCapabilities::default();
         let gpu = &scene.gpu;
         let size = metadata.input_extent;
@@ -176,6 +177,7 @@ impl FrameProducer {
                 Guide::DiffuseAlbedo,
                 Guide::SpecularAlbedo,
                 Guide::Motion,
+                Guide::SpecularReflection,
             ],
             0,
             0,
@@ -227,6 +229,7 @@ impl FrameProducer {
             allocate(pixels * 16),
             allocate(pixels * 48),
             allocate(pixels * size_of::<FramePixelRecord>() as u64),
+            allocate(pixels * 32),
         ];
         let bind_buffers = |group: usize, buffers: &[&wgpu::Buffer]| {
             gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -236,7 +239,7 @@ impl FrameProducer {
                     .iter()
                     .enumerate()
                     .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                        binding: binding as u32,
+                        binding: if binding == 5 { 10 } else { binding as u32 },
                         resource: buffer.as_entire_binding(),
                     })
                     .collect::<Vec<_>>(),
@@ -324,7 +327,9 @@ impl FrameProducer {
         resolve_parameters.extend_from_slice(bytemuck::cast_slice(&[
             u32::from(previous.is_some()),
             u32::from(stable),
-            0,
+            u32::from(
+                previous.is_some_and(|p| p.metadata.scene_revision == metadata.scene_revision),
+            ),
             0,
         ]));
         let resolve_parameters = uniform("Frame correspondence parameters", &resolve_parameters);
@@ -368,6 +373,16 @@ impl FrameProducer {
                 resource: buffer.as_entire_binding(),
             });
         }
+        resolve_entries.push(wgpu::BindGroupEntry {
+            binding: 13,
+            resource: outputs[5].as_entire_binding(),
+        });
+        resolve_entries.push(wgpu::BindGroupEntry {
+            binding: 14,
+            resource: wgpu::BindingResource::TextureView(
+                &resources.guide(Guide::SpecularReflection).unwrap().view,
+            ),
+        });
         let resolve_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.resolve.get_bind_group_layout(0),

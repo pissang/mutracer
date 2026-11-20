@@ -35,10 +35,35 @@ impl Drop for Feature {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
+enum SpecularGuide {
+    Off,
+    Motion,
+    Distance,
+}
+impl SpecularGuide {
+    fn from_environment() -> Result<Self> {
+        match std::env::var("MUTRACER_DLSS_SPECULAR").as_deref() {
+            Ok("motion") => Ok(Self::Motion),
+            Ok("distance") => Ok(Self::Distance),
+            Ok("off") | Err(std::env::VarError::NotPresent) => Ok(Self::Off),
+            _ => Err(anyhow::anyhow!(
+                "MUTRACER_DLSS_SPECULAR accepts off, motion or distance"
+            )),
+        }
+    }
+}
+struct OpticalInput {
+    kind: SpecularGuide,
+    pipeline: wgpu::ComputePipeline,
+    format: wgpu::TextureFormat,
+}
 struct Target {
     feature: Feature,
     size: [u32; 2],
     textures: [wgpu::Texture; 3], // converted depth, motion, SDK output
+    optical: Option<wgpu::Texture>,
     last: Option<api::DenoiseFrameStatus>,
     flights: Vec<api::DenoiseFrameStatus>,
     last_frame: u64,
@@ -57,6 +82,7 @@ pub struct Dlss {
     resolve: wgpu::ComputePipeline,
     runtime: Arc<Runtime>,
     trace_preset: Option<u32>,
+    optical: Option<OpticalInput>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -110,6 +136,7 @@ impl Dlss {
             !CREATED.swap(true, std::sync::atomic::Ordering::AcqRel),
             "DLSS runtime already created in this process"
         );
+        let guide = SpecularGuide::from_environment()?;
         let logs = std::env::temp_dir().join("mutracer-ngx");
         std::fs::create_dir_all(&logs)?;
         let ngx = unsafe {
@@ -125,6 +152,34 @@ impl Dlss {
         }
         let gpu = gpu::bootstrap(&ngx)?;
         let runtime = Arc::new(Runtime { ngx, gpu });
+        let optical = match guide {
+            SpecularGuide::Off => None,
+            kind => {
+                let (format, name, value) = match kind {
+                    SpecularGuide::Motion => (
+                        wgpu::TextureFormat::Rg32Float,
+                        "rg32float",
+                        "vec4f(select(vec2f(size) * 2.0, record.xy, record.z > 0.0), 0.0, 0.0)",
+                    ),
+                    SpecularGuide::Distance => {
+                        (wgpu::TextureFormat::R32Float, "r32float", "vec4f(record.w)")
+                    }
+                    SpecularGuide::Off => unreachable!(),
+                };
+                let shader = include_str!("specular.wgsl")
+                    .replace("GUIDE_FORMAT", name)
+                    .replace("GUIDE_VALUE", value);
+                Some(OpticalInput {
+                    kind,
+                    format,
+                    pipeline: pipeline(
+                        &runtime.gpu.device,
+                        "NGX optical guide conversion",
+                        &shader,
+                    ),
+                })
+            }
+        };
         Ok(Arc::new(Self {
             prepare: pipeline(
                 &runtime.gpu.device,
@@ -137,6 +192,7 @@ impl Dlss {
                 include_str!("resolve.wgsl"),
             ),
             runtime,
+            optical,
             state: Mutex::new(State::default()),
             trace_preset: (std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"))
                 .then_some(preset),
@@ -201,6 +257,23 @@ impl Dlss {
             Target {
                 feature,
                 textures,
+                optical: self.optical.as_ref().map(|input| {
+                    device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("NGX optical guide"),
+                        size: wgpu::Extent3d {
+                            width: frame.size[0],
+                            height: frame.size[1],
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: input.format,
+                        usage: wgpu::TextureUsages::STORAGE_BINDING
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    })
+                }),
                 size: frame.size,
                 last: None,
                 flights: Vec::new(),
@@ -365,7 +438,35 @@ impl Dlss {
             let view = if i < 4 { &views[i] } else { &converted[i - 4] };
             descriptors[i] = gpu::descriptor(&self.runtime.gpu.adapter, texture, view, false);
         }
-        // Specular distance is optional. Never pass a fabricated zero guide.
+        let mut guide = SpecularGuide::Off;
+        if let (Some(convert), Some(texture), Some(input)) = (
+            &self.optical,
+            &target.optical,
+            temporal.guide(Guide::SpecularReflection),
+        ) {
+            let input_view = input.create_view(&Default::default());
+            let output_view = texture.create_view(&Default::default());
+            let bind_group = group(
+                device,
+                &convert.pipeline,
+                &[
+                    wgpu::BindingResource::TextureView(&input_view),
+                    wgpu::BindingResource::TextureView(&output_view),
+                ],
+            );
+            dispatch(&mut producer, &convert.pipeline, &bind_group, frame.size);
+            producer.transition_resources(
+                std::iter::empty(),
+                std::iter::once(wgpu::TextureTransition {
+                    texture,
+                    selector: None,
+                    state: wgpu::TextureUses::RESOURCE,
+                }),
+            );
+            descriptors[6] =
+                gpu::descriptor(&self.runtime.gpu.adapter, texture, &output_view, false);
+            guide = convert.kind;
+        }
         descriptors[7] = gpu::descriptor(
             &self.runtime.gpu.adapter,
             &target.textures[2],
@@ -383,7 +484,7 @@ impl Dlss {
         unsafe {
             native.as_hal_mut::<Vulkan, _, _>(|e| {
                 let cmd = e.unwrap().raw_handle();
-                for d in &descriptors[..6] {
+                for d in descriptors[..7].iter().filter(|d| d.image != 0) {
                     gpu::barrier(&self.runtime.gpu.raw, cmd, d.image, true);
                 }
                 gpu::output_barrier(&self.runtime.gpu.raw, cmd, descriptors[7].image);
@@ -393,13 +494,14 @@ impl Dlss {
                     descriptors.as_ptr(),
                     8,
                     reset as u32,
+                    guide as u32,
                     -meta.jitter_pixels[0],
                     -meta.jitter_pixels[1],
                     meta.camera.view.as_ptr(),
                     projection.as_ptr(),
                     meta.delta_seconds * 1000.,
                 );
-                for d in &descriptors[..6] {
+                for d in descriptors[..7].iter().filter(|d| d.image != 0) {
                     gpu::barrier(&self.runtime.gpu.raw, cmd, d.image, false);
                 }
             });
@@ -442,6 +544,7 @@ impl Dlss {
                     "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
                     "size": meta.input_extent, "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
                     "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
+                    "specularGuide": format!("{guide:?}"),
                 }
             })
         });

@@ -58,6 +58,7 @@ type Eval = unsafe extern "C" fn(
     *const Texture,
     u32,
     u32,
+    u32,
     f32,
     f32,
     *const f32,
@@ -91,7 +92,7 @@ impl Ngx {
     pub unsafe fn load(path: &Path, runtime: &Path, logs: &Path, id: &str) -> Result<Self> {
         let lib = unsafe { libloading::Library::new(path) }?;
         let abi = unsafe { lib.get::<unsafe extern "C" fn() -> u32>(b"rr_abi\0") }?;
-        ensure!(unsafe { abi() } == 2, "shim ABI mismatch");
+        ensure!(unsafe { abi() } == 3, "shim ABI mismatch");
         let configure = *unsafe { lib.get::<Configure>(b"rr_configure\0") }?;
         let ngx = Self {
             extensions: *unsafe { lib.get(b"rr_extensions\0") }?,
