@@ -48,18 +48,22 @@ export function aovMask(kinds: readonly AovKind[]): number {
   return mask;
 }
 export interface AovInstanceSnapshot {
-  object: number; instance: number; topology: number; vertices: number;
+  object: number; instance: number; topology: number; vertices: number; geometry: number;
   transform: Float32Array;
 }
 export interface AovFrameSnapshot {
   width: number; height: number;
   cameraEye?: Float32Array; cameraForward?: Float32Array;
   viewProjection: Float32Array; instances: readonly AovInstanceSnapshot[];
+  /** CPU history used to pack the previous positions of meshes that deformed. */
+  geometryPositions?: ReadonlyMap<number, Float32Array>;
+  geometryVersions?: ReadonlyMap<number, number>;
 }
 /** Per-render history; camera pose, projection and rigid transforms may change without resetting. */
 export class AovHistory {
   private frame?: AovFrameSnapshot;
   private instances=new Map<string,AovInstanceSnapshot>();
+  constructor(public captureDeformation = false) {}
   clear() { this.frame = undefined; this.instances.clear(); }
   previous(next: AovFrameSnapshot): AovFrameSnapshot | undefined {
     const old = this.frame;
@@ -67,11 +71,18 @@ export class AovHistory {
   }
   match(next: AovFrameSnapshot, instance: AovInstanceSnapshot): AovInstanceSnapshot | undefined {
     const old = this.previous(next) ? this.instances.get(`${instance.object}:${instance.instance}`) : undefined;
-    return old && old.topology === instance.topology && old.vertices === instance.vertices ? old : undefined;
+    return old && old.topology === instance.topology ? old : undefined;
+  }
+  positions(next: AovFrameSnapshot, geometry: number): Float32Array | undefined {
+    return this.previous(next)?.geometryPositions?.get(geometry);
   }
   accept(frame: AovFrameSnapshot) {
+    const oldPositions = this.frame?.geometryPositions, oldVersions = this.frame?.geometryVersions;
+    const positions = this.captureDeformation && frame.geometryPositions ? new Map([...frame.geometryPositions].map(([id, values]) =>
+      [id, oldVersions?.get(id) === frame.geometryVersions?.get(id) ? oldPositions?.get(id) ?? values.slice() : values.slice()])) : undefined;
     this.frame = {...frame, cameraEye: frame.cameraEye?.slice(), cameraForward: frame.cameraForward?.slice(), viewProjection: frame.viewProjection.slice(),
-      instances: frame.instances.map(i => ({...i, transform: i.transform.slice()}))};
+      instances: frame.instances.map(i => ({...i, transform: i.transform.slice()})), geometryPositions: positions,
+      geometryVersions: this.captureDeformation ? new Map(frame.geometryVersions) : undefined};
     this.instances.clear();
     for (const instance of this.frame.instances) this.instances.set(`${instance.object}:${instance.instance}`,instance);
   }

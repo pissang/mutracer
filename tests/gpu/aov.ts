@@ -29,6 +29,32 @@ function measurePlaneMotion(motion: Float32Array, camera: THREE.Camera, previous
   }
   return {valid, maxPixelError, maxDepthRelativeError};
 }
+function measureDeformedPlaneMotion(motion: Float32Array, camera: THREE.PerspectiveCamera, previousCamera: THREE.PerspectiveCamera,
+  currentMesh: THREE.Mesh, previousTransform: THREE.Matrix4, previousLocalZ: number, currentLocalZ: number, width: number, height: number) {
+  const ray = new THREE.Ray(), target = new THREE.Vector3(), point = new THREE.Vector3(), normal = new THREE.Vector3();
+  const previousForward = previousCamera.getWorldDirection(new THREE.Vector3()), inverseCurrent = currentMesh.matrixWorld.clone().invert();
+  const planePoint = new THREE.Vector3(0, 0, currentLocalZ).applyMatrix4(currentMesh.matrixWorld);
+  normal.set(0, 0, 1).transformDirection(currentMesh.matrixWorld);
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, planePoint);
+  let valid = 0, maxPixelError = 0, maxDepthRelativeError = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const ndcX = (x + .5) / width * 2 - 1, ndcY = 1 - (y + .5) / height * 2;
+    target.set(ndcX, ndcY, .5).unproject(camera);
+    ray.set(camera.position, target.sub(camera.position).normalize());
+    if (!ray.intersectPlane(plane, point)) continue;
+    const local = point.clone().applyMatrix4(inverseCurrent); local.z = previousLocalZ;
+    const oldWorld = local.applyMatrix4(previousTransform), previousNdc = oldWorld.clone().project(previousCamera);
+    const previousX = (previousNdc.x + 1) * .5 * width, previousY = (1 - previousNdc.y) * .5 * height;
+    if (previousX < 0 || previousX >= width || previousY < 0 || previousY >= height) continue;
+    const offset = (y * width + x) * 4;
+    if (motion[offset + 3] !== 3) continue;
+    const expectedDepth = oldWorld.clone().sub(previousCamera.position).dot(previousForward);
+    maxPixelError = Math.max(maxPixelError, Math.abs(motion[offset] - (previousX - x - .5)), Math.abs(motion[offset + 1] - (previousY - y - .5)));
+    maxDepthRelativeError = Math.max(maxDepthRelativeError, Math.abs(motion[offset + 2] - expectedDepth) / Math.abs(expectedDepth));
+    valid++;
+  }
+  return {valid,maxPixelError,maxDepthRelativeError};
+}
 async function captureAovs() {
   const engine = new Engine({canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   const render = new Render(engine, {width: 48, height: 32, bounces: 1});
@@ -155,10 +181,6 @@ async function captureAovs() {
       check(Math.abs(rotationMotion.data[o]-((px-.35)*newFocal/distance+24-x-.5))<.001 && Math.abs(rotationMotion.data[o+1]-(16-py*newFocal/distance-y-.5))<.001,'Rigid rotation motion mismatch');rotationValid++;
     }
     check(rotationValid>100,'Rigid rotation has no valid history');
-    source.geometry.position.array[0]-=.1;source.geometry.markVerticesUpdated();engine.update();
-    await render.converge({samples:4});check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'Deformation history must be invalid');
-    source.aovId=303;engine.update();await render.converge({samples:4});
-    check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'New identity history must be invalid');
     const previousPerspective=camera.clone();
     const ortho=new THREE.OrthographicCamera(-3,3,2,-2,.1,100);ortho.position.z=4;ortho.updateMatrixWorld();
     engine.camera=fromTHREECamera(ortho);engine.update();await render.converge({samples:4});
@@ -245,8 +267,33 @@ async function captureAovs() {
     check(grazingValid>=grazingSurface*.98,`Grazing motion lost history: ${grazingValid}/${grazingSurface}`);
     check(grazingError<.01,`Grazing motion mismatch: ${grazingError}`);
     check(grazingDepthRelativeError<1e-4,`Grazing previous depth mismatch: ${grazingDepthRelativeError}`);
+    mesh.geometry=new THREE.PlaneGeometry(1.5,1.5);mesh.position.set(0,0,0);mesh.rotation.set(0,0,0);sync.update();engine.scene=sync.scene;
+    camera.position.set(0,0,4);camera.lookAt(0,0,0);camera.updateProjectionMatrix();camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();
+    await render.converge({samples:4});
+    const deformationCamera=camera.clone(),deformationTransform=mesh.matrixWorld.clone();
+    for(let i=2;i<source.geometry.position.array.length;i+=3)source.geometry.position.array[i]=.1;
+    mesh.position.x=.05;
+    source.geometry.markVerticesUpdated();mesh.updateMatrixWorld();sync.update();engine.scene=sync.scene;engine.update();
+    await render.converge({samples:4});const deformationMotion=await render.readPixels('motion');
+    const deformation=measureDeformedPlaneMotion(deformationMotion.data,camera,deformationCamera,mesh,deformationTransform,0,.1,48,32);
+    check(deformation.valid>100,`Deformation history has too few valid samples: ${deformation.valid}`);
+    check(deformation.maxPixelError<.001,`Deformation motion mismatch: ${deformation.maxPixelError}`);
+    check(deformation.maxDepthRelativeError<1e-4,`Deformation previous depth mismatch: ${deformation.maxDepthRelativeError}`);
+    const secondDeformationCamera=camera.clone(),secondDeformationTransform=mesh.matrixWorld.clone();
+    for(let i=2;i<source.geometry.position.array.length;i+=3)source.geometry.position.array[i]=.2;
+    mesh.position.x=.1;
+    source.geometry.markVerticesUpdated();mesh.updateMatrixWorld();sync.update();engine.scene=sync.scene;engine.update();
+    await render.converge({samples:4});const secondDeformationMotion=await render.readPixels('motion');
+    const secondDeformation=measureDeformedPlaneMotion(secondDeformationMotion.data,camera,secondDeformationCamera,mesh,secondDeformationTransform,.1,.2,48,32);
+    check(secondDeformation.valid>100,`Second deformation history has too few valid samples: ${secondDeformation.valid}`);
+    check(secondDeformation.maxPixelError<.001,`Second deformation motion mismatch: ${secondDeformation.maxPixelError}`);
+    check(secondDeformation.maxDepthRelativeError<1e-4,`Second deformation previous depth mismatch: ${secondDeformation.maxDepthRelativeError}`);
+    const topologyIndices=source.geometry.indices.array;topologyIndices[0]=topologyIndices[1];source.geometry.markUpdated();engine.update();await render.converge({samples:4});
+    check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'Topology changes must invalidate deformation history');
+    source.aovId=303;engine.update();await render.converge({samples:4});
+    check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'New identity history must be invalid');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {customCalls,disoccluded,rotationValid,grazing:{surface:grazingSurface,valid:grazingValid,maxError:grazingError,previousDepthRelativeError:grazingDepthRelativeError},motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length,dollyPreviousDepthRelativeError:dollyDepthRelativeError,focalLength:focalResult,dollyZoom:{...zoomResult,maxMotionX:zoomMotionMagnitude},projectionSwitch,orthoToPerspective},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {customCalls,disoccluded,rotationValid,grazing:{surface:grazingSurface,valid:grazingValid,maxError:grazingError,previousDepthRelativeError:grazingDepthRelativeError},deformation,secondDeformation,topologyInvalidated:true,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length,dollyPreviousDepthRelativeError:dollyDepthRelativeError,focalLength:focalResult,dollyZoom:{...zoomResult,maxMotionX:zoomMotionMagnitude},projectionSwitch,orthoToPerspective},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});
