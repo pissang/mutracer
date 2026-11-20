@@ -1213,6 +1213,128 @@ fn temporal_mirror_records_real_segment_and_reprojects_its_virtual_image() {
 }
 
 #[test]
+#[ignore = "requires real GPU"]
+fn temporal_glass_records_trace_thin_and_solid_interfaces() {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene};
+    use std::sync::{Arc, Mutex};
+
+    struct InspectGlass {
+        engine: Engine,
+        thin: bool,
+        result: Arc<Mutex<Option<(usize, f32)>>>,
+    }
+    impl CustomDenoiser for InspectGlass {
+        fn input_mode(&self) -> DenoiseInputMode {
+            DenoiseInputMode::TemporalGpu
+        }
+        fn denoise(
+            &self,
+            mut input: DenoiseInput,
+            _: CancelToken,
+        ) -> std::result::Result<DenoiseOutput, String> {
+            let frame = input.resident.take().unwrap();
+            let temporal = frame.temporal.as_ref().unwrap();
+            let gpu = &self.engine.inner.gpu;
+            let paths =
+                crate::hit_diagnostics::read_raw(gpu, temporal.optical_path_records()).unwrap();
+            let primary = crate::hit_diagnostics::read_raw(gpu, temporal.pixel_records()).unwrap();
+            let scalar =
+                |bytes: &[u8], i: usize| f32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+            let slope_air = -0.35f32.tan();
+            let slope_glass = -(0.35f32.sin() / 1.5).asin().tan();
+            let mut count = 0;
+            let mut error = 0f32;
+            for (path, surface) in paths.chunks_exact(32).zip(primary.chunks_exact(240)) {
+                let flags = u32::from_le_bytes(path[28..32].try_into().unwrap());
+                if flags & 0xa8000000 != 0xa8000000 {
+                    continue;
+                }
+                assert_eq!(flags & 0x40000000 == 0, self.thin);
+                let entry_x = scalar(surface, 32);
+                let exit_x = scalar(path, 16);
+                let end_x = scalar(path, 0);
+                assert!((scalar(path, 8) + 3.).abs() < 1e-4);
+                let thickness = if self.thin { 0. } else { 0.5 };
+                assert!((scalar(path, 24) + thickness).abs() < 1e-4);
+                error = error.max((exit_x - entry_x - slope_glass * thickness).abs());
+                error = error.max((end_x - exit_x - slope_air * (3. - thickness)).abs());
+                count += 1;
+            }
+            *self.result.lock().unwrap() = Some((count, error));
+            let output = frame.buffers.color.clone();
+            frame.submit([], output).map(DenoiseOutput::Resident)
+        }
+    }
+    let _guard = crate::abi_test_lock();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(16, 16).unwrap();
+    for thin in [true, false] {
+        let mut scene = Scene::new();
+        let plane = |z: f32| vec![-10., 10., z, 10., 10., z, -10., -10., z, 10., -10., z];
+        let mut positions = plane(0.);
+        let mut triangles = vec![0, 2, 1, 2, 3, 1];
+        if !thin {
+            positions.extend(plane(-0.5));
+            triangles.extend([4, 5, 6, 6, 5, 7]);
+        }
+        let geometry = scene
+            .add_geometry(Geometry::new(positions, triangles))
+            .unwrap();
+        let mut glass = OpenPbrMaterial::default();
+        glass.values.layers.thin_walled = thin;
+        glass.values.transmission = 1.;
+        glass.values.roughness = 0.;
+        let material = scene.add_material(glass).unwrap();
+        scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+        let receiver_geometry = scene
+            .add_geometry(Geometry::new(plane(-3.), vec![0, 2, 1, 2, 3, 1]))
+            .unwrap();
+        let receiver = scene.add_material(OpenPbrMaterial::default()).unwrap();
+        scene
+            .add_mesh(Mesh::new(receiver_geometry, receiver))
+            .unwrap();
+        let camera = Camera {
+            projection: 1,
+            world_matrix: glam::Mat4::from_rotation_translation(
+                glam::Quat::from_rotation_y(0.35),
+                glam::Vec3::new(0., 0., 4.),
+            )
+            .to_cols_array(),
+            ..Default::default()
+        };
+        scene.set_default_camera(Some(camera));
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        let settings = RenderSettings {
+            max_samples: 1,
+            bounces: 4,
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings).unwrap();
+        let report = Arc::new(Mutex::new(None));
+        render
+            .set_custom_denoiser(
+                Some(Arc::new(InspectGlass {
+                    engine: engine.clone(),
+                    thin,
+                    result: report.clone(),
+                })),
+                DenoiseSchedule::EverySample,
+            )
+            .unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let (covered, maximum_error) = report.lock().unwrap().unwrap();
+        assert!(
+            covered >= 192 && maximum_error < 0.002,
+            "thin={thin}, coverage={covered}, error={maximum_error}"
+        );
+        println!(
+            "Snell forward oracle: thin={thin}, valid pixels={covered}, max endpoint error={maximum_error}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires real GPU with a 256 MiB storage binding"]
 fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
     let _guard = crate::abi_test_lock();

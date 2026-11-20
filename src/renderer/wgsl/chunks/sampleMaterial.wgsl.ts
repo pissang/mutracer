@@ -468,8 +468,11 @@ ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
     // Zero throughput cannot contribute at subsequent vertices or light connections.
     if (all((*path).beta == vec3f(0.0))) { (*path).abort = true; return; }
 
-${recordReflection ? `    if ((*path).fromEye && scattered.specularReflection) {
-      mtReflectionExit(${ffnormal});
+${recordReflection ? `    if ((*path).fromEye) {
+      if (scattered.specularReflection) { mtReflectionExit(${ffnormal}); }
+      if (scattered.transmission) { mtRefractionEntry((*ma).thinWalled); }
+    } else {
+      mtRefractionContinue(scattered.transmission);
     }
 ` : ''}    crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;

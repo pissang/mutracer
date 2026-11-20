@@ -24,6 +24,13 @@ struct MtReflection {
 }
 @group(${GROUP.OUTPUT}) @binding(10) var<storage, read_write> mtReflections: array<MtReflection>;
 var<private> mtReflectionPending: bool;
+var<private> mtRefractionStage: u32;
+const OPT_TRANSMISSION = 0x80000000u;
+const OPT_SOLID = 0x40000000u;
+const OPT_TERMINAL = 0x20000000u;
+const OPT_MISS = 0x10000000u;
+const OPT_EXIT = 0x08000000u;
+const OPT_INSTANCE_MASK = 0x07ffffffu;
 var<private> mtFrameIndex: u32;
 var<private> mtFrameCaptured: bool;
 
@@ -33,15 +40,60 @@ fn mtFrameBegin(index: u32) {
   mtFramePixels[index] = MtFramePixel();
   mtReflections[index] = MtReflection();
   mtReflectionPending = false;
+  mtRefractionStage = 0u;
   mtFramePixels[index].normalRoughness.w = 1.0;
 }
 fn mtReflectionExit(normal: vec3f) {
   if ((mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u ||
       (SPECTRAL && rtUniform.dispersionWavelengths > 1)) { return; }
   mtReflectionPending = true;
-  mtReflections[mtFrameIndex].normalInstance = vec4u(bitcast<vec3u>(normal), 0xffffffffu);
+  mtReflections[mtFrameIndex].normalInstance = vec4u(bitcast<vec3u>(normal), OPT_INSTANCE_MASK);
+}
+fn mtRefractionEntry(thin: bool) {
+  let primary = mtFramePixels[mtFrameIndex];
+  if ((primary.identity.w & 161u) != 129u || primary.transmission.w <= 0.0 ||
+      primary.barycentricsFace.z < 0.5 || primary.roughnessIor.y > 0.06) { return; }
+  mtRefractionStage = select(1u, 3u, thin);
+  let kind = OPT_TRANSMISSION | select(OPT_SOLID, OPT_EXIT, thin);
+  mtReflections[mtFrameIndex].normalInstance = vec4u(
+    bitcast<vec3u>(primary.positionDepth.xyz), kind | OPT_INSTANCE_MASK);
+}
+fn mtRefractionContinue(transmitted: bool) {
+  if (mtRefractionStage == 2u) {
+    mtRefractionStage = select(0u, 3u, transmitted);
+    if (transmitted) { mtReflections[mtFrameIndex].normalInstance.w |= OPT_EXIT; }
+  }
+}
+fn mtRefractionHit(si: SurfaceInteraction) {
+  let primary = mtFramePixels[mtFrameIndex];
+  if (mtRefractionStage == 1u) {
+    // This compact record supports a closed slab with two parallel boundaries.
+    // A second instance, a side wall or an internal reflection stays incomplete.
+    mtRefractionStage = 0u;
+    if (si.hit && bitcast<u32>(si.instanceIndex) == primary.identity.x &&
+        dot(si.faceNormal, primary.geometricNormal.xyz) < -0.9999) {
+      mtReflections[mtFrameIndex].normalInstance = vec4u(
+        bitcast<vec3u>(si.position), mtReflections[mtFrameIndex].normalInstance.w);
+      mtRefractionStage = 2u;
+    }
+  } else if (mtRefractionStage == 3u) {
+    mtRefractionStage = 0u;
+    if (!si.hit) {
+      mtReflections[mtFrameIndex].normalInstance.w |= OPT_MISS;
+      return;
+    }
+    let exitPoint = bitcast<vec3f>(mtReflections[mtFrameIndex].normalInstance.xyz);
+    let segmentLength = distance(primary.positionDepth.xyz, exitPoint) + distance(exitPoint, si.position);
+    if (segmentLength > 0.0 && segmentLength < 3.402823e38) {
+      mtReflections[mtFrameIndex].endpointDistance = vec4f(si.position, segmentLength);
+      let tags = mtReflections[mtFrameIndex].normalInstance.w & ~OPT_INSTANCE_MASK;
+      mtReflections[mtFrameIndex].normalInstance.w =
+        tags | OPT_TERMINAL | (bitcast<u32>(si.instanceIndex) & OPT_INSTANCE_MASK);
+    }
+  }
 }
 fn mtReflectionHit(si: SurfaceInteraction) {
+  mtRefractionHit(si);
   if (!mtReflectionPending) { return; }
   mtReflectionPending = false;
   if (!si.hit) {
@@ -51,7 +103,7 @@ fn mtReflectionHit(si: SurfaceInteraction) {
   let distanceFromSurface = distance(mtFramePixels[mtFrameIndex].positionDepth.xyz, si.position);
   if (distanceFromSurface > 0.0 && distanceFromSurface < 3.402823e38) {
     mtReflections[mtFrameIndex].endpointDistance = vec4f(si.position, distanceFromSurface);
-    mtReflections[mtFrameIndex].normalInstance.w = bitcast<u32>(si.instanceIndex);
+    mtReflections[mtFrameIndex].normalInstance.w = bitcast<u32>(si.instanceIndex) & OPT_INSTANCE_MASK;
   }
 }
 fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray: Ray) {
