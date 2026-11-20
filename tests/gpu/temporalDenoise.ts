@@ -124,9 +124,10 @@ async function run() {
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
+    const forwardSeed = await exerciseForwardMotionSeed(device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -223,6 +224,62 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
     check(smoothMetal[6]===pixels,`Smooth-metal roughness rule was lost: ${smoothMetal[6]}`);
     return {materialId:212,diffuseAccepted:diffuse[9],smoothMetalRejected:smoothMetal[6]};
   }finally{history.dispose();}
+}
+
+async function exerciseForwardMotionSeed(device: GPUDevice) {
+  const width = 16;
+  const height = 8;
+  const pixels = width * height;
+  const identity = new Float32Array(16);
+  identity[0] = identity[5] = identity[10] = identity[15] = 1;
+  const metadata = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
+  const window = await DirectWindowGPU.create(device, width, height, 3, false, true, 'veto');
+
+  async function upload(frame: number, start: number, brightness: number, visible: boolean) {
+    const depth = new Float32Array(pixels * 4);
+    const position = new Float32Array(pixels * 4);
+    const normal = new Float32Array(pixels * 4);
+    const albedo = new Float32Array(pixels * 4);
+    const roughness = new Float32Array(pixels * 4);
+    const motion = new Float32Array(pixels * 4);
+    const hdr = new Float32Array(pixels * 4);
+    const id = new Uint32Array(pixels * 4);
+    for (let i = 0; i < pixels; i++) {
+      const x = i % width;
+      const inside = x >= start && x < start + 2;
+      const at = i * 4;
+      position.set([0, 0, 0, 1], at);
+      depth.set([1, 0, 0, 1], at);
+      normal.set([0, 0, 1, 1], at);
+      albedo.set([.5, .5, .5, 1], at);
+      roughness.set([.5, 0, 0, 1], at);
+      if (inside && visible) motion.set([-3, 0, 1, 3], at);
+      hdr.set([brightness, brightness, brightness, 1], at);
+      id.set([inside ? 1 : 9, 0, 1, 0], at);
+    }
+    await window.upload(frame, metadata, {
+      centerPosition: position, centerDepth: depth, centerNormal: normal,
+      albedo, roughness, motion, hdr, id,
+    });
+  }
+
+  try {
+    await upload(0, 4, 1, true);
+    await upload(1, 7, 3, true);
+    const pixel = (3 * width + 4) * 4;
+    const accepted = new Float32Array(await window.read(await window.filter(0, [1], true)));
+    const expected = (1 + 3 * 8 / 9) / (1 + 8 / 9);
+    check(Math.abs(accepted[pixel] - expected) < 1e-6,
+      'A visible forward solution was lost because the earlier coordinate fell off the later surface');
+
+    await upload(1, 7, 3, false);
+    await upload(2, 10, 9, true);
+    const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));
+    check(occluded[pixel] === 1, 'The predictor used history beyond invalid intermediate motion');
+    return {visible: accepted[pixel], occluded: occluded[pixel]};
+  } finally {
+    window.dispose();
+  }
 }
 
 async function blobPixels(blob:Blob){const image=await createImageBitmap(blob);const canvas=new OffscreenCanvas(image.width,image.height);const context=canvas.getContext('2d')!;context.drawImage(image,0,0);return context.getImageData(0,0,image.width,image.height).data;}

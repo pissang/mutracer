@@ -230,6 +230,10 @@ in pixels). For pixel *x* of frame *t*:
   step inverts it by fixed-point iteration:
   - Find *y* in frame *k + 1* with `y + motion_{k+1}(y) = p_k`, starting from
     `y₀ = p_k − motion_{k+1}(p_k)`, for at most four iterations.
+  - In the symmetric window, retry a failed solve from a seed based on
+    the preceding motion, with a same-ID neighborhood search as a fallback.
+    The earlier coordinate can fall off the later surface even when the
+    inverse has a visible solution.
   - Accept the step only when the residual is below 0.05 px and the `id`
     matches. Otherwise the chain ends.
 - **Chain validity.** Every step needs:

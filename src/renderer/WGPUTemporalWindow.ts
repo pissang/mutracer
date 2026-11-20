@@ -22,6 +22,50 @@ fn motionAt(q:vec2f,frame:u32,id:vec3u)->vec4f{
   }}
   if(total<=0.){return vec4f(0);}return vec4f(value.xyz/total,3.);
 }
+// The source point can be outside the later frame's same-ID footprint
+// even when the inverse has a visible solution. A seed is just a proposal;
+// invertForwardMotion still samples and validates the later motion field.
+fn predictForwardSeed(q: vec2f, later: u32, prior: u32, id: vec3u) -> vec4f {
+  let previous = motionAt(q, prior, id);
+  let guess = q - select(vec2f(0.0), previous.xy, previous.w == 3.0);
+  let prediction = motionAt(guess, later, id);
+  if (prediction.w == 3.0 && motionAt(q - prediction.xy, later, id).w == 3.0) {
+    return prediction;
+  }
+  let center = vec2i(floor(clamp(guess, vec2f(0), vec2f(p.size) - 1.0) + 0.5));
+  let radius = select(4, 2, previous.w == 3.0);
+  var best = 4.0;
+  var seed = vec4f(0.0);
+  for (var y = -radius; y <= radius; y++) {
+    for (var x = -radius; x <= radius; x++) {
+      let at = center + vec2i(x, y);
+      if (any(at < vec2i(0)) || any(at >= vec2i(p.size)) || any(ident(at, later) != id)) {
+        continue;
+      }
+      let motion = textureLoad(motions, at, i32(later), 0);
+      if (motion.w != 3.0) { continue; }
+      let residual = vec2f(at) + motion.xy - q;
+      let error = dot(residual, residual);
+      if (error < best) {
+        best = error;
+        seed = motion;
+      }
+    }
+  }
+  return seed;
+}
+fn invertForwardMotion(q: vec2f, later: u32, id: vec3u, seed: vec4f) -> vec4f {
+  if (seed.w != 3.0) { return vec4f(0.0); }
+  var next = q - seed.xy;
+  for (var iteration = 0; iteration < 4; iteration++) {
+    let edge = motionAt(next, later, id);
+    if (edge.w != 3.0) { return vec4f(0.0); }
+    next = q - edge.xy;
+  }
+  let edge = motionAt(next, later, id);
+  if (edge.w != 3.0 || length(next + edge.xy - q) >= 0.05) { return vec4f(0.0); }
+  return vec4f(next, edge.z, 1.0);
+}
 fn guideAt(q:vec2f,frame:u32,field:u32,id:vec3u)->vec4f{
   if(!inFrame(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
@@ -39,13 +83,23 @@ fn traceMotionFrom(x:vec2f,id:vec3u,first:u32,delta:i32)->vec4f{
     let prior=(later+u32(capacity)-1u)%u32(capacity);let src=select(prior,later,delta<0);let dst=select(later,prior,delta<0);
     let sourceNormal=guideAt(q,src,1u,id);
     if(sourceNormal.w<=0.||dot(normal,sourceNormal.xyz)<.95){return vec4f(q,depth,0);}
-    var next=q;var m=motionAt(q,later,id);if(m.w!=3.){return vec4f(q,depth,0);}
-    if(delta<0){next=q+m.xy;depth=m.z;}else{
-      next=q-m.xy;var found=true;
-      for(var iteration=0;iteration<4;iteration++){let edge=motionAt(next,later,id);if(edge.w!=3.){found=false;break;}next=q-edge.xy;m=edge;}
-      if(!found){return vec4f(q,depth,0);}let edge=motionAt(next,later,id);
-      if(edge.w!=3.||length(next+edge.xy-q)>=.05){return vec4f(q,depth,0);}
-      let currentDepth=guideAt(next,later,0u,id);if(currentDepth.w<=0.){return vec4f(q,depth,0);}depth+=currentDepth.w-edge.z;
+    let motion = motionAt(q, later, id);
+    var next: vec2f;
+    if (delta < 0) {
+      if (motion.w != 3.0) { return vec4f(q, depth, 0); }
+      next = q + motion.xy;
+      depth = motion.z;
+    } else {
+      var forward = invertForwardMotion(q, later, id, motion);
+      if (forward.w == 0.0 && p.symmetric == 1u) {
+        let seed = predictForwardSeed(q, later, prior, id);
+        forward = invertForwardMotion(q, later, id, seed);
+      }
+      if (forward.w == 0.0) { return vec4f(q, depth, 0); }
+      next = forward.xy;
+      let currentDepth = guideAt(next, later, 0u, id);
+      if (currentDepth.w <= 0.0) { return vec4f(q, depth, 0); }
+      depth += currentDepth.w - forward.z;
     }
     if(!inFrame(next)){return vec4f(q,depth,0);}let destNormal=guideAt(next,dst,1u,id);
     if(destNormal.w<=0.||dot(normal,destNormal.xyz)<.95){return vec4f(q,depth,0);}
@@ -92,6 +146,13 @@ fn radiance(x:vec2i,frame:u32)->vec3f {
 fn overflowMissing(x:vec2i,frame:u32)->bool {
   return textureLoad(hdr,x,i32(frame),0).a==-2.0;
 }
+fn landingNormal(q: vec2f, id: vec3u) -> vec3f {
+  // Follow the same surface as the trace when the nearest texel belongs to
+  // a different surface. Causal reconstruction retains its existing sampler.
+  if (p.symmetric == 1u) { return guideAt(q, p.source, 1u, id).xyz; }
+  let nearest = clamp(vec2i(floor(q + 0.5)), vec2i(0), vec2i(p.size) - 1);
+  return surface(nearest, p.source, 1u).xyz;
+}
 fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u)->u32 {
   let oldPos=surface(at,p.source,0u);
   let oldNormal=surface(at,p.source,1u);
@@ -110,7 +171,7 @@ fn rejection(x:vec2i, q:vec3f, nearest:vec2i, partial:bool)->u32 {
   if (!(all(q.xy>=vec2f(0)) && all(q.xy<=vec2f(p.size)-1.0) && q.z>0.0)) { return 3u; }
   if (!(abs(coc(pos.w,p.current)-coc(q.z,p.source))<=0.5)) { return 4u; }
   let id=ident(x,p.current);
-  let endpointNormal=surface(clamp(vec2i(floor(q.xy+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
+  let endpointNormal=landingNormal(q.xy,id);
   if (partial) { return tapRejection(nearest,q.z,endpointNormal,id); }
   let origin=vec2i(floor(q.xy));
   for (var dy=0;dy<=1;dy++) { for (var dx=0;dx<=1;dx++) {
@@ -126,7 +187,7 @@ fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
   let pos=surface(x,p.current,0u);
   let normal=surface(x,p.current,1u);
   let id=ident(x,p.current);
-  let endpointNormal=surface(clamp(vec2i(floor(q+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
+  let endpointNormal=landingNormal(q,id);
   var coverage=0.0;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
     let at=min(origin+vec2i(dx,dy),vec2i(p.size)-1);
@@ -195,7 +256,7 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
     for(var dx=-1;dx<=1;dx++){
       let tap=original.at+vec2i(dx,dy);
       if(any(tap<vec2i(0)) || any(tap>=vec2i(p.size))){continue;}
-      let endpointNormal=surface(clamp(vec2i(floor(q.xy+.5)),vec2i(0),vec2i(p.size)-1),p.source,1u).xyz;
+      let endpointNormal=landingNormal(q.xy,id);
       let why=tapRejection(tap,q.z,endpointNormal,id);
       if(why!=0u && why!=9u){continue;}
       let source=surface(tap,p.source,0u);
