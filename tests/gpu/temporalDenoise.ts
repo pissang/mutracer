@@ -151,6 +151,12 @@ async function run() {
         'Temporal accumulation did not match the fixed render crop');
     }
     narrowTemporal.dispose(); narrowRender.dispose();
+    const displayAovRender = new Render(engine, {resolutionScale: .5, aovResolution: 'display', maxSamples: 1});
+    const displayAovTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false, denoiser: null});
+    displayAovTemporal.attach(displayAovRender);
+    await displayAovRender.converge({samples: 1});
+    await rejects(displayAovTemporal.push(displayAovRender), /AOVs at the render resolution/);
+    displayAovTemporal.dispose(); displayAovRender.dispose();
     const fullIdResult = await exerciseFullWidthIds(device);
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);

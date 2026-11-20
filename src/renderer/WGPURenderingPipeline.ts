@@ -1234,6 +1234,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     capture: (input: import('../Render.js').DenoiseInput) => Promise<void>
   ) {
     if (disposed || !presentationTexture) throw new Error('Temporal capture requires a complete render.');
+    if (requestedAovs.length && (aov.width !== renderWidth || aov.height !== renderHeight)) {
+      throw new Error('Temporal capture requires AOVs at the render resolution.');
+    }
     const color = copyGuide('Temporal HDR input', getFrameInput('color'), true);
     const albedo = copyGuide('Temporal albedo input', getFrameInput('albedo'), true);
     const normal = copyGuide('Temporal normal input', getFrameInput('normal'), true);

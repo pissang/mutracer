@@ -243,6 +243,13 @@ export class TemporalDenoiser {
       }
       const metadata = render._temporalMetadata;
       if (!metadata.camera) throw new Error('Temporal push requires a completed converge call.');
+      // The renderer may pad the capture grid while presenting a center crop.
+      const captureWidth = metadata.captureWidth ?? render.width;
+      const captureHeight = metadata.captureHeight ?? render.height;
+      await this.ensureResources(captureWidth, captureHeight);
+      if (captureWidth !== this.history.width || captureHeight !== this.history.height) {
+        throw new Error('Temporal frame dimensions changed within a shot.');
+      }
       if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
       if (this.activeOptions.historyInvalidation === 'auto' && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
       if (this.activeOptions.historyInvalidation === 'auto' && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
@@ -261,11 +268,8 @@ export class TemporalDenoiser {
       const sampleCount = metadata.samples;
       const settings = this.engine.display._snapshotSettings();
       await render._captureTemporal(async input => {
-        // Beauty and center AOVs share the padded target grid. Keep that grid
-        // through denoising and use the render's center crop at readback/export.
-        await this.ensureResources(input.width, input.height);
-        if (input.width !== this.history.width || input.height !== this.history.height) {
-          throw new Error('Temporal frame dimensions changed within a shot.');
+        if (input.width !== captureWidth || input.height !== captureHeight) {
+          throw new Error('Temporal render dimensions changed during capture.');
         }
         const projection = direct.projection ?? targetCamera.getProjectionMatrix(input.width / input.height);
         const view = mat4.create();
