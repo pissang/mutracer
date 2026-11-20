@@ -39,9 +39,7 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
   width: number, height: number, history: AovHistory, primitiveIds?: Uint32Array, includePrimitives = true): {words: Uint32Array; frame: AovFrameSnapshot} {
   const order = aovInstanceOrder(tlas);
   const instances = source.instances;
-  const frame: AovFrameSnapshot = {width, height,
-    projection: JSON.stringify(Array.from(camera.getProjectionMatrix(width / height))),
-    viewProjection: new Float32Array(16), instances: []};
+  const frame: AovFrameSnapshot = {width, height, viewProjection: new Float32Array(16), instances: []};
   const view = mat4.create(); mat4.invert(view, camera.transform);
   mat4.mul(frame.viewProjection, camera.getProjectionMatrix(width / height), view);
   const eye = new Float32Array([camera.transform[12],camera.transform[13],camera.transform[14],1]);

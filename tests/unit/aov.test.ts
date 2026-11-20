@@ -87,9 +87,9 @@ describe('AOV contract', () => {
       }
     }
   });
-  it('owns history snapshots and matches rigid motion by stable identity', () => {
+  it('retains history across projection changes and invalidates on resize or identity changes', () => {
     const history = new AovHistory();
-    const frame: AovFrameSnapshot = {width: 32, height: 16, projection: 'p', viewProjection: new Float32Array(16),
+    const frame: AovFrameSnapshot = {width: 32, height: 16, viewProjection: new Float32Array(16),
       instances: [{object: 9, instance: 0, topology: 1, vertices: 1, transform: new Float32Array(16)}]};
     expect(history.previous(frame)).toBeUndefined();
     history.accept(frame);
@@ -98,7 +98,8 @@ describe('AOV contract', () => {
     expect(history.match(frame, {...frame.instances[0], object: 10})).toBeUndefined();
     expect(history.match(frame, {...frame.instances[0], vertices: 2})).toBeUndefined();
     expect(history.match(frame, {...frame.instances[0], topology: 2})).toBeUndefined();
-    for (const changed of [{width: 33}, {height: 17}, {projection: 'o'}]) expect(history.previous({...frame, ...changed})).toBeUndefined();
+    expect(history.previous({...frame, viewProjection: new Float32Array(16).fill(2)})).toBeDefined();
+    for (const changed of [{width: 33}, {height: 17}]) expect(history.previous({...frame, ...changed})).toBeUndefined();
     history.clear();
     expect(history.previous(frame)).toBeUndefined();
   });

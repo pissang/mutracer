@@ -52,18 +52,18 @@ export interface AovInstanceSnapshot {
   transform: Float32Array;
 }
 export interface AovFrameSnapshot {
-  width: number; height: number; projection: string;
+  width: number; height: number;
   cameraEye?: Float32Array; cameraForward?: Float32Array;
   viewProjection: Float32Array; instances: readonly AovInstanceSnapshot[];
 }
-/** Per-render history; camera pose and rigid transforms may change without resetting. */
+/** Per-render history; camera pose, projection and rigid transforms may change without resetting. */
 export class AovHistory {
   private frame?: AovFrameSnapshot;
   private instances=new Map<string,AovInstanceSnapshot>();
   clear() { this.frame = undefined; this.instances.clear(); }
   previous(next: AovFrameSnapshot): AovFrameSnapshot | undefined {
     const old = this.frame;
-    return old && old.width === next.width && old.height === next.height && old.projection === next.projection ? old : undefined;
+    return old && old.width === next.width && old.height === next.height ? old : undefined;
   }
   match(next: AovFrameSnapshot, instance: AovInstanceSnapshot): AovInstanceSnapshot | undefined {
     const old = this.previous(next) ? this.instances.get(`${instance.object}:${instance.instance}`) : undefined;
