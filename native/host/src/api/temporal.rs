@@ -68,9 +68,11 @@ impl TemporalFrame {
     /// until a finite endpoint is sampled. Lane 1 stores a bitcast vec3 and
     /// a u32. For reflection the vec3 is its plane normal and the low 27 bits
     /// are the terminal instance. For transmission bit 31 marks the branch,
-    /// bit 30 a slab, bit 29 a finite terminal, bit 28 an environment miss,
-    /// and bit 27 a sampled exit. The vec3 is the exit position when bit 27
-    /// is set. All-ones low bits mean no instance. These are sampled records,
+    /// bit 30 a solid, bit 29 a finite terminal, bit 28 an environment miss,
+    /// bit 27 a sampled exit and bit 26 two nearly parallel geometric normals.
+    /// For transmission the low 26 bits are the terminal instance, and the vec3
+    /// is the exit position when bit 27 is set. All-ones low bits mean no instance.
+    /// These are sampled records,
     /// and incomplete paths carry no valid terminal.
     pub fn optical_path_records(&self) -> &wgpu::Buffer {
         &self.frame.current.resources.producer_buffers[7]

@@ -1249,6 +1249,8 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
     struct InspectGlass {
         engine: Engine,
         thin: bool,
+        rough: bool,
+        wedge_slope: f32,
         results: Arc<Mutex<Vec<(usize, f32)>>>,
     }
     impl CustomDenoiser for InspectGlass {
@@ -1303,11 +1305,29 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                 assert!((scalar(path, 8) + 3.).abs() < 1e-4);
                 let thickness = if self.thin { 0. } else { 0.5 };
                 let entrance_z = scalar(surface, 40);
-                assert!((scalar(path, 24) + thickness - entrance_z).abs() < 1e-4);
+                let exit_z = scalar(path, 24);
+                assert_eq!(
+                    flags & 0x04000000 != 0,
+                    !self.thin && self.wedge_slope == 0.
+                );
+                assert!((exit_z + thickness - entrance_z - exit_x * self.wedge_slope).abs() < 1e-4);
                 if meta.camera.kind == TemporalProjection::Orthographic {
                     assert_eq!(scalar(motion, 8), 0.);
-                    error = error.max((exit_x - entry_x - slope_glass * thickness).abs());
-                    error = error.max((end_x - exit_x - slope_air * (3. - thickness)).abs());
+                    let inside_length_z = entrance_z - exit_z;
+                    error = error.max((exit_x - entry_x - slope_glass * inside_length_z).abs());
+                    if self.wedge_slope != 0. {
+                        let incoming = glam::Vec3::new(slope_glass, 0., -1.).normalize();
+                        let normal = glam::Vec3::new(-self.wedge_slope, 0., 1.).normalize();
+                        let cosine = incoming.dot(normal);
+                        let transmitted = 1.5 * incoming
+                            - (1.5 * cosine + (1. - 2.25 * (1. - cosine * cosine)).sqrt()) * normal;
+                        let expected_end = exit_x + (-3. - exit_z) * transmitted.x / transmitted.z;
+                        error = error.max((end_x - expected_end).abs());
+                    } else {
+                        error = error.max((end_x - exit_x - slope_air * (3. + exit_z)).abs());
+                    }
+                } else if self.rough || self.wedge_slope != 0. {
+                    assert_eq!(scalar(motion, 8), 0.);
                 } else if let Some(previous) = temporal.previous_metadata() {
                     if scalar(motion, 8) == 0. {
                         continue;
@@ -1361,14 +1381,23 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
     let _guard = crate::abi_test_lock();
     let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 16).unwrap();
-    for thin in [true, false] {
+    for (thin, rough, wedge_slope) in [
+        (true, false, 0.),
+        (false, false, 0.),
+        (false, true, 0.),
+        (false, false, 0.02),
+    ] {
         engine.set_camera(None).unwrap();
         let mut scene = Scene::new();
         let plane = |z: f32| vec![-10., 10., z, 10., 10., z, -10., -10., z, 10., -10., z];
         let mut positions = plane(0.);
         let mut triangles = vec![0, 2, 1, 2, 3, 1];
         if !thin {
-            positions.extend(plane(-0.5));
+            positions.extend(
+                plane(-0.5)
+                    .chunks_exact(3)
+                    .flat_map(|p| [p[0], p[1], p[2] + wedge_slope * p[0]]),
+            );
             triangles.extend([4, 5, 6, 6, 5, 7]);
         }
         let geometry = scene
@@ -1377,7 +1406,7 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
         let mut glass = OpenPbrMaterial::default();
         glass.values.layers.thin_walled = thin;
         glass.values.transmission = 1.;
-        glass.values.roughness = 0.;
+        glass.values.roughness = if rough { 0.25 } else { 0. };
         let material = scene.add_material(glass).unwrap();
         let glass_surface = scene.add_mesh(Mesh::new(geometry, material)).unwrap();
         let receiver_geometry = scene
@@ -1411,6 +1440,8 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
                 Some(Arc::new(InspectGlass {
                     engine: engine.clone(),
                     thin,
+                    rough,
+                    wedge_slope,
                     results: report.clone(),
                 })),
                 DenoiseSchedule::EverySample,
@@ -1418,13 +1449,26 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
             .unwrap();
         render.converge(ConvergeOptions::new(1)).unwrap();
         let (covered, maximum_error) = report.lock().unwrap()[0];
-        assert!(
-            covered >= 192 && maximum_error < 0.002,
-            "thin={thin}, coverage={covered}, error={maximum_error}"
-        );
-        println!(
-            "Snell forward oracle: thin={thin}, valid pixels={covered}, max endpoint error={maximum_error}"
-        );
+        if rough {
+            assert!(
+                covered >= 160 && maximum_error > 0.01,
+                "coverage={covered}, spread={maximum_error}"
+            );
+        } else {
+            assert!(
+                covered >= 192 && maximum_error < 0.002,
+                "thin={thin}, wedge={wedge_slope}, coverage={covered}, error={maximum_error}"
+            );
+        }
+        if rough {
+            println!(
+                "Rough glass: {covered} sampled paths, largest offset from smooth reference={maximum_error}"
+            );
+        } else {
+            println!(
+                "Snell forward oracle: thin={thin}, wedge={wedge_slope}, valid pixels={covered}, max endpoint error={maximum_error}"
+            );
+        }
         camera.projection = 0;
         engine.set_camera(Some(camera)).unwrap();
         engine.update().unwrap();
@@ -1433,6 +1477,15 @@ fn temporal_glass_records_trace_thin_and_solid_interfaces() {
         engine.set_camera(Some(camera)).unwrap();
         engine.update().unwrap();
         render.converge(ConvergeOptions::new(1)).unwrap();
+        if rough || wedge_slope != 0. {
+            let rows = report.lock().unwrap();
+            assert!(rows[2].0 >= 160, "{rows:?}");
+            println!(
+                "Diagnostic transmission only: rough={rough}, wedge={wedge_slope}, covered={}",
+                rows[2].0
+            );
+            continue;
+        }
         scene.mesh_mut(receiver).unwrap().transform =
             glam::Mat4::from_translation(glam::Vec3::new(0.125, 0., 0.));
         engine.set_scene_object(&scene).unwrap();
