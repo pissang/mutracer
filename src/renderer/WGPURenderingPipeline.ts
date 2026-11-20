@@ -1229,6 +1229,39 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     return task;
   }
 
+  async function captureTemporalInput(
+    requestedAovs: readonly import('./aov.js').AovKind[],
+    capture: (input: import('../Render.js').DenoiseInput) => Promise<void>
+  ) {
+    if (disposed || !presentationTexture) throw new Error('Temporal capture requires a complete render.');
+    const color = copyGuide('Temporal HDR input', getFrameInput('color'), true);
+    const albedo = copyGuide('Temporal albedo input', getFrameInput('albedo'), true);
+    const normal = copyGuide('Temporal normal input', getFrameInput('normal'), true);
+    const output = scratch.get('Temporal capture output', () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16, true);
+    const aovs = requestedAovs.length ? aov.snapshot(requestedAovs) : undefined;
+    try {
+      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs});
+    } finally {
+      if (aovs) void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => aov.releaseSnapshot(aovs));
+    }
+  }
+
+  function composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}) {
+    if (disposed) throw new Error('Render target is disposed.');
+    const buffers = prepareParityInput(input.width, input.height);
+    const encoder = device.createCommandEncoder({label: 'External HDR composition input'});
+    const bytes = input.width * input.height * 16;
+    for (const key of ['color', 'albedo', 'normal'] as const) encoder.copyBufferToBuffer(input[key], 0, buffers[key], 0, bytes);
+    encoder.clearBuffer(buffers.shadowCatcher);
+    finishParityInput(encoder, buffers, input.samples, false);
+    drawPostProcess(device.createCommandEncoder(), false, true);
+    const snapshot = device.createCommandEncoder({label: 'External HDR denoise input'});
+    const color = snapshotInput(snapshot, 'Temporal composed color', composePass.getOutput('denoiseColor'), true);
+    device.queue.submit([snapshot.finish()]);
+    return {color, albedo: copyGuide('Temporal composed albedo', composePass.getOutput('denoiseAlbedo'), true),
+      normal: copyGuide('Temporal composed normal', getFrameInput('normal'), true)};
+  }
+
   function performDenoise(
     attachedDenoiser: DenoiserHandle,
     alphaDenoiser: OIDNWeb | undefined,
@@ -1534,6 +1567,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   return {
+    captureTemporalInput,
+    composeExternalDenoiseInput,
     invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {

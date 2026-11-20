@@ -277,6 +277,9 @@ export default class Render {
   private _denoiseController?: AbortController;
   private _filterRevision = 0;
   private _filterPending?: Promise<void>;
+  private _temporalAovs?: readonly AovKind[];
+  private _lastConvergeCamera?: Camera;
+  private _lastSequenceOffset?: number;
   private _denoiseRevision = 0;
   private _denoisePending?: Promise<void>;
   private _denoisedSamples = 0;
@@ -314,6 +317,27 @@ export default class Render {
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
+  async _captureTemporal(capture: (input: DenoiseInput) => Promise<void>) {
+    if (this._disposed) throw new Error('Render is disposed.');
+    if (!this.converged || !this._target?.captureTemporalInput) throw new Error('Temporal push requires a converged WebGPU render.');
+    this._target.activate(); this._engine.display._configure(this); this._target.drawPostProcess();
+    await this._target.captureTemporalInput(this._temporalAovs ?? [], capture);
+  }
+  /** @internal Compose caller-owned HDR and guides through this render's captured display settings. */
+  _composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}) {
+    if (!this._target?.composeExternalDenoiseInput) throw new Error('External HDR composition requires WebGPU.');
+    this._target.activate(); this._engine.display._configure(this);
+    return this._target.composeExternalDenoiseInput(input);
+  }
+  /** @internal Register hidden AOV inputs without changing Render.aovs. */
+  _attachTemporal(aovs: readonly AovKind[]) {
+    if (this._temporalAovs) throw new Error('This render is already attached to a temporal denoiser.');
+    const request = this._temporalAovs = Object.freeze([...aovs]);
+    this.restart();
+    return () => { if (this._temporalAovs !== request) return; this._temporalAovs = undefined; this.restart(); };
+  }
+  /** @internal */ get _temporalMetadata() { return {camera: this._lastConvergeCamera, sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples}; }
   /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
   /** @internal Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
@@ -431,7 +455,7 @@ export default class Render {
       if (!this._warnedAovResolution) {this._warnedAovResolution = true; console.warn('Display-resolution AOVs require WebGPU; using render resolution.');}
     }
     settings.batchSamples = this._refineOptions?.batchSamples ?? settings.batchSamples;
-    if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
+    settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions?.type==='custom' ? this._denoiserOptions.aovs ?? [] : []),...(this._temporalAovs ?? [])])];
     return settings;
   }
   private _synchronize(sampleCap = this.maxSamples, offline = false) {
@@ -851,6 +875,8 @@ export default class Render {
         options.onProgress?.({stage: 'denoising', samples: result.samples, targetSamples: result.samples});
         this._status = 'denoising'; this._maybeDenoise(true); await this._engine._awaitDevice(Promise.resolve(this._denoisePending)); check();
       }
+      this._lastConvergeCamera = camera;
+      this._lastSequenceOffset = sequenceOffset;
       this._status = 'finished'; return result;
     } catch (error) { if (this._engine._deviceGeneration === deviceGeneration) this._status = 'error'; throw error; }
     finally {

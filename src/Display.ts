@@ -6,6 +6,13 @@ import type Render from './Render.js';
 import type { ToneMapping, DisplayChannel } from './renderer/RenderingPipeline.js';
 import type { ColorRGB } from './types.js';
 import { displaySettingsKey, displayFilterSettingsKey, applyDisplaySettings } from './settings/display.js';
+interface TemporalBlobFrame {
+  readonly _temporalFrame: true;
+  readonly width: number;
+  readonly height: number;
+  readPixels(kind?: 'denoised'): Promise<{width: number; height: number; data: Float32Array}>;
+  _withPresentation<T>(callback: (render: Render) => T): T;
+}
 /** Display image channels. Default final. */
 export type {DisplayChannel} from './renderer/RenderingPipeline.js';
 /** Image encoding options for Display.toBlob. */
@@ -74,6 +81,17 @@ export default class Display {
   /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha = 1;
   private constructor(private readonly engine: Engine, canvas: HTMLCanvasElement | OffscreenCanvas) { this.canvas = canvas; }
   /** @internal */ static _create(engine: Engine, canvas: HTMLCanvasElement | OffscreenCanvas) { return new Display(engine, canvas); }
+  /** @internal */ _snapshotSettings(): Required<DisplaySettings> {
+    return {toneMapping:this.toneMapping,toneMappingExposure:this.toneMappingExposure,contrast:this.contrast,saturation:this.saturation,
+      temperature:this.temperature,tint:this.tint,vignette:this.vignette,bloomIntensity:this.bloomIntensity,bloomThreshold:this.bloomThreshold,
+      bloomRadius:this.bloomRadius,hdrOutputEnabled:this.hdrOutputEnabled,channel:this.channel,aovDepthRange:[...this.aovDepthRange],
+      aovPositionScale:this.aovPositionScale,aovMotionScale:this.aovMotionScale,aovIdComponent:this.aovIdComponent,
+      shadowCatcherColor:[...this.shadowCatcherColor],shadowCatcherAlpha:this.shadowCatcherAlpha};
+  }
+  /** @internal */ _withSettings<T>(settings: Required<DisplaySettings>, callback: () => T): T {
+    const restore=this._snapshotSettings(); Object.assign(this,settings);
+    try{return callback();}finally{Object.assign(this,restore);}
+  }
   /** Resizes the drawing buffer; scale-based renders resize at their next refine. */
   setSize(width: number, height: number) {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) throw new Error('Display dimensions must be positive.');
@@ -134,7 +152,10 @@ export default class Display {
     return target;
   }
   /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
-  present(render: Render): Render | undefined {
+  present(render: Render): Render | undefined;
+  present(render: TemporalBlobFrame): TemporalBlobFrame | undefined;
+  present(render: Render | TemporalBlobFrame): Render | TemporalBlobFrame | undefined {
+    if ('_temporalFrame' in render) return render._withPresentation(presentation => this.present(presentation)) ? render : undefined;
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const ready = this.channel === 'final' && render.fallback ? render._presentable : render._completeFor(this.channel);
     const fallback = render.fallback;
@@ -146,7 +167,11 @@ export default class Display {
     return selected;
   }
   /** Encodes the display chain at its final dimensions (default render dimensions), cropping fixed renders before passes using these settings; leaves the display canvas unchanged. */
-  async toBlob(render: Render, options: BlobOptions = {}): Promise<Blob> {
+  async toBlob(render: Render | TemporalBlobFrame, options: BlobOptions = {}): Promise<Blob> {
+    if ('_temporalFrame' in render) {
+      if (this.channel !== 'final') throw new Error('AOV display channels do not accept temporal frames.');
+      return render._withPresentation(presentation => this.toBlob(presentation, options));
+    }
     const target = this.compose(render, true);
     if (!target) throw new Error('Render has no complete image.');
     const presentation = await target.readPresentation();
