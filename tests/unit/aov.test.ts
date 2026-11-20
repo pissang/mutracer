@@ -42,6 +42,13 @@ describe('AOV contract', () => {
       expect(prefix.words.length).toBe(full.words[17]);
       expect(prefix.words).toEqual(full.words.slice(0, prefix.words.length));
       expect(prefix.frame).toEqual(full.frame);
+      if (frame === 1) {
+        const packedFloats = new Float32Array(full.words.buffer);
+        expect(packedFloats.slice(44, 47)).toEqual(new Float32Array([0, 0, 0]));
+        expect(Math.abs(packedFloats[48])).toBe(0);
+        expect(Math.abs(packedFloats[49])).toBe(0);
+        expect(packedFloats[50]).toBe(-1);
+      }
       const joined = new Uint32Array(prefix.words.length + primitives.length);
       joined.set(prefix.words); joined.set(primitives, prefix.words.length);
       expect(joined).toEqual(full.words);

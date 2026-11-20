@@ -86,6 +86,7 @@ void main() {
   out_centerPosition=vec4(si.position,1.0);` : ''}
   int offset=52+si.instanceIndex*24;
   out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
+  // Keep current depth in z for next-frame visibility; w carries previous depth when valid.
   out_motion.z=dot(si.position-aovVector(36),aovVector(40));
   if(aovWord(offset+2)==0u)return;
   mat4 transform=aovMatrix(offset+4), previousViewProjection=aovMatrix(0);
@@ -99,7 +100,8 @@ void main() {
   vec4 origin=aovPreviousProjection(si.position,transform,previousViewProjection,viewportSize);
   float planeDepth=aovPlaneDepthAtPreviousCenter(si.position,si.faceNormal,transform,previousViewProjection,viewportSize,max(out_motion.z,1e-3)*1e-2,origin);
   if(planeDepth<=0.0||abs(oldDepth-planeDepth)>max(1e-4,planeDepth*1e-3))return;
-  out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,3.0);
+  float previousDepth=dot(oldWorld.xyz-aovVector(44),aovVector(48));
+  out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,previousDepth);
   ` : /* glsl */ `
   ivec2 coord=ivec2(gl_FragCoord.xy);
   out_geometry=aovSample==0 ? vec4(0.0) : texelFetch(previousGeometry,coord,0);

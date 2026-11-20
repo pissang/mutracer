@@ -66,7 +66,10 @@ export class WebGLAov {
         }
         return {width,height,data};
       }
-      if(kind==='motion'){for(let o=2;o<data.length;o+=4)data[o]=0;return {width,height,data};}
+      if(kind==='motion'){
+        for(let o=0;o<data.length;o+=4){const previousDepth=data[o+3];data[o+2]=previousDepth;data[o+3]=previousDepth!==0?3:0;}
+        return {width,height,data};
+      }
       framebuffer.bind(this.renderer,[accumulated.position]);const coverage=readRgbaPixels(gl,width,height,false);
       for(let p=0;p<width*height;p++){
         const o=p*4,hits=coverage[o+3],inv=hits>0?1/hits:0,alpha=hits/Math.max(1,this.samples);

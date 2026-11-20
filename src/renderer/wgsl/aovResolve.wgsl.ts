@@ -1,5 +1,5 @@
 /** Shared normalization for readback and GPU denoiser snapshots. */
-function resolveCommon(primary: boolean, primaryStart = 9) { return /* wgsl */ `
+function resolveCommon(primary: boolean, primaryStart = 9, exposePreviousDepth = true) { return /* wgsl */ `
 struct AovResolvedAccumulation { geometry: vec4f, position: vec4f, diffuse: vec4f, specular: vec4f, }
 struct AovResolvedCenter { identity: vec4u, motion: vec4f, }
 @group(0) @binding(0) var<storage,read> accumulation: array<AovResolvedAccumulation>;
@@ -8,7 +8,7 @@ struct AovResolvedCenter { identity: vec4u, motion: vec4f, }
 fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
-  if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,motion.w);}
+  if(kind==6u){let motion=center[source].motion;value=${exposePreviousDepth ? 'vec4f(motion.xy,motion.w,select(0.0,3.0,motion.w!=0.0))' : 'vec4f(motion.xy,0.0,select(0.0,3.0,motion.w!=0.0))'};}
 ${primary ? /* wgsl */ `  else if(kind>=${primaryStart}u){
     let primary=center[source+parameters.x*parameters.y];
     let normalDepth=bitcast<vec4f>(primary.identity);
@@ -44,7 +44,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   output[index]=aovResolvedValue(source,parameters.w&255u);
 }
 `;
-export const aovResolveNativeShader = resolveCommon(true, 7) + resolveMain;
+export const aovResolveNativeShader = resolveCommon(true, 7, false) + resolveMain;
 export default resolveCommon(false) + resolveMain;
 
 /** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
@@ -56,11 +56,7 @@ const borrowDepthMain = /* wgsl */ `
   let value=bitcast<vec4f>(aovResolvedValue(source,parameters.w));
   textureStore(image,vec2i(id.xy),vec4f(value.x,value.w,0,0));
 }`;
-export const aovBorrowDepthShader = resolveCommon(false) + borrowDepthMain;
-/** Native borrowed depth also supports center depth at native AOV index 8. */
-export const aovBorrowDepthNativeShader = resolveCommon(true, 7) + borrowDepthMain;
-/** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
-export const aovBorrowReflectanceShader = resolveCommon(false) + /* wgsl */ `
+const borrowReflectanceMain = /* wgsl */ `
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
   let p=vec2f(f32((index<<1u)&2u),f32(index&2u));return vec4f(p*2.0-1.0,0,1);
 }
@@ -69,3 +65,10 @@ export const aovBorrowReflectanceShader = resolveCommon(false) + /* wgsl */ `
   let source=id.x+(parameters.y-1u-id.y)*parameters.x;
   return clamp(bitcast<vec4f>(aovResolvedValue(source,parameters.w)),vec4f(0),vec4f(1));
 }`;
+export const aovBorrowDepthShader = resolveCommon(false) + borrowDepthMain;
+/** Native borrowed depth also supports center depth at native AOV index 8. */
+export const aovBorrowDepthNativeShader = resolveCommon(true, 7, false) + borrowDepthMain;
+/** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
+export const aovBorrowReflectanceShader = resolveCommon(false) + borrowReflectanceMain;
+/** Native keeps its existing public motion depth lane while preserving validity. */
+export const aovBorrowReflectanceNativeShader = resolveCommon(false, 9, false) + borrowReflectanceMain;

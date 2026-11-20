@@ -48,7 +48,7 @@ void main() {
     else color = clamp(cp.xyz / mapping.z * .5 + .5, 0.0, 1.0);
   } else {
     vec4 m = texelFetch(motion, p, 0);
-    alpha = m.w == 3.0 ? 1.0 : 0.0;
+    alpha = m.w != 0.0 ? 1.0 : 0.0;
     float magnitude = length(m.xy), hue = 0.0;
     if (magnitude > 0.0) hue = fract(atan(m.y, m.x) / 6.28318530718 + 1.0);
     vec3 v = abs(fract(vec3(hue) + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);

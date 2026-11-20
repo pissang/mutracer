@@ -133,6 +133,7 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   let primitiveOffset = aovScene[17u];
   aovCenter[index].identity = vec4u(aovScene[offset], aovScene[offset+1u],
     aovScene[materialOffset + u32(si.materialIndex)], aovScene[primitiveOffset + u32(si.triangleIndex)]);
+  // Keep current depth in z for next-frame visibility; w carries previous depth when valid.
   aovCenter[index].motion.z = dot(si.position-aovVector(36u),aovVector(40u));
   if (aovScene[offset+2u] == 0u) { return; }
   let transform = aovMatrix(offset+4u);
@@ -149,7 +150,8 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
     max(aovCenter[index].motion.z, 1e-3) * 1e-2, origin);
   if (planeDepth <= 0.0 || abs(previous.motion.z-planeDepth)>max(1e-4,planeDepth*1e-3)) { return; }
   let motion=(oldPixel-(vec2f(id.xy)+0.5))*vec2f(1.0,-1.0);
-  aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,3.0);
+  let previousDepth = dot(oldWorld.xyz-aovVector(44u),aovVector(48u));
+  aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,previousDepth);
 }
 `;
 }
