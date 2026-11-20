@@ -2065,11 +2065,20 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     let size = context_size(render.context)?;
     let scaled_size = size.map(|n| n * 2);
     let limits = gpu.device.limits();
+    let bytes_per_pixel = if render
+        .capture
+        .as_ref()
+        .is_some_and(Capture::has_shadow_catcher)
+    {
+        48
+    } else {
+        16
+    };
     let output_size = if render.denoise.temporal_output_scale == 2
         && scaled_size
             .iter()
             .all(|&n| n <= limits.max_texture_dimension_2d)
-        && u64::from(scaled_size[0]) * u64::from(scaled_size[1]) * 16
+        && u64::from(scaled_size[0]) * u64::from(scaled_size[1]) * bytes_per_pixel
             <= u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size)
     {
         scaled_size

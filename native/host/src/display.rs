@@ -322,31 +322,33 @@ impl Display {
                 cache: None,
             })
         });
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Unscaled temporal composition extent"),
-            contents: bytemuck::cast_slice(&self.size),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
         let mut buffers = vec![
-            (&self.raw, &result.raw),
-            (&self.normal, &result.normal),
-            (&self.albedo, &result.albedo),
+            (&self.raw, &result.raw, 1u32),
+            (&self.normal, &result.normal, 1),
+            (&self.albedo, &result.albedo, 1),
         ];
         if let Some(shadow) = self.shadow.as_ref().filter(|_| self.metadata.has_catcher) {
             let target = result.shadow.get_or_insert_with(|| {
                 device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Resampled catcher accumulation"),
-                    size: result.raw.size(),
+                    size: shadow.size() * 4,
                     usage: wgpu::BufferUsages::STORAGE
                         | wgpu::BufferUsages::COPY_SRC
                         | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 })
             });
-            buffers.push((shadow, target));
+            // ShadowCatcherAccumulation stores mask, background and moments
+            // interleaved as three vec4f values per pixel.
+            buffers.push((shadow, target, 3));
         }
         let mut encoder = device.create_command_encoder(&Default::default());
-        for (source, target) in buffers {
+        for (source, target, lanes) in buffers {
+            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Unscaled temporal composition layout"),
+                contents: bytemuck::cast_slice(&[self.size[0], self.size[1], lanes, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &pipeline.get_bind_group_layout(0),
@@ -374,6 +376,9 @@ impl Display {
         result.metadata = self.metadata;
         result.original_samples = self.original_samples;
         Ok(result)
+    }
+    pub(crate) fn has_shadow_catcher(&self) -> bool {
+        self.metadata.has_catcher
     }
     /// Replace the preview with a caller-owned linear denoised result. The image
     /// stays on the GPU, so [`Display::show_denoised`] can show it again after a capture.
@@ -1017,6 +1022,54 @@ mod tests {
         assert_eq!(read(&texture), expected);
         display.upload(&[0.75; 16]).unwrap();
         assert_eq!(read(&display.hdr_texture()), expected);
+    }
+
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn temporal_output_resampling_copies_all_interleaved_catcher_lanes() {
+        use wgpu::util::DeviceExt;
+        let _lock = crate::abi_test_lock();
+        let gpu = GpuDevice::with_backend(0).unwrap();
+        let mut display = Display::new(gpu.clone(), [2, 2]);
+        let data: Vec<_> = (0..48).map(|i| i as f32 / 48.).collect();
+        let output = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&data),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        let size = display.raw.size();
+        let inputs = |label| {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        display.capture(
+            &inputs("Shade input fixture"),
+            &inputs("Normal input fixture"),
+            &inputs("Albedo input fixture"),
+            &output,
+            Metadata {
+                has_catcher: true,
+                ..Default::default()
+            },
+            1,
+        );
+        // The upscaled shadow is four times the input size, with all 12
+        // values copied together at each destination pixel.
+        let high = display.upsample2x(None).unwrap();
+        let shadow = high.shadow.unwrap();
+        let values: Vec<f32> = bytemuck::pod_collect_to_vec(
+            &crate::read_average(&gpu.device, &gpu.queue, &shadow, 12, 4, 1).unwrap(),
+        );
+        for (i, actual) in values.chunks_exact(12).enumerate() {
+            let source = (i % 4) / 2 + (i / 4) / 2 * 2;
+            assert_eq!(actual, &data[source * 12..(source + 1) * 12]);
+        }
     }
 
     #[test]
