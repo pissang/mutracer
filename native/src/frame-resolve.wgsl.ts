@@ -34,7 +34,8 @@ struct ReflectionRecord {
 
 const OPT_TRANSMITTED_ENDPOINT = 0xa8000000u;
 const OPT_SOLID_SLAB = 0x40000000u;
-const OPT_INSTANCE_INDEX = 0x07ffffffu;
+const OPT_PARALLEL = 0x04000000u;
+const OPT_INSTANCE_INDEX = 0x03ffffffu;
 
 fn stableMatrix(offset:u32)->mat4x4f {
   return mat4x4f(bitcast<vec4f>(vec4u(stableMetadata[offset],stableMetadata[offset+1u],stableMetadata[offset+2u],stableMetadata[offset+3u])),
@@ -133,7 +134,9 @@ fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u
 }
 fn transmissionMotion(pixel: FramePixel, optical: ReflectionRecord, size: vec2u) -> vec3f {
     if (correspondence.enabled.x == 0u || correspondence.enabled.w == 0u ||
-        (optical.normalInstance.w & OPT_TRANSMITTED_ENDPOINT) != OPT_TRANSMITTED_ENDPOINT) {
+        (optical.normalInstance.w & OPT_TRANSMITTED_ENDPOINT) != OPT_TRANSMITTED_ENDPOINT ||
+        pixel.roughnessIor.y > 0.06 ||
+        (optical.normalInstance.w & (OPT_SOLID_SLAB | OPT_PARALLEL)) == OPT_SOLID_SLAB) {
         return vec3f(0.0);
     }
     let point = pixel.positionDepth.xyz;
@@ -175,8 +178,9 @@ fn transmissionMotion(pixel: FramePixel, optical: ReflectionRecord, size: vec2u)
     let index = p.x + (size.y - 1u - p.y) * size.x;
     let previous = previousPixels[index];
     let previousOptical = previousOptics[index];
-    let pathMask = OPT_TRANSMITTED_ENDPOINT | OPT_SOLID_SLAB;
+    let pathMask = OPT_TRANSMITTED_ENDPOINT | OPT_SOLID_SLAB | OPT_PARALLEL;
     if ((previousOptical.normalInstance.w & pathMask) != (optical.normalInstance.w & pathMask) ||
+        previous.roughnessIor.y > 0.06 ||
         dot(previous.geometricNormal.xyz, previousNormal) < 0.9999 ||
         abs(dot(previous.positionDepth.xyz - previousPoint, previousNormal)) > 1e-4 ||
         abs(dot(previous.positionDepth.xyz - bitcast<vec3f>(previousOptical.normalInstance.xyz),

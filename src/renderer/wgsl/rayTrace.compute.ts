@@ -514,7 +514,7 @@ ${queryPoints ? /* wgsl */ `  }
 }
 
 fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, sampleIgnored: bool) {
-${inputHooks?.recordReflection ? '  mtReflectionHit(*si);\n' : ''}  if (SPECTRAL) {
+${inputHooks?.recordReflection ? '  mtReflectionHit(*si, (*path).ray.d);\n' : ''}  if (SPECTRAL) {
     // Is glass
     if ((*ma).transmissionWeight > 0.001) {
       (*ma).specularIor = sampling_cauchy_ior(
