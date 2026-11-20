@@ -141,9 +141,10 @@ export class TemporalGPU {
         const key = offset/4+1;
         let bucket = Math.imul(key, 2654435761) & (overflowBuckets-1);
         for (let probe=0; keys[bucket*8]; probe++) {
-          if (probe === overflowBuckets) throw Error('Temporal HDR overflow history is full.');
+          if (probe === overflowBuckets) { bucket = -1; break; }
           bucket = (bucket+1) & (overflowBuckets-1);
         }
+        if (bucket < 0) continue;
         keys[bucket*8] = key;
         values.set(source.subarray(offset,offset+4),bucket*8+4);
         half[offset+3] = -1;

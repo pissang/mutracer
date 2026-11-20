@@ -85,9 +85,10 @@ async function run() {
     narrowTemporal.attach(narrowRender);await narrowRender.converge({samples:1});await narrowTemporal.push(narrowRender);
     for await(const frame of narrowTemporal.flush()){await frame.readPixels();}narrowTemporal.dispose();narrowRender.dispose();
     const fullIdResult = await exerciseFullWidthIds(device);
+    const overflowResult = await exerciseFullOverflow(device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -114,6 +115,34 @@ async function exerciseFullWidthIds(device: GPUDevice) {
     for(let i=0;i<pixels;i++)for(let c=0;c<3;c++)maximumError=Math.max(maximumError,Math.abs(output[i*4+c]-(c===0?1:0)));
     check(maximumError===0,`32-bit temporal IDs aliased: ${maximumError}`);
     return {ids:[1,65537],maximumError};
+  }finally{window.dispose();}
+}
+
+async function exerciseFullOverflow(device: GPUDevice) {
+  const width=65,height=64,pixels=width*height;
+  const position=new Float32Array(pixels*4),depth=new Float32Array(pixels*4),normal=new Float32Array(pixels*4),roughness=new Float32Array(pixels*4),albedo=new Float32Array(pixels*4),id=new Uint32Array(pixels*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+    const i=(y*width+x)*4;position.set([(2*(x+.5)/width)-1,1-(2*(y+.5)/height),0,1],i);
+    depth.set([1,0,0,1],i);normal.set([0,0,1,1],i);roughness.set([.5,0,0,1],i);albedo.set([.5,.5,.5,1],i);id.set([7,8,9,0],i);
+  }
+  const identity=new Float32Array(16);identity[0]=identity[5]=identity[10]=identity[15]=1;
+  const metadata={viewProjection:identity,projection:identity,apertureRadius:0,focusDistance:1};
+  const arrays=(color:[number,number,number])=>{
+    const hdr=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)hdr.set([...color,1],i*4);
+    return {centerPosition:position,centerDepth:depth,centerNormal:normal,roughness,albedo,id,hdr};
+  };
+  const window=await DirectWindowGPU.create(device,width,height,2,false,true,'veto');
+  try{
+    await window.upload(0,metadata,arrays([0,100000,0]));
+    await window.upload(1,metadata,arrays([100000,0,0]));
+    const output=new Float32Array(await window.read(await window.filter(1,[0],false)));
+    let fallbackPixels=0;
+    for(let i=0;i<pixels;i++){
+      check(Number.isFinite(output[i*4])&&Number.isFinite(output[i*4+1])&&Number.isFinite(output[i*4+2]),'Overflow fallback produced non-finite HDR');
+      if(output[i*4+1]===0){check(output[i*4]>0,'Overflow fallback lost current HDR');fallbackPixels++;}
+    }
+    check(fallbackPixels===pixels-4096,`Expected ${pixels-4096} current-only overflow pixels, got ${fallbackPixels}`);
+    return {pixels,tableEntries:4096,fallbackPixels};
   }finally{window.dispose();}
 }
 

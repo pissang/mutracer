@@ -46,6 +46,9 @@ fn radiance(x:vec2i,frame:u32)->vec3f {
   }
   return vec3f(0);
 }
+fn overflowMissing(x:vec2i,frame:u32)->bool {
+  return textureLoad(hdr,x,i32(frame),0).a==-2.0;
+}
 fn tapRejection(at:vec2i, pos:vec4f, normal:vec4f, id:vec3u)->u32 {
   let oldPos=surface(at,p.source,0u);
   let oldNormal=surface(at,p.source,1u);
@@ -185,6 +188,7 @@ const startWindowWGSL = /* wgsl */ `
     return;
   }
   if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,total[index].a); return; }
+  if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
   let q=project(pos.xyz,p.source);
@@ -198,7 +202,7 @@ const startWindowWGSL = /* wgsl */ `
 
 // Keep the original tap and weighting expressions for the strict and round-1 controls.
 export const directWindowWGSL = /* wgsl */ `${windowBindingsAndGeometry}
-${startWindowWGSL}  if(reason!=0u){atomicAdd(&rejects[reason],1u);return;}
+${startWindowWGSL}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   var weight=(radius+1.0-abs(f32(p.delta)))/(radius+1.0);
   if(partial){weight*=footprintWeight(x,q.xy,nearest);}
@@ -216,7 +220,7 @@ ${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
   if(partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
     tap=recoverTap(x,pos,q,tap);
   }
-  if(tap.support<=0.){atomicAdd(&rejects[reason],1u);return;}
+  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   let weight=(radius+1.-abs(f32(p.delta)))/(radius+1.)*tap.support;
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
@@ -257,12 +261,13 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   let guide=u32(floor(255.*sqrt(clamp(peak,0.,1.))+.5)); let coverage=u32(floor(255.*clamp(r.w,0.,1.)+.5));
   textureStore(idOut,vec2i(g.xy),i32(p.slot),vec4u(identity[i].xyz,(guide<<8u)|coverage));
   let rgba=color[i];let exceeds=any(!(abs(rgba.rgb)<=vec3f(65504.)));
-  textureStore(hdrOut,vec2i(g.xy),i32(p.slot),select(nearestHalf4(vec4f(rgba.rgb,1.)),vec4f(0.,0.,0.,-1.),exceeds));
-  if(exceeds){let key=i+1u;for(var probe=0u;probe<4096u;probe++){
+  if(!exceeds){textureStore(hdrOut,vec2i(g.xy),i32(p.slot),nearestHalf4(vec4f(rgba.rgb,1.)));return;}
+  let key=i+1u;for(var probe=0u;probe<4096u;probe++){
     let address=p.slot*4096u+((key*2654435761u+probe)&4095u);
     let claim=atomicCompareExchangeWeak(&overflowOut[address].index,0u,key);
-    if(claim.exchanged || claim.old_value==key){overflowOut[address].color=vec4f(rgba.rgb,0.);break;}
-  }}
+    if(claim.exchanged || claim.old_value==key){overflowOut[address].color=vec4f(rgba.rgb,0.);textureStore(hdrOut,vec2i(g.xy),i32(p.slot),vec4f(0.,0.,0.,-1.));return;}
+  }
+  textureStore(hdrOut,vec2i(g.xy),i32(p.slot),vec4f(nearestHalf4(vec4f(clamp(rgba.rgb,vec3f(-65504),vec3f(65504)),0.)).rgb,-2.));
 }`;
 
 export class DirectWindowGPU {
@@ -382,10 +387,13 @@ export class DirectWindowGPU {
       if(exceeds){
         const key=i+1; let bucket=Math.imul(key,2654435761)&4095;
         for(let probe=0;keys[bucket*8];probe++){
-          if(probe===4095)throw Error('Direct window HDR overflow table is full.');
+          if(probe===4095){
+            for(let c=0;c<3;c++)hdr[base+c]=Math.max(-65504,Math.min(65504,sourceHdr[i*hdrComponents+c]));
+            hdr[base+3]=-2;bucket=-1;break;
+          }
           bucket=(bucket+1)&4095;
         }
-        keys[bucket*8]=key; values.set(sourceHdr.subarray(i*hdrComponents,i*hdrComponents+3),bucket*8+4);
+        if(bucket>=0){keys[bucket*8]=key; values.set(sourceHdr.subarray(i*hdrComponents,i*hdrComponents+3),bucket*8+4);}
       }
     }
     d.queue.writeBuffer(this.overflow,s*overflow.byteLength,overflow);

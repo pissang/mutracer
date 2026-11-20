@@ -172,6 +172,7 @@ fn half(value: vec2f) -> vec2f {
     }
   }
   atomicAdd(&missed,1u);
+  textureStore(dst,vec2i(g.xy),i32(p.a),vec4f(half(color.xy),half(color.zw)));
 }
 `;
 
