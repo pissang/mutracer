@@ -93,19 +93,22 @@ export class TemporalFrame {
   private encodedCodes!: boolean;
   private device!: GPUDevice;
   private presentation!: Render;
+  private storageWidth!: number;
+  private storageHeight!: number;
   private valid = true;
 
   /** @internal */
-  constructor(device: GPUDevice, presentation: Render, index: number, width: number, height: number,
+  constructor(device: GPUDevice, presentation: Render, index: number, storageWidth: number, storageHeight: number,
     buffers: Record<TemporalPixelKind, GPUBuffer>, source: TemporalFrame['source'], displayLinear: boolean, encodedCodes: boolean) {
-    Object.assign(this, {device, presentation, index, width, height, buffers, source, displayLinear, encodedCodes});
+    Object.assign(this, {device, presentation, index, width: presentation.width, height: presentation.height,
+      storageWidth, storageHeight, buffers, source, displayLinear, encodedCodes});
   }
 
   /** Reads RGBA float32 pixels. Default `'denoised'`. */
   async readPixels(kind: TemporalPixelKind = 'denoised') {
     if (!this.valid) throw new Error('This temporal frame is no longer borrowed.');
     if (kind !== 'denoised' && kind !== 'accumulated') throw new Error(`Unknown temporal pixel kind ${kind}.`);
-    const bytes = this.width * this.height * 16;
+    const bytes = this.storageWidth * this.storageHeight * 16;
     const staging = this.device.createBuffer({size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
     try {
       const encoder = this.device.createCommandEncoder({label: 'Temporal frame readback'});
@@ -122,7 +125,7 @@ export class TemporalFrame {
           data[i + 3] = 1;
         }
       }
-      return {width: this.width, height: this.height, data};
+      return this.presentation._cropOutput({width: this.storageWidth, height: this.storageHeight, data});
     } finally { staging.destroy(); }
   }
 
@@ -235,8 +238,9 @@ export class TemporalDenoiser {
       if (render !== this.attached) throw new Error('Temporal push requires the attached render.');
       if (!render.converged) throw new Error('Temporal push requires a converged render.');
       if (this.finished.length >= TEMPORAL_MAX_FINISHED) throw new Error('Too many finished temporal frames are waiting; drain output before pushing.');
-      await this.ensureResources(render.width, render.height);
-      if (render.width !== this.history.width || render.height !== this.history.height) throw new Error('Temporal frame dimensions changed within a shot.');
+      if (this.replay && (render.width !== this.replay.width || render.height !== this.replay.height)) {
+        throw new Error('Temporal frame dimensions changed within a shot.');
+      }
       const metadata = render._temporalMetadata;
       if (!metadata.camera) throw new Error('Temporal push requires a completed converge call.');
       if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
@@ -252,21 +256,29 @@ export class TemporalDenoiser {
       }
       this.previousOffset = metadata.sampleSequenceOffset;
       const direct = metadata as typeof metadata & {projection?: number[]; viewProjection?: number[]; apertureRadius?: number; focusDistance?: number};
-      const projection = direct.projection ?? metadata.camera.getProjectionMatrix(render.width / render.height);
-      const view = mat4.create(); mat4.invert(view, metadata.camera.transform);
-      const viewProjection = direct.viewProjection ?? mat4.mul(mat4.create(), projection, view);
+      const targetCamera = metadata.targetCamera ?? metadata.camera;
       const frame = this.frames;
       const sampleCount = metadata.samples;
       const settings = this.engine.display._snapshotSettings();
       await render._captureTemporal(async input => {
+        // Beauty and center AOVs share the padded target grid. Keep that grid
+        // through denoising and use the render's center crop at readback/export.
+        await this.ensureResources(input.width, input.height);
+        if (input.width !== this.history.width || input.height !== this.history.height) {
+          throw new Error('Temporal frame dimensions changed within a shot.');
+        }
+        const projection = direct.projection ?? targetCamera.getProjectionMatrix(input.width / input.height);
+        const view = mat4.create();
+        mat4.invert(view, targetCamera.transform);
+        const viewProjection = direct.viewProjection ?? mat4.mul(mat4.create(), projection, view);
         const aovs = input.aovs!;
         if (this.activeOptions.denoiser?.type === 'custom') for (const kind of this.activeOptions.denoiser.aovs ?? []) {
           if (!aovs[kind]) throw new Error(`Temporal capture is missing custom denoiser AOV ${kind}.`);
         }
         this.window.capture(frame, {...input, ...aovs});
         await this.history.uploadBuffers(frame, {
-          viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(metadata.camera!),
-          focusDistance: direct.focusDistance ?? metadata.camera!.focusDistance
+          viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(targetCamera),
+          focusDistance: direct.focusDistance ?? targetCamera.focusDistance
         }, {...input, ...aovs});
         this.window.copyMotion(frame);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.window.capacity > 1 &&

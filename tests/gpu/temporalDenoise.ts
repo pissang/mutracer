@@ -94,7 +94,8 @@ async function run() {
     for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
     reduced.dispose();
-    const oidnRender = new Render(engine, {width: 64, height: 64, maxSamples: 3,
+    // Both axes exercise the padded target stride and the exact public crop.
+    const oidnRender = new Render(engine, {width: 57, height: 51, maxSamples: 3,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
     const oidnTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
@@ -103,7 +104,10 @@ async function run() {
     const baseline=await blobPixels(await engine.display.toBlob(oidnRender)); await oidnTemporal.push(oidnRender);
     let temporalOIDN: Float32Array | undefined, presentationIdentity=0, vignetteChange=0;
     for await (const frame of oidnTemporal.flush()) {
-      temporalOIDN=(await frame.readPixels()).data; check(engine.display.present(frame)===frame,'OIDN temporal frame was not presented');
+      const read = await frame.readPixels();
+      check(frame.width === 57 && frame.height === 51 && read.width === 57 && read.height === 51 &&
+        read.data.length === builtIn.length, 'Temporal OIDN readback did not use the requested crop');
+      temporalOIDN=read.data; check(engine.display.present(frame)===frame,'OIDN temporal frame was not presented');
       const clean=await blobPixels(await engine.display.toBlob(frame)); engine.display.vignette=.8;
       const vignette=await blobPixels(await engine.display.toBlob(frame)); engine.display.vignette=0;
       for(let i=0;i<clean.length;i++){presentationIdentity=Math.max(presentationIdentity,Math.abs(clean[i]-baseline[i]));vignetteChange=Math.max(vignetteChange,Math.abs(clean[i]-vignette[i]));}
@@ -140,7 +144,13 @@ async function run() {
     const narrowRender=new Render(engine,{width:31,height:16,maxSamples:1});
     const narrowTemporal=new TemporalDenoiser(engine,{historyRadius:0,postRadius:0,stabilizeSparkle:false,denoiser:null});
     narrowTemporal.attach(narrowRender);await narrowRender.converge({samples:1});await narrowTemporal.push(narrowRender);
-    for await(const frame of narrowTemporal.flush()){await frame.readPixels();}narrowTemporal.dispose();narrowRender.dispose();
+    const narrowHDR = (await narrowRender.readPixels('hdr')).data;
+    for await (const frame of narrowTemporal.flush()) {
+      const read = await frame.readPixels('accumulated');
+      check(read.width === 31 && read.height === 16 && read.data.every((value, i) => Math.abs(value - narrowHDR[i]) <= 1e-3),
+        'Temporal accumulation did not match the fixed render crop');
+    }
+    narrowTemporal.dispose(); narrowRender.dispose();
     const fullIdResult = await exerciseFullWidthIds(device);
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);

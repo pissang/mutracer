@@ -343,7 +343,9 @@ export default class Render {
     this.restart();
     return () => { if (this._temporalAovs !== request) return; this._temporalAovs = undefined; this.restart(); };
   }
-  /** @internal */ get _temporalMetadata() { return {camera: this._lastConvergeCamera, sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
+  /** @internal */ get _temporalMetadata() { return {camera: this._lastConvergeCamera,
+    targetCamera: this._lastConvergeCamera && this._targetCamera(this._lastConvergeCamera),
+    sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
     frameSequence: this._temporalFrameSequence, scene: this._engine.scene, cameraSource: this._engine.camera,
     sceneRevision: this._engine._temporalRevision}; }
   /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
