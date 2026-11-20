@@ -190,6 +190,7 @@ export class TemporalDenoiser {
   private spatialOutputs = new Map<number, GPUBuffer>();
   private epoch = 0;
   private epochs: number[] = [];
+  private materialRevisionFrames: Map<number,number>[] = [];
   private globalIndices: number[] = [];
   private sampleCounts: number[] = [];
   private displaySettings: Required<DisplaySettings>[] = [];
@@ -247,7 +248,8 @@ export class TemporalDenoiser {
       // The renderer may pad the capture grid while presenting a center crop.
       const captureWidth = metadata.captureWidth ?? render.width;
       const captureHeight = metadata.captureHeight ?? render.height;
-      await this.ensureResources(captureWidth, captureHeight);
+      const revisionEntries = this.activeOptions.historyInvalidation === 'auto' ? this.engine._temporalMaterialRevisionEntries : [];
+      await this.ensureResources(captureWidth, captureHeight, revisionEntries.length);
       if (captureWidth !== this.history.width || captureHeight !== this.history.height) {
         throw new Error('Temporal frame dimensions changed within a shot.');
       }
@@ -280,11 +282,11 @@ export class TemporalDenoiser {
         if (this.activeOptions.denoiser?.type === 'custom') for (const kind of this.activeOptions.denoiser.aovs ?? []) {
           if (!aovs[kind]) throw new Error(`Temporal capture is missing custom denoiser AOV ${kind}.`);
         }
-        this.window.capture(frame, {...input, ...aovs});
         await this.history.uploadBuffers(frame, {
           viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(targetCamera),
           focusDistance: direct.focusDistance ?? targetCamera.focusDistance
-        }, {...input, ...aovs});
+        }, {...input, ...aovs}, revisionEntries);
+        this.window.capture(frame, {...input, ...aovs});
         this.window.copyMotion(frame);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.window.capacity > 1 &&
             this.previousFrameSequence === metadata.frameSequence - 1 && this.previousSceneRevision === metadata.sceneRevision &&
@@ -304,6 +306,7 @@ export class TemporalDenoiser {
           this.engine.device!.queue.submit([encoder.finish()]); this.customAovs.set(frame, copies);
         }
       });
+      this.materialRevisionFrames[frame]=new Map(revisionEntries);
       this.frames++;
       this.globalIndices[frame] = this.pushIndex;
       this.pushIndex++;
@@ -357,8 +360,23 @@ export class TemporalDenoiser {
   }
 
   private assertAlive() { if (this.disposed) throw new Error('Temporal denoiser is disposed.'); }
-  private async ensureResources(width: number, height: number) {
-    if (this.history) return;
+  private revisionMaterialCapacity = 0;
+  private async ensureResources(width: number, height: number, materialCount=0) {
+    if (this.history) {
+      const nextCapacity=Math.max(1,materialCount);
+      if(nextCapacity>this.revisionMaterialCapacity){
+        const delta=nextCapacity-this.revisionMaterialCapacity;
+        const postSlots=this.activeOptions.mode==='offline'?this.activeOptions.postRadius*2+1:this.activeOptions.postRadius+1;
+        const extra=delta*8+(this.activeOptions.postRadius>0?delta*postSlots*4:0);
+        if(this.options.memoryBudget!==undefined && (this.plan?.bytes??0)+extra>this.options.memoryBudget){
+          throw new RangeError(`Temporal memory budget cannot fit material revision entries (${(this.plan?.bytes??0)+extra} bytes).`);
+        }
+        this.plan=Object.freeze({...this.plan!,bytes:this.plan!.bytes+extra});
+        this.revisionMaterialCapacity=nextCapacity;
+        await this.post?.ensureMaterialCapacity(materialCount);
+      }
+      return;
+    }
     const device = this.engine.device!;
     if (this.deviceGeneration !== undefined && this.engine._deviceGeneration !== this.deviceGeneration) {
       this.deviceLost = true;
@@ -369,13 +387,13 @@ export class TemporalDenoiser {
       this.watchedDevice = device;
       void device.lost.then(() => { this.deviceLost = true; });
     }
-    let candidate = planTemporalMemory(width, height, this.options, device.limits);
+    let candidate = planTemporalMemory(width, height, this.options, device.limits, materialCount);
     let retried = false;
     for (;;) {
       this.activeOptions = Object.freeze({...this.options, historyRadius: candidate.historyRadius, postRadius: candidate.postRadius});
       device.pushErrorScope('out-of-memory');
       let allocationError: unknown;
-      try { await this.allocateResources(width, height); }
+      try { await this.allocateResources(width, height, materialCount); }
       catch (error) { allocationError = error; }
       let scopedError: GPUError | null;
       try { scopedError = await device.popErrorScope(); }
@@ -383,6 +401,7 @@ export class TemporalDenoiser {
       const error = scopedError ?? allocationError;
       if (!error) {
         this.plan = Object.freeze({...candidate});
+        this.revisionMaterialCapacity=Math.max(1,materialCount);
         if (!this.warnedBudget && (candidate.historyRadius.min !== this.options.historyRadius.min ||
           candidate.historyRadius.max !== this.options.historyRadius.max || candidate.postRadius !== this.options.postRadius)) {
           this.warnedBudget = true;
@@ -392,21 +411,21 @@ export class TemporalDenoiser {
       }
       this.releaseResources();
       if ((!scopedError && !isOutOfMemory(error)) || retried) { this.activeOptions = this.options; throw error; }
-      const next = nextTemporalMemoryPlan(width, height, this.options, candidate, device.limits);
+      const next = nextTemporalMemoryPlan(width, height, this.options, candidate, device.limits, materialCount);
       if (!next) { this.activeOptions = this.options; throw error; }
       retried = true; candidate = next;
     }
   }
 
-  private async allocateResources(width: number, height: number) {
+  private async allocateResources(width: number, height: number, materialCount=0) {
     const device = this.engine.device!;
     const historySlots = this.activeOptions.mode === 'offline' ? this.activeOptions.historyRadius.max * 2 + 1 : this.activeOptions.historyRadius.max + 1;
-    this.history = await TemporalGPU.create(device, width, height, 'pre', historySlots);
+    this.history = await TemporalGPU.create(device, width, height, 'pre', historySlots, materialCount);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
     this.window = await DirectWindowGPU.create(device, width, height, historySlots,
       this.activeOptions.historyRadius.min !== this.activeOptions.historyRadius.max, true, 'veto');
     this.window.useHistory(this.history);
-    this.post = await TemporalGPU.create(device, width, height, 'post', this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1);
+    this.post = await TemporalGPU.create(device, width, height, 'post', this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1, materialCount);
     if (this.activeOptions.stabilizeSparkle && this.activeOptions.postRadius > 0) this.sparkle = await createSparklePost(device);
     if (this.activeOptions.denoiser?.type === 'oidn') {
       const {type: _type, ...oidnOptions} = this.activeOptions.denoiser;
@@ -471,7 +490,7 @@ export class TemporalDenoiser {
       if (surfaces === 0) return true;
       this.engine.device!.queue.writeBuffer(this.window.rejects, 0, new Uint32Array(16));
       await this.window.dispatch(frame, frame - 1, this.activeOptions.mode === 'offline', 1,
-        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max);
+        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max, false);
       const validation = new Uint32Array(await this.window.read(this.window.rejects, 64));
       const accepted = validation[0];
       return isTemporalCameraCut(surfaces, accepted);
@@ -541,8 +560,17 @@ export class TemporalDenoiser {
       const bytes = this.history.bytes, device = this.engine.device!;
       let denoised: GPUBuffer;
       if (this.activeOptions.postRadius === 0) { denoised = this.spatialOutputs.get(i)!; this.spatialOutputs.delete(i); }
-      else { await this.post.filter(i, neighbors); this.sparkle?.filter(this.post, i, neighbors);
-        denoised = copyBuffer(device, this.post.output, bytes, 'Temporal finished output'); }
+      else {
+        const currentRevisions=this.materialRevisionFrames[i]??new Map<number,number>();
+        const changedByFrame=new Map<number,readonly number[]>();
+        for(const j of neighbors){
+          const previous=this.materialRevisionFrames[j]??new Map<number,number>();
+          const changed=[...currentRevisions].filter(([id,revision])=>previous.get(id)!==revision).map(([id])=>id);
+          changedByFrame.set(j,[...new Set(changed)].sort((a,b)=>a-b));
+        }
+        await this.post.filter(i, neighbors, false, undefined, changedByFrame); this.sparkle?.filter(this.post, i, neighbors);
+        denoised = copyBuffer(device, this.post.output, bytes, 'Temporal finished output');
+      }
       const packed=this.packExternal(i,this.accumulated.get(i)!);
       const source={color:copyBuffer(device,packed.color,bytes,'Temporal presentation color'),
         albedo:copyBuffer(device,packed.albedo,bytes,'Temporal presentation albedo'),
@@ -562,7 +590,7 @@ export class TemporalDenoiser {
   }
 
   private resetShot() {
-    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
+    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.materialRevisionFrames.length=0; this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
     for (const buffer of this.accumulated.values()) buffer.destroy(); this.accumulated.clear();
     for (const buffer of this.spatialOutputs.values()) buffer.destroy(); this.spatialOutputs.clear();
     for (const aovs of this.customAovs.values()) for (const buffer of Object.values(aovs)) buffer?.destroy(); this.customAovs.clear();
@@ -583,5 +611,6 @@ export class TemporalDenoiser {
     this.composePipeline = undefined; this.mergeWindowPipeline = undefined;
     this.motionCoveragePipeline = undefined; this.motionCoverageCounts?.destroy(); this.motionCoverageCounts = undefined;
     this.plan = undefined;
+    this.revisionMaterialCapacity=0;
   }
 }

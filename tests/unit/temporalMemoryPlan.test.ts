@@ -67,6 +67,16 @@ describe('temporal memory planner', () => {
     expect(estimateTemporalMemory(32, 24, custom)).toBeGreaterThan(estimateTemporalMemory(32, 24, plain));
   });
 
+  it('budgets the per-material revision table and post change lists', () => {
+    const options = normalizeTemporalOptions({historyRadius: 1, postRadius: 1, mode: 'interactive'});
+    const base = estimateTemporalMemory(32, 24, options);
+    const withMaterials = estimateTemporalMemory(32, 24, options, 3);
+    const postSlots = options.postRadius + 1;
+    expect(withMaterials - base).toBe(3 * 8 + postSlots * ((3 + 1) * 4 - 8));
+    const withoutPost = normalizeTemporalOptions({historyRadius: 1, postRadius: 0, mode: 'interactive'});
+    expect(estimateTemporalMemory(32, 24, withoutPost, 3) - estimateTemporalMemory(32, 24, withoutPost)).toBe(3 * 8);
+  });
+
   it('offers only the next eligible tier for a single OOM retry', () => {
     const options = normalizeTemporalOptions();
     const first = planTemporalMemory(32, 24, options, limits);

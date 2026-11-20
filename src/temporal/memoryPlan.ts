@@ -23,7 +23,7 @@ function slots(mode: NormalizedTemporalOptions['mode'], radius: number, offlineD
 }
 
 /** Exact allocation estimate for the GPU resources owned by temporal history, window and post stages. */
-export function estimateTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions) {
+export function estimateTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions, materialCount=0) {
   const pixels = width * height;
   const historySlots = options.mode === 'offline' ? options.historyRadius.max * 2 + 1 : options.historyRadius.max + 1;
   const postSlots = slots(options.mode, options.postRadius, true);
@@ -34,7 +34,7 @@ export function estimateTemporalMemory(width: number, height: number, options: N
 
   // DirectWindowGPU holds a 56-byte-per-pixel frame across its ring, two
   // per-frame sums, packed HDR overflow entries, camera records and uniforms.
-  const window = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 32 + 128;
+  const window = historySlots * (pixels * 60 + 80 + overflowBuckets * overflowEntryBytes) + pixels * 32 + 128;
 
   const pyramidBytes = scales.reduce((sum, scale) => sum + ceilDiv(width, scale) * ceilDiv(height, scale) * 8, 0);
   const grids = gridScratchBytes(width, height);
@@ -45,7 +45,9 @@ export function estimateTemporalMemory(width: number, height: number, options: N
   const pendingAndTransient = pixels * (postPending + 2) * 16;
   const customAovs = options.denoiser?.type === 'custom' ? (options.mode === 'offline' ? options.historyRadius.max + 1 : 1) *
     (options.denoiser.aovs?.length ?? 0) * pixels * 16 : 0;
-  return pre + window + post + composition + queuedFrames + pendingAndTransient + customAovs;
+  const materialRevisionTable = Math.max(8, materialCount * 8);
+  const changedMaterialIds = options.postRadius > 0 ? postSlots * Math.max(8, (materialCount + 1) * 4) : 0;
+  return pre + window + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
 }
 
 const scales = [2, 4, 8] as const;
@@ -54,7 +56,7 @@ function gridScratchBytes(width: number, height: number) {
   return grids.reduce((sum, scale) => sum + ceilDiv(width, scale * 3) * ceilDiv(height, scale * 3) * 8, 0);
 }
 
-function layerLimits(width: number, height: number, options: NormalizedTemporalOptions, limits: TemporalMemoryLimits) {
+function layerLimits(width: number, height: number, options: NormalizedTemporalOptions, limits: TemporalMemoryLimits, materialCount: number) {
   if (width > limits.maxTextureDimension2D || height > limits.maxTextureDimension2D) return false;
   const history = options.mode === 'offline' ? options.historyRadius.max * 2 + 1 : options.historyRadius.max + 1;
   const post = slots(options.mode, options.postRadius, true);
@@ -65,7 +67,9 @@ function layerLimits(width: number, height: number, options: NormalizedTemporalO
   const overflow = history * overflowBuckets * overflowEntryBytes;
   const grids = [...scales, ...scales, scales[0], scales[0]].map(scale =>
     ceilDiv(width, scale * 3) * ceilDiv(height, scale * 3) * 8);
-  const buffers = [image, overflow, history * 80, post * 80, image / 4, ceilDiv(pixels, 64) * 4, ...grids];
+  const revisionTable = Math.max(8, materialCount * 8);
+  const changedMaterialIds = options.postRadius > 0 ? post * Math.max(8, (materialCount + 1) * 4) : 0;
+  const buffers = [image, overflow, history * 80, post * 80, image / 4, ceilDiv(pixels, 64) * 4, revisionTable, changedMaterialIds, ...grids];
   return buffers.every(size => Number.isSafeInteger(size) && size <= limits.maxBufferSize) &&
     [image, overflow, history * 80, post * 80, image / 4, ceilDiv(pixels, 64) * 4, ...grids].every(size => size <= limits.maxStorageBufferBindingSize);
 }
@@ -94,14 +98,14 @@ function candidates(options: NormalizedTemporalOptions) {
 }
 
 /** Select the first quality tier that fits the budget and the device's live layer/buffer limits. */
-export function planTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions, limits: TemporalMemoryLimits): TemporalMemoryPlan {
+export function planTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions, limits: TemporalMemoryLimits, materialCount=0): TemporalMemoryPlan {
   if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) throw new RangeError('Temporal dimensions must be positive integers.');
   const tiers = candidates(options);
   let minimum = Infinity;
   for (const candidate of tiers) {
-    const bytes = estimateTemporalMemory(width, height, candidate);
+    const bytes = estimateTemporalMemory(width, height, candidate, materialCount);
     minimum = Math.min(minimum, bytes);
-    if (Number.isSafeInteger(bytes) && layerLimits(width, height, candidate, limits) && (options.memoryBudget === undefined || bytes <= options.memoryBudget)) {
+    if (Number.isSafeInteger(bytes) && layerLimits(width, height, candidate, limits, materialCount) && (options.memoryBudget === undefined || bytes <= options.memoryBudget)) {
       return Object.freeze({historyRadius: candidate.historyRadius, postRadius: candidate.postRadius, bytes});
     }
   }
@@ -110,14 +114,14 @@ export function planTemporalMemory(width: number, height: number, options: Norma
 }
 
 export function nextTemporalMemoryPlan(width: number, height: number, options: NormalizedTemporalOptions,
-  current: TemporalMemoryPlan, limits: TemporalMemoryLimits): TemporalMemoryPlan | undefined {
+  current: TemporalMemoryPlan, limits: TemporalMemoryLimits, materialCount=0): TemporalMemoryPlan | undefined {
   const tiers = candidates(options);
   const index = tiers.findIndex(candidate => candidate.historyRadius.min === current.historyRadius.min &&
     candidate.historyRadius.max === current.historyRadius.max && candidate.postRadius === current.postRadius);
   if (index < 0) return undefined;
   for (const candidate of tiers.slice(index + 1)) {
-    const bytes = estimateTemporalMemory(width, height, candidate);
-    if (Number.isSafeInteger(bytes) && layerLimits(width, height, candidate, limits) && (options.memoryBudget === undefined || bytes <= options.memoryBudget)) {
+    const bytes = estimateTemporalMemory(width, height, candidate, materialCount);
+    if (Number.isSafeInteger(bytes) && layerLimits(width, height, candidate, limits, materialCount) && (options.memoryBudget === undefined || bytes <= options.memoryBudget)) {
       return Object.freeze({historyRadius: candidate.historyRadius, postRadius: candidate.postRadius, bytes});
     }
   }
