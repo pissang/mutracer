@@ -77,7 +77,12 @@ and 6.14 GB, respectively. Renderer and OIDN allocations are additional.
   returns the windowed linear HDR before the spatial filter.
 - History needs valid correspondence across the frames it traverses. Surfaces
   that become hidden can have fewer usable samples and retain more noise.
-- Refraction, reflections and moving shadows can change while the center
-  surface stays visible. A shorter history reduces the persistence of those changes.
-- Continuous lighting changes can trigger frequent cuts in auto mode. Manual
-  mode retains lighting history and can blur moving shadows.
+- The history window averages changes in lighting on surfaces that stay
+  visible. Moving shadows, including shadows cast by a deforming object onto
+  itself, can have softer edges and leave faint trails. Changing reflections
+  and refraction can also leave trails. Use per-frame OIDN on
+  `Render` for the sharpest edges in these shots. For temporal denoising,
+  `historyRadius: 2` reduces trails, with edges still softer than per-frame
+  OIDN. For abrupt lighting changes, call `cut()` at the boundary or use
+  `historyInvalidation: 'auto'` for detected changes. Continuous lighting
+  animation can trigger frequent cuts in auto mode.
