@@ -23,9 +23,50 @@ The window gives smooth metals with roughness below 0.25 and metalness above
 coverage, searches for a checked same-surface tap within 3×3 on nearby frames,
 and corrects mixed sky contribution where the local background is consistent.
 
+## Why this design
+
+The target is offline animation at a low fixed sample count (32 spp in the
+reference work), with quality first and cost informational. On the 720p
+dining-table close-up, per-frame OIDN drifts visibly from frame to frame. The
+direct window followed by one OIDN pass and the post stage cut low-frequency
+drift on the sideboard from 0.854 to 0.127. Against 1024 spp, it reached
+39.5–40.0 dB full PSNR.
+
+- **Direct window, not recursive history.**
+  - A finite window reads each frame's own radiance, so a bad sample expires
+    after `R + P` frames. With an exponential history, its lifetime is
+    unbounded.
+  - It also avoids feeding filtered output back into the history.
+  - A symmetric window centers the temporal support on the output frame. The
+    only lag left is the causal mode's one-sided support.
+- **Accumulate before denoising.**
+  - OIDN on the windowed mean sees much less noise than OIDN on one frame. It
+    then keeps detail it would otherwise smooth, and stops inventing different
+    structure in every frame, which is the source of per-frame drift.
+  - Filtering each frame first and averaging the results afterwards keeps that
+    drift.
+- **One combined signal, not split lighting.** An NRD-style split was tested in
+  two rounds: diffuse and specular radiance with separate radii, specular
+  virtual-surface reprojection, and silhouette limits.
+  - It improved brass, the sideboard and defocus drift.
+  - It lost edge PSNR, and lost 0.6–1.8 dB on smooth steel cutlery. There,
+    virtual landings pass every geometric test but carry a different
+    reflection.
+  - The split AOVs therefore stayed unmerged.
+- **Smooth metals use the current frame.** Their reflections move
+  independently of the surface. A per-material cap map was also tried, and it
+  cost glaze and marble 1–3 dB for no visible benefit.
+- **Post stabilisation.** The window removes most of the noise, but OIDN still
+  adds small, frame-specific structure. Matching neighbouring denoised frames
+  removes that structure, which halves the remaining drift. Image matching
+  decides the blend; the motion prior only seeds the search.
+- **Sparkle veto.** Fireflies that survive the window would flash for one
+  frame. The filter clamps a bright residual only beyond the temporal spread,
+  and a veto keeps glints that neighbouring frames confirm.
+
 ## Chained correspondence
 
-The renderer's `motion` AOV returns the displacement to the preceding frame
+The renderer's [`motion` AOV](./motion-aov.md) returns the displacement to the preceding frame
 and the preceding camera-forward depth. It supports rigid transforms, camera
 projection changes and same-topology deformation. The window accumulates on
 the capture grid, including any padding used by the renderer.
@@ -46,6 +87,25 @@ visible. The earlier prototype projected stored world positions straight to
 the endpoint. The chain preserves correspondence with moving and deforming
 surfaces. Smooth, transparent contents can still change behind the center
 surface.
+
+Why the window chains `motion` instead of computing its own correspondence:
+
+- **Reuse.** Every movement the renderer supports reaches the temporal window
+  with no extra state in it: rigid transforms, projection changes, and
+  deformation through the renderer's previous-vertex snapshot. The alternative
+  (per-frame transform tables, barycentric coordinates and vertex snapshots
+  kept by the denoiser) duplicated the renderer's work. It would also have
+  kept geometry for the whole window.
+- **Accuracy.** The prototype stored f16 world positions. That rounding alone
+  gives landing errors of 0.22–0.45 px p99 at ±16 frames on the dining pairs.
+  The chain measures p50 ≈ 0.0004 px and p99 ≤ 0.071 px on the same pairs.
+  The ID-restricted bilinear sampling keeps the per-step error small enough
+  that it does not compound visibly over 16 steps.
+- **Per-step tests.** A rotating or deforming surface keeps history after its
+  normal has turned far from the current frame, as long as each step agrees.
+- **Cost.** Chaining rejects a surface hidden in any intermediate frame. At
+  ±16 frames the chain accepted 94–96% of the prototype's taps. Those taps
+  carry the smallest tent weight, and the image gates showed no loss.
 
 ## History invalidation
 
@@ -111,7 +171,7 @@ with the next eligible plan after an out-of-memory error.
   0.25 px, accepted taps and per-frame window weight. The GPU projection
   regression uses 0.1 px.
 - On the dining archive, symmetric full PSNR is at least 39.47 dB. Region
-  PSNR may fall by 0.1 dB from B2. For drift, use the one-sided paired sign
+  PSNR may fall by at most 0.1 dB from the pre-chain baseline. For drift, use the one-sided paired sign
   test on 35 sideboard pairs and 23 defocus pairs. A regression requires both
   a positive mean paired difference and p < 0.05. Deterministic repeats alone
   give no noise estimate. Compare f150 glints with a same-input post-only run.
@@ -138,3 +198,25 @@ with the next eligible plan after an out-of-memory error.
   relative to per-frame OIDN.
 - The lighting fixture checks accepted taps at light, visibility and material
   boundaries and compares auto to manual history.
+
+## Lessons for evaluation
+
+- Derive a precision gate from the error that the accepted result already
+  carried. A tighter threshold without that basis, such as 0.05 px for chain
+  landings, blocked a correspondence four times more accurate than the
+  prototype's.
+- A deterministic renderer repeats bit-exactly, so zero run-to-run spread does
+  not bound noise. Judge drift changes per frame pair with a paired sign test,
+  and pair it with a regional PSNR limit.
+- Localize a regression by stage before tuning: OIDN input, post-only, and the
+  full output, each against the baseline. Here a sideboard drift change looked
+  like a post-stage problem, but it was already present in the window's OIDN
+  input.
+- Check detection power before building a test. At 32 spp the noise of a 5×5
+  neighbourhood is about √(1024/32) ≈ 5.7 times the 1024 spp noise. A moving
+  shadow on the deforming fixture's floor stays below 1σ per tap even 16 frames
+  apart, yet it biases a ±16-frame mean. Tests need temporal and spatial
+  averaging to have the power to see it.
+- Test scenes with static lighting cannot reveal lighting-change failures.
+  Keep a deforming and a lighting-change fixture beside the camera-move
+  archive.
