@@ -43,7 +43,7 @@ async function run() {
     await render.converge({samples: 1}); const source = (await render.readPixels('hdr')).data; await temporal.push(render);
     check(!(temporal as any).post, 'The zero post radius allocated a post history');
     const frames = []; let accumulated: Float32Array | undefined;
-    for await (const frame of temporal.flush()) { check(engine.display.present(frame) === frame, 'Temporal frame was not presented'); await engine.display.toBlob(frame); frames.push(await frame.readPixels()); accumulated = (await frame.readPixels('accumulated')).data; }
+    for await (const frame of temporal.flush()) { const channel=engine.display.channel; engine.display.channel='depth'; let rejected=false; try { engine.display.present(frame); } catch { rejected=true; } finally { engine.display.channel=channel; } check(rejected, 'An AOV display channel presented a temporal frame'); check(engine.display.present(frame) === frame, 'Temporal frame was not presented'); await engine.display.toBlob(frame); frames.push(await frame.readPixels()); accumulated = (await frame.readPixels('accumulated')).data; }
     check(frames.length === 1, 'Flush did not yield one frame');
     check(frames[0].width === 64 && frames[0].data.every(Number.isFinite), 'Invalid temporal output');
     let max = 0; for (let i = 0; i < source.length; i++) max = Math.max(max, Math.abs(source[i] - accumulated![i]));

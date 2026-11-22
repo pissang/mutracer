@@ -155,7 +155,10 @@ export default class Display {
   present(render: Render): Render | undefined;
   present(render: TemporalBlobFrame): TemporalBlobFrame | undefined;
   present(render: Render | TemporalBlobFrame): Render | TemporalBlobFrame | undefined {
-    if ('_temporalFrame' in render) return render._withPresentation(presentation => this.present(presentation)) ? render : undefined;
+    if ('_temporalFrame' in render) {
+      if (this.channel !== 'final') throw new Error('AOV display channels do not accept temporal frames.');
+      return render._withPresentation(presentation => this.present(presentation)) ? render : undefined;
+    }
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const ready = this.channel === 'final' && render.fallback ? render._presentable : render._completeFor(this.channel);
     const fallback = render.fallback;

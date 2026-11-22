@@ -141,7 +141,8 @@ export class TemporalDenoiser {
   private readonly options: NormalizedTemporalOptions;
   private activeOptions: NormalizedTemporalOptions;
   /** Effective allocation after budgeting; undefined until the first push. */
-  plan?: TemporalPlan;
+  get plan(): TemporalPlan | undefined { return this._plan; }
+  private _plan?: TemporalPlan;
   private engine: Engine;
   private attached?: Render;
   private detachRender?: () => void;
@@ -350,10 +351,10 @@ export class TemporalDenoiser {
         const delta=nextCapacity-this.revisionMaterialCapacity;
         const postSlots=this.activeOptions.mode==='offline'?this.activeOptions.postRadius*2+1:this.activeOptions.postRadius+1;
         const extra=delta*8+(this.activeOptions.postRadius>0?delta*postSlots*4:0);
-        if(this.options.memoryBudget!==undefined && (this.plan?.bytes??0)+extra>this.options.memoryBudget){
-          throw new RangeError(`Temporal memory budget cannot fit material revision entries (${(this.plan?.bytes??0)+extra} bytes).`);
+        if(this.options.memoryBudget!==undefined && (this._plan?.bytes??0)+extra>this.options.memoryBudget){
+          throw new RangeError(`Temporal memory budget cannot fit material revision entries (${(this._plan?.bytes??0)+extra} bytes).`);
         }
-        this.plan=Object.freeze({...this.plan!,bytes:this.plan!.bytes+extra});
+        this._plan=Object.freeze({...this._plan!,bytes:this._plan!.bytes+extra});
         this.revisionMaterialCapacity=nextCapacity;
         await this.post?.ensureMaterialCapacity(materialCount);
       }
@@ -382,7 +383,7 @@ export class TemporalDenoiser {
       catch (error) { this.releaseResources(); this.activeOptions = this.options; throw error; }
       const error = scopedError ?? allocationError;
       if (!error) {
-        this.plan = Object.freeze({...candidate});
+        this._plan = Object.freeze({...candidate});
         this.revisionMaterialCapacity=Math.max(1,materialCount);
         if (!this.warnedBudget && (candidate.historyRadius.min !== this.options.historyRadius.min ||
           candidate.historyRadius.max !== this.options.historyRadius.max || candidate.postRadius !== this.options.postRadius)) {
@@ -585,7 +586,7 @@ export class TemporalDenoiser {
     this.composeParams?.destroy(); this.composeParams = undefined;
     this.composePipeline = undefined;
     this.motionCoveragePipeline = undefined; this.motionCoverageCounts?.destroy(); this.motionCoverageCounts = undefined;
-    this.plan = undefined;
+    this._plan = undefined;
     this.revisionMaterialCapacity=0;
   }
 }
