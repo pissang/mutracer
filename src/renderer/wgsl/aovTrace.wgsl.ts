@@ -67,6 +67,10 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
   }
   return false;
 }
+// Kept alongside aovSurface so native display specialization preserves the index source.
+fn aovTriangleIndices(si: SurfaceInteraction) -> vec3u {
+  return bitcast<vec3u>(bvhBuffer[u32(si.triangleIndex)].xyz);
+}
 @compute @workgroup_size(8, 8)
 fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   let size = aovParameters.xy;
@@ -143,8 +147,7 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   var transform = aovMatrix(offset+4u); var projectionTransform=transform;
   var oldWorld=transform*vec4f(si.position,1.0); var projectionPoint=si.position; var oldFace=si.faceNormal;
   if (aovScene[offset+3u] != 0u) {
-    let record=bvhBuffer[u32(si.triangleIndex)];
-    let indices=bitcast<vec3u>(record.xyz);
+    let indices=aovTriangleIndices(si);
     let p0=aovSnapshotVertex(aovScene[offset+3u],indices.x);
     let p1=aovSnapshotVertex(aovScene[offset+3u],indices.y);
     let p2=aovSnapshotVertex(aovScene[offset+3u],indices.z);

@@ -379,10 +379,10 @@ pub enum PixelKind {
     /// `Image::id_data`. Background is u32::MAX in all channels. Exact shared-edge
     /// hits may select either adjacent triangle depending on host/GPU rounding.
     Id,
-    /// Previous minus current pixel position, x right, y down, z=0; alpha 3 for
-    /// visible camera/rigid correspondence, otherwise 0. History is per-render,
-    /// from its previous AOV frame. Size/projection changes, missing IDs, topology
-    /// or vertex edits and visibility failures invalidate it. Device loss clears it.
+    /// Previous minus current pixel position (x right, y down) and previous camera-forward
+    /// depth in z. Alpha is 3 for visible correspondence, otherwise all lanes are zero.
+    /// History follows camera, projection, rigid and same-topology vertex changes.
+    /// Size changes, missing IDs, topology changes and device loss invalidate history.
     Motion,
     /// Signed unit world shading normal, including the base normal map, from the
     /// same unjittered center hit as ID. Double-sided backface orientation is retained.
@@ -1685,7 +1685,7 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
             vec![0; 64]
         } else {
             query
-                .metadata(&render.aov_camera, layout.size)
+                .metadata(&render.aov_camera, layout.size, mask & 64 != 0)
                 .map_err(|e| error(Status::Error, e.to_string()))?
         };
         render.aov = Some(

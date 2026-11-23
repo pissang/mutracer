@@ -166,7 +166,7 @@ impl State {
             pre_exposure: 1.,
             capabilities: Default::default(),
         };
-        let words = retained.aov_metadata(request.camera, request.size)?;
+        let words = retained.aov_metadata(request.camera, request.size, false)?;
         if let Some(previous) = self.history.previous_snapshot() {
             let old = &previous.geometry.aov_words;
             let mut topology = std::collections::HashMap::new();

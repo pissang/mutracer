@@ -19,7 +19,12 @@ export function nativeShaderVariant(id: number, constants: Record<string, boolea
   hash >>>= 0;
   const previous = variants.get(hash);
   if (previous?.signature === signature) {hits++; return previous.bytes;}
-  const bytes = new TextEncoder().encode(source()); generated++;
+  let wgsl = source();
+  // HWRT records address the intersected index buffer. Snapshots use local indices.
+  if (wgsl.includes('fn mtIndices(')) wgsl = wgsl.replace(
+    'return bitcast<vec3u>(bvhBuffer[u32(si.triangleIndex)].xyz);',
+    'return vec3u(mtIndices(si.instanceIndex,si.triangleIndex) - vec3i(bitcast<i32>(instancesBuffer[si.instanceIndex*10].y)));');
+  const bytes = new TextEncoder().encode(wgsl); generated++;
   variants.set(hash, {signature, bytes});
   if (!previous) order.push(hash);
   if (order.length > 32) variants.delete(order.shift()!);

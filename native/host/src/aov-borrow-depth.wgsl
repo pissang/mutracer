@@ -20,7 +20,7 @@ fn loadAov(source: u32) -> AovResolvedAccumulation {
 fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
-  if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,select(0.0,3.0,motion.w!=0.0));}
+  if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,motion.w,select(0.0,3.0,motion.w!=0.0));}
   else if(kind>=7u){
     let primary=center[source+parameters.x*parameters.y];
     let normalDepth=bitcast<vec4f>(primary.identity);

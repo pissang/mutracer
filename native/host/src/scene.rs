@@ -1484,9 +1484,17 @@ impl PreparedState {
     }
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.
-    pub(crate) fn aov_metadata(&self, camera: &[u8], size: [u32; 2]) -> Result<Vec<u32>> {
+    pub(crate) fn aov_metadata(
+        &self,
+        camera: &[u8],
+        size: [u32; 2],
+        capture_positions: bool,
+    ) -> Result<Vec<u32>> {
         let mut input: Vec<u8> = bytemuck::cast_slice(&size).to_vec();
         input.extend_from_slice(camera);
+        if capture_positions {
+            input.extend_from_slice(&1u32.to_le_bytes());
+        }
         let state = self.clone();
         let packet = runtime::call(move || native_step(mt_core_scene_aov, &input, state.token))?;
         if packet.len() < 80 || packet.len() % 4 != 0 {

@@ -2022,9 +2022,10 @@ const aovCaches = new Map<number, {primitives: AovPrimitiveCache;
 export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {
   try {
     const state=retainedScenes.get(token);
-    if(!state || bytes.byteLength!==136) throw new Error('Invalid AOV request');
+    if(!state || (bytes.byteLength!==136 && bytes.byteLength!==140)) throw new Error('Invalid AOV request');
     const u=new Uint32Array(bytes.buffer,bytes.byteOffset,2);
-    const camera=decodeCamera(bytes.subarray(8));
+    const camera=decodeCamera(bytes.subarray(8,136));
+    const capturePositions=bytes.byteLength===140;
     let cache=aovCaches.get(token);
     if(!cache){cache={primitives:new AovPrimitiveCache(),signatures:new Map()};aovCaches.set(token,cache);}
     let primitiveIds: Uint32Array;
@@ -2061,12 +2062,32 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
       }
       objectSignatures.set(mesh.aovId,cached.value);
     }
+    // Retain one local-space vertex snapshot per geometry for motion-enabled renders.
+    const positions=new Map<number,Float32Array>();
+    const geometryOffsets=new Map<Geometry,number>();
+    const objectOffsets=new Map<number,number>();
+    let packetWords=words.length;
+    if(capturePositions)for(const mesh of state.meshes){
+      let offset=geometryOffsets.get(mesh.geometry);
+      if(offset===undefined){
+        offset=packetWords;
+        const vertices=mesh.geometry.position.array;
+        positions.set(offset,new Float32Array(vertices));
+        packetWords+=vertices.length;
+        geometryOffsets.set(mesh.geometry,offset);
+      }
+      objectOffsets.set(mesh.aovId,offset);
+    }
+    words[19]=words.length;
     for(let i=0;i<packed.frame.instances.length;i++) {
       const instance=packed.frame.instances[i],offset=52+i*24;
       floats.set(instance.transform,offset+4);
       words.set(objectSignatures.get(instance.object)!,offset+20);
+      words[offset+23]=objectOffsets.get(instance.object)??0;
     }
-    const result=new Uint32Array(4+words.length);result.set([1,words.length,0,0]);result.set(words,4);
+    const result=new Uint32Array(4+packetWords);result.set([1,packetWords,0,0]);result.set(words,4);
+    const data=new Float32Array(result.buffer);
+    for(const [offset,vertices] of positions)data.set(vertices,4+offset);
     return new Uint8Array(result.buffer);
   }catch(error){return sceneErrorPacket(ERROR_CODE.CONFIGURE,error);}
 }
