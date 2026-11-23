@@ -94,7 +94,12 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
     };
     let exe = std::env::current_exe()?;
     let capture = std::env::var_os("MUTRACER_DLSS_CAPTURE_DIR")
-        .map(super::replay::Capture::new)
+        .map(|path| {
+            super::replay::Capture::new(
+                path,
+                std::env::var_os("MUTRACER_DLSS_CAPTURE_OPTICS").is_some_and(|value| value == "1"),
+            )
+        })
         .transpose()?;
     let filter = Dlss::new_internal(exe.parent().context("App directory")?, capture)?;
     let (_, adapter, device, queue) = filter.device();

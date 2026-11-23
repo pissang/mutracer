@@ -1,7 +1,7 @@
 //! Freeze the inputs of one offscreen target and replay the production NGX passes.
 use super::{Dlss, SpecularGuide, Target};
 use anyhow::{Context, Result, ensure};
-use mutracer_native::api::TemporalGuide as Guide;
+use mutracer_native::api::{TemporalFrame, TemporalGuide as Guide};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -114,16 +114,20 @@ fn rgba_bytes([width, height]: [u32; 2]) -> u64 {
     u64::from(width) * u64::from(height) * 16
 }
 
-pub(super) struct Capture(PathBuf);
+pub(super) struct Capture {
+    path: PathBuf,
+    pub optics: bool,
+}
 pub(super) struct PendingCapture {
     header: Vec<u8>,
     readback: wgpu::Buffer,
+    optics: Option<wgpu::Buffer>,
 }
 impl Capture {
-    pub(super) fn new(path: impl Into<PathBuf>) -> Result<Self> {
+    pub(super) fn new(path: impl Into<PathBuf>, optics: bool) -> Result<Self> {
         let path = path.into();
         new_directory(&path)?;
-        Ok(Self(path))
+        Ok(Self { path, optics })
     }
     pub(super) fn record(
         &self,
@@ -132,6 +136,7 @@ impl Capture {
         evaluation: &Evaluation<'_>,
         result: &wgpu::Buffer,
         commands: &mut Vec<wgpu::CommandBuffer>,
+        temporal: &TemporalFrame,
     ) -> Result<PendingCapture> {
         let specular = evaluation.specular.is_some();
         let header = serde_json::to_vec(&FrameHeader {
@@ -143,7 +148,7 @@ impl Capture {
             layout.bytes <= device.limits().max_buffer_size,
             "DLSS capture exceeds GPU buffer limit"
         );
-        let readback = readback(device, layout.bytes);
+        let input_readback = readback(device, layout.bytes);
         let mut copy = device.create_command_encoder(&Default::default());
         for (guide, (region, stride)) in evaluation
             .inputs
@@ -154,7 +159,7 @@ impl Capture {
             copy.copy_texture_to_buffer(
                 guide.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
-                    buffer: &readback,
+                    buffer: &input_readback,
                     layout: wgpu::TexelCopyBufferLayout {
                         offset: region.offset,
                         bytes_per_row: Some(stride),
@@ -169,10 +174,35 @@ impl Capture {
             (evaluation.albedo, layout.albedo),
             (result, layout.output),
         ] {
-            copy.copy_buffer_to_buffer(buffer, 0, &readback, region.offset, region.size);
+            copy.copy_buffer_to_buffer(buffer, 0, &input_readback, region.offset, region.size);
         }
+        let optics = if self.optics {
+            let buffers = [
+                Some(temporal.optical_path_records()),
+                Some(temporal.stable_ids()),
+                temporal.transmission_motion(),
+            ];
+            let size = buffers.iter().flatten().map(|buffer| buffer.size()).sum();
+            ensure!(
+                size <= device.limits().max_buffer_size,
+                "Optical capture exceeds GPU buffer limit"
+            );
+            let snapshot = readback(device, size);
+            let mut offset = 0;
+            for buffer in buffers.into_iter().flatten() {
+                copy.copy_buffer_to_buffer(buffer, 0, &snapshot, offset, buffer.size());
+                offset += buffer.size();
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
         commands.push(copy.finish());
-        Ok(PendingCapture { header, readback })
+        Ok(PendingCapture {
+            header,
+            readback: input_readback,
+            optics,
+        })
     }
     pub(super) fn save(
         &self,
@@ -183,9 +213,12 @@ impl Capture {
         save_readback(
             device,
             &pending.readback,
-            &frame_path(&self.0, index, "bin"),
+            &frame_path(&self.path, index, "bin"),
         )?;
-        fs::write(frame_path(&self.0, index, "json"), pending.header)?;
+        if let Some(optics) = pending.optics {
+            save_readback(device, &optics, &frame_path(&self.path, index, "optics"))?;
+        }
+        fs::write(frame_path(&self.path, index, "json"), pending.header)?;
         Ok(())
     }
     pub(super) fn finish(
@@ -196,7 +229,7 @@ impl Capture {
         frames: u64,
     ) -> Result<()> {
         fs::write(
-            self.0.join("capture.json"),
+            self.path.join("capture.json"),
             serde_json::to_vec_pretty(&Manifest {
                 version: CAPTURE_VERSION,
                 input_size,

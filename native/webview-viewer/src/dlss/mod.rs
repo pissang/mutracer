@@ -488,8 +488,14 @@ impl Dlss {
             .capture
             .as_ref()
             .map(|capture| {
-                let record =
-                    capture.record(&frame.device, target, &evaluation, &output, &mut commands)?;
+                let record = capture.record(
+                    &frame.device,
+                    target,
+                    &evaluation,
+                    &output,
+                    &mut commands,
+                    temporal,
+                )?;
                 Ok::<_, anyhow::Error>((capture, frame.device.clone(), record))
             })
             .transpose()
@@ -803,6 +809,9 @@ impl CustomDenoiser for Dlss {
     }
     fn temporal_output_scale(&self) -> u32 {
         self.output_scale
+    }
+    fn temporal_transmission_motion(&self) -> bool {
+        self.capture.as_ref().is_some_and(|capture| capture.optics)
     }
     fn temporal_guide_model(&self) -> api::TemporalGuideModel {
         self.guide_model

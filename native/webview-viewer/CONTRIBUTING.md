@@ -124,6 +124,11 @@ each submitted frame's exact guides, raw fallback buffers, jitter, camera,
 reset decision and linear RGBA32F result. Capture adds GPU readback and disk
 I/O, so collect timings in a separate run. A 320×320 capture uses about
 320 MiB for 24 frames at equal input and output size.
+For glass diagnostics, also set `MUTRACER_DLSS_CAPTURE_OPTICS=1`. Each
+`.optics` sidecar contains the bottom-row-first optical path records and stable
+IDs, followed by the transmission motion buffer when available. These blocks
+use 32, 16 and 16 bytes per input pixel respectively. Replay reads the ordinary
+capture files. The transmission buffer describes thin panes and parallel slabs.
 Set `MUTRACER_DLSS_REFERENCE_SPP` to also render an independent raw reference at
 the output extent, with the same scene, camera and lighting. The profile writes
 `reference-SAMPLES.rgba32f` in bottom-row-first order.
