@@ -93,7 +93,10 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     let exe = std::env::current_exe()?;
-    let filter = Dlss::new(exe.parent().context("App directory")?)?;
+    let capture = std::env::var_os("MUTRACER_DLSS_CAPTURE_DIR")
+        .map(super::replay::Capture::new)
+        .transpose()?;
+    let filter = Dlss::new_internal(exe.parent().context("App directory")?, capture)?;
     let (_, adapter, device, queue) = filter.device();
     let engine = api::Engine::on_device(
         &adapter,
@@ -142,19 +145,7 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
         },
     )?;
     render.set_custom_denoiser(Some(filter.clone()), api::DenoiseSchedule::EverySample)?;
-    let started = Instant::now();
-    loop {
-        match render.refine()? {
-            api::RenderStatus::Finished => break,
-            api::RenderStatus::Error => anyhow::bail!("Render failed: {:?}", engine.last_error()),
-            _ => (),
-        }
-        ensure!(
-            started.elapsed() < Duration::from_secs(180),
-            "DLSS profile timed out"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    converge(&engine, &render)?;
     let report = render.denoise_report().context("Missing DLSS report")?;
     ensure!(report.error.is_none(), "DLSS failed: {:?}", report.error);
     let (evaluations, resets) = filter.counts();
@@ -194,5 +185,60 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
             "evaluations": evaluations, "resets": resets,
         }))?,
     )?;
+    if let Some(capture) = &filter.capture {
+        capture.finish(&filter, input_size, output_size, evaluations)?;
+    }
+    if let Some(samples) = std::env::var_os("MUTRACER_DLSS_REFERENCE_SPP") {
+        let samples: u32 = samples
+            .to_str()
+            .context("Invalid reference sample count")?
+            .parse()?;
+        ensure!(samples >= 24, "Reference requires at least 24 samples");
+        let reference = api::Render::new(
+            &engine,
+            api::RenderSettings {
+                max_samples: samples,
+                size: api::RenderSize::Fixed {
+                    width: output_size[0],
+                    height: output_size[1],
+                },
+                ..render.settings()?
+            },
+        )?;
+        converge(&engine, &reference)?;
+        ensure!(
+            reference.samples() == samples,
+            "Incomplete reference render"
+        );
+        let hdr = reference.read_pixels(api::PixelKind::Hdr)?;
+        ensure!(
+            [hdr.width, hdr.height] == output_size,
+            "Unexpected reference extent"
+        );
+        let bytes: Vec<_> = hdr
+            .data
+            .chunks_exact(hdr.width as usize * 4)
+            .rev()
+            .flatten()
+            .flat_map(|pixel| pixel.to_le_bytes())
+            .collect();
+        std::fs::write(output.join(format!("reference-{samples}.rgba32f")), bytes)?;
+    }
     Ok(())
+}
+
+fn converge(engine: &api::Engine, render: &api::Render) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match render.refine()? {
+            api::RenderStatus::Finished => return Ok(()),
+            api::RenderStatus::Error => anyhow::bail!("Render failed: {:?}", engine.last_error()),
+            _ => (),
+        }
+        ensure!(
+            started.elapsed() < Duration::from_secs(180),
+            "DLSS profile timed out"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }

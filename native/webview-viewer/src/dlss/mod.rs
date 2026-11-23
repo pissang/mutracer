@@ -2,10 +2,13 @@
 mod ffi;
 mod gpu;
 mod profile;
+mod replay;
 use anyhow::{Context, Result, ensure};
 use ash::vk::Handle;
 use mutracer_native::api::{self, CustomDenoiser, TemporalGuide as Guide};
 pub use profile::run as profile_1080p;
+pub use replay::run as replay_sequence;
+use replay::{Evaluation, FrameParameters, GUIDE_KINDS};
 use std::{
     collections::HashMap,
     path::Path,
@@ -88,6 +91,12 @@ struct MaterialGuideInput {
     mapping: MaterialGuideMapping,
     pipeline: wgpu::ComputePipeline,
 }
+struct Encoded {
+    commands: [wgpu::CommandBuffer; 3],
+    output: wgpu::Buffer,
+    guide: SpecularGuide,
+    timer: Option<profile::Stages>,
+}
 struct Target {
     feature: Feature,
     size: [u32; 2],
@@ -107,16 +116,20 @@ struct State {
     resets: u64,
     last_reset: Vec<api::TemporalResetReason>,
 }
+const SDK_VERSION: &str = "310.9.16";
+
 pub struct Dlss {
     state: Mutex<State>,
     prepare: wgpu::ComputePipeline,
     resolve: wgpu::ComputePipeline,
     runtime: Arc<Runtime>,
-    trace_preset: Option<u32>,
+    trace: bool,
+    preset: u32,
     input_samples: u32,
     output_scale: u32,
     optical: Option<OpticalInput>,
     material_guide: Option<MaterialGuideInput>,
+    capture: Option<replay::Capture>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -163,6 +176,9 @@ fn group(
 }
 impl Dlss {
     pub fn new(directory: &Path) -> Result<Arc<Self>> {
+        Self::new_internal(directory, None)
+    }
+    fn new_internal(directory: &Path, capture: Option<replay::Capture>) -> Result<Arc<Self>> {
         // NGX configuration is process-wide. Only the startup path creates an
         // adapter; share the returned Arc between all renders and windows.
         static CREATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -257,9 +273,10 @@ impl Dlss {
             output_scale,
             optical,
             material_guide,
+            capture,
             state: Mutex::new(State::default()),
-            trace_preset: (std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"))
-                .then_some(preset),
+            trace: std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"),
+            preset,
         }))
     }
     pub fn device(&self) -> (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue) {
@@ -271,9 +288,13 @@ impl Dlss {
             gpu.queue.clone(),
         )
     }
-    fn target(&self, frame: &api::GpuDenoiseInput) -> Result<(Target, wgpu::CommandBuffer)> {
-        let device = &frame.device;
-        let output_size = frame.output_size();
+    fn target(
+        &self,
+        size: [u32; 2],
+        output_size: [u32; 2],
+        frame_id: u64,
+    ) -> Result<(Target, wgpu::CommandBuffer)> {
+        let device = &self.runtime.gpu.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("NGX feature creation"),
         });
@@ -283,8 +304,8 @@ impl Dlss {
             encoder.as_hal_mut::<Vulkan, _, _>(|e| {
                 result = (self.runtime.ngx.create)(
                     e.unwrap().raw_handle().as_raw(),
-                    frame.size[0],
-                    frame.size[1],
+                    size[0],
+                    size[1],
                     output_size[0],
                     output_size[1],
                     &mut handle,
@@ -316,27 +337,24 @@ impl Dlss {
             })
         };
         let textures = [
-            image(wgpu::TextureFormat::R32Float, frame.size),
-            image(wgpu::TextureFormat::Rg32Float, frame.size),
+            image(wgpu::TextureFormat::R32Float, size),
+            image(wgpu::TextureFormat::Rg32Float, size),
             image(wgpu::TextureFormat::Rgba32Float, output_size),
         ];
         Ok((
             Target {
                 feature,
                 textures,
-                optical: self
-                    .optical
-                    .as_ref()
-                    .map(|input| image(input.format, frame.size)),
+                optical: self.optical.as_ref().map(|input| image(input.format, size)),
                 mapped_guide: self
                     .material_guide
                     .as_ref()
-                    .map(|_| image(wgpu::TextureFormat::Rgba32Float, frame.size)),
-                size: frame.size,
+                    .map(|_| image(wgpu::TextureFormat::Rgba32Float, size)),
+                size,
                 output_size,
                 last: None,
                 flights: Vec::new(),
-                last_frame: frame.id.frame,
+                last_frame: frame_id,
             },
             encoder.finish(),
         ))
@@ -390,10 +408,11 @@ impl Dlss {
                 };
                 state.targets.remove(&oldest);
             }
-            let (target, command) = self.target(&frame)?;
+            let (target, command) = self.target(frame.size, output_size, frame.id.frame)?;
             state.targets.insert(key, target);
             commands.push(command);
         }
+        let capture_index = state.evaluations;
         let target = state.targets.get_mut(&key).unwrap();
         let frame_id = frame.id.frame;
         let previous_submission = target.last.as_ref().map(|_| target.last_frame);
@@ -406,19 +425,136 @@ impl Dlss {
         let reset = !temporal.reset_reasons().is_empty()
             || temporal.previous_metadata().is_none()
             || !previous_accepted;
-        let device = &frame.device;
-        let inputs = [
-            Guide::NoisyColor,
-            Guide::DiffuseAlbedo,
-            Guide::SpecularAlbedo,
-            Guide::NormalRoughness,
-            Guide::LinearDepth,
-            Guide::Motion,
-            Guide::Validity,
-        ]
-        .map(|g| temporal.guide(g).context("Missing DLSS guide"))
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        let inputs = GUIDE_KINDS
+            .map(|kind| temporal.guide(kind).context("Missing DLSS guide"))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let previous = temporal.previous_metadata().unwrap_or(meta);
+        let params = FrameParameters {
+            reset,
+            stationary: !reset
+                && meta.scene_revision == previous.scene_revision
+                && meta.camera_revision == previous.camera_revision,
+            orthographic: meta.camera.kind == api::TemporalProjection::Orthographic,
+            jitter: meta.jitter_pixels,
+            delta_ms: meta.delta_seconds * 1000.,
+            view: meta.camera.view,
+            projection: meta.camera.projection,
+            projection_inverse: meta.camera.projection_inverse,
+            view_inverse: meta.camera.view_inverse,
+            previous_view_projection: (glam::Mat4::from_cols_array(&previous.camera.projection)
+                * glam::Mat4::from_cols_array(&previous.camera.view))
+            .to_cols_array(),
+        };
+        let evaluation = Evaluation {
+            params: &params,
+            inputs: inputs.try_into().unwrap(),
+            specular: temporal.guide(Guide::SpecularReflection),
+            color: &frame.buffers.color,
+            albedo: &frame.buffers.albedo,
+        };
+        let encoded = match self.encode(target, &evaluation, true) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                // Evaluation can mutate SDK history before returning an error.
+                let old = state.targets.remove(&key).unwrap();
+                state.retired.push(old);
+                return Err(error);
+            }
+        };
+        let Encoded {
+            commands: passes,
+            output,
+            guide,
+            timer,
+        } = encoded;
+        commands.extend(passes);
+        let capture = match self
+            .capture
+            .as_ref()
+            .map(|capture| {
+                let record =
+                    capture.record(&frame.device, target, &evaluation, &output, &mut commands)?;
+                Ok::<_, anyhow::Error>((capture, frame.device.clone(), record))
+            })
+            .transpose()
+        {
+            Ok(capture) => capture,
+            Err(error) => {
+                let old = state.targets.remove(&key).unwrap();
+                state.retired.push(old);
+                return Err(error);
+            }
+        };
+        target.last = Some(frame.status());
+        target.flights.push(frame.status());
+        let reset_reasons = temporal.reset_reasons().to_vec();
+        let sample_index = meta.sample_index;
+        let trace = self.trace.then(|| {
+            let reasons = reset_reasons.iter().map(|reason| format!("{reason:?}")).collect::<Vec<_>>();
+            serde_json::json!({
+                "dlssEvaluation": {
+                    "target": key.1, "frame": frame_id, "previousSubmission": previous_submission,
+                    "previousAccepted": previous_accepted, "previousSequence": temporal.previous_metadata().map(|m| m.sample_index),
+                    "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
+                    "size": meta.input_extent, "outputSize": meta.output_extent,
+                    "preset": self.preset, "sdk": SDK_VERSION, "backend": "vulkan",
+                    "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
+                    "specularGuide": format!("{guide:?}"), "temporalBytes": temporal.resident_frame_bytes(),
+                    "materialGuide": self.material_guide.as_ref().map(|g| format!("{:?}", g.mapping)),
+                }
+            })
+        });
+        // The headless lifecycle check can cancel precisely after SDK encoding.
+        before_submit();
+        // This path uses the public frame submission and publication contract.
+        // Only offscreen capture reads back the adapter inputs and result.
+        let output = frame
+            .submit(commands, output)
+            .map(api::DenoiseOutput::Resident)
+            .map_err(anyhow::Error::msg);
+        if let Some(mut trace) = trace {
+            trace["dlssEvaluation"]["submitted"] = serde_json::Value::Bool(output.is_ok());
+            eprintln!("{trace}");
+        }
+        if output.is_ok() {
+            if let Some(timer) = timer {
+                timer.log(frame_id, sample_index);
+            }
+            if let Some((capture, device, record)) = capture {
+                capture.save(&device, capture_index, record)?;
+            }
+            state.evaluations += 1;
+            state.resets += u64::from(reset);
+            if reset {
+                state.last_reset = reset_reasons;
+            }
+        } else {
+            // Cancellation may discard the command buffer that created this
+            // feature, or submission may fail after partially enqueuing work.
+            // Recreate it next time and retain every older flight until retirement.
+            let old = state.targets.remove(&key).unwrap();
+            state.retired.push(old);
+        }
+        output
+    }
+    fn encode(
+        &self,
+        target: &Target,
+        evaluation: &Evaluation<'_>,
+        profile: bool,
+    ) -> Result<Encoded> {
+        let device = &self.runtime.gpu.device;
+        let Target {
+            size, output_size, ..
+        } = *target;
+        let Evaluation {
+            params,
+            inputs,
+            specular,
+            color,
+            albedo,
+        } = *evaluation;
         let views = inputs
             .iter()
             .map(|t| t.create_view(&Default::default()))
@@ -427,30 +563,24 @@ impl Dlss {
             .textures
             .each_ref()
             .map(|t| t.create_view(&Default::default()));
-        let previous = temporal.previous_metadata().unwrap_or(meta);
-        let stationary = !reset
-            && meta.scene_revision == previous.scene_revision
-            && meta.camera_revision == previous.camera_revision;
-        let previous_vp = glam::Mat4::from_cols_array(&previous.camera.projection)
-            * glam::Mat4::from_cols_array(&previous.camera.view);
         let mut uniforms = Vec::new();
         for matrix in [
-            meta.camera.projection_inverse,
-            meta.camera.view_inverse,
-            previous_vp.to_cols_array(),
+            params.projection_inverse,
+            params.view_inverse,
+            params.previous_view_projection,
         ] {
             uniforms.extend(matrix.iter().flat_map(|v| v.to_le_bytes()));
         }
         uniforms.extend(
-            [meta.jitter_pixels[0], meta.jitter_pixels[1], 0., 0.]
+            [params.jitter[0], params.jitter[1], 0., 0.]
                 .iter()
                 .flat_map(|v| v.to_le_bytes()),
         );
         uniforms.extend(
             [
-                u32::from(!reset),
-                u32::from(meta.camera.kind == api::TemporalProjection::Orthographic),
-                u32::from(stationary),
+                u32::from(!params.reset),
+                u32::from(params.orthographic),
+                u32::from(params.stationary),
                 0,
             ]
             .iter()
@@ -476,11 +606,13 @@ impl Dlss {
             ],
         );
         let mut producer = device.create_command_encoder(&Default::default());
-        let timer = profile::Stages::new(device, &self.runtime.gpu.queue);
+        let timer = profile
+            .then(|| profile::Stages::new(device, &self.runtime.gpu.queue))
+            .flatten();
         if let Some(timer) = &timer {
             timer.stamp(&mut producer, 0);
         }
-        dispatch(&mut producer, &self.prepare, &prepare, frame.size);
+        dispatch(&mut producer, &self.prepare, &prepare, size);
         let mut sdk_inputs = [
             inputs[0],
             inputs[1],
@@ -505,12 +637,7 @@ impl Dlss {
             (&self.material_guide, &target.mapped_guide, &mapped_view)
         {
             let index = convert.mapping.input_index();
-            let mut options: Vec<_> = meta
-                .camera
-                .view
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
+            let mut options: Vec<_> = params.view.iter().flat_map(|v| v.to_le_bytes()).collect();
             options.extend(
                 [u32::from(index == 3), 0, 0, 0]
                     .iter()
@@ -526,7 +653,7 @@ impl Dlss {
                 &convert.pipeline,
                 &[tex(&views[index]), tex(view), uniform.as_entire_binding()],
             );
-            dispatch(&mut producer, &convert.pipeline, &mapping, frame.size);
+            dispatch(&mut producer, &convert.pipeline, &mapping, size);
             sdk_inputs[index] = texture;
             sdk_views[index] = view;
         }
@@ -544,11 +671,9 @@ impl Dlss {
                 gpu::descriptor(&self.runtime.gpu.adapter, texture, sdk_views[i], false);
         }
         let mut guide = SpecularGuide::Off;
-        if let (Some(convert), Some(texture), Some(input)) = (
-            &self.optical,
-            &target.optical,
-            temporal.guide(Guide::SpecularReflection),
-        ) {
+        if let (Some(convert), Some(texture), Some(input)) =
+            (&self.optical, &target.optical, specular)
+        {
             let input_view = input.create_view(&Default::default());
             let output_view = texture.create_view(&Default::default());
             let bind_group = group(
@@ -559,7 +684,7 @@ impl Dlss {
                     wgpu::BindingResource::TextureView(&output_view),
                 ],
             );
-            dispatch(&mut producer, &convert.pipeline, &bind_group, frame.size);
+            dispatch(&mut producer, &convert.pipeline, &bind_group, size);
             producer.transition_resources(
                 std::iter::empty(),
                 std::iter::once(wgpu::TextureTransition {
@@ -587,8 +712,7 @@ impl Dlss {
         let clip = glam::Mat4::from_cols_array(&[
             1., 0., 0., 0., 0., -1., 0., 0., 0., 0., 0.5, 0., 0., 0., 0.5, 1.,
         ]);
-        let projection =
-            (clip * glam::Mat4::from_cols_array(&meta.camera.projection)).to_cols_array();
+        let projection = (clip * glam::Mat4::from_cols_array(&params.projection)).to_cols_array();
         unsafe {
             native.as_hal_mut::<Vulkan, _, _>(|e| {
                 let cmd = e.unwrap().raw_handle();
@@ -601,25 +725,20 @@ impl Dlss {
                     cmd.as_raw(),
                     descriptors.as_ptr(),
                     8,
-                    reset as u32,
+                    params.reset as u32,
                     guide as u32,
-                    -meta.jitter_pixels[0],
-                    -meta.jitter_pixels[1],
-                    meta.camera.view.as_ptr(),
+                    -params.jitter[0],
+                    -params.jitter[1],
+                    params.view.as_ptr(),
                     projection.as_ptr(),
-                    meta.delta_seconds * 1000.,
+                    params.delta_ms,
                 );
                 for d in descriptors[..7].iter().filter(|d| d.image != 0) {
                     gpu::barrier(&self.runtime.gpu.raw, cmd, d.image, false);
                 }
             });
         }
-        if let Err(error) = ffi::check(result, "DLSS RR evaluate") {
-            // Evaluation can mutate SDK history before returning an error.
-            let old = state.targets.remove(&key).unwrap();
-            state.retired.push(old);
-            return Err(error);
-        }
+        ffi::check(result, "DLSS RR evaluate")?;
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("NGX MuTracer result"),
             size: u64::from(output_size[0]) * u64::from(output_size[1]) * 16,
@@ -632,9 +751,9 @@ impl Dlss {
             &[
                 tex(&converted[2]),
                 tex(&views[6]),
-                frame.buffers.color.as_entire_binding(),
+                color.as_entire_binding(),
                 output.as_entire_binding(),
-                frame.buffers.albedo.as_entire_binding(),
+                albedo.as_entire_binding(),
             ],
         );
         let mut consumer = device.create_command_encoder(&Default::default());
@@ -646,55 +765,12 @@ impl Dlss {
             timer.stamp(&mut consumer, 3);
             timer.resolve(&mut consumer);
         }
-        commands.extend([producer.finish(), native.finish(), consumer.finish()]);
-        target.last = Some(frame.status());
-        target.flights.push(frame.status());
-        let reset_reasons = temporal.reset_reasons().to_vec();
-        let sample_index = meta.sample_index;
-        let trace = self.trace_preset.map(|preset| {
-            let reasons = reset_reasons.iter().map(|reason| format!("{reason:?}")).collect::<Vec<_>>();
-            serde_json::json!({
-                "dlssEvaluation": {
-                    "target": key.1, "frame": frame_id, "previousSubmission": previous_submission,
-                    "previousAccepted": previous_accepted, "previousSequence": temporal.previous_metadata().map(|m| m.sample_index),
-                    "sequence": meta.sample_index, "samples": meta.sample_count, "jitter": meta.jitter_pixels,
-                    "size": meta.input_extent, "outputSize": meta.output_extent,
-                    "preset": preset, "sdk": "310.9.16", "backend": "vulkan",
-                    "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
-                    "specularGuide": format!("{guide:?}"), "temporalBytes": temporal.resident_frame_bytes(),
-                    "materialGuide": self.material_guide.as_ref().map(|g| format!("{:?}", g.mapping)),
-                }
-            })
-        });
-        // The headless lifecycle check can cancel precisely after SDK encoding.
-        before_submit();
-        // This path uses the public frame submission and publication contract.
-        // No queue waits, readbacks or CPU image uploads occur here.
-        let output = frame
-            .submit(commands, output)
-            .map(api::DenoiseOutput::Resident)
-            .map_err(anyhow::Error::msg);
-        if let Some(mut trace) = trace {
-            trace["dlssEvaluation"]["submitted"] = serde_json::Value::Bool(output.is_ok());
-            eprintln!("{trace}");
-        }
-        if output.is_ok() {
-            if let Some(timer) = timer {
-                timer.log(frame_id, sample_index);
-            }
-            state.evaluations += 1;
-            state.resets += u64::from(reset);
-            if reset {
-                state.last_reset = reset_reasons;
-            }
-        } else {
-            // Cancellation may discard the command buffer that created this
-            // feature, or submission may fail after partially enqueuing work.
-            // Recreate it next time and retain every older flight until retirement.
-            let old = state.targets.remove(&key).unwrap();
-            state.retired.push(old);
-        }
-        output
+        Ok(Encoded {
+            commands: [producer.finish(), native.finish(), consumer.finish()],
+            output,
+            guide,
+            timer,
+        })
     }
     pub fn counts(&self) -> (u64, u64) {
         let s = self.state.lock().unwrap();

@@ -2017,6 +2017,7 @@ dependencies = [
  "percent-encoding",
  "pollster",
  "rfd",
+ "serde",
  "serde_json",
  "ureq",
  "wgpu",

@@ -109,6 +109,24 @@ The glTF must load with the native scene importer. A camera file uses the
 `WIDTHxHEIGHT` to test a different extent. With GPU timestamps enabled the log separates
 independent sampling, guide resolve, adapter prepare, NGX and output resolve.
 
+Set `MUTRACER_DLSS_CAPTURE_DIR` to an empty directory while profiling to save
+each submitted frame's exact guides, raw fallback buffers, jitter, camera,
+reset decision and linear RGBA32F result. Capture adds GPU readback and disk
+I/O, so collect timings in a separate run. A 320×320 capture uses about
+320 MiB for 24 frames at equal input and output size.
+Set `MUTRACER_DLSS_REFERENCE_SPP` to also render an independent raw reference at
+the output extent, with the same scene, camera and lighting. The profile writes
+`reference-SAMPLES.rgba32f` in bottom-row-first order.
+
+Run `mutracer-viewer.exe --replay-dlss CAPTURE OUTPUT` with an empty output
+directory. Replay uses the recorded extents and frame order and runs the same
+adapter passes. `replay.json` records both adapter settings and the count of
+pixels that differ from the captured output on each frame. The per-frame
+`.rgba32f` files store little-endian, bottom-row-first linear pixels. Keep the
+driver, runtime and adapter options fixed to check reproducibility. Change
+`MUTRACER_DLSS_SPECULAR`, `MUTRACER_DLSS_MATERIAL_GUIDE` or
+`MUTRACER_DLSS_PRESET` one at a time to compare the same input sequence.
+
 The internal `MUTRACER_VIEWER_BENCHMARK` JSON workflow supports `editOnly` for
 material-edit first-sample timing and `captureScene` for compact scene, resource
 reference and camera/settings replay artifacts. Rehydrate native references and

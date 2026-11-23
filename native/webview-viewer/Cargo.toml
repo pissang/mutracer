@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [features]
-dlss-rr = ["dep:ash", "dep:libloading"]
+dlss-rr = ["dep:ash", "dep:libloading", "dep:serde"]
 
 [dependencies]
 anyhow = "1"
@@ -28,6 +28,7 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["metal"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std", "loaded"], optional = true }
 libloading = { version = "=0.8.9", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

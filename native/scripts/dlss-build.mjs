@@ -35,6 +35,7 @@ writeFileSync(resolve(app,'MuTracer-DLSS.cmd'),'@echo off\r\nset MUTRACER_VIEWER
 const binaries=['mutracer-viewer.exe','mutracer_ngx.dll','nvngx_dlssd.dll'];
 const sources=['native/host/src/api/temporal.rs','native/webview-viewer/src/main.rs','native/webview-viewer/src/wire.rs',
  'native/webview-viewer/src/dlss/mod.rs','native/webview-viewer/src/dlss/ffi.rs','native/webview-viewer/src/dlss/gpu.rs',
+ 'native/webview-viewer/src/dlss/profile.rs','native/webview-viewer/src/dlss/replay.rs',
  'native/webview-viewer/src/dlss/ngx.cpp','native/webview-viewer/src/dlss/prepare.wgsl','native/webview-viewer/src/dlss/resolve.wgsl','native/scripts/dlss-build.mjs'];
 writeFileSync(resolve(app,'dlss-build.json'),JSON.stringify({sdk:'310.9.16',
   gitRevision:spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout?.trim(),

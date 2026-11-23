@@ -1676,6 +1676,13 @@ fn main() -> Result<()> {
             let camera = args.next().map(PathBuf::from);
             return dlss::profile_1080p(&model, &output, camera.as_deref());
         }
+        #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+        if arg == "--replay-dlss" {
+            let input = PathBuf::from(args.next().context("DLSS capture directory")?);
+            let output = PathBuf::from(args.next().context("Replay output directory")?);
+            anyhow::ensure!(args.next().is_none(), "Expected capture and replay directories");
+            return dlss::replay_sequence(&input, &output);
+        }
         if arg == "--package-smoke" {
             return smoke::run(&PathBuf::from(
                 args.next().context("Package output directory")?,
