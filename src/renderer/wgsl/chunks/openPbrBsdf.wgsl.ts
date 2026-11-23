@@ -1089,10 +1089,11 @@ fn openpbr_substrate_fresnel(prepared: OpenPbrPreparedBsdf, cosine: f32, reflect
     return mix(opaqueFresnel, transFresnel, nonOpaque);
 }
 
-fn openpbr_eval_prepared_lobe(
+fn openpbr_eval_prepared_lobe_mode(
     prepared: OpenPbrPreparedBsdf,
     lightDirection: vec3f,
     allowedLobe: i32,
+    includeProjectedCosine: bool,
     pdf: ptr<function, f32>
 ) -> vec3f {
     let material = prepared.material;
@@ -1336,7 +1337,7 @@ ${hasCoatNormals ? /* wgsl */ `    } // base hemisphere support` : ''}
     }
 ${hasCoatNormals ? /* wgsl */ `
     // Values are BSDF*cos in world solid angle before the frames are combined.
-    if (independentCoat) { response *= abs(lightLocal.z); }
+    if (independentCoat & includeProjectedCosine) { response *= abs(lightLocal.z); }
 ` : ''}
 
 ${hasAnisotropyDirections ? /* wgsl */ `
@@ -1362,7 +1363,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
         if (allowCoat) {
-            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat)' : ''} * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat & includeProjectedCosine)' : ''} * openpbr_eval_microfacet_reflection(
                 coatMaterial,
                 coatView,
                 coatLight,
@@ -1384,7 +1385,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
         if (allowCoat) {
-            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat)' : ''} * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat & includeProjectedCosine)' : ''} * openpbr_eval_microfacet_reflection(
                 coatMaterial,
                 viewLocal,
                 lightLocal,
@@ -1407,7 +1408,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
             vec3f(1.0 - prepared.weights[OPENPBR_LOBE_FUZZ] * fuzzAlbedo)
         );
         if (allowFuzz) {
-            response += prepared.weights[OPENPBR_LOBE_FUZZ]${hasCoatNormals ? ' * select(1.0, max(lightLocal.z, 0.0), independentCoat)' : ''} * openpbr_eval_fuzz(
+            response += prepared.weights[OPENPBR_LOBE_FUZZ]${hasCoatNormals ? ' * select(1.0, max(lightLocal.z, 0.0), independentCoat & includeProjectedCosine)' : ''} * openpbr_eval_fuzz(
                 material,
                 viewLocal,
                 lightLocal,
@@ -1417,7 +1418,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         }
     }
 
-    return response * ${hasCoatNormals ? 'select(abs(lightLocal.z), 1.0, independentCoat)' : 'abs(lightLocal.z)'};
+    return response * ${hasCoatNormals ? 'select(select(1.0, abs(lightLocal.z), includeProjectedCosine), 1.0, independentCoat & includeProjectedCosine)' : 'select(1.0, abs(lightLocal.z), includeProjectedCosine)'};
 }
 
 fn openpbr_eval_prepared(
@@ -1426,6 +1427,26 @@ fn openpbr_eval_prepared(
     pdf: ptr<function, f32>
 ) -> vec3f {
     return openpbr_eval_prepared_lobe(prepared, lightDirection, -1, pdf);
+}
+
+// Keep the established four-argument entry point for shared native WGSL callers.
+fn openpbr_eval_prepared_lobe(
+    prepared: OpenPbrPreparedBsdf,
+    lightDirection: vec3f,
+    allowedLobe: i32,
+    pdf: ptr<function, f32>
+) -> vec3f {
+    return openpbr_eval_prepared_lobe_mode(prepared, lightDirection, allowedLobe, true, pdf);
+}
+
+// Photon density estimates integrate the BSDF against stored surface flux.
+// Return the BSDF without the projected light cosine already used by path tracing.
+fn openpbr_eval_prepared_area(
+    prepared: OpenPbrPreparedBsdf,
+    lightDirection: vec3f,
+    pdf: ptr<function, f32>
+) -> vec3f {
+    return openpbr_eval_prepared_lobe_mode(prepared, lightDirection, -1, false, pdf);
 }
 
 
