@@ -114,7 +114,12 @@ fn create_pipelines(
 /// The path tracer source with its AOV entry points replaced by the shared
 /// display-resolution storage variant.
 fn display_source(source: &str) -> Result<String> {
-    let [default, display] = &crate::postprocess::sources()?.aov_trace;
+    let sources = crate::postprocess::sources()?;
+    let [default, display] = if source.contains("fn mtIndices(") {
+        &sources.aov_trace_hwrt
+    } else {
+        &sources.aov_trace
+    };
     // Material graphs specialize aovSurface's material call alongside the
     // beauty shader. Keep that function verbatim when changing AOV storage;
     // the surrounding shared template must still match exactly.

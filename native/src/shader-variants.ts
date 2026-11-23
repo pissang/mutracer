@@ -19,11 +19,8 @@ export function nativeShaderVariant(id: number, constants: Record<string, boolea
   hash >>>= 0;
   const previous = variants.get(hash);
   if (previous?.signature === signature) {hits++; return previous.bytes;}
-  let wgsl = source();
-  // HWRT records address the intersected index buffer. Snapshots use local indices.
-  if (wgsl.includes('fn mtIndices(')) wgsl = wgsl.replace(
-    'return bitcast<vec3u>(bvhBuffer[u32(si.triangleIndex)].xyz);',
-    'return vec3u(mtIndices(si.instanceIndex,si.triangleIndex) - vec3i(bitcast<i32>(instancesBuffer[si.instanceIndex*10].y)));');
+  const original = source();
+  const wgsl = original.includes('fn mtIndices(') ? specializeMotionIndices(original) : original;
   const bytes = new TextEncoder().encode(wgsl); generated++;
   variants.set(hash, {signature, bytes});
   if (!previous) order.push(hash);
@@ -31,3 +28,9 @@ export function nativeShaderVariant(id: number, constants: Record<string, boolea
   return bytes;
 }
 export function nativeShaderVariantStats() {return {generated, hits, retained: variants.size};}
+
+// Native ray queries return global vertex indices. Previous positions are per geometry.
+export function specializeMotionIndices(source: string): string {
+  return source.replace('let record=bvhBuffer[u32(si.triangleIndex)];\n    let indices=bitcast<vec3u>(record.xyz);',
+    'let indices=vec3u(mtIndices(si.instanceIndex,si.triangleIndex) - vec3i(bitcast<i32>(instancesBuffer[si.instanceIndex*10].y)));');
+}

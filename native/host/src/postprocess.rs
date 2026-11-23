@@ -20,6 +20,7 @@ pub(crate) struct Sources {
     pub easu_detail: [f32; 7],
     pub tone_lut_size: u32,
     /// Default and display-resolution AOV entry points of the path tracer.
+    pub aov_trace_hwrt: [String; 2],
     pub aov_trace: [String; 2],
 }
 unsafe extern "C" {

@@ -182,6 +182,7 @@ ${createCompositeDenoiseDisplayMain('srgb')}
 import frameResolve from './frame-resolve.wgsl.js';
 import {areaDownsampleShader, easuShader} from '../../src/renderer/wgsl/easu.wgsl.js';
 import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, EASU_DETAIL, TONE_LUT_SIZE} from '../../src/renderer/wgsl/easuDetail.wgsl.js';
+import {specializeMotionIndices} from './shader-variants.js';
 import aovTraceWGSL from '../../src/renderer/wgsl/aovTrace.wgsl.js';
 import aovTraceDisplayWGSL from '../../src/renderer/wgsl/aovTraceDisplay.wgsl.js';
 
@@ -206,7 +207,8 @@ export function postprocessParameters(): Uint8Array {
       EASU_DETAIL.minimumAlbedo, EASU_DETAIL.depthTolerance, EASU_DETAIL.guidedEpsilon],
     tone_lut_size: TONE_LUT_SIZE,
     // The display AOV trace replaces the default suffix of the path tracer source.
-    aov_trace: [aovTraceWGSL, aovTraceDisplayWGSL]
+    aov_trace: [aovTraceWGSL, aovTraceDisplayWGSL],
+    aov_trace_hwrt: [specializeMotionIndices(aovTraceWGSL), specializeMotionIndices(aovTraceDisplayWGSL)]
   }));
 }
 export function bloomParameters(radius: number): Uint8Array {
