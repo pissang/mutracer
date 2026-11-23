@@ -192,4 +192,3 @@ ${startPostWGSL}
   output[index]=vec4f(mix(current.rgb,mean,allowed),current.a);
 }
 `;
-

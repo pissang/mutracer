@@ -22,4 +22,3 @@ struct Counts { values: array<atomic<u32>> }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) g: vec3u, @builtin(workgroup_id) group: vec3u) {
   if (g.x < arrayLength(&position) && bitcast<f32>(position[g.x].w) > 0.5) { atomicAdd(&counts.values[group.x], 1u); }
 }`;
-

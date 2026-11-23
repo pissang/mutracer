@@ -335,4 +335,3 @@ ${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
   total[index]+=vec4f(rgb*weight,weight);
 }
 `;
-
