@@ -92,11 +92,7 @@ void main() {
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
   float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
-  bool unsupportedCoat = material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0
-#ifdef USE_COAT_NORMAL_FRAMES
-    || material.coatNormalEnabled
-#endif
-  );
+  bool unsupportedCoat = material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0);
   bool unsupportedAnisotropy = material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
   bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || unsupportedCoat || material.fuzzWeight>0.0 || unsupportedAnisotropy || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
   out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,unsupported?1.0:0.0);
@@ -109,6 +105,17 @@ void main() {
     if(faceCosine>=0.0&&cosine<0.0){normal=face;cosine=faceCosine;}
     if(cosine<0.0)normal=-normal;
     material.inside=cosine<=0.0&&!material.thinWalled;material.relativeIor=cosine>0.0?1.0/material.specularIor:material.specularIor;
+#ifdef USE_COAT_NORMAL_FRAMES
+    if (material.coatNormalEnabled) {
+      vec3 view = -ray.d;
+      float geometricView = dot(si.faceNormal, view);
+      material.geometricNormal = geometricView >= 0.0 ? si.faceNormal : -si.faceNormal;
+      normal = coat_frame_normal(si.normal, si.faceNormal, view);
+      material.coatNormal = coat_frame_normal(si.coatNormal, si.faceNormal, view);
+      material.inside = geometricView <= 0.0 && !material.thinWalled;
+      material.relativeIor = (geometricView > 0.0 || material.thinWalled) ? 1.0/material.specularIor : material.specularIor;
+    }
+#endif
     vec3 tangent=vec3(0.0);
 #ifdef USE_TANGENT
     tangent=si.tangent;

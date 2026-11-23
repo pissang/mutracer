@@ -1268,7 +1268,8 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(options.displayAovStorage || inputHooks?.layeredReflectance)
+  let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(
+    options.displayAovStorage || inputHooks?.layeredReflectance, !!options.displayAovStorage && hasCoatNormals)
     + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, hasCoatNormals, hasAnisotropyDirections) : createAovTraceWgsl(materialHooks));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,

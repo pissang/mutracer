@@ -40,6 +40,9 @@ async function run() {
   const camera = new Camera({projection: 'orthographic', left: -.07, right: .07, bottom: -.07, top: .07});
   const white = new Texture({width: 16, height: 8, data: new Float32Array(16 * 8 * 4).fill(1)});
   const coatMap = new Texture({width: 1, height: 1, data: new Uint8Array([128, 64, 0, 255])});
+  const baseNormal = new Texture({width: 1, height: 1, data: new Uint8Array([128, 171, 247, 255])});
+  const coatToward = new Texture({width: 1, height: 1, data: new Uint8Array([166, 128, 249, 255])});
+  const coatAway = new Texture({width: 1, height: 1, data: new Uint8Array([89, 128, 249, 255])});
   const neutralColor = [1, 1, 1] as const;
   const rows: Result[] = [];
 
@@ -78,6 +81,8 @@ async function run() {
       {name: 'brushed metal tangent', coat: 0, roughness: 0, metal: 1, cosine, anisotropy: .8, rotation: 0},
       {name: 'brushed metal bitangent', coat: 0, roughness: 0, metal: 1, cosine, anisotropy: .8, rotation: Math.PI / 2},
       {name: 'anisotropic dielectric', coat: 0, roughness: 0, metal: 0, cosine: .4, anisotropy: .7},
+      {name: 'independent coat tilts toward viewer', coat: 1, roughness: .2, metal: 0, cosine: .55, coatNormal: coatToward},
+      {name: 'independent coat tilts away from viewer', coat: 1, roughness: .2, metal: 0, cosine: .55, coatNormal: coatAway},
     ];
 
     for (const fixture of cases) {
@@ -88,6 +93,8 @@ async function run() {
       material.coatColor = [...neutralColor];
       material.coatWeightMap = fixture.mapped ? coatMap : undefined;
       material.coatRoughnessMap = fixture.mapped ? coatMap : undefined;
+      material.coatNormalMap = fixture.coatNormal;
+      material.normalMap = fixture.coatNormal ? baseNormal : undefined;
       material.baseMetalness = fixture.metal;
       material.specularAnisotropy = fixture.anisotropy ?? 0;
       material.specularAnisotropyRotation = fixture.rotation ?? 0;
@@ -95,7 +102,7 @@ async function run() {
       material.specularWeight = fixture.coatOnly ? 0 : 1;
       engine.update();
       render.aovs = [];
-      const raw = fixture.name === 'coated wood' ? await frame(4) : undefined;
+      const raw = fixture.name === 'coated wood' || fixture.coatNormal ? await frame(4) : undefined;
       render.aovs = [...aovs];
       if (raw) check((await frame(4)).every((value, i) => Object.is(value, raw[i])),
         'Enabling layered guides changed fixed-seed beauty');
@@ -126,6 +133,10 @@ async function run() {
       'Clearcoat texture slots must resolve to the equivalent constant values');
     check(channelError(rows[6].specular, rows[7].specular) > .01,
       'Rotating the brushed-metal tangent must affect its grazing-angle reflectance');
+    check(channelError(rows[9].specular, rows[10].specular) > .015,
+      'The independent coat normal must affect specular reflectance');
+    check(channelError(rows[9].diffuse, rows[10].diffuse) > .015,
+      'The independent coat normal must affect substrate attenuation');
     return {backend, adapter: info.adapterName, samples: fixtureSamples, sequenceOffset, passed: true, rows};
   } finally {
     render.dispose();

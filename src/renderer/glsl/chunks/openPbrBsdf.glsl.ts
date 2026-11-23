@@ -20,6 +20,16 @@ import { glsl } from '../../shader.js';
 import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW } from '../../decodeOpenPbrEnergyLut.js';
 
 export default glsl`
+#ifdef USE_COAT_NORMAL_FRAMES
+vec3 coat_frame_normal(vec3 inputNormal, vec3 face, vec3 view) {
+  bool front = dot(face, view) >= 0.0;
+  vec3 ffFace = front ? face : -face;
+  vec3 ffInput = front ? inputNormal : -inputNormal;
+  if (dot(inputNormal, face) <= 0.0 || dot(ffInput, view) <= 1e-6) { return ffFace; }
+  return ffInput;
+}
+#endif
+
 const int OPENPBR_LOBE_FUZZ = 0;
 const int OPENPBR_LOBE_COAT = 1;
 const int OPENPBR_LOBE_METAL = 2;
