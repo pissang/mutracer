@@ -28,6 +28,7 @@ function args() {
       output: {type: 'string', short: 'o'}, help: {type: 'boolean', short: 'h'},
       size: {type: 'string'}, spp: {type: 'string'}, fps: {type: 'string'}, frames: {type: 'string'},
       t: {type: 'string'}, seed: {type: 'string'}, denoise: {type: 'string'}, tracer: {type: 'string'},
+      bounces: {type: 'string'}, format: {type: 'string'}, 'sample-sequence': {type: 'string'},
       'keep-frames': {type: 'string'}, 'contact-sheet': {type: 'string'},
     },
   });
@@ -57,7 +58,7 @@ function options(input, command, values) {
   const seed = values.seed ?? input.seed ?? 'fixed';
   if (!['fixed','frame'].includes(seed)) throw new Error('Use --seed fixed or frame.');
   const denoise = values.denoise ?? (preview ? 'none' : input.denoise ?? 'oidn');
-  if (!['oidn','none'].includes(denoise)) throw new Error('Use --denoise oidn or none.');
+  if (!['oidn','cleanAuxLarge','none'].includes(denoise)) throw new Error('Use --denoise oidn, cleanAuxLarge or none.');
   const tracer = values.tracer ?? input.tracer ?? 'hardware';
   if (!['hardware','software'].includes(tracer)) throw new Error('Use --tracer hardware or software.');
   const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
@@ -72,8 +73,25 @@ function options(input, command, values) {
   if (first > last) throw new Error('Frame range starts after it ends.');
   const time = Number(values.t ?? 0);
   if (command === 'still' && (!Number.isFinite(time) || time < 0 || time > duration)) throw new Error('Still time must be within the shot.');
+  const render = input.render;
+  const display = input.display;
+  for (const [name, group] of [['render', render], ['display', display]]) {
+    if (group !== undefined && (group === null || typeof group !== 'object' || Array.isArray(group))) {
+      throw new Error(`output.${name} must be an object.`);
+    }
+  }
+  const sampleSequence = values['sample-sequence'] ?? input.sampleSequence;
+  if (sampleSequence !== undefined && !['fixed','frame'].includes(sampleSequence)) {
+    throw new Error('Use sampleSequence fixed or frame.');
+  }
+  const format = values.format;
+  if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
+    throw new Error('Use --format png or exr for a still.');
+  }
   return {duration, fps, first, last, time, stride: preview ? 2 : 1,
-    settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer}};
+    settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
+      sampleSequence, display, format,
+      render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
 }
 
 function rng(seed) {
@@ -184,8 +202,9 @@ async function main() {
   console.info = console.log;
   const module = await import(url.href);
   const opts = options(module.output,command,values);
-  if (values.output && !values.output.toLowerCase().endsWith(command === 'still' ? '.png' : '.mp4')) {
-    throw new Error(command === 'still' ? 'Still output must be a PNG.' : 'Video output must be an MP4.');
+  const extension = command === 'still' ? (opts.settings.format ?? 'png') : 'mp4';
+  if (values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
+    throw new Error(`Output must end in .${extension}.`);
   }
   let worker = await Worker.open();
   let release;
@@ -200,9 +219,19 @@ async function main() {
     const other = Math.min(duration,timeA + 1 / fps);
     await frame(other,Math.floor(other * fps));
     if (digest(await frame(timeA,indexA)) !== early) throw new Error(`frame(t=${timeA}) is not deterministic. Assign an absolute pose from t and frame.`);
-    if (command === 'validate') {
-      // Ask the authoritative descriptor parser to check the converted scene.
+    const canCheck = worker.info.capabilities.includes('check-settings');
+    let denoiserWeights;
+    if (canCheck || command === 'validate') {
       await worker.request('scene',{format:'descriptor-v8'},await frame(timeA,indexA));
+      if (canCheck) {
+        const index = command === 'still' ? indexA : first + Math.floor((last-first)/stride)*stride;
+        const {header} = await worker.request('check',{t:command === 'still' ? time : index/fps,frame:index,settings});
+        denoiserWeights = header.denoiserWeights ?? undefined;
+      } else if (settings.render || settings.display || settings.sampleSequence || settings.denoise === 'cleanAuxLarge') {
+        throw new Error('Update the native CLI to validate the requested render settings.');
+      }
+    }
+    if (command === 'validate') {
       emit({event:'validated',module:file,pixelSamples:settings.size[0]*settings.size[1]*settings.spp*(last-first+1)});
       return;
     }
@@ -230,7 +259,7 @@ async function main() {
     const directory = resolve(values['keep-frames'] ?? `${output}.frames`);
     await mkdir(directory,{recursive:true});
     release = await lock(directory);
-    const key = hashJson({version:1,build:worker.info.build,settings,fps,stride,first,last,early,assets:shot.assets,module:digest(await readFile(file))});
+    const key = hashJson({version:1,build:worker.info.build,settings,denoiserWeights,fps,stride,first,last,early,assets:shot.assets,module:digest(await readFile(file))});
     const manifest = resolve(directory,'node-manifest.json');
     try {
       if ((await readFile(manifest,'utf8')).trim() !== key) throw new Error('Render settings changed. Use a new frame directory.');

@@ -1,4 +1,5 @@
 use crate::error::{Error, Result, escape};
+use crate::render_settings::{RenderOptions, SampleSequence};
 use glam::{EulerRot, Quat};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -268,10 +269,12 @@ pub enum Seed {
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, serde::Serialize, clap::ValueEnum, PartialEq, Eq,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum Denoise {
     #[default]
     Oidn,
+    #[value(name = "cleanAuxLarge", alias = "clean-aux-large")]
+    CleanAuxLarge,
     None,
 }
 
@@ -296,12 +299,13 @@ impl From<Tracer> for mutracer_native::api::Backend {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tonemap {
     #[default]
     Agx,
     Aces,
+    Cineon,
     Linear,
     Reinhard,
     None,
@@ -311,8 +315,61 @@ pub enum Tonemap {
 #[serde(deny_unknown_fields)]
 pub struct Display {
     #[serde(default)]
+    #[serde(alias = "toneMapping")]
     pub tonemap: Tonemap,
     pub exposure: Option<Channel<f32>>,
+    #[serde(rename = "toneMappingExposure")]
+    pub tone_mapping_exposure: Option<Channel<f32>>,
+}
+
+impl Display {
+    pub fn check(&self, duration: f64, pointer: &str) -> Result<()> {
+        if self.exposure.is_some() && self.tone_mapping_exposure.is_some() {
+            return Err(Error::validation(
+                pointer,
+                "Two exposure fields were supplied",
+                "Use exposure in stops or toneMappingExposure as a linear multiplier.",
+            ));
+        }
+        for (field, channel) in [
+            ("exposure", &self.exposure),
+            ("toneMappingExposure", &self.tone_mapping_exposure),
+        ] {
+            if let Some(channel) = channel {
+                channel.check(
+                    &format!("{pointer}/{field}"),
+                    duration,
+                    "a finite exposure",
+                    |value| {
+                        if field == "exposure" {
+                            value.exp2().is_finite() && value.exp2() > 0.
+                        } else {
+                            value.is_finite() && value >= 0.
+                        }
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn at(&self, t: f64) -> mutracer_native::api::DisplaySettings {
+        use mutracer_native::api::{DisplaySettings, ToneMapping};
+        DisplaySettings {
+            tone_mapping: match self.tonemap {
+                Tonemap::Agx => ToneMapping::Agx,
+                Tonemap::Aces => ToneMapping::Aces,
+                Tonemap::Cineon => ToneMapping::Cineon,
+                Tonemap::Reinhard => ToneMapping::Reinhard,
+                Tonemap::Linear | Tonemap::None => ToneMapping::Linear,
+            },
+            tone_mapping_exposure: self
+                .tone_mapping_exposure
+                .as_ref()
+                .map_or_else(|| at(&self.exposure, 0., t).exp2(), |channel| channel.at(t)),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -331,6 +388,10 @@ pub struct Output {
     pub seed_value: u32,
     #[serde(default)]
     pub sample_sequence_offset: u32,
+    #[serde(default)]
+    pub sample_sequence: SampleSequence,
+    #[serde(default)]
+    pub render: RenderOptions,
     #[serde(default)]
     pub denoise: Denoise,
     #[serde(default)]
@@ -579,32 +640,8 @@ pub fn parse(bytes: &[u8]) -> Result<Shot> {
         reject_null(&value, "")?;
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let shot: Shot = serde_path_to_error::deserialize(&mut decoder).map_err(|error| {
-        use serde_path_to_error::Segment;
-        let mut pointer = String::new();
-        for segment in error.path() {
-            match segment {
-                Segment::Seq { index } => pointer.push_str(&format!("/{index}")),
-                Segment::Map { key } => pointer.push_str(&format!("/{}", escape(key))),
-                Segment::Enum { variant } => pointer.push_str(&format!("/{}", escape(variant))),
-                Segment::Unknown => {}
-            }
-        }
-        let message = error.inner().to_string();
-        if let Some(rest) = message.strip_prefix("unknown field `") {
-            if let Some((key, _)) = rest.split_once('`') {
-                let key = format!("/{}", escape(key));
-                if !pointer.ends_with(&key) {
-                    pointer.push_str(&key);
-                }
-            }
-        }
-        Error::validation(
-            pointer,
-            message,
-            "Check the field type and spelling with mutracer schema.",
-        )
-    })?;
+    let shot: Shot =
+        serde_path_to_error::deserialize(&mut decoder).map_err(|error| decode_error("", error))?;
     decoder
         .end()
         .map_err(|e| Error::validation("", e.to_string(), "Supply one JSON object."))?;
@@ -612,7 +649,37 @@ pub fn parse(bytes: &[u8]) -> Result<Shot> {
     Ok(shot)
 }
 
-fn reject_null(value: &serde_json::Value, pointer: &str) -> Result<()> {
+pub fn decode_error<E: std::fmt::Display>(
+    prefix: &str,
+    error: serde_path_to_error::Error<E>,
+) -> Error {
+    use serde_path_to_error::Segment;
+    let mut pointer = prefix.to_owned();
+    for segment in error.path() {
+        match segment {
+            Segment::Seq { index } => pointer.push_str(&format!("/{index}")),
+            Segment::Map { key } => pointer.push_str(&format!("/{}", escape(key))),
+            Segment::Enum { variant } => pointer.push_str(&format!("/{}", escape(variant))),
+            Segment::Unknown => {}
+        }
+    }
+    let message = error.inner().to_string();
+    if let Some(rest) = message.strip_prefix("unknown field `") {
+        if let Some((key, _)) = rest.split_once('`') {
+            let key = format!("/{}", escape(key));
+            if !pointer.ends_with(&key) {
+                pointer.push_str(&key);
+            }
+        }
+    }
+    Error::validation(
+        pointer,
+        message,
+        "Check the field type and spelling with mutracer schema.",
+    )
+}
+
+pub fn reject_null(value: &serde_json::Value, pointer: &str) -> Result<()> {
     use serde_json::Value;
     match value {
         Value::Null => {
@@ -692,7 +759,14 @@ impl Shot {
         let duration = self.output.duration;
         check_size(self.output.size)?;
         check_samples(self.output.spp, self.output.sample_sequence_offset)?;
-        frame_count(duration, self.output.fps)?;
+        let frames = frame_count(duration, self.output.fps)?;
+        self.output.sample_sequence.offset(
+            self.output.sample_sequence_offset,
+            self.output.spp,
+            frames - 1,
+            "/output/sampleSequenceOffset",
+        )?;
+        self.output.render.check("/output/render")?;
         let mut names = BTreeSet::new();
         if self.objects.is_empty() || self.objects.len() > 65_536 {
             return Err(bad("/objects", "Expected 1 to 65536 objects"));
@@ -737,31 +811,7 @@ impl Shot {
         let ior = |v: f32| v.is_finite() && v >= 1.;
         let fov = |v: f32| v > 0. && v < 180.;
         let color = |v: [f32; 3]| v.into_iter().all(nonnegative);
-        channel!(
-            &self.output.display.exposure,
-            "/output/display/exposure",
-            "a finite exposure",
-            f32::is_finite
-        );
-        channel!(
-            &self.environment.color,
-            "/environment/color",
-            "nonnegative RGB",
-            color
-        );
-        channel!(
-            &self.environment.intensity,
-            "/environment/intensity",
-            "nonnegative intensity",
-            nonnegative
-        );
-        channel!(
-            &self.environment.rotation,
-            "/environment/rotation",
-            "finite degrees",
-            f32::is_finite
-        );
-        target(&self.camera.target, "/camera/target")?;
+        self.output.display.check(duration, "/output/display")?;
         channel!(&self.camera.fov, "/camera/fov", "degrees in (0, 180)", fov);
         match (&self.camera.position, &self.camera.orbit) {
             (Some(p), None) => p.check("/camera/position", duration, "a finite point", finite)?,
@@ -1037,6 +1087,17 @@ mod tests {
         let a = Rotation::Quaternion([0., 0., 0., 1.]);
         let b = Rotation::Quaternion([0., 0., 0., -1.]);
         assert!(a.mix(b, 0.5).quaternion().abs_diff_eq(Quat::IDENTITY, 1e-6));
+    }
+
+    #[test]
+    fn display_accepts_zero_linear_exposure_and_rejects_duplicate_units() {
+        let black: Display =
+            serde_json::from_str(r#"{"toneMapping":"cineon","toneMappingExposure":0}"#).unwrap();
+        black.check(1., "/output/display").unwrap();
+        assert_eq!(black.at(0.).tone_mapping_exposure, 0.);
+        let duplicate: Display =
+            serde_json::from_str(r#"{"exposure":0,"toneMappingExposure":1}"#).unwrap();
+        assert!(duplicate.check(1., "/output/display").is_err());
     }
 
     #[test]

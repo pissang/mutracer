@@ -431,13 +431,44 @@
       ]
     },
     "target": {"oneOf": [{"$ref": "#/$defs/name"}, {"$ref": "#/$defs/pointChannel"}]},
+    "render": {
+      "type": "object",
+      "properties": {
+        "bounces": {"type": "integer", "minimum": 1, "maximum": 20, "default": 6},
+        "clamping": {"type": "number", "minimum": 0, "default": 0},
+        "samplingPattern": {"enum": ["sobol", "zsobol", "random"], "default": "sobol"},
+        "directLightCandidates": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4},
+        "dispersionWavelengths": {"enum": [1, 3], "default": 3},
+        "bevel": {"type": "boolean", "default": true},
+        "bevelSamples": {"type": "integer", "minimum": 1, "maximum": 32, "default": 8},
+        "alphaBlendStrategy": {"enum": ["stochastic", "deterministic-source-over"], "default": "stochastic"},
+        "transmissiveOutputAlphaMin": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
+        "caustics": {
+          "type": "object",
+          "properties": {
+            "lightTracing": {"type": "boolean", "default": false},
+            "photonMapping": {"type": "boolean", "default": false},
+            "lightPhotons": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 0},
+            "photonMapPhotons": {"type": "integer", "minimum": 0, "maximum": 262144, "default": 0},
+            "photonMapRadius": {"type": "number", "minimum": 0, "default": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "display": {
       "type": "object",
       "properties": {
-        "tonemap": {"enum": ["agx", "aces", "linear", "reinhard", "none"], "default": "agx"},
-        "exposure": {"$ref": "#/$defs/scalarChannel", "default": 0}
+        "tonemap": {"enum": ["agx", "aces", "cineon", "linear", "reinhard", "none"], "default": "agx"},
+        "toneMapping": {"enum": ["agx", "aces", "cineon", "linear", "reinhard"]},
+        "exposure": {"$ref": "#/$defs/scalarChannel", "default": 0},
+        "toneMappingExposure": {"$ref": "#/$defs/nonnegativeChannel", "default": 1}
       },
-      "required": [],
+      "allOf": [
+        {"not": {"required": ["tonemap", "toneMapping"]}},
+        {"not": {"required": ["exposure", "toneMappingExposure"]}}
+      ],
       "additionalProperties": false
     },
     "output": {
@@ -463,7 +494,9 @@
         "seed": {"enum": ["fixed", "frame"], "default": "fixed"},
         "seedValue": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 12345},
         "sampleSequenceOffset": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 0},
-        "denoise": {"enum": ["oidn", "none"], "default": "oidn"},
+        "sampleSequence": {"enum": ["fixed", "frame"], "default": "fixed"},
+        "denoise": {"enum": ["oidn", "cleanAuxLarge", "none"], "default": "oidn"},
+        "render": {"$ref": "#/$defs/render"},
         "tracer": {
           "enum": ["hardware", "software"],
           "default": "hardware",

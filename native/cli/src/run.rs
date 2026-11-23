@@ -3,6 +3,7 @@ use crate::{
     encode::{self, Rate},
     error::{Error, Result},
     lifetime, progress, quality,
+    render_settings::{self, RenderOptions, SampleSequence},
     scene::Prepared,
     shot::{self, Denoise, Seed, Shot, Tracer},
 };
@@ -48,7 +49,13 @@ pub struct Overrides {
     /// Use the shot seed for every frame (fixed) or add the frame index (frame). Defaults to the shot's seed mode.
     pub seed: Option<Seed>,
     #[arg(long, value_enum)]
-    /// Use OIDN or no denoising. Defaults to the shot setting or none for preview.
+    /// Select the same sample indices each frame or advance by one frame's spp.
+    pub sample_sequence: Option<SampleSequence>,
+    #[arg(long)]
+    /// Scattering depth from 1 to 20. Defaults to shot render settings or 6.
+    pub bounces: Option<u32>,
+    #[arg(long, value_enum)]
+    /// Use oidn, cleanAuxLarge or none. Defaults to the shot setting or none for preview.
     pub denoise: Option<Denoise>,
     #[arg(long, value_enum, default_value = "png")]
     /// Write display PNG or linear HDR EXR frames. Sequences also keep display PNGs.
@@ -104,7 +111,7 @@ pub struct Sequence {
     pub options: Overrides,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     pub size: [u32; 2],
     pub spp: u32,
@@ -113,6 +120,8 @@ pub struct Settings {
     pub seed: Seed,
     pub seed_value: u32,
     pub sample_sequence_offset: u32,
+    pub sample_sequence: SampleSequence,
+    pub render: RenderOptions,
     pub denoise: Denoise,
     pub format: Format,
     pub aovs: bool,
@@ -133,6 +142,8 @@ impl Settings {
         } else {
             (output.size, output.spp, output.denoise, 1)
         };
+        let mut render = output.render;
+        render.bounces = overrides.bounces.or(render.bounces);
         let this = Self {
             size: overrides.size.unwrap_or(defaults.0),
             spp: overrides.spp.unwrap_or(defaults.1),
@@ -141,18 +152,36 @@ impl Settings {
             seed: overrides.seed.unwrap_or(output.seed),
             seed_value: output.seed_value,
             sample_sequence_offset: output.sample_sequence_offset,
+            sample_sequence: overrides.sample_sequence.unwrap_or(output.sample_sequence),
+            render,
             denoise: overrides.denoise.unwrap_or(defaults.2),
             format: overrides.format,
             aovs: overrides.aovs,
             tracer: overrides.tracer.unwrap_or(output.tracer),
             gpu: overrides.gpu,
         };
-        this.validate(shot.output.duration)?;
+        this.validate(shot.output.duration, "/output")?;
+        this.offset(
+            shot::frame_count(shot.output.duration, this.fps)? - 1,
+            "/output",
+        )?;
         Ok(this)
     }
-    pub fn validate(self, duration: f64) -> Result<()> {
-        shot::check_size(self.size)?;
-        shot::check_samples(self.spp, self.sample_sequence_offset)?;
+    pub fn validate(self, duration: f64, pointer: &str) -> Result<()> {
+        let relocate = |mut error: Error| {
+            if let Some(path) = error
+                .pointer
+                .as_deref()
+                .and_then(|path| path.strip_prefix("/output"))
+            {
+                error.pointer = Some(format!("{pointer}{path}"));
+            }
+            error
+        };
+        shot::check_size(self.size).map_err(relocate)?;
+        shot::check_samples(self.spp, self.sample_sequence_offset).map_err(relocate)?;
+        self.render.check(&format!("{pointer}/render"))?;
+        render_settings::denoiser_library(self.denoise, &format!("{pointer}/denoise"))?;
         shot::frame_count(duration, self.fps)?;
         if self.aovs && self.format != Format::Exr {
             return Err(Error::validation(
@@ -162,6 +191,14 @@ impl Settings {
             ));
         }
         Ok(())
+    }
+    pub fn offset(self, frame: u32, pointer: &str) -> Result<u32> {
+        self.sample_sequence.offset(
+            self.sample_sequence_offset,
+            self.spp,
+            frame,
+            &format!("{pointer}/sampleSequenceOffset"),
+        )
     }
     pub fn seed(self, frame: u32) -> u32 {
         match self.seed {
@@ -249,11 +286,16 @@ impl Input {
         })
     }
 
-    fn manifest(&self, settings: Settings) -> serde_json::Value {
+    fn manifest(&self, settings: Settings) -> Result<serde_json::Value> {
         let mut manifest = self.scene_identity();
         manifest["version"] = json!(1);
         manifest["settings"] = json!(settings);
-        manifest
+        if let Some(weights) =
+            render_settings::denoiser_identity(settings.denoise, "/output/denoise")?
+        {
+            manifest["denoiserWeights"] = json!(weights);
+        }
+        Ok(manifest)
     }
 
     fn estimate(&self, settings: Settings, frames: u32) -> serde_json::Value {
@@ -288,6 +330,8 @@ pub fn validate(file: &Path) -> Result<()> {
             size: None,
             spp: None,
             seed: None,
+            sample_sequence: None,
+            bounces: None,
             denoise: None,
             format: Format::Png,
             aovs: false,
@@ -335,20 +379,23 @@ impl Renderer {
         let [width, height] = settings.size;
         let render = api::Render::new(
             &engine,
-            api::RenderSettings {
+            settings.render.apply(api::RenderSettings {
                 size: api::RenderSize::Fixed { width, height },
                 max_samples: settings.spp,
-                bounces: 6,
                 aovs: if settings.aovs { quality::AOV_MASK } else { 0 },
                 seed: settings.seed_value,
                 ..Default::default()
-            },
+            }),
         )
         .map_err(|e| Error::gpu(e.to_string()))?;
-        if settings.denoise == Denoise::Oidn {
+        if settings.denoise != Denoise::None {
             render
                 .set_denoiser(Some(api::DenoiserOptions {
                     backend: api::DENOISE_OIDN_WEBGPU,
+                    library: render_settings::denoiser_library(
+                        settings.denoise,
+                        "/output/denoise",
+                    )?,
                     ..Default::default()
                 }))
                 .map_err(|e| Error::gpu(e.to_string()))?;
@@ -367,7 +414,18 @@ impl Renderer {
         frame: u32,
         t: f64,
     ) -> Result<Vec<u8>> {
-        let (camera, display) = input.prepared.evaluate(&input.shot, t, settings.size)?;
+        self.shot_frame_with_display(input, settings, frame, t, None)
+    }
+
+    pub fn shot_frame_with_display(
+        &mut self,
+        input: &mut Input,
+        settings: Settings,
+        frame: u32,
+        t: f64,
+        display: Option<api::DisplaySettings>,
+    ) -> Result<Vec<u8>> {
+        let (camera, shot_display) = input.prepared.evaluate(&input.shot, t, settings.size)?;
         self.engine
             .set_scene_object(&input.prepared.scene)
             .map_err(|e| Error::gpu(e.to_string()))?;
@@ -379,7 +437,7 @@ impl Renderer {
         }
         self.engine
             .display()
-            .set_settings(display)
+            .set_settings(display.unwrap_or(shot_display))
             .map_err(|e| Error::gpu(e.to_string()))?;
         self.engine
             .update()
@@ -400,11 +458,11 @@ impl Renderer {
                 .map_err(|e| Error::gpu(e.to_string()))?;
         }
         let mut converge = api::ConvergeOptions::new(settings.spp);
-        converge.sample_sequence_offset = settings.sample_sequence_offset;
+        converge.sample_sequence_offset = settings.offset(frame, "/output")?;
         self.render
             .converge(converge)
             .map_err(|e| Error::gpu(e.to_string()))?;
-        if settings.denoise == Denoise::Oidn {
+        if settings.denoise != Denoise::None {
             match self.render.denoise_report() {
                 Some(report) if report.samples == settings.spp && report.error.is_none() => {}
                 Some(report) => {
@@ -612,7 +670,7 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     let directory = cache_dir(&args);
     let indices: Vec<u32> = (first..=last).step_by(settings.stride as usize).collect();
     let files: Vec<_> = indices.iter().map(|&i| frame_path(&directory, i)).collect();
-    let manifest = input.manifest(settings);
+    let manifest = input.manifest(settings)?;
 
     if worker {
         // A replaced supervisor can start before the previous worker has
@@ -807,6 +865,8 @@ mod tests {
             size: None,
             spp: None,
             seed: None,
+            sample_sequence: None,
+            bounces: None,
             denoise: None,
             format: Format::Png,
             aovs: false,

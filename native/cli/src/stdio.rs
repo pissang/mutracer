@@ -1,6 +1,7 @@
 use crate::{
     error::{Error, Result},
     lifetime,
+    render_settings::{self, RenderOptions, SampleSequence},
     run::{Format, Input, Renderer, Settings},
     shot::{self, Denoise, Seed, Tracer},
 };
@@ -47,6 +48,9 @@ struct Overrides {
     seed: Option<Seed>,
     seed_value: Option<u32>,
     sample_sequence_offset: Option<u32>,
+    sample_sequence: Option<SampleSequence>,
+    render: Option<RenderOptions>,
+    display: Option<shot::Display>,
     format: Option<Format>,
     tracer: Option<Tracer>,
 }
@@ -92,7 +96,13 @@ enum Request {
         id: u32,
         frame: u32,
         t: Option<f64>,
-        settings: Option<Overrides>,
+        settings: Option<Value>,
+    },
+    Check {
+        id: u32,
+        frame: u32,
+        t: Option<f64>,
+        settings: Option<Value>,
     },
 }
 
@@ -184,7 +194,7 @@ fn editable(pointer: &str) -> bool {
     match parts.as_slice() {
         ["", "camera", "fov" | "target" | "position"]
         | ["", "camera", "orbit", "azimuth" | "elevation" | "distance"]
-        | ["", "output", "display", "exposure"]
+        | ["", "output", "display", "exposure" | "toneMappingExposure"]
         | ["", "environment", "color" | "intensity" | "rotation"] => true,
         ["", "objects", n, "position" | "rotation" | "scale"]
         | ["", "objects", n, "animation", "time"]
@@ -236,6 +246,7 @@ impl Session {
         if !self.hello && !matches!(request, Request::Hello { .. }) {
             return Err(invalid("/type", "Send hello first"));
         }
+        let check_only = matches!(request, Request::Check { .. });
         match request {
             Request::Hello { id, protocol } => {
                 if protocol != 1 || self.hello {
@@ -248,7 +259,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -436,6 +447,12 @@ impl Session {
                 frame,
                 t,
                 settings,
+            }
+            | Request::Check {
+                id,
+                frame,
+                t,
+                settings,
             } => {
                 let tick = Instant::now();
                 let scene = self
@@ -443,7 +460,14 @@ impl Session {
                     .as_mut()
                     .ok_or_else(|| invalid("/type", "Submit a scene before rendering"))?;
                 let explicit_settings = settings.is_some();
-                let overrides = settings.unwrap_or_default();
+                let overrides: Overrides = match settings {
+                    Some(settings) => {
+                        shot::reject_null(&settings, "/settings")?;
+                        serde_path_to_error::deserialize(settings)
+                            .map_err(|e| shot::decode_error("/settings", e))?
+                    }
+                    None => Overrides::default(),
+                };
                 let defaults = if let Scene::Shot { input, .. } = scene {
                     Some(&input.shot.output)
                 } else {
@@ -479,6 +503,12 @@ impl Session {
                     sample_sequence_offset: overrides
                         .sample_sequence_offset
                         .unwrap_or_else(|| defaults.map_or(0, |o| o.sample_sequence_offset)),
+                    sample_sequence: overrides.sample_sequence.unwrap_or_else(|| {
+                        defaults.map_or(SampleSequence::Fixed, |o| o.sample_sequence)
+                    }),
+                    render: overrides.render.unwrap_or_else(|| {
+                        defaults.map_or_else(RenderOptions::default, |o| o.render)
+                    }),
                     format: overrides.format.unwrap_or(Format::Png),
                     aovs: false,
                     tracer: overrides
@@ -488,12 +518,33 @@ impl Session {
                     stride: 1,
                     gpu: None,
                 };
-                settings.validate(defaults.map_or(1., |o| o.duration))?;
+                settings.validate(defaults.map_or(1., |o| o.duration), "/settings")?;
+                settings.offset(frame, "/settings")?;
+                let display = overrides
+                    .display
+                    .map(|display| {
+                        display.check(
+                            defaults.map_or(f64::MAX, |o| o.duration),
+                            "/settings/display",
+                        )?;
+                        Ok(display.at(t))
+                    })
+                    .transpose()?;
+                if check_only {
+                    let weights =
+                        render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;
+                    return reply(
+                        writer,
+                        json!({"type":"ok","id":id,"denoiserWeights":weights}),
+                        None,
+                    );
+                }
                 if self.renderer.as_ref().is_none_or(|(old, _)| {
                     old.size != settings.size
                         || old.spp != settings.spp
                         || old.denoise != settings.denoise
                         || old.tracer != settings.tracer
+                        || old.render != settings.render
                 }) {
                     self.renderer = Some((settings, Renderer::new(settings)?));
                 }
@@ -504,11 +555,18 @@ impl Session {
                     None,
                 )?;
                 let image = match scene {
-                    Scene::Shot { input, .. } => renderer.shot_frame(input, settings, frame, t)?,
+                    Scene::Shot { input, .. } => {
+                        renderer.shot_frame_with_display(input, settings, frame, t, display)?
+                    }
                     Scene::Descriptor(bytes) => {
                         renderer
                             .engine
                             .set_scene_shared(bytes.clone())
+                            .map_err(|e| Error::gpu(e.to_string()))?;
+                        renderer
+                            .engine
+                            .display()
+                            .set_settings(display.unwrap_or_default())
                             .map_err(|e| Error::gpu(e.to_string()))?;
                         renderer
                             .engine

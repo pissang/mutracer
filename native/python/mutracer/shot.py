@@ -179,6 +179,8 @@ class Output:
     denoise: str | None = None
     tracer: str | None = None
     display: dict | None = None
+    render: dict | None = None
+    sample_sequence: str | None = None
 
 
 def _json_value(value, directory: Path):
@@ -212,6 +214,7 @@ class Shot:
         del raw["_path"]
         raw["output"]["seedValue"] = raw["output"].pop("seed_value")
         raw["output"]["sampleSequenceOffset"] = raw["output"].pop("sample_sequence_offset")
+        raw["output"]["sampleSequence"] = raw["output"].pop("sample_sequence")
         raw["camera"]["orbit"] = raw["camera"].pop("orbit_parameters")
         return {"version": 1, **_json_value(raw, Path(directory).resolve())}
 

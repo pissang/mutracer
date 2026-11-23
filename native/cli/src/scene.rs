@@ -585,30 +585,13 @@ impl Prepared {
             Vec3::from_array(cam.position.as_ref().unwrap().at(t))
         };
         let matrix = look_at(eye, target, "/camera")?;
-        let exposure = at(&shot.output.display.exposure, 0., t).exp2();
-        if !exposure.is_finite() || exposure <= 0. {
-            return Err(Error::validation(
-                "/output/display/exposure",
-                "Exposure multiplier is outside the finite range",
-                "Use fewer stops of exposure compensation.",
-            ));
-        }
         Ok((
             api::Camera {
                 fov,
                 world_matrix: matrix.to_cols_array(),
                 ..Default::default()
             },
-            api::DisplaySettings {
-                tone_mapping: match shot.output.display.tonemap {
-                    shot::Tonemap::Agx => api::ToneMapping::Agx,
-                    shot::Tonemap::Aces => api::ToneMapping::Aces,
-                    shot::Tonemap::Reinhard => api::ToneMapping::Reinhard,
-                    shot::Tonemap::Linear | shot::Tonemap::None => api::ToneMapping::Linear,
-                },
-                tone_mapping_exposure: exposure,
-                ..Default::default()
-            },
+            shot.output.display.at(t),
         ))
     }
 }

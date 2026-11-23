@@ -4,6 +4,7 @@ mod error;
 mod lifetime;
 mod materialx;
 mod quality;
+mod render_settings;
 mod run;
 mod scene;
 mod shot;
