@@ -25,7 +25,7 @@ import randWgsl from './chunks/rand.wgsl.js';
 import { createSampleMaterialWgsl } from './chunks/sampleMaterial.wgsl.js';
 import {createSampleLightWgsl} from './chunks/sampleLight.wgsl.js';
 import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
-import samplingWgsl from './chunks/sampling.wgsl.js';
+import samplingWgsl, {cameraJitterWgsl, haltonWgsl} from './chunks/sampling.wgsl.js';
 import {spectrumWgsl} from '../spectrum.js';
 import {createQueryPointsWgsl, pendingSceneQueryRef} from './chunks/queryPoints.wgsl.js';
 import {createSampleShadowCatcherWgsl, SHADOW_CATCHER_LIGHT_SAMPLES} from './chunks/sampleShadowCatcher.wgsl.js';
@@ -44,6 +44,8 @@ export interface RayTraceInputHooks {
 }
 
 export interface RayTraceShaderOptions {
+  /** Generate Random camera jitter from the GPU sample index. Default false uses the trace uniform. */
+  sampleIndexedRandomJitter?: boolean;
   materialHooks?: MaterialShaderHooks;
   /** Internal host budget. Default 20 preserves the native AOT contract. */
   maxPathEvents?: number;
@@ -98,6 +100,7 @@ export interface RayTraceShaderOptions {
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
+  const indexedJitter = !!options.sampleIndexedRandomJitter && !inputHooks?.uniformJitter;
   const materialHooks = options.materialHooks ?? {};
   const sharedGraph = materialHooks.graph?.precomputed !== undefined;
   const maxPathEvents = options.maxPathEvents ?? MAX_PATH_EVENTS_WEBGL;
@@ -231,7 +234,7 @@ ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
 
-${samplingWgsl}
+${samplingWgsl}${indexedJitter ? haltonWgsl : ''}
 ${spectrumWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks)}
 ${createSampleLightWgsl(options.emissiveInstanceIndices, !!materialHooks.graph?.emission, materialHooks.graph?.precomputed !== undefined)}${inputHooks?.declarations ?? ''}
@@ -1187,9 +1190,7 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   samplingPixel = coord;
   pixelSampleIndex = u32(outNormal[idx].a) + rtUniform.sampleSequenceOffset;
   samplingBounce = 0u; hashedCounter = 0u;
-  if (${inputHooks?.uniformJitter ? 'false' : 'SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1'}) {
-    jitter = (sample2D(CAMERA_PIXEL) - 0.5) / outputSize;
-  }
+${cameraJitterWgsl('outputSize', indexedJitter, !!inputHooks?.uniformJitter)}
   rng_initialize(coord, i32(pixelSampleIndex ^ sampleHash(rtUniform.sequenceSeed)));
   var cam = initCameraRay(uv + jitter);
 

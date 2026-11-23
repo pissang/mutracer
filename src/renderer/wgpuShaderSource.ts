@@ -7,6 +7,8 @@ import type {MaterialShaderHooks} from './wgsl/materialShaderHooks.js';
 import {WGPU_RUNTIME_VERTEX_CONSTANTS, runtimeVertexLayoutSource} from './wgpuVertexLayout.js';
 
 export interface WGPUShaderFeatures {
+  /** Generate Random camera jitter from the GPU sample index. Default false uses the trace uniform. */
+  sampleIndexedRandomJitter?: boolean;
   materialHooks?: MaterialShaderHooks;
   /** Native wgpu binding arrays. Default false. */
   independentTextures?: boolean;

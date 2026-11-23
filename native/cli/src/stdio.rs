@@ -558,13 +558,6 @@ impl Session {
                         }
                     }
                 }
-                if let Some(warning) = settings.render.sampling_warning() {
-                    let warning = warnings::random_sampling(warning);
-                    if seen_warnings.insert(warning.clone()) {
-                        reply_warning(writer, id, frame, settings.spp, &warning)?;
-                        request_warnings.push(warning);
-                    }
-                }
                 if check_only {
                     let weights =
                         render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;

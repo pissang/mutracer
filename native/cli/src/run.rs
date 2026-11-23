@@ -324,13 +324,6 @@ impl Input {
     }
 }
 
-fn warn_sampling(settings: Settings) {
-    if let Some(message) = settings.render.sampling_warning() {
-        eprintln!("Warning /output/render/samplingPattern: {message}");
-        warnings::emit_file([warnings::random_sampling(message)], &mut HashSet::new());
-    }
-}
-
 pub fn validate(file: &Path) -> Result<()> {
     let input = Input::load(file)?;
     let settings = Settings::resolve(
@@ -350,7 +343,6 @@ pub fn validate(file: &Path) -> Result<()> {
         None,
         false,
     )?;
-    warn_sampling(settings);
     if warnings::caustics_enabled(settings.render) {
         let targets = input.prepared.material_graph_targets(&input.shot);
         warnings::emit_file(
@@ -548,7 +540,6 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
             "Match the file extension to --format.",
         ));
     }
-    warn_sampling(settings);
     let graph_targets = input.prepared.material_graph_targets(&input.shot);
     let mut seen_warnings = HashSet::new();
     if warnings::caustics_enabled(settings.render) {
@@ -723,9 +714,6 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
             warnings::predicted_caustic_graph_warnings(&graph_targets),
             &mut seen_warnings,
         );
-    }
-    if !worker {
-        warn_sampling(settings);
     }
 
     if worker {

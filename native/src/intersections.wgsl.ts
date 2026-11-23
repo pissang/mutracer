@@ -1,4 +1,5 @@
 import {GROUP, HWRT_BINDING} from './layout.js';
+import {cameraJitterWgsl} from '../../src/renderer/wgsl/chunks/sampling.wgsl.js';
 import {createSceneHitQueryWgsl} from '../../src/renderer/wgsl/chunks/intersect.wgsl.js';
 import type {WGPUShaderFeatures} from '../../src/renderer/wgpuShaderSource.js';
 
@@ -167,7 +168,7 @@ fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
   let uv = (vec2f(coord) + vec2f(0.5)) / size;
   samplingPixel = coord; pixelSampleIndex = 0u; samplingBounce = 0u; hashedCounter = 0u;
   var jitter = rtUniform.jitter;
-  if (SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1) { jitter = (sample2D(CAMERA_PIXEL) - 0.5) / size; }
+${cameraJitterWgsl('size', !!features.sampleIndexedRandomJitter)}
   rng_initialize(coord, i32(sampleHash(rtUniform.sequenceSeed)));
   var ray = initCameraRay(uv + jitter);
   if (cameraUniform.apertureRadius > 0.0) {

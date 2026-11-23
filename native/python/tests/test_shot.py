@@ -5,7 +5,7 @@ import struct
 from tempfile import TemporaryDirectory
 import unittest
 
-from mutracer import Camera, Instances, Keys, Mesh, Output, RenderError, Shot
+from mutracer import Camera, Instances, Keys, Mesh, Output, RenderError, Session, Shot
 
 
 def shot(mesh):
@@ -24,6 +24,16 @@ class ShotTests(unittest.TestCase):
                 scene.render(base / "result.mp4", frames=2, max_minutes=2e-11, progress=events.append)
             self.assertEqual(error.exception.returncode, 4)
             self.assertEqual(events[0]["cost"]["frames"], 1)
+
+    @unittest.skipUnless(os.environ.get("MUTRACER_BIN"), "requires the native CLI")
+    def test_random_sampling_check_has_no_warning(self):
+        with Session() as session:
+            session.scene(shot(Mesh("tri", shape="box")).to_dict())
+            progress = []
+            reply = session.check(0, 0, settings={"render": {"samplingPattern": "random"}},
+                                  progress=progress.append)
+            self.assertEqual(reply["warnings"], [])
+            self.assertFalse(any("warning" in event for event in progress))
 
     def test_keys_bake_and_json(self):
         keys = Keys.bake(0.1, 24, lambda time: [time, 0, 0])

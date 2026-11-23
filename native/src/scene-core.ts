@@ -113,7 +113,7 @@ interface SceneShader {
 /** Trace-uniform fields owned by one target: size, sampling and per-render quality. */
 function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views'],
   configuration: ReturnType<typeof defaultSceneConfiguration>, width: number, height: number, qualityFlags: number) {
-  views.outputSize.set([width, height]); views.scaleOffset.set([1, 1, 0, 0]); views.jitter.set([.5, .5]);
+  views.outputSize.set([width, height]); views.scaleOffset.set([1, 1, 0, 0]); views.jitter.set([0, 0]);
   writeTraceSampling(views, configuration.sampling);
   views.clamping[0] = configuration.clamping; views.transmissiveOutputAlphaMin[0] = configuration.transmissiveAlphaMin;
   views.sampleSequenceOffset[0] = configuration.sequenceOffset;
@@ -125,12 +125,10 @@ function productionShader(id: number, shader: SceneShader): Uint8Array {
   const {constants, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
   const features = nativeGraphFeatures(shader.features, shader.graphs);
   const plan=shader.graphs;
-  return nativeShaderVariant(id, constants, features, variantFlags, () => {
-    const source=id===RESOURCE.HWRT_SHADER
-      ? 'enable wgpu_ray_query;\n'+wgpuShaderSource(constants,features,true,nativeIntersections(features,isEmpty,false,false,hardware,opaqueClosest))
-      : wgpuShaderSource(constants,features,true);
-    return source;
-  },plan?.key??'');
+  return nativeShaderVariant(id, constants, features, variantFlags, () => id === RESOURCE.HWRT_SHADER
+    ? 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+        nativeIntersections(features, isEmpty, false, false, hardware, opaqueClosest))
+    : wgpuShaderSource(constants, features, true), plan?.key ?? '');
 }
 function nativeGraphFeatures(features: Parameters<typeof wgpuShaderSource>[1], plan: NativeGraphPlan | undefined): Parameters<typeof wgpuShaderSource>[1] {
   const caustics=!!features.lightTracing||!!features.photonMapping;
@@ -683,7 +681,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(Math.max(stacks.tlas, 32), stacks.blas), ...attributeLayout.constants,
     ...nativeMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
-  const features: Parameters<typeof wgpuShaderSource>[1] = {independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
+  const features: Parameters<typeof wgpuShaderSource>[1] = {sampleIndexedRandomJitter: true, independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     // Match the browser spectral reservoir even for one-wavelength previews.
     // Only three-wavelength targets replay RGB prefixes; the source feature is
     // part of nativeShaderVariant's key and the host caches the resulting WGSL.

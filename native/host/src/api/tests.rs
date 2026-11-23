@@ -1890,6 +1890,88 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
 }
 
 #[test]
+#[ignore = "requires a real GPU"]
+fn random_sampling_matches_sobol_mean_on_diffuse_area_lighting() {
+    use crate::scene_api::{Geometry, Light, Mesh, OpenPbrMaterial, Scene};
+    use glam::{Mat4, Vec3};
+    use std::sync::Arc;
+
+    let mut scene = Scene::new();
+    let mut geometry = Geometry::new(
+        vec![-3., 0., -3., -3., 0., 3., 3., 0., 3., 3., 0., -3.],
+        vec![0, 1, 2, 0, 2, 3],
+    );
+    geometry.normals = Arc::from([0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.]);
+    geometry.uv[0] = Arc::from([0., 0., 0., 1., 1., 1., 1., 0.]);
+    let geometry = scene.add_geometry(geometry).unwrap();
+    let mut material = OpenPbrMaterial::default();
+    material.values.color = [0.7; 3];
+    material.values.layers.specular_weight = 0.;
+    let material = scene.add_material(material).unwrap();
+    scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+    let light_transform =
+        Mat4::look_at_rh(Vec3::new(0., 2., 0.), Vec3::new(0., 0., 0.1), Vec3::Z).inverse();
+    scene
+        .add_light(Light::Rect {
+            color: [1., 0.83, 0.63],
+            intensity: 6.,
+            width: 1.8,
+            height: 1.3,
+            spread: 1.,
+            transform: light_transform,
+            texture: None,
+        })
+        .unwrap();
+    let mut camera = Camera::default();
+    camera.fov = 35.;
+    camera.world_matrix = Mat4::look_at_rh(Vec3::new(2., 2., 3.), Vec3::ZERO, Vec3::Y)
+        .inverse()
+        .to_cols_array();
+    scene.set_default_camera(Some(camera));
+
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let mut means = Vec::new();
+    for pattern in [SamplingPattern::Sobol, SamplingPattern::Random] {
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 256,
+                bounces: 6,
+                direct_light_candidates: 2,
+                sampling_pattern: pattern,
+                seed: 12345,
+                size: RenderSize::Fixed {
+                    width: 64,
+                    height: 48,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(256)).unwrap();
+        let image = render.read_pixels(PixelKind::Hdr).unwrap();
+        let mut sum = 0.;
+        let mut count = 0;
+        for pixel in image.data.chunks_exact(4) {
+            sum += (pixel[0] + pixel[1] + pixel[2]) as f64 / 3.;
+            count += 1;
+        }
+        means.push(sum / count as f64);
+    }
+    assert!(
+        (means[0] - means[1]).abs() < 0.01,
+        "random mean {} diverged from sobol mean {}",
+        means[1],
+        means[0]
+    );
+}
+
+#[test]
 fn sample_cap_changes_images_only_for_zsobol() {
     let _test = crate::abi_test_lock();
     if software_engine(Backend::Software).is_none() {
