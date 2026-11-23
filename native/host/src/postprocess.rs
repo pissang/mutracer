@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
 pub(crate) struct Sources {
+    pub temporal: std::collections::BTreeMap<String, String>,
     pub bloom: String,
     pub auxiliary: String,
     pub normalize: String,

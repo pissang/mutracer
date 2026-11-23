@@ -1,0 +1,271 @@
+use serde::{Deserialize, Serialize};
+
+/// Neighbors in each direction. Offline defaults to adaptive 8 through 16.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum HistoryRadius {
+    Fixed(u32),
+    Adaptive { min: u32, max: u32 },
+}
+
+impl Default for HistoryRadius {
+    fn default() -> Self {
+        Self::Adaptive { min: 8, max: 16 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryInvalidation {
+    #[default]
+    Auto,
+    Manual,
+}
+
+/// Offline history and stabilization options.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct TemporalOptions {
+    /// Window size in each direction, from 0 through 32.
+    pub history_radius: HistoryRadius,
+    /// Display stabilization radius, from 0 through 3. Default 3.
+    pub post_radius: u32,
+    /// Suppress isolated impulses. Default true, requires post stabilization.
+    pub stabilize_sparkle: bool,
+    /// Default Auto. Manual uses explicit cuts and frame gaps only.
+    pub history_invalidation: HistoryInvalidation,
+    /// Maximum temporal GPU bytes. Default None selects the full plan.
+    pub memory_budget: Option<u64>,
+}
+impl Default for TemporalOptions {
+    fn default() -> Self {
+        Self {
+            history_radius: Default::default(),
+            post_radius: 3,
+            stabilize_sparkle: true,
+            history_invalidation: HistoryInvalidation::Auto,
+            memory_budget: None,
+        }
+    }
+}
+/// Effective history, post radius, and temporal memory estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TemporalPlan {
+    pub min: u32,
+    pub max: u32,
+    pub post_radius: u32,
+    pub bytes: u64,
+}
+impl TemporalPlan {
+    /// Number of future inputs required before an output is ready.
+    pub fn latency(self) -> u32 {
+        self.max + self.post_radius
+    }
+    pub(super) fn slots(self) -> u32 {
+        (2 * self.max).max(self.max + 2 * self.post_radius) + 1
+    }
+    pub(super) fn post_slots(self) -> u32 {
+        if self.post_radius == 0 {
+            0
+        } else {
+            2 * self.post_radius + 1
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) enum SpatialCost {
+    Oidn,
+    None,
+    Custom,
+}
+impl TemporalOptions {
+    /// Returns an error for out-of-range radii or incompatible sparkle settings.
+    pub fn validate(self) -> std::result::Result<(), String> {
+        let (min, max) = self.range();
+        if min > max || max > 32 {
+            return Err("historyRadius requires 0 <= min <= max <= 32".into());
+        }
+        if self.post_radius > 3 || self.post_radius == 0 && self.stabilize_sparkle {
+            return Err(
+                "postRadius must be 0 through 3; set stabilizeSparkle to false for radius 0".into(),
+            );
+        }
+        if self
+            .memory_budget
+            .is_some_and(|n| n > 9_007_199_254_740_991)
+        {
+            return Err("memoryBudget must be a non-negative safe integer".into());
+        }
+        Ok(())
+    }
+    fn range(self) -> (u32, u32) {
+        match self.history_radius {
+            HistoryRadius::Fixed(n) => (n, n),
+            HistoryRadius::Adaptive { min, max } => (min, max),
+        }
+    }
+    pub(super) fn plans(
+        self,
+        size: [u32; 2],
+        materials: usize,
+        spatial: SpatialCost,
+        limits: &wgpu::Limits,
+    ) -> crate::Result<Vec<TemporalPlan>> {
+        self.validate()?;
+        let [w, h] = size.map(u64::from);
+        if w == 0 || h == 0 || size.into_iter().max().unwrap() > limits.max_texture_dimension_2d {
+            return Err("Invalid temporal dimensions".into());
+        }
+        let (mut min, mut max) = self.range();
+        let post = self.post_radius;
+        let mut tiers = vec![(min, max, post)];
+        for n in [8, 4, 2] {
+            if max > n {
+                max = n;
+                min = min.min(n);
+                tiers.push((min, max, post));
+            }
+        }
+        for p in [2, 1] {
+            if post > p {
+                tiers.push((min, max, p));
+            }
+        }
+        if max > 1 || post > 0 {
+            tiers.push((max.min(1), max.min(1), 0));
+        }
+        let mut out = Vec::new();
+        for (min, max, post_radius) in tiers {
+            let mut plan = TemporalPlan {
+                min,
+                max,
+                post_radius,
+                bytes: 0,
+            };
+            let history = u64::from(plan.slots());
+            let post = u64::from(plan.post_slots());
+            let guides = u64::from(max + 1);
+            let px = w * h;
+            let layer = |scale| w.div_ceil(scale) * h.div_ceil(scale) * 8;
+            let pyramid = layer(2) + layer(4) + layer(8);
+            let grid = 4 * layer(6) + 2 * layer(12) + 2 * layer(24);
+            let revisions = (materials as u64 * 8).max(8);
+            let changed = post * ((materials as u64 + 1) * 4).max(8);
+            let overflow = history * 4096 * 32;
+            let max_buffer = limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size as u64);
+            if history * 2 > limits.max_texture_array_layers as u64
+                || [px * 16, overflow, history * 80, revisions, changed]
+                    .into_iter()
+                    .any(|bytes| bytes > max_buffer)
+            {
+                continue;
+            }
+            let frames = 4
+                * px
+                * if matches!(spatial, SpatialCost::Oidn) {
+                    96
+                } else {
+                    80
+                };
+            plan.bytes = history * (px * 56 + 80)
+                + overflow
+                + guides * px * 16
+                + 32
+                + px * 32
+                + 112
+                + post * (px * 16 + pyramid)
+                + if post > 0 { px * 76 + grid + 120 } else { 0 }
+                + px.div_ceil(64) * 4
+                + 16
+                + if self.stabilize_sparkle && post > 0 {
+                    32
+                } else {
+                    0
+                }
+                + frames
+                + px * (u64::from(post_radius) * 64 + 32)
+                + revisions
+                + changed
+                + if matches!(spatial, SpatialCost::Custom) {
+                    guides * px * 32
+                } else {
+                    0
+                };
+            if self.memory_budget.is_none_or(|b| plan.bytes <= b) {
+                out.push(plan);
+            }
+        }
+        if out.is_empty() {
+            return Err("Temporal budget or device limits cannot fit the minimum plan".into());
+        }
+        Ok(out)
+    }
+    /// Estimates the first offline OIDN plan that fits the supplied device limits and budget.
+    pub fn plan(
+        self,
+        size: [u32; 2],
+        materials: usize,
+        limits: &wgpu::Limits,
+    ) -> crate::Result<TemporalPlan> {
+        Ok(self.plans(size, materials, SpatialCost::Oidn, limits)?[0])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shared_memory_contract() {
+        let f: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/temporal-offline.json"
+        ))
+        .unwrap();
+        for c in f["memory"].as_array().unwrap() {
+            let mut raw = c["input"].clone();
+            let cost = if raw.as_object_mut().unwrap().remove("denoiser").is_some() {
+                SpatialCost::None
+            } else {
+                SpatialCost::Oidn
+            };
+            let options: TemporalOptions = serde_json::from_value(raw).unwrap();
+            let limits = wgpu::Limits {
+                max_texture_dimension_2d: 16384,
+                max_texture_array_layers: c["overrides"]["maxTextureArrayLayers"]
+                    .as_u64()
+                    .unwrap_or(256) as u32,
+                max_storage_buffer_binding_size: 134217728,
+                max_buffer_size: 268435456,
+                ..Default::default()
+            };
+            let plan = options
+                .plans(
+                    [
+                        c["width"].as_u64().unwrap() as u32,
+                        c["height"].as_u64().unwrap() as u32,
+                    ],
+                    c["materials"].as_u64().unwrap() as usize,
+                    cost,
+                    &limits,
+                )
+                .unwrap()[0];
+            let e = &c["expected"];
+            assert_eq!(plan.bytes, e["bytes"].as_u64().unwrap());
+            assert_eq!(
+                (plan.min, plan.max, plan.post_radius),
+                (
+                    e["historyRadius"]["min"].as_u64().unwrap() as u32,
+                    e["historyRadius"]["max"].as_u64().unwrap() as u32,
+                    e["postRadius"].as_u64().unwrap() as u32
+                )
+            );
+        }
+        for c in f["invalid"].as_array().unwrap() {
+            assert!(
+                serde_json::from_value::<TemporalOptions>(c.clone())
+                    .map_or(true, |o| o.validate().is_err())
+            );
+        }
+    }
+}

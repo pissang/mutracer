@@ -495,6 +495,9 @@ impl Output {
         self.render(query, 1, self.mask)
     }
     pub(crate) fn snapshot(&self, mask: u32) -> Result<Vec<api::GpuAov>> {
+        self.ordered_snapshot(mask,false)
+    }
+    pub(crate) fn ordered_snapshot(&self, mask:u32,top_first:bool)->Result<Vec<api::GpuAov>> {
         let device = &self.gpu.device;
         let pipeline = self.resolve.get_or_init(|| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -524,7 +527,7 @@ impl Output {
                 mapped_at_creation: false,
             });
             let bytes: Vec<_> =
-                bytemuck::cast_slice(&[self.size[0], self.size[1], self.samples, index]).to_vec();
+                bytemuck::cast_slice(&[self.size[0], self.size[1], self.samples, index | (u32::from(top_first)<<8)]).to_vec();
             let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: &bytes,

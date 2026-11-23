@@ -3237,6 +3237,31 @@ impl Render {
             }
         })
     }
+    pub(super) fn offline_capture(&self,engine:&Engine)->crate::Result<super::offline::Capture>{
+        if !Arc::ptr_eq(&engine.inner,&self.engine.inner) || !self.converged(){return Err("Temporal push needs a converged render on the same engine".into());}
+        Ok(self.with(|state,id|{
+            use super::offline::TemporalDenoiser;
+            let r=state.renders.get_mut(&id).unwrap();
+            if r.settings.aovs & TemporalDenoiser::AOVS != TemporalDenoiser::AOVS || r.settings.aov_resolution==AovResolution::Display {
+                return Err(error(Status::InvalidArgument,"Enable TemporalDenoiser::AOVS at render resolution before convergence"));
+            }
+            update_aovs(r)?;
+            let aov=r.aov.as_ref().ok_or_else(||error(Status::InvalidState,"Missing temporal surface outputs"))?;
+            let shots=context_result(aov.ordered_snapshot(TemporalDenoiser::AOVS,true))?;
+            let get=|kind| shots.iter().find(|a|a.kind==kind).unwrap().buffer.clone();
+            let (raw,size,_)=context_result(context::denoise_buffers(r.context))?;
+            let [color,albedo,normal]=raw;
+            let packed=context_result(crate::scene::prepare_camera(&r.aov_camera,size[0],size[1]))?;
+            let layout:Vec<f32>=bytemuck::pod_collect_to_vec(&packed);
+            let vp=glam::Mat4::from_cols_slice(&layout[..16]).inverse();
+            let proj=vp*glam::Mat4::from_cols_slice(&layout[16..32]);
+            let mut camera=[0.;20];camera[..16].copy_from_slice(&vp.to_cols_array());
+            camera[16..].copy_from_slice(&[size[1] as f32*proj.y_axis.y*0.5,layout[32],layout[33],0.]);
+            let (scene_key,revisions)=super::offline::scene_revisions(state.scene.as_ref().unwrap());
+            Ok(super::offline::Capture{raw:true,size,samples:r.samples,camera,display:state.display.settings,revisions,scene_key,
+                guides:[get(PixelKind::CenterDepth),get(PixelKind::CenterNormal),get(PixelKind::Roughness),albedo,color,get(PixelKind::Motion),get(PixelKind::Id),normal,get(PixelKind::CenterPosition)]})
+        })?)
+    }
     /// Waits for the in-flight batch, then reads this render's RGBA image
     /// (u32 for Id, f32 otherwise), top row first. During preparation it reads the previous image.
     /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps

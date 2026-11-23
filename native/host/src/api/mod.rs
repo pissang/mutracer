@@ -16,6 +16,8 @@
 //! camera or sequence offset never prepares the scene again.
 pub(crate) mod abi;
 mod custom_denoise;
+mod offline;
+pub use offline::{HistoryInvalidation,HistoryRadius,OfflineFrame,OfflineSpatialFilter,TemporalDenoiser,TemporalOptions,TemporalPlan,TemporalSpatial};
 pub(crate) mod custom_gpu;
 #[cfg(test)]
 mod custom_gpu_failure_tests;
