@@ -2,6 +2,28 @@ use super::producer_tests::*;
 use super::*;
 use crate::*;
 
+fn set_camera_pose(input: &mut [u8], translation: [f32; 2], yaw: f32) {
+    let camera_offset = layout::header::CAMERA_OFFSET * 4;
+    let camera_transform = u32::from_le_bytes(input[camera_offset..][..4].try_into().unwrap())
+        as usize
+        + layout::camera::TRANSFORM;
+    let transform =
+        glam::Mat4::from_translation(glam::Vec3::new(translation[0], translation[1], 0.))
+            * glam::Mat4::from_rotation_y(yaw);
+    for (i, value) in transform.to_cols_array().into_iter().enumerate() {
+        set(input, camera_transform + i, value.to_bits());
+    }
+}
+
+fn point_on_plane(inverse: glam::DMat4, pixel: glam::DVec2) -> glam::DVec3 {
+    let ndc = glam::DVec2::new(pixel.x / 4. - 1., 1. - pixel.y / 4.);
+    let a = inverse * glam::DVec4::new(ndc.x, ndc.y, -1., 1.);
+    let b = inverse * glam::DVec4::new(ndc.x, ndc.y, 1., 1.);
+    let origin = a.truncate() / a.w;
+    let direction = b.truncate() / b.w - origin;
+    origin + direction * ((-3. - origin.z) / direction.z)
+}
+
 #[test]
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() {
@@ -11,9 +33,14 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
             continue;
         };
         for ortho in [false, true] {
-            for (translation, yaw) in [([0f32, 0.], 0.), ([0.21, -0.16], 0.), ([0.07, -0.05], 0.12)]
-            {
-                let input = plane(false, ortho, false);
+            for (translation, previous_yaw, yaw) in [
+                ([0., 0.], 0., 0.),
+                ([0.21, -0.16], 0., 0.),
+                ([0.07, -0.05], 0., 0.12),
+                ([0.07, -0.05], 0.52, 0.49),
+            ] {
+                let mut input = plane(false, ortho, false);
+                set_camera_pose(&mut input, [0., 0.], previous_yaw);
                 let (description, assets) =
                     scene::prepare_frame_inputs(&input, &settings::RenderSettings::default())
                         .unwrap();
@@ -38,6 +65,13 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                 let previous_matrix =
                     glam::DMat4::from_cols_array(&metadata.camera.projection.map(f64::from))
                         * glam::DMat4::from_cols_array(&metadata.camera.view.map(f64::from));
+                let previous_camera =
+                    glam::DMat4::from_cols_array(&metadata.camera.view_inverse.map(f64::from));
+                let previous_forward = -previous_camera.z_axis.truncate().normalize();
+                let previous_eye = previous_camera.w_axis.truncate();
+                let packed = values(camera);
+                let previous_inverse =
+                    glam::DMat4::from_cols_array(&std::array::from_fn(|i| packed[i] as f64));
                 let old_jitter = metadata.jitter_pixels;
                 let (first, dependency) = producer
                     .produce(
@@ -67,21 +101,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                         .texture,
                 );
                 let mut moved = input.clone();
-                let camera_transform = u32::from_le_bytes(
-                    input[layout::header::CAMERA_OFFSET * 4..][..4]
-                        .try_into()
-                        .unwrap(),
-                ) as usize
-                    + layout::camera::TRANSFORM;
-                for (i, value) in glam::Mat4::from_rotation_y(yaw)
-                    .to_cols_array()
-                    .into_iter()
-                    .enumerate()
-                {
-                    set(&mut moved, camera_transform + i, value.to_bits());
-                }
-                set(&mut moved, camera_transform + 12, translation[0].to_bits());
-                set(&mut moved, camera_transform + 13, translation[1].to_bits());
+                set_camera_pose(&mut moved, translation, yaw);
                 let (_, moved_assets) =
                     scene::prepare_frame_inputs(&moved, &settings::RenderSettings::default())
                         .unwrap();
@@ -131,6 +151,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                 let inverse =
                     glam::DMat4::from_cols_array(&std::array::from_fn(|i| packed[i] as f64));
                 let mut valid_count = 0;
+                let mut legacy_depth_rejections = 0;
                 let mut error = 0f64;
                 for index in 0..64 {
                     let flags =
@@ -139,12 +160,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                         index as f64 % 8. + 0.5 + metadata.jitter_pixels[0] as f64,
                         (index / 8) as f64 + 0.5 + metadata.jitter_pixels[1] as f64,
                     );
-                    let ndc = glam::DVec2::new(current.x / 4. - 1., 1. - current.y / 4.);
-                    let a = inverse * glam::DVec4::new(ndc.x, ndc.y, -1., 1.);
-                    let b = inverse * glam::DVec4::new(ndc.x, ndc.y, 1., 1.);
-                    let origin = a.truncate() / a.w;
-                    let direction = b.truncate() / b.w - origin;
-                    let point = origin + direction * ((-3. - origin.z) / direction.z);
+                    let point = point_on_plane(inverse, current);
                     let clip = previous_matrix * point.extend(1.);
                     let previous =
                         glam::DVec2::new(clip.x / clip.w * 4. + 4., 4. - clip.y / clip.w * 4.);
@@ -178,6 +194,16 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                     );
                     if should_match {
                         valid_count += 1;
+                        let previous_ray_pixel = glam::DVec2::new(
+                            lookup[0].floor() + 0.5 + f64::from(old_jitter[0]),
+                            lookup[1].floor() + 0.5 + f64::from(old_jitter[1]),
+                        );
+                        let sampled = point_on_plane(previous_inverse, previous_ray_pixel);
+                        let depth = (point - previous_eye).dot(previous_forward);
+                        let sample_depth = (sampled - previous_eye).dot(previous_forward);
+                        if (depth - sample_depth).abs() > (depth.abs() * 1e-3).max(1e-4) {
+                            legacy_depth_rejections += 1;
+                        }
                         for channel in 0..2 {
                             error = error.max(
                                 (motion[index * 2 + channel] as f64 - expected[channel]).abs(),
@@ -188,6 +214,9 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                     }
                 }
                 assert!(valid_count > 16);
+                if previous_yaw != 0. {
+                    assert!(legacy_depth_rejections * 2 > valid_count);
+                }
                 assert!(error < 1e-4, "camera motion error {error} pixels");
                 history.reject(frame.key()).unwrap();
                 let (foreign, _) = producer
@@ -215,7 +244,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                         .all(|b| u32::from_le_bytes(b.try_into().unwrap()) & validity::MOTION == 0)
                 );
                 println!(
-                    "camera motion {:?}, ortho={ortho}, translation={translation:?}, yaw={yaw}: {valid_count} matches, max error {error} pixels",
+                    "camera motion {:?}, ortho={ortho}, translation={translation:?}, yaw {previous_yaw}->{yaw}: {valid_count} matches, {legacy_depth_rejections} rejected by the old depth test, max error {error} pixels",
                     gpu.info.backend
                 );
                 if let Ok(root) = std::env::var("MUTRACER_FRAME_EVIDENCE") {
@@ -233,7 +262,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                     )
                     .unwrap();
                     fs::write(directory.join("validity.u32"), &validity).unwrap();
-                    fs::write(directory.join("parameters.json"), serde_json::to_vec_pretty(&json!({"adapter":format!("{:?}",gpu.info),"translation":translation,"yaw":yaw,"orthographic":ortho,"currentJitter":metadata.jitter_pixels,"previousJitter":old_jitter,"validCount":valid_count,"maximumErrorPixels":error,"foreignPublicationRejected":true})).unwrap()).unwrap();
+                    fs::write(directory.join("parameters.json"), serde_json::to_vec_pretty(&json!({"adapter":format!("{:?}",gpu.info),"translation":translation,"previousYaw":previous_yaw,"yaw":yaw,"orthographic":ortho,"currentJitter":metadata.jitter_pixels,"previousJitter":old_jitter,"validCount":valid_count,"legacyDepthRejections":legacy_depth_rejections,"maximumErrorPixels":error,"foreignPublicationRejected":true})).unwrap()).unwrap();
                 }
             }
         }

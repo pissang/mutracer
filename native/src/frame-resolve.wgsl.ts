@@ -13,7 +13,7 @@ ${optics}
 struct Correspondence {
     currentViewProjection: mat4x4f,
     previousViewProjection: mat4x4f,
-    previousEye: vec4f,
+    previousEye: vec4f, // world position; w is 1 for an orthographic camera
     previousForward: vec4f,
     previousJitter: vec4f,
     enabled: vec4u,
@@ -85,9 +85,20 @@ fn cameraMotion(pixel: FramePixel, size: vec2u) -> vec3f {
     if(correspondence.enabled.y!=0u){
       if(any(previousIds[p.x+(size.y-1u-p.y)*size.x].xy!=stableIdentity(pixel).xy)){return vec3f(0.0);}
     }else if(any(sample.identity.xy!=pixel.identity.xy)){return vec3f(0.0);}
-    let depth = dot(oldPosition.xyz - correspondence.previousEye.xyz, correspondence.previousForward.xyz);
-    if (abs(depth - sample.positionDepth.w) > max(1e-4, abs(depth) * 1e-3)
-        || dot(sample.geometricNormal.xyz, oldNormal) < 0.9) { return vec3f(0.0); }
+    if (dot(sample.geometricNormal.xyz, oldNormal) < 0.9) { return vec3f(0.0); }
+    // The retained hit lies on the actual previous jittered ray. Intersect
+    // that ray with the previous tangent plane and compare view depths at
+    // the same sample location, including on steeply sloped surfaces.
+    let ray = select(normalize(sample.positionDepth.xyz - correspondence.previousEye.xyz),
+        correspondence.previousForward.xyz, correspondence.previousEye.w != 0.0);
+    let incidence = dot(ray, oldNormal);
+    if (!(abs(incidence) > 1e-6)) { return vec3f(0.0); }
+    let distance = dot(oldPosition.xyz - sample.positionDepth.xyz, oldNormal) / incidence;
+    let depthDelta = distance * dot(ray, correspondence.previousForward.xyz);
+    let planeDepth = sample.positionDepth.w + depthDelta;
+    if (!(planeDepth > 0.0 && abs(depthDelta) <= max(1e-4, planeDepth * 1e-3))) {
+        return vec3f(0.0);
+    }
     return vec3f(previousPixel - currentPixel, 1.0);
 }
 fn reflectionMotion(pixel: FramePixel, reflection: ReflectionRecord, size: vec2u) -> vec3f {

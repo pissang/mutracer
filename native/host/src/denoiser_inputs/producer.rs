@@ -326,7 +326,12 @@ impl FrameProducer {
         let resolve_values: Vec<f32> = current_matrix
             .into_iter()
             .chain(previous_matrix)
-            .chain([inverse_view[12], inverse_view[13], inverse_view[14], 0.])
+            .chain([
+                inverse_view[12],
+                inverse_view[13],
+                inverse_view[14],
+                u8::from(previous_camera.kind == Projection::Orthographic) as f32,
+            ])
             .chain([
                 previous_forward.x,
                 previous_forward.y,
