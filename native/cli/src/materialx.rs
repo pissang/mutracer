@@ -1175,3 +1175,200 @@ pub fn load(
         },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct BrowserFixture {
+        file: String,
+        graph: Option<FlatGraph>,
+        rejection: Option<String>,
+        #[serde(default)]
+        diagnostics: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct FlatGraph {
+        nodes: Vec<u32>,
+        inputs: Vec<u32>,
+        terminal: Vec<u32>,
+        parameters: Vec<f32>,
+    }
+
+    impl From<MaterialGraph> for FlatGraph {
+        fn from(graph: MaterialGraph) -> Self {
+            Self {
+                nodes: graph
+                    .nodes
+                    .into_iter()
+                    .flat_map(|node| {
+                        [
+                            node.category,
+                            node.implementation,
+                            node.port_type,
+                            node.first_input,
+                            node.input_count,
+                        ]
+                    })
+                    .collect(),
+                inputs: graph
+                    .inputs
+                    .into_iter()
+                    .flat_map(|input| {
+                        [
+                            input.port,
+                            input.port_type,
+                            input.source_kind,
+                            input.source,
+                            input.output,
+                        ]
+                    })
+                    .collect(),
+                terminal: graph
+                    .terminals
+                    .into_iter()
+                    .flat_map(|terminal| [terminal.port, terminal.node, terminal.output])
+                    .collect(),
+                parameters: graph.parameters.into_iter().flatten().collect(),
+            }
+        }
+    }
+
+    fn compile(file: &Path) -> Result<(OpenPbrMaterial, MaterialBindings)> {
+        let shot = crate::shot::parse(
+            br#"{
+            "version":1, "output":{"duration":1},
+            "objects":[{"name":"subject","shape":"sphere"}],
+            "camera":{"position":[0,0,3],"target":"subject"}
+        }"#,
+        )
+        .unwrap();
+        let mut assets = Assets::load(&shot, file.parent().unwrap()).unwrap();
+        load(file, "/material", &mut assets, &mut Scene::new())
+    }
+
+    fn compile_xml(xml: &str) -> Result<(OpenPbrMaterial, MaterialBindings)> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.mtlx");
+        std::fs::write(&path, xml).unwrap();
+        compile(&path)
+    }
+
+    #[test]
+    fn viewer_materials_match_browser_ir() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../viewer/src/assets/materialx");
+        let fixtures: Vec<BrowserFixture> =
+            serde_json::from_str(include_str!("../tests/fixtures/materialx-browser-ir.json"))
+                .unwrap();
+        let mut files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|file| file.ends_with(".mtlx"))
+            .collect();
+        files.sort();
+        assert_eq!(
+            files,
+            fixtures
+                .iter()
+                .map(|row| row.file.clone())
+                .collect::<Vec<_>>()
+        );
+        for row in fixtures {
+            let result = compile(&directory.join(&row.file));
+            if row.rejection.is_some() || !row.diagnostics.is_empty() {
+                let Err(error) = result else {
+                    panic!(
+                        "{} accepted despite browser diagnostics: {:?} {:?}",
+                        row.file, row.rejection, row.diagnostics
+                    );
+                };
+                assert!(!error.message.is_empty(), "{}", row.file);
+            } else {
+                let (material, _) = result.unwrap_or_else(|error| panic!("{}: {error}", row.file));
+                let actual = material.graph.map(FlatGraph::from);
+                assert_eq!(actual, row.graph, "{}", row.file);
+            }
+        }
+    }
+
+    fn surface(shader: &str, nodes: &str, inputs: &str) -> String {
+        format!(
+            r#"<materialx>
+            {nodes}
+            <{shader} name="shader" type="surfaceshader">{inputs}</{shader}>
+            <surfacematerial name="material" type="material">
+              <input name="surfaceshader" type="surfaceshader" nodename="shader"/>
+            </surfacematerial>
+        </materialx>"#
+        )
+    }
+
+    #[test]
+    fn reports_unsupported_shader_and_node() {
+        let shader = surface("unsupported_shader", "", "");
+        let node = surface(
+            "open_pbr_surface",
+            r#"<unsupported_node name="mystery" type="float"/>"#,
+            r#"<input name="specular_roughness" type="float" nodename="mystery"/>"#,
+        );
+        for (xml, expected) in [
+            (shader, "Unsupported MaterialX surface unsupported_shader"),
+            (node, r#"Unsupported graph identifier "unsupported_node""#),
+        ] {
+            let Err(error) = compile_xml(&xml) else {
+                panic!("invalid material accepted")
+            };
+            assert!(error.message.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_zero_ior_from_standard_surface_translation() {
+        let xml = surface(
+            "standard_surface",
+            "",
+            r#"<input name="specular_IOR" type="float" value="0"/>"#,
+        );
+        let Err(error) = compile_xml(&xml) else {
+            panic!("zero IOR accepted")
+        };
+        assert!(error.message.contains("native surface range"), "{error}");
+    }
+
+    #[test]
+    fn ambiguous_interface_requires_graph_and_input_name() {
+        let make_graph = |name| {
+            format!(
+                r#"<nodegraph name="{name}">
+            <input name="value" type="float" value="0.4"/>
+            <output name="out" type="float" interfacename="value"/>
+        </nodegraph>"#
+            )
+        };
+        let xml = surface(
+            "open_pbr_surface",
+            &(make_graph("first") + &make_graph("second")),
+            r#"<input name="specular_roughness" type="float" nodegraph="first"/>
+               <input name="base_metalness" type="float" nodegraph="second"/>"#,
+        );
+        let (material, bindings) = compile_xml(&xml).unwrap();
+        let mut graph = material.graph.unwrap();
+        let inputs = |name: &str| serde_json::from_value(serde_json::json!({name: 0.8})).unwrap();
+        let error = bindings
+            .update(&mut graph, &inputs("value"), 0., "/inputs")
+            .unwrap_err();
+        assert_eq!(error.code, 2);
+        assert!(error.message.contains("ambiguous"), "{error}");
+        let before = graph.parameters.clone();
+        for name in ["first/value", "second/value"] {
+            bindings
+                .update(&mut graph, &inputs(name), 0., "/inputs")
+                .unwrap();
+        }
+        assert_eq!(graph.parameters, vec![[0.8, 0., 0., 0.]; 2]);
+        assert_ne!(graph.parameters, before);
+    }
+}
