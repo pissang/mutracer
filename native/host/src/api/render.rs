@@ -2634,7 +2634,7 @@ impl Render {
         self.set_denoiser_domain(options, false)
     }
     // Viewer-only plumbing; the installed SDK keeps its HDR denoiser contract.
-    #[cfg(feature = "viewer-support")]
+    #[cfg(any(test, feature = "viewer-support"))]
     #[doc(hidden)]
     pub fn set_viewer_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
         self.set_denoiser_domain(options, true)
