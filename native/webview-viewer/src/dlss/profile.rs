@@ -109,11 +109,19 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
     );
     let scene = mutracer_native::scene_api::Scene::import_gltf(model)?.scene;
     engine.set_scene_object(&scene)?;
-    let camera = match camera {
+    let cameras = match camera {
         Some(path) => {
-            api::Camera::from_bytes(&std::fs::read(path)?).context("Invalid camera record")?
+            let bytes = std::fs::read(path)?;
+            let records = bytes.chunks_exact(size_of::<api::Camera>());
+            ensure!(
+                records.len() > 0 && records.remainder().is_empty(),
+                "Expected complete native camera records"
+            );
+            records
+                .map(|record| api::Camera::from_bytes(record).context("Invalid camera record"))
+                .collect::<Result<Vec<_>>>()?
         }
-        None => api::Camera {
+        None => vec![api::Camera {
             world_matrix: glam::Mat4::look_at_rh(
                 glam::Vec3::new(3.2, 1.45, 3.8),
                 glam::Vec3::new(0.0, 1.35, 0.0),
@@ -122,9 +130,9 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
             .inverse()
             .to_cols_array(),
             ..Default::default()
-        },
+        }],
     };
-    engine.set_camera(Some(camera))?;
+    engine.set_camera(Some(cameras[0]))?;
     let output_scale = api::CustomDenoiser::temporal_output_scale(&*filter);
     ensure!(
         output_size.iter().all(|&n| n > 0 && n % output_scale == 0),
@@ -140,17 +148,29 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
                 width: input_size[0],
                 height: input_size[1],
             },
-            max_samples: 24,
+            max_samples: if cameras.len() == 1 { 24 } else { 1 },
             ..Default::default()
         },
     )?;
     render.set_custom_denoiser(Some(filter.clone()), api::DenoiseSchedule::EverySample)?;
     converge(&engine, &render)?;
+    for &camera in &cameras[1..] {
+        engine.set_camera(Some(camera))?;
+        if !engine.update()? {
+            render.warm_temporal_denoiser(1)?;
+        }
+        converge(&engine, &render)?;
+    }
     let report = render.denoise_report().context("Missing DLSS report")?;
     ensure!(report.error.is_none(), "DLSS failed: {:?}", report.error);
     let (evaluations, resets) = filter.counts();
+    let complete = if cameras.len() == 1 {
+        evaluations >= 12
+    } else {
+        evaluations == cameras.len() as u64
+    };
     ensure!(
-        evaluations >= 12 && resets == 1,
+        complete && resets == 1,
         "Unexpected history: {evaluations} frames, {resets} resets"
     );
     let hdr = render.read_pixels(api::PixelKind::Denoised)?;
@@ -182,7 +202,7 @@ pub fn run(model: &Path, output: &Path, camera: Option<&Path>) -> Result<()> {
                 .filter(|pixel| pixel[..3].iter().any(|&v| v < -0.01)).count(),
             "pixelsWithNonfiniteRadiance": hdr.data.chunks_exact(4)
                 .filter(|pixel| pixel[..3].iter().any(|v| !v.is_finite())).count(),
-            "evaluations": evaluations, "resets": resets,
+            "evaluations": evaluations, "resets": resets, "cameraRecords": cameras.len(),
         }))?,
     )?;
     if let Some(capture) = &filter.capture {

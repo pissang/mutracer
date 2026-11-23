@@ -108,6 +108,10 @@ The glTF must load with the native scene importer. A camera file uses the
 128-byte native camera record. Set `MUTRACER_DLSS_PROFILE_SIZE` to
 `WIDTHxHEIGHT` to test a different extent. With GPU timestamps enabled the log separates
 independent sampling, guide resolve, adapter prepare, NGX and output resolve.
+Concatenate camera records in pose order to profile a fixed trajectory. The
+profile evaluates one frame per record and keeps the same history across poses
+with unchanged projection. Consecutive identical records advance the temporal
+filter at the same pose. The optional raw reference is rendered at the last pose.
 
 Set `MUTRACER_DLSS_CAPTURE_DIR` to an empty directory while profiling to save
 each submitted frame's exact guides, raw fallback buffers, jitter, camera,
