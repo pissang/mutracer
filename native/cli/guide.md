@@ -97,7 +97,9 @@ the history around missing frames, which costs additional render time.
 The [shot options](schema/shot.md#output-and-animation) describe GPU memory
 budgets, cut points and the choice of OIDN weights.
 
-For an open worker, iterate over `Worker.temporalFrames(inputs, settings)` in
-Node or `Session.temporal_frames(inputs, settings=settings)` in Python. Node
+Import `Worker` from `@meimu/mutracer-cli` in Node or `Session` from
+`mutracer.stream` in Python. On an open session, iterate over
+`worker.temporalFrames(inputs, settings)` or
+`session.temporal_frames(inputs, settings=settings)`. Node
 yields objects with `frame` and `bytes`. Python yields `(index, bytes)` pairs.
 Both iterators flush the final frames when the input ends.
