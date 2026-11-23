@@ -295,17 +295,13 @@ export const photonQueryWgsl = /* wgsl */ `${photonPackingWgsl}
               continue;
             }
             let incoming=photonDecodeOct(vec2f(f32((directions>>16u)&255u),f32(directions>>24u))/255.0);
-            let cosine=abs(dot(si.faceNormal,incoming));
-            if(cosine<=0.0) {
-              continue;
-            }
             var flux=photonDecodeFlux(record.w)/emitted;
             if(SPECTRAL) {
               flux=sampling_spectral_rgb_filter(flux,si.spectralChannel);
             }
             var pdf:f32;
-            let response=openpbr_eval_prepared(prepared,incoming,&pdf);
-            sum+=response*flux/cosine*(radius*radius)/(kernelRadius*kernelRadius);
+            let response=openpbr_eval_prepared_area(prepared,incoming,&pdf);
+            sum+=response*flux*(radius*radius)/(kernelRadius*kernelRadius);
           }
         }
       }
