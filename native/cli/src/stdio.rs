@@ -7,12 +7,12 @@ use crate::{
     warnings::{self, Warning},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashSet},
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{mpsc, Arc},
     thread,
     time::Instant,
 };
@@ -219,6 +219,7 @@ struct Stream {
     config: crate::temporal::Config,
     settings: Settings,
     last: u32,
+    last_time: f64,
     flushing: bool,
 }
 fn temporal_reply(
@@ -253,23 +254,16 @@ fn temporal_reply(
 fn editable(pointer: &str) -> bool {
     let parts: Vec<_> = pointer.split('/').collect();
     match parts.as_slice() {
-        [
-            "",
-            "camera",
-            "fov" | "target" | "position" | "fStop" | "focusDistance" | "sensorHeight",
-        ]
+        ["", "camera", "fov" | "target" | "position" | "fStop" | "focusDistance" | "sensorHeight"]
         | ["", "camera", "orbit", "azimuth" | "elevation" | "distance"]
         | ["", "output", "display", "exposure" | "toneMappingExposure"]
         | ["", "environment", "color" | "intensity" | "rotation"] => true,
         ["", "objects", n, "position" | "rotation" | "scale"]
         | ["", "objects", n, "animation", "time"]
         | ["", "objects", n, "material", "inputs", _]
-        | [
-            "",
-            "lights",
-            n,
-            "position" | "target" | "color" | "intensity" | "size" | "radius" | "length" | "angle",
-        ] => n.parse::<usize>().is_ok(),
+        | ["", "lights", n, "position" | "target" | "color" | "intensity" | "size" | "radius" | "length" | "angle"] => {
+            n.parse::<usize>().is_ok()
+        }
         ["", "objects", n, "material", key] => {
             n.parse::<usize>().is_ok() && crate::material::editable(key)
         }
@@ -615,6 +609,7 @@ impl Session {
                     .or_else(|| defaults.map(|o| o.temporal.clone()))
                     .unwrap_or_default();
                 config.validate("/settings/temporal", defaults.map(|o| o.duration), fps)?;
+                config.check_budget(settings, "/settings/temporal")?;
                 if !check_only
                     && self.temporal.as_ref().is_some_and(|s| {
                         s.flushing
@@ -713,11 +708,12 @@ impl Session {
                             config: config.clone(),
                             settings,
                             last: frame,
+                            last_time: f64::NEG_INFINITY,
                             flushing: false,
                         });
                     }
                     let stream = self.temporal.as_mut().unwrap();
-                    if config.cuts_at(frame, fps) {
+                    if config.cuts_at(frame, stream.last_time, t) {
                         stream.filter.cut();
                     }
                     stream
@@ -725,6 +721,7 @@ impl Session {
                         .push(frame, &renderer.render)
                         .map_err(crate::temporal::gpu)?;
                     stream.last = frame;
+                    stream.last_time = t;
                     None
                 } else {
                     Some(renderer.capture(settings, frame)?)
@@ -823,12 +820,10 @@ mod tests {
             .handle(Request::Hello { id: 1, protocol: 1 }, vec![], &mut out)
             .unwrap();
         let hello: Value = serde_json::from_slice(&out).unwrap();
-        assert!(
-            hello["capabilities"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("temporal-offline"))
-        );
+        assert!(hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("temporal-offline")));
         out.clear();
         session
             .handle(Request::Flush { id: 2 }, vec![], &mut out)
@@ -837,11 +832,9 @@ mod tests {
         assert_eq!(batch["frames"], json!([]));
         assert_eq!(batch["done"], true);
         assert!(batch.get("bytes").is_none());
-        assert!(
-            session
-                .handle(Request::Cut { id: 3 }, vec![], &mut out)
-                .is_err()
-        );
+        assert!(session
+            .handle(Request::Cut { id: 3 }, vec![], &mut out)
+            .is_err());
     }
 
     #[test]
@@ -932,12 +925,10 @@ mod tests {
         assert_eq!(error["id"], 3);
         assert_eq!(error["type"], "error");
         assert_eq!(error["code"], 2);
-        assert!(
-            error["message"]
-                .as_str()
-                .unwrap()
-                .contains("bad.mtlx:2:3: shader (<mystery>)")
-        );
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("bad.mtlx:2:3: shader (<mystery>)"));
         assert!(error["hint"].as_str().unwrap().contains("open_pbr_surface"));
         assert_eq!(
             read_packet(&mut output).unwrap().unwrap().header["type"],

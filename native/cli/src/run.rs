@@ -57,7 +57,7 @@ pub struct Overrides {
     /// Scattering depth from 1 to 20. Defaults to shot render settings or 6.
     pub bounces: Option<u32>,
     #[arg(long, value_enum)]
-    /// Use oidn, cleanAuxLarge or none. Defaults to the shot setting or none for preview.
+    /// Use oidn, cleanAuxLarge, temporal or none. Defaults to the shot setting or none for preview.
     pub denoise: Option<Denoise>,
     #[arg(long, value_enum, default_value = "png")]
     /// Write display PNG or linear HDR EXR frames. Sequences also keep display PNGs.
@@ -163,6 +163,9 @@ impl Settings {
             gpu: overrides.gpu,
         };
         this.validate(shot.output.duration, "/output")?;
+        shot.output
+            .temporal
+            .check_budget(this, "/output/temporal")?;
         this.offset(
             shot::frame_count(shot.output.duration, this.fps)? - 1,
             "/output",
@@ -326,11 +329,13 @@ impl Input {
             "weightedPixelSamples": workload as f64 * material_factor
         });
         if settings.denoise == Denoise::Temporal {
-            if let Ok(plan) = self.shot.output.temporal.options.plan(
-                settings.size,
-                self.shot.objects.len(),
-                &Default::default(),
-            ) {
+            if let Ok(plan) = self
+                .shot
+                .output
+                .temporal
+                .options
+                .estimate(settings.size, self.shot.objects.len())
+            {
                 cost["temporalGpuBytes"] = json!(plan.bytes);
                 cost["latency"] = json!(plan.latency());
             }
@@ -365,6 +370,10 @@ pub fn validate(file: &Path) -> Result<()> {
             &mut HashSet::new(),
         );
     }
+    warnings::emit_file(
+        crate::temporal::fallback(settings.denoise, "/output/denoise"),
+        &mut HashSet::new(),
+    );
     for (pointer, replacement) in &input.shot.deprecated_fields {
         eprintln!("Warning {pointer}: Deprecated field. {replacement}");
         warnings::emit_file(
@@ -940,7 +949,11 @@ fn temporal_sequence(
             None,
         )?;
         renderer.converge(settings, i)?;
-        if config.cuts_at(i, settings.fps) {
+        if config.cuts_at(
+            i,
+            (f64::from(i) - 1.) / f64::from(settings.fps),
+            f64::from(i) / f64::from(settings.fps),
+        ) {
             stream.cut();
         }
         stream

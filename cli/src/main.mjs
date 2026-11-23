@@ -123,8 +123,6 @@ function options(input, command, values) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
   const temporal = input.temporal && {...input.temporal};
-  if (Array.isArray(temporal?.cuts)) temporal.cuts = temporal.cuts.map(cut =>
-    typeof cut?.time === 'number' && cut.time >= 0 && cut.time < duration ? Math.ceil(cut.time * fps) : cut);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');

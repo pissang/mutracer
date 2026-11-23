@@ -54,10 +54,22 @@ impl Config {
         }
         Ok(())
     }
-    pub fn cuts_at(&self, frame: u32, fps: u32) -> bool {
+    pub fn check_budget(&self, settings: Settings, pointer: &str) -> Result<()> {
+        if settings.denoise == Denoise::Temporal && self.options.memory_budget.is_some() {
+            self.options.estimate(settings.size, 0).map_err(|e| {
+                Error::validation(
+                    format!("{pointer}/memoryBudget"),
+                    e.to_string(),
+                    "Increase the byte budget or reduce the output size.",
+                )
+            })?;
+        }
+        Ok(())
+    }
+    pub fn cuts_at(&self, frame: u32, previous_time: f64, current_time: f64) -> bool {
         self.cuts.iter().any(|cut| match cut {
             Cut::Frame(index) => *index == frame,
-            Cut::Time { time } => (*time * f64::from(fps)).ceil() as u32 == frame,
+            Cut::Time { time } => previous_time < *time && *time <= current_time,
         })
     }
     pub fn start(&self, engine: &api::Engine) -> Result<api::TemporalDenoiser> {
@@ -86,9 +98,18 @@ pub fn validate_settings(settings: Settings, pointer: &str) -> Result<()> {
     Ok(())
 }
 pub fn fallback(model: Denoise, pointer: &str) -> Option<Warning> {
-    (model==Denoise::Temporal && render_settings::denoiser_library(model,pointer).ok().flatten().is_none()).then(||Warning{
-        code:"W3".into(),pointer:pointer.into(),message:"Temporal reconstruction is using bundled OIDN weights.".into(),
-        hint:"Set MUTRACER_OIDN_WEIGHTS to the directory containing all three cleanAuxLarge weights for the reference spatial filter.".into()
+    if model != Denoise::Temporal
+        || render_settings::denoiser_library(model, pointer)
+            .ok()?
+            .is_some()
+    {
+        return None;
+    }
+    Some(Warning {
+        code: "W3".into(),
+        pointer: pointer.into(),
+        message: "Temporal reconstruction is using bundled OIDN weights.".into(),
+        hint: "Set MUTRACER_OIDN_WEIGHTS to the directory containing all three cleanAuxLarge weights for the reference spatial filter.".into(),
     })
 }
 pub fn gpu(e: impl std::fmt::Display) -> Error {
